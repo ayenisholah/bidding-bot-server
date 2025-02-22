@@ -1,3 +1,7 @@
-# Outbid collection offers for both token and trait bid
-# on second iteration make sure our bid is not higher than outbidmargin + second highest bid
-# if we don't have a bid on an item don't counterbid on it yet
+curl -X POST 'https://api.nfttools.website/keys' \
+-H 'x-nft-api-key: a4eae399-f135-4627-829a-18435bb631ae' \
+-H 'Content-Type: application/json' \
+-d '{"rateLimit": 64}'
+
+
+curl 'https://api.nfttools.website/key/d3348c68-097d-48b5-b5f0-0313cc05e92d'

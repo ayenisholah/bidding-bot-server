@@ -44,6 +44,7 @@ async function initialize(rateLimit: number) {
 
   // Define window size for RPS calculation
   const RPS_WINDOW_SECONDS = 60; // Adjust window size as needed
+  const IDLE_THRESHOLD_SECONDS = 10; // Time without requests before considering RPS as 0
   const requests: { timestamp: number }[] = [];
 
   limiter.on("received", () => {
@@ -54,6 +55,13 @@ async function initialize(rateLimit: number) {
     const cutoff = now - RPS_WINDOW_SECONDS;
     while (requests.length > 0 && requests[0].timestamp <= cutoff) {
       requests.shift();
+    }
+
+    // Check if the most recent request is older than the idle threshold
+    const mostRecentRequest = requests[requests.length - 1]?.timestamp || 0;
+    if (now - mostRecentRequest >= IDLE_THRESHOLD_SECONDS) {
+      rps.currentRPS = 0;
+      return;
     }
 
     // Calculate current RPS

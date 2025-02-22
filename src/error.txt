@@ -4,3 +4,11 @@ Error fetching Magic Eden collection stats: TypeError: Cannot read properties of
     at /Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/magiceden/bid.ts:688:43
     at Generator.next (<anonymous>)
     at fulfilled (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/magiceden/bid.ts:5:58)
+
+    Error processing MagicEden collection bid for task: 67b8c0286b1442529aac73a2  SyntaxError: Cannot convert 88000000000000001e+32 to a BigInt
+    at BigInt (<anonymous>)
+    at /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:4750:28
+    at Generator.next (<anonymous>)
+    at fulfilled (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:28:58)
+    at runNextTicks (node:internal/process/task_queues:60:5)
+    at processTimers (node:internal/timers:511:9)
