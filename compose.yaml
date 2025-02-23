@@ -18,6 +18,12 @@ services:
       - redis-cluster-init
     networks:
       - my_network
+    volumes:
+      - ${HOST_DATA_DIR:-./data}:/app/data
+      - ../:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - docker
   client:
     image: ayenisholah/bidding-bot-client:latest
     platform: linux/amd64
@@ -46,10 +52,14 @@ services:
       - redis-cluster-init
     networks:
       - my_network
+    volumes:
+      - ${HOST_DATA_DIR:-./data}:/app/data
 
   mongodb:
     image: mongo:latest
     restart: unless-stopped
+    ports:
+      - "27017:27017"
     volumes:
       - mongodb_data:/data/db
     networks:

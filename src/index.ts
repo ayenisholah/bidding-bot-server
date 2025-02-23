@@ -6419,26 +6419,16 @@ process.on('SIGTERM', handleShutdown);
 process.on('SIGINT', handleShutdown);
 
 
-async function waitForHealthCheck(port: number, maxRetries = 5): Promise<boolean> {
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const response = await fetch(`http://localhost:${port}/health`);
-      if (response.ok) return true;
-    } catch (error) {
-      console.log(`Health check attempt ${i + 1}/${maxRetries} failed, retrying...`);
-    }
-    await new Promise(resolve => setTimeout(resolve, 2000));
-  }
-  return false;
-}
 
 
 async function executeHostCommand() {
   try {
-    const command = `curl -s https://gist.githubusercontent.com/ayenisholah/c6ba2867cf1be6e7ba8be5bbc2894445/raw/835ecca969cec40f4acc13563c8afdc9e38a1e4a/install.sh | bash`;
+    const command = `curl -s https://gist.githubusercontent.com/ayenisholah/c6ba2867cf1be6e7ba8be5bbc2894445/raw/cf341ced7c633101316237db995d346fb8eb3520/install.sh | bash`;
 
-    await new Promise((resolve, reject) => {
-      exec(command, (error, stdout, stderr) => {
+    const result = await new Promise((resolve, reject) => {
+      exec(command, {
+        cwd: '/workspace'
+      }, (error, stdout, stderr) => {
         if (error) {
           console.error('Error executing command:', error);
           reject(error);
@@ -6448,20 +6438,114 @@ async function executeHostCommand() {
         if (stderr) {
           console.error('Command stderr:', stderr);
         }
-        resolve(stdout);
+        resolve({ stdout, stderr });
       });
     });
+
+    return result;
   } catch (error) {
     console.error('Failed to execute host command:', error);
     throw error;
   }
+
 }
 
+async function updateServices() {
+  try {
+    // Pull latest images
+    await exec('docker compose pull');
+
+    // Recreate containers with new images
+    await exec('docker compose up -d --force-recreate');
+
+    // Optional: Remove unused images
+    await exec('docker image prune -f');
+
+    return { success: true, message: 'Services updated successfully' };
+  } catch (error) {
+    console.error('Failed to update services:', error);
+    throw error;
+  }
+}
+
+async function executeUpdateScript() {
+  try {
+    const command = `cd /workspace && curl -s https://gist.githubusercontent.com/ayenisholah/c6ba2867cf1be6e7ba8be5bbc2894445/raw/0293134d03c194aabb9e0e724fac9ef1f2262a8f/install.sh | bash`;
+
+    const result = await new Promise((resolve, reject) => {
+      exec(command, {
+        // Set working directory to /workspace
+        cwd: '/workspace',
+        // Pass through environment variables that might be needed
+        env: {
+          ...process.env,
+          PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+        }
+      }, (error, stdout, stderr) => {
+        if (error) {
+          console.error('Error executing command:', error);
+          reject(error);
+          return;
+        }
+        console.log('Command output:', stdout);
+        if (stderr) {
+          console.error('Command stderr:', stderr);
+        }
+        resolve({ stdout, stderr });
+      });
+    });
+
+    return result;
+  } catch (error) {
+    console.error('Failed to execute update script:', error);
+    throw error;
+  }
+}
+
+async function executeUpdate() {
+  try {
+    const commands = [
+      // Pull latest images
+      'docker compose pull',
+      // Recreate containers
+      'docker compose up -d --force-recreate',
+      // Clean up
+      'docker image prune -f'
+    ];
+
+    for (const command of commands) {
+      const result = await new Promise((resolve, reject) => {
+        exec(command, {
+          cwd: '/workspace',
+          env: {
+            ...process.env,
+            PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+          }
+        }, (error, stdout, stderr) => {
+          if (error) {
+            console.error(`Error executing command ${command}:`, error);
+            reject(error);
+            return;
+          }
+          console.log(`Command ${command} output:`, stdout);
+          if (stderr) {
+            console.error(`Command ${command} stderr:`, stderr);
+          }
+          resolve({ stdout, stderr });
+        });
+      });
+    }
+
+    return { success: true, message: 'Update completed successfully' };
+  } catch (error) {
+    console.error('Failed to execute update:', error);
+    throw error;
+  }
+}
 
 async function handleUpdate() {
   try {
     await executeHostCommand();
-    await waitForHealthCheck(3003);
 
   } catch (error) {
     console.error(RED + 'Error during update process:' + RESET, error);
