@@ -42,6 +42,8 @@ const defaultConfig = {
       return delay;
     }
   },
+  // Add memory optimization settings
+  dropBufferSupport: true,
   slotsRefreshTimeout: 30000,
   showFriendlyErrorStack: true,
   enableOfflineQueue: true,

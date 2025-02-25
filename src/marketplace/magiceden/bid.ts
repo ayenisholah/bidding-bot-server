@@ -351,7 +351,7 @@ async function sendSignedOrderData(order: any, taskId: string, offerPrice: strin
       ]);
 
       trackBidRate("magiceden", taskId)
-      console.log(MAGENTA, successMessage, RESET);
+      // console.log(MAGENTA, successMessage, RESET);
       if (!task) {
         await cancelMagicEdenBid([order], privateKey, taskId)
       }
@@ -596,7 +596,7 @@ export async function fetchMagicEdenOffer(taskId: string, type: "COLLECTION" | "
         normalizeRoyalties: 'false',
       }
 
-      const { data } = await limiter.schedule(() =>
+      const { data } = await limiter?.schedule(() =>
         axiosInstance.get<MagicedenCollectionResponse>(URL, {
           params: queryParams,
           headers: {

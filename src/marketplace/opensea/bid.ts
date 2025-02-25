@@ -350,7 +350,7 @@ export async function bidOnOpensea(
     trackBidRate('opensea', taskId);
 
     const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()}  TOKEN: ${asset.tokenId} ${Number(offerPriceEthFinal)} WETH 🎉`
-    console.log(BLUE, JSON.stringify(successMessage), RESET);
+    // console.log(BLUE, JSON.stringify(successMessage), RESET);
   }
   else {
     const divider = BigNumber.from(10000);
@@ -542,7 +542,7 @@ async function submitOfferToOpensea(slug: string, bidCount: string, offerPrice: 
     const successMessage = opensea_traits ?
       `🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()}  TRAIT: ${opensea_traits} ${(Number(offerPrice) / 1e18)} WETH 🎉`
       : `🎉 COLLECTION OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()} ${(Number(offerPrice) / 1e18)} WETH 🎉`
-    console.log(BLUE, successMessage, RESET);
+    // console.log(BLUE, successMessage, RESET);
 
 
   } catch (error: any) {
@@ -1024,7 +1024,7 @@ export async function fetchOpenseaOffers(
   }
 }
 
-export async function fetchOpenseaListings(taskId: string, collectionSlug: string, limit?: number ) {
+export async function fetchOpenseaListings(taskId: string, collectionSlug: string, limit?: number) {
   try {
     const baseUrl = `https://api.nfttools.website/opensea/api/v2/listings/collection/${collectionSlug}/all`;
     let allListings: OpenseaOrder[] = [];

@@ -1,7 +1,934 @@
-curl -X POST 'https://api.nfttools.website/keys' \
--H 'x-nft-api-key: a4eae399-f135-4627-829a-18435bb631ae' \
--H 'Content-Type: application/json' \
--d '{"rateLimit": 64}'
+Current RPS: 10.68
+Batch processing breakdown:
+        Batch size: 59
+        Queue addition time: 4018ms
+        Total flow time: 4018ms
+        Jobs/second: 14.683922349427577
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 64
+        Batch size: 59
+        Processing time: 635129ms
+      
+Redis metrics:
+        Used memory: 97.95M
+        Peak memory: 458.76M
+        AOF size: 22424849
+        Ops/sec: 340
+      
+Redis metrics:
+        Used memory: 97.98M
+        Peak memory: 458.76M
+        AOF size: 22424849
+        Ops/sec: 340
+      
+Redis metrics:
+        Used memory: 3.50M
+        Peak memory: 3.68M
+        AOF size: 12000295
+        Ops/sec: 46
+      
 
+📊 ═══════ Health Monitor Stats ═══════ 📊
 
-curl 'https://api.nfttools.website/key/d3348c68-097d-48b5-b5f0-0313cc05e92d'
+💾 Memory Usage:
+   rss: 3076MB
+   heapTotal: 2932MB
+   heapUsed: 2760MB
+   external: 114MB
+
+📋 Queue Status:
+   active: 5
+   completed: 0
+   delayed: 0
+   failed: 0
+   paused: 0
+   prioritized: 176
+   waiting: 0
+   waiting-children: 3
+   Total Jobs: 184
+Current RPS: 10.68
+Current RPS: 10.68
+Current RPS: 10.68
+Starting batch 65.44680851063829 of 213
+Starting batch 65.42553191489361 of 213
+Current RPS: 10.68
+Batch processing breakdown:
+        Batch size: 47
+        Queue addition time: 1021ms
+        Total flow time: 1021ms
+        Jobs/second: 46.033300685602356
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 230
+        Batch size: 47
+        Processing time: 643242ms
+      
+Redis metrics:
+        Used memory: 5.27M
+        Peak memory: 17.38M
+        AOF size: 28983231
+        Ops/sec: 6585
+      
+Starting batch 64.71739130434783 of 218
+Batch processing breakdown:
+        Batch size: 47
+        Queue addition time: 1624ms
+        Total flow time: 1624ms
+        Jobs/second: 28.940886699507388
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 230
+        Batch size: 47
+        Processing time: 640608ms
+      
+Current RPS: 10.68
+Redis metrics:
+        Used memory: 5.28M
+        Peak memory: 17.38M
+        AOF size: 28983231
+        Ops/sec: 6775
+      
+Batch processing breakdown:
+        Batch size: 46
+        Queue addition time: 2221ms
+        Total flow time: 2221ms
+        Jobs/second: 20.711391265195857
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 325
+        Batch size: 46
+        Processing time: 642828ms
+      
+Current RPS: 10.55
+Redis metrics:
+        Used memory: 105.79M
+        Peak memory: 458.76M
+        AOF size: 33235220
+        Ops/sec: 238
+      
+Current RPS: 10.39
+Starting batch 78.075 of 250
+{
+  bidStats: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 2645, magiceden: 1157, blur: 0 }
+  }
+}
+{
+  bestOffers: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 0.0193, magiceden: 0.02, blur: 0 }
+  }
+}
+{
+  floorPrices: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 0.026, magiceden: 0.026, blur: 0 }
+  }
+}
+{
+  warningBids: {
+    '67bd2014ef2da68e8b6a159c': { opensea: false, magiceden: false, blur: false }
+  }
+}
+Current RPS: 10.39
+Batch processing breakdown:
+        Batch size: 40
+        Queue addition time: 972ms
+        Total flow time: 972ms
+        Jobs/second: 41.1522633744856
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 366
+        Batch size: 40
+        Processing time: 648904ms
+      
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+   rss: 2972MB
+   heapTotal: 2895MB
+   heapUsed: 2752MB
+   external: 46MB
+
+📋 Queue Status:
+   active: 25
+   completed: 0
+   delayed: 0
+   failed: 0
+   paused: 0
+   prioritized: 335
+   waiting: 0
+   waiting-children: 7
+   Total Jobs: 367
+Starting batch 84.37837837837837 of 271
+Redis metrics:
+        Used memory: 3.50M
+        Peak memory: 3.68M
+        AOF size: 12000295
+        Ops/sec: 1
+      
+Current RPS: 10.39
+Batch processing breakdown:
+        Batch size: 37
+        Queue addition time: 943ms
+        Total flow time: 943ms
+        Jobs/second: 39.23647932131495
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 404
+        Batch size: 37
+        Processing time: 646893ms
+      
+Redis metrics:
+        Used memory: 3.50M
+        Peak memory: 3.68M
+        AOF size: 12000295
+        Ops/sec: 2
+      
+Current RPS: 10.29
+Starting batch 88.91176470588235 of 295
+Batch processing breakdown:
+        Batch size: 34
+        Queue addition time: 818ms
+        Total flow time: 818ms
+        Jobs/second: 41.56479217603912
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 439
+        Batch size: 34
+        Processing time: 648143ms
+      
+Current RPS: 10.29
+Redis metrics:
+        Used memory: 140.60M
+        Peak memory: 458.76M
+        AOF size: 66931743
+        Ops/sec: 318
+      
+Current RPS: 10.29
+Starting batch 121.65384615384616 of 385
+Current RPS: 9.81
+Batch processing breakdown:
+        Batch size: 26
+        Queue addition time: 735ms
+        Total flow time: 735ms
+        Jobs/second: 35.374149659863946
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 466
+        Batch size: 26
+        Processing time: 654243ms
+      
+Redis metrics:
+        Used memory: 148.70M
+        Peak memory: 458.76M
+        AOF size: 74835382
+        Ops/sec: 217
+      
+Starting batch 131.625 of 417
+Current RPS: 9.81
+Starting batch 132.91304347826087 of 435
+Batch processing breakdown:
+        Batch size: 24
+        Queue addition time: 1865ms
+        Total flow time: 1865ms
+        Jobs/second: 12.868632707774799
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 491
+        Batch size: 24
+        Processing time: 653740ms
+      
+Current RPS: 9.81
+Redis metrics:
+        Used memory: 156.31M
+        Peak memory: 458.76M
+        AOF size: 39354189
+        Ops/sec: 155
+      
+Batch processing breakdown:
+        Batch size: 23
+        Queue addition time: 730ms
+        Total flow time: 730ms
+        Jobs/second: 31.506849315068493
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 515
+        Batch size: 23
+        Processing time: 654470ms
+      
+Redis metrics:
+        Used memory: 3.50M
+        Peak memory: 3.68M
+        AOF size: 12000295
+        Ops/sec: 1
+      
+{
+  bidStats: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 2645, magiceden: 1157, blur: 0 }
+  }
+}
+{
+  bestOffers: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 0.0193, magiceden: 0.02, blur: 0 }
+  }
+}
+{
+  floorPrices: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 0.026, magiceden: 0.026, blur: 0 }
+  }
+}
+{
+  warningBids: {
+    '67bd2014ef2da68e8b6a159c': { opensea: false, magiceden: false, blur: false }
+  }
+}
+Current RPS: 7.97
+Current RPS: 5.97
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+   rss: 2843MB
+   heapTotal: 2784MB
+   heapUsed: 2709MB
+   external: 30MB
+
+📋 Queue Status:
+   active: 44
+   completed: 0
+   delayed: 0
+   failed: 0
+   paused: 0
+   prioritized: 460
+   waiting: 0
+   waiting-children: 12
+   Total Jobs: 516
+Starting batch 167.8421052631579 of 527
+Current RPS: 5.36
+Batch processing breakdown:
+        Batch size: 19
+        Queue addition time: 1746ms
+        Total flow time: 1746ms
+        Jobs/second: 10.882016036655212
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 535
+        Batch size: 19
+        Processing time: 663546ms
+      
+Current RPS: 5.36
+Redis metrics:
+        Used memory: 169.13M
+        Peak memory: 458.76M
+        AOF size: 52097088
+        Ops/sec: 151
+      
+Starting batch 187.23529411764707 of 589
+Starting batch 181.1764705882353 of 589
+Batch processing breakdown:
+        Batch size: 17
+        Queue addition time: 835ms
+        Total flow time: 835ms
+        Jobs/second: 20.35928143712575
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 553
+        Batch size: 17
+        Processing time: 661585ms
+      
+Batch processing breakdown:
+        Batch size: 17
+        Queue addition time: 835ms
+        Total flow time: 835ms
+        Jobs/second: 20.35928143712575
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 553
+        Batch size: 17
+        Processing time: 661585ms
+      
+Current RPS: 5.36
+Redis metrics:
+        Used memory: 5.27M
+        Peak memory: 17.38M
+        AOF size: 28986796
+        Ops/sec: 4565
+      
+Redis metrics:
+        Used memory: 180.12M
+        Peak memory: 458.76M
+        AOF size: 62413717
+        Ops/sec: 314
+      
+Current RPS: 4.47
+Current RPS: 4.51
+-----PING------
+Current RPS: 4.51
+Starting batch 320.8 of 1000
+{
+  bidStats: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 2645, magiceden: 1157, blur: 0 }
+  }
+}
+{
+  bestOffers: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 0.0193, magiceden: 0.02, blur: 0 }
+  }
+}
+{
+  floorPrices: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 0.026, magiceden: 0.026, blur: 0 }
+  }
+}
+{
+  warningBids: {
+    '67bd2014ef2da68e8b6a159c': { opensea: false, magiceden: false, blur: false }
+  }
+}
+Starting batch 355.55555555555554 of 1112
+Batch processing breakdown:
+        Batch size: 10
+        Queue addition time: 417ms
+        Total flow time: 417ms
+        Jobs/second: 23.980815347721823
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 582
+        Batch size: 10
+        Processing time: 669248ms
+      
+Redis metrics:
+        Used memory: 183.19M
+        Peak memory: 458.76M
+        AOF size: 65456918
+        Ops/sec: 129
+      
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+   rss: 2855MB
+   heapTotal: 2840MB
+   heapUsed: 2756MB
+   external: 43MB
+
+📋 Queue Status:
+   active: 55
+   completed: 0
+   delayed: 0
+   failed: 0
+   paused: 0
+   prioritized: 512
+   waiting: 0
+   waiting-children: 16
+   Total Jobs: 583
+Starting batch 387.125 of 1250
+Batch processing breakdown:
+        Batch size: 9
+        Queue addition time: 1084ms
+        Total flow time: 1084ms
+        Jobs/second: 8.302583025830257
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 592
+        Batch size: 9
+        Processing time: 667095ms
+      
+Current RPS: 4.49
+Completed MAGICEDEN_TOKEN_BID in 511424ms
+Redis metrics:
+        Used memory: 185.74M
+        Peak memory: 458.76M
+        AOF size: 68195125
+        Ops/sec: 241
+      
+Batch processing breakdown:
+        Batch size: 8
+        Queue addition time: 730ms
+        Total flow time: 730ms
+        Jobs/second: 10.95890410958904
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 601
+        Batch size: 8
+        Processing time: 667824ms
+      
+Redis metrics:
+        Used memory: 5.27M
+        Peak memory: 17.38M
+        AOF size: 28987546
+        Ops/sec: 3326
+      
+Current RPS: 4.49
+Completed MAGICEDEN_TOKEN_BID in 508554ms
+Completed MAGICEDEN_TOKEN_BID in 507518ms
+Current RPS: 4.79
+Completed MAGICEDEN_TOKEN_BID in 509042ms
+Completed MAGICEDEN_TOKEN_BID in 514361ms
+Current RPS: 4.97
+Current RPS: 5.03
+Starting batch 1609 of 5000
+Starting batch 1604.5 of 5000
+Starting batch 1552.5 of 5000
+WebSocket already connected, sending ping to verify...
+Current RPS: 4.61
+Batch processing breakdown:
+        Batch size: 2
+        Queue addition time: 581ms
+        Total flow time: 581ms
+        Jobs/second: 3.442340791738382
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 604
+        Batch size: 2
+        Processing time: 677200ms
+      
+Batch processing breakdown:
+        Batch size: 2
+        Queue addition time: 582ms
+        Total flow time: 582ms
+        Jobs/second: 3.436426116838488
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 604
+        Batch size: 2
+        Processing time: 673963ms
+      
+Batch processing breakdown:
+        Batch size: 2
+        Queue addition time: 582ms
+        Total flow time: 582ms
+        Jobs/second: 3.436426116838488
+      
+Batch metrics:
+        Active jobs: 64
+        Total jobs: 604
+        Batch size: 2
+        Processing time: 673963ms
+      
+Redis metrics:
+        Used memory: 5.29M
+        Peak memory: 17.38M
+        AOF size: 28989971
+        Ops/sec: 2818
+      
+Redis metrics:
+        Used memory: 5.29M
+        Peak memory: 17.38M
+        AOF size: 28989971
+        Ops/sec: 2818
+      
+Redis metrics:
+        Used memory: 190.41M
+        Peak memory: 458.76M
+        AOF size: 44618815
+        Ops/sec: 76
+      
+Current RPS: 4.90
+{
+  bidStats: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 2645, magiceden: 1162, blur: 0 }
+  }
+}
+{
+  bestOffers: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 0.0193, magiceden: 0.02, blur: 0 }
+  }
+}
+{
+  floorPrices: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 0.026, magiceden: 0.026, blur: 0 }
+  }
+}
+{
+  warningBids: {
+    '67bd2014ef2da68e8b6a159c': { opensea: false, magiceden: false, blur: false }
+  }
+}
+Current RPS: 4.90
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+   rss: 2396MB
+   heapTotal: 2907MB
+   heapUsed: 2828MB
+   external: 54MB
+
+📋 Queue Status:
+   active: 67
+   completed: 0
+   delayed: 0
+   failed: 0
+   paused: 0
+   prioritized: 523
+   waiting: 0
+   waiting-children: 21
+   Total Jobs: 611
+Current RPS: 5.46
+Current RPS: 5.74
+Current RPS: 5.53
+Current RPS: 5.68
+Current RPS: 5.74
+Current RPS: 5.88
+{
+  bidStats: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 2645, magiceden: 1162, blur: 0 }
+  }
+}
+{
+  bestOffers: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 0.0193, magiceden: 0.02, blur: 0 }
+  }
+}
+{
+  floorPrices: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 0.026, magiceden: 0.026, blur: 0 }
+  }
+}
+{
+  warningBids: {
+    '67bd2014ef2da68e8b6a159c': { opensea: false, magiceden: false, blur: false }
+  }
+}
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+   rss: 1736MB
+   heapTotal: 2959MB
+   heapUsed: 2881MB
+   external: 63MB
+
+📋 Queue Status:
+   active: 77
+   completed: 0
+   delayed: 0
+   failed: 0
+   paused: 0
+   prioritized: 513
+   waiting: 0
+   waiting-children: 21
+   Total Jobs: 611
+Current RPS: 5.76
+WebSocket already connected, sending ping to verify...
+Current RPS: 5.93
+Current RPS: 6.20
+Current RPS: 6.38
+Current RPS: 6.56
+Current RPS: 7.69
+Current RPS: 7.62
+-----PING------
+{
+  bidStats: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 2645, magiceden: 1162, blur: 0 }
+  }
+}
+{
+  bestOffers: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 0.0193, magiceden: 0.02, blur: 0 }
+  }
+}
+{
+  floorPrices: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 0.026, magiceden: 0.026, blur: 0 }
+  }
+}
+{
+  warningBids: {
+    '67bd2014ef2da68e8b6a159c': { opensea: false, magiceden: false, blur: false }
+  }
+}
+Current RPS: 7.30
+Current RPS: 7.47
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+   rss: 2899MB
+   heapTotal: 2922MB
+   heapUsed: 2658MB
+   external: 30MB
+
+📋 Queue Status:
+   active: 90
+   completed: 0
+   delayed: 0
+   failed: 0
+   paused: 0
+   prioritized: 500
+   waiting: 0
+   waiting-children: 21
+   Total Jobs: 611
+Current RPS: 7.59
+Error: Lock mismatch for job 34b31ab2-0dc2-45bf-bfbb-7f1df308288b. Cmd moveToFinished from active
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1488:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Error: Lock mismatch for job f2b47b30-9e11-49bc-aeed-1ba1f4576f28. Cmd moveToFinished from active
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1488:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Error: Lock mismatch for job a5ca4a83-286f-42da-bb5c-0334688495c5. Cmd moveToFinished from active
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1488:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting OPENSEA_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":78,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":13,"waiting-children":21}
+Error: Lock mismatch for job f0f0064e-8de9-4fde-94c2-181d1c205c9f. Cmd moveToFinished from active
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1488:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":79,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":499,"waiting":12,"waiting-children":21}
+Error: Lock mismatch for job abc9dd86-d668-4996-8dc2-dc0cea317e99. Cmd moveToFinished from active
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1488:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Error: Lock mismatch for job b4201f87-b7d1-400b-99d4-ae8af1ca29e0. Cmd moveToFinished from active
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1488:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Error: Missing lock for job c28f71ef-de8c-43a3-b2bd-14a95c66b1d6. moveToFinished
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1478:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Error: Missing lock for job bfa6d262-db7d-44b5-a5e0-6e999ef7d3f9. moveToFinished
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1478:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Error: Missing lock for job ef2710a2-bc43-4db1-8b5d-29123a8a65cd. moveToFinished
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1478:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Error: Missing lock for job 83b17bc1-4095-4f61-bee3-7c9546c9b51f. moveToFinished
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1478:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Error: Missing lock for job 311a1aa7-7931-4b84-9319-d85b8ebe4934. moveToFinished
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1478:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Error: Missing lock for job 3efd7640-0e0f-4bee-8705-78f077c89059. moveToFinished
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1478:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Error: Missing lock for job 3959c1f6-7bce-4118-a0be-b55a84ce894b. moveToFinished
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1478:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Error: Missing lock for job 4e8a4e21-e898-40f8-9111-62a2cea7f234. moveToFinished
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1478:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Error: Missing lock for job af7c591b-5bec-41d4-97cd-2a74b8a37a3f. moveToFinished
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1478:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Error: Missing lock for job 1d40d1c8-3494-4202-a96f-dc3f22a386e5. moveToFinished
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1478:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Error: Missing lock for job 0f457790-d8a9-42e7-bc5f-57fc916f9159. moveToFinished
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1478:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Error: Missing lock for job 6079032d-170a-4fbc-b14b-fb09fc8fd86c. moveToFinished
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1478:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Error: Missing lock for job 055bfc8e-c628-450e-a59d-022e00ffd6f8. moveToFinished
+    at Scripts.finishedErrors (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/scripts.ts:1478:16)
+    at /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/job.ts:768:30
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async handleFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:875:30)
+    at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:907:26
+    at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1175:16)
+Current RPS: 7.51
+Current RPS: 8.61
+Current RPS: 8.98
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":82,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":431,"waiting":0,"waiting-children":21}
+Starting MAGICEDEN_TOKEN_BID, queue size: {"active":83,"completed":0,"delayed":0,"failed":0,"paused":0,"prioritized":429,"waiting":0,"waiting-children":21}
+Current RPS: 8.88
+Current RPS: 8.80
+Current RPS: 8.80
+Current RPS: 8.80
+{
+  bidStats: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 2645, magiceden: 1162, blur: 0 }
+  }
+}
+{
+  bestOffers: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 0.0193, magiceden: 0.02, blur: 0 }
+  }
+}
+{
+  floorPrices: {
+    '67bd2014ef2da68e8b6a159c': { opensea: 0.026, magiceden: 0.026, blur: 0 }
+  }
+}
+{
+  warningBids: {
+    '67bd2014ef2da68e8b6a159c': { opensea: false, magiceden: false, blur: false }
+  }
+}
