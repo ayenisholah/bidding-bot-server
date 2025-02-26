@@ -1,7 +1,7 @@
 import { ethers, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
 import { config } from "dotenv";
-import { activeTasks, currentTasks, decrementBidCount, errorStats, logBidError, MAGENTA, redis, trackBidRate } from "../..";
+import { activeTasks, currentTasks, decrementBidCount, errorStats, isTaskAborted, logBidError, MAGENTA, redis, trackBidRate } from "../..";
 import { createBalanceChecker } from "../../utils/balance";
 import { DistributedLockManager } from '../../utils/lock';
 
@@ -302,6 +302,11 @@ async function sendSignedOrderData(order: any, taskId: string, offerPrice: strin
     // check if the tasks is still active before you make the offer
     const currentTask = activeTasks.get(taskId)
     if (!currentTask?.running || !currentTask?.selectedMarketplaces?.map((marketplace) => marketplace.toLowerCase()).includes("magiceden".toLowerCase())) return
+
+    if (isTaskAborted(taskId)) {
+      console.log(RED + `TASK ${taskId} IS STOPPED. SKIPPING MAGICEDEN...` + RESET);
+      return
+    }
 
     try {
       const { data: offerResponse } = await limiter.schedule(() =>

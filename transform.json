@@ -1,131 +1,23 @@
 {
-	"orders": [
-		{
-			"id": "0x3d8b30fb18a3637200c2114bec42047834cc1984a835419e3b875e45b26b6711",
-			"kind": "seaport-v1.6",
-			"side": "buy",
-			"status": "active",
-			"tokenSetId": "contract:0xb586d1dc01178ce79046e00ede62a3218722dfdd",
-			"tokenSetSchemaHash": "0xb596ad826a88402df9df0df626b6231e6923b844cd87520bea5431cd7b56bce8",
-			"contract": "0xb586d1dc01178ce79046e00ede62a3218722dfdd",
-			"contractKind": "erc721",
-			"maker": "0xbb9c40b36cc43f9b1bc48aaccb0bdcfff9bff655",
-			"taker": "0x0000000000000000000000000000000000000000",
-			"price": {
-				"currency": {
-					"contract": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
-					"name": "Wrapped Ether",
-					"symbol": "WETH",
-					"decimals": 18
-				},
-				"amount": {
-					"raw": "8700000000000000",
-					"decimal": 0.0087,
-					"usd": 23.62171,
-					"native": 0.0087
-				},
-				"netAmount": {
-					"raw": "8526000000000000",
-					"decimal": 0.00853,
-					"usd": 23.14927,
-					"native": 0.00853
-				}
-			},
-			"validFrom": 1740032880,
-			"validUntil": 1740119340,
-			"quantityFilled": 0,
-			"quantityRemaining": 2,
-			"criteria": {
-				"kind": "collection",
-				"data": {
-					"collection": { "id": "0xb586d1dc01178ce79046e00ede62a3218722dfdd" }
-				}
-			},
-			"source": {
-				"id": "0x8a75dd00f6766f27ac410e203c56b7693bf23c4d",
-				"domain": "magiceden.io",
-				"name": "Magic Eden",
-				"icon": "https://raw.githubusercontent.com/reservoirprotocol/assets/main/sources/magiceden-logo.svg",
-				"url": "https://magiceden.io/item-details/ethereum/0xb586d1dc01178ce79046e00ede62a3218722dfdd/91"
-			},
-			"feeBps": 200,
-			"feeBreakdown": [
-				{
-					"kind": "marketplace",
-					"recipient": "0x6fa303e72bed54f515a513496f922bc331e2f27e",
-					"bps": 200
-				}
-			],
-			"expiration": 1740119340,
-			"isReservoir": true,
-			"createdAt": "2025-02-20T06:29:06.374Z",
-			"updatedAt": "2025-02-20T06:29:06.374Z",
-			"originatedAt": null,
-			"isNativeOffChainCancellable": true
-		},
-		{
-			"id": "0xabd3dd5fc4c86929de0a6d20b54d7846b1c5a71ca988c232f517af8cb4177db4",
-			"kind": "seaport-v1.6",
-			"side": "buy",
-			"status": "active",
-			"tokenSetId": "dynamic:collection-non-flagged:0xb586d1dc01178ce79046e00ede62a3218722dfdd",
-			"tokenSetSchemaHash": "0x3ace50923635a64c78926af6b57b864bf9256b74acc14ef035002680a85b7862",
-			"contract": "0xb586d1dc01178ce79046e00ede62a3218722dfdd",
-			"contractKind": "erc721",
-			"maker": "0x5ed0529ed8935fd20379f55c8688d4c955993c92",
-			"taker": "0x0000000000000000000000000000000000000000",
-			"price": {
-				"currency": {
-					"contract": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
-					"name": "Wrapped Ether",
-					"symbol": "WETH",
-					"decimals": 18
-				},
-				"amount": {
-					"raw": "8500000000000000",
-					"decimal": 0.0085,
-					"usd": 23.07868,
-					"native": 0.0085
-				},
-				"netAmount": {
-					"raw": "8457500000000000",
-					"decimal": 0.00846,
-					"usd": 22.96329,
-					"native": 0.00846
-				}
-			},
-			"validFrom": 1740057711,
-			"validUntil": 1740058610,
-			"quantityFilled": 0,
-			"quantityRemaining": 1,
-			"criteria": {
-				"kind": "collection",
-				"data": {
-					"collection": { "id": "0xb586d1dc01178ce79046e00ede62a3218722dfdd" }
-				}
-			},
-			"source": {
-				"id": "0x5b3256965e7c3cf26e11fcaf296dfc8807c01073",
-				"domain": "opensea.io",
-				"name": "OpenSea",
-				"icon": "https://raw.githubusercontent.com/reservoirprotocol/assets/main/sources/opensea-logo.svg",
-				"url": "https://opensea.io/assets/ethereum/0xb586d1dc01178ce79046e00ede62a3218722dfdd/91"
-			},
-			"feeBps": 50,
-			"feeBreakdown": [
-				{
-					"kind": "marketplace",
-					"recipient": "0x0000a26b00c1f0df003000390027140000faa719",
-					"bps": 50
-				}
-			],
-			"expiration": 1740058610,
-			"isReservoir": null,
-			"createdAt": "2025-02-20T13:21:56.352Z",
-			"updatedAt": "2025-02-20T13:21:56.352Z",
-			"originatedAt": "2025-02-20T13:21:52.032Z",
-			"isNativeOffChainCancellable": false
-		}
-	],
-	"continuation": "ODQ1NzUwMDAwMDAwMDAwMF8weGFiZDNkZDVmYzRjODY5MjlkZTBhNmQyMGI1NGQ3ODQ2YjFjNWE3MWNhOTg4YzIzMmY1MTdhZjhjYjQxNzdkYjQ="
+	"name": "MAGICEDEN_TOKEN_BID",
+	"opts": {
+		"attempts": 3,
+		"priority": 3,
+		"timeout": 30000,
+		"removeOnFail": true,
+		"jobId": "67be22d9ef2da68e8b6a175c-tubby-cats-magiceden-409",
+		"removeOnComplete": true,
+		"backoff": { "delay": 1000, "type": "exponential" }
+	},
+	"id": "67be22d9ef2da68e8b6a175c-tubby-cats-magiceden-409",
+	"progress": 0,
+	"returnvalue": null,
+	"stacktrace": [],
+	"delay": 0,
+	"priority": 3,
+	"attemptsStarted": 1,
+	"attemptsMade": 0,
+	"timestamp": 1740593228928,
+	"queueQualifiedName": "{bull}:BIDDING_BOT",
+	"processedOn": 1740593254624
 }

@@ -37,45 +37,38 @@ async function initialize(rateLimit: number) {
   axiosInstance = axios.create({
     timeout: 300000,
   });
+
   limiter = new Bottleneck({
     minTime: 1000 / rateLimit,
+    maxConcurrent: rateLimit * 1.5,
   });
   axiosRetry(axiosInstance, retryConfig);
 
   // Define window size for RPS calculation
-  const RPS_WINDOW_SECONDS = 60; // Adjust window size as needed
-  const IDLE_THRESHOLD_SECONDS = 10; // Time without requests before considering RPS as 0
+  const RPS_WINDOW_MS = 10000; // 60 seconds in milliseconds
+  const IDLE_THRESHOLD_MS = 10000; // 10 seconds in milliseconds
   const requests: { timestamp: number }[] = [];
 
-  limiter.on("received", () => {
-    const now = Math.floor(Date.now() / 1000);
+  limiter.on("done", () => {
+    const now = Date.now();
     requests.push({ timestamp: now });
 
     // Remove old requests outside the window
-    const cutoff = now - RPS_WINDOW_SECONDS;
+    const cutoff = now - RPS_WINDOW_MS;
     while (requests.length > 0 && requests[0].timestamp <= cutoff) {
       requests.shift();
     }
 
     // Check if the most recent request is older than the idle threshold
-    const mostRecentRequest = requests[requests.length - 1]?.timestamp || 0;
-    if (now - mostRecentRequest >= IDLE_THRESHOLD_SECONDS) {
+    if (requests.length === 0 || (now - requests[requests.length - 1].timestamp) >= IDLE_THRESHOLD_MS) {
       rps.currentRPS = 0;
       return;
     }
 
-    // Calculate current RPS
-    const windowSize = Math.min(RPS_WINDOW_SECONDS, now - (requests[0]?.timestamp || now));
-    const currentRPS = requests.length / windowSize;
-
-    rps.currentRPS = currentRPS;
+    const windowDuration = now - requests[0].timestamp;
+    // Avoid division by zero and convert to seconds
+    rps.currentRPS = windowDuration > 0 ? (requests.length / (windowDuration / 1000)) : 0;
   });
-
-  // Log RPS periodically
-  setInterval(() => {
-    console.log(`Current RPS: ${rps.currentRPS.toFixed(2)}`);
-  }, 1000);
-
   console.log(`Limiter initialized with rate limit: ${rateLimit} requests per second`);
 }
 

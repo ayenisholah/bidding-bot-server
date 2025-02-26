@@ -1,14 +1,11 @@
-Error fetching Magic Eden collection stats: TypeError: Cannot read properties of null (reading 'currency')
-    at /Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/magiceden/bid.ts:688:100
-    at Array.filter (<anonymous>)
-    at /Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/magiceden/bid.ts:688:43
+Error processing MagicEden collection bid for task: undefined  TypeError: Cannot read properties of undefined (reading 'contractAddress')
+    at /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:4902:92
     at Generator.next (<anonymous>)
-    at fulfilled (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/magiceden/bid.ts:5:58)
-
-    Error processing MagicEden collection bid for task: 67b8c0286b1442529aac73a2  SyntaxError: Cannot convert 88000000000000001e+32 to a BigInt
-    at BigInt (<anonymous>)
-    at /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:4750:28
+    at /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:31:71
+    at new Promise (<anonymous>)
+    at __awaiter (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:27:12)
+    at processMagicedenCollectionBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:4317:12)
+    at /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:750:34
     at Generator.next (<anonymous>)
-    at fulfilled (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:28:58)
-    at runNextTicks (node:internal/process/task_queues:60:5)
-    at processTimers (node:internal/timers:511:9)
+    at /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:31:71
+    at new Promise (<anonymous>)

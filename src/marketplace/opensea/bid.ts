@@ -1,7 +1,7 @@
 import { BigNumber, Contract, ethers, Wallet } from "ethers";
 import { SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI, WETH_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, BLUE, currentTasks, decrementBidCount, errorStats, logBidError, OPENSEA_SCHEDULE, OPENSEA_TOKEN_BID, OPENSEA_TRAIT_BID, queue, redis, trackBidRate } from "../..";
+import { activeTasks, BLUE, currentTasks, decrementBidCount, errorStats, isTaskAborted, logBidError, OPENSEA_SCHEDULE, OPENSEA_TOKEN_BID, OPENSEA_TRAIT_BID, queue, redis, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { createBalanceChecker } from "../../utils/balance";
 import { Job } from "bullmq";
@@ -210,7 +210,6 @@ export async function bidOnOpensea(
 
   const task = activeTasks.get(taskId)
   if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return
-
 
   let totalOfferAmount = 0;
   const wethBalance = await balanceChecker.getWethBalance(wallet_address);
@@ -504,6 +503,11 @@ async function submitOfferToOpensea(slug: string, bidCount: string, offerPrice: 
     const task = activeTasks.get(taskId)
     if (!task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) return
 
+    if (isTaskAborted(taskId)) {
+      console.log(RED + `TASK ${taskId} IS STOPPED. SKIPPING OPENSEA...` + RESET);
+      return
+    }
+
     const { data: offer } = await
       limiter.schedule(() => axiosInstance.request<OpenseaOffer>({
         method: 'POST',
@@ -699,6 +703,11 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
       parameters: offer,
       signature,
       protocol_address: SEAPORT_CONTRACT_ADDRESS,
+    }
+
+    if (isTaskAborted(taskId)) {
+      console.log(RED + `TASK ${taskId} IS STOPPED. SKIPPING OPENSEA...` + RESET);
+      return
     }
 
     const { data } = await limiter.schedule(() => axiosInstance.post(`https://api.nfttools.website/opensea/api/v2/orders/ethereum/seaport/offers`, payload, {

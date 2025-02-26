@@ -21,12 +21,10 @@ const defaultConfig = {
   maxRetriesPerRequest: null,
   retryStrategy: (times: number) => {
     const delay = Math.min(times * INITIAL_RETRY_DELAY, 20000);
-    console.log(`Retrying connection attempt ${times} after ${delay}ms`);
     return delay;
   },
   clusterRetryStrategy: (times: number) => {
     if (times > RETRY_MAX_ATTEMPTS) {
-      console.error('Max retry attempts reached, giving up...');
       return null;
     }
     const delay = Math.min(times * INITIAL_RETRY_DELAY, 20000);
@@ -38,7 +36,6 @@ const defaultConfig = {
     connectTimeout: 30000,
     retryStrategy: (times: number) => {
       const delay = Math.min(times * INITIAL_RETRY_DELAY, 20000);
-      console.log(`Retrying redis connection attempt ${times} after ${delay}ms`);
       return delay;
     }
   },
@@ -84,7 +81,6 @@ class RedisClient {
 
     if (!this.client) {
       try {
-        console.log('Initializing Redis Cluster connection...');
 
         this.client = new Redis.Cluster(getRedisNodes(), {
           ...defaultConfig,
@@ -101,7 +97,6 @@ class RedisClient {
 
         this.setupEventHandlers();
       } catch (error) {
-        console.error('Redis connection error:', error);
         this.isConnected = false;
         this.client = null;
 
@@ -124,7 +119,6 @@ class RedisClient {
 
     this.client.on('error', (err) => {
       this.isConnected = false;
-      console.error('Redis Client Error:', err.message);
       if (!this.connecting && this.connectionAttempts < this.maxConnectionAttempts) {
         this.connectionAttempts++;
         setTimeout(() => this.connect(), 5000);
@@ -135,23 +129,8 @@ class RedisClient {
       this.isConnected = true;
       this.connecting = false;
       this.connectionAttempts = 0;
-      console.log('Redis Cluster is ready');
     });
 
-    this.client.on('connect', () => {
-      console.log('Redis Cluster connecting...');
-    });
-
-    this.client.on('node error', (err: Error, node: any) => {
-      console.error('Redis Cluster Node Error:', err.message);
-      if (node) {
-        console.error('Node details:', {
-          id: node.id || 'unknown',
-          address: node.address || 'unknown',
-          options: node.options || {}
-        });
-      }
-    });
   }
 
   public getClient(): Cluster {
