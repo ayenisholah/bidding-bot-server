@@ -30,6 +30,7 @@ import BidLogs from "./models/logs.model";
 
 let RATE_LIMIT = 64;
 const bidStats: BidCounts = {};
+const taskStatus: TaskStatus = {};
 const bestOffers: BidCounts = {};
 const floorPrices: BidCounts = {};
 const balances: any = {};
@@ -128,7 +129,6 @@ const workers = Array.from({ length: WORKER_COUNT }, (_, index) => new Worker(
 
 // Add error handling for stalled jobs
 workers.forEach((worker, index) => {
-  worker.on('completed', (job: Job) => handleJobCompletion(job));
   worker.on('failed', async (job, err) => {
     if (!job) return
     await job.moveToFailed(err as Error, "failed", true).catch(() => { });
@@ -189,6 +189,7 @@ function unlockTask(taskId: string): void {
 // Update handleJobCompletion to use locks
 const handleJobCompletion = async (job: Job) => {
   try {
+    console.log(GREEN + `Job ${job.id} completed` + RESET);
   } catch (error) {
     console.error(RED + `Error in handleJobCompletion:` + RESET, error);
   }
@@ -441,6 +442,62 @@ async function fetchCurrentTasks() {
 const DOWNTIME_THRESHOLD = 5 * 60 * 1000;
 const LAST_RUNTIME_KEY = 'server:last_runtime';
 
+
+interface BulkJobTracker {
+  taskId: string;
+  jobName: string;
+  marketplace: string; // Added marketplace field
+  totalJobs: number;
+  processedJobs: number;
+  completedJobs: number;
+  failedJobs: number;
+  startTime: number;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  percentComplete: number;
+}
+
+// Add tracking map
+const bulkJobTrackers = new Map<string, BulkJobTracker>();
+
+const bulkJobEmitter = new EventEmitter();
+
+// Add event listener near the top of the file with other listeners
+bulkJobEmitter.on('bulkJobComplete', (data: {
+  bulkJobId: string,
+  taskId: string,
+  jobName: string,
+  marketplace: string, // Added marketplace field
+  totalJobs: number,
+  completedJobs: number,
+  failedJobs: number,
+  duration: number
+}) => {
+  const { bulkJobId, taskId, jobName, marketplace, totalJobs, completedJobs, failedJobs, duration } = data;
+
+  console.log('\n=== Bulk Job Completed ===');
+  console.log(`Job ID: ${bulkJobId}`);
+  console.log(`Task ID: ${taskId}`);
+  console.log(`Job Type: ${jobName}`);
+  console.log(`Marketplace: ${marketplace}`); // Added marketplace log
+  console.log(`Total Jobs: ${totalJobs}`);
+  console.log(`Completed: ${completedJobs}`);
+  console.log(`Failed: ${failedJobs}`);
+  console.log(`Duration: ${(duration / 1000).toFixed(2)}s`);
+  console.log('=========================\n');
+});
+
+interface BulkJobParent {
+  parentId: string;
+  totalJobs: number;
+  completedJobs: number;
+  failedJobs: number;
+  startTime: number;
+  taskId: string;
+  jobName: string;
+}
+
+const parentJobs = new Map<string, BulkJobParent>();
+
 async function startServer() {
   try {
     await mongoose.connect(process.env.MONGODB_URI as string, {
@@ -536,6 +593,48 @@ queueEvents.on('drained', (args) => {
   globalBidRates['blur'] = { bidsPerSecond: 0, totalBids: 0, windowPeriod: BID_WINDOW_SECONDS }
 
 });
+
+queueEvents.on('completed', ({ jobId }) => {
+
+  if (jobId.split('-').length < 3) return
+
+  const taskId = jobId.split('-')[0];
+  const marketplace = jobId.split('-')[1];
+
+  const parentId = taskId + '-' + marketplace;
+  const parentJob = parentJobs.get(parentId);
+
+  if (!parentJob) return
+
+  parentJob.completedJobs++;
+
+  if (parentJob.completedJobs + parentJob.failedJobs === parentJob.totalJobs) {
+    console.log(GREEN + `All jobs for parent ID ${parentId} have been completed` + RESET);
+    parentJobs.delete(parentId);
+  }
+
+})
+
+queueEvents.on('failed', ({ jobId }) => {
+
+  if (jobId.split('-').length < 3) return
+
+  const taskId = jobId.split('-')[0];
+  const marketplace = jobId.split('-')[1];
+
+  const parentId = taskId + '-' + marketplace;
+  const parentJob = parentJobs.get(parentId);
+
+  if (!parentJob) return
+
+  parentJob.failedJobs++;
+
+  if (parentJob.completedJobs + parentJob.failedJobs === parentJob.totalJobs) {
+    console.log(RED + `All jobs for parent ID ${parentId} have been completed` + RESET);
+    parentJobs.delete(parentId);
+  }
+
+})
 
 function broadcastBidRates() {
   bidRates = getAllBidRates();
@@ -1073,58 +1172,31 @@ const MAX_MEMORY_USAGE = 75;
 const MAX_PRIORITIZED_JOBS = RATE_LIMIT * 2;
 const DRAIN_THRESHOLD = 100;
 
-// Add tracking interface
-interface BulkJobTracker {
-  taskId: string;
-  jobName: string;
-  totalJobs: number;
-  processedJobs: number;
-  completedJobs: number;
-  failedJobs: number;
-  startTime: number;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-  percentComplete: number;
-}
-
-// Add tracking map
-const bulkJobTrackers = new Map<string, BulkJobTracker>();
-
-const bulkJobEmitter = new EventEmitter();
-
-// Add event listener near the top of the file with other listeners
-bulkJobEmitter.on('bulkJobComplete', (data: {
-  bulkJobId: string,
-  taskId: string,
-  jobName: string,
-  totalJobs: number,
-  completedJobs: number,
-  failedJobs: number,
-  duration: number
-}) => {
-  const { bulkJobId, taskId, jobName, totalJobs, completedJobs, failedJobs, duration } = data;
-
-  console.log('\n=== Bulk Job Completed ===');
-  console.log(`Job ID: ${bulkJobId}`);
-  console.log(`Task ID: ${taskId}`);
-  console.log(`Job Type: ${jobName}`);
-  console.log(`Total Jobs: ${totalJobs}`);
-  console.log(`Completed: ${completedJobs}`);
-  console.log(`Failed: ${failedJobs}`);
-  console.log(`Duration: ${(duration / 1000).toFixed(2)}s`);
-  console.log('=========================\n');
-});
-
+// Add tracking interfac
 
 async function processBulkJobs(jobs: Job[], createKey = false) {
   if (!jobs?.length) return;
 
   const firstJob = jobs[0];
-  const bulkJobId = `${firstJob.name}-${firstJob.data._id}`;
+  const taskId = firstJob.data._id;
+  const marketplace = firstJob.name.split('_')[0] || 'UNKNOWN';
+  const bulkJobId = `${firstJob.data._id}-${marketplace}`;
+
+  parentJobs.set(bulkJobId, {
+    parentId: bulkJobId,
+    totalJobs: jobs.length,
+    completedJobs: 0,
+    failedJobs: 0,
+    startTime: Date.now(),
+    taskId,
+    jobName: firstJob.name
+  })
 
   const tracker: BulkJobTracker = {
     taskId: firstJob.data._id,
     jobName: firstJob.name,
     totalJobs: jobs.length,
+    marketplace, // Added marketplace field
     processedJobs: 0,
     completedJobs: 0,
     failedJobs: 0,
@@ -1251,6 +1323,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
       bulkJobId,
       taskId: tracker.taskId,
       jobName: tracker.jobName,
+      marketplace: tracker.marketplace, // Added marketplace field
       totalJobs: tracker.totalJobs,
       completedJobs: tracker.completedJobs,
       failedJobs: tracker.failedJobs,
@@ -1263,16 +1336,6 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
   }
 }
 
-// Add helper function to get bulk job status
-function getBulkJobStatus(bulkJobId: string): BulkJobTracker | null {
-  return bulkJobTrackers.get(bulkJobId) || null;
-}
-
-// Add helper function to get all active bulk jobs for a task
-function getTaskBulkJobs(taskId: string): BulkJobTracker[] {
-  return Array.from(bulkJobTrackers.values())
-    .filter(tracker => tracker.taskId === taskId);
-}
 
 // Helper function to wait for queue drain
 async function waitForQueueDrain(): Promise<void> {
@@ -1356,8 +1419,8 @@ function createJobKey(job: Job) {
     default:
       uniqueKey = 'collection';
   }
-  const baseKey = `${job?.data?._id}-${job?.data?.contract?.slug || job?.data?.slug}` || Math.floor(Math.random() * Number.MAX_SAFE_INTEGER).toString()
-  const key = `${baseKey}-${uniqueKey}`
+  const baseKey = `${job?.data?._id}` || Math.floor(Math.random() * Number.MAX_SAFE_INTEGER).toString()
+  const key = `${baseKey}-${uniqueKey}-${job?.data?.contract?.slug || job?.data?.slug}`
   return key
 }
 
@@ -1826,23 +1889,27 @@ async function waitForRunningJobsToComplete(task: ITask, marketplace?: string) {
       let failedCount = 0;
 
       await Promise.allSettled(relatedJobs.map(async (job: Job) => {
+
+        const state = await job.getState()
         console.log(`Attempting to stop job ${job.id}:`, {
           name: job.name,
           hasToken: !!job.token,
-          state: await job.getState()
+          state: state
         });
 
         try {
+
+          if (state === 'prioritized') {
+            await job.remove()
+          }
           // Signal the job to stop by updating its data
           await job.updateData({
             ...job.data,
             shouldStop: true
           });
           completedCount++;
-          console.log(`Successfully signaled job ${job.id} to stop`);
         } catch (err) {
           failedCount++;
-          console.error(`Failed to signal job ${job.id}:`, err);
         }
       }));
 
@@ -3669,7 +3736,7 @@ async function processOpenseaScheduledBid(task: ITask) {
       await queue.add(
         OPENSEA_COLLECTION_BID,
         { task, collectionDetails },
-        { priority: COLLECTION_BID_PRIORITY.OPENSEA } as JobsOptions
+        { priority: COLLECTION_BID_PRIORITY.OPENSEA, jobId: `${task._id}-opensea-${task.contract.slug}-collection` } as JobsOptions
       );
     }
   } catch (error) {
@@ -3920,7 +3987,7 @@ async function processBlurScheduledBid(task: ITask) {
       await queue.add(
         BLUR_COLLECTION_BID,
         { task },
-        { priority: COLLECTION_BID_PRIORITY.BLUR } as JobsOptions
+        { priority: COLLECTION_BID_PRIORITY.BLUR, jobId: `${task._id}-blur-${task.contract.slug}-collection` } as JobsOptions
       );
     }
   } catch (error) {
@@ -4924,7 +4991,7 @@ async function processMagicedenScheduledBid(task: ITask) {
       await queue.add(
         MAGICEDEN_COLLECTION_BID,
         { task },
-        { priority: COLLECTION_BID_PRIORITY.MAGICEDEN } as JobsOptions
+        { priority: COLLECTION_BID_PRIORITY.MAGICEDEN, jobId: `${task._id}-magiceden-${task.contract.slug}-collection` } as JobsOptions
       );
 
       console.log(`ADDED ${MAGICEDEN_COLLECTION_BID} JOB TO QUEUE`);
@@ -4938,7 +5005,6 @@ async function processMagicedenScheduledBid(task: ITask) {
 async function processMagicedenCollectionBid(data: { task: ITask }) {
   try {
     const { task } = data
-    console.log({ task });
     const floor_price = Number(await fetchMagicEdenCollectionStats(task._id, task.contract.contractAddress))
 
     if (!floorPrices[task._id]) {
@@ -6399,6 +6465,10 @@ interface BidCounts {
     magiceden: number;
     blur: number;
   };
+}
+
+interface TaskStatus {
+  [key: string]: 'RUNNING' | 'WAITING' | 'CANCELING' | 'SCHEDULED' | 'COMPLETED';
 }
 
 interface WarningBids {
