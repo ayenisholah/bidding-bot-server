@@ -27,7 +27,7 @@ import { execSync } from "child_process";
 import net from 'net'
 import BidLogs from "./models/logs.model";
 
-let RATE_LIMIT = 64;
+let RATE_LIMIT = process.env.RATE_LIMIT ? parseInt(process.env.RATE_LIMIT) : 8;
 const bidStats: BidCounts = {};
 const taskStatus: TaskStatus = {};
 const bestOffers: BidCounts = {};
@@ -36,7 +36,7 @@ const balances: any = {};
 export const warningBids: WarningBids = {};
 export const warningMessage: WarningMessage = {};
 export const errorStats: BidCounts = {};
-const skipStats: BidCounts = {};
+const skipStats: BidCounts = {}; 8
 const redis = redisClient.getClient()
 const QUEUE_NAME = 'BIDDING_BOT';
 const CPU_COUNT = os.cpus().length;
@@ -47,15 +47,15 @@ const JOB_TIMEOUT = 30000;
 const SEAPORT = '0x1e0049783f008a0085193e00003d00cd54003c71';
 
 const TOKEN_BID_PRIORITY = {
-  OPENSEA: 3,
-  MAGICEDEN: 3,
-  BLUR: 3
+  OPENSEA: 5,
+  MAGICEDEN: 5,
+  BLUR: 5
 };
 
 const TRAIT_BID_PRIORITY = {
-  OPENSEA: 4,
-  MAGICEDEN: 4,
-  BLUR: 4
+  OPENSEA: 5,
+  MAGICEDEN: 5,
+  BLUR: 5
 };
 
 const COLLECTION_BID_PRIORITY = {
@@ -114,13 +114,9 @@ const workers = Array.from({ length: WORKER_COUNT }, (_, index) => new Worker(
     connection: redis,
     prefix: '{bull}',
     // Each worker gets a fair share of the rate limit
-    concurrency: RATE_LIMIT * 1.5,
+    concurrency: RATE_LIMIT,
     lockDuration: 30000,
     stalledInterval: 15000,
-    limiter: {
-      max: RATE_LIMIT * 1.5,
-      duration: 1000,
-    },
     maxStalledCount: 1,
     name: `worker-${index + 1}`
   }
@@ -185,14 +181,6 @@ function unlockTask(taskId: string): void {
   }
 }
 
-// Update handleJobCompletion to use locks
-const handleJobCompletion = async (job: Job) => {
-  try {
-    console.log(GREEN + `Job ${job.id} completed` + RESET);
-  } catch (error) {
-    console.error(RED + `Error in handleJobCompletion:` + RESET, error);
-  }
-};
 
 // Helper function for consistent task ID extraction
 function extractTaskId(jobName: string): string | null {
@@ -308,6 +296,15 @@ async function monitorHealth() {
       }, 5000);
     }
 
+    if (counts.active > RATE_LIMIT * 1.5) {
+      await queue.pause();
+      setTimeout(async () => {
+        await queue.resume();
+      }, 2500);
+    } else {
+      await queue.resume();
+    }
+
     const totalJobs = Object.values(counts).reduce((a, b) => a + b, 0);
 
     if (totalJobs === 0) {
@@ -331,7 +328,7 @@ async function monitorHealth() {
 
     console.log(BLUE + '\n📋 Queue Status:' + RESET);
     Object.entries(counts).forEach(([key, value]) => {
-      const color = value > RATE_LIMIT * 2 ? RED : value > RATE_LIMIT ? YELLOW : GREEN;
+      const color = value > RATE_LIMIT * 1.5 ? RED : value > RATE_LIMIT ? YELLOW : GREEN;
       console.log(`   ${key}: ${color}${value}${RESET}`);
     });
     console.log(`   Total Jobs: ${totalJobs}`);
@@ -633,16 +630,24 @@ queueEvents.on('completed', ({ jobId }) => {
 
       if (allMarketsComplete) {
         console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
-        if (!taskStatus[taskId]) {
-          taskStatus[taskId] = 'COMPLETED'
-        }
-        taskStatus[taskId] = 'COMPLETED'
-        if (!task || !task.running) return;
-        const loopInterval = getExpiry(task.loopInterval) + 1
 
-        setTimeout(() => {
-          startTask(task, true)
-        }, loopInterval * 1000);
+        // Mark as COMPLETED temporarily, but we'll schedule it to run again
+        taskStatus[taskId] = 'COMPLETED';
+
+        // Only schedule the next run if the task is still in running state
+        if (task && task.running) {
+          const loopInterval = getExpiry(task.loopInterval) + 1;
+
+          console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
+
+          setTimeout(() => {
+            // When we restart, update the status
+            taskStatus[taskId] = 'SCHEDULED';
+            startTask(task, true);
+          }, loopInterval * 1000);
+        }
+
+        return;
       }
     }
   }
@@ -684,17 +689,24 @@ queueEvents.on('failed', ({ jobId }) => {
 
       if (allMarketsComplete) {
         console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
-        if (!taskStatus[taskId]) {
-          taskStatus[taskId] = 'COMPLETED'
+
+        // Mark as COMPLETED temporarily, but we'll schedule it to run again
+        taskStatus[taskId] = 'COMPLETED';
+
+        // Only schedule the next run if the task is still in running state
+        if (task && task.running) {
+          const loopInterval = getExpiry(task.loopInterval) + 1;
+
+          console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
+
+          setTimeout(() => {
+            // When we restart, update the status
+            taskStatus[taskId] = 'SCHEDULED';
+            startTask(task, true);
+          }, loopInterval * 1000);
         }
-        taskStatus[taskId] = 'COMPLETED'
 
-        if (!task || !task.running) return;
-        const loopInterval = getExpiry(task.loopInterval) + 1
-
-        setTimeout(() => {
-          startTask(task, true)
-        }, loopInterval * 1000);
+        return;
       }
     }
   }
@@ -834,7 +846,7 @@ async function updateConfig(data: any) {
 
       // Pause queue and shutdown existing workers
       await queue.pause();
-      await Promise.all(workers.map(worker => worker.close()));
+      // await Promise.all(workers.map(worker => worker.pause()));
 
       // Reinitialize with new rate limit
       await initialize(RATE_LIMIT);
@@ -842,46 +854,10 @@ async function updateConfig(data: any) {
       rps.maxRPS = RATE_LIMIT
 
       // Create new workers with updated settings
-      workers.length = 0; // Clear existing workers array
-      for (let i = 0; i < WORKER_COUNT; i++) {
-        const worker = new Worker(
-          QUEUE_NAME,
-          async (job) => {
-            try {
-              // Process job with timeout protection
-              const result = await Promise.race([
-                processJob(job),
-                new Promise((_, reject) =>
-                  setTimeout(() => reject(new Error('Job timeout')), JOB_TIMEOUT)
-                )
-              ]);
-              return result;
-            } catch (error) {
-              throw error;
-            }
-
-          },
-          {
-            connection: redis,
-            prefix: '{bull}',
-            concurrency: RATE_LIMIT * WORKER_COUNT,
-            lockDuration: 30000,
-            stalledInterval: 30000,
-            limiter: {
-              max: RATE_LIMIT * WORKER_COUNT,
-              duration: 1000
-            },
-            maxStalledCount: 1,
-            name: `worker-${i + 1}`
-          }
-        );
-
-        worker.on('completed', (job: Job) => handleJobCompletion(job));
-
-        workers.push(worker);
-      }
+      workers.map(worker => worker.concurrency = RATE_LIMIT)
 
       await queue.resume();
+      // await Promise.all(workers.map(worker => worker.resume()));
     }
 
     console.log(GREEN + 'Server components restarted successfully' + RESET);
@@ -1233,7 +1209,6 @@ async function processUpdatedTask(task: ITask) {
 }
 
 const MAX_MEMORY_USAGE = 75;
-const MAX_PRIORITIZED_JOBS = RATE_LIMIT * 1.5;
 const DRAIN_THRESHOLD = 100;
 
 // Add tracking interfac
@@ -1276,37 +1251,43 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
   };
 
   bulkJobTrackers.set(bulkJobId, tracker);
-  const rateLimiter = new RateLimiter(MAX_PRIORITIZED_JOBS);
-  const chunks = chunk(jobs, MAX_PRIORITIZED_JOBS);
+  const rateLimiter = new RateLimiter(RATE_LIMIT);
+  const chunks = chunk(jobs, RATE_LIMIT);
 
   let totalProcessed = 0;
   let totalAdded = 0;
   let totalFailed = 0;
 
   try {
-    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
-      const currentChunk = chunks[chunkIndex];
+    for (const [chunkIndex, currentChunk] of chunks.entries()) {
       try {
         const memUsage = process.memoryUsage();
         const memoryUsagePercent = (memUsage.heapUsed / os.totalmem()) * 100;
 
         if (memoryUsagePercent > MAX_MEMORY_USAGE) {
+          console.log(YELLOW + `Memory usage high (${memoryUsagePercent.toFixed(1)}%). Waiting for GC...` + RESET);
           await new Promise(resolve => setTimeout(resolve, 5000));
           global.gc?.();
-          chunkIndex--; // Decrement to retry current chunk
           continue;
-
         }
 
         while (true) {
           const counts = await queue.getJobCounts();
           const prioritizedCount = counts.prioritized || 0;
 
-          if (prioritizedCount <= MAX_PRIORITIZED_JOBS) {
+          if (prioritizedCount <= RATE_LIMIT) {
             break;
           }
           const delay = (prioritizedCount / RATE_LIMIT);
           await new Promise(resolve => setTimeout(resolve, delay * 1000));
+        }
+
+        // Check queue health
+        const counts = await queue.getJobCounts();
+        const prioritizedCount = counts.prioritized || 0;
+
+        if (prioritizedCount > RATE_LIMIT) {
+          await waitForQueueDrain();
         }
 
         totalProcessed += currentChunk.length;
@@ -1336,6 +1317,24 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
         }));
         const filteredJobs = validJobs.filter(Boolean);
         if (!filteredJobs.length) continue;
+
+        // Filter out jobs for stopped tasks
+        const activeJobs = currentChunk.filter(job => {
+          const taskId = job?.data?._id;
+          if (!taskId) return true; // Keep jobs without taskId
+
+          const task = activeTasks.get(taskId);
+          if (task && !task?.running) {
+            return false;
+          }
+          return true;
+        });
+
+        if (!activeJobs.length) {
+          console.log(YELLOW + `No active jobs in chunk ${chunkIndex + 1}, skipping...` + RESET);
+          continue;
+        }
+
 
         let retries = 3;
         while (retries > 0) {
@@ -1375,10 +1374,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
           }
         }
 
-        const counts = await queue.getJobCounts();
-        const queueSize = counts.prioritized || 0;
-        const delay = Math.max(1000, Math.min(5000, queueSize / RATE_LIMIT));
-
+        const delay = Math.max(1000, Math.min(5000, prioritizedCount / RATE_LIMIT));
         await new Promise(resolve => setTimeout(resolve, delay));
 
       } catch (error) {
@@ -1507,6 +1503,8 @@ function generateJobKey(job: any): string {
 
 async function updateMagicEdenTokenJobs(task: ITask, tokenIds: (number | string)[], offerPrice: number, expiry: number, maxBidPriceEth: number, minBidPriceEth: number) {
   try {
+    const newTask = { ...task, traits: {} } as ITask
+
     const jobs = tokenIds
       .filter(token => !isNaN(Number(token)))
       .map((token) => ({
@@ -1523,7 +1521,8 @@ async function updateMagicEdenTokenJobs(task: ITask, tokenIds: (number | string)
           outbidOptions: task.outbidOptions,
           maxBidPriceEth,
           minBidPriceEth,
-          shouldStop: false
+          shouldStop: false,
+          task: newTask
         },
         opts: { priority: TOKEN_BID_PRIORITY.MAGICEDEN } as JobsOptions
       })) as Job[]
@@ -1539,6 +1538,9 @@ async function updateMagicEdenTokenJobs(task: ITask, tokenIds: (number | string)
 async function updateOpenseaTokenJobs(task: ITask, tokenIds: (number | string)[], offerPrice: number, expiry: number, maxBidPriceEth: number, creatorFees: IFee, collectionDetails: any, minBidPriceEth: number) {
 
   try {
+
+    const newTask = { ...task, traits: {} } as ITask
+
     const jobs = tokenIds
       .filter(token => !isNaN(Number(token)))
       .map((token) => ({
@@ -1554,7 +1556,7 @@ async function updateOpenseaTokenJobs(task: ITask, tokenIds: (number | string)[]
           expiry,
           outbidOptions: task.outbidOptions,
           shouldStop: false,
-          task
+          task: newTask
         },
         opts: { priority: TOKEN_BID_PRIORITY.OPENSEA } as JobsOptions
       })) as Job[]
@@ -1576,7 +1578,9 @@ async function processMagicEdenTraitJobs(task: ITask, traits: {
 }[], offerPrice: number, expiration: number) {
 
   try {
+    const newTask = { ...task, traits: {} } as ITask
     const traitJobs = traits.map((trait) => ({
+
       name: MAGICEDEN_TRAIT_BID,
       data: {
         _id: task._id,
@@ -1590,7 +1594,7 @@ async function processMagicEdenTraitJobs(task: ITask, traits: {
         trait,
         outbidOptions: task.outbidOptions,
         shouldStop: false,
-        task
+        task: newTask
       },
       opts: { priority: TRAIT_BID_PRIORITY.MAGICEDEN } as JobsOptions
     })) as Job[]
@@ -1606,6 +1610,8 @@ async function processOpenseaTraitJobs(task: ITask, traits: {
 }[], offerPrice: bigint, expiry: number, creatorFees: IFee, collectionDetails: any) {
 
   try {
+    const newTask = { ...task, traits: {} } as ITask
+
     const traitJobs = traits.map((trait) => ({
       name: OPENSEA_TRAIT_BID,
       data: {
@@ -1620,7 +1626,7 @@ async function processOpenseaTraitJobs(task: ITask, traits: {
         expiry,
         outbidOptions: task.outbidOptions,
         shouldStop: false,
-        task
+        task: newTask
       },
       opts: { priority: TRAIT_BID_PRIORITY.OPENSEA } as JobsOptions
     })) as Job[]
@@ -1636,6 +1642,7 @@ async function processBlurTraitJobs(task: ITask, traits: {
   [key: string]: string;
 }[], offerPrice: bigint, expiry: number, maxBidPriceEth: number, minBidPriceEth: number) {
   try {
+    const newTask = { ...task, traits: {} } as ITask
     const traitJobs = traits.map((trait) => ({
       name: BLUR_TRAIT_BID,
       data: {
@@ -1650,7 +1657,8 @@ async function processBlurTraitJobs(task: ITask, traits: {
         outbidOptions: task.outbidOptions,
         maxBidPriceEth: maxBidPriceEth,
         minBidPriceEth: minBidPriceEth,
-        shouldStop: false
+        shouldStop: false,
+        task: newTask
       },
       opts: { priority: TRAIT_BID_PRIORITY.BLUR } as JobsOptions
     })) as Job[]
@@ -1800,7 +1808,6 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
     await cancelAllRelatedBids(task, marketplace);
 
     const { openseaBids, magicedenBids, blurBids } = await getAllRelatedBids(task);
-    console.log({ openseaBids, magicedenBids, blurBids });
     if (marketplace) {
       switch (marketplace.toLowerCase()) {
         case 'opensea':
@@ -3773,6 +3780,7 @@ async function processOpenseaScheduledBid(task: ITask) {
       taskStatus[task._id] = 'SCHEDULED'
     }
     taskStatus[task._id] = 'SCHEDULED'
+    const newTask = { ...task, traits: {} } as ITask
 
     if (tokenBid) {
       const jobs = tokenIds
@@ -3790,7 +3798,7 @@ async function processOpenseaScheduledBid(task: ITask) {
             expiry,
             outbidOptions: task.outbidOptions,
             shouldStop: false,
-            task
+            task: newTask
           },
           opts: { priority: TOKEN_BID_PRIORITY.OPENSEA } as JobsOptions,
         })) as Job[]
@@ -3814,7 +3822,7 @@ async function processOpenseaScheduledBid(task: ITask) {
           expiry,
           shouldStop: false,
           outbidOptions: task.outbidOptions,
-          task
+          task: newTask
         },
         opts: { priority: TRAIT_BID_PRIORITY.OPENSEA } as JobsOptions
       })) as Job[]
@@ -3838,7 +3846,7 @@ async function processOpenseaScheduledBid(task: ITask) {
 
       await queue.add(
         OPENSEA_COLLECTION_BID,
-        { task, collectionDetails },
+        { task: newTask, collectionDetails },
         { priority: COLLECTION_BID_PRIORITY.OPENSEA, jobId } as JobsOptions
       );
     }
@@ -4069,7 +4077,7 @@ async function processBlurScheduledBid(task: ITask) {
       taskStatus[task._id] = 'SCHEDULED'
     }
     taskStatus[task._id] = 'SCHEDULED'
-
+    const newTask = { ...task, traits: {} } as ITask
     if (traitBid) {
       const traits = transformBlurTraits(selectedTraits)
       const traitJobs = traits.map((trait) => ({
@@ -4084,7 +4092,7 @@ async function processBlurScheduledBid(task: ITask) {
           expiry,
           outbidOptions: task.outbidOptions,
           shouldStop: false,
-          task
+          task: newTask
         },
         opts: { priority: TRAIT_BID_PRIORITY.BLUR } as JobsOptions
       })) as Job[]
@@ -4105,7 +4113,7 @@ async function processBlurScheduledBid(task: ITask) {
 
       await queue.add(
         BLUR_COLLECTION_BID,
-        { task },
+        { task: newTask },
         { priority: COLLECTION_BID_PRIORITY.BLUR, jobId } as JobsOptions
       );
     }
@@ -4491,7 +4499,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     }
     const currentTask = activeTasks.get(_id)
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) return;
-    const floor_price = 0.026
+    const floor_price = await getCollectionStats(slug);
     if (!floorPrices[_id]) {
       floorPrices[_id] = {
         opensea: floor_price as number,
@@ -5061,6 +5069,8 @@ async function processMagicedenScheduledBid(task: ITask) {
     }
 
     taskStatus[task._id] = 'SCHEDULED'
+    const newTask = { ...task, traits: {} } as ITask
+
 
 
     if (tokenBid) {
@@ -5079,7 +5089,7 @@ async function processMagicedenScheduledBid(task: ITask) {
             tokenId: token,
             outbidOptions: task.outbidOptions,
             shouldStop: false,
-            task
+            task: newTask
           },
           opts: { priority: TOKEN_BID_PRIORITY.MAGICEDEN } as JobsOptions
         })) as Job[]
@@ -5102,7 +5112,7 @@ async function processMagicedenScheduledBid(task: ITask) {
           trait,
           outbidOptions: task.outbidOptions,
           shouldStop: false,
-          task
+          task: newTask
         },
         opts: { priority: TRAIT_BID_PRIORITY.MAGICEDEN } as JobsOptions
       })) as Job[]
@@ -5126,7 +5136,7 @@ async function processMagicedenScheduledBid(task: ITask) {
 
       await queue.add(
         MAGICEDEN_COLLECTION_BID,
-        { task },
+        { task: newTask },
         { priority: COLLECTION_BID_PRIORITY.MAGICEDEN, jobId } as JobsOptions
       );
 
@@ -5294,7 +5304,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       return
     }
 
-    const floor_price = 0.026
+    const floor_price = Number(await fetchMagicEdenCollectionStats(task._id, task.contract.contractAddress))
 
     if (!floorPrices[task._id]) {
       floorPrices[task._id] = {
@@ -6288,11 +6298,11 @@ async function hasActivePrioritizedJobs(task: ITask): Promise<boolean> {
 
 
 export async function getMEHighestOffers(contract: `0x${string}`) {
-  const BASE_URL = 'https://api.nfttools.website/magiceden/v3/rtp/ethereum/orders/bids/v6';
+  const BASE_URL = 'https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6';
 
   const headers = {
     "accept": "/",
-    "X-NFT-API-KEY": "d3348c68-097d-48b5-b5f0-0313cc05e92d"
+    "X-NFT-API-KEY": "a4eae399-f135-4627-829a-18435bb631ae"
   };
   const url = `${BASE_URL}?collection=${contract}&status=active&sortBy=price&limit=50`;
   try {

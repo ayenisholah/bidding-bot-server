@@ -117,7 +117,16 @@ class RedisClient {
   private setupEventHandlers() {
     if (!this.client) return;
 
+    // Add connection pool monitoring
+    this.client.on('ready', () => {
+      this.isConnected = true;
+      this.connecting = false;
+      this.connectionAttempts = 0;
+      console.log('Redis cluster connection established');
+    });
+
     this.client.on('error', (err) => {
+      console.error('Redis cluster error:', err);
       this.isConnected = false;
       if (!this.connecting && this.connectionAttempts < this.maxConnectionAttempts) {
         this.connectionAttempts++;
@@ -125,12 +134,16 @@ class RedisClient {
       }
     });
 
-    this.client.on('ready', () => {
-      this.isConnected = true;
-      this.connecting = false;
-      this.connectionAttempts = 0;
-    });
-
+    // Add periodic health check
+    setInterval(() => {
+      if (this.isConnected && this.client) {
+        this.client.ping().catch(err => {
+          console.warn('Redis ping failed:', err);
+          this.isConnected = false;
+          this.connect();
+        });
+      }
+    }, 30000);
   }
 
   public getClient(): Cluster {

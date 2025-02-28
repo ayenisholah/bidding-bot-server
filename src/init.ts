@@ -8,6 +8,8 @@ config()
 
 let limiter: Bottleneck;
 let axiosInstance: AxiosInstance;
+let countLoggerInterval: NodeJS.Timeout | null = null;
+let firstRequestTimestamp: number | null = null;
 
 async function fetchRateLimitFromDatabase() {
   return { rateLimit: Number(process.env.RATE_LIMIT), apiKey: process.env.API_KEY as string };
@@ -40,17 +42,26 @@ async function initialize(rateLimit: number) {
 
   limiter = new Bottleneck({
     minTime: 1000 / rateLimit,
-    maxConcurrent: rateLimit * 1.5,
+    trackDoneStatus: true, // Enable tracking of DONE status
   });
   axiosRetry(axiosInstance, retryConfig);
+
+  // Reset first request timestamp on initialization
+  firstRequestTimestamp = null;
 
   // Define window size for RPS calculation
   const RPS_WINDOW_MS = 10000; // 60 seconds in milliseconds
   const IDLE_THRESHOLD_MS = 10000; // 10 seconds in milliseconds
   const requests: { timestamp: number }[] = [];
 
-  limiter.on("done", () => {
+  limiter.on("received", () => {
     const now = Date.now();
+
+    // Track first request timestamp
+    if (firstRequestTimestamp === null) {
+      firstRequestTimestamp = now;
+    }
+
     requests.push({ timestamp: now });
 
     // Remove old requests outside the window
@@ -74,11 +85,46 @@ async function initialize(rateLimit: number) {
 
 // Add a function to get current counts
 export function getLimiterCounts() {
-  return {
-    queued: limiter.queued(),
-    running: limiter.running(),
-    done: limiter.done()
-  };
+  if (!limiter) {
+    return {
+      RECEIVED: 0,
+      QUEUED: 0,
+      RUNNING: 0,
+      EXECUTING: 0,
+      DONE: 0
+    };
+  }
+  return limiter.counts();
 }
+
+// Function to start logging limiter counts every second
+export function startCountsLogger(intervalMs = 1000) {
+  if (countLoggerInterval) {
+    clearInterval(countLoggerInterval);
+  }
+
+  countLoggerInterval = setInterval(() => {
+    const counts = getLimiterCounts();
+    console.log('Limiter Counts:', counts);
+  }, intervalMs);
+
+  console.log(`Started logging limiter counts every ${intervalMs}ms`);
+  return countLoggerInterval;
+}
+
+// Function to stop the counts logger
+export function stopCountsLogger() {
+  if (countLoggerInterval) {
+    clearInterval(countLoggerInterval);
+    countLoggerInterval = null;
+    console.log('Stopped logging limiter counts');
+  }
+}
+
+setInterval(() => {
+  const counts = getLimiterCounts();
+  console.log('Current Limiter Stats:', counts);
+}, 1000);
+
 
 export { limiter, initialize, axiosInstance };

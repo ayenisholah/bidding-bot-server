@@ -226,7 +226,21 @@ services:
         until redis-cli -h redis-node-4 ping; do sleep 1; done &&
         until redis-cli -h redis-node-5 ping; do sleep 1; done &&
         until redis-cli -h redis-node-6 ping; do sleep 1; done &&
-        echo "All nodes are up. Creating cluster..." &&
+        echo "Flushing existing data..." &&
+        redis-cli -h redis-node-1 FLUSHALL &&
+        redis-cli -h redis-node-2 FLUSHALL &&
+        redis-cli -h redis-node-3 FLUSHALL &&
+        redis-cli -h redis-node-4 FLUSHALL &&
+        redis-cli -h redis-node-5 FLUSHALL &&
+        redis-cli -h redis-node-6 FLUSHALL &&
+        echo "All nodes are up. Resetting cluster state..." &&
+        redis-cli -h redis-node-1 CLUSTER RESET HARD &&
+        redis-cli -h redis-node-2 CLUSTER RESET HARD &&
+        redis-cli -h redis-node-3 CLUSTER RESET HARD &&
+        redis-cli -h redis-node-4 CLUSTER RESET HARD &&
+        redis-cli -h redis-node-5 CLUSTER RESET HARD &&
+        redis-cli -h redis-node-6 CLUSTER RESET HARD &&
+        echo "Creating cluster..." &&
         redis-cli --cluster create \
           redis-node-1:6379 redis-node-2:6379 redis-node-3:6379 \
           redis-node-4:6379 redis-node-5:6379 redis-node-6:6379 \
