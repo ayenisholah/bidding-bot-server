@@ -356,7 +356,7 @@ async function sendSignedOrderData(order: any, taskId: string, offerPrice: strin
       ]);
 
       trackBidRate("magiceden", taskId)
-      // console.log(MAGENTA, successMessage, RESET);
+      console.log(MAGENTA, successMessage, RESET);
       if (!task) {
         await cancelMagicEdenBid([order], privateKey, taskId)
       }

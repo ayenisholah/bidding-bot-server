@@ -62,12 +62,12 @@ export async function bidOnBlur(
   }
 
   if (totalOfferAmount + offerPriceEth >= leverage * bethBalance) {
-    
+
     const jobs: Job[] = await queue.getJobs(['prioritized']);
     const blurJobs = jobs.filter(job =>
       [BLUR_SCHEDULE, BLUR_TRAIT_BID].includes(job.name)
     );
-    
+
     if (blurJobs.length > 0) {
       await queue.pause()
       await Promise.all(blurJobs.map(job => job.remove()));

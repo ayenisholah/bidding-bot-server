@@ -2,7 +2,7 @@ import Bottleneck from "bottleneck";
 import axios, { AxiosInstance } from "axios";
 import axiosRetry, { IAxiosRetryConfig } from "axios-retry";
 import { config } from "dotenv";
-import { rps } from ".";
+import { rps, WORKER_COUNT } from ".";
 
 config()
 
@@ -10,6 +10,11 @@ let limiter: Bottleneck;
 let axiosInstance: AxiosInstance;
 let countLoggerInterval: NodeJS.Timeout | null = null;
 let firstRequestTimestamp: number | null = null;
+let previousDoneCount = 0;
+let trueRPS = 0;
+// Add an array to store recent RPS values for averaging
+const rpsHistory: number[] = [];
+const RPS_HISTORY_SECONDS = 10; // Keep a 10-second history for averaging
 
 async function fetchRateLimitFromDatabase() {
   return { rateLimit: Number(process.env.RATE_LIMIT), apiKey: process.env.API_KEY as string };
@@ -49,37 +54,7 @@ async function initialize(rateLimit: number) {
   // Reset first request timestamp on initialization
   firstRequestTimestamp = null;
 
-  // Define window size for RPS calculation
-  const RPS_WINDOW_MS = 10000; // 60 seconds in milliseconds
-  const IDLE_THRESHOLD_MS = 10000; // 10 seconds in milliseconds
-  const requests: { timestamp: number }[] = [];
 
-  limiter.on("received", () => {
-    const now = Date.now();
-
-    // Track first request timestamp
-    if (firstRequestTimestamp === null) {
-      firstRequestTimestamp = now;
-    }
-
-    requests.push({ timestamp: now });
-
-    // Remove old requests outside the window
-    const cutoff = now - RPS_WINDOW_MS;
-    while (requests.length > 0 && requests[0].timestamp <= cutoff) {
-      requests.shift();
-    }
-
-    // Check if the most recent request is older than the idle threshold
-    if (requests.length === 0 || (now - requests[requests.length - 1].timestamp) >= IDLE_THRESHOLD_MS) {
-      rps.currentRPS = 0;
-      return;
-    }
-
-    const windowDuration = now - requests[0].timestamp;
-    // Avoid division by zero and convert to seconds
-    rps.currentRPS = windowDuration > 0 ? (requests.length / (windowDuration / 1000)) : 0;
-  });
   console.log(`Limiter initialized with rate limit: ${rateLimit} requests per second`);
 }
 
@@ -124,6 +99,27 @@ export function stopCountsLogger() {
 setInterval(() => {
   const counts = getLimiterCounts();
   console.log('Current Limiter Stats:', counts);
+
+  // Calculate instantaneous RPS based on completed requests
+  const completedInLastSecond = counts.DONE ? counts.DONE - previousDoneCount : 0;
+  previousDoneCount = counts.DONE || 0;
+
+  // Add current RPS to history
+  rpsHistory.push(completedInLastSecond);
+
+  // Keep only the last N seconds of history
+  if (rpsHistory.length > RPS_HISTORY_SECONDS) {
+    rpsHistory.shift();
+  }
+
+  // Calculate average RPS over the history window
+  const executing = counts.EXECUTING / WORKER_COUNT
+  const averageRPS = rpsHistory.reduce((sum, val) => sum + val, 0) / rpsHistory.length;
+  trueRPS = Math.max(executing, averageRPS);
+
+
+  rps.currentRPS = trueRPS;
+
 }, 1000);
 
 
