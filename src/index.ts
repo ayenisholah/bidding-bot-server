@@ -28,6 +28,7 @@ import net from 'net'
 import BidLogs from "./models/logs.model";
 
 let RATE_LIMIT = process.env.RATE_LIMIT ? parseInt(process.env.RATE_LIMIT) : 8;
+let API_KEY = process.env.API_KEY;
 const bidStats: BidCounts = {};
 const taskStatus: TaskStatus = {};
 const bestOffers: BidCounts = {};
@@ -780,9 +781,8 @@ async function updateConfig(data: any) {
   try {
     const { apiKey, rateLimit } = data;
     const oldRateLimit = RATE_LIMIT;
-
+    const oldApiKey = API_KEY;
     // Update global variables with new values
-    let API_KEY = apiKey
     RATE_LIMIT = rateLimit
 
     // Get path to .env file in project root
@@ -831,7 +831,7 @@ async function updateConfig(data: any) {
     console.log(GREEN + 'Configuration updated successfully' + RESET);
 
     // If rate limit changed, we need to restart server components
-    if (oldRateLimit !== rateLimit) {
+    if (oldRateLimit !== rateLimit || !oldApiKey || !oldRateLimit) {
       console.log(YELLOW + 'Rate limit changed. Restarting server components...' + RESET);
 
       // Pause queue and shutdown existing workers
@@ -842,14 +842,10 @@ async function updateConfig(data: any) {
       await initialize(RATE_LIMIT);
 
       rps.maxRPS = RATE_LIMIT
-
-      // Create new workers with updated settings
       workers.map(worker => worker.concurrency = RATE_LIMIT)
 
       await queue.resume();
-      // await Promise.all(workers.map(worker => worker.resume()));
     }
-
     console.log(GREEN + 'Server components restarted successfully' + RESET);
 
     // Return updated config values
@@ -962,12 +958,14 @@ async function runScheduledLoop() {
 
   if (!API_KEY) {
     console.log(RED + 'API_KEY is not set' + RESET);
+    await queue.pause()
     return
   }
 
 
   if (!RATE_LIMIT) {
     console.log(RED + 'RATE_LIMIT is not set' + RESET);
+    await queue.pause()
     return
   }
 
@@ -1650,6 +1648,7 @@ async function startTask(task: ITask, start: boolean) {
   const API_KEY = process.env.API_KEY
   if (!API_KEY) {
     console.log(RED + 'API_KEY is not set' + RESET);
+    await queue.pause()
     return
   }
 
@@ -1679,6 +1678,7 @@ async function startTask(task: ITask, start: boolean) {
   const RATE_LIMIT = process.env.RATE_LIMIT
   if (!RATE_LIMIT) {
     console.log(RED + 'RATE_LIMIT is not set' + RESET);
+    await queue.pause()
     return
   }
 
