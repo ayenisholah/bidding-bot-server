@@ -9,7 +9,7 @@ const RED = '\x1b[31m';
 
 config()
 const API_KEY = process.env.API_KEY as string;
-const BLUR_API_URL = 'https://api.nfttools.website/blur';
+const BLUR_API_URL = 'https://nfttools.pro/blur';
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 
 const deps = {
@@ -417,7 +417,7 @@ export async function cancelBlurBid(taskId: string, data: BlurCancelPayload) {
 }
 
 export async function fetchBlurBid(taskId: string, collection: string, criteriaType: 'TRAIT' | 'COLLECTION', criteriaValue: Record<string, string>) {
-  const url = `https://api.nfttools.website/blur/v1/collections/${collection}/executable-bids`;
+  const url = `https://nfttools.pro/blur/v1/collections/${collection}/executable-bids`;
   try {
     const { data } = await limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
       params: {
@@ -445,7 +445,7 @@ export async function fetchBlurBid(taskId: string, collection: string, criteriaT
 
 
 export async function fetchBlurCollectionStats(taskId: string, slug: string) {
-  const url = `https://api.nfttools.website/blur/v1/collections/${slug}/tokens`;
+  const url = `https://nfttools.pro/blur/v1/collections/${slug}/tokens`;
   try {
     const { data } = await limiter.schedule(() => axiosInstance.get<BlurTokensResponse>(url, {
       headers: {

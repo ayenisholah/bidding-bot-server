@@ -1,6 +1,6 @@
 services:
   server:
-    image: ayenisholah/bidding-bot-server:latest
+    image: ayenisholah/bidding-bot-server-production:latest
     platform: linux/amd64
     restart: always
     ports:
@@ -12,7 +12,7 @@ services:
       ALCHEMY_API_KEY: "HGWgCONolXMB2op5UjPH1YreDCwmSbvx"
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
       RATE_LIMIT: 32
-      API_KEY: d3348c68-097d-48b5-b5f0-0313cc05e92d
+      API_KEY: a4eae399-f135-4627-829a-18435bb631ae
     depends_on:
       - mongodb
       - redis-cluster-init
@@ -40,7 +40,7 @@ services:
       NEXT_PUBLIC_SERVER_WEBSOCKET: "ws://localhost:3003"
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
       RATE_LIMIT: 32
-      API_KEY: d3348c68-097d-48b5-b5f0-0313cc05e92d
+      API_KEY: a4eae399-f135-4627-829a-18435bb631ae
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001"]
       interval: 30s

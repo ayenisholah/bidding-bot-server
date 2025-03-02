@@ -13,8 +13,8 @@
 		"dc:destroy": "docker stop $(docker ps -aq) || true sleep 3 docker compose down --volumes --remove-orphans --timeout 15 && docker system prune -af --volumes",
 		"test": "nodemon test.ts",
 		"dc:start": "docker compose up --build",
-		"dc:build": "docker build -t ayenisholah/bidding-bot-server:latest .",
-		"dc:push": "docker push ayenisholah/bidding-bot-server:latest"
+		"dc:build": "docker build -t ayenisholah/bidding-bot-server-production:latest .",
+		"dc:push": "docker push ayenisholah/bidding-bot-server-production:latest"
 	},
 	"keywords": [],
 	"author": "",

@@ -511,7 +511,7 @@ async function submitOfferToOpensea(slug: string, bidCount: string, offerPrice: 
     const { data: offer } = await
       limiter.schedule(() => axiosInstance.request<OpenseaOffer>({
         method: 'POST',
-        url: `https://api.nfttools.website/opensea/api/v2/offers`,
+        url: `https://nfttools.pro/opensea/api/v2/offers`,
         headers: {
           'content-type': 'application/json',
           'X-NFT-API-Key': API_KEY
@@ -591,7 +591,7 @@ async function buildOffer(taskId: string, buildPayload: any) {
     const { data } = await limiter.schedule(() =>
       axiosInstance.request<PartialParameters>({
         method: 'POST',
-        url: `https://api.nfttools.website/opensea/api/v2/offers/build`,
+        url: `https://nfttools.pro/opensea/api/v2/offers/build`,
         headers: {
           'content-type': 'application/json',
           'X-NFT-API-Key': API_KEY,
@@ -618,7 +618,7 @@ export async function cancelOrder(orderHash: string, protocolAddress: string, pr
     return;
   }
 
-  const url = `https://api.nfttools.website/opensea/api/v2/orders/chain/ethereum/protocol/${protocolAddress}/${orderHash}/cancel`;
+  const url = `https://nfttools.pro/opensea/api/v2/orders/chain/ethereum/protocol/${protocolAddress}/${orderHash}/cancel`;
 
   const headers = {
     'content-type': 'application/json',
@@ -710,7 +710,7 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
       return
     }
 
-    const { data } = await limiter.schedule(() => axiosInstance.post(`https://api.nfttools.website/opensea/api/v2/orders/ethereum/seaport/offers`, payload, {
+    const { data } = await limiter.schedule(() => axiosInstance.post(`https://nfttools.pro/opensea/api/v2/orders/ethereum/seaport/offers`, payload, {
       headers: {
         'content-type': 'application/json',
         'X-NFT-API-Key': API_KEY
@@ -868,7 +868,7 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
 
   try {
     const { data } = await limiter.schedule(() => axiosInstance.post<OpenseaGraphResponse>(
-      'https://api.nfttools.website/opensea/graphql',
+      'https://nfttools.pro/opensea/graphql',
       query,
       {
         headers: {
@@ -912,7 +912,7 @@ export async function fetchOpenseaOffers(
 ): Promise<OpenseaTopOffers[]> {
   try {
     if (offerType === 'COLLECTION') {
-      const url = `https://api.nfttools.website/opensea/api/v2/offers/collection/${collectionSlug}`;
+      const url = `https://nfttools.pro/opensea/api/v2/offers/collection/${collectionSlug}`;
       const { data } = await limiter.schedule(() => axiosInstance.get(url, {
         headers: {
           'accept': 'application/json',
@@ -947,7 +947,7 @@ export async function fetchOpenseaOffers(
 
     } else if (offerType === 'TRAIT') {
       const { type, value } = identifiers as Record<string, string>;
-      const url = `https://api.nfttools.website/opensea/api/v2/offers/collection/${collectionSlug}/traits`;
+      const url = `https://nfttools.pro/opensea/api/v2/offers/collection/${collectionSlug}/traits`;
       const { data } = await limiter.schedule(() => axiosInstance.get(url, {
         headers: {
           'accept': 'application/json',
@@ -981,7 +981,7 @@ export async function fetchOpenseaOffers(
       return topOffers;
     } else if (offerType === 'TOKEN') {
       const token = identifiers as string;
-      const url = `https://api.nfttools.website/opensea/api/v2/orders/ethereum/seaport/offers`;
+      const url = `https://nfttools.pro/opensea/api/v2/orders/ethereum/seaport/offers`;
       const params = {
         asset_contract_address: contractAddress,
         token_ids: token,
@@ -1035,7 +1035,7 @@ export async function fetchOpenseaOffers(
 
 export async function fetchOpenseaListings(taskId: string, collectionSlug: string, limit?: number) {
   try {
-    const baseUrl = `https://api.nfttools.website/opensea/api/v2/listings/collection/${collectionSlug}/all`;
+    const baseUrl = `https://nfttools.pro/opensea/api/v2/listings/collection/${collectionSlug}/all`;
     let allListings: OpenseaOrder[] = [];
     let nextCursor: string | null = null;
 

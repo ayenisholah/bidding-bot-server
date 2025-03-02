@@ -29,7 +29,7 @@ export async function getCollectionDetails(slug: string, contractAddress: string
     try {
       const { data: collection } = await limiter.schedule(() => axiosInstance
         .get(
-          `https://api.nfttools.website/opensea/api/v2/collections/${slug}`,
+          `https://nfttools.pro/opensea/api/v2/collections/${slug}`,
           {
             headers: {
               'X-NFT-API-Key': API_KEY
@@ -85,7 +85,7 @@ export async function getCollectionDetails(slug: string, contractAddress: string
 export async function getCollectionStats(collectionSlug: string) {
   try {
     const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
-      `https://api.nfttools.website/opensea/api/v2/listings/collection/${collectionSlug}/best`,
+      `https://nfttools.pro/opensea/api/v2/listings/collection/${collectionSlug}/best`,
       {
         headers: { 'X-NFT-API-Key': API_KEY }
       }
@@ -115,7 +115,7 @@ export async function getCollectionEvents(
     params.append('limit', limit.toString());
 
     const { data } = await limiter.schedule(() => axiosInstance.get<CollectionEventResponse>(
-      `https://api.nfttools.website/opensea/api/v2/events/collection/${collectionSlug}`,
+      `https://nfttools.pro/opensea/api/v2/events/collection/${collectionSlug}`,
       {
         params: params,
         headers: { 'X-NFT-API-Key': API_KEY }
