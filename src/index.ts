@@ -7075,6 +7075,7 @@ async function watchNetworkState() {
   if (previousNetState !== netEnabled) {
     if (netEnabled) {
       // Network restored
+      await queue.pause()
       await queue.obliterate()
       console.log('Network restored, resuming operations...');
       queue.resume(); // Resume the queue
