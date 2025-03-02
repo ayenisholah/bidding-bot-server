@@ -1,11 +1,10 @@
 import { config } from "dotenv";
 import { axiosInstance, limiter } from "../init"; // Import Redis client
 import { DistributedLockManager } from "../utils/lock";
-import { redis } from "..";
+import { API_KEY, redis } from "..";
 
 config()
 
-const API_KEY = process.env.API_KEY as string
 
 const collectionCache: { [key: string]: any } = {};
 const MAX_CACHE_ITEMS = 1000;

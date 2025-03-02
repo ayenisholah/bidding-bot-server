@@ -16,10 +16,6 @@ let trueRPS = 0;
 const rpsHistory: number[] = [];
 const RPS_HISTORY_SECONDS = 10; // Keep a 10-second history for averaging
 
-async function fetchRateLimitFromDatabase() {
-  return { rateLimit: Number(process.env.RATE_LIMIT), apiKey: process.env.API_KEY as string };
-}
-
 const retryConfig: IAxiosRetryConfig = {
   retries: 3,
   retryDelay: (retryCount, error) => {

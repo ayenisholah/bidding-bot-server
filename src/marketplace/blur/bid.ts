@@ -1,6 +1,6 @@
 import { BigNumber, ethers, utils, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, BLUR_SCHEDULE, BLUR_TRAIT_BID, currentTasks, decrementBidCount, errorStats, logBidError, queue, redis, RESET, trackBidRate } from "../..";
+import { activeTasks, API_KEY, BLUR_SCHEDULE, BLUR_TRAIT_BID, currentTasks, decrementBidCount, errorStats, logBidError, queue, redis, RESET, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { createBalanceChecker } from "../../utils/balance";
 import { Job } from "bullmq";
@@ -8,7 +8,6 @@ import { DistributedLockManager } from "../../utils/lock";
 const RED = '\x1b[31m';
 
 config()
-const API_KEY = process.env.API_KEY as string;
 const BLUR_API_URL = 'https://nfttools.pro/blur';
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 

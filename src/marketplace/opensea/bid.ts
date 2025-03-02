@@ -1,7 +1,7 @@
 import { BigNumber, Contract, ethers, Wallet } from "ethers";
 import { SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI, WETH_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, BLUE, currentTasks, decrementBidCount, errorStats, isTaskAborted, logBidError, OPENSEA_SCHEDULE, OPENSEA_TOKEN_BID, OPENSEA_TRAIT_BID, queue, redis, trackBidRate } from "../..";
+import { activeTasks, API_KEY, BLUE, currentTasks, decrementBidCount, errorStats, isTaskAborted, logBidError, OPENSEA_SCHEDULE, OPENSEA_TOKEN_BID, OPENSEA_TRAIT_BID, queue, redis, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { createBalanceChecker } from "../../utils/balance";
 import { Job } from "bullmq";
@@ -10,7 +10,6 @@ import { Job } from "bullmq";
 
 config()
 
-const API_KEY = process.env.API_KEY as string;
 const OPENSEA_ITEM_ZONE = "0x000056f7000000ece9003ca63978907a00ffd100"
 const OPENSEA_COLLECTION_ZONE = "0x004C00500000aD104D7DBd00e3ae0A5C00560C00"
 const ZONE_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000"

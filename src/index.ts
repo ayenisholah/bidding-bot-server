@@ -27,8 +27,8 @@ import { execSync } from "child_process";
 import net from 'net'
 import BidLogs from "./models/logs.model";
 
-let RATE_LIMIT = process.env.RATE_LIMIT ? parseInt(process.env.RATE_LIMIT) : 8;
-let API_KEY = process.env.API_KEY;
+export let RATE_LIMIT = process.env.RATE_LIMIT ? parseInt(process.env.RATE_LIMIT) : 8;
+export let API_KEY = process.env.API_KEY;
 const bidStats: BidCounts = {};
 const taskStatus: TaskStatus = {};
 const bestOffers: BidCounts = {};
@@ -784,6 +784,10 @@ async function updateConfig(data: any) {
     const oldApiKey = API_KEY;
     // Update global variables with new values
     RATE_LIMIT = rateLimit
+    API_KEY = apiKey
+
+    process.env.RATE_LIMIT = rateLimit.toString();
+    process.env.API_KEY = apiKey;
 
     // Get path to .env file in project root
     const envPath = path.resolve(process.cwd(), '.env');
@@ -953,8 +957,6 @@ interface TaskLock {
 
 async function runScheduledLoop() {
 
-  const RATE_LIMIT = process.env.RATE_LIMIT
-  const API_KEY = process.env.API_KEY
 
   if (!API_KEY) {
     console.log(RED + 'API_KEY is not set' + RESET);
@@ -1645,7 +1647,6 @@ async function processBlurTraitJobs(task: ITask, traits: {
 }
 
 async function startTask(task: ITask, start: boolean) {
-  const API_KEY = process.env.API_KEY
   if (!API_KEY) {
     console.log(RED + 'API_KEY is not set' + RESET);
     await queue.pause()
@@ -6243,6 +6244,7 @@ export async function getMEHighestOffers(contract: `0x${string}`) {
     [0]
 
     const blur = data.orders
+
       .filter(item => item.source.name.toLowerCase() === "blur")
       .sort((a, b) => b.price.amount.decimal - a.price.amount.decimal)[0]
 

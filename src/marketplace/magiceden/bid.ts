@@ -1,7 +1,7 @@
 import { ethers, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
 import { config } from "dotenv";
-import { activeTasks, currentTasks, decrementBidCount, errorStats, isTaskAborted, logBidError, MAGENTA, redis, trackBidRate } from "../..";
+import { activeTasks, API_KEY, currentTasks, decrementBidCount, errorStats, isTaskAborted, logBidError, MAGENTA, redis, trackBidRate } from "../..";
 import { createBalanceChecker } from "../../utils/balance";
 import { DistributedLockManager } from '../../utils/lock';
 
@@ -10,7 +10,6 @@ const RESET = '\x1b[0m';
 
 config()
 
-const API_KEY = process.env.API_KEY
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 const provider = new ethers.providers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 

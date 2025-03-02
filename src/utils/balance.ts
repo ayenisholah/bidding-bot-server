@@ -14,7 +14,7 @@ const API_KEY = "a4eae399-f135-4627-829a-18435bb631ae";
 
 // Environment configuration
 const config = {
-  API_KEY: process.env.API_KEY,
+  API_KEY: API_KEY,
   ALCHEMY_KEY: process.env.ALCHEMY_KEY,
   OPENSEA_API_URL: 'https://nfttools.pro/opensea/__api/graphql/',
 };
