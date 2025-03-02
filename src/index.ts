@@ -539,7 +539,7 @@ export const rps = {
   currentRPS: 0,
   maxRPS: RATE_LIMIT ?? 0,
 }
-const BID_WINDOW_SECONDS = 60;
+const BID_WINDOW_SECONDS = 10;
 
 let bidRates = {
   opensea: { bidsPerSecond: 0, totalBids: 0, windowPeriod: BID_WINDOW_SECONDS },
@@ -6507,9 +6507,14 @@ const bidRateState: {
   blur: { bids: [] }
 };
 
+export const globalBidRates: MarketplaceBidRates = {
+  opensea: { bidsPerSecond: 0, totalBids: 0, windowPeriod: BID_WINDOW_SECONDS },
+  magiceden: { bidsPerSecond: 0, totalBids: 0, windowPeriod: BID_WINDOW_SECONDS },
+  blur: { bidsPerSecond: 0, totalBids: 0, windowPeriod: BID_WINDOW_SECONDS }
+};
+
 
 export function getAllBidRates(): MarketplaceBidRates {
-
   const tasks = Array.from(activeTasks.values());
   const running = tasks.some(task => task.running);
   if (!running) {
@@ -6523,11 +6528,45 @@ export function getAllBidRates(): MarketplaceBidRates {
   return globalBidRates;
 }
 
-export const globalBidRates: MarketplaceBidRates = {
-  opensea: { bidsPerSecond: 0, totalBids: 0, windowPeriod: BID_WINDOW_SECONDS },
-  magiceden: { bidsPerSecond: 0, totalBids: 0, windowPeriod: BID_WINDOW_SECONDS },
-  blur: { bidsPerSecond: 0, totalBids: 0, windowPeriod: BID_WINDOW_SECONDS }
-};
+export function trackBidRate(marketplace: 'opensea' | 'magiceden' | 'blur', taskId: string) {
+  const now = Math.floor(Date.now() / 1000);
+  const cutoff = now - BID_WINDOW_SECONDS;
+
+  // Add the new bid to the tracking state
+  bidRateState[marketplace].bids.push({
+    timestamp: now,
+    count: 1
+  });
+
+  // Consider batch processing - combine bids that happen in the same second
+  // This would reduce array size and improve performance for high-volume scenarios
+  const bidsGroupedByTimestamp = new Map<number, number>();
+  bidRateState[marketplace].bids.forEach(bid => {
+    const current = bidsGroupedByTimestamp.get(bid.timestamp) || 0;
+    bidsGroupedByTimestamp.set(bid.timestamp, current + bid.count);
+  });
+
+  // Convert back to array format but with consolidated entries
+  bidRateState[marketplace].bids = Array.from(bidsGroupedByTimestamp.entries())
+    .map(([timestamp, count]) => ({ timestamp, count }))
+    .filter(bid => bid.timestamp > cutoff);
+
+  // Update the bid rate calculations
+  updateBidRate(marketplace, now);
+
+  // Update bid stats for the specific task
+  if (!bidStats[taskId]) {
+    bidStats[taskId] = {
+      opensea: 0,
+      magiceden: 0,
+      blur: 0
+    };
+  }
+  bidStats[taskId][marketplace]++;
+
+  return { globalBidRates, bidStats };
+}
+
 
 // Add this interface near other interfaces
 interface BidCounts {
@@ -6558,60 +6597,36 @@ interface WarningMessage {
   };
 }
 
-export function trackBidRate(marketplace: 'opensea' | 'magiceden' | 'blur', taskId: string) {
-  const now = Math.floor(Date.now() / 1000);
-  const cutoff = now - BID_WINDOW_SECONDS;
-
-  // Normal bid rate calculation
-  bidRateState[marketplace].bids.push({
-    timestamp: now,
-    count: 1
-  });
-
-  bidRateState[marketplace].bids = bidRateState[marketplace].bids.filter(bid =>
-    bid.timestamp > cutoff
-  );
-
-  updateBidRate(marketplace, now);
-
-  // Update bid stats
-  if (!bidStats[taskId]) {
-    bidStats[taskId] = {
-      opensea: 0,
-      magiceden: 0,
-      blur: 0
-    };
-  }
-  bidStats[taskId][marketplace]++;
-
-  return { globalBidRates, bidStats };
-}
-
 // New function to update bid rates - can be called independently
 function updateBidRate(marketplace: 'opensea' | 'magiceden' | 'blur', now = Math.floor(Date.now() / 1000)) {
+  const bids = bidRateState[marketplace].bids;
   const cutoff = now - BID_WINDOW_SECONDS;
 
   // Filter out old bids again to ensure we're working with current data
-  bidRateState[marketplace].bids = bidRateState[marketplace].bids.filter(bid =>
-    bid.timestamp > cutoff
-  );
+  const recentBids = bids.filter(bid => bid.timestamp > cutoff);
 
-  const totalBids = bidRateState[marketplace].bids.reduce((sum, bid) => sum + bid.count, 0);
+  // Calculate total bids in the window
+  const totalBids = recentBids.reduce((sum, bid) => sum + bid.count, 0);
 
-  // If we have bids in the window, calculate based on the oldest bid's timestamp
-  // If no bids, the rate will be 0
-  let rate = 0;
-  if (bidRateState[marketplace].bids.length > 0) {
-    const oldestTimestamp = bidRateState[marketplace].bids[0]?.timestamp || now;
-    const timeWindow = Math.min(BID_WINDOW_SECONDS, now - oldestTimestamp);
-    rate = totalBids / timeWindow;
+  // Calculate actual time span (in case window isn't full yet)
+  let timeSpan = BID_WINDOW_SECONDS;
+  if (recentBids.length > 0) {
+    const oldestTimestamp = Math.min(...recentBids.map(bid => bid.timestamp));
+    timeSpan = Math.max(1, now - oldestTimestamp); // Ensure at least 1 second to avoid division by zero
   }
 
+  // Calculate bids per second
+  const bidsPerSecond = totalBids / timeSpan;
+
+  // Update global bid rates
   globalBidRates[marketplace] = {
-    bidsPerSecond: rate,
-    totalBids: totalBids,
+    bidsPerSecond: parseFloat(bidsPerSecond.toFixed(2)), // Round to 2 decimal places for readability
+    totalBids,
     windowPeriod: BID_WINDOW_SECONDS
   };
+
+  // Update bidRateState with filtered bids
+  bidRateState[marketplace].bids = recentBids;
 }
 
 // New function to periodically update all bid rates
@@ -6633,7 +6648,6 @@ export function getBidStats(taskId?: string): BidCounts | { [key: string]: numbe
   }
   return bidStats;
 }
-
 interface MarketplaceBidRates {
   opensea: BidRateStats;
   blur: BidRateStats;
@@ -6645,7 +6659,6 @@ interface BidRateStats {
   totalBids: number;
   windowPeriod: number;
 }
-
 interface IOpenseaBidParams {
   taskId: string;
   bidCount: string;
