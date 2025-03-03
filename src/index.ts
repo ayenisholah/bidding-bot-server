@@ -27,7 +27,7 @@ import { execSync } from "child_process";
 import net from 'net'
 import BidLogs from "./models/logs.model";
 
-export let RATE_LIMIT = process.env.RATE_LIMIT ? parseInt(process.env.RATE_LIMIT) : 8;
+export let RATE_LIMIT = process.env.RATE_LIMIT ? parseInt(process.env.RATE_LIMIT) : 100;
 export let API_KEY = process.env.API_KEY;
 const bidStats: BidCounts = {};
 const taskStatus: TaskStatus = {};
@@ -780,14 +780,18 @@ wss.on('connection', async (ws) => {
 async function updateConfig(data: any) {
   try {
     const { apiKey, rateLimit } = data;
-    const oldRateLimit = RATE_LIMIT;
-    const oldApiKey = API_KEY;
+
     // Update global variables with new values
-    RATE_LIMIT = rateLimit
+    RATE_LIMIT = Number(rateLimit)
     API_KEY = apiKey
 
-    process.env.RATE_LIMIT = rateLimit.toString();
-    process.env.API_KEY = apiKey;
+
+    if (typeof process.env.RATE_LIMIT !== 'undefined') {
+      process.env.RATE_LIMIT = rateLimit.toString();
+    }
+    if (typeof process.env.API_KEY !== 'undefined') {
+      process.env.API_KEY = apiKey;
+    }
 
     // Get path to .env file in project root
     const envPath = path.resolve(process.cwd(), '.env');
@@ -835,21 +839,13 @@ async function updateConfig(data: any) {
     console.log(GREEN + 'Configuration updated successfully' + RESET);
 
     // If rate limit changed, we need to restart server components
-    if (oldRateLimit !== rateLimit || !oldApiKey || !oldRateLimit) {
-      console.log(YELLOW + 'Rate limit changed. Restarting server components...' + RESET);
+    console.log(YELLOW + 'Rate limit changed. Restarting server components...' + RESET);
 
-      // Pause queue and shutdown existing workers
-      await queue.pause();
-      // await Promise.all(workers.map(worker => worker.pause()));
+    // Reinitialize with new rate limit
+    await initialize(RATE_LIMIT);
+    rps.maxRPS = RATE_LIMIT
 
-      // Reinitialize with new rate limit
-      await initialize(RATE_LIMIT);
 
-      rps.maxRPS = RATE_LIMIT
-      workers.map(worker => worker.concurrency = RATE_LIMIT)
-
-      await queue.resume();
-    }
     console.log(GREEN + 'Server components restarted successfully' + RESET);
 
     // Return updated config values
@@ -1782,9 +1778,7 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
     // Add timing logs for each operation
     await cancelAllRelatedBids(task, marketplace);
     await removePendingAndWaitingBids(task, marketplace)
-    await cancelAllRelatedBids(task, marketplace);
     await waitForRunningJobsToComplete(task, marketplace);
-    await cancelAllRelatedBids(task, marketplace);
 
     const { openseaBids, magicedenBids, blurBids } = await getAllRelatedBids(task);
     if (marketplace) {
@@ -6127,10 +6121,15 @@ async function approveMarketplace(currency: string, marketplace: string, task: I
         if (!stillLocked) {
           clearInterval(checkInterval);
           // Verify approval after lock is released
-          const provider = new ethers.providers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
-          const wethContract = new Contract(currency, WETH_MIN_ABI, provider);
-          const allowance = Number(await wethContract.allowance(task.wallet.address, marketplace)) / 1e18;
-          resolve(allowance > maxBidPriceEth);
+          try {
+            const provider = new ethers.providers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
+            const wethContract = new Contract(currency, WETH_MIN_ABI, provider);
+            const allowance = Number(await getAllowanceWithRetry(wethContract, task.wallet.address, marketplace)) / 1e18;
+            resolve(allowance > maxBidPriceEth);
+          } catch (error: any) {
+            console.error(`Error checking allowance after lock release: ${error.message}`);
+            resolve(false);
+          }
         }
       }, 1000); // Check every second
     });
@@ -6148,30 +6147,37 @@ async function approveMarketplace(currency: string, marketplace: string, task: I
           setTimeout(() => reject(new Error('Operation timed out')), 240000);
         });
 
-        const approvalPromise = async () => {
-          const allowance = Number(await wethContract.allowance(task.wallet.address, marketplace)) / 1e18;
-          if (allowance > maxBidPriceEth) return true;
+        const approvalPromise = async (): Promise<boolean> => {
+          try {
+            // Use getAllowanceWithRetry for better error handling
+            const allowance = Number(await getAllowanceWithRetry(wethContract, task.wallet.address, marketplace)) / 1e18;
+            if (allowance > maxBidPriceEth) return true;
 
-          const tx = await wethContract.approve(marketplace, constants.MaxUint256);
-          await tx.wait();
+            console.log(`Approving ${marketplace} to spend WETH for wallet ${task.wallet.address}`);
+            const tx = await wethContract.approve(marketplace, constants.MaxUint256);
+            await tx.wait();
 
-          const updateData = marketplace.toLowerCase() === SEAPORT.toLowerCase()
-            ? { openseaApproval: true }
-            : { magicedenApproval: true };
+            const updateData = marketplace.toLowerCase() === SEAPORT.toLowerCase()
+              ? { openseaApproval: true }
+              : { magicedenApproval: true };
 
-          // Batch update all tasks with this wallet
-          await Promise.all([
-            Wallet.updateOne(
-              { address: { $regex: new RegExp(task.wallet.address, 'i') } },
-              updateData
-            ),
-            Task.updateMany(
-              { 'wallet.address': { $regex: new RegExp(task.wallet.address, 'i') } },
-              { $set: updateData }
-            )
-          ]);
+            // Batch update all tasks with this wallet
+            await Promise.all([
+              Wallet.updateOne(
+                { address: { $regex: new RegExp(task.wallet.address, 'i') } },
+                updateData
+              ),
+              Task.updateMany(
+                { 'wallet.address': { $regex: new RegExp(task.wallet.address, 'i') } },
+                { $set: updateData }
+              )
+            ]);
 
-          return true;
+            return true;
+          } catch (error: any) {
+            console.error(`Error in approval process: ${error.message}`);
+            throw error;
+          }
         };
 
         return await Promise.race([approvalPromise(), timeoutPromise]);
@@ -7076,7 +7082,7 @@ async function watchNetworkState() {
     if (netEnabled) {
       // Network restored
       await queue.pause()
-      await queue.obliterate()
+      await queue.drain(true)
       console.log('Network restored, resuming operations...');
       queue.resume(); // Resume the queue
       workers.forEach(worker => worker.resume()); // Resume all workers

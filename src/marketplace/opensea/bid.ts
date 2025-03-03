@@ -641,7 +641,6 @@ export async function cancelOrder(orderHash: string, protocolAddress: string, pr
       decrementBidCount('opensea', taskId)
       return;
     }
-    console.log(error.response?.data || error.message);
   }
 }
 

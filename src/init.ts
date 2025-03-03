@@ -113,6 +113,7 @@ setInterval(() => {
   const averageRPS = rpsHistory.reduce((sum, val) => sum + val, 0) / rpsHistory.length;
   trueRPS = Math.max(executing, averageRPS);
 
+  console.log('Average RPS:', averageRPS.toFixed(2), 'Executing:', executing.toFixed(2), 'True RPS:', trueRPS.toFixed(2));
 
   rps.currentRPS = trueRPS;
 
