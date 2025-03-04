@@ -2,6 +2,10 @@ import { config } from "dotenv";
 import { axiosInstance, limiter } from "../init"; // Import Redis client
 import { DistributedLockManager } from "../utils/lock";
 import { API_KEY, redis } from "..";
+import axios from "axios";
+import { CollectionItemsListQuery } from "../queries";
+
+const GRAPHQL_URL = 'https://nfttools.pro/opensea/graphql';
 
 config()
 
@@ -131,25 +135,90 @@ export async function getCollectionEvents(
 }
 
 
-interface CollectionStats {
-  total: {
-    volume: number;
-    sales: number;
-    average_price: number;
-    num_owners: number;
-    market_cap: number;
-    floor_price: number;
-    floor_price_symbol: string;
+export async function fetchOpenSeaCollectionItems(variables: CollectionItemsQueryVariables): Promise<number[]> {
+
+  try {
+    const payload = {
+      operationName: 'CollectionItemsListQuery',
+      CollectionItemsListQuery,
+      variables
+    };
+
+    const { data } = await limiter.schedule(() => axios.post<CollectionItemsResponse>(GRAPHQL_URL, payload, {
+      headers: {
+        'X-NFT-API-KEY': API_KEY,
+      },
+    }));
+
+    return data.data.collectionItems.items.map((item) => item.name).map(id => parseInt(id.replace('#', '')));
+
+  } catch (error) {
+    console.error('Error fetching OpenSea collection items:', error);
+    throw new Error(`Failed to fetch collection items`);
+  }
+
+}
+
+
+interface CollectionItemsFilter {
+  attributes?: Array<{
+    traitType: string;
+    values: string[];
+  }>;
+}
+
+interface CollectionItemsSort {
+  by: 'PRICE' | 'CREATED_DATE' | 'RARITY';
+  direction: 'ASC' | 'DESC';
+}
+
+interface CollectionItemsQueryVariables {
+  collectionSlug: string;
+  filter?: CollectionItemsFilter;
+  limit?: number;
+  sort?: CollectionItemsSort;
+  cursor?: string;
+}
+
+
+interface TokenPrice {
+  unit: number;
+  symbol: string;
+}
+
+interface BestListing {
+  pricePerItem: {
+    token: TokenPrice;
   };
-  intervals: {
-    interval: string;
-    volume: number;
-    volume_diff: number;
-    volume_change: number;
-    sales: number;
-    sales_diff: number;
-    average_price: number;
-  }[];
+}
+
+interface LastSale {
+  native: {
+    unit: number;
+  };
+}
+
+interface Rarity {
+  rank: number;
+  category: string;
+}
+
+interface CollectionItem {
+  id: string;
+  name: string;
+  imageUrl: string;
+  bestListing: BestListing | null;
+  lastSale: LastSale | null;
+  rarity: Rarity;
+}
+
+interface CollectionItemsResponse {
+  data: {
+    collectionItems: {
+      items: CollectionItem[];
+      nextPageCursor: string;
+    };
+  };
 }
 
 interface CollectionEventResponse {
