@@ -72,8 +72,6 @@ export async function getCollectionDetails(slug: string, contractAddress: string
         error: error?.response?.data || error.message || error
       });
 
-      console.log(error);
-
       throw new Error(`Failed to fetch collection details for ${slug}: ${error?.response?.data?.message || error.message || 'Unknown error'}`);
     }
   });
@@ -140,17 +138,25 @@ export async function fetchOpenSeaCollectionItems(variables: CollectionItemsQuer
   try {
     const payload = {
       operationName: 'CollectionItemsListQuery',
-      CollectionItemsListQuery,
+      query: CollectionItemsListQuery,
       variables
     };
 
-    const { data } = await limiter.schedule(() => axios.post<CollectionItemsResponse>(GRAPHQL_URL, payload, {
+    const { data } = await limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(GRAPHQL_URL, payload, {
       headers: {
-        'X-NFT-API-KEY': API_KEY,
+        'x-nft-api-key': API_KEY,
       },
     }));
 
-    return data.data.collectionItems.items.map((item) => item.name).map(id => parseInt(id.replace('#', '')));
+    const tokenIds = data.data.collectionItems.items.map((item) => {
+      const match = item.name.match(/#(\d+)$/);
+      if (match && match[1]) {
+        return parseInt(match[1], 10);
+      }
+      return parseInt(item.name.replace(/\D/g, '')) || 0;
+    });
+
+    return [...new Set(tokenIds)];
 
   } catch (error) {
     console.error('Error fetching OpenSea collection items:', error);
@@ -172,7 +178,7 @@ interface CollectionItemsSort {
   direction: 'ASC' | 'DESC';
 }
 
-interface CollectionItemsQueryVariables {
+export interface CollectionItemsQueryVariables {
   collectionSlug: string;
   filter?: CollectionItemsFilter;
   limit?: number;

@@ -411,7 +411,7 @@ export async function cancelBlurBid(taskId: string, data: BlurCancelPayload) {
     if (error.response?.data?.message?.message !== 'No bids found') {
       console.log("cancelBlurBid: ", error?.response?.data || error);
     }
-    console.log(error.response.data || error.message);
+    // console.log(error.response.data || error.message);
   }
 }
 
