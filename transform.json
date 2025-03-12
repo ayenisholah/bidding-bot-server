@@ -1,362 +1,303 @@
 {
-	"traitOffers": [
-		{
-			"amount": 92000000000000000,
-			"owner": "0xc100dba17193e2909f2ef540268f5e7a504d8820"
-		},
-		{
-			"amount": 22000000000000000,
-			"owner": "0xdd687028f311271c65fa0653f33d23097277b3aa"
-		}
+	"openseaBids": [
+		{ "traitType": "Shirt", "traitValue": "Groovy" },
+		{ "traitType": "Hat", "traitValue": "American" },
+		{ "traitType": "Shirt", "traitValue": "Ray" },
+		{ "traitType": "Hat", "traitValue": "Jimmy" },
+		{ "traitType": "Fur", "traitValue": "Fish Scale" },
+		{ "traitType": "Hat", "traitValue": "Notorious Crown" },
+		{ "traitType": "Hat", "traitValue": "Rows" },
+		{ "traitType": "Eye", "traitValue": "Bloodshot" },
+		{ "traitType": "Hat", "traitValue": "ETH" },
+		{ "traitType": "Shirt", "traitValue": "Brown Coat" },
+		{ "traitType": "Fur", "traitValue": "Pink" },
+		{ "traitType": "Eye", "traitValue": "Laser ETH" },
+		{ "traitType": "Hat", "traitValue": "Donnie" },
+		{ "traitType": "Beak", "traitValue": "Glowing" },
+		{ "traitType": "Shirt", "traitValue": "Flannel" },
+		{ "traitType": "Eye", "traitValue": "Cat Scratch" },
+		{ "traitType": "Shirt", "traitValue": "Lobsta" },
+		{ "traitType": "Fur", "traitValue": "Pink Leopard" },
+		{ "traitType": "Necklace", "traitValue": "Thick Silver" },
+		{ "traitType": "Mouth", "traitValue": "French Fry" },
+		{ "traitType": "Fur", "traitValue": "Color Tats" },
+		{ "traitType": "Eye", "traitValue": "Heterochromia Green Yellow" },
+		{ "traitType": "Fur", "traitValue": "Hendrix" },
+		{ "traitType": "Shirt", "traitValue": "Hawaiian" },
+		{ "traitType": "Hat", "traitValue": "Ski Mask" },
+		{ "traitType": "Shirt", "traitValue": "Chef Curry" },
+		{ "traitType": "Shirt", "traitValue": "Tie Dye" },
+		{ "traitType": "Necklace", "traitValue": "BTC" },
+		{ "traitType": "Fur", "traitValue": "Grey Tats" },
+		{ "traitType": "Eye", "traitValue": "Fancy Gang Shades" },
+		{ "traitType": "Hat", "traitValue": "Juice" },
+		{ "traitType": "Eye", "traitValue": "Ballin" },
+		{ "traitType": "Hat", "traitValue": "Backwards Hat" },
+		{ "traitType": "Eye", "traitValue": "Icebreakers" },
+		{ "traitType": "Shirt", "traitValue": "Ski Jacket" },
+		{ "traitType": "Necklace", "traitValue": "Silver Chains" },
+		{ "traitType": "Eye", "traitValue": "Green Glowing" },
+		{ "traitType": "Necklace", "traitValue": "Bread Chain" },
+		{ "traitType": "Shirt", "traitValue": "Jail" },
+		{ "traitType": "Hat", "traitValue": "BTC" },
+		{ "traitType": "Necklace", "traitValue": "Gold Chains" },
+		{ "traitType": "Necklace", "traitValue": "Dog Tags" },
+		{ "traitType": "Necklace", "traitValue": "Diamond Cuban Links" },
+		{ "traitType": "Fur", "traitValue": "Leopard" },
+		{ "traitType": "Hat", "traitValue": "Dillinger" },
+		{ "traitType": "Fur", "traitValue": "Green Cat Camo" },
+		{ "traitType": "Necklace", "traitValue": "Thin Gold" },
+		{ "traitType": "Eye", "traitValue": "Prestige" },
+		{ "traitType": "Eye", "traitValue": "Triangle Shades" },
+		{ "traitType": "Mouth", "traitValue": "Joint" },
+		{ "traitType": "Fur", "traitValue": "White" },
+		{ "traitType": "Fur", "traitValue": "Alien Green" },
+		{ "traitType": "Hat", "traitValue": "Green Makaveli" },
+		{ "traitType": "Fur", "traitValue": "Black" },
+		{ "traitType": "Fur", "traitValue": "Pink Tats" },
+		{ "traitType": "Shirt", "traitValue": "Presidential" },
+		{ "traitType": "Necklace", "traitValue": "Bird Gang" },
+		{ "traitType": "Mouth", "traitValue": "Vape" },
+		{ "traitType": "Fur", "traitValue": "Dark Camo" },
+		{ "traitType": "Necklace", "traitValue": "Gold Cross" },
+		{ "traitType": "Eye", "traitValue": "Laser BTC" },
+		{ "traitType": "Fur", "traitValue": "Orange Tabby" },
+		{ "traitType": "Hat", "traitValue": "Beanie" },
+		{ "traitType": "Background", "traitValue": "White" },
+		{ "traitType": "Eye", "traitValue": "Green" },
+		{ "traitType": "Background", "traitValue": "Pink" },
+		{ "traitType": "Necklace", "traitValue": "Headphones" },
+		{ "traitType": "Shirt", "traitValue": "Gold Jacket" },
+		{ "traitType": "Necklace", "traitValue": "ETH" },
+		{ "traitType": "Eye", "traitValue": "Blue Glowing" },
+		{ "traitType": "Hat", "traitValue": "Spinner" },
+		{ "traitType": "Background", "traitValue": "Green" },
+		{ "traitType": "Fur", "traitValue": "Purple Cheshire" },
+		{ "traitType": "Necklace", "traitValue": "Thick Gold" },
+		{ "traitType": "Background", "traitValue": "Purple" },
+		{ "traitType": "Necklace", "traitValue": "Thin Silver" },
+		{ "traitType": "Hat", "traitValue": "Horny" },
+		{ "traitType": "Eye", "traitValue": "Black" },
+		{ "traitType": "Shirt", "traitValue": "Cheetah Fur" },
+		{ "traitType": "Eye", "traitValue": "Yellow" },
+		{ "traitType": "Shirt", "traitValue": "Flames" },
+		{ "traitType": "Eye", "traitValue": "Pirate" },
+		{ "traitType": "Fur", "traitValue": "Gold Tats" },
+		{ "traitType": "Shirt", "traitValue": "Air Patrol" },
+		{ "traitType": "Shirt", "traitValue": "Tracksuit" },
+		{ "traitType": "Mouth", "traitValue": "Cig" },
+		{ "traitType": "Hat", "traitValue": "Bucket Hat" },
+		{ "traitType": "Shirt", "traitValue": "Biker Vest" },
+		{ "traitType": "Shirt", "traitValue": "Jobs" },
+		{ "traitType": "Fur", "traitValue": "White Tiger" },
+		{ "traitType": "Shirt", "traitValue": "Black Merch Shirt" },
+		{ "traitType": "Fur", "traitValue": "Grey" },
+		{ "traitType": "Shirt", "traitValue": "Farmer" },
+		{ "traitType": "Eye", "traitValue": "Heterochromia Yellow Blue" },
+		{ "traitType": "Fur", "traitValue": "Robot" },
+		{ "traitType": "Hat", "traitValue": "Halo" },
+		{ "traitType": "Shirt", "traitValue": "Construction Vest" },
+		{ "traitType": "Fur", "traitValue": "Black Tats" },
+		{ "traitType": "Fur", "traitValue": "Alien Green Tats" },
+		{ "traitType": "Shirt", "traitValue": "Bird" },
+		{ "traitType": "Eye", "traitValue": "King Louis" },
+		{ "traitType": "Hat", "traitValue": "Green Bandana" },
+		{ "traitType": "Fur", "traitValue": "Manhattan" },
+		{ "traitType": "Hat", "traitValue": "Durag" },
+		{ "traitType": "Hat", "traitValue": "Captain" },
+		{ "traitType": "Eye", "traitValue": "White" },
+		{ "traitType": "Eye", "traitValue": "Blue" },
+		{ "traitType": "Mouth", "traitValue": "Toothpick" },
+		{ "traitType": "Beak", "traitValue": "Gold" },
+		{ "traitType": "Beak", "traitValue": "Diamond" },
+		{ "traitType": "Necklace", "traitValue": "GCG Chain" },
+		{ "traitType": "Shirt", "traitValue": "Mr Buckets" },
+		{ "traitType": "Eye", "traitValue": "Gutta Goggles" },
+		{ "traitType": "Fur", "traitValue": "Galaxy Allstar" },
+		{ "traitType": "Shirt", "traitValue": "Mamba" },
+		{ "traitType": "Background", "traitValue": "Blue" },
+		{ "traitType": "Fur", "traitValue": "Platinum" },
+		{ "traitType": "Shirt", "traitValue": "Dirty Bird" },
+		{ "traitType": "Fur", "traitValue": "Gold" },
+		{ "traitType": "Hat", "traitValue": "Afro" },
+		{ "traitType": "Eye", "traitValue": "Monocle" },
+		{ "traitType": "Eye", "traitValue": "Rainbow" },
+		{ "traitType": "Shirt", "traitValue": "MJ" },
+		{ "traitType": "Eye", "traitValue": "Rhinestone" },
+		{ "traitType": "Shirt", "traitValue": "Tuxedo" },
+		{ "traitType": "Shirt", "traitValue": "Vibin" },
+		{ "traitType": "Hat", "traitValue": "Dreads" },
+		{ "traitType": "Fur", "traitValue": "Cyborg" },
+		{ "traitType": "Eye", "traitValue": "Heterochromia Blue Green" },
+		{ "traitType": "Background", "traitValue": "Yellow" },
+		{ "traitType": "Shirt", "traitValue": "Gang Gang" },
+		{ "traitType": "Fur", "traitValue": "Silver" },
+		{ "traitType": "Shirt", "traitValue": "Finnesse" },
+		{ "traitType": "Fur", "traitValue": "Camo" },
+		{ "traitType": "Hat", "traitValue": "Sicko" },
+		{ "traitType": "Shirt", "traitValue": "Pink Fur" },
+		{ "traitType": "Shirt", "traitValue": "HODL" },
+		{ "traitType": "Hat", "traitValue": "Merch Hat" },
+		{ "traitType": "Eye", "traitValue": "VR" },
+		{ "traitType": "Fur", "traitValue": "Ice Cream Drip" },
+		{ "traitType": "Shirt", "traitValue": "Black Tee" },
+		{ "traitType": "Necklace", "traitValue": "Green Bandana" },
+		{ "traitType": "Hat", "traitValue": "Skullz" },
+		{ "traitType": "Fur", "traitValue": "Gradient Tats" },
+		{ "traitType": "Shirt", "traitValue": "Vince" },
+		{ "traitType": "Shirt", "traitValue": "Puffer" },
+		{ "traitType": "Shirt", "traitValue": "Color Block" }
 	],
-	"collectionOffers": [
-		{
-			"amount": 21000000000000000,
-			"owner": "0xc6aef1f708d7b7d7bbe5981480e4d2571fcda638"
-		},
-		{
-			"amount": 20700000000000000,
-			"owner": "0x19d266792b28a441cb0f6a3334ba617ef18b50ee"
-		},
-		{
-			"amount": 20300000000000000,
-			"owner": "0x497d55d85955b153c74f6c6740b29dffc0286747"
-		},
-		{
-			"amount": 20100000000000000,
-			"owner": "0x1150ba11d23037af1c63e166b767f02e614440aa"
-		},
-		{
-			"amount": 19800000000000000,
-			"owner": "0x19d266792b28a441cb0f6a3334ba617ef18b50ee"
-		},
-		{
-			"amount": 18800000000000000,
-			"owner": "0x1bce0701f553594189bbeed07a230bf88a74e7a8"
-		},
-		{
-			"amount": 18700000000000000,
-			"owner": "0x1bce0701f553594189bbeed07a230bf88a74e7a8"
-		},
-		{
-			"amount": 18700000000000000,
-			"owner": "0x497d55d85955b153c74f6c6740b29dffc0286747"
-		},
-		{
-			"amount": 18600000000000000,
-			"owner": "0x2212c1c14747ac2ef4b7d6a293cd9293ebf7f1bd"
-		},
-		{
-			"amount": 18500000000000000,
-			"owner": "0x39ca7fad38f8ec58d2217e2b845fb90d49b87822"
-		},
-		{
-			"amount": 17800000000000000,
-			"owner": "0x89f690bdf5e6d838cb0d4cd4c3a8eb538dc5fdac"
-		},
-		{
-			"amount": 17800000000000000,
-			"owner": "0x89f690bdf5e6d838cb0d4cd4c3a8eb538dc5fdac"
-		},
-		{
-			"amount": 17700000000000000,
-			"owner": "0x497d55d85955b153c74f6c6740b29dffc0286747"
-		},
-		{
-			"amount": 17600000000000000,
-			"owner": "0x497d55d85955b153c74f6c6740b29dffc0286747"
-		},
-		{
-			"amount": 17500000000000000,
-			"owner": "0x497d55d85955b153c74f6c6740b29dffc0286747"
-		},
-		{
-			"amount": 17400000000000000,
-			"owner": "0xc265e012fe45fef668db24c88a5ec47f5ad86a07"
-		},
-		{
-			"amount": 17200000000000000,
-			"owner": "0x7f9b8c7bd797503af08e48ac52e19b0cd5ae9ac4"
-		},
-		{
-			"amount": 16800000000000000,
-			"owner": "0x9e30ad52595a892c4e5cb54be99cf11277b7ff41"
-		},
-		{
-			"amount": 16800000000000000,
-			"owner": "0x497d55d85955b153c74f6c6740b29dffc0286747"
-		},
-		{
-			"amount": 16800000000000000,
-			"owner": "0x9e30ad52595a892c4e5cb54be99cf11277b7ff41"
-		},
-		{
-			"amount": 16700000000000000,
-			"owner": "0x43982282ea619877e3999999d2723354a43082ca"
-		},
-		{
-			"amount": 16700000000000000,
-			"owner": "0xf81a733aca06d4639c238ec88899d913bbdd38f8"
-		},
-		{
-			"amount": 16600000000000000,
-			"owner": "0xc74cca3b23785faf2f67a9e71f82eb50e3f9bf12"
-		},
-		{
-			"amount": 16500000000000000,
-			"owner": "0x89f690bdf5e6d838cb0d4cd4c3a8eb538dc5fdac"
-		},
-		{
-			"amount": 16500000000000000,
-			"owner": "0x89f690bdf5e6d838cb0d4cd4c3a8eb538dc5fdac"
-		},
-		{
-			"amount": 16400000000000000,
-			"owner": "0xc265e012fe45fef668db24c88a5ec47f5ad86a07"
-		},
-		{
-			"amount": 16000000000000000,
-			"owner": "0x853a5db0da20366fad923f7eeecce52b14769a3e"
-		},
-		{
-			"amount": 15000000000000000,
-			"owner": "0xea27c344487b6fb780e33d40b636fe3d0103a15e"
-		},
-		{
-			"amount": 14000000000000000,
-			"owner": "0xc265e012fe45fef668db24c88a5ec47f5ad86a07"
-		},
-		{
-			"amount": 13800000000000000,
-			"owner": "0x57227fe96ded3ef450033de63eafb4550985cd83"
-		},
-		{
-			"amount": 13500000000000000,
-			"owner": "0x5bc576f572dd2713b641074292ab027c3ef2620b"
-		},
-		{
-			"amount": 13300000000000000,
-			"owner": "0x89f690bdf5e6d838cb0d4cd4c3a8eb538dc5fdac"
-		},
-		{
-			"amount": 13300000000000000,
-			"owner": "0x89f690bdf5e6d838cb0d4cd4c3a8eb538dc5fdac"
-		},
-		{
-			"amount": 13200000000000000,
-			"owner": "0xc9d957e45e599de1bfd20e7d4e2f9311bcf183b3"
-		},
-		{
-			"amount": 13000000000000000,
-			"owner": "0x2212c1c14747ac2ef4b7d6a293cd9293ebf7f1bd"
-		},
-		{
-			"amount": 12600000000000000,
-			"owner": "0x664e3a3a6a6fa524d06f4d612fe8440b923574bd"
-		},
-		{
-			"amount": 12300000000000000,
-			"owner": "0x388a1612255729fb78d1dc474110d475eea231eb"
-		},
-		{
-			"amount": 11900000000000000,
-			"owner": "0x30c98ab8fb66212634bf284f3c13b1e1fe61b3ce"
-		},
-		{
-			"amount": 10200000000000000,
-			"owner": "0xda9d0bb5964770f4aca45e5d8148c8acebff6593"
-		},
-		{
-			"amount": 10200000000000000,
-			"owner": "0xda9d0bb5964770f4aca45e5d8148c8acebff6593"
-		},
-		{
-			"amount": 10000000000000000,
-			"owner": "0x7fe6103714e5bb901dcd770c6d7e42093907e3de"
-		},
-		{
-			"amount": 10000000000000000,
-			"owner": "0x53647e79efdbf68493427b7cd663792d53989720"
-		},
-		{
-			"amount": 9800000000000000,
-			"owner": "0x664e3a3a6a6fa524d06f4d612fe8440b923574bd"
-		},
-		{
-			"amount": 9700000000000000,
-			"owner": "0x24d21eeb725a28a92da4408d8aa087927a28d24d"
-		},
-		{
-			"amount": 9700000000000000,
-			"owner": "0xb9e5269a37d006c9a04ee2a15c73a622a5a45e88"
-		},
-		{
-			"amount": 9700000000000000,
-			"owner": "0xbec3e15bdcddccff5d9e033a32d201ff26942fb0"
-		},
-		{
-			"amount": 9700000000000000,
-			"owner": "0x1f174f196965bf752df91973a1183e2ae43e7800"
-		},
-		{
-			"amount": 9700000000000000,
-			"owner": "0x6fc0cc41097d848da1c0062c6b1d65f9a1af9e8b"
-		},
-		{
-			"amount": 9700000000000000,
-			"owner": "0xb60ebb83d0667efc0f5b8361cd7038cacda29f24"
-		},
-		{
-			"amount": 9700000000000000,
-			"owner": "0xfba397fb444fc5f0d8d21e1ace31d625deb3613a"
-		},
-		{
-			"amount": 8500000000000000,
-			"owner": "0x57227fe96ded3ef450033de63eafb4550985cd83"
-		},
-		{
-			"amount": 8300000000000000,
-			"owner": "0xc9d957e45e599de1bfd20e7d4e2f9311bcf183b3"
-		},
-		{
-			"amount": 7100000000000000,
-			"owner": "0xda9d0bb5964770f4aca45e5d8148c8acebff6593"
-		},
-		{
-			"amount": 7100000000000000,
-			"owner": "0xda9d0bb5964770f4aca45e5d8148c8acebff6593"
-		},
-		{
-			"amount": 7000000000000000,
-			"owner": "0x757ed11885a6808c85b4c75b058c3643f2b6b9d7"
-		},
-		{
-			"amount": 7000000000000000,
-			"owner": "0x57227fe96ded3ef450033de63eafb4550985cd83"
-		},
-		{
-			"amount": 6900000000000000,
-			"owner": "0xfdc2b224cc1fd65d6cdccdd896510a7d89af81c3"
-		},
-		{
-			"amount": 6600000000000000,
-			"owner": "0x53647e79efdbf68493427b7cd663792d53989720"
-		},
-		{
-			"amount": 6400000000000000,
-			"owner": "0x664e3a3a6a6fa524d06f4d612fe8440b923574bd"
-		},
-		{
-			"amount": 5800000000000000,
-			"owner": "0xc572aa7509184f0ec34bad5f71cc0feb1b650185"
-		},
-		{
-			"amount": 5700000000000000,
-			"owner": "0x53647e79efdbf68493427b7cd663792d53989720"
-		},
-		{
-			"amount": 5700000000000000,
-			"owner": "0xc9d957e45e599de1bfd20e7d4e2f9311bcf183b3"
-		},
-		{
-			"amount": 5600000000000000,
-			"owner": "0xda9d0bb5964770f4aca45e5d8148c8acebff6593"
-		},
-		{
-			"amount": 5500000000000000,
-			"owner": "0xdd687028f311271c65fa0653f33d23097277b3aa"
-		},
-		{
-			"amount": 5100000000000000,
-			"owner": "0xda9d0bb5964770f4aca45e5d8148c8acebff6593"
-		},
-		{
-			"amount": 5000000000000000,
-			"owner": "0xa951a154bb33809f0b2b6ef649b8747a85a2c0d0"
-		},
-		{
-			"amount": 3800000000000000,
-			"owner": "0xc9d957e45e599de1bfd20e7d4e2f9311bcf183b3"
-		},
-		{
-			"amount": 3800000000000000,
-			"owner": "0x53647e79efdbf68493427b7cd663792d53989720"
-		},
-		{
-			"amount": 3600000000000000,
-			"owner": "0xdd687028f311271c65fa0653f33d23097277b3aa"
-		},
-		{
-			"amount": 3600000000000000,
-			"owner": "0x57227fe96ded3ef450033de63eafb4550985cd83"
-		},
-		{
-			"amount": 3500000000000000,
-			"owner": "0x72d578a9abbbb055a7d151a115970be5e81941f1"
-		},
-		{
-			"amount": 3500000000000000,
-			"owner": "0x1e5afe49e1d3099729b7643b179876545b33af0a"
-		},
-		{
-			"amount": 3200000000000000,
-			"owner": "0x53647e79efdbf68493427b7cd663792d53989720"
-		},
-		{
-			"amount": 3200000000000000,
-			"owner": "0x1bec10186081b68491361da9eb46e45b5ed86425"
-		},
-		{
-			"amount": 3200000000000000,
-			"owner": "0xa839d2c5dd1900ab05de35944fd7ac388a87e0d5"
-		},
-		{
-			"amount": 3100000000000000,
-			"owner": "0x9375d4f6835bf89625d410e3567e34c28a543d46"
-		},
-		{
-			"amount": 3000000000000000,
-			"owner": "0x0d13886aeac824f85a742b49e5223732686e9d40"
-		},
-		{
-			"amount": 2800000000000000,
-			"owner": "0x17b1321f92695f12cc63fc0cfe28378f9b04db47"
-		},
-		{
-			"amount": 2700000000000000,
-			"owner": "0xda9d0bb5964770f4aca45e5d8148c8acebff6593"
-		},
-		{
-			"amount": 2700000000000000,
-			"owner": "0xda9d0bb5964770f4aca45e5d8148c8acebff6593"
-		},
-		{
-			"amount": 2600000000000000,
-			"owner": "0x53647e79efdbf68493427b7cd663792d53989720"
-		},
-		{
-			"amount": 2600000000000000,
-			"owner": "0xc9d957e45e599de1bfd20e7d4e2f9311bcf183b3"
-		},
-		{
-			"amount": 2400000000000000,
-			"owner": "0x0d13886aeac824f85a742b49e5223732686e9d40"
-		},
-		{
-			"amount": 2400000000000000,
-			"owner": "0x3747fac42b8df0ba8277f807620812bd1a1d9b56"
-		},
-		{
-			"amount": 2300000000000000,
-			"owner": "0xf43845c4a9d212565fb58de2fa140dd6fc8290bf"
-		},
-		{
-			"amount": 2200000000000000,
-			"owner": "0xdd687028f311271c65fa0653f33d23097277b3aa"
-		},
-		{
-			"amount": 2000000000000000,
-			"owner": "0x4f5d63d11ea32c7f4af24beb174391e37060fb5b"
-		}
+	"traits": [
+		{ "type": "Background", "value": "Blue" },
+		{ "type": "Background", "value": "Green" },
+		{ "type": "Background", "value": "Pink" },
+		{ "type": "Background", "value": "Purple" },
+		{ "type": "Background", "value": "White" },
+		{ "type": "Background", "value": "Yellow" },
+		{ "type": "Fur", "value": "Alien Green" },
+		{ "type": "Fur", "value": "Alien Green Tats" },
+		{ "type": "Fur", "value": "Black" },
+		{ "type": "Fur", "value": "Black Tats" },
+		{ "type": "Fur", "value": "Camo" },
+		{ "type": "Fur", "value": "Color Tats" },
+		{ "type": "Fur", "value": "Cyborg" },
+		{ "type": "Fur", "value": "Dark Camo" },
+		{ "type": "Fur", "value": "Diamond Fish Scale" },
+		{ "type": "Fur", "value": "Fish Scale" },
+		{ "type": "Fur", "value": "Galaxy Allstar" },
+		{ "type": "Fur", "value": "Gold" },
+		{ "type": "Fur", "value": "Gold Tats" },
+		{ "type": "Fur", "value": "Gradient Tats" },
+		{ "type": "Fur", "value": "Green Cat Camo" },
+		{ "type": "Fur", "value": "Grey" },
+		{ "type": "Fur", "value": "Grey Tats" },
+		{ "type": "Fur", "value": "Hendrix" },
+		{ "type": "Fur", "value": "Ice Cream Drip" },
+		{ "type": "Fur", "value": "Leopard" },
+		{ "type": "Fur", "value": "Manhattan" },
+		{ "type": "Fur", "value": "Orange Tabby" },
+		{ "type": "Fur", "value": "Pink" },
+		{ "type": "Fur", "value": "Pink Leopard" },
+		{ "type": "Fur", "value": "Pink Tats" },
+		{ "type": "Fur", "value": "Platinum" },
+		{ "type": "Fur", "value": "Purple Cheshire" },
+		{ "type": "Fur", "value": "Robot" },
+		{ "type": "Fur", "value": "Silver" },
+		{ "type": "Fur", "value": "Splatter" },
+		{ "type": "Fur", "value": "Streetbeast" },
+		{ "type": "Fur", "value": "White" },
+		{ "type": "Fur", "value": "White Tiger" },
+		{ "type": "Necklace", "value": "BTC" },
+		{ "type": "Necklace", "value": "Bird Gang" },
+		{ "type": "Necklace", "value": "Bread Chain" },
+		{ "type": "Necklace", "value": "Diamond Cuban Links" },
+		{ "type": "Necklace", "value": "Dog Tags" },
+		{ "type": "Necklace", "value": "ETH" },
+		{ "type": "Necklace", "value": "GCG Chain" },
+		{ "type": "Necklace", "value": "Gold Chains" },
+		{ "type": "Necklace", "value": "Gold Cross" },
+		{ "type": "Necklace", "value": "Green Bandana" },
+		{ "type": "Necklace", "value": "Headphones" },
+		{ "type": "Necklace", "value": "Silver Chains" },
+		{ "type": "Necklace", "value": "Thick Gold" },
+		{ "type": "Necklace", "value": "Thick Silver" },
+		{ "type": "Necklace", "value": "Thin Gold" },
+		{ "type": "Necklace", "value": "Thin Silver" },
+		{ "type": "Mouth", "value": "Cig" },
+		{ "type": "Mouth", "value": "French Fry" },
+		{ "type": "Mouth", "value": "Joint" },
+		{ "type": "Mouth", "value": "Toothpick" },
+		{ "type": "Mouth", "value": "Vape" },
+		{ "type": "Eye", "value": "Ballin" },
+		{ "type": "Eye", "value": "Black" },
+		{ "type": "Eye", "value": "Bloodshot" },
+		{ "type": "Eye", "value": "Blue" },
+		{ "type": "Eye", "value": "Blue Glowing" },
+		{ "type": "Eye", "value": "Cat Scratch" },
+		{ "type": "Eye", "value": "Fancy Gang Shades" },
+		{ "type": "Eye", "value": "Green" },
+		{ "type": "Eye", "value": "Green Glowing" },
+		{ "type": "Eye", "value": "Gutta Goggles" },
+		{ "type": "Eye", "value": "Heterochromia Blue Green" },
+		{ "type": "Eye", "value": "Heterochromia Green Yellow" },
+		{ "type": "Eye", "value": "Heterochromia Yellow Blue" },
+		{ "type": "Eye", "value": "Icebreakers" },
+		{ "type": "Eye", "value": "King Louis" },
+		{ "type": "Eye", "value": "Laser BTC" },
+		{ "type": "Eye", "value": "Laser ETH" },
+		{ "type": "Eye", "value": "Monocle" },
+		{ "type": "Eye", "value": "Pirate" },
+		{ "type": "Eye", "value": "Prestige" },
+		{ "type": "Eye", "value": "Rainbow" },
+		{ "type": "Eye", "value": "Rhinestone" },
+		{ "type": "Eye", "value": "Triangle Shades" },
+		{ "type": "Eye", "value": "VR" },
+		{ "type": "Eye", "value": "White" },
+		{ "type": "Eye", "value": "Yellow" },
+		{ "type": "Shirt", "value": "Air Patrol" },
+		{ "type": "Shirt", "value": "Biker Vest" },
+		{ "type": "Shirt", "value": "Bird" },
+		{ "type": "Shirt", "value": "Black Merch Shirt" },
+		{ "type": "Shirt", "value": "Black Tee" },
+		{ "type": "Shirt", "value": "Brown Coat" },
+		{ "type": "Shirt", "value": "Cheetah Fur" },
+		{ "type": "Shirt", "value": "Chef Curry" },
+		{ "type": "Shirt", "value": "Color Block" },
+		{ "type": "Shirt", "value": "Construction Vest" },
+		{ "type": "Shirt", "value": "Dirty Bird" },
+		{ "type": "Shirt", "value": "Farmer" },
+		{ "type": "Shirt", "value": "Finnesse" },
+		{ "type": "Shirt", "value": "Flames" },
+		{ "type": "Shirt", "value": "Flannel" },
+		{ "type": "Shirt", "value": "Gang Gang" },
+		{ "type": "Shirt", "value": "Gold Jacket" },
+		{ "type": "Shirt", "value": "Groovy" },
+		{ "type": "Shirt", "value": "HODL" },
+		{ "type": "Shirt", "value": "Hawaiian" },
+		{ "type": "Shirt", "value": "Jail" },
+		{ "type": "Shirt", "value": "Jobs" },
+		{ "type": "Shirt", "value": "Lobsta" },
+		{ "type": "Shirt", "value": "MJ" },
+		{ "type": "Shirt", "value": "Mamba" },
+		{ "type": "Shirt", "value": "Mr Buckets" },
+		{ "type": "Shirt", "value": "Pink Fur" },
+		{ "type": "Shirt", "value": "Presidential" },
+		{ "type": "Shirt", "value": "Puffer" },
+		{ "type": "Shirt", "value": "Ray" },
+		{ "type": "Shirt", "value": "Ski Jacket" },
+		{ "type": "Shirt", "value": "Tie Dye" },
+		{ "type": "Shirt", "value": "Tracksuit" },
+		{ "type": "Shirt", "value": "Tuxedo" },
+		{ "type": "Shirt", "value": "Vibin" },
+		{ "type": "Shirt", "value": "Vince" },
+		{ "type": "Hat", "value": "Afro" },
+		{ "type": "Hat", "value": "American" },
+		{ "type": "Hat", "value": "BTC" },
+		{ "type": "Hat", "value": "Backwards Hat" },
+		{ "type": "Hat", "value": "Beanie" },
+		{ "type": "Hat", "value": "Bucket Hat" },
+		{ "type": "Hat", "value": "Captain" },
+		{ "type": "Hat", "value": "Dillinger" },
+		{ "type": "Hat", "value": "Donnie" },
+		{ "type": "Hat", "value": "Dreads" },
+		{ "type": "Hat", "value": "Durag" },
+		{ "type": "Hat", "value": "ETH" },
+		{ "type": "Hat", "value": "Green Bandana" },
+		{ "type": "Hat", "value": "Green Makaveli" },
+		{ "type": "Hat", "value": "Halo" },
+		{ "type": "Hat", "value": "Horny" },
+		{ "type": "Hat", "value": "Jimmy" },
+		{ "type": "Hat", "value": "Juice" },
+		{ "type": "Hat", "value": "Merch Hat" },
+		{ "type": "Hat", "value": "Notorious Crown" },
+		{ "type": "Hat", "value": "Rows" },
+		{ "type": "Hat", "value": "Sicko" },
+		{ "type": "Hat", "value": "Ski Mask" },
+		{ "type": "Hat", "value": "Skullz" },
+		{ "type": "Hat", "value": "Spinner" },
+		{ "type": "Beak", "value": "Diamond" },
+		{ "type": "Beak", "value": "Glowing" },
+		{ "type": "Beak", "value": "Gold" }
 	]
 }

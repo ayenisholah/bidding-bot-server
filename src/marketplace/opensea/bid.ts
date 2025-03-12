@@ -233,7 +233,12 @@ export async function bidOnOpensea(
 
     if (openseaJobs.length > 0) {
       await queue.pause()
-      await Promise.allSettled(openseaJobs.map(job => job.remove()));
+      await Promise.allSettled(openseaJobs.map(job => {
+        const token = job.token
+        if (token) {
+          job.moveToCompleted({ message: 'Outstanding order to wallet balance ratio exceeds allowed limit.' }, token, false)
+        }
+      }));
       console.log(RED + `REMOVING ${openseaJobs.length} OPENSEA JOB(S) DUE TO OUTSTANDING ORDER TO WALLET BALANCE RATIO EXCEEDING ALLOWED LIMIT.` + RESET);
       await queue.resume()
     }
@@ -538,7 +543,12 @@ async function submitOfferToOpensea(slug: string, bidCount: string, offerPrice: 
       );
       if (openseaJobs.length > 0) {
         await queue.pause()
-        await Promise.allSettled(openseaJobs.map(job => job.remove()));
+        await Promise.allSettled(openseaJobs.map(job => {
+          const token = job.token
+          if (token) {
+            job.moveToCompleted({ message: 'Outstanding order to wallet balance ratio exceeds allowed limit.' }, token, false)
+          }
+        }));
         console.log(RED + `REMOVING ${openseaJobs.length} OPENSEA JOB(S) DUE TO OUTSTANDING ORDER TO WALLET BALANCE RATIO EXCEEDING ALLOWED LIMIT.` + RESET);
         await queue.resume()
       }
@@ -675,10 +685,8 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
     }))
     return data
   } catch (error: any) {
-    if (error?.response?.data?.message?.errors?.[0] === 'Outstanding order to wallet balance ratio exceeds allowed limit.' ||
-      error?.message?.errors?.[0] === 'Outstanding order to wallet balance ratio exceeds allowed limit.' ||
-      error?.response?.data?.message === 'Outstanding order to wallet balance ratio exceeds allowed limit.' ||
-      error?.message === 'Outstanding order to wallet balance ratio exceeds allowed limit.') {
+    const errorMessage = error?.response?.data?.errors?.[0] || error?.response?.data || error?.response || error
+    if (error?.response?.data?.errors?.[0] === 'Outstanding order to wallet balance ratio exceeds allowed limit.') {
       const jobs = await queue.getJobs(['prioritized']);
       const openseaJobs: Job[] = jobs.filter(job =>
         [OPENSEA_SCHEDULE, OPENSEA_TRAIT_BID, OPENSEA_TOKEN_BID].includes(job?.name)
@@ -686,18 +694,26 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
 
       if (openseaJobs.length > 0) {
         await queue.pause()
-        await Promise.allSettled(openseaJobs.map(job => job.remove()));
+        await Promise.allSettled(openseaJobs.map(job => {
+          const token = job.token
+          if (token) {
+            job.moveToCompleted({ message: 'Outstanding order to wallet balance ratio exceeds allowed limit.' }, token, false)
+          }
+        }));
         console.log(RED + `REMOVING ${openseaJobs.length} OPENSEA JOB(S) DUE TO OUTSTANDING ORDER TO WALLET BALANCE RATIO EXCEEDING ALLOWED LIMIT.` + RESET);
         await queue.resume()
       }
+    } else if (typeof errorMessage === 'string' && /Trading is not enabled for this item/i.test(errorMessage)) {
+      console.log(RED + "TRADING IS NOT ENABLED FOR THIS ITEM." + RESET);
+    } else if (typeof errorMessage === 'string' && /Asset does not exist/i.test(errorMessage)) {
+      console.log(RED + "ASSET DOES NOT EXIST." + RESET);
     }
-    const errorMessage = error?.response?.data?.errors?.[0] || error?.response?.data || error?.response || error
+    else {
+      throw new Error(errorMessage)
+    }
     await logBidError(taskId, "POST ITEM OFFER ERROR", errorMessage, "error", "opensea");
-    throw new Error(errorMessage)
   }
 }
-
-//     at Generator.throw (<anonymous>)
 
 
 const getItemConsideration = (

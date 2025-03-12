@@ -1,0 +1,5 @@
+Error processing OpenSea scheduled bid for task: 67ceaae2ed64d271545720b0  TypeError: Cannot set properties of undefined (setting 'opensea')
+    at /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:3988:39
+    at Generator.next (<anonymous>)
+    at fulfilled (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:28:58)
+    at processTicksAndRejections (node:internal/process/task_queues:95:5)

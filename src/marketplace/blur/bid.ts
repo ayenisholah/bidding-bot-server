@@ -456,9 +456,6 @@ export async function fetchBlurCollectionStats(taskId: string, slug: string) {
     const floor_price = Number(listings[0]?.price?.amount)
     return floor_price;
   } catch (error: any) {
-    const message = `Error fetching Blur collection stats: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-    await logBidError(taskId, "FETCH COLLECTION STATS ERROR", message, "error", "blur");
-    console.error("Error fetching collection data:", error.response?.data || error.message);
     return 0
   }
 }

@@ -43,7 +43,7 @@ async function initialize(rateLimit: number) {
 
   limiter = new Bottleneck({
     minTime: 1000 / rateLimit,
-    trackDoneStatus: true, // Enable tracking of DONE status
+    trackDoneStatus: true,
   });
   axiosRetry(axiosInstance, retryConfig);
 

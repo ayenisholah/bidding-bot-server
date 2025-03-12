@@ -91,11 +91,11 @@ export async function getCollectionStats(collectionSlug: string) {
         headers: { 'X-NFT-API-Key': API_KEY }
       }
     ));
-    const listings = data.listings.sort((a, b) => Number(a.price.current.value) - Number(b.price.current.value))
-    const floor_price = Number(listings[0].price.current.value) / 1e18
+    const listings = data?.listings?.sort((a, b) => Number(a.price.current.value) - Number(b.price.current.value))
+    const floor_price = Number(listings[0]?.price?.current?.value) / 1e18 || 0
     return floor_price;
   } catch (error: any) {
-    console.error('Error fetching collection stats:', error?.response);
+    return 0;
   }
 }
 
@@ -133,13 +133,22 @@ export async function getCollectionEvents(
 }
 
 
-export async function fetchOpenSeaCollectionItems(variables: CollectionItemsQueryVariables): Promise<number[]> {
-
+export async function fetchOpenSeaCollectionItems(
+  variables: CollectionItemsQueryVariables,
+  allTokenIds: number[] = [],
+  cursor?: string
+): Promise<number[]> {
   try {
+    // Add cursor to variables if it exists
+    const queryVariables = {
+      ...variables,
+      cursor: cursor
+    };
+
     const payload = {
       operationName: 'CollectionItemsListQuery',
       query: CollectionItemsListQuery,
-      variables
+      variables: queryVariables
     };
 
     const { data } = await limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(GRAPHQL_URL, payload, {
@@ -147,7 +156,7 @@ export async function fetchOpenSeaCollectionItems(variables: CollectionItemsQuer
         'x-nft-api-key': API_KEY,
       },
     }));
-
+    // Extract token IDs from the current page
     const tokenIds = data.data.collectionItems.items.map((item) => {
       const match = item.name.match(/#(\d+)$/);
       if (match && match[1]) {
@@ -155,14 +164,20 @@ export async function fetchOpenSeaCollectionItems(variables: CollectionItemsQuer
       }
       return parseInt(item.name.replace(/\D/g, '')) || 0;
     });
-
-    return [...new Set(tokenIds)];
-
+    // Add current page's token IDs to our accumulated list
+    const updatedTokenIds = [...allTokenIds, ...tokenIds];
+    // Get the next cursor
+    const nextCursor = data.data.collectionItems.nextPageCursor;
+    // If there's a next cursor, recursively fetch the next page
+    if (nextCursor) {
+      return fetchOpenSeaCollectionItems(variables, updatedTokenIds, nextCursor);
+    }
+    // No more pages, return all unique token IDs
+    return [...new Set(updatedTokenIds)];
   } catch (error) {
     console.error('Error fetching OpenSea collection items:', error);
     throw new Error(`Failed to fetch collection items`);
   }
-
 }
 
 
