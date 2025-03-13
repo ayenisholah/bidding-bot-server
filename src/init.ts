@@ -2,7 +2,7 @@ import Bottleneck from "bottleneck";
 import axios, { AxiosInstance } from "axios";
 import axiosRetry, { IAxiosRetryConfig } from "axios-retry";
 import { config } from "dotenv";
-import { rps, WORKER_COUNT } from ".";
+import { RATE_LIMIT, rps, WORKER_COUNT } from ".";
 
 config()
 
@@ -115,7 +115,7 @@ setInterval(() => {
 
   console.log('Average RPS:', averageRPS.toFixed(2), 'Executing:', executing.toFixed(2), 'True RPS:', trueRPS.toFixed(2));
 
-  rps.currentRPS = trueRPS;
+  rps.currentRPS = Math.min(RATE_LIMIT, trueRPS);
 
 }, 1000);
 

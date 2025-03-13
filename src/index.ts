@@ -218,8 +218,8 @@ const CANCEL_MAGICEDEN_BID = "CANCEL_MAGICEDEN_BID"
 const CANCEL_BLUR_BID = "CANCEL_BLUR_BID"
 const MAGICEDEN_MARKETPLACE = "0x9A1D00bEd7CD04BCDA516d721A596eb22Aac6834"
 const MAX_RETRIES: number = 5;
-// const MARKETPLACE_WS_URL = "wss://wss-marketplace.nfttools.website";
-const MARKETPLACE_WS_URL = "ws://localhost:8080"
+const MARKETPLACE_WS_URL = "wss://wss-marketplace.nfttools.website";
+// const MARKETPLACE_WS_URL = "ws://localhost:8080"
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 const OPENSEA_PROTOCOL_ADDRESS = "0x0000000000000068F116a894984e2DB1123eB395"
 const HEALTH_CHECK_INTERVAL = 5000;
@@ -3096,6 +3096,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const quantity = Number(data?.payload?.payload?.quantity) || 1
     const incomingBidAmount: number = Number(data?.payload?.payload?.base_price) / quantity;
 
+    // console.log({ maker, incomingBidAmount, event: data.event });
+
+
     const wallets = await Wallet.find({})
     const walletAddresses = wallets.map((wallet) => wallet.address.toLowerCase())
     const WALLET_PRIVATE_KEY: string = wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.address.toLowerCase())?.privateKey as string
@@ -3407,6 +3410,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         return parsed.offer
       })
       const currentBidPrice = !offers.length ? 0 : Math.max(...offers.map((offer) => Number(offer)))
+
+      console.log({ incomingBidAmount, currentBidPrice });
+
 
 
       if (incomingBidAmount < currentBidPrice) return
@@ -4852,7 +4858,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
           tokenOffer = BigInt(Math.round(secondOffer.amount + (outbidMargin * 1e18)));
         }
         else if (ttl > MIN_BID_DURATION) {
-          // console.log(YELLOW + `Skipping opensea collection bid for ${slug} ${asset.tokenId} - we have top bid (${highestBidAmount / 1e18} ETH) with ${ttl / 60} minutes remaining`.toUpperCase() + RESET);
+          console.log(YELLOW + `Skipping opensea collection bid for ${slug} ${asset.tokenId} - we have top bid (${highestBidAmount / 1e18} ETH) with ${ttl / 60} minutes remaining`.toUpperCase() + RESET);
           return;
         } else {
           tokenOffer = BigInt(Math.round(highestBidAmount));
@@ -6182,14 +6188,6 @@ async function stopOption(
         };
       }
 
-
-      if (!warningMessage[task._id]) {
-        warningMessage[task._id] = {
-          opensea: "",
-          magiceden: "",
-          blur: ""
-        };
-      }
       warningBids[task._id][marketplace] = true;
       warningMessage[task._id][marketplace] = `Floor price ${floorPrice} ETH for ${task.contract.slug} is outside allowed range (${task.stopOptions.minFloorPrice} ETH - ${task.stopOptions.maxFloorPrice} ETH).`;
       return true;
