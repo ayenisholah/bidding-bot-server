@@ -83,7 +83,7 @@ export async function getCollectionDetails(slug: string, contractAddress: string
   return result;
 }
 
-export async function getCollectionStats(collectionSlug: string) {
+export async function getOpenseaFloor(collectionSlug: string) {
   try {
     const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
       `https://nfttools.pro/opensea/api/v2/listings/collection/${collectionSlug}/best`,
@@ -95,6 +95,7 @@ export async function getCollectionStats(collectionSlug: string) {
     const floor_price = Number(listings[0]?.price?.current?.value) / 1e18 || 0
     return floor_price;
   } catch (error: any) {
+    console.error('Error fetching collection stats:', error);
     return 0;
   }
 }
@@ -139,7 +140,15 @@ export async function fetchOpenSeaCollectionItems(
   cursor?: string
 ): Promise<number[]> {
   try {
-    // Add cursor to variables if it exists
+    // Create a cache key based on the variables (excluding cursor for the initial request)
+
+    const cacheKey = `{${variables.collectionSlug}}:${variables.filter?.attributes?.[0]?.traitType}:${variables.filter?.attributes?.[0]?.values?.[0]}`;
+
+    const cachedData = await redis.get(cacheKey);
+    if (cachedData) {
+      return JSON.parse(cachedData);
+    }
+
     const queryVariables = {
       ...variables,
       cursor: cursor
@@ -172,8 +181,13 @@ export async function fetchOpenSeaCollectionItems(
     if (nextCursor) {
       return fetchOpenSeaCollectionItems(variables, updatedTokenIds, nextCursor);
     }
-    // No more pages, return all unique token IDs
-    return [...new Set(updatedTokenIds)];
+
+    // No more pages, get unique token IDs
+    const uniqueTokenIds = [...new Set(updatedTokenIds)];
+
+    // Cache the final result (only for initial requests that completed pagination)
+    await redis.setex(cacheKey, 24 * 60 * 60, JSON.stringify(uniqueTokenIds));
+    return uniqueTokenIds;
   } catch (error) {
     console.error('Error fetching OpenSea collection items:', error);
     throw new Error(`Failed to fetch collection items`);

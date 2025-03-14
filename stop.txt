@@ -1,0 +1,128 @@
+# Bottleneck Job Cancellation Strategies
+
+Based on the Bottleneck documentation, there isn't a direct method to stop a specific job by ID once it's already executing. Bottleneck is designed to manage the scheduling and rate limiting of jobs, but it doesn't provide built-in functionality to cancel individual running jobs.
+
+Here are your options for handling job cancellation:
+
+## 1. Use job expiration
+
+You can set an `expiration` when scheduling a job:
+
+```javascript
+limiter.schedule({
+  id: 'my-job-id',
+  expiration: 5000 // job will fail after 5 seconds
+}, myFunction);
+```
+
+This doesn't actively stop the job's execution, but it will mark the job as failed after the specified time.
+
+## 2. Implement cancellation in your job function
+
+Design your job functions to check a cancellation flag:
+
+```javascript
+// Track cancellable jobs
+const cancellableJobs = new Map();
+
+// Function that checks if it should continue
+function myCancellableJob() {
+  const jobId = 'my-job-id';
+  
+  // Register this job as running
+  cancellableJobs.set(jobId, { cancelled: false });
+  
+  return new Promise((resolve, reject) => {
+    // Periodically check if cancelled
+    const checkInterval = setInterval(() => {
+      const jobState = cancellableJobs.get(jobId);
+      if (jobState && jobState.cancelled) {
+        clearInterval(checkInterval);
+        cancellableJobs.delete(jobId);
+        reject(new Error('Job cancelled'));
+      }
+    }, 100);
+    
+    // Your actual job logic here
+    doWork().then(result => {
+      clearInterval(checkInterval);
+      cancellableJobs.delete(jobId);
+      resolve(result);
+    }).catch(err => {
+      clearInterval(checkInterval);
+      cancellableJobs.delete(jobId);
+      reject(err);
+    });
+  });
+}
+
+// Function to cancel a job
+function cancelJob(jobId) {
+  const job = cancellableJobs.get(jobId);
+  if (job) {
+    job.cancelled = true;
+    return true;
+  }
+  return false;
+}
+```
+
+## 3. Use the `stop()` method
+
+While not specific to a single job, you can use `stop()` to prevent new jobs from being added and optionally drop waiting jobs:
+
+```javascript
+limiter.stop({ dropWaitingJobs: true })
+  .then(() => {
+    console.log("Limiter stopped and waiting jobs dropped");
+  });
+```
+
+This won't stop already executing jobs but will prevent new ones from starting.
+
+## 4. Use AbortController (for modern JavaScript environments)
+
+If your job functions support it, you can use AbortController:
+
+```javascript
+// Create a map to store abort controllers by job ID
+const jobControllers = new Map();
+
+function scheduleWithAbort(jobId, fn) {
+  const controller = new AbortController();
+  jobControllers.set(jobId, controller);
+  
+  return limiter.schedule(() => {
+    // Pass the signal to your function
+    return fn(controller.signal).finally(() => {
+      jobControllers.delete(jobId);
+    });
+  });
+}
+
+// Function to cancel a job
+function cancelJobById(jobId) {
+  const controller = jobControllers.get(jobId);
+  if (controller) {
+    controller.abort();
+    return true;
+  }
+  return false;
+}
+
+// Example usage
+scheduleWithAbort('job-123', async (signal) => {
+  // Check signal.aborted periodically or use in fetch, etc.
+  while (!signal.aborted) {
+    await someWork();
+    if (signal.aborted) break;
+  }
+});
+
+// Later, to cancel:
+cancelJobById('job-123');
+```
+
+## Conclusion
+
+Bottleneck itself doesn't provide a way to cancel a specific running job by ID. You'll need to implement your own cancellation mechanism within your job functions. The best approach is to design your jobs to be cancellable from the start by checking cancellation flags or using AbortController signals.

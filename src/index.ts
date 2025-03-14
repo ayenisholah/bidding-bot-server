@@ -13,7 +13,7 @@ import { axiosInstance, initialize, limiter } from "./init";
 import { bidOnOpensea, cancelOrder, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, fetchBlurBid, fetchBlurCollectionStats } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens } from "./marketplace/magiceden";
-import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, getCollectionDetails, getCollectionStats } from "./functions";
+import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, getCollectionDetails, getOpenseaFloor } from "./functions";
 import mongoose from 'mongoose';
 import Task from "./models/task.model";
 import { Queue, Worker, Job, QueueOptions, JobType, UnrecoverableError, JobsOptions, QueueEvents } from "bullmq";
@@ -85,11 +85,7 @@ const QUEUE_OPTIONS: QueueOptions = {
   defaultJobOptions: {
     removeOnComplete: true,
     removeOnFail: true,
-    attempts: 1,
-    backoff: {
-      type: 'fixed',
-      delay: 1000
-    },
+    attempts: 0
   }
 };
 
@@ -117,7 +113,6 @@ const workers = Array.from({ length: WORKER_COUNT }, (_, index) => new Worker(
   {
     connection: redis,
     prefix: '{bull}',
-    // Each worker gets a fair share of the rate limit
     concurrency: RATE_LIMIT,
     lockDuration: 30000,
     stalledInterval: 15000,
@@ -626,13 +621,13 @@ queueEvents.on('completed', async ({ jobId }) => {
             const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
             console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
-            taskStatus[taskId].status = 'WAITING';
+            taskStatus[taskId].status = 'SCHEDULED';
             taskStatus[taskId].waitingTime = secondsUntilNextLoop;
             taskStatus[taskId].nextLoopTime = nextLoopTime;
 
             // Create a countdown timer that updates waitingTime every second
             const countdownTimer = setInterval(() => {
-              if (taskStatus[taskId] && taskStatus[taskId].status === 'WAITING') {
+              if (taskStatus[taskId] && taskStatus[taskId].status === 'SCHEDULED') {
                 const remainingSeconds = Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000));
                 taskStatus[taskId].waitingTime = remainingSeconds;
 
@@ -728,13 +723,13 @@ queueEvents.on('failed', async ({ jobId }) => {
           const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
           console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
-          taskStatus[taskId].status = 'WAITING';
+          taskStatus[taskId].status = 'SCHEDULED';
           taskStatus[taskId].waitingTime = secondsUntilNextLoop;
           taskStatus[taskId].nextLoopTime = nextLoopTime;
 
           // Create a countdown timer that updates waitingTime every second
           const countdownTimer = setInterval(() => {
-            if (taskStatus[taskId] && taskStatus[taskId].status === 'WAITING') {
+            if (taskStatus[taskId] && taskStatus[taskId].status === 'SCHEDULED') {
               const remainingSeconds = Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000));
               taskStatus[taskId].waitingTime = remainingSeconds;
 
@@ -786,6 +781,8 @@ wss.on('connection', async (ws) => {
   clients.add(ws);
 
   console.log(GREEN + 'New WebSocket connection' + RESET);
+
+  broadcastBidRates()
 
 
   ws.onmessage = async (event: WebSocket.MessageEvent) => {
@@ -1099,8 +1096,6 @@ async function processNewTask(task: ITask) {
 }
 
 function processGlobalMarketplaces(data: string[]) {
-  console.log("Global Marketplaces", data);
-
   runScheduledLoop().catch(err => {
     console.error('Failed to restart scheduled loop:', err);
   });
@@ -1514,11 +1509,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
                   removeOnComplete: true,
                   removeOnFail: true,
                   timeout: JOB_TIMEOUT,
-                  attempts: 3,
-                  backoff: {
-                    type: 'exponential',
-                    delay: 1000
-                  }
+                  attempts: 0,
                 }
               }))
             );
@@ -3144,7 +3135,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       bestOffers[task._id].opensea = collectionOffer;
     }
 
-    const floor_price = await getCollectionStats(task.contract.slug);
+    const floor_price = await getOpenseaFloor(task.contract.slug);
+    if (!floor_price) return
     const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, Number(floor_price), "opensea")
 
     if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
@@ -3828,6 +3820,7 @@ async function processOpenseaScheduledBid(task: ITask) {
     const currentTask = activeTasks.get(task._id);
 
     if (!currentTask || !currentTask.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return;
+
     if (!taskStatus[task._id]) {
       taskStatus[task._id] = {
         status: 'SCHEDULED',
@@ -3836,14 +3829,6 @@ async function processOpenseaScheduledBid(task: ITask) {
         cancellationPercentage: 0,
         processingPercentage: 0,
         nextLoopTime: new Date()
-      }
-    }
-
-    if (!skipStats[task._id]) {
-      skipStats[task._id] = {
-        opensea: 0,
-        magiceden: 0,
-        blur: 0
       }
     }
 
@@ -3873,6 +3858,7 @@ async function processOpenseaScheduledBid(task: ITask) {
     const collectionDetails = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
     taskStatus[task._id].processingPercentage = (2 / 5) * 100
     const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0
+
     if (!warningBids[task._id]) {
       warningBids[task._id] = {
         opensea: false,
@@ -3881,9 +3867,8 @@ async function processOpenseaScheduledBid(task: ITask) {
       }
     }
 
-    if (warningBids[task._id].opensea) {
-      warningBids[task._id].opensea = false;
-    }
+    warningBids[task._id].opensea = false;
+
 
     const highestOffer = await fetchOpenseaOffers(task._id, 'COLLECTION', task.contract.slug, task.contract.contractAddress, {})
     taskStatus[task._id].processingPercentage = (3 / 5) * 100
@@ -4165,7 +4150,9 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
     const { task, collectionDetails } = data
     const currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces.includes("OpenSea")) return;
-    const floor_price = await getCollectionStats(task.contract.slug);
+    const floor_price = await getOpenseaFloor(task.contract.slug);
+
+    if (!floor_price) return
 
     if (!floorPrices[task._id]) {
       floorPrices[task._id] = {
@@ -4626,7 +4613,9 @@ async function processOpenseaTraitBid(data: {
 
     const expiry = getExpiry(currentTask.bidDuration)
 
-    const floor_price = await getCollectionStats(slug);
+    const floor_price = await getOpenseaFloor(slug);
+    if (!floor_price) return
+
     if (!floorPrices[_id]) {
       floorPrices[_id] = {
         opensea: floor_price as number,
@@ -4780,15 +4769,8 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     const currentTask = activeTasks.get(_id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) return;
 
-    const floor_price = await getCollectionStats(slug);
-
-    if (!skipStats[task._id]) {
-      skipStats[task._id] = {
-        opensea: 0,
-        magiceden: 0,
-        blur: 0
-      };
-    }
+    const floor_price = await getOpenseaFloor(slug);
+    if (!floor_price) return
 
     if (!floorPrices[_id]) {
       floorPrices[_id] = {
@@ -4909,7 +4891,14 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", `Offer price ${offerEth} WETH for ${slug} ${asset.tokenId} bid exceeds max bid price ${maxBidPriceEth} WETH FOR OPENSEA.Skipping ...`.toUpperCase(), "skipped", "opensea");
 
-      skipStats[task._id].opensea++;
+      if (!skipStats[_id]) {
+        skipStats[_id] = {
+          opensea: 0,
+          magiceden: 0,
+          blur: 0
+        }
+      }
+      skipStats[_id].opensea++;
       return;
     } else if (offerEth < minBidPriceEth) {
       tokenOffer = BigInt(Math.round(minBidPriceEth * 1e18));
@@ -6064,7 +6053,7 @@ app.post('/api/floor', async (req, res) => {
       try {
         // OpenSea floor price
         try {
-          const openseaFloorPrice = await getCollectionStats(slug);
+          const openseaFloorPrice = await getOpenseaFloor(slug);
           floorPrices[taskId]['opensea'] = openseaFloorPrice;
         } catch (error) {
           console.error(`Error fetching OpenSea floor price for ${taskId}:`, error);
@@ -6985,11 +6974,6 @@ interface BottomListings {
     magiceden: number[];
   }
 }
-// Scheduled x mins
-// Running x%
-// Canceling x%
-// Processing x%
-// Stopped
 interface TaskStatus {
   [key: string]: {
     status: 'RUNNING' | 'WAITING' | 'CANCELING' | 'SCHEDULED' | 'COMPLETED' | 'QUEUED' | 'QUEUEING' | 'STARTED' | "STOPPED" | "PROCESSING",

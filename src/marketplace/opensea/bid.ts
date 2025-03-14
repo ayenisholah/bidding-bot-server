@@ -497,9 +497,13 @@ async function submitOfferToOpensea(slug: string, bidCount: string, offerPrice: 
         url: `https://nfttools.pro/opensea/api/v2/offers`,
         headers: {
           'content-type': 'application/json',
-          'X-NFT-API-Key': API_KEY
+          'X-NFT-API-Key': API_KEY,
+          "Cache-Control": "no-store", // ⛔ Prevents caching
+          "Pragma": "no-cache", // ⛔ Prevents old cache policies from affecting response
+          "Expires": "0", // ⛔ Forces fresh reques
         },
-        data: JSON.stringify(payload)
+        data: JSON.stringify(payload),
+        "axios-retry": { retries: 0 },
       }))
 
     const order_hash = offer.order_hash
