@@ -1,11 +1,15 @@
 import { BigNumber, Contract, ethers, Wallet } from "ethers";
 import { SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI, WETH_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, API_KEY, BLUE, currentTasks, decrementBidCount, errorStats, getExpiry, isTaskAborted, logBidError, OPENSEA_SCHEDULE, OPENSEA_TOKEN_BID, OPENSEA_TRAIT_BID, queue, redis, skipStats, trackBidRate } from "../..";
+import { activeTasks, API_KEY, BLUE, currentTasks, decrementBidCount, errorStats, getExpiry, isTaskAborted, logBidError, markTaskAsAborted, OPENSEA_SCHEDULE, OPENSEA_TOKEN_BID, OPENSEA_TRAIT_BID, queue, redis, skipStats, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { createBalanceChecker } from "../../utils/balance";
 import { Job } from "bullmq";
 import axios from "axios";
+import { PrismaClient } from '@prisma/client'
+import { off } from "process";
+
+const prisma = new PrismaClient()
 
 config()
 
@@ -134,6 +138,7 @@ const deps = {
 
 const balanceChecker = createBalanceChecker(deps);
 
+const activeRequests = new Map<string, AbortController[]>();
 
 async function buildItemOffer(taskId: string, offerSpecification: ItemOfferSpecification) {
   try {
@@ -211,14 +216,18 @@ export async function bidOnOpensea(
   let totalOfferAmount = 0;
   const wethBalance = await balanceChecker.getWethBalance(wallet_address);
   for (const task of currentTasks) {
-    const openseaOrders = await redis.smembers(`{${task._id}}:opensea:orders`);
-
-    for (const orderKey of openseaOrders) {
-      const orderData = await redis.get(orderKey);
-      if (orderData) {
-        const order = JSON.parse(orderData);
-        totalOfferAmount += Number(order.offer) / 1e18; // Convert from wei to ETH
+    const openseaOrders = await prisma.order.findMany({
+      where: {
+        taskId: task._id,
+        marketplace: 'opensea',
+        expiresAt: {
+          gt: new Date()
+        }
       }
+    });
+
+    for (const order of openseaOrders) {
+      totalOfferAmount += Number(order.offerPrice) / 1e18; // Convert from wei to ETH
     }
   }
   const offerPriceEth = Number(offer_price) / 1e18;
@@ -226,10 +235,13 @@ export async function bidOnOpensea(
   const leverage = 1000;
 
   if (totalOfferAmount + offerPriceEth >= leverage * wethBalance) {
+    markTaskAsAborted(taskId)
+    cancelOpenseaRequest(taskId)
     const jobs = await queue.getJobs(['prioritized']);
     const openseaJobs: Job[] = jobs.filter(job =>
       [OPENSEA_SCHEDULE, OPENSEA_TRAIT_BID, OPENSEA_TOKEN_BID].includes(job?.name)
     );
+
 
     if (openseaJobs.length > 0) {
       await queue.pause()
@@ -326,30 +338,31 @@ export async function bidOnOpensea(
     if (!itemSignature) return
 
     // check if the tasks is still active before you make the offer
-    const [taskId, count] = bidCount.split(":")
+    const [taskId] = bidCount.split(":")
     if (!task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) return
 
     const itemResponse = await postItemOffer(taskId, offer, itemSignature, slug)
     const itemOrderHash = itemResponse?.order?.order_hash
-    const orderTrackingKey = `{${taskId}}:opensea:orders`;
-    const orderKey = `{${taskId}}:${count}:opensea:order:${slug}:${asset.tokenId}`;
-
-    const order = JSON.stringify({
-      offer: offerPrice.toString(),
-      orderId: itemOrderHash,
-      createdAt: Date.now()
-    })
 
     const sanitizedExpiry = expiry > 900 ? expiry : 900
 
-    await Promise.all([
-      redis.setex(orderKey, sanitizedExpiry, order),
-      redis.sadd(orderTrackingKey, orderKey),
-      redis.expire(orderTrackingKey, sanitizedExpiry)
-    ]);
+    if (offerPrice && itemOrderHash && sanitizedExpiry && slug && taskId && asset.tokenId) {
+
+      await prisma.order.create({
+        data: {
+          slug: slug,
+          orderHash: itemOrderHash,
+          expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
+          offerPrice: offerPrice.toString(),
+          identifier: asset.tokenId.toString(),
+          taskId: taskId,
+          marketplace: 'opensea'
+        }
+      })
+
+    }
 
     trackBidRate('opensea', taskId);
-
     const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()}  TOKEN: ${asset.tokenId} ${Number(offerPriceEthFinal)} WETH 🎉`
     console.log(BLUE, JSON.stringify(successMessage), RESET);
   }
@@ -470,9 +483,9 @@ export async function bidOnOpensea(
       await submitOfferToOpensea(slug, bidCount, offerPrice.toString(), payload, expiry, opensea_traits)
     } catch (error: any) {
       const tokenIdOrTrait = asset ? `token #${JSON.stringify(asset)}` : opensea_traits ? `trait ${opensea_traits}` : 'collection';
-      const message = `Error submitting OpenSea offer for ${tokenIdOrTrait} in collection ${slug}: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
+      const message = `Error submitting OpenSea offer for ${tokenIdOrTrait} in collection ${slug}: ${error?.response?.data?.errors?.[0] || error?.response?.data?.errors || error?.response?.data || error?.response || error}`
       await logBidError(taskId, "SUBMIT OFFER TO OPENSEA ERROR", message, "error", "opensea");
-
+      throw new Error(message)
     }
   }
 };
@@ -490,52 +503,52 @@ async function submitOfferToOpensea(slug: string, bidCount: string, offerPrice: 
 
     if (isTaskAborted(taskId)) return
 
+    try {
+      const { data: offer } = await
+        limiter.schedule(() => axiosInstance.request<OpenseaOffer>({
+          method: 'POST',
+          url: `https://nfttools.pro/opensea/api/v2/offers`,
+          headers: {
+            'content-type': 'application/json',
+            'X-NFT-API-Key': API_KEY,
+            "Cache-Control": "no-store", // ⛔ Prevents caching
+            "Pragma": "no-cache", // ⛔ Prevents old cache policies from affecting response
+            "Expires": "0", // ⛔ Forces fresh reques
+          },
+          data: JSON.stringify(payload),
+          "axios-retry": { retries: 0 }
+        }))
 
-    const { data: offer } = await
-      limiter.schedule(() => axiosInstance.request<OpenseaOffer>({
-        method: 'POST',
-        url: `https://nfttools.pro/opensea/api/v2/offers`,
-        headers: {
-          'content-type': 'application/json',
-          'X-NFT-API-Key': API_KEY,
-          "Cache-Control": "no-store", // ⛔ Prevents caching
-          "Pragma": "no-cache", // ⛔ Prevents old cache policies from affecting response
-          "Expires": "0", // ⛔ Forces fresh reques
-        },
-        data: JSON.stringify(payload),
-        "axios-retry": { retries: 0 },
-      }))
+      const order_hash = offer.order_hash
+      const identifier: string = offer?.criteria?.trait?.type
+        && offer?.criteria?.trait?.value
+        ? `${offer.criteria.trait?.type}:${offer.criteria.trait?.value}`
+        : "collection"
 
-    const order_hash = offer.order_hash
-    const identifier = offer?.criteria?.trait?.type
-      && offer?.criteria?.trait?.value
-      ? `${offer.criteria.trait?.type}:${offer.criteria.trait?.value}`
-      : "collection"
+      const slug = offer?.criteria?.collection?.slug
+      const sanitizedExpiry = expiry > 900 ? expiry : 900
 
-    const slug = offer?.criteria?.collection?.slug
-
-    const orderTrackingKey = `{${taskId}}:opensea:orders`;
-    const orderKey = `{${taskId}}:${count}:opensea:order:${slug}:${identifier}`;
-    const sanitizedExpiry = expiry > 900 ? expiry : 900
-    const order = JSON.stringify({
-      offer: offerPrice.toString(),
-      orderId: order_hash,
-      createdAt: Date.now()
-    })
-
-    await Promise.all([
-      redis.setex(orderKey, sanitizedExpiry, order),
-      redis.sadd(orderTrackingKey, orderKey),
-      redis.expire(orderTrackingKey, sanitizedExpiry)
-    ]);
-
-    trackBidRate('opensea', taskId);
-    const successMessage = opensea_traits ?
-      `🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()}  TRAIT: ${opensea_traits} ${(Number(offerPrice) / 1e18)} WETH 🎉`
-      : `🎉 COLLECTION OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()} ${(Number(offerPrice) / 1e18)} WETH 🎉`
-    console.log(BLUE, successMessage, RESET);
-
-
+      if (offerPrice && order_hash && sanitizedExpiry && slug && taskId && identifier) {
+        await prisma.order.create({
+          data: {
+            slug: slug,
+            orderHash: order_hash,
+            expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
+            offerPrice: offerPrice.toString(),
+            identifier: identifier,
+            taskId: taskId,
+            marketplace: 'opensea'
+          }
+        })
+      }
+      trackBidRate('opensea', taskId);
+      const successMessage = opensea_traits ?
+        `TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()}  TRAIT: ${opensea_traits} ${(Number(offerPrice) / 1e18)} WETH 🎉`
+        : `🎉 COLLECTION OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()} ${(Number(offerPrice) / 1e18)} WETH 🎉`
+      console.log(BLUE, successMessage, RESET);
+    } catch (error: any) {
+      throw error
+    }
   } catch (error: any) {
     if (error?.response?.data?.message?.errors?.[0] === 'Outstanding order to wallet balance ratio exceeds allowed limit.' ||
       error?.message?.errors?.[0] === 'Outstanding order to wallet balance ratio exceeds allowed limit.' ||
@@ -557,6 +570,14 @@ async function submitOfferToOpensea(slug: string, bidCount: string, offerPrice: 
         await queue.resume()
       }
     }
+
+    // Handle ECONNRESET error specifically
+    if (error?.message?.includes('ECONNRESET')) {
+      console.log(RED + `ERROR: READ ECONNRESET - CONNECTION RESET BY PEER` + RESET);
+      return;
+    }
+
+    // Throw other errors
     throw error
   }
 }
@@ -567,42 +588,86 @@ async function submitOfferToOpensea(slug: string, bidCount: string, offerPrice: 
  */
 async function buildOffer(taskId: string, buildPayload: any) {
   try {
-    const { data } = await limiter.schedule(() =>
-      axiosInstance.request<PartialParameters>({
-        method: 'POST',
-        url: `https://nfttools.pro/opensea/api/v2/offers/build`,
-        headers: {
-          'content-type': 'application/json',
-          'X-NFT-API-Key': API_KEY,
-        },
-        data: JSON.stringify(buildPayload),
-      })
-    );
-    return data
+    const controller = new AbortController();
+    addActiveRequest(taskId, controller);
+
+    try {
+      const { data } = await limiter.schedule(() =>
+        axiosInstance.request<PartialParameters>({
+          method: 'POST',
+          url: `https://nfttools.pro/opensea/api/v2/offers/build`,
+          headers: {
+            'content-type': 'application/json',
+            'X-NFT-API-Key': API_KEY,
+          },
+          data: JSON.stringify(buildPayload),
+          signal: controller.signal
+        })
+      );
+      return data;
+    } catch (error) {
+      throw error
+    }
+    finally {
+      const controllers = activeRequests.get(taskId) || [];
+      const index = controllers.indexOf(controller);
+      if (index >= 0) {
+        controllers.splice(index, 1);
+      }
+      if (controllers.length === 0) {
+        activeRequests.delete(taskId);
+      }
+    }
   } catch (error: any) {
-    throw error
+    if (axios.isCancel(error)) {
+      console.log(`Request for task ${taskId} was cancelled`);
+      return null;
+    }
+    throw error;
   }
 }
+
+
+/**
+ * Fetches an order from OpenSea by its hash.
+ * @param orderHash - The hash of the order to fetch.
+ * @param protocolAddress - The protocol address.
+ * @param chain - The blockchain chain (default: 'ethereum').
+ * @param taskId - The ID of the task.
+ * @returns The order data or null if the request was cancelled.
+ */
+async function getOrderByHash(orderHash: string, protocolAddress: string, chain: string = 'ethereum', taskId: string) {
+  try {
+    const { data } = await limiter.schedule(() =>
+      axiosInstance.request({
+        method: 'GET',
+        url: `https://nfttools.pro/opensea/api/v2/orders/chain/${chain}/protocol/${protocolAddress}/${orderHash}`,
+        headers: {
+          'accept': 'application/json',
+          'X-NFT-API-Key': API_KEY,
+        },
+      })
+    );
+    return data;
+  } catch (error: any) {
+    return
+    // console.log(error?.response?.data?.errors?.[0] || error?.response?.data?.errors || error?.response?.data || error?.response);
+  }
+}
+
 
 export async function cancelOrder(orderHash: string, protocolAddress: string, privateKey: string, taskId: string) {
   if (!orderHash || !protocolAddress || !privateKey) return
 
   const offererSignature = await signCancelOrder(taskId, orderHash, protocolAddress, privateKey);
-
-  if (!offererSignature) {
-    return;
-  }
-
+  if (!offererSignature) return;
   const url = `https://nfttools.pro/opensea/api/v2/orders/chain/ethereum/protocol/${protocolAddress}/${orderHash}/cancel`;
-
   const headers = {
     'content-type': 'application/json',
     'X-NFT-API-Key': API_KEY
   };
 
-  const body = {
-    offerer_signature: offererSignature
-  };
+  const body = { offerer_signature: offererSignature };
 
   try {
     const response = await limiter.schedule(() => axiosInstance.post(url, body, { headers }))
@@ -610,14 +675,9 @@ export async function cancelOrder(orderHash: string, protocolAddress: string, pr
     decrementBidCount('opensea', taskId)
     return response.data;
   } catch (error: any) {
-    const message = `Error cancelling OpenSea order: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-    await logBidError(taskId, "CANCEL ORDER ERROR", message, "error", "opensea");
-    // Ignore "Order not valid" errors
-    if (error?.response?.data?.message?.errors?.[0] === 'Order not valid or already filled or cancelled.') {
-      decrementBidCount('opensea', taskId)
-      return;
-    }
+    return
   }
+
 }
 
 async function signCancelOrder(taskId: string, orderHash: string, protocolAddress: string, privateKey: string) {
@@ -677,19 +737,28 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
 
     if (isTaskAborted(taskId)) return
 
-    const { data } = await limiter.schedule(() => axiosInstance.post(`https://nfttools.pro/opensea/api/v2/orders/ethereum/seaport/offers`, payload, {
-      headers: {
-        'content-type': 'application/json',
-        'X-NFT-API-Key': API_KEY,
-        "Cache-Control": "no-store", // ⛔ Prevents caching
-        "Pragma": "no-cache", // ⛔ Prevents old cache policies from affecting response
-        "Expires": "0", // ⛔ Forces fresh request
-      },
-      "axios-retry": { retries: 0 },
-    }))
-    return data
+    try {
+      const { data } = await limiter.schedule(() => axiosInstance.post(`https://nfttools.pro/opensea/api/v2/orders/ethereum/seaport/offers`, payload, {
+        headers: {
+          'content-type': 'application/json',
+          'X-NFT-API-Key': API_KEY,
+          "Cache-Control": "no-store",
+          "Pragma": "no-cache",
+          "Expires": "0",
+        },
+        "axios-retry": { retries: 0 },
+      }))
+      return data
+    } catch (error: any) {
+      throw error
+    }
   } catch (error: any) {
-    const errorMessage = error?.response?.data?.errors?.[0] || error?.response?.data || error?.response || error
+    if (axios.isCancel(error)) {
+      console.log(`Request for task ${taskId} was cancelled`);
+      return null;
+    }
+
+    const errorMessage = error?.response?.data?.errors?.[0] || error?.response?.data || error?.response || error?.code || error
     if (error?.response?.data?.errors?.[0] === 'Outstanding order to wallet balance ratio exceeds allowed limit.') {
       const jobs = await queue.getJobs(['prioritized']);
       const openseaJobs: Job[] = jobs.filter(job =>
@@ -712,10 +781,16 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
     } else if (typeof errorMessage === 'string' && /Asset does not exist/i.test(errorMessage)) {
       console.log(RED + "ASSET DOES NOT EXIST." + RESET);
     }
-    else {
-      throw new Error(errorMessage)
+    // Handle socket hang up error specifically
+    else if (error?.message?.includes('socket hang up')) {
+      console.log(RED + `ERROR: SOCKET HANG UP - CONNECTION CLOSED UNEXPECTEDLY` + RESET);
+    }
+    // Handle ECONNRESET error specifically
+    else if (error?.message?.includes('ECONNRESET')) {
+      console.log(RED + `ERROR: READ ECONNRESET - CONNECTION RESET BY PEER` + RESET);
     }
     await logBidError(taskId, "POST ITEM OFFER ERROR", errorMessage, "error", "opensea");
+    throw new Error(errorMessage)
   }
 }
 
@@ -986,7 +1061,6 @@ export async function fetchOpenseaOffers(
         order_by: 'eth_price',
         order_direction: 'desc'
       };
-
       const { data } = await limiter.schedule(() => axiosInstance.get(url, {
         headers: {
           'accept': 'application/json',
@@ -1036,7 +1110,6 @@ export async function fetchOpenseaListings(taskId: string, collectionSlug: strin
         next: nextCursor,
         limit: Math.min(100, limit * 2 - uniqueTokenIds.length) // Fetch more to account for duplicates
       }
-
       const { data } = await limiter.schedule(() => axiosInstance.get<OpenseaListingData>(baseUrl, {
         headers: {
           'accept': 'application/json',
@@ -1343,4 +1416,23 @@ interface OpenseaGraphOrderProfile {
 interface OpenseaGraphMarketplace {
   identifier: string;
   __typename: 'Marketplace';
+}
+
+export function cancelOpenseaRequest(taskId: string): boolean {
+  const controllers = activeRequests.get(taskId);
+  if (controllers && controllers.length > 0) {
+    controllers.forEach(controller => controller.abort());
+    activeRequests.delete(taskId);
+    console.log(`Aborted ${controllers.length} OpenSea requests for task ${taskId}`);
+    return true;
+  }
+  console.log(`No active OpenSea requests found for task ${taskId}`);
+  return false;
+}
+
+function addActiveRequest(taskId: string, controller: AbortController) {
+  if (!activeRequests.has(taskId)) {
+    activeRequests.set(taskId, []);
+  }
+  activeRequests.get(taskId)?.push(controller);
 }

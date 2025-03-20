@@ -10,7 +10,7 @@ import http from 'http';
 import fs from 'fs/promises';
 import path from 'path';
 import { axiosInstance, initialize, limiter } from "./init";
-import { bidOnOpensea, cancelOrder, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee } from "./marketplace/opensea";
+import { bidOnOpensea, cancelOpenseaRequest, cancelOrder, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, fetchBlurBid, fetchBlurCollectionStats } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens } from "./marketplace/magiceden";
 import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, getCollectionDetails, getOpenseaFloor } from "./functions";
@@ -28,6 +28,9 @@ import net from 'net'
 import BidLogs from "./models/logs.model";
 import PQueue from "p-queue";
 import { randomUUID } from "crypto";
+import { PrismaClient, Order as PrismaOrder } from '@prisma/client'
+
+const prisma = new PrismaClient()
 
 export let RATE_LIMIT = process.env.RATE_LIMIT ? parseInt(process.env.RATE_LIMIT) : 100;
 export let API_KEY = process.env.API_KEY;
@@ -40,13 +43,11 @@ const balances: any = {};
 export const warningBids: WarningBids = {};
 export const warningMessage: WarningMessage = {};
 export const errorStats: BidCounts = {};
-export const skipStats: BidCounts = {}; 8
+export const skipStats: BidCounts = {};
 const redis = redisClient.getClient()
 const QUEUE_NAME = 'BIDDING_BOT';
 const CPU_COUNT = os.cpus().length;
-export const WORKER_COUNT = Math.max(2, Math.min(CPU_COUNT - 1, 4));
-const JOB_TIMEOUT = 30000;
-
+export const WORKER_COUNT = Math.max(1, Math.min(CPU_COUNT - 1, 4));
 
 const SEAPORT = '0x1e0049783f008a0085193e00003d00cd54003c71';
 
@@ -107,6 +108,9 @@ const workers = Array.from({ length: WORKER_COUNT }, (_, index) => new Worker(
       await processJob(job);
       return;
     } catch (error) {
+      if (job.token) {
+        await job.moveToFailed(new Error("Job failed"), job.token);
+      }
       throw new UnrecoverableError('Unrecoverable');
     }
   },
@@ -127,28 +131,6 @@ const taskTimeouts = new Map<string, NodeJS.Timeout>();
 // Add a Map to track task locks
 const taskLocks = new Map<string, TaskLock>();
 
-// Add lock/unlock helper functions
-async function lockTask(taskId: string): Promise<boolean> {
-  const now = Date.now();
-  const currentLock = taskLocks.get(taskId);
-
-  // If task is locked peand lock hasn't expired, return false
-  if (currentLock?.locked && now < currentLock.lockUntil) {
-    return false;
-  }
-
-  const task = activeTasks.get(taskId)
-  if (!task || !task.running) return false;
-  const lockDuration = getExpiry(task.loopInterval)
-  // Set or update lock
-  taskLocks.set(taskId, {
-    locked: true,
-    lockUntil: now + (lockDuration * 1000),
-    loopCount: (currentLock?.loopCount || 0) + 1
-  });
-
-  return true;
-}
 
 function unlockTask(taskId: string): void {
   const currentLock = taskLocks.get(taskId);
@@ -169,8 +151,7 @@ function extractTaskId(jobName: string): string | null {
 
 }
 
-const BROADCAST_INTERVAL = 1000;
-setInterval(broadcastBidRates, BROADCAST_INTERVAL);
+
 
 const queue = new Queue(QUEUE_NAME, QUEUE_OPTIONS);
 const queueEvents = new QueueEvents(QUEUE_NAME, QUEUE_OPTIONS);
@@ -256,9 +237,6 @@ function cleanupMemory() {
 
 async function monitorHealth() {
   try {
-
-    console.log({ skipStats });
-
     const counts = await queue.getJobCounts();
     const used = process.memoryUsage();
     const memoryStats = {
@@ -562,13 +540,33 @@ interface CompletedTasks {
 const completedTasks: CompletedTasks = {};
 
 queueEvents.on('completed', async ({ jobId }) => {
+
+  if (jobId.includes('CANCEL_OPENSEA_BID')) {
+    const taskId = jobId.split('-')[1];
+    const task = activeTasks.get(taskId);
+    const parentJobId = `${taskId}-CANCEL_OPENSEA_BID`
+    const parentJob = parentJobs.get(parentJobId);
+
+    if (!parentJob) return;
+
+    parentJob.completedJobs++;
+    const cancellationPercentage = ((parentJob.completedJobs + parentJob.failedJobs) / parentJob.totalJobs) * 100
+    taskStatus[taskId].cancellationPercentage = cancellationPercentage
+
+    if (cancellationPercentage >= 99.5 && !task?.running) {
+      taskStatus[taskId].status = 'STOPPED'
+    }
+    return
+  }
+
   if (jobId.split('-').length < 3) return;
   const taskId = jobId.split('-')[0];
   const task = activeTasks.get(taskId);
 
   if (!task || !task.running) return;
 
-  taskStatus[taskId].status = 'RUNNING'
+
+
 
   const marketplace = jobId.split('-')[1].toLowerCase();
   const parentId = `${taskId}-${marketplace}`.toLowerCase();
@@ -576,6 +574,9 @@ queueEvents.on('completed', async ({ jobId }) => {
   const parentJob = parentJobs.get(parentId);
 
   if (!parentJob) return;
+
+  taskStatus[taskId].status = 'RUNNING'
+
 
   parentJob.completedJobs++;
   const runningPercentage = ((parentJob.completedJobs + parentJob.failedJobs) / parentJob.totalJobs) * 100
@@ -647,7 +648,6 @@ queueEvents.on('completed', async ({ jobId }) => {
                 await startTask(currentTask, true);
               } else if (currentTask) {
                 await stopTask(currentTask, false);
-                taskStatus[taskId].status = 'STOPPED';
               }
             }, loopInterval * 1000);
 
@@ -662,12 +662,29 @@ queueEvents.on('completed', async ({ jobId }) => {
 });
 
 queueEvents.on('failed', async ({ jobId }) => {
+  if (jobId.includes('CANCEL_OPENSEA_BID')) {
+    const taskId = jobId.split('-')[1];
+    const task = activeTasks.get(taskId);
+    const parentJobId = `${taskId}-CANCEL_OPENSEA_BID`
+    const parentJob = parentJobs.get(parentJobId);
+
+    if (!parentJob) return;
+
+    parentJob.failedJobs++;
+    const cancellationPercentage = ((parentJob.completedJobs + parentJob.failedJobs) / parentJob.totalJobs) * 100
+    taskStatus[taskId].cancellationPercentage = cancellationPercentage
+    if (cancellationPercentage >= 99.5 && !task?.running) {
+      taskStatus[taskId].status = 'STOPPED'
+    }
+    return
+  }
 
   if (jobId.split('-').length < 3) return;
   const taskId = jobId.split('-')[0];
   const task = activeTasks.get(taskId);
 
   if (!task || !task.running) return;
+
 
   taskStatus[taskId].status = 'RUNNING'
 
@@ -749,7 +766,6 @@ queueEvents.on('failed', async ({ jobId }) => {
               await startTask(currentTask, true);
             } else if (currentTask) {
               await stopTask(currentTask, false);
-              taskStatus[taskId].status = 'STOPPED';
             }
           }, loopInterval * 1000);
 
@@ -760,6 +776,25 @@ queueEvents.on('failed', async ({ jobId }) => {
     }
   }
 });
+
+// Get opensea skip counts for each task from Redis
+
+bidRates = getAllBidRates();
+const clientData = {
+  bidRates: bidRates,
+  bidCounts: bidStats,
+  skipCounts: skipStats,
+  errorCounts: errorStats,
+  floorPrices,
+  bestOffers,
+  warningBids,
+  warningMessage,
+  rps,
+  taskStatus
+};
+
+const BROADCAST_INTERVAL = 1000;
+setInterval(broadcastBidRates, BROADCAST_INTERVAL);
 
 function broadcastBidRates() {
   bidRates = getAllBidRates();
@@ -777,13 +812,29 @@ function broadcastBidRates() {
 
 // Update the WebSocket connection handler to send initial state
 wss.on('connection', async (ws) => {
-  // Add the new client to the set
   clients.add(ws);
-
   console.log(GREEN + 'New WebSocket connection' + RESET);
 
-  broadcastBidRates()
+  // Send the latest bid rates immediately upon connection
+  if (ws.readyState === WebSocket.OPEN) {
+    const initialMessage = JSON.stringify({
+      type: "bidRatesUpdate",
+      data: {
+        bidRates,
+        bidCounts: bidStats,
+        skipCounts: skipStats,
+        errorCounts: errorStats,
+        floorPrices,
+        bestOffers,
+        warningBids,
+        warningMessage,
+        rps,
+        taskStatus,
+      },
+    });
 
+    ws.send(initialMessage);
+  }
 
   ws.onmessage = async (event: WebSocket.MessageEvent) => {
     try {
@@ -797,9 +848,6 @@ wss.on('connection', async (ws) => {
           break;
         case 'updated-task':
           await processUpdatedTask(message.data);
-          break;
-        case 'globalMarketplaces':
-          await processGlobalMarketplaces(message.data);
           break;
         case 'toggle-status':
           await updateStatus(message.data);
@@ -925,7 +973,6 @@ async function updateConfig(data: any) {
 
 async function processJob(job: Job) {
   const startTime = Date.now();
-
   try {
     const result = await (async () => {
       switch (job.name) {
@@ -1006,7 +1053,6 @@ async function processJob(job: Job) {
     throw error;
   }
 }
-
 interface TaskLock {
   locked: boolean;
   lockUntil: number;
@@ -1240,7 +1286,6 @@ async function processUpdatedTask(task: ITask) {
               };
 
               const items = await fetchOpenSeaCollectionItems(variable);
-              taskStatus[task._id].processingPercentage = (4 / 5) * 100;
               tokens.push(...items);
             })
           )
@@ -1251,31 +1296,37 @@ async function processUpdatedTask(task: ITask) {
         } else if (task.bidType === "token" && Object.keys(selectedTraits).length === 0) {
           // Directly combine and deduplicate in one step
           tokenIds = [...new Set([...bottomListings, ...taskTokenIds])];
-          const difference = Math.max(0, amount - tokenIds.length)
-          skipStats[task._id]['opensea'] += difference
+          const difference = amount !== undefined ? Math.max(0, amount - tokenIds.length) : 0
+          skipStats[task._id]['opensea'] += Number(difference)
         }
 
         const existingTokenIds = currentTokenIds[task._id].opensea
         const tokenBid = task.bidType === "token" && tokenIds.length > 0
         const traitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
 
-        const orderTrackingKey = `{${task._id}}:opensea:orders`;
         const tokenIdsToCancel = existingTokenIds.filter(id => !tokenIds.includes(id))
 
 
         if (tokenIdsToCancel.length > 0) {
           for (const token of tokenIdsToCancel) {
-            const orderKeys = await getPatternKeys(orderTrackingKey, token.toString()) || []
-            if (orderKeys.length > 0) {
-              const bidData = await redis.mget(orderKeys);
-              const cancelData = bidData.map((order, index) => {
-                if (!order) return
-                const parsed = JSON.parse(order);
+            const orders = await prisma.order.findMany({
+              where: {
+                slug: task.contract.slug,
+                identifier: token.toString(),
+                taskId: task._id
+              }
+            })
+
+            if (orders.length > 0) {
+              const cancelData = orders.map((order, index) => {
                 return {
                   name: CANCEL_OPENSEA_BID,
-                  data: { privateKey: WALLET_PRIVATE_KEY, orderId: parsed.orderId, taskId: task._id, orderKey: orderKeys[index] },
+                  data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+                  opts: {
+                    jobId: `CANCEL_OPENSEA_BID-${task._id}-${order.id}`
+                  }
                 }
-              }).filter((item) => item !== undefined)
+              })
               await queue.addBulk(cancelData)
             }
           }
@@ -1285,15 +1336,25 @@ async function processUpdatedTask(task: ITask) {
           console.log(`REMOVED TRAIT BIDS: ${removedTraits.length}`);
 
           for (const trait of removedTraits) {
-            const orderKeys = await getPatternKeys(orderTrackingKey, `${trait.type}:${trait.value}`) || []
-            if (orderKeys.length > 0) {
-              const bidData = await redis.mget(orderKeys);
-              const cancelData = bidData.map((order, index) => {
+            const identifier = `${trait.type}:${trait.value}`
+
+            const orders = await prisma.order.findMany({
+              where: {
+                slug: task.contract.slug,
+                identifier: identifier,
+                taskId: task._id
+              }
+            })
+
+            if (orders.length > 0) {
+              const cancelData = orders.map((order, index) => {
                 if (!order) return
-                const parsed = JSON.parse(order);
                 return {
                   name: CANCEL_OPENSEA_BID,
-                  data: { privateKey: WALLET_PRIVATE_KEY, orderId: parsed.orderId, taskId: task._id, orderKey: orderKeys[index] },
+                  data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+                  opts: {
+                    jobId: `CANCEL_OPENSEA_BID-${task._id}-${order.id}`
+                  }
                 }
               }).filter((item) => item !== undefined)
               await queue.addBulk(cancelData)
@@ -1502,15 +1563,14 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
               filteredJobs.filter((job): job is NonNullable<typeof job> => job !== null).map(job => ({
                 name: job.name,
                 data: job.data,
-                token: randomUUID(),
                 opts: {
                   ...(job.jobKey ? { jobId: job.jobKey } : {}),
                   ...job?.opts,
                   removeOnComplete: true,
                   removeOnFail: true,
-                  timeout: JOB_TIMEOUT,
                   attempts: 0,
                 }
+
               }))
             );
 
@@ -1828,7 +1888,8 @@ async function startTask(task: ITask, start: boolean) {
     blur: 0
   };
 
-
+  redis.set(`{${task._id}}:skipCounts:opensea`, 0)
+  redis.set(`{${task._id}}:errorStats:opensea`, 0)
 
   if (!taskStatus[task._id]) {
     taskStatus[task._id] = {
@@ -1897,7 +1958,6 @@ async function startTask(task: ITask, start: boolean) {
 
 async function stopTask(task: ITask, start: boolean, marketplace?: string) {
   const taskId = task._id.toString();
-  console.log(`[StopTask] Starting task shutdown for ${taskId}`);
   const wallet = await Wallet.findOne({ address: task.wallet.address })
   const WALLET_PRIVATE_KEY: string = wallet?.privateKey as string
 
@@ -1914,6 +1974,15 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
         magiceden: 0,
         blur: 0
       };
+    }
+
+    switch (marketplace?.toLowerCase()) {
+      case 'opensea':
+        await cancelOpenseaRequest(taskId)
+        break;
+      default:
+        await cancelOpenseaRequest(taskId)
+        break;
     }
 
     if (marketplace) {
@@ -1956,62 +2025,17 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
         console.error(RED + `Error unsubscribing from collection for task ${task.contract.slug}: ` + RESET, error);
       }
     }
-
-    // Add timing logs for each operation
     await cancelAllRelatedBids(task, WALLET_PRIVATE_KEY, marketplace);
     await removePendingAndWaitingBids(task, marketplace)
-    await waitForRunningJobsToComplete(task, marketplace);
+    // Wait 10 seconds before canceling bids
+    await cancelAllRelatedBids(task, WALLET_PRIVATE_KEY, marketplace);
 
-    // Recursive function to check and wait for bids to clear
-    async function waitForBidsToClear(attempts = 0, maxAttempts = 10): Promise<void> {
-      const { openseaBids, magicedenBids, blurBids } = await getAllRelatedBids(task);
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    await cancelAllRelatedBids(task, WALLET_PRIVATE_KEY, marketplace);
 
-      // Check based on marketplace parameter
-      if (marketplace) {
-        const marketplaceBids = {
-          opensea: openseaBids,
-          magiceden: magicedenBids,
-          blur: blurBids
-        }[marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur'];
-
-        if (marketplaceBids.length > 0) {
-          if (attempts >= maxAttempts) {
-            console.log(`[StopTask] Max attempts reached waiting for ${marketplace} bids to clear for task ${taskId}`);
-            return;
-          }
-          // Cancel bids for the specific marketplace
-          await cancelAllRelatedBids(task, WALLET_PRIVATE_KEY, marketplace);
-          await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before next check
-          return waitForBidsToClear(attempts + 1, maxAttempts);
-        }
-      } else {
-        // Check all marketplaces
-        if (openseaBids.length > 0 || magicedenBids.length > 0 || blurBids.length > 0) {
-          if (attempts >= maxAttempts) {
-            console.log(`[StopTask] Max attempts reached waiting for all bids to clear for task ${taskId}`);
-            return;
-          }
-          // Cancel all remaining bids
-          await cancelAllRelatedBids(task, WALLET_PRIVATE_KEY);
-          await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before next check
-          return waitForBidsToClear(attempts + 1, maxAttempts);
-        }
-      }
-    }
-
-    await waitForBidsToClear();
-
-    if (!taskStatus[taskId]) {
-      taskStatus[taskId] = {
-        status: 'STOPPED',
-        runningPercentage: 0,
-        waitingTime: 0,
-        cancellationPercentage: 0,
-        processingPercentage: 0,
-        nextLoopTime: new Date()
-      }
-    }
-    taskStatus[taskId].status = 'STOPPED'
+    // if (!marketplace && taskStatus[taskId].cancellationPercentage >= 99) {
+    //   taskStatus[taskId].status = 'STOPPED'
+    // }
 
     // Clear any scheduled timeouts for this task
     const timeoutId = taskTimeouts.get(taskId);
@@ -2026,7 +2050,6 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
       command: error.command,
       timestamp: new Date().toISOString()
     });
-    throw error;
   }
 }
 
@@ -2053,53 +2076,47 @@ async function removePendingAndWaitingBids(task: ITask, marketplace?: string) {
         ]
     }
 
-    const BATCH_SIZE = 1000;
-    const CONCURRENT_BATCHES = WORKER_COUNT;
-
     let totalJobsRemoved = 0;
     try {
+      const BATCH_SIZE = RATE_LIMIT * WORKER_COUNT * 2; // Process 100 jobs at a time
       let start = 0;
+      let hasMoreJobs = true;
 
-      while (true) {
-        const batchPromises = Array.from({ length: CONCURRENT_BATCHES }, async (_, i) => {
-          const batchStart = start + (i * BATCH_SIZE);
-          const batchEnd = batchStart + BATCH_SIZE;
+      while (hasMoreJobs) {
+        // Get jobs in batches
+        const jobs: Job[] = await queue.getJobs([], start, start + BATCH_SIZE - 1);
+        console.log(`Processing batch of ${jobs.length} jobs starting at index ${start}`);
 
-          // Get jobs in batches using range
-          const jobs: Job[] = await queue.getJobs(
-            ['prioritized', 'waiting', 'paused'],
-            batchStart,
-            batchEnd
-          );
 
-          if (jobs.length === 0) return null;
-          // Process jobs in parallel with rate limiting
-          await Promise.all(jobs.map(async (job) => {
-            if (!job?.id) return;
+        if (jobs.length === 0) {
+          hasMoreJobs = false;
+          break;
+        }
 
-            if (jobIds.includes(job.id)) {
-              try {
+        const relevantJobs = jobs.filter((job) => job?.id && jobIds.includes(job.id));
+        // Process this batch of jobs
+        await Promise.all(relevantJobs.map(async (job) => {
+          try {
+            await job.remove();
+            totalJobsRemoved++;
 
-                if (!job.token) {
-                  await job.remove()
-                  totalJobsRemoved++;
-                }
-              } catch (error) {
-                if (error instanceof Error) { }
-              }
-            }
-          }));
+          } catch (error) {
+            totalJobsRemoved++;
+          }
+        }));
 
-          return jobs.length;
-        });
+        // Move to the next batch
+        start += BATCH_SIZE;
 
-        const batchResults = await Promise.all(batchPromises);
-        if (batchResults.every(result => result === null)) break;
-        start += (BATCH_SIZE * CONCURRENT_BATCHES);
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // If we got fewer jobs than the batch size, we've reached the end
+        if (jobs.length < BATCH_SIZE) {
+          hasMoreJobs = false;
+        }
       }
+
+      console.log(`Removed ${totalJobsRemoved} jobs for task`);
     } catch (error) {
-      console.error(RED + `Error removing jobs in batch: ${error} ` + RESET);
+      console.error(RED + `Error removing jobs: ${error}` + RESET);
     }
 
     console.log('=== End Summary ====' + RESET);
@@ -2220,12 +2237,65 @@ async function updateTaskStatus(task: ITask, running: boolean, marketplace?: str
 
 const CANCEL_BATCH_SIZE = 1000; // Define batch size constant
 
+async function fetchAndCancelOpenseaBids(task: ITask, WALLET_PRIVATE_KEY: string) {
+  try {
+
+
+    const allOpenseaBids = await prisma.order.findMany({
+      where: {
+        slug: task.contract.slug,
+        taskId: task._id,
+        marketplace: OPENSEA.toLowerCase()
+      }
+    });
+
+    const parentJobId = `${task._id}-CANCEL_OPENSEA_BID`
+
+    parentJobs.set(parentJobId, {
+      parentId: parentJobId,
+      totalJobs: allOpenseaBids.length,
+      completedJobs: 0,
+      failedJobs: 0,
+      startTime: Date.now(),
+      taskId: task._id,
+      jobName: CANCEL_OPENSEA_BID
+    })
+
+    if (allOpenseaBids.length > 0) {
+      // Process cancellations in batches
+      const BATCH_SIZE = RATE_LIMIT * WORKER_COUNT;
+      for (let i = 0; i < allOpenseaBids.length; i += BATCH_SIZE) {
+        const batchBids = allOpenseaBids.slice(i, i + BATCH_SIZE);
+        await cancelOpenseaBids(batchBids, WALLET_PRIVATE_KEY, task._id);
+
+        // Add delay between batches if there are more to process
+        if (i + BATCH_SIZE < allOpenseaBids.length) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+    }
+  } catch (error) {
+    console.log(error);
+  }
+}
+
+
 async function cancelAllRelatedBids(task: ITask, WALLET_PRIVATE_KEY: string, marketplace?: string, attempt: number = 1,): Promise<void> {
   try {
-    const { openseaBids, magicedenBids, blurBids } = await getAllRelatedBids(task);
+    switch (marketplace?.toLowerCase()) {
+      case OPENSEA.toLowerCase():
+        // Fetch all bids at once instead of in batches
+        await fetchAndCancelOpenseaBids(task, WALLET_PRIVATE_KEY);
+        break;
+
+      default:
+        await fetchAndCancelOpenseaBids(task, WALLET_PRIVATE_KEY);
+        break;
+    }
+
+    const { magicedenBids, blurBids } = await getAllRelatedBids(task);
 
     const bidsToCancel = {
-      opensea: (!marketplace || marketplace.toLowerCase() === OPENSEA.toLowerCase()) ? openseaBids : [],
       magiceden: (!marketplace || marketplace.toLowerCase() === MAGICEDEN.toLowerCase()) ? magicedenBids : [],
       blur: (!marketplace || marketplace.toLowerCase() === BLUR.toLowerCase()) ? blurBids : [],
     };
@@ -2237,9 +2307,6 @@ async function cancelAllRelatedBids(task: ITask, WALLET_PRIVATE_KEY: string, mar
             const batchBids = bids.slice(i, i + CANCEL_BATCH_SIZE);
 
             switch (marketplace) {
-              case "opensea":
-                await cancelOpenseaBids(batchBids, WALLET_PRIVATE_KEY, task._id);
-                break;
               case "magiceden":
                 await cancelMagicedenBids(batchBids, WALLET_PRIVATE_KEY, task._id);
                 break;
@@ -2267,6 +2334,7 @@ async function getAllRelatedBids(task: ITask) {
     const magicedenOrderTrackingKey = `{${taskId}}:magiceden:orders`;
     const magicedenOrderKeys = await redis.smembers(magicedenOrderTrackingKey);
 
+    // @TODO: Remove this
     const openseaOrderTrackingKey = `{${taskId}}:opensea:orders`;
     const openseaOrderKeys = await redis.smembers(openseaOrderTrackingKey);
 
@@ -2282,28 +2350,19 @@ async function getAllRelatedBids(task: ITask) {
 }
 
 
-async function cancelOpenseaBids(orderKeys: string[], privateKey: string, taskId: string) {
-  if (!orderKeys.length) return
-  if (!taskStatus[taskId]) {
-    taskStatus[taskId] = {
-      status: 'CANCELING',
-      runningPercentage: 0,
-      waitingTime: 0,
-      cancellationPercentage: 0,
-      processingPercentage: 0,
-      nextLoopTime: new Date()
-    }
-  }
+async function cancelOpenseaBids(orders: PrismaOrder[], privateKey: string, taskId: string) {
+  if (!orders.length) return
+
   taskStatus[taskId].status = 'CANCELING'
-  const bidData = await redis.mget(orderKeys);
-  const cancelData = bidData.map((order, index) => {
-    if (!order) return
-    const parsed = JSON.parse(order);
+  const cancelData = orders.map((order, index) => {
     return {
       name: CANCEL_OPENSEA_BID,
-      data: { privateKey, orderId: parsed.orderId, taskId, orderKey: orderKeys[index] },
+      data: { privateKey, orderId: order.orderHash, taskId, orderKey: order.id },
+      opts: {
+        jobId: `CANCEL_OPENSEA_BID-${taskId}-${order.id}`
+      }
     }
-  }).filter((item) => item !== undefined)
+  })
   await queue.addBulk(cancelData)
 }
 
@@ -2342,18 +2401,17 @@ async function extractMagicedenOrderHash(orderKeys: string[]): Promise<string[]>
 
 async function cancelMagicedenBids(orderKeys: string[], privateKey: string, taskId: string) {
   if (!orderKeys.length) return;
-  if (!orderKeys.length) return
-  if (!taskStatus[taskId]) {
-    taskStatus[taskId] = {
-      status: 'CANCELING',
-      runningPercentage: 0,
-      waitingTime: 0,
-      cancellationPercentage: 0,
-      processingPercentage: 0,
-      nextLoopTime: new Date()
-    }
-  }
-  taskStatus[taskId].status = 'CANCELING'
+  // if (!taskStatus[taskId]) {
+  //   taskStatus[taskId] = {
+  //     status: 'CANCELING',
+  //     runningPercentage: 0,
+  //     waitingTime: 0,
+  //     cancellationPercentage: 0,
+  //     processingPercentage: 0,
+  //     nextLoopTime: new Date()
+  //   }
+  // }
+  // taskStatus[taskId].status = 'CANCELING'
   for (let i = 0; i < orderKeys.length; i += 500) {
     const batchKeys = orderKeys.slice(i, i + 500);
     const extractedOrderIds = await extractMagicedenOrderHash(batchKeys)
@@ -2364,17 +2422,17 @@ async function cancelMagicedenBids(orderKeys: string[], privateKey: string, task
 async function cancelBlurBids(orderKeys: string[], privateKey: string, taskId: string) {
   if (!orderKeys.length) return
   if (!orderKeys.length) return
-  if (!taskStatus[taskId]) {
-    taskStatus[taskId] = {
-      status: 'CANCELING',
-      runningPercentage: 0,
-      waitingTime: 0,
-      cancellationPercentage: 0,
-      processingPercentage: 0,
-      nextLoopTime: new Date()
-    }
-  }
-  taskStatus[taskId].status = 'CANCELING'
+  // if (!taskStatus[taskId]) {
+  //   taskStatus[taskId] = {
+  //     status: 'CANCELING',
+  //     runningPercentage: 0,
+  //     waitingTime: 0,
+  //     cancellationPercentage: 0,
+  //     processingPercentage: 0,
+  //     nextLoopTime: new Date()
+  //   }
+  // }
+  // taskStatus[taskId].status = 'CANCELING'
   const orderData = await redis.mget(orderKeys);
   const cancelData = orderData.map((orderKey, index) => {
     if (!orderKey) return
@@ -2579,6 +2637,17 @@ async function connectWebSocket(): Promise<void> {
         if (message.type === 'pong') {
           console.log('Pong received from server.');
         }
+        // Add handler for the initial data request
+        if (message.endpoint === "get-initial-data") {
+          // Send the current state to the requesting client
+          const initialDataMessage = JSON.stringify({
+            type: 'bidRatesUpdate',
+            data: clientData
+          });
+
+          ws.send(initialDataMessage);
+          return;
+        }
         await handleCounterBid(message);
       } catch (error) {
       }
@@ -2694,10 +2763,13 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     const wallets = await Wallet.find({})
     const walletAddresses = wallets.map((wallet) => wallet.address.toLowerCase())
 
+
+
     const WALLET_PRIVATE_KEY: string = wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.address.toLowerCase())?.privateKey as string
 
     const maker = data?.data?.maker?.toLowerCase()
 
+    console.log({ maker, domain });
     if (walletAddresses.includes(maker)) return
 
     const expiry = getExpiry(task.bidDuration)
@@ -3086,6 +3158,13 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const maker = data?.payload?.payload?.maker?.address.toLowerCase()
     const quantity = Number(data?.payload?.payload?.quantity) || 1
     const incomingBidAmount: number = Number(data?.payload?.payload?.base_price) / quantity;
+    const tokenId = data.event === "item_received_bid" ? data.payload.payload.protocol_data.parameters.consideration.find((item: any) => item.token.toLowerCase() === task.contract.contractAddress.toLowerCase()).identifierOrCriteria : null
+
+    const trait = data.event === "trait_offer" ? {
+      type: data.payload.payload.trait_criteria.trait_type,
+      value: data.payload.payload.trait_criteria.trait_name
+    } : null
+
 
     // console.log({ maker, incomingBidAmount, event: data.event });
 
@@ -3139,21 +3218,13 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     if (!floor_price) return
     const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, Number(floor_price), "opensea")
 
-    if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
-      const reason = incomingBidAmountEth < minBidPriceEth
-        ? `is less than min bid price ${minBidPriceEth} WETH`
-        : `is greater than max bid price ${maxBidPriceEth} WETH`;
-      const message = `incoming bid ${incomingBidAmountEth} WETH for ${task.contract.slug} ${reason}. Skipping ...`.toUpperCase()
-      await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "magiceden");
-      return
-    }
+
 
     if (data.event === "item_received_bid") {
       let tokenOffer: bigint;
       let offerPrice: number;
       const currentTask = activeTasks.get(task._id)
       if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes(OPENSEA.toLowerCase())) return
-      const tokenId = +data.payload.payload.protocol_data.parameters.consideration.find((item: any) => item.token.toLowerCase() === task.contract.contractAddress.toLowerCase()).identifierOrCriteria
       const tokenIds = task.tokenIds.filter(id => !isNaN(Number(id)));
       const tokenBid = task.bidType === "token"
 
@@ -3165,19 +3236,31 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       console.log(BLUE + `incoming offer for ${task.contract.slug}:${tokenId} for ${incomingBidAmount / 1e18} WETH on opensea`.toUpperCase() + RESET);
       console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
 
-      const orderTrackingKey = `{${task._id}}:opensea:orders`;
-      const orderKeys = await getPatternKeys(orderTrackingKey, tokenId.toString()) || []
-      const orderData = orderKeys.length ? await redis.mget(orderKeys) : []
 
-      const offers = orderData.map((order: any) => {
-        if (order.offer) return
-        const parsed = JSON.parse(order)
-        return parsed.offer
+      const orders = await prisma.order.findMany({
+        where: {
+          slug: task.contract.slug,
+          taskId: task._id,
+          marketplace: OPENSEA.toLowerCase(),
+          identifier: tokenId.toString()
+        }
       })
 
-      const currentBidPrice = Math.max(...offers.map((offer) => Number(offer)))
-      if (incomingBidAmount < currentBidPrice) return
+      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
+        const identifier = tokenId ? tokenId : trait && trait.type && trait.value ? `${trait.type}:${trait.value}` : "collection"
+        const reason = incomingBidAmountEth < minBidPriceEth
+          ? `is less than min bid price ${minBidPriceEth} WETH`
+          : `is greater than max bid price ${maxBidPriceEth} WETH`;
+        const message = `incoming bid ${incomingBidAmountEth} WETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
+        return
+      }
 
+      const offers = orders.map((order: PrismaOrder) => order.offerPrice)
+
+      const currentBidPrice = offers.length > 0 ? Math.max(...offers.map((offer) => Number(offer))) : 0
+
+      if (incomingBidAmount < currentBidPrice) return
       const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth)
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
 
@@ -3195,16 +3278,16 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         console.log(RED + message + RESET);
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
 
-        if (orderKeys.length > 0) {
-          const bidData = await redis.mget(orderKeys);
-          const cancelData = bidData.map((order, index) => {
-            if (!order) return
-            const parsed = JSON.parse(order);
+        if (orders.length > 0) {
+          const cancelData = orders.map((order, index) => {
             return {
               name: CANCEL_OPENSEA_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, orderId: parsed.orderId, taskId: task._id, orderKey: orderKeys[index] },
+              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+              opts: {
+                jobId: `CANCEL_OPENSEA_BID-${task._id}-${order.id}`
+              }
             }
-          }).filter((item) => item !== undefined)
+          })
           await queue.addBulk(cancelData)
         }
         return;
@@ -3254,49 +3337,59 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       console.log(GREEN + `Counterbidding incoming opensea offer of ${Number(incomingBidAmount) / 1e18} WETH for ${task.contract.slug}:${asset.tokenId} for ${Number(tokenOffer) / 1e18} WETH ON OPENSEA`.toUpperCase() + RESET);
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
 
-      if (orderKeys.length > 0) {
-        const bidData = await redis.mget(orderKeys);
-        const cancelData = bidData.map((order, index) => {
-          if (!order) return
-          const parsed = JSON.parse(order);
+      if (orders.length > 0) {
+        const cancelData = orders.map((order, index) => {
           return {
             name: CANCEL_OPENSEA_BID,
-            data: { privateKey: WALLET_PRIVATE_KEY, orderId: parsed.orderId, taskId: task._id, orderKey: orderKeys[index] },
+            data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+            opts: {
+              jobId: `CANCEL_OPENSEA_BID-${task._id}-${order.id}`
+            }
           }
-        }).filter((item) => item !== undefined)
+        })
         await queue.addBulk(cancelData)
       }
     }
 
     if (data.event === "trait_offer") {
+      if (!trait) return
       const traitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
       const hasTraits = checkOpenseaTrait(selectedTraits, data.payload.payload.trait_criteria)
 
       if (!hasTraits || !traitBid) return
-      const trait = {
-        type: data.payload.payload.trait_criteria.trait_type,
-        value: data.payload.payload.trait_criteria.trait_name
-      }
+
 
       console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
       console.log(BLUE + `incoming offer for ${task.contract.slug}:${JSON.stringify(trait)} for ${incomingBidAmount / 1e18} WETH on opensea`.toUpperCase() + RESET);
       console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
+      const identifier = `${trait.type}:${trait.value}`
 
-      const orderTrackingKey = `{${task._id}}:opensea:orders`;
-      const orderKeys = await getPatternKeys(orderTrackingKey, `${trait.type}:${trait.value}`) || []
-      const orderData = orderKeys.length ? await redis.mget(orderKeys) : []
-
-      const offers = orderData.map((order: any) => {
-        if (order.offer) return
-        const parsed = JSON.parse(order)
-        return parsed.offer
+      const orders = await prisma.order.findMany({
+        where: {
+          slug: task.contract.slug,
+          taskId: task._id,
+          marketplace: OPENSEA.toLowerCase(),
+          identifier
+        }
       })
 
-      const currentBidPrice = Math.max(...offers.map((offer) => Number(offer)))
+      const offers = orders.map((order: PrismaOrder) => order.offerPrice)
+
+      const currentBidPrice = offers.length > 0 ? Math.max(...offers.map((offer) => Number(offer))) : 0
+      const incomingBidAmountEth = incomingBidAmount / 1e18
+
+      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
+        const identifier = tokenId ? tokenId : trait && trait.type && trait.value ? `${trait.type}:${trait.value}` : "collection"
+        const reason = incomingBidAmountEth < minBidPriceEth
+          ? `is less than min bid price ${minBidPriceEth} WETH`
+          : `is greater than max bid price ${maxBidPriceEth} WETH`;
+        const message = `incoming bid ${incomingBidAmountEth} WETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
+        return
+      }
 
       if (incomingBidAmount < currentBidPrice) return
 
-      const incomingBidAmountEth = incomingBidAmount / 1e18
 
       const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth)
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
@@ -3312,19 +3405,18 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         console.log(RED + `counter Offer ${offerPriceEth} WETH for ${task.contract.slug} ${JSON.stringify(trait)} exceeds max bid price ${maxBidPriceEth} WETH ON OPENSEA.Skipping ...`.toUpperCase() + RESET);
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
 
-        if (orderKeys.length > 0) {
-          const bidData = await redis.mget(orderKeys);
-          const cancelData = bidData.map((order, index) => {
-            if (!order) return
-            const parsed = JSON.parse(order);
+        if (orders.length > 0) {
+          const cancelData = orders.map((order, index) => {
             return {
               name: CANCEL_OPENSEA_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, orderId: parsed.orderId, taskId: task._id, orderKey: orderKeys[index] },
+              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+              opts: {
+                jobId: `CANCEL_OPENSEA_BID-${task._id}-${order.id}`
+              }
             }
-          }).filter((item) => item !== undefined)
+          })
           await queue.addBulk(cancelData)
         }
-
         return;
       }
 
@@ -3368,19 +3460,18 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       console.log(GREEN + `Counterbidding incoming opensea offer of ${Number(incomingBidAmount) / 1e18} WETH for ${task.contract.slug} ${JSON.stringify(trait)} for ${Number(colletionOffer) / 1e18} WETH ON OPENSEA`.toUpperCase() + RESET);
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
 
-      if (orderKeys.length > 0) {
-        const bidData = await redis.mget(orderKeys);
-        const cancelData = bidData.map((order, index) => {
-          if (!order) return
-          const parsed = JSON.parse(order);
+      if (orders.length > 0) {
+        const cancelData = orders.map((order, index) => {
           return {
             name: CANCEL_OPENSEA_BID,
-            data: { privateKey: WALLET_PRIVATE_KEY, orderId: parsed.orderId, taskId: task._id, orderKey: orderKeys[index] },
+            data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+            opts: {
+              jobId: `CANCEL_OPENSEA_BID-${task._id}-${order.id}`
+            }
           }
-        }).filter((item) => item !== undefined)
+        })
         await queue.addBulk(cancelData)
       }
-
     }
     if (data.event === "collection_offer") {
       const isTraitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
@@ -3393,23 +3484,32 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       console.log(BLUE + `incoming collection offer for ${task.contract.slug} for ${incomingBidAmount / 1e18} WETH on opensea`.toUpperCase() + RESET);
       console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
 
-      const orderTrackingKey = `{${task._id}}:opensea:orders`;
-      const orderKeys = await getPatternKeys(orderTrackingKey, 'collection') || []
-      const orderData = orderKeys.length ? await redis.mget(orderKeys) : []
-      const offers = orderData.map((order: any) => {
-        if (order.offer) return
-        const parsed = JSON.parse(order)
-        return parsed.offer
+      const orders = await prisma.order.findMany({
+        where: {
+          slug: task.contract.slug,
+          taskId: task._id,
+          marketplace: OPENSEA.toLowerCase(),
+          identifier: 'collection'
+        }
       })
-      const currentBidPrice = !offers.length ? 0 : Math.max(...offers.map((offer) => Number(offer)))
 
-      console.log({ incomingBidAmount, currentBidPrice });
+      const offers = orders.map((order: PrismaOrder) => order.offerPrice)
+      const currentBidPrice = offers.length > 0 ? Math.max(...offers.map((offer) => Number(offer))) : 0
 
+      const incomingBidAmountEth = incomingBidAmount / 1e18
 
+      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
+        const identifier = tokenId ? tokenId : trait && trait.type && trait.value ? `${trait.type}:${trait.value}` : "collection"
+        const reason = incomingBidAmountEth < minBidPriceEth
+          ? `is less than min bid price ${minBidPriceEth} WETH`
+          : `is greater than max bid price ${maxBidPriceEth} WETH`;
+        const message = `incoming bid ${incomingBidAmountEth} WETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
+        return
+      }
 
       if (incomingBidAmount < currentBidPrice) return
 
-      const incomingBidAmountEth = incomingBidAmount / 1e18
       const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth)
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
 
@@ -3425,16 +3525,16 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         console.log(RED + message + RESET);
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
 
-        if (orderKeys.length > 0) {
-          const bidData = await redis.mget(orderKeys);
-          const cancelData = bidData.map((order, index) => {
-            if (!order) return
-            const parsed = JSON.parse(order);
+        if (orders.length > 0) {
+          const cancelData = orders.map((order, index) => {
             return {
               name: CANCEL_OPENSEA_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, orderId: parsed.orderId, taskId: task._id, orderKey: orderKeys[index] },
+              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+              opts: {
+                jobId: `CANCEL_OPENSEA_BID-${task._id}-${order.id}`
+              }
             }
-          }).filter((item) => item !== undefined)
+          })
           await queue.addBulk(cancelData)
         }
         return;
@@ -3479,16 +3579,16 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       console.log(GREEN + `Counterbidding incoming offer of ${Number(incomingBidAmount) / 1e18} WETH for ${task.contract.slug} for ${Number(colletionOffer) / 1e18} WETH ON OPENSEA`.toUpperCase() + RESET);
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
 
-      if (orderKeys.length > 0) {
-        const bidData = await redis.mget(orderKeys);
-        const cancelData = bidData.map((order, index) => {
-          if (!order) return
-          const parsed = JSON.parse(order);
+      if (orders.length > 0) {
+        const cancelData = orders.map((order, index) => {
           return {
             name: CANCEL_OPENSEA_BID,
-            data: { privateKey: WALLET_PRIVATE_KEY, orderId: parsed.orderId, taskId: task._id, orderKey: orderKeys[index] },
+            data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+            opts: {
+              jobId: `CANCEL_OPENSEA_BID-${task._id}-${order.id}`
+            }
           }
-        }).filter((item) => item !== undefined)
+        })
         await queue.addBulk(cancelData)
       }
     }
@@ -3851,12 +3951,12 @@ async function processOpenseaScheduledBid(task: ITask) {
     const WALLET_ADDRESS: string = task.wallet.address;
     taskStatus[task._id].status = 'PROCESSING'
     const wallets = await Wallet.findOne({ address: task.wallet.address })
-    taskStatus[task._id].processingPercentage = (1 / 5) * 100
+    taskStatus[task._id].processingPercentage = (1 / 3) * 100
     const WALLET_PRIVATE_KEY: string = wallets?.privateKey as string
 
 
     const collectionDetails = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
-    taskStatus[task._id].processingPercentage = (2 / 5) * 100
+    taskStatus[task._id].processingPercentage = (2 / 3) * 100
     const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0
 
     if (!warningBids[task._id]) {
@@ -3866,22 +3966,6 @@ async function processOpenseaScheduledBid(task: ITask) {
         blur: false
       }
     }
-
-    warningBids[task._id].opensea = false;
-
-
-    const highestOffer = await fetchOpenseaOffers(task._id, 'COLLECTION', task.contract.slug, task.contract.contractAddress, {})
-    taskStatus[task._id].processingPercentage = (3 / 5) * 100
-    const [topOffer] = highestOffer
-    const bestOfferAmount = (topOffer?.amount ?? 0) / 1e18
-    if (!bestOffers[task._id]) {
-      bestOffers[task._id] = {
-        opensea: bestOfferAmount,
-        magiceden: 0,
-        blur: 0
-      };
-    }
-    bestOffers[task._id].opensea = bestOfferAmount;
 
     const autoIds = task.tokenIds
       .filter(id => id.toString().toLowerCase().startsWith('bot'))
@@ -3919,7 +4003,6 @@ async function processOpenseaScheduledBid(task: ITask) {
           };
 
           const items = await fetchOpenSeaCollectionItems(variable);
-          taskStatus[task._id].processingPercentage = (4 / 5) * 100;
           tokens.push(...items);
         })
       )
@@ -3929,45 +4012,42 @@ async function processOpenseaScheduledBid(task: ITask) {
       currentTokenIds[task._id].opensea = [...tokenIds]
 
     } else if (task.bidType === "token") {
-      taskStatus[task._id].processingPercentage = (4 / 5) * 100
       // Directly combine and deduplicate in one step
       tokenIds = [...new Set([...bottomListings, ...taskTokenIds])];
       currentTokenIds[task._id].opensea = [...tokenIds]
-      const difference = Math.max(0, amount - tokenIds.length)
+      const difference = amount !== undefined ? Math.max(0, amount - tokenIds.length) : 0
       skipStats[task._id]['opensea'] += difference
     }
 
+    taskStatus[task._id].processingPercentage = (3 / 3) * 100
+
     const tokenBid = task.bidType === "token" && tokenIds.length > 0
 
-    const openseaOrderTrackingKey = `{${task._id}}:opensea:orders`;
-    const openseaOrderKeys = await redis.smembers(openseaOrderTrackingKey);
-
-    const openseaOrders = openseaOrderKeys.length
-      ? await redis.mget(openseaOrderKeys)
-      : [];
+    const openseaOrders = await prisma.order.findMany({
+      where: {
+        slug: task.contract.slug,
+        taskId: task._id,
+        marketplace: OPENSEA.toLowerCase(),
+      }
+    })
 
     let openseaBids: any[] = []
 
     if (currentTask.bidType === "token") {
-      openseaBids = openseaOrders.map((orderKey, index) => {
-        if (!orderKey) return null;
-        const parts = openseaOrderKeys[index].split(":");
-        return Number(parts[parts.length - 1])
-      }).filter((bid): bid is number => bid !== null);
+      openseaBids = openseaOrders.map((order) => +order.identifier)
+
     } else if (currentTask.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0) {
-      openseaBids = openseaOrders.map((orderKey, index) => {
-        if (!orderKey) return null;
-        const parts = openseaOrderKeys[index].split(":");
+      openseaBids = openseaOrders.map((order) => {
+        if (!order) return null;
+        const parts = order.identifier.split(":");
         return {
-          traitType: parts[5],
-          traitValue: parts[6],
+          traitType: parts[0],
+          traitValue: parts[1],
         };
       });
     }
 
     const traits = selectedTraits && Object.keys(selectedTraits).length > 0 ? transformOpenseaTraits(selectedTraits) : [];
-
-    const orderTrackingKey = `{${task._id}}:opensea:orders`;
 
     const removedTraits = currentTask.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0 ? openseaBids.filter(bid =>
       bid !== null &&
@@ -3976,23 +4056,32 @@ async function processOpenseaScheduledBid(task: ITask) {
         trait.value === bid.traitValue
       )
     ) : [];
+
     if (removedTraits.length > 0) {
       console.log(`REMOVED TRAIT BIDS: ${removedTraits.length}`);
       for (const trait of removedTraits) {
         console.log(`CANCELLING TRAIT BID FOR: ${trait.traitType.toUpperCase()}:${trait.traitValue.toUpperCase()}`);
-        const orderKeys = await getPatternKeys(orderTrackingKey, `${trait.traitType}:${trait.traitValue}`) || []
 
-        if (orderKeys.length > 0) {
-          console.log(`FOUND ${orderKeys.length.toString().toUpperCase()} ORDERS TO CANCEL FOR TRAIT ${trait.traitType.toUpperCase()}:${trait.traitValue.toUpperCase()}`);
-          const bidData = await redis.mget(orderKeys);
-          const cancelData = bidData.map((order, index) => {
-            if (!order) return
-            const parsed = JSON.parse(order);
+        const orders = await prisma.order.findMany({
+          where: {
+            slug: task.contract.slug,
+            taskId: task._id,
+            marketplace: OPENSEA.toLowerCase(),
+            identifier: trait.traitType.toUpperCase() + ":" + trait.traitValue.toUpperCase()
+          }
+        })
+
+        if (orders.length > 0) {
+          console.log(`FOUND ${orders.length.toString().toUpperCase()} ORDERS TO CANCEL FOR TRAIT ${trait.traitType.toUpperCase()}:${trait.traitValue.toUpperCase()}`);
+          const cancelData = orders.map((order, index) => {
             return {
               name: CANCEL_OPENSEA_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, orderId: parsed.orderId, taskId: task._id, orderKey: orderKeys[index] },
+              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+              opts: {
+                jobId: `CANCEL_OPENSEA_BID-${task._id}-${order.id}`
+              }
             }
-          }).filter((item) => item !== undefined)
+          })
           await queue.addBulk(cancelData)
           console.log(`QUEUED ${cancelData.length.toString().toUpperCase()} CANCELLATIONS FOR TRAIT ${trait.traitType.toUpperCase()}:${trait.traitValue.toUpperCase()}`);
         }
@@ -4003,17 +4092,24 @@ async function processOpenseaScheduledBid(task: ITask) {
 
     if (tokensToCancel.length > 0) {
       for (const token of tokensToCancel) {
-        const orderKeys = await getPatternKeys(orderTrackingKey, token.toString()) || []
-        if (orderKeys.length > 0) {
-          const bidData = await redis.mget(orderKeys);
-          const cancelData = bidData.map((order, index) => {
-            if (!order) return
-            const parsed = JSON.parse(order);
+        const orders = await prisma.order.findMany({
+          where: {
+            slug: task.contract.slug,
+            taskId: task._id,
+            marketplace: OPENSEA.toLowerCase(),
+            identifier: token.toString()
+          }
+        })
+        if (orders.length > 0) {
+          const cancelData = orders.map((order, index) => {
             return {
               name: CANCEL_OPENSEA_BID,
-              data: { privateKey: task.wallet.privateKey, orderId: parsed.orderId, taskId: task._id, orderKey: orderKeys[index] },
+              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+              opts: {
+                jobId: `CANCEL_OPENSEA_BID-${task._id}-${order.id}`
+              }
             }
-          }).filter((item) => item !== undefined)
+          })
           await queue.addBulk(cancelData)
         }
       }
@@ -4179,21 +4275,30 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
     let offerPrice = BigInt(Math.ceil(roundToValidPrecision(offerPriceEth) * 1e18));
 
     let colletionOffer = BigInt(offerPrice)
-    const orderTrackingKey = `{${task._id}}:opensea:orders`;
-    const orderKeys = await getPatternKeys(orderTrackingKey, 'collection') || []
-    const [orderKey, ...remainingKeys] = orderKeys
-    const ttl = await redis.ttl(orderKey)
+    const orders = await prisma.order.findMany({
+      where: {
+        slug: task.contract.slug,
+        taskId: task._id,
+        marketplace: OPENSEA.toLowerCase(),
+        identifier: 'collection',
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    })
+    const [order, ...remainingOrders] = orders
+    const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
 
-    if (remainingKeys.length > 0) {
-      const bidData = await redis.mget(remainingKeys);
-      const cancelData = bidData.map((order, index) => {
-        if (!order) return
-        const parsed = JSON.parse(order);
+    if (remainingOrders.length > 0) {
+      const cancelData = remainingOrders.map((order, index) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey: task.wallet.privateKey, orderId: parsed.orderId, taskId: task._id, orderKey: remainingKeys[index] },
+          data: { privateKey: task.wallet.privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+          opts: {
+            jobId: `CANCEL_OPENSEA_BID-${task._id}-${order.id}`
+          }
         }
-      }).filter((item) => item !== undefined)
+      })
       await queue.addBulk(cancelData)
     }
 
@@ -4220,16 +4325,16 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
 
         // Check for overbidding
         if (spread > outbidMargin && Number(secondOffer.amount) > 0) {
-          if (orderKeys.length > 0) {
-            const bidData = await redis.mget(orderKeys);
-            const cancelData = bidData.map((order, index) => {
-              if (!order) return
-              const parsed = JSON.parse(order);
+          if (orders.length > 0) {
+            const cancelData = orders.map((order, index) => {
               return {
                 name: CANCEL_OPENSEA_BID,
-                data: { privateKey: task.wallet.privateKey, orderId: parsed.orderId, taskId: task._id, orderKey: orderKeys[index] },
+                data: { privateKey: task.wallet.privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+                opts: {
+                  jobId: `CANCEL_OPENSEA_BID-${task._id}-${order.id}`
+                }
               }
-            }).filter((item) => item !== undefined)
+            })
             await queue.addBulk(cancelData)
           }
           // Place new bid at optimal level
@@ -4251,16 +4356,16 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
     }
     const bidCount = getIncrementedBidCount(OPENSEA, task.contract.slug, task._id)
 
-    if (orderKeys.length > 0) {
-      const bidData = await redis.mget(orderKeys);
-      const cancelData = bidData.map((order, index) => {
-        if (!order) return
-        const parsed = JSON.parse(order);
+    if (orders.length > 0) {
+      const cancelData = orders.map((order, index) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey: task.wallet.privateKey, orderId: parsed.orderId, taskId: task._id, orderKey: orderKeys[index] },
+          data: { privateKey: task.wallet.privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+          opts: {
+            jobId: `CANCEL_OPENSEA_BID-${task._id}-${order.id}`
+          }
         }
-      }).filter((item) => item !== undefined)
+      })
       await queue.addBulk(cancelData)
     }
 
@@ -4281,16 +4386,16 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       console.log(RED + message + RESET);
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
-      if (orderKeys.length > 0) {
-        const bidData = await redis.mget(orderKeys);
-        const cancelData = bidData.map((order, index) => {
-          if (!order) return
-          const parsed = JSON.parse(order);
+      if (orders.length > 0) {
+        const cancelData = orders.map((order, index) => {
           return {
             name: CANCEL_OPENSEA_BID,
-            data: { privateKey: task.wallet.privateKey, orderId: parsed.orderId, taskId: task._id, orderKey: orderKeys[index] },
+            data: { privateKey: task.wallet.privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+            opts: {
+              jobId: `CANCEL_OPENSEA_BID-${task._id}-${order.id}`
+            }
           }
-        }).filter((item) => item !== undefined)
+        })
         await queue.addBulk(cancelData)
       }
       return;
@@ -4310,7 +4415,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       expiry
     )
   } catch (error: any) {
-    console.error(RED + `Error processing OpenSea collection bid for task: ${data.task._id} ` + RESET, error?.response?.data || error?.response || error);
+    console.error(RED + `Error processing OpenSea collection bid for task: ${data.task._id} ` + RESET, error?.response?.data || error?.response || error?.code)
   }
 }
 
@@ -4640,22 +4745,36 @@ async function processOpenseaTraitBid(data: {
     let traitOffer = BigInt(Math.round(roundToValidPrecision(offerPriceEth) * 1e18))
 
     const { type, value } = JSON.parse(trait);
-    const orderTrackingKey = `{${_id}}:opensea:orders`;
-    const orderKeys = await getPatternKeys(orderTrackingKey, `${type}:${value}`) || []
-    const [orderKey, ...remainingKeys] = orderKeys
-    const ttl = await redis.ttl(orderKey)
 
-    if (remainingKeys.length > 0) {
-      const orderData = await redis.mget(remainingKeys);
-      const cancelData = orderData.map((orderKey, index) => {
-        if (!orderKey) return
-        const order = JSON.parse(orderKey);
-        const payload = order.payload;
+    const identifier = `${type}:${value}`
+
+    const orders = await prisma.order.findMany({
+      where: {
+        slug: slug,
+        taskId: _id,
+        marketplace: OPENSEA.toLowerCase(),
+        identifier
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    })
+
+
+    const [order, ...remainingOrders] = orders
+    const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
+
+
+    if (remainingOrders.length > 0) {
+      const cancelData = remainingOrders.map((order, index) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey, payload, taskId: _id, orderKey: remainingKeys[index] }
+          data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order.id },
+          opts: {
+            jobId: `CANCEL_OPENSEA_BID-${_id}-${order.id}`
+          }
         }
-      }).filter((item) => item !== undefined)
+      })
       await queue.addBulk(cancelData)
     }
 
@@ -4678,16 +4797,16 @@ async function processOpenseaTraitBid(data: {
       if (isOwnBid) {
         const spread = (Number(topOffer.amount) - Number(secondOffer.amount)) / 1e18;
         if (spread > outbidMargin && Number(secondOffer.amount) > 0) {
-          if (orderKeys.length > 0) {
-            const bidData = await redis.mget(orderKeys);
-            const cancelData = bidData.map((order, index) => {
-              if (!order) return
-              const parsed = JSON.parse(order);
+          if (orders.length > 0) {
+            const cancelData = orders.map((order, index) => {
               return {
                 name: CANCEL_OPENSEA_BID,
-                data: { privateKey: privateKey, orderId: parsed.orderId, taskId: _id, orderKey: orderKeys[index] },
+                data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order.id },
+                opts: {
+                  jobId: `CANCEL_OPENSEA_BID-${_id}-${order.id}`
+                }
               }
-            }).filter((item) => item !== undefined)
+            })
             await queue.addBulk(cancelData)
           }
           traitOffer = BigInt(Math.round(secondOffer.amount + (outbidMargin * 1e18)));
@@ -4705,16 +4824,16 @@ async function processOpenseaTraitBid(data: {
     }
 
     const bidCount = getIncrementedBidCount(OPENSEA, slug, _id)
-    if (orderKeys.length > 0) {
-      const bidData = await redis.mget(orderKeys);
-      const cancelData = bidData.map((order, index) => {
-        if (!order) return
-        const parsed = JSON.parse(order);
+    if (orders.length > 0) {
+      const cancelData = orders.map((order, index) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey, orderId: parsed.orderId, taskId: _id, orderKey: orderKeys[index] },
+          data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order.id },
+          opts: {
+            jobId: `CANCEL_OPENSEA_BID-${_id}-${order.id}`
+          }
         }
-      }).filter((item) => item !== undefined)
+      })
       await queue.addBulk(cancelData)
     }
 
@@ -4728,16 +4847,17 @@ async function processOpenseaTraitBid(data: {
       console.log(RED + message + RESET);
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
-      if (orderKeys.length > 0) {
-        const bidData = await redis.mget(orderKeys);
-        const cancelData = bidData.map((order, index) => {
-          if (!order) return
-          const parsed = JSON.parse(order);
+
+      if (orders.length > 0) {
+        const cancelData = orders.map((order, index) => {
           return {
             name: CANCEL_OPENSEA_BID,
-            data: { privateKey: privateKey, orderId: parsed.orderId, taskId: _id, orderKey: orderKeys[index] },
+            data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order.id },
+            opts: {
+              jobId: `CANCEL_OPENSEA_BID-${_id}-${order.id}`
+            }
           }
-        }).filter((item) => item !== undefined)
+        })
         await queue.addBulk(cancelData)
       }
       return;
@@ -4757,8 +4877,17 @@ async function processOpenseaTraitBid(data: {
       expiry,
       trait
     )
-  } catch (error) {
-    console.error(RED + `❌ Error processing OpenSea trait bid for task: ${data?.slug} ` + RESET, error);
+  } catch (error: any) {
+    console.error(RED + `❌ Error processing OpenSea trait bid for task: ${data?.slug} trait: ${data?.trait} ` + RESET, error?.response?.data || error?.response || error?.code);
+
+    if (!errorStats[data?.task?._id]) {
+      errorStats[data?.task?._id] = {
+        magiceden: 0,
+        opensea: 0,
+        blur: 0
+      }
+    }
+    errorStats[data?.task?._id]['opensea']++
   }
 }
 
@@ -4783,26 +4912,36 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
     const { maxBidPriceEth, offerPriceEth, minBidPriceEth } = await calculateBidPrice(task, floor_price as number, "opensea")
     let tokenOffer = BigInt(Math.round(offerPriceEth * 1e18))
-    const orderTrackingKey = `{${_id}}:opensea:orders`;
-    const orderKeys = await getPatternKeys(orderTrackingKey, asset.tokenId.toString()) || []
-    const [orderKey, ...remainingKeys] = orderKeys
+    const orders = await prisma.order.findMany({
+      where: {
+        slug: slug,
+        taskId: _id,
+        marketplace: OPENSEA.toLowerCase(),
+        identifier: asset.tokenId.toString()
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    })
 
-    if (remainingKeys.length > 0) {
-      const orderData = await redis.mget(remainingKeys);
-      const cancelData = orderData.map((orderKey, index) => {
-        if (!orderKey) return
-        const order = JSON.parse(orderKey);
-        const payload = order.payload;
+    const [order, ...remainingOrders] = orders
+    const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
+
+    if (remainingOrders.length > 0) {
+      const cancelData = remainingOrders.map((order, index) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey, payload, taskId: _id, orderKey: remainingKeys[index] }
+          data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order.id },
+          opts: {
+            jobId: `CANCEL_OPENSEA_BID-${_id}-${order.id}`
+          }
         }
-      }).filter((item) => item !== undefined)
+      })
       await queue.addBulk(cancelData)
     }
     const stopBid = await stopOption(task, 'opensea', Number(floor_price), balances[task._id])
+
     if (stopBid) return;
-    const ttl = await redis.ttl(orderKey)
 
     if (!outbidOptions.outbid) {
       if (ttl >= MIN_BID_DURATION) return;
@@ -4825,16 +4964,16 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         const spread = (Number(highestBidAmount) - Number(secondOffer.amount)) / 1e18;
 
         if (spread > outbidMargin && Number(secondOffer.amount) > 0) {
-          if (orderKeys.length > 0) {
-            const bidData = await redis.mget(orderKeys);
-            const cancelData = bidData.map((order, index) => {
-              if (!order) return
-              const parsed = JSON.parse(order);
+          if (orders.length > 0) {
+            const cancelData = orders.map((order, index) => {
               return {
                 name: CANCEL_OPENSEA_BID,
-                data: { privateKey: privateKey, orderId: parsed.orderId, taskId: _id, orderKey: orderKeys[index] },
+                data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order.id },
+                opts: {
+                  jobId: `CANCEL_OPENSEA_BID-${_id}-${order.id}`
+                }
               }
-            }).filter((item) => item !== undefined)
+            })
             await queue.addBulk(cancelData)
           }
           tokenOffer = BigInt(Math.round(secondOffer.amount + (outbidMargin * 1e18)));
@@ -4852,19 +4991,18 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     }
 
     const bidCount = getIncrementedBidCount(OPENSEA, slug, _id)
-    if (orderKeys.length > 0) {
-      const bidData = await redis.mget(orderKeys);
-      const cancelData = bidData.map((order, index) => {
-        if (!order) return
-        const parsed = JSON.parse(order);
+    if (orders.length > 0) {
+      const cancelData = orders.map((order, index) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey, orderId: parsed.orderId, taskId: _id, orderKey: orderKeys[index] },
+          data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order.id },
+          opts: {
+            jobId: `CANCEL_OPENSEA_BID-${_id}-${order.id}`
+          }
         }
-      }).filter((item) => item !== undefined)
+      })
       await queue.addBulk(cancelData)
     }
-
     const expiry = getExpiry(task?.bidDuration as {
       value: number;
       unit: string;
@@ -4873,16 +5011,16 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     const offerEth = Number(tokenOffer) / 1e18;
 
     if (outbidOptions.outbid && offerEth > maxBidPriceEth) {
-      if (orderKeys.length > 0) {
-        const bidData = await redis.mget(orderKeys);
-        const cancelData = bidData.map((order, index) => {
-          if (!order) return
-          const parsed = JSON.parse(order);
+      if (orders.length > 0) {
+        const cancelData = orders.map((order, index) => {
           return {
             name: CANCEL_OPENSEA_BID,
-            data: { privateKey: privateKey, orderId: parsed.orderId, taskId: _id, orderKey: orderKeys[index] },
+            data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order.id },
+            opts: {
+              jobId: `CANCEL_OPENSEA_BID-${_id}-${order.id}`
+            }
           }
-        }).filter((item) => item !== undefined)
+        })
         await queue.addBulk(cancelData)
       }
       const message = `❌ Offer price ${offerEth} WETH for ${slug} ${asset.tokenId} bid exceeds max bid price ${maxBidPriceEth} WETH FOR OPENSEA.Skipping ...`.toUpperCase()
@@ -4919,7 +5057,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     )
 
   } catch (error: any) {
-    console.error(RED + `Error processing OpenSea token bid for task: ${data.task._id} ${data.slug} ${data.asset.tokenId}` + RESET, error);
+    console.error(RED + `Error processing OpenSea token bid for task: ${data.task._id} ${data.slug} ${data.asset.tokenId}` + RESET, error?.response?.data || error?.response || error?.code);
     if (!errorStats[data.task._id]) {
       errorStats[data.task._id] = {
         magiceden: 0,
@@ -4954,7 +5092,7 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
     if (error.length > 0 && error[0]?.includes("Duplicate order")) {
       return;
     }
-    console.error(RED + `❌ Error processing OpenSea collection counter bid for task: ${slug} ` + RESET, error?.response?.data || error?.response || error);
+    console.error(RED + `❌ Error processing OpenSea collection counter bid for task: ${slug} ` + RESET, error?.response?.data || error?.response || error?.code);
   }
 }
 
@@ -5324,8 +5462,8 @@ async function processMagicedenScheduledBid(task: ITask) {
 
     if (!bestOffers[task._id]) {
       bestOffers[task._id] = {
-        opensea: bestOfferAmount,
-        magiceden: 0,
+        opensea: 0,
+        magiceden: bestOfferAmount,
         blur: 0
       };
     }
@@ -5899,11 +6037,18 @@ async function processMagicedenTraitBid(data: {
 async function bulkCancelOpenseaBid(data: { privateKey: string, orderId: string, taskId: string, orderKey: string }) {
   const { privateKey, orderId, taskId, orderKey } = data
   try {
-    await Promise.all([
-      cancelOrder(orderId, OPENSEA_PROTOCOL_ADDRESS, privateKey, taskId),
-      redis.srem(`{${taskId}}:opensea:orders`, orderKey),
-      redis.del(orderKey)
-    ])
+    const orderExist = await prisma.order.findUnique({
+      where: {
+        id: orderKey
+      }
+    })
+    if (!orderExist) return
+    await cancelOrder(orderId, OPENSEA_PROTOCOL_ADDRESS, privateKey, taskId)
+    await prisma.order.deleteMany({
+      where: {
+        id: orderKey
+      }
+    })
   } catch (error) {
     console.error(RED + `Error processing Opensea bid cancellation for task: ${taskId} ` + RESET, error);
   }
@@ -5927,41 +6072,67 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], privateKey: st
 async function validateBidCount() {
   for (const task of currentTasks) {
     try {
-      const [openseaOrders, magicedenOrders, blurOrders] = await Promise.all([
-        redis.smembers(`{${task._id}}:opensea:orders`),
+      // Check if the Order table exists before querying
+      let openseaOrders = [];
+      let hasOrderTable = true;
+
+      try {
+        openseaOrders = await prisma.order.findMany({
+          where: {
+            taskId: task._id,
+            marketplace: OPENSEA.toLowerCase(),
+            expiresAt: {
+              gt: new Date()
+            }
+          }
+        });
+
+        // If we got here, the table exists, so delete expired orders
+        await prisma.order.deleteMany({
+          where: {
+            taskId: task._id,
+            expiresAt: {
+              lte: new Date()
+            }
+          }
+        });
+      } catch (err: any) {
+        if (err?.code === 'P2021') {
+          // Table doesn't exist yet - likely needs migration
+          console.log(YELLOW + `Order table doesn't exist. Run 'npx prisma migrate dev' to create it.` + RESET);
+          hasOrderTable = false;
+        } else {
+          throw err; // Re-throw if it's a different error
+        }
+      }
+
+      const [magicedenOrders, blurOrders] = await Promise.all([
         redis.smembers(`{${task._id}}:magiceden:orders`),
         redis.smembers(`{${task._id}}:blur:orders`)
-      ])
+      ]);
 
       await Promise.all([
         ...blurOrders.map(async (key) => {
-          const ttl = await redis.ttl(key)
+          const ttl = await redis.ttl(key);
           if (ttl <= 0) {
-            await redis.srem(`{${task._id}}:blur:orders`, key)
-            blurOrders.filter((item) => item !== key)
-          }
-        }),
-        ...openseaOrders.map(async (key) => {
-          const ttl = await redis.ttl(key)
-          if (ttl <= 0) {
-            await redis.srem(`{${task._id}}:opensea:orders`, key)
-            openseaOrders.filter((item) => item !== key)
+            await redis.srem(`{${task._id}}:blur:orders`, key);
+            blurOrders.filter((item) => item !== key);
           }
         }),
         ...magicedenOrders.map(async (key) => {
-          const ttl = await redis.ttl(key)
+          const ttl = await redis.ttl(key);
           if (ttl <= 0) {
-            await redis.srem(`{${task._id}}:magiceden:orders`, key)
-            magicedenOrders.filter((item) => item !== key)
+            await redis.srem(`{${task._id}}:magiceden:orders`, key);
+            magicedenOrders.filter((item) => item !== key);
           }
         })
-      ])
+      ]);
 
       bidStats[task._id] = {
-        opensea: openseaOrders.length,
+        opensea: hasOrderTable ? openseaOrders.length : 0,
         magiceden: magicedenOrders.length,
         blur: blurOrders.length
-      }
+      };
     } catch (error) {
       console.error(RED + `Error validating bid count for task: ${task._id}` + RESET, error);
     }
@@ -6030,11 +6201,111 @@ app.get("/health", async (req, res) => {
 });
 
 
+app.get("/api/task/:taskId", async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const { page = "1", pageSize = "20", marketplace = "" } = req.query;
+
+
+
+    // Convert to numbers and validate
+    const pageNum = parseInt(page as string, 10) || 1;
+    const pageSizeNum = parseInt(pageSize as string, 10) || 20;
+
+    // Limit page size to reasonable values
+    const limitedPageSize = Math.min(Math.max(pageSizeNum, 1), 100);
+
+    // Calculate skip value for pagination
+    const skip = (pageNum - 1) * limitedPageSize;
+
+    // Build where clause
+    const whereClause: any = { taskId };
+
+    // Add marketplace filter if provided
+    if (marketplace) {
+      // Handle marketplace as an array or single value
+      if (Array.isArray(marketplace)) {
+        whereClause.marketplace = {
+          in: marketplace.map((m: any) => m.toLowerCase())
+        };
+      } else if (typeof marketplace === 'string' && marketplace.includes(',')) {
+        // Handle comma-separated string
+        whereClause.marketplace = {
+          in: marketplace.split(',').map(m => m.trim().toLowerCase())
+        };
+      } else {
+        whereClause.marketplace = (marketplace as string).toLowerCase();
+      }
+    }
+
+    // Get total count for pagination metadata
+    const totalCount = await prisma.order.count({ where: whereClause });
+
+    // Fetch paginated orders
+    const orders = await prisma.order.findMany({
+      where: whereClause,
+      skip,
+      take: limitedPageSize,
+      orderBy: { createdAt: 'desc' }
+    });
+
+    // Calculate pagination metadata
+    const totalPages = Math.ceil(totalCount / limitedPageSize);
+
+    res.status(200).json({
+      data: orders,
+      pagination: {
+        total: totalCount,
+        page: pageNum,
+        pageSize: limitedPageSize,
+        totalPages,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1
+      }
+    });
+  } catch (error: any) {
+    console.error("Error fetching task:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to fetch task details",
+      error: error.message
+    });
+  }
+});
+
+app.post('/api/task/cancel/:taskId', async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const task = activeTasks.get(taskId)
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    const wallet = await Wallet.findOne({ address: task.wallet.address })
+    const WALLET_PRIVATE_KEY: string = wallet?.privateKey as string
+    const orders: PrismaOrder[] = req.body
+    const openseaOrders = orders.filter((order: any) => order.marketplace === OPENSEA.toLowerCase())
+    const cancelData = openseaOrders.map((order, index) => {
+      return {
+        name: CANCEL_OPENSEA_BID,
+        data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+        opts: {
+          jobId: `CANCEL_OPENSEA_BID-${task._id}-${order.id}`
+        }
+      }
+    })
+    await queue.addBulk(cancelData)
+    res.status(200).json({ message: 'Task cancelled' });
+  } catch (error) {
+    console.error('Error updating task:', error);
+    res.status(500).json({ error: 'Failed to update task' });
+  }
+})
+
+
 // Fetch floor prices for all tasks and all marketplaces
 app.post('/api/floor', async (req, res) => {
   try {
     const { tasks }: { tasks: { _id: string, slug: string, contractAddress: string }[] } = req.body;
-
     // Create tasks for pQueue instead of using Promise.all
     await pQueue.addAll(tasks.map(task => async () => {
       const taskId = task._id;
@@ -6049,30 +6320,51 @@ app.post('/api/floor', async (req, res) => {
         };
       }
 
-      // Fetch floor prices for all marketplaces for each task
+      if (!bestOffers[taskId]) {
+        bestOffers[taskId] = {
+          opensea: 0,
+          blur: 0,
+          magiceden: 0
+        };
+      }
+
       try {
-        // OpenSea floor price
         try {
           const openseaFloorPrice = await getOpenseaFloor(slug);
           floorPrices[taskId]['opensea'] = openseaFloorPrice;
+          const [topOffer] = await fetchOpenseaOffers(taskId, 'COLLECTION', slug, contractAddress, {})
+          const topOfferAmount = Number(topOffer?.amount) / 1e18
+          bestOffers[taskId]['opensea'] = topOfferAmount
+
         } catch (error) {
           console.error(`Error fetching OpenSea floor price for ${taskId}:`, error);
           floorPrices[taskId]['opensea'] = 0;
         }
 
-        // Blur floor price
         try {
           const blurFloorPrice = await fetchBlurCollectionStats(taskId, slug);
           floorPrices[taskId]['blur'] = blurFloorPrice;
+          const bestOffer = await fetchBlurBid(taskId, contractAddress, "COLLECTION", {})
+          const bestOfferAmount = bestOffer?.priceLevels?.[0]?.price ? Number(bestOffer.priceLevels[0].price) : 0
+          bestOffers[taskId]['blur'] = bestOfferAmount
+
         } catch (error) {
           console.error(`Error fetching Blur floor price for ${taskId}:`, error);
           floorPrices[taskId]['blur'] = 0;
         }
 
-        // MagicEden floor price
         try {
           const magicEdenFloorPrice = await fetchMagicEdenCollectionStats(taskId, contractAddress);
           floorPrices[taskId]['magiceden'] = magicEdenFloorPrice;
+
+          const [bestOffer] = await fetchMagicEdenOffer(taskId,
+            "COLLECTION",
+            contractAddress,
+            {}
+          )
+          const bestOfferAmount = Number(bestOffer.amount) / 1e18
+          bestOffers[taskId]['magiceden'] = bestOfferAmount;
+
         } catch (error) {
           console.error(`Error fetching MagicEden floor price for ${taskId}:`, error);
           floorPrices[taskId]['magiceden'] = 0;
@@ -6081,8 +6373,7 @@ app.post('/api/floor', async (req, res) => {
         console.error(`Error fetching floor prices for task ${taskId}:`, error);
       }
     }));
-
-    res.status(200).json({ floorPrices });
+    res.status(200).json({ floorPrices, bestOffers });
   } catch (error) {
     console.error('Error fetching floor prices:', error);
     res.status(500).json({ error: 'Failed to fetch floor prices' });
@@ -6197,6 +6488,22 @@ async function stopOption(
         warningBids[task._id].opensea = true;
         warningBids[task._id].magiceden = true;
         warningBids[task._id].blur = true;
+
+        if (!warningBids[task._id]) {
+          warningBids[task._id] = {
+            opensea: false,
+            magiceden: false,
+            blur: false
+          };
+        }
+
+        if (!warningMessage[task._id]) {
+          warningMessage[task._id] = {
+            opensea: "",
+            magiceden: "",
+            blur: ""
+          };
+        }
         warningMessage[task._id].opensea = `Total purchase amount (${(newBalance - balance)} ${task.contract.slug}) has reached or exceeded max purchase limit (${task.stopOptions.maxPurchase}) for ${task.contract.slug}.`;
         warningMessage[task._id].magiceden = `Total purchase amount (${(newBalance - balance)} ${task.contract.slug}) has reached or exceeded max purchase limit (${task.stopOptions.maxPurchase}) for ${task.contract.slug}.`;
         warningMessage[task._id].blur = `Total purchase amount (${(newBalance - balance)} ${task.contract.slug}) has reached or exceeded max purchase limit (${task.stopOptions.maxPurchase}) for ${task.contract.slug}.`;
@@ -6826,7 +7133,7 @@ function transformNewTask(newTask: Record<string, Array<{ name: string }>>): Rec
 
 export const abortedTasks: string[] = [];
 
-function markTaskAsAborted(taskId: string) {
+export function markTaskAsAborted(taskId: string) {
   if (!abortedTasks.includes(taskId)) {
     abortedTasks.push(taskId);
   }
@@ -7179,7 +7486,6 @@ async function handleShutdown() {
 // Add signal handlers
 process.on('SIGTERM', handleShutdown);
 process.on('SIGINT', handleShutdown);
-
 
 
 
