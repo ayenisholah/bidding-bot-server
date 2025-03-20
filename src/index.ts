@@ -550,7 +550,7 @@ queueEvents.on('completed', async ({ jobId }) => {
     if (!parentJob) return;
 
     parentJob.completedJobs++;
-    const cancellationPercentage = ((parentJob.completedJobs + parentJob.failedJobs) / parentJob.totalJobs) * 100
+    const cancellationPercentage = parentJob.totalJobs > 0 ? ((parentJob.completedJobs + parentJob.failedJobs) / parentJob.totalJobs) * 100 : 0
     taskStatus[taskId].cancellationPercentage = cancellationPercentage
 
     if (cancellationPercentage >= 99.5 && !task?.running) {
@@ -671,7 +671,7 @@ queueEvents.on('failed', async ({ jobId }) => {
     if (!parentJob) return;
 
     parentJob.failedJobs++;
-    const cancellationPercentage = ((parentJob.completedJobs + parentJob.failedJobs) / parentJob.totalJobs) * 100
+    const cancellationPercentage = parentJob.totalJobs > 0 ? ((parentJob.completedJobs + parentJob.failedJobs) / parentJob.totalJobs) * 100 : 0
     taskStatus[taskId].cancellationPercentage = cancellationPercentage
     if (cancellationPercentage >= 99.5 && !task?.running) {
       taskStatus[taskId].status = 'STOPPED'
@@ -1888,8 +1888,6 @@ async function startTask(task: ITask, start: boolean) {
     blur: 0
   };
 
-  redis.set(`{${task._id}}:skipCounts:opensea`, 0)
-  redis.set(`{${task._id}}:errorStats:opensea`, 0)
 
   if (!taskStatus[task._id]) {
     taskStatus[task._id] = {
@@ -1976,14 +1974,14 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
       };
     }
 
-    switch (marketplace?.toLowerCase()) {
-      case 'opensea':
-        await cancelOpenseaRequest(taskId)
-        break;
-      default:
-        await cancelOpenseaRequest(taskId)
-        break;
-    }
+    // switch (marketplace?.toLowerCase()) {
+    //   case 'opensea':
+    //     await cancelOpenseaRequest(taskId)
+    //     break;
+    //   default:
+    //     await cancelOpenseaRequest(taskId)
+    //     break;
+    // }
 
     if (marketplace) {
       if (!skipStats[taskId]) {
@@ -2033,11 +2031,28 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
     await new Promise(resolve => setTimeout(resolve, 5000));
     await cancelAllRelatedBids(task, WALLET_PRIVATE_KEY, marketplace);
 
-    // if (!marketplace && taskStatus[taskId].cancellationPercentage >= 99) {
-    //   taskStatus[taskId].status = 'STOPPED'
-    // }
 
-    // Clear any scheduled timeouts for this task
+    // Initialize taskStatus if it doesn't exist
+    if (!taskStatus[taskId]) {
+      taskStatus[taskId] = {
+        status: 'STOPPED',
+        runningPercentage: 0,
+        waitingTime: 0,
+        cancellationPercentage: 0,
+        processingPercentage: 0,
+        nextLoopTime: new Date()
+      };
+    } else {
+
+      // get parent job 
+      const parentJobId = `${taskId}-OPENSEA`
+      const parentJob = await parentJobs.get(parentJobId)
+
+      if (parentJob?.totalJobs === 0 && !task.running) {
+        taskStatus[taskId].status = 'STOPPED';
+      }
+    }
+
     const timeoutId = taskTimeouts.get(taskId);
     if (timeoutId) {
       clearTimeout(timeoutId);
@@ -3214,7 +3229,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       bestOffers[task._id].opensea = collectionOffer;
     }
 
-    const floor_price = await getOpenseaFloor(task.contract.slug);
+    const floor_price = await getOpenseaFloor(task._id, task.contract.slug);
     if (!floor_price) return
     const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, Number(floor_price), "opensea")
 
@@ -4016,6 +4031,14 @@ async function processOpenseaScheduledBid(task: ITask) {
       tokenIds = [...new Set([...bottomListings, ...taskTokenIds])];
       currentTokenIds[task._id].opensea = [...tokenIds]
       const difference = amount !== undefined ? Math.max(0, amount - tokenIds.length) : 0
+
+      if (!skipStats[task._id]) {
+        skipStats[task._id] = {
+          opensea: 0,
+          magiceden: 0,
+          blur: 0
+        }
+      }
       skipStats[task._id]['opensea'] += difference
     }
 
@@ -4058,10 +4081,7 @@ async function processOpenseaScheduledBid(task: ITask) {
     ) : [];
 
     if (removedTraits.length > 0) {
-      console.log(`REMOVED TRAIT BIDS: ${removedTraits.length}`);
       for (const trait of removedTraits) {
-        console.log(`CANCELLING TRAIT BID FOR: ${trait.traitType.toUpperCase()}:${trait.traitValue.toUpperCase()}`);
-
         const orders = await prisma.order.findMany({
           where: {
             slug: task.contract.slug,
@@ -4120,6 +4140,14 @@ async function processOpenseaScheduledBid(task: ITask) {
     if (!approved) return
 
     if (traitBid && !collectionDetails.trait_offers_enabled && !tokenBid) {
+
+      if (!warningMessage[task._id]) {
+        warningMessage[task._id] = {
+          opensea: `Trait bidding is not available for ${task.contract.slug}`,
+          magiceden: "",
+          blur: ""
+        }
+      }
       console.log(RED + `Trait bidding is not available for ${task.contract.slug} on OpenSea.`.toUpperCase() + RESET);
       warningBids[task._id].opensea = true;
       warningMessage[task._id].opensea = `Trait bidding is not available for ${task.contract.slug}`;
@@ -4246,7 +4274,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
     const { task, collectionDetails } = data
     const currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces.includes("OpenSea")) return;
-    const floor_price = await getOpenseaFloor(task.contract.slug);
+    const floor_price = await getOpenseaFloor(task._id, task.contract.slug);
 
     if (!floor_price) return
 
@@ -4718,7 +4746,7 @@ async function processOpenseaTraitBid(data: {
 
     const expiry = getExpiry(currentTask.bidDuration)
 
-    const floor_price = await getOpenseaFloor(slug);
+    const floor_price = await getOpenseaFloor(_id, slug);
     if (!floor_price) return
 
     if (!floorPrices[_id]) {
@@ -4878,8 +4906,12 @@ async function processOpenseaTraitBid(data: {
       trait
     )
   } catch (error: any) {
-    console.error(RED + `❌ Error processing OpenSea trait bid for task: ${data?.slug} trait: ${data?.trait} ` + RESET, error?.response?.data || error?.response || error?.code);
-
+    console.error(
+      RED +
+      `[OpenSea Bid Error] Task: ${data.task._id} | Collection: ${data.slug} | Trait: ${data.trait}`,
+      error.message || error +
+      RESET
+    );
     if (!errorStats[data?.task?._id]) {
       errorStats[data?.task?._id] = {
         magiceden: 0,
@@ -4898,7 +4930,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     const currentTask = activeTasks.get(_id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) return;
 
-    const floor_price = await getOpenseaFloor(slug);
+    const floor_price = await getOpenseaFloor(_id, slug);
     if (!floor_price) return
 
     if (!floorPrices[_id]) {
@@ -5057,7 +5089,12 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     )
 
   } catch (error: any) {
-    console.error(RED + `Error processing OpenSea token bid for task: ${data.task._id} ${data.slug} ${data.asset.tokenId}` + RESET, error?.response?.data || error?.response || error?.code);
+    console.error(
+      RED +
+      `[OpenSea Bid Error] Task: ${data.task._id} | Collection: ${data.slug} | Token: ${data.asset.tokenId}`,
+      error.message || error +
+      RESET
+    );
     if (!errorStats[data.task._id]) {
       errorStats[data.task._id] = {
         magiceden: 0,
@@ -6330,7 +6367,7 @@ app.post('/api/floor', async (req, res) => {
 
       try {
         try {
-          const openseaFloorPrice = await getOpenseaFloor(slug);
+          const openseaFloorPrice = await getOpenseaFloor(taskId, slug);
           floorPrices[taskId]['opensea'] = openseaFloorPrice;
           const [topOffer] = await fetchOpenseaOffers(taskId, 'COLLECTION', slug, contractAddress, {})
           const topOfferAmount = Number(topOffer?.amount) / 1e18

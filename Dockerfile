@@ -20,6 +20,9 @@ WORKDIR /app
 # Copy package.json and package-lock.json
 COPY package*.json ./
 
+# Make sure the prisma directory exists and copy schema file
+COPY prisma ./prisma
+
 # Install dependencies
 RUN npm ci
 
@@ -61,6 +64,8 @@ COPY --from=base /app/node_modules ./node_modules
 COPY --from=base /app/package.json ./package.json
 COPY --from=base /app/dist ./dist
 COPY --from=base /app/src ./src
+# Copy the prisma directory to ensure schema.prisma is available
+COPY --from=base /app/prisma ./prisma
 
 # Create workspace directory and set proper permissions
 RUN mkdir -p /workspace && \

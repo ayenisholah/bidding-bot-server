@@ -1,7 +1,7 @@
 import { config } from "dotenv";
 import { axiosInstance, limiter } from "../init"; // Import Redis client
 import { DistributedLockManager } from "../utils/lock";
-import { API_KEY, redis } from "..";
+import { API_KEY, logBidError, redis } from "..";
 import axios from "axios";
 import { CollectionItemsListQuery } from "../queries";
 
@@ -83,7 +83,7 @@ export async function getCollectionDetails(slug: string, contractAddress: string
   return result;
 }
 
-export async function getOpenseaFloor(collectionSlug: string) {
+export async function getOpenseaFloor(taskId: string, collectionSlug: string) {
   try {
     const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
       `https://nfttools.pro/opensea/api/v2/listings/collection/${collectionSlug}/best`,
@@ -95,8 +95,12 @@ export async function getOpenseaFloor(collectionSlug: string) {
     const floor_price = Number(listings[0]?.price?.current?.value) / 1e18 || 0
     return floor_price;
   } catch (error: any) {
-    console.error('Error fetching collection stats:', error);
-    return 0;
+    const errorMessage = error?.response?.data?.errors?.[0] || error.message || 'Unknown error';
+    const formattedError = `Failed to fetch opensea floor price for ${collectionSlug}: ${errorMessage}`;
+
+    await logBidError(taskId, "ERROR_FETCHING_COLLECTION_STATS", formattedError, "error", "opensea");
+
+    throw new Error(formattedError);
   }
 }
 

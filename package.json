@@ -4,10 +4,10 @@
 	"description": "",
 	"main": "index.js",
 	"scripts": {
-		"build": "npx prisma migrate reset --force && npx prisma migrate dev --name orders && tsc",
+		"build": "rm -rf prisma/migrations && rm -f prisma/dev.db && npx prisma migrate dev --name init && npx prisma generate && tsc",
 		"dev:start": "docker compose -f compose.redis.yaml up -d && tsc && node --expose-gc --max-old-space-size=8192 dist/src/index.js",
-		"start": "node --expose-gc --max-old-space-size=8192 dist/src/index.js",
-		"dev": "docker compose -f compose.redis.yaml up -d && rm -rf prisma/migrations && npx prisma migrate dev --name orders && nodemon",
+		"start": "npx prisma migrate dev --name init && node --expose-gc --max-old-space-size=8192 dist/src/index.js",
+		"dev": "docker compose -f compose.redis.yaml up -d && rm -rf prisma/migrations && rm -f prisma/dev.db && npx prisma migrate dev --name orders && nodemon",
 		"ci": "npm install --frozen-lockfile",
 		"dc:down": "docker compose down -v",
 		"dc:destroy": "docker stop $(docker ps -aq) || true sleep 3 docker compose down --volumes --remove-orphans --timeout 15 && docker system prune -af --volumes",

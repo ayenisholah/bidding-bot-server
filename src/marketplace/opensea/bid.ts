@@ -208,243 +208,116 @@ export async function bidOnOpensea(
   opensea_traits?: string,
   asset?: { contractAddress: string, tokenId: number }
 ) {
-  const divider = BigNumber.from(10000);
+  try {
+    const divider = BigNumber.from(10000);
 
-  const task = activeTasks.get(taskId)
-  if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return
+    const task = activeTasks.get(taskId)
+    if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return
 
-  let totalOfferAmount = 0;
-  const wethBalance = await balanceChecker.getWethBalance(wallet_address);
-  for (const task of currentTasks) {
-    const openseaOrders = await prisma.order.findMany({
-      where: {
-        taskId: task._id,
-        marketplace: 'opensea',
-        expiresAt: {
-          gt: new Date()
+    let totalOfferAmount = 0;
+    const wethBalance = await balanceChecker.getWethBalance(wallet_address);
+    for (const task of currentTasks) {
+      const openseaOrders = await prisma.order.findMany({
+        where: {
+          taskId: task._id,
+          marketplace: 'opensea',
+          expiresAt: {
+            gt: new Date()
+          }
         }
+      });
+
+      for (const order of openseaOrders) {
+        totalOfferAmount += Number(order.offerPrice) / 1e18; // Convert from wei to ETH
       }
-    });
-
-    for (const order of openseaOrders) {
-      totalOfferAmount += Number(order.offerPrice) / 1e18; // Convert from wei to ETH
     }
-  }
-  const offerPriceEth = Number(offer_price) / 1e18;
+    const offerPriceEth = Number(offer_price) / 1e18;
 
-  const leverage = 1000;
+    const leverage = 1000;
 
-  if (totalOfferAmount + offerPriceEth >= leverage * wethBalance) {
-    markTaskAsAborted(taskId)
-    cancelOpenseaRequest(taskId)
-    const jobs = await queue.getJobs(['prioritized']);
-    const openseaJobs: Job[] = jobs.filter(job =>
-      [OPENSEA_SCHEDULE, OPENSEA_TRAIT_BID, OPENSEA_TOKEN_BID].includes(job?.name)
-    );
+    if (totalOfferAmount + offerPriceEth >= leverage * wethBalance) {
+      markTaskAsAborted(taskId)
+      cancelOpenseaRequest(taskId)
+      const jobs = await queue.getJobs(['prioritized']);
+      const openseaJobs: Job[] = jobs.filter(job =>
+        [OPENSEA_SCHEDULE, OPENSEA_TRAIT_BID, OPENSEA_TOKEN_BID].includes(job?.name)
+      );
 
 
-    if (openseaJobs.length > 0) {
-      await queue.pause()
-      await Promise.allSettled(openseaJobs.map(job => {
-        const token = job.token
-        if (token) {
-          job.moveToCompleted({ message: 'Outstanding order to wallet balance ratio exceeds allowed limit.' }, token, false)
-        }
-      }));
-      console.log(RED + `REMOVING ${openseaJobs.length} OPENSEA JOB(S) DUE TO OUTSTANDING ORDER TO WALLET BALANCE RATIO EXCEEDING ALLOWED LIMIT.` + RESET);
-      await queue.resume()
+      if (openseaJobs.length > 0) {
+        await queue.pause()
+        await Promise.allSettled(openseaJobs.map(job => {
+          const token = job.token
+          if (token) {
+            job.moveToCompleted({ message: 'Outstanding order to wallet balance ratio exceeds allowed limit.' }, token, false)
+          }
+        }));
+        console.log(RED + `REMOVING ${openseaJobs.length} OPENSEA JOB(S) DUE TO OUTSTANDING ORDER TO WALLET BALANCE RATIO EXCEEDING ALLOWED LIMIT.` + RESET);
+        await queue.resume()
+      }
+      await logBidError(taskId, "INSUFFICIENT WETH BALANCE", `Total offer amount: ${totalOfferAmount} + offer price: ${offerPriceEth} is greater than the leverage: ${leverage} * weth balance: ${wethBalance}`, "error", "opensea");
+      console.log(`Total offer amount: ${totalOfferAmount} + offer price: ${offerPriceEth} is greater than the leverage: ${leverage} * weth balance: ${wethBalance}`);
+      return
     }
-    await logBidError(taskId, "INSUFFICIENT WETH BALANCE", `Total offer amount: ${totalOfferAmount} + offer price: ${offerPriceEth} is greater than the leverage: ${leverage} * weth balance: ${wethBalance}`, "error", "opensea");
-    console.log(`Total offer amount: ${totalOfferAmount} + offer price: ${offerPriceEth} is greater than the leverage: ${leverage} * weth balance: ${wethBalance}`);
-    return
-  }
 
-  // Determine precision based on price range
-  let decimals;
-  if (offerPriceEth >= 1) {
-    decimals = 2;
-  } else if (offerPriceEth >= 0.1) {
-    decimals = 3;
-  } else {
-    decimals = 4;
-  }
-
-  const roundedEth = Number(offerPriceEth);
-  const basis = decimals === 2 ? 1e16 : decimals === 3 ? 1e15 : 1e14
-  const roundedWei = Math.round(roundedEth * 1e18 / basis) * basis
-  const offerPrice = BigNumber.from(roundedWei.toString());
-  const offerPriceEthFinal = Number(roundedWei) / 1e18;
-
-  if (offerPriceEthFinal > wethBalance) {
-    const identifier = opensea_traits ? opensea_traits : asset?.tokenId ? asset?.tokenId : slug;
-
-    const message = `[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEthFinal} WETH is greater than available WETH balance: ${wethBalance} WETH. SKIPPING OPENSEA...`
-    await logBidError(taskId, "INSUFFICIENT WETH BALANCE", message, "skipped", "opensea");
-    if (!skipStats[taskId]) {
-      skipStats[taskId] = {
-        opensea: 0,
-        magiceden: 0,
-        blur: 0
-      };
+    // Determine precision based on price range
+    let decimals;
+    if (offerPriceEth >= 1) {
+      decimals = 2;
+    } else if (offerPriceEth >= 0.1) {
+      decimals = 3;
+    } else {
+      decimals = 4;
     }
-    skipStats[taskId].opensea += 1;
-    return
-  }
 
-  const wallet = new Wallet(private_key, provider);
-  const openseaFee = BigNumber.from(50);
+    const roundedEth = Number(offerPriceEth);
+    const basis = decimals === 2 ? 1e16 : decimals === 3 ? 1e15 : 1e14
+    const roundedWei = Math.round(roundedEth * 1e18 / basis) * basis
+    const offerPrice = BigNumber.from(roundedWei.toString());
+    const offerPriceEthFinal = Number(roundedWei) / 1e18;
 
-  if (asset) {
-    const offer = await buildItemOffer(task._id, {
-      assetContractAddress: asset.contractAddress,
-      tokenId: asset.tokenId.toString(),
-      walletAddress: wallet_address,
-      quantity: 1,
-      expirationSeconds: BigInt(expiry),
-      priceWei: BigInt(roundedWei)
-    })
+    if (offerPriceEthFinal > wethBalance) {
+      const identifier = opensea_traits ? opensea_traits : asset?.tokenId ? asset?.tokenId : slug;
 
-    if (!offer) return
-
-    const opensea_consideration = {
-      itemType: 1,
-      token: WETH_CONTRACT_ADDRESS,
-      identifierOrCriteria: "0",
-      startAmount: +offerPrice.mul(openseaFee).div(divider).toString(),
-      endAmount: +offerPrice.mul(openseaFee).div(divider).toString(),
-      recipient: OPENSEA_FEE_ADDRESS
-    };
-
-    offer.consideration.push(opensea_consideration);
-    offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
-    for (const address in creator_fees) {
-      let fee: BigNumber | number = creator_fees[address];
-      fee = BigNumber.from(Math.round(fee).toString());
-      if (enforceCreatorFee) {
-        const consideration_item = {
-          itemType: 1,
-          token: WETH_CONTRACT_ADDRESS,
-          identifierOrCriteria: "0",
-          startAmount: Number(offerPrice.mul(fee).div(divider).toString()),
-          endAmount: Number(offerPrice.mul(fee).div(divider).toString()),
-          recipient: address
+      const message = `[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEthFinal} WETH is greater than available WETH balance: ${wethBalance} WETH. SKIPPING OPENSEA...`
+      await logBidError(taskId, "INSUFFICIENT WETH BALANCE", message, "skipped", "opensea");
+      if (!skipStats[taskId]) {
+        skipStats[taskId] = {
+          opensea: 0,
+          magiceden: 0,
+          blur: 0
         };
-        offer.consideration.push(consideration_item);
-        offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
       }
+      skipStats[taskId].opensea += 1;
+      return
     }
-    const itemSignature = await signOffer(wallet, offer)
 
-    if (!itemSignature) return
+    const wallet = new Wallet(private_key, provider);
+    const openseaFee = BigNumber.from(50);
 
-    // check if the tasks is still active before you make the offer
-    const [taskId] = bidCount.split(":")
-    if (!task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) return
-
-    const itemResponse = await postItemOffer(taskId, offer, itemSignature, slug)
-    const itemOrderHash = itemResponse?.order?.order_hash
-
-    const sanitizedExpiry = expiry > 900 ? expiry : 900
-
-    if (offerPrice && itemOrderHash && sanitizedExpiry && slug && taskId && asset.tokenId) {
-
-      await prisma.order.create({
-        data: {
-          slug: slug,
-          orderHash: itemOrderHash,
-          expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
-          offerPrice: offerPrice.toString(),
-          identifier: asset.tokenId.toString(),
-          taskId: taskId,
-          marketplace: 'opensea'
-        }
+    if (asset) {
+      const offer = await buildItemOffer(task._id, {
+        assetContractAddress: asset.contractAddress,
+        tokenId: asset.tokenId.toString(),
+        walletAddress: wallet_address,
+        quantity: 1,
+        expirationSeconds: BigInt(expiry),
+        priceWei: BigInt(roundedWei)
       })
 
-    }
-
-    trackBidRate('opensea', taskId);
-    const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()}  TOKEN: ${asset.tokenId} ${Number(offerPriceEthFinal)} WETH 🎉`
-    console.log(BLUE, JSON.stringify(successMessage), RESET);
-  }
-  else {
-    const divider = BigNumber.from(10000);
-    const offerPrice = BigNumber.from(roundedWei.toString());
-
-    const payload: IPayload = {
-      criteria: {
-        collection: {
-          slug: slug
-        }
-      },
-      protocol_data: {
-        parameters: {
-          offerer: wallet_address,
-          offer: [
-            {
-              itemType: 1,
-              token: WETH_CONTRACT_ADDRESS,
-              identifierOrCriteria: 0,
-              startAmount: (Date.now() / 1000).toString(),
-              endAmount: (Date.now() / 1000 + 100000).toString()
-            }
-          ],
-          consideration: [],
-          startTime: '1666480886',
-          endTime: '1666680886',
-          orderType: 2,
-          zone: OPENSEA_COLLECTION_ZONE,
-          zoneHash: ZONE_HASH,
-          conduitKey: CONDUIT_KEY,
-          totalOriginalConsiderationItems: 2,
-          counter: '0'
-        },
-        signature: '0x0'
-      },
-      protocol_address: SEAPORT_1_6
-    }
-    // reset consideration list and count
-    payload.protocol_data.parameters.consideration = [];
-    payload.protocol_data.parameters.totalOriginalConsiderationItems = 2;
-
-    // set correct slug for collection
-    payload.criteria.collection.slug = slug;
-
-    if (opensea_traits && typeof opensea_traits !== undefined) {
-      payload.criteria.trait = JSON.parse(opensea_traits)
-    } else {
-      delete payload.criteria.trait
-    }
-
-    const buildPayload = {
-      quantity: 1,
-      criteria: payload.criteria,
-      offerer: wallet_address,
-      protocol_address: SEAPORT_1_6
-    };
-
-    try {
-      const data = await buildOffer(taskId, buildPayload)
-
-
-      if (!data || !data.partialParameters) return
-      payload.protocol_data.parameters.startTime = BigInt(Math.floor(Date.now() / 1000)).toString();
-      payload.protocol_data.parameters.endTime = BigInt(Math.floor(Date.now() / 1000 + expiry)).toString();
-      payload.protocol_data.parameters.offerer = wallet_address;
-      payload.protocol_data.parameters.offer[0].startAmount = offerPrice.toString();
-      payload.protocol_data.parameters.offer[0].token = WETH_CONTRACT_ADDRESS;
-      payload.protocol_data.parameters.offer[0].endAmount = offerPrice.toString();
-      payload.protocol_data.parameters.consideration.push(data.partialParameters.consideration[0]);
+      if (!offer) return
 
       const opensea_consideration = {
         itemType: 1,
         token: WETH_CONTRACT_ADDRESS,
-        identifierOrCriteria: 0,
-        startAmount: offerPrice.mul(openseaFee).div(divider).toString(),
-        endAmount: offerPrice.mul(openseaFee).div(divider).toString(),
+        identifierOrCriteria: "0",
+        startAmount: +offerPrice.mul(openseaFee).div(divider).toString(),
+        endAmount: +offerPrice.mul(openseaFee).div(divider).toString(),
         recipient: OPENSEA_FEE_ADDRESS
       };
-      payload.protocol_data.parameters.consideration.push(opensea_consideration);
 
+      offer.consideration.push(opensea_consideration);
+      offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
       for (const address in creator_fees) {
         let fee: BigNumber | number = creator_fees[address];
         fee = BigNumber.from(Math.round(fee).toString());
@@ -452,43 +325,182 @@ export async function bidOnOpensea(
           const consideration_item = {
             itemType: 1,
             token: WETH_CONTRACT_ADDRESS,
-            identifierOrCriteria: 0,
-            startAmount: offerPrice.mul(fee).div(divider).toString(),
-            endAmount: offerPrice.mul(fee).div(divider).toString(),
+            identifierOrCriteria: "0",
+            startAmount: Number(offerPrice.mul(fee).div(divider).toString()),
+            endAmount: Number(offerPrice.mul(fee).div(divider).toString()),
             recipient: address
           };
-
-          payload.protocol_data.parameters.consideration.push(consideration_item);
-          payload.protocol_data.parameters.totalOriginalConsiderationItems += 1;
+          offer.consideration.push(consideration_item);
+          offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
         }
       }
+      const itemSignature = await signOffer(wallet, offer)
 
-      payload.protocol_data.parameters.zone = data.partialParameters.zone;
-      payload.protocol_data.parameters.zoneHash = data.partialParameters.zoneHash;
-      payload.protocol_data.parameters.salt = getSalt();
-      const counter = await SEAPORT_CONTRACT.getCounter(wallet_address);
-      payload.protocol_data.parameters.counter = counter.toString();
+      if (!itemSignature) return
 
-      const signObj = await wallet._signTypedData(
-        domain,
-        types,
-        payload.protocol_data.parameters
-      );
-      payload.protocol_data.signature = signObj;
-      payload.protocol_address = SEAPORT_1_6;
+      // check if the tasks is still active before you make the offer
+      const [taskId] = bidCount.split(":")
+      if (!task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) return
 
+      const itemResponse = await postItemOffer(taskId, offer, itemSignature, slug)
+      const itemOrderHash = itemResponse?.order?.order_hash
 
-      if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return
+      const sanitizedExpiry = expiry > 900 ? expiry : 900
 
-      await submitOfferToOpensea(slug, bidCount, offerPrice.toString(), payload, expiry, opensea_traits)
-    } catch (error: any) {
-      const tokenIdOrTrait = asset ? `token #${JSON.stringify(asset)}` : opensea_traits ? `trait ${opensea_traits}` : 'collection';
-      const message = `Error submitting OpenSea offer for ${tokenIdOrTrait} in collection ${slug}: ${error?.response?.data?.errors?.[0] || error?.response?.data?.errors || error?.response?.data || error?.response || error}`
-      await logBidError(taskId, "SUBMIT OFFER TO OPENSEA ERROR", message, "error", "opensea");
-      throw new Error(message)
+      if (offerPrice && itemOrderHash && sanitizedExpiry && slug && taskId && asset.tokenId) {
+
+        await prisma.order.create({
+          data: {
+            slug: slug,
+            orderHash: itemOrderHash,
+            expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
+            offerPrice: offerPrice.toString(),
+            identifier: asset.tokenId.toString(),
+            taskId: taskId,
+            marketplace: 'opensea'
+          }
+        })
+
+      }
+
+      trackBidRate('opensea', taskId);
+      const successMessage = `�� TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()}  TOKEN: ${asset.tokenId} ${Number(offerPriceEthFinal)} WETH 🎉`
+      console.log(BLUE, JSON.stringify(successMessage), RESET);
     }
+    else {
+      const divider = BigNumber.from(10000);
+      const offerPrice = BigNumber.from(roundedWei.toString());
+
+      const payload: IPayload = {
+        criteria: {
+          collection: {
+            slug: slug
+          }
+        },
+        protocol_data: {
+          parameters: {
+            offerer: wallet_address,
+            offer: [
+              {
+                itemType: 1,
+                token: WETH_CONTRACT_ADDRESS,
+                identifierOrCriteria: 0,
+                startAmount: (Date.now() / 1000).toString(),
+                endAmount: (Date.now() / 1000 + 100000).toString()
+              }
+            ],
+            consideration: [],
+            startTime: '1666480886',
+            endTime: '1666680886',
+            orderType: 2,
+            zone: OPENSEA_COLLECTION_ZONE,
+            zoneHash: ZONE_HASH,
+            conduitKey: CONDUIT_KEY,
+            totalOriginalConsiderationItems: 2,
+            counter: '0'
+          },
+          signature: '0x0'
+        },
+        protocol_address: SEAPORT_1_6
+      }
+      // reset consideration list and count
+      payload.protocol_data.parameters.consideration = [];
+      payload.protocol_data.parameters.totalOriginalConsiderationItems = 2;
+
+      // set correct slug for collection
+      payload.criteria.collection.slug = slug;
+
+      if (opensea_traits && typeof opensea_traits !== undefined) {
+        payload.criteria.trait = JSON.parse(opensea_traits)
+      } else {
+        delete payload.criteria.trait
+      }
+
+      const buildPayload = {
+        quantity: 1,
+        criteria: payload.criteria,
+        offerer: wallet_address,
+        protocol_address: SEAPORT_1_6
+      };
+
+      try {
+        const data = await buildOffer(taskId, buildPayload)
+
+
+        if (!data || !data.partialParameters) return
+        payload.protocol_data.parameters.startTime = BigInt(Math.floor(Date.now() / 1000)).toString();
+        payload.protocol_data.parameters.endTime = BigInt(Math.floor(Date.now() / 1000 + expiry)).toString();
+        payload.protocol_data.parameters.offerer = wallet_address;
+        payload.protocol_data.parameters.offer[0].startAmount = offerPrice.toString();
+        payload.protocol_data.parameters.offer[0].token = WETH_CONTRACT_ADDRESS;
+        payload.protocol_data.parameters.offer[0].endAmount = offerPrice.toString();
+        payload.protocol_data.parameters.consideration.push(data.partialParameters.consideration[0]);
+
+        const opensea_consideration = {
+          itemType: 1,
+          token: WETH_CONTRACT_ADDRESS,
+          identifierOrCriteria: 0,
+          startAmount: offerPrice.mul(openseaFee).div(divider).toString(),
+          endAmount: offerPrice.mul(openseaFee).div(divider).toString(),
+          recipient: OPENSEA_FEE_ADDRESS
+        };
+        payload.protocol_data.parameters.consideration.push(opensea_consideration);
+
+        for (const address in creator_fees) {
+          let fee: BigNumber | number = creator_fees[address];
+          fee = BigNumber.from(Math.round(fee).toString());
+          if (enforceCreatorFee) {
+            const consideration_item = {
+              itemType: 1,
+              token: WETH_CONTRACT_ADDRESS,
+              identifierOrCriteria: 0,
+              startAmount: offerPrice.mul(fee).div(divider).toString(),
+              endAmount: offerPrice.mul(fee).div(divider).toString(),
+              recipient: address
+            };
+
+            payload.protocol_data.parameters.consideration.push(consideration_item);
+            payload.protocol_data.parameters.totalOriginalConsiderationItems += 1;
+          }
+        }
+
+        payload.protocol_data.parameters.zone = data.partialParameters.zone;
+        payload.protocol_data.parameters.zoneHash = data.partialParameters.zoneHash;
+        payload.protocol_data.parameters.salt = getSalt();
+        const counter = await SEAPORT_CONTRACT.getCounter(wallet_address);
+        payload.protocol_data.parameters.counter = counter.toString();
+
+        const signObj = await wallet._signTypedData(
+          domain,
+          types,
+          payload.protocol_data.parameters
+        );
+        payload.protocol_data.signature = signObj;
+        payload.protocol_address = SEAPORT_1_6;
+
+
+        if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return
+
+        await submitOfferToOpensea(slug, bidCount, offerPrice.toString(), payload, expiry, opensea_traits)
+      } catch (error: any) {
+        const tokenIdOrTrait = asset ? `token #${JSON.stringify(asset)}` : opensea_traits ? `trait ${opensea_traits}` : 'collection';
+        const message = `Error submitting OpenSea offer for ${tokenIdOrTrait} in collection ${slug}: ${error?.response?.data?.errors?.[0] || error?.response?.data?.errors || error?.response?.data || error?.response || error}`
+        await logBidError(taskId, "SUBMIT OFFER TO OPENSEA ERROR", message, "error", "opensea");
+        console.error(`OpenSea bidding error: ${message}`);
+        // Don't re-throw the error here, just log it and return
+        return;
+      }
+    }
+  } catch (error: any) {
+    // Top-level error handler to prevent server crashes
+    const errorMessage = error?.message || String(error);
+    const errorSource = error?.response?.data?.errors?.[0] || error?.response?.data || "Unknown error source";
+    console.error(`Critical error in bidOnOpensea: ${errorMessage}`, errorSource);
+    await logBidError(taskId, "CRITICAL OPENSEA BID ERROR", errorMessage, "error", "opensea");
+    // Don't re-throw the error, just log it and return
+    return;
   }
-};
+}
 
 
 /**
