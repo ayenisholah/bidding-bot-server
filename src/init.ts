@@ -2,7 +2,7 @@ import Bottleneck from "bottleneck";
 import axios, { AxiosInstance } from "axios";
 import axiosRetry, { IAxiosRetryConfig } from "axios-retry";
 import { config } from "dotenv";
-import { RATE_LIMIT, rps, WORKER_COUNT } from ".";
+import { rps, WORKER_COUNT } from ".";
 
 config()
 
@@ -37,10 +37,10 @@ const retryConfig: IAxiosRetryConfig = {
 };
 
 async function initialize(rateLimit: number) {
-  axiosInstance = axios.create({ timeout: 60000 * 2 });
+  axiosInstance = axios.create({ timeout: 60000 });
 
   limiter = new Bottleneck({
-    minTime: 1000 / rateLimit,
+    minTime: 1000 / (rateLimit * 1.5),
     trackDoneStatus: true,
   });
 
@@ -114,7 +114,7 @@ setInterval(() => {
 
   console.log('Average RPS:', averageRPS.toFixed(2), 'Executing:', executing.toFixed(2), 'True RPS:', trueRPS.toFixed(2));
 
-  rps.currentRPS = Math.min(RATE_LIMIT, trueRPS);
+  rps.currentRPS = averageRPS
 
 }, 1000);
 

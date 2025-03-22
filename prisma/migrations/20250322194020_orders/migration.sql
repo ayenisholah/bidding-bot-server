@@ -12,6 +12,14 @@ CREATE TABLE "Order" (
     "slug" TEXT NOT NULL
 );
 
+-- CreateTable
+CREATE TABLE "Wallet" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "address" TEXT NOT NULL,
+    "openseaApproval" BOOLEAN NOT NULL DEFAULT false,
+    "magicedenApproval" BOOLEAN NOT NULL DEFAULT false
+);
+
 -- CreateIndex
 CREATE INDEX "Order_taskId_idx" ON "Order"("taskId");
 
@@ -20,3 +28,9 @@ CREATE INDEX "Order_marketplace_idx" ON "Order"("marketplace");
 
 -- CreateIndex
 CREATE INDEX "Order_taskId_marketplace_idx" ON "Order"("taskId", "marketplace");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Wallet_address_key" ON "Wallet"("address");
+
+-- CreateIndex
+CREATE INDEX "Wallet_address_idx" ON "Wallet"("address");

@@ -4,6 +4,10 @@ import { config } from "dotenv";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, errorStats, isTaskAborted, logBidError, MAGENTA, redis, trackBidRate } from "../..";
 import { createBalanceChecker } from "../../utils/balance";
 import { DistributedLockManager } from '../../utils/lock';
+import { PrismaClient } from '@prisma/client'
+import axios from "axios";
+
+const prisma = new PrismaClient()
 
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
@@ -25,6 +29,8 @@ const lockManager = new DistributedLockManager({
   lockPrefix: '{magiceden}:fetch:',
   defaultTTLSeconds: 30
 });
+
+const activeRequests = new Map<string, AbortController[]>();
 
 /**
  * Places a bid on Magic Eden.
@@ -197,18 +203,37 @@ async function createBidData(
   };
 
   try {
-    const { data: order } = await limiter.schedule(() => axiosInstance.post<CreateBidData>(
-      'https://nfttools.pro/magiceden/v3/rtp/ethereum/execute/bid/v5',
-      data,
-      {
-        headers: {
-          'content-type': 'application/json',
-          'X-NFT-API-Key': API_KEY
+    const controller = new AbortController();
+    addActiveRequest(taskId, controller);
+
+    try {
+      const { data: order } = await limiter.schedule(() => axiosInstance.post<CreateBidData>(
+        'https://nfttools.pro/magiceden/v3/rtp/ethereum/execute/bid/v5',
+        data,
+        {
+          headers: {
+            'content-type': 'application/json',
+            'X-NFT-API-Key': API_KEY
+          },
+          signal: controller.signal
         }
+      ));
+      return order;
+    } finally {
+      const controllers = activeRequests.get(taskId) || [];
+      const index = controllers.indexOf(controller);
+      if (index >= 0) {
+        controllers.splice(index, 1);
       }
-    ));
-    return order;
+      if (controllers.length === 0) {
+        activeRequests.delete(taskId);
+      }
+    }
   } catch (error: any) {
+    if (axios.isCancel(error)) {
+      console.log(`Request for task ${taskId} was cancelled`);
+      return null;
+    }
     throw error
   }
 }
@@ -307,6 +332,9 @@ async function sendSignedOrderData(order: any, taskId: string, offerPrice: strin
       return
     }
 
+    const controller = new AbortController();
+    addActiveRequest(taskId, controller);
+
     try {
       const { data: offerResponse } = await limiter.schedule(() =>
         axiosInstance.post(
@@ -316,7 +344,8 @@ async function sendSignedOrderData(order: any, taskId: string, offerPrice: strin
             headers: {
               'content-type': 'application/json',
               'X-NFT-API-Key': API_KEY,
-            }
+            },
+            signal: controller.signal
           }
         )
       );
@@ -329,6 +358,7 @@ async function sendSignedOrderData(order: any, taskId: string, offerPrice: strin
 
 
       const payload = JSON.stringify(offerResponse);
+
       const task = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase() && task.selectedMarketplaces.includes("MagicEden"))
       if (!task) {
         return await cancelMagicEdenBid([payload], privateKey, taskId)
@@ -339,33 +369,44 @@ async function sendSignedOrderData(order: any, taskId: string, offerPrice: strin
       const expiration = Math.floor((currentTime + (duration * 60 * 1000)) / 1000);
       const expiry = Math.ceil(Number(expiration) - (Date.now() / 1000))
 
-      const orderTrackingKey = `{${taskId}}:magiceden:orders`;
-      const orderKey = `{${taskId}}:${count}:magiceden:order:${slug}:${identifier}`;
-
       const order = JSON.stringify({
         offer: offerPrice.toString(),
         payload: payload,
         createdAt: Date.now()
       })
 
-      await Promise.all([
-        redis.setex(orderKey, expiry, order),
-        redis.sadd(orderTrackingKey, orderKey),
-        redis.expire(orderTrackingKey, expiry)
-      ]);
-
+      await prisma.order.create({
+        data: {
+          slug: slug,
+          orderHash: payload,
+          expiresAt: new Date(Date.now() + expiry * 1000),
+          offerPrice: offerPrice.toString(),
+          identifier: identifier.toString(),
+          taskId: taskId,
+          marketplace: "magiceden"
+        }
+      })
       trackBidRate("magiceden", taskId)
       console.log(MAGENTA, successMessage, RESET);
       if (!task) {
         await cancelMagicEdenBid([order], privateKey, taskId)
       }
       return offerResponse;
-    } catch (error: any) {
-      const message = `Error sending MagicEden bid: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-      await logBidError(taskId, "SEND BID ERROR", message, "error", "magiceden");
-      throw error
+    } finally {
+      const controllers = activeRequests.get(taskId) || [];
+      const index = controllers.indexOf(controller);
+      if (index >= 0) {
+        controllers.splice(index, 1);
+      }
+      if (controllers.length === 0) {
+        activeRequests.delete(taskId);
+      }
     }
   } catch (error: any) {
+    if (axios.isCancel(error)) {
+      console.log(`Request for task ${taskId} was cancelled`);
+      return null;
+    }
     const message = `Error sending MagicEden bid: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
     await logBidError(taskId, "SEND BID ERROR", message, "error", "magiceden");
     throw error
@@ -402,7 +443,7 @@ export async function submitSignedOrderData(taskId: string, offerPrice: string |
         });
       }
       if (item.data?.post?.body?.order?.data?.consideration) {
-        item.data.post.body.order.data.consideration.forEach((considerationItem) => {
+        item.data?.post?.body?.order?.data?.consideration?.forEach((considerationItem) => {
           if (considerationItem.recipient.toLowerCase() === "0x6fa303e72bed54f515a513496f922bc331e2f27e".toLowerCase()) {
             considerationItem.recipient = "0xca9337244b5f04cb946391bc8b8a980e988f9a6a".toLowerCase();
           }
@@ -702,7 +743,7 @@ export async function fetchMagicEdenCollectionStats(taskId: string, contractAddr
     const token: TokenData = data?.tokens?.filter((token: TokenData) => token?.market?.floorAsk?.price?.currency?.symbol?.toLowerCase() === "weth" || token?.market?.floorAsk?.price?.currency?.symbol?.toLowerCase())[0]
     return token?.market?.floorAsk?.price?.amount?.decimal
   } catch (error: any) {
-    const message = `Error fetching Magic Eden collection stats: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
+    const message = `Error fetching Magic Eden collection stats: ${error?.response?.data || error?.response || error?.message || error}`
     await logBidError(taskId, "FETCH COLLECTION STATS ERROR", message, "error", "magiceden");
     console.error('Error fetching Magic Eden collection stats:', error);
     return 0
@@ -752,7 +793,7 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
 
         return allTokens.slice(0, limit);
       } catch (error: any) {
-        const message = `Error fetching Magic Eden tokens: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
+        const message = `Error fetching Magic Eden tokens: ${error?.response?.data || error?.response || error?.message || error}`
         await logBidError(taskId, "FETCH TOKENS ERROR", message, "error", "magiceden");
         console.error("Error fetching Magic Eden tokens:", error);
         return []
@@ -1508,4 +1549,23 @@ interface TokenData {
   market: Market;
   updatedAt: string;
   media: Media;
+}
+
+export function cancelMagicedenRequest(taskId: string): boolean {
+  const controllers = activeRequests.get(taskId);
+  if (controllers && controllers.length > 0) {
+    controllers.forEach(controller => controller.abort());
+    activeRequests.delete(taskId);
+    console.log(`Aborted ${controllers.length} MagicEden requests for task ${taskId}`);
+    return true;
+  }
+  console.log(`No active MagicEden requests found for task ${taskId}`);
+  return false;
+}
+
+function addActiveRequest(taskId: string, controller: AbortController) {
+  if (!activeRequests.has(taskId)) {
+    activeRequests.set(taskId, []);
+  }
+  activeRequests.get(taskId)?.push(controller);
 }

@@ -26,3 +26,12 @@ model Order {
   @@index([marketplace])      // Index on marketplace
   @@index([taskId, marketplace]) // Composite index for filtering by both
 }
+
+model Wallet {
+  id               String  @id @default(uuid())
+  address          String  @unique
+  openseaApproval Boolean @default(false)
+  magicedenApproval Boolean @default(false)
+
+  @@index([address])
+}

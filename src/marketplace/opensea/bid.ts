@@ -7,7 +7,6 @@ import { createBalanceChecker } from "../../utils/balance";
 import { Job } from "bullmq";
 import axios from "axios";
 import { PrismaClient } from '@prisma/client'
-import { off } from "process";
 
 const prisma = new PrismaClient()
 
@@ -364,7 +363,7 @@ export async function bidOnOpensea(
       }
 
       trackBidRate('opensea', taskId);
-      const successMessage = `�� TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()}  TOKEN: ${asset.tokenId} ${Number(offerPriceEthFinal)} WETH 🎉`
+      const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()}  TOKEN: ${asset.tokenId} ${Number(offerPriceEthFinal)} WETH 🎉`
       console.log(BLUE, JSON.stringify(successMessage), RESET);
     }
     else {
