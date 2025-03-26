@@ -9,7 +9,6 @@ config()
 let limiter: Bottleneck;
 let axiosInstance: AxiosInstance;
 let countLoggerInterval: NodeJS.Timeout | null = null;
-let firstRequestTimestamp: number | null = null;
 let previousDoneCount = 0;
 let trueRPS = 0;
 // Add an array to store recent RPS values for averaging
@@ -40,16 +39,11 @@ async function initialize(rateLimit: number) {
   axiosInstance = axios.create({ timeout: 60000 });
 
   limiter = new Bottleneck({
-    minTime: 1000 / (rateLimit * 1.5),
+    minTime: 1000 / (rateLimit * 0.98),
     trackDoneStatus: true,
   });
 
   axiosRetry(axiosInstance, retryConfig);
-
-  // Reset first request timestamp on initialization
-  firstRequestTimestamp = null;
-
-
   console.log(`Limiter initialized with rate limit: ${rateLimit} requests per second`);
 }
 

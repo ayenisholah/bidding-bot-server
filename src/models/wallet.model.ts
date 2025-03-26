@@ -24,6 +24,9 @@ const WalletSchema = new Schema<IWallet>(
   { timestamps: true }
 );
 
+// MongoDB command to fetch all wallets:
+// db.wallets.find({})
+
 const Wallet = model<IWallet>("Wallet", WalletSchema);
 
 export default Wallet;

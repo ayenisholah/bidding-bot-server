@@ -110,12 +110,23 @@ class BalanceChecker {
 
         } catch (error) {
           console.error("Error fetching WETH balance:", error);
-          return cachedBalance ?? 0;
+          if (cachedBalance !== null) {
+            return cachedBalance;
+          }
+          throw error;
         }
       }
     );
 
-    return result ?? (cachedBalance ?? 0);
+    if (result !== undefined && result !== null) {
+      return result;
+    }
+
+    if (cachedBalance !== null) {
+      return cachedBalance;
+    }
+
+    return 0;
   }
 
   async getBethBalance(address: string): Promise<number> {
@@ -147,7 +158,10 @@ class BalanceChecker {
           } catch (error) {
             if (attempt === maxRetries) {
               console.error("Error fetching BETH balance after retries:", error);
-              return cachedBalance ?? 0;
+              if (cachedBalance !== null) {
+                return cachedBalance;
+              }
+              throw error;
             }
             const backoffTime = Math.pow(2, attempt) * 1000; // Exponential backoff
             await new Promise(resolve => setTimeout(resolve, backoffTime));
@@ -156,7 +170,15 @@ class BalanceChecker {
       }
     );
 
-    return result ?? (cachedBalance ?? 0);
+    if (result !== undefined && result !== null) {
+      return result;
+    }
+
+    if (cachedBalance !== null) {
+      return cachedBalance;
+    }
+
+    return 0;
   }
 }
 

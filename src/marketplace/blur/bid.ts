@@ -1,11 +1,15 @@
 import { BigNumber, ethers, utils, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, API_KEY, BLUR_SCHEDULE, BLUR_TRAIT_BID, currentTasks, decrementBidCount, errorStats, logBidError, queue, redis, RESET, trackBidRate } from "../..";
+import { activeTasks, API_KEY, BLUR_SCHEDULE, BLUR_TRAIT_BID, currentTasks, decrementBidCount, errorStats, logBidError, pQueue, queue, redis, RESET, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { createBalanceChecker } from "../../utils/balance";
 import { Job } from "bullmq";
 import { DistributedLockManager } from "../../utils/lock";
 const RED = '\x1b[31m';
+import { PrismaClient } from '@prisma/client'
+import axios from "axios";
+
+const prisma = new PrismaClient()
 
 config()
 const BLUR_API_URL = 'https://nfttools.pro/blur';
@@ -22,6 +26,27 @@ const lockManager = new DistributedLockManager({
   lockPrefix: '{blur}:lock:',
   defaultTTLSeconds: 60 // 1 minute lock timeout
 });
+
+const activeRequests = new Map<string, AbortController[]>();
+
+function addActiveRequest(taskId: string, controller: AbortController) {
+  if (!activeRequests.has(taskId)) {
+    activeRequests.set(taskId, []);
+  }
+  activeRequests.get(taskId)?.push(controller);
+}
+
+export function cancelBlurRequest(taskId: string): boolean {
+  const controllers = activeRequests.get(taskId);
+  if (controllers && controllers.length > 0) {
+    controllers.forEach(controller => controller.abort());
+    activeRequests.delete(taskId);
+    console.log(`Aborted ${controllers.length} Blur requests for task ${taskId}`);
+    return true;
+  }
+  console.log(`No active Blur requests found for task ${taskId}`);
+  return false;
+}
 
 /**
  * Creates an offer on Blur.
@@ -257,6 +282,9 @@ async function formatBidOnBlur(
   walletAddress: string,
   buildPayload: any
 ) {
+  const controller = new AbortController();
+  addActiveRequest(taskId, controller);
+
   try {
     const { data } = await limiter.schedule(() =>
       axiosInstance.request<BlurBidResponse>({
@@ -269,10 +297,16 @@ async function formatBidOnBlur(
           'X-NFT-API-Key': API_KEY,
         },
         data: JSON.stringify(buildPayload),
+        signal: controller.signal
       })
     );
     return data;
   } catch (error: any) {
+    if (axios.isCancel(error)) {
+      console.log(`Request for task ${taskId} was cancelled`);
+      return null;
+    }
+
     const message = `Error formatting Blur bid: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
     await logBidError(taskId, "FORMAT BID ERROR", message, "error", "blur");
 
@@ -283,6 +317,15 @@ async function formatBidOnBlur(
       return;
     }
     throw error
+  } finally {
+    const controllers = activeRequests.get(taskId) || [];
+    const index = controllers.indexOf(controller);
+    if (index >= 0) {
+      controllers.splice(index, 1);
+    }
+    if (controllers.length === 0) {
+      activeRequests.delete(taskId);
+    }
   }
 }
 
@@ -307,6 +350,9 @@ async function submitBidToBlur(
   expiry = 900,
   traits?: string
 ) {
+  const controller = new AbortController();
+  addActiveRequest(taskId, controller);
+
   try {
     const [taskId, count] = bidCount.split(":")
 
@@ -326,6 +372,7 @@ async function submitBidToBlur(
           'X-NFT-API-Key': API_KEY,
         },
         data: JSON.stringify(submitPayload),
+        signal: controller.signal
       })
     );
 
@@ -345,24 +392,26 @@ async function submitBidToBlur(
       } else {
         identifier = "collection"
       }
-      const orderTrackingKey = `{${taskId}}:blur:orders`;
-      const orderKey = `{${taskId}}:${count}:blur:order:${slug}:${identifier}`;
 
-      const order = JSON.stringify({
-        offer: offer_price.toString(),
-        payload: cancelPayload,
-        createdAt: Date.now()
+      await prisma.order.create({
+        data: {
+          slug: slug,
+          orderHash: JSON.stringify(cancelPayload),
+          expiresAt: new Date(Date.now() + expiry * 1000),
+          offerPrice: offer_price.toString(),
+          identifier: identifier,
+          taskId: taskId,
+          marketplace: "blur"
+        }
       })
-
-      await Promise.all([
-        redis.setex(orderKey, expiry, order),
-        redis.sadd(orderTrackingKey, orderKey),
-        redis.expire(orderTrackingKey, expiry)
-      ]);
-
       trackBidRate("blur", taskId)
     }
   } catch (error: any) {
+    if (axios.isCancel(error)) {
+      console.log(`Request for task ${taskId} was cancelled`);
+      return;
+    }
+
     const message = `Error submitting Blur bid: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
     await logBidError(taskId, "SUBMIT BID ERROR", message, "error", "blur");
 
@@ -382,6 +431,15 @@ async function submitBidToBlur(
       console.error("Error submitting bid:", error.response?.data || error.message);
     }
     throw error
+  } finally {
+    const controllers = activeRequests.get(taskId) || [];
+    const index = controllers.indexOf(controller);
+    if (index >= 0) {
+      controllers.splice(index, 1);
+    }
+    if (controllers.length === 0) {
+      activeRequests.delete(taskId);
+    }
   }
 }
 
@@ -418,22 +476,76 @@ export async function cancelBlurBid(taskId: string, data: BlurCancelPayload) {
 export async function fetchBlurBid(taskId: string, collection: string, criteriaType: 'TRAIT' | 'COLLECTION', criteriaValue: Record<string, string>) {
   const url = `https://nfttools.pro/blur/v1/collections/${collection}/executable-bids`;
   try {
-    const { data } = await limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
-      params: {
-        filters: JSON.stringify({
-          criteria: {
-            type: criteriaType,
-            value: criteriaValue
-          }
-        })
-      },
-      headers: {
-        'content-type': 'application/json',
-        'X-NFT-API-Key': API_KEY,
-      }
-    }));
 
-    return data;
+
+    if (criteriaType === 'TRAIT') {
+      const tasks = [
+        () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+          params: {
+            filters: JSON.stringify({
+              criteria: {
+                type: 'TRAIT',
+                value: criteriaValue
+              }
+            })
+          },
+          headers: {
+            'content-type': 'application/json',
+            'X-NFT-API-Key': API_KEY,
+          }
+        })),
+        () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+          params: {
+            filters: JSON.stringify({
+              criteria: {
+                type: 'COLLECTION',
+                value: {}
+              }
+            })
+          },
+          headers: {
+            'content-type': 'application/json',
+            'X-NFT-API-Key': API_KEY,
+          }
+        }))
+      ];
+
+      const [traitResponse, collectionResponse] = await pQueue.addAll(tasks, {
+        throwOnTimeout: true,
+      });
+
+      const traitData = traitResponse.data;
+      const collectionData = collectionResponse.data;
+
+      // Combine trait and collection price levels
+      const combinedData = {
+        success: traitData.success && collectionData.success,
+        priceLevels: [
+          ...(traitData.priceLevels || []),
+          ...(collectionData.priceLevels || [])
+        ].sort((a, b) => Number(b.price) - Number(a.price))
+      };
+
+      return combinedData;
+
+    } else {
+      const { data } = await limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+        params: {
+          filters: JSON.stringify({
+            criteria: {
+              type: 'COLLECTION',
+              value: {}
+            }
+          })
+        },
+        headers: {
+          'content-type': 'application/json',
+          'X-NFT-API-Key': API_KEY,
+        }
+      }));
+      return data;
+    }
+
   } catch (error: any) {
     const message = `Error fetching executable bids: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
     await logBidError(taskId, "FETCH EXECUTABLE BIDS ERROR", message, "error", "blur");

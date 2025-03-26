@@ -360,9 +360,7 @@ async function sendSignedOrderData(order: any, taskId: string, offerPrice: strin
       const payload = JSON.stringify(offerResponse);
 
       const task = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase() && task.selectedMarketplaces.includes("MagicEden"))
-      if (!task) {
-        return await cancelMagicEdenBid([payload], privateKey, taskId)
-      }
+      if (!task) return
       const bidExpiry = await getExpiry(task.bidDuration)
       const duration = bidExpiry / 60 || 15; // minutes
       const currentTime = new Date().getTime();
@@ -388,9 +386,7 @@ async function sendSignedOrderData(order: any, taskId: string, offerPrice: strin
       })
       trackBidRate("magiceden", taskId)
       console.log(MAGENTA, successMessage, RESET);
-      if (!task) {
-        await cancelMagicEdenBid([order], privateKey, taskId)
-      }
+      if (!task) return
       return offerResponse;
     } finally {
       const controllers = activeRequests.get(taskId) || [];
@@ -592,7 +588,6 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
     ))
     console.log(JSON.stringify(cancelResponse));
     console.log(`Successfully cancelled ${orderIds.length} MagicEden bids for task: ${taskId}`.toUpperCase());
-
     orderIds.forEach(() => {
       decrementBidCount('magiceden', taskId);
     });
