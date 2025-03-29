@@ -39,7 +39,7 @@ async function initialize(rateLimit: number) {
   axiosInstance = axios.create({ timeout: 60000 });
 
   limiter = new Bottleneck({
-    minTime: 1000 / (rateLimit * 0.98),
+    minTime: 1000 / (rateLimit),
     trackDoneStatus: true,
   });
 
@@ -84,7 +84,6 @@ export function stopCountsLogger() {
     console.log('Stopped logging limiter counts');
   }
 }
-
 setInterval(() => {
   const counts = getLimiterCounts();
   console.log('Current Limiter Stats:', counts);
@@ -103,7 +102,11 @@ setInterval(() => {
 
   // Calculate average RPS over the history window
   const executing = counts.EXECUTING / WORKER_COUNT
-  const averageRPS = rpsHistory.reduce((sum, val) => sum + val, 0) / rpsHistory.length;
+  // Filter out 0 values before calculating the average
+  const nonZeroRpsHistory = rpsHistory.filter(val => val > 0);
+  const averageRPS = nonZeroRpsHistory.length > 0
+    ? nonZeroRpsHistory.reduce((sum, val) => sum + val, 0) / nonZeroRpsHistory.length
+    : 0;
   trueRPS = Math.max(executing, averageRPS);
 
   console.log('Average RPS:', averageRPS.toFixed(2), 'Executing:', executing.toFixed(2), 'True RPS:', trueRPS.toFixed(2));

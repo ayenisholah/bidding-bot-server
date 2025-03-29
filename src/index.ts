@@ -147,7 +147,7 @@ const workers = new Worker(
   {
     connection: redis,
     prefix: '{bull}',
-    concurrency: RATE_LIMIT * 1.5,
+    concurrency: RATE_LIMIT,
     lockDuration: 30000,
     stalledInterval: 15000,
     maxStalledCount: 1,
@@ -571,7 +571,20 @@ const completedTasks: CompletedTasks = {};
 
 queueEvents.on('completed', async ({ jobId }) => {
   if (jobId.includes('CANCEL_OPENSEA_BID') || jobId.includes('CANCEL_MAGICEDEN_BID') || jobId.includes('CANCEL_BLUR_BID')) {
+
     const taskId = jobId.split('-')[1];
+    if (!taskStatus[taskId]) {
+      taskStatus[taskId] = {
+        status: 'STOPPED',
+        cancellationPercentage: 0,
+        runningPercentage: 0,
+        waitingTime: 0,
+        nextLoopTime: new Date(),
+        processingPercentage: 0
+      }
+    }
+    const previousStatus = taskStatus[taskId].status
+    taskStatus[taskId].status = 'CANCELING'
     const task = activeTasks.get(taskId);
     if (!task) return;
 
@@ -623,14 +636,26 @@ queueEvents.on('completed', async ({ jobId }) => {
         ((completedJobs + failedJobs) / totalJobs) * 100 : 0;
 
       taskStatus[taskId].cancellationPercentage = combinedCancellationPercentage;
+
+      if (combinedCancellationPercentage > 99) {
+        parentJobs.delete(openSeaParentJobId)
+        parentJobs.delete(magicEdenParentJobId)
+        parentJobs.delete(blurParentJobId)
+        taskStatus[taskId].status = 'STOPPED'
+      }
+
     } else {
       // If task is running, just update with the marketplace-specific percentage
       taskStatus[taskId].cancellationPercentage = marketplaceCancellationPercentage;
+      if (marketplaceCancellationPercentage > 99) {
+        taskStatus[taskId].status = previousStatus
+        parentJobs.delete(parentJobId)
+      }
+
     }
 
-
     if (jobId.includes('CANCEL_OPENSEA_BID')) {
-      if (marketplaceCancellationPercentage >= 99.5 && !task?.running) {
+      if (marketplaceCancellationPercentage >= 99.5) {
         const orders = await prisma.order.findMany({
           where: {
             taskId: taskId,
@@ -644,11 +669,15 @@ queueEvents.on('completed', async ({ jobId }) => {
           await fetchAndCancelOpenseaBids(task, private_key);
           return;
         }
-        taskStatus[taskId].status = 'STOPPED';
-        taskStatus[taskId].cancellationPercentage = 0;
+
+        if (!task?.running) {
+          taskStatus[taskId].status = 'STOPPED';
+          taskStatus[taskId].cancellationPercentage = 0;
+        }
       }
+
     } else if (jobId.includes('CANCEL_MAGICEDEN_BID')) {
-      if (marketplaceCancellationPercentage >= 99.5 && !task?.running) {
+      if (marketplaceCancellationPercentage >= 99.5) {
         const orders = await prisma.order.findMany({
           where: {
             taskId: taskId,
@@ -662,11 +691,13 @@ queueEvents.on('completed', async ({ jobId }) => {
           await fetchAndCancelMagicedenBids(task, private_key);
           return;
         }
-        taskStatus[taskId].status = 'STOPPED';
-        taskStatus[taskId].cancellationPercentage = 0;
+        if (!task?.running) {
+          taskStatus[taskId].status = 'STOPPED';
+          taskStatus[taskId].cancellationPercentage = 0;
+        }
       }
     } else if (jobId.includes('CANCEL_BLUR_BID')) {
-      if (marketplaceCancellationPercentage >= 99.5 && !task?.running) {
+      if (marketplaceCancellationPercentage >= 99.5) {
         const orders = await prisma.order.findMany({
           where: {
             taskId: taskId,
@@ -680,8 +711,10 @@ queueEvents.on('completed', async ({ jobId }) => {
           await fetchAndCancelBlurBids(task, private_key);
           return;
         }
-        taskStatus[taskId].status = 'STOPPED';
-        taskStatus[taskId].cancellationPercentage = 0;
+        if (!task?.running) {
+          taskStatus[taskId].status = 'STOPPED';
+          taskStatus[taskId].cancellationPercentage = 0;
+        }
       }
     }
   }
@@ -759,8 +792,8 @@ queueEvents.on('completed', async ({ jobId }) => {
         taskStatus[taskId].status = 'COMPLETED';
         await new Promise(resolve => setTimeout(resolve, 1000));
 
-
         // Only schedule the next run if the task is still in running state
+
         if (task && task.running) {
           const loopInterval = getExpiry(task.loopInterval);
           const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
@@ -800,6 +833,280 @@ queueEvents.on('completed', async ({ jobId }) => {
 
           taskTimeouts.set(taskId, timeoutId);
         }
+
+        return;
+      }
+    }
+  }
+
+});
+
+
+queueEvents.on('failed', async ({ jobId }) => {
+  if (jobId.includes('CANCEL_OPENSEA_BID') || jobId.includes('CANCEL_MAGICEDEN_BID') || jobId.includes('CANCEL_BLUR_BID')) {
+
+    const taskId = jobId.split('-')[1];
+    if (!taskStatus[taskId]) {
+      taskStatus[taskId] = {
+        status: 'STOPPED',
+        cancellationPercentage: 0,
+        runningPercentage: 0,
+        waitingTime: 0,
+        nextLoopTime: new Date(),
+        processingPercentage: 0
+      }
+    }
+    const previousStatus = taskStatus[taskId].status
+    taskStatus[taskId].status = 'CANCELING'
+    const task = activeTasks.get(taskId);
+    if (!task) return;
+
+    const marketplace = jobId.includes('CANCEL_OPENSEA_BID') ? 'OPENSEA' : jobId.includes('CANCEL_MAGICEDEN_BID') ? 'MAGICEDEN' : 'BLUR';
+    const parentJobId = `${taskId}-CANCEL_${marketplace}_BID`;
+    const parentJob = parentJobs.get(parentJobId);
+
+    if (!parentJob) return;
+
+    parentJob.failedJobs++;
+
+    // Calculate marketplace-specific cancellation percentage
+    const marketplaceCancellationPercentage = parentJob.totalJobs > 0 ?
+
+      ((parentJob.completedJobs + parentJob.failedJobs) / parentJob.totalJobs) * 100 : 0;
+
+    // If task is not running, calculate combined cancellation percentage with weighting
+    if (!task?.running) {
+      // Get all parent jobs for this task (both OpenSea and MagicEden)
+      const openSeaParentJobId = `${taskId}-CANCEL_OPENSEA_BID`;
+      const magicEdenParentJobId = `${taskId}-CANCEL_MAGICEDEN_BID`;
+      const blurParentJobId = `${taskId}-CANCEL_BLUR_BID`;
+
+      const openSeaParentJob = parentJobs.get(openSeaParentJobId);
+      const magicEdenParentJob = parentJobs.get(magicEdenParentJobId);
+      const blurParentJob = parentJobs.get(blurParentJobId);
+
+      // Apply a weight of 500 to MagicEden jobs
+      const magicEdenWeight = 500;
+
+      // Calculate weighted totals across both marketplaces
+      const openSeaTotalJobs = openSeaParentJob?.totalJobs || 0;
+      const openSeaCompletedJobs = openSeaParentJob?.completedJobs || 0;
+      const openSeaFailedJobs = openSeaParentJob?.failedJobs || 0;
+
+      const blurTotalJobs = blurParentJob?.totalJobs || 0;
+      const blurCompletedJobs = blurParentJob?.completedJobs || 0;
+      const blurFailedJobs = blurParentJob?.failedJobs || 0;
+
+      const magicEdenCompletedJobs = (magicEdenParentJob?.completedJobs || 0) * magicEdenWeight;
+      const magicEdenFailedJobs = (magicEdenParentJob?.failedJobs || 0) * magicEdenWeight;
+      const magicEdenTotalJobs = (magicEdenParentJob?.totalJobs || 0) * magicEdenWeight;
+
+      const totalJobs = openSeaTotalJobs + magicEdenTotalJobs + blurTotalJobs;
+      const completedJobs = openSeaCompletedJobs + magicEdenCompletedJobs + blurCompletedJobs;
+      const failedJobs = openSeaFailedJobs + magicEdenFailedJobs + blurFailedJobs;
+
+      const combinedCancellationPercentage = totalJobs > 0 ?
+        ((completedJobs + failedJobs) / totalJobs) * 100 : 0;
+
+      taskStatus[taskId].cancellationPercentage = combinedCancellationPercentage;
+
+      if (combinedCancellationPercentage > 99) {
+        parentJobs.delete(openSeaParentJobId)
+        parentJobs.delete(magicEdenParentJobId)
+        parentJobs.delete(blurParentJobId)
+        taskStatus[taskId].status = 'STOPPED'
+      }
+
+    } else {
+      // If task is running, just update with the marketplace-specific percentage
+      taskStatus[taskId].cancellationPercentage = marketplaceCancellationPercentage;
+      if (marketplaceCancellationPercentage > 99) {
+        taskStatus[taskId].status = previousStatus
+        parentJobs.delete(parentJobId)
+      }
+
+    }
+
+    if (jobId.includes('CANCEL_OPENSEA_BID')) {
+      if (marketplaceCancellationPercentage >= 99.5) {
+        const orders = await prisma.order.findMany({
+          where: {
+            taskId: taskId,
+            marketplace: 'opensea'
+          }
+        });
+
+        if (orders.length > 0) {
+          const wallet = await Wallet.findOne({ address: task?.wallet.address });
+          const private_key = wallet?.privateKey as string;
+          await fetchAndCancelOpenseaBids(task, private_key);
+          return;
+        }
+
+        if (!task?.running) {
+          taskStatus[taskId].status = 'STOPPED';
+          taskStatus[taskId].cancellationPercentage = 0;
+        }
+      }
+
+    } else if (jobId.includes('CANCEL_MAGICEDEN_BID')) {
+      if (marketplaceCancellationPercentage >= 99.5) {
+        const orders = await prisma.order.findMany({
+          where: {
+            taskId: taskId,
+            marketplace: 'magiceden'
+          }
+        });
+
+        if (orders.length > 0) {
+          const wallet = await Wallet.findOne({ address: task?.wallet.address });
+          const private_key = wallet?.privateKey as string;
+          await fetchAndCancelMagicedenBids(task, private_key);
+          return;
+        }
+        if (!task?.running) {
+          taskStatus[taskId].status = 'STOPPED';
+          taskStatus[taskId].cancellationPercentage = 0;
+        }
+      }
+    } else if (jobId.includes('CANCEL_BLUR_BID')) {
+      if (marketplaceCancellationPercentage >= 99.5) {
+        const orders = await prisma.order.findMany({
+          where: {
+            taskId: taskId,
+            marketplace: 'blur'
+          }
+        });
+
+        if (orders.length > 0) {
+          const wallet = await Wallet.findOne({ address: task?.wallet.address });
+          const private_key = wallet?.privateKey as string;
+          await fetchAndCancelBlurBids(task, private_key);
+          return;
+        }
+        if (!task?.running) {
+          taskStatus[taskId].status = 'STOPPED';
+          taskStatus[taskId].cancellationPercentage = 0;
+        }
+      }
+    }
+  }
+
+  if (jobId.split('-').length < 3) return;
+
+  const taskId = jobId.split('-')[0];
+  const task = activeTasks.get(taskId);
+
+  if (!task || !task.running) return;
+
+  const marketplace = jobId.split('-')[1].toLowerCase();
+  const parentId = `${taskId}-${marketplace}`.toLowerCase();
+
+  const parentJob = parentJobs.get(parentId);
+
+  if (!parentJob) return;
+
+  taskStatus[taskId].status = 'RUNNING'
+  parentJob.failedJobs++;
+
+  // Calculate total jobs across all selected and enabled marketplaces for this task
+  let totalJobs = 0;
+  let completedJobs = 0;
+  let failedJobs = 0;
+  const selectedMarketplaces = task.selectedMarketplaces.map(m => m.toLowerCase());
+  const enabledAndSelectedMarketplaces = selectedMarketplaces.filter(m =>
+    enabledMarketplaces.map(em => em.toLowerCase()).includes(m)
+  );
+
+  for (const marketplace of enabledAndSelectedMarketplaces) {
+    const marketplaceParentId = `${taskId}-${marketplace}`.toLowerCase();
+    const marketplaceParentJob = parentJobs.get(marketplaceParentId);
+    if (marketplaceParentJob) {
+      totalJobs += marketplaceParentJob.totalJobs;
+      completedJobs += marketplaceParentJob.completedJobs;
+      failedJobs += marketplaceParentJob.failedJobs;
+    }
+  }
+
+  // If no jobs are found across marketplaces, use the current marketplace's total
+  if (totalJobs === 0 && parentJob) {
+    totalJobs = parentJob.totalJobs;
+    completedJobs = parentJob.completedJobs;
+    failedJobs = parentJob.failedJobs;
+  }
+
+  const runningPercentage = ((completedJobs + failedJobs) / totalJobs) * 100
+  taskStatus[taskId].runningPercentage = runningPercentage
+
+  if (parentJob.completedJobs + parentJob.failedJobs === parentJob.totalJobs) {
+    const taskId = parentJob.parentId.split('-')[0];
+    const marketplace = parentJob.parentId.split('-')[1].toLowerCase();
+    if (!completedTasks[taskId]) {
+      completedTasks[taskId] = {
+        opensea: false,
+        magiceden: false,
+        blur: false
+      }
+    }
+    completedTasks[taskId][marketplace as 'opensea' | 'magiceden' | 'blur'] = true
+    console.log(GREEN + `Task ${taskId} completed for ${marketplace} ` + RESET);
+    const task = activeTasks.get(taskId);
+    const availableMarketplaces = task?.selectedMarketplaces.map(m => m.toLowerCase())
+
+    // Check if all available marketplaces have completed
+    if (availableMarketplaces && availableMarketplaces.length > 0) {
+      const allMarketsComplete = availableMarketplaces.every(m =>
+        completedTasks[taskId]?.[m as 'opensea' | 'magiceden' | 'blur']
+      );
+
+      if (allMarketsComplete && runningPercentage > 99) {
+        console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
+        // Mark as COMPLETED temporarily, but we'll schedule it to run again
+        taskStatus[taskId].status = 'COMPLETED';
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Only schedule the next run if the task is still in running state
+
+        if (task && task.running) {
+          const loopInterval = getExpiry(task.loopInterval);
+          const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
+          // Calculate how many seconds away is the next loop
+          const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
+
+          console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
+          taskStatus[taskId].status = 'SCHEDULED';
+          taskStatus[taskId].waitingTime = secondsUntilNextLoop;
+          taskStatus[taskId].nextLoopTime = nextLoopTime;
+
+          // Create a countdown timer that updates waitingTime every second
+          const countdownTimer = setInterval(() => {
+            if (taskStatus[taskId] && taskStatus[taskId].status === 'SCHEDULED') {
+              const remainingSeconds = Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000));
+              taskStatus[taskId].waitingTime = remainingSeconds;
+              taskStatus[taskId].status = 'SCHEDULED';
+
+              // Clear the interval when countdown reaches 0 or task is no longer waiting
+              if (remainingSeconds <= 0) {
+                clearInterval(countdownTimer);
+              }
+            } else {
+              clearInterval(countdownTimer);
+            }
+          }, 1000);
+
+          const timeoutId = setTimeout(async () => {
+            // When we restart, update the status
+            const currentTask = activeTasks.get(taskId);
+            if (currentTask?.running) {
+              await startTask(currentTask, true);
+            } else if (currentTask) {
+              await stopTask(currentTask, false);
+            }
+          }, loopInterval * 1000);
+
+          taskTimeouts.set(taskId, timeoutId);
+        }
+
         return;
       }
     }
@@ -2344,14 +2651,14 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
       if (parentJob?.totalJobs === 0 && !task.running) {
         taskStatus[taskId].status = 'STOPPED';
         taskStatus[taskId].cancellationPercentage = 0
+        const timeoutId = taskTimeouts.get(taskId);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          taskTimeouts.delete(taskId);
+        }
       }
     }
 
-    const timeoutId = taskTimeouts.get(taskId);
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-      taskTimeouts.delete(taskId);
-    }
 
   } catch (error: any) {
     console.error(`[StopTask] Error in stopTask for ${taskId}:`, {
@@ -2672,17 +2979,6 @@ async function cancelAllRelatedBids(task: ITask, WALLET_PRIVATE_KEY: string, mar
 
 async function cancelOpenseaBids(orders: PrismaOrder[], privateKey: string, taskId: string) {
   if (!orders.length) return;
-  if (!taskStatus[taskId]) {
-    taskStatus[taskId] = {
-      status: 'CANCELING',
-      runningPercentage: 0,
-      waitingTime: 0,
-      cancellationPercentage: 0,
-      processingPercentage: 0,
-      nextLoopTime: new Date()
-    }
-  }
-  taskStatus[taskId].status = 'CANCELING'
   const cancelData = orders.map((order, index) => {
     return {
       name: CANCEL_OPENSEA_BID,
@@ -2724,18 +3020,6 @@ async function extractMagicedenOrderHash(orders: PrismaOrder[]): Promise<string[
 
 async function cancelMagicedenBids(orders: PrismaOrder[], privateKey: string, taskId: string) {
   if (!orders.length) return;
-  if (!taskStatus[taskId]) {
-    taskStatus[taskId] = {
-      status: 'CANCELING',
-      runningPercentage: 0,
-      waitingTime: 0,
-      cancellationPercentage: 0,
-      processingPercentage: 0,
-      nextLoopTime: new Date()
-    }
-  }
-  taskStatus[taskId].status = 'CANCELING'
-
   for (let i = 0; i < orders.length; i += 500) {
     const batchOrders = orders.slice(i, i + 500);
     const extractedOrderIds = await extractMagicedenOrderHash(batchOrders)
@@ -2746,17 +3030,6 @@ async function cancelMagicedenBids(orders: PrismaOrder[], privateKey: string, ta
 
 async function cancelBlurBids(orders: PrismaOrder[], privateKey: string, taskId: string) {
   if (!orders.length) return
-  if (!taskStatus[taskId]) {
-    taskStatus[taskId] = {
-      status: 'CANCELING',
-      runningPercentage: 0,
-      waitingTime: 0,
-      cancellationPercentage: 0,
-      processingPercentage: 0,
-      nextLoopTime: new Date()
-    }
-  }
-  taskStatus[taskId].status = 'CANCELING'
   const cancelData = orders.map((order, index) => {
     const payload = JSON.parse(order.orderHash)
     return {
@@ -6307,8 +6580,22 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
 
     await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, tokenOffer.toString(), privateKey, slug, undefined, tokenId)
-  } catch (error) {
-    console.error(RED + `Error processing MagicEden token bid for task: ${data?.slug} ` + RESET, error);
+  } catch (error: any) {
+    console.error(
+      RED +
+      `[MagicEden Bid Error] Task: ${data.task._id} | Collection: ${data.slug} | Token: ${data.tokenId}`,
+      error.message || error +
+      RESET
+    );
+
+    if (!errorStats[data.task._id]) {
+      errorStats[data.task._id] = {
+        magiceden: 0,
+        opensea: 0,
+        blur: 0
+      }
+    }
+    errorStats[data.task._id]['magiceden']++
   }
 }
 
@@ -6517,8 +6804,22 @@ async function processMagicedenTraitBid(data: {
 
 
     await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, traitOffer.toString(), privateKey, slug, trait)
-  } catch (error) {
-    console.error(RED + `Error processing MagicEden trait bid for task: ${data?.slug} ` + RESET, error);
+  } catch (error: any) {
+    console.error(
+      RED +
+      `[MagicEden Bid Error] Task: ${data._id} | Collection: ${data.slug} | Trait: ${JSON.stringify(data.trait)}`,
+      error.message || error +
+      RESET
+    );
+
+    if (!errorStats[data._id]) {
+      errorStats[data._id] = {
+        magiceden: 0,
+        opensea: 0,
+        blur: 0
+      }
+    }
+    errorStats[data._id]['magiceden']++
   }
 }
 
@@ -7578,8 +7879,13 @@ async function approveMarketplace(marketplace: string, privateKey: string): Prom
       if (allowance.gte(constants.MaxUint256.div(2))) {
         // If approval exists in blockchain but not in database, add it to the database
         if (!existingApproval) {
-          await prisma.wallet.create({
-            data: {
+          await prisma.wallet.upsert({
+            where: { address },
+            update: {
+              openseaApproval: marketplace.toLowerCase() === SEAPORT.toLowerCase() ? true : undefined,
+              magicedenApproval: marketplace.toLowerCase() === MAGICEDEN.toLowerCase() ? true : undefined
+            },
+            create: {
               address,
               openseaApproval: marketplace.toLowerCase() === SEAPORT.toLowerCase(),
               magicedenApproval: marketplace.toLowerCase() === MAGICEDEN.toLowerCase()
@@ -7609,8 +7915,10 @@ async function approveMarketplace(marketplace: string, privateKey: string): Prom
         : { magicedenApproval: true };
 
       if (!existingApproval) {
-        await prisma.wallet.create({
-          data: {
+        await prisma.wallet.upsert({
+          where: { address },
+          update: updateData,
+          create: {
             address,
             ...updateData
           }

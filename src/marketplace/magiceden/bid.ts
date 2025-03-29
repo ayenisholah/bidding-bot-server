@@ -1,7 +1,7 @@
 import { ethers, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
 import { config } from "dotenv";
-import { activeTasks, API_KEY, currentTasks, decrementBidCount, errorStats, isTaskAborted, logBidError, MAGENTA, redis, trackBidRate } from "../..";
+import { activeTasks, API_KEY, currentTasks, decrementBidCount, errorStats, logBidError, MAGENTA, redis, trackBidRate } from "../..";
 import { createBalanceChecker } from "../../utils/balance";
 import { DistributedLockManager } from '../../utils/lock';
 import { PrismaClient } from '@prisma/client'
@@ -326,11 +326,6 @@ async function sendSignedOrderData(order: any, taskId: string, offerPrice: strin
     // check if the tasks is still active before you make the offer
     const currentTask = activeTasks.get(taskId)
     if (!currentTask?.running || !currentTask?.selectedMarketplaces?.map((marketplace) => marketplace.toLowerCase()).includes("magiceden".toLowerCase())) return
-
-    if (isTaskAborted(taskId)) {
-      console.log(RED + `TASK ${taskId} IS STOPPED. SKIPPING MAGICEDEN...` + RESET);
-      return
-    }
 
     const controller = new AbortController();
     addActiveRequest(taskId, controller);
@@ -740,8 +735,8 @@ export async function fetchMagicEdenCollectionStats(taskId: string, contractAddr
   } catch (error: any) {
     const message = `Error fetching Magic Eden collection stats: ${error?.response?.data || error?.response || error?.message || error}`
     await logBidError(taskId, "FETCH COLLECTION STATS ERROR", message, "error", "magiceden");
-    console.error('Error fetching Magic Eden collection stats:', error);
-    return 0
+    throw new Error(message)
+   
   }
 }
 

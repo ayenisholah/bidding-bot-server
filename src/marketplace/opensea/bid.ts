@@ -1,7 +1,7 @@
 import { BigNumber, Contract, ethers, Wallet } from "ethers";
 import { SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI, WETH_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, API_KEY, BLUE, currentTasks, decrementBidCount, errorStats, getExpiry, isTaskAborted, logBidError, markTaskAsAborted, OPENSEA_SCHEDULE, OPENSEA_TOKEN_BID, OPENSEA_TRAIT_BID, queue, redis, skipStats, trackBidRate } from "../..";
+import { activeTasks, API_KEY, BLUE, currentTasks, decrementBidCount, logBidError, markTaskAsAborted, OPENSEA_SCHEDULE, OPENSEA_TOKEN_BID, OPENSEA_TRAIT_BID, queue, redis, skipStats, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { createBalanceChecker } from "../../utils/balance";
 import { Job } from "bullmq";
@@ -493,11 +493,8 @@ export async function bidOnOpensea(
   } catch (error: any) {
     // Top-level error handler to prevent server crashes
     const errorMessage = error?.message || String(error);
-    const errorSource = error?.response?.data?.errors?.[0] || error?.response?.data || "Unknown error source";
-    console.error(`Critical error in bidOnOpensea: ${errorMessage}`, errorSource);
     await logBidError(taskId, "CRITICAL OPENSEA BID ERROR", errorMessage, "error", "opensea");
-    // Don't re-throw the error, just log it and return
-    return;
+    throw new Error(errorMessage)
   }
 }
 
@@ -512,7 +509,6 @@ async function submitOfferToOpensea(slug: string, bidCount: string, offerPrice: 
     const task = activeTasks.get(taskId)
     if (!task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) return
 
-    if (isTaskAborted(taskId)) return
 
     try {
       const { data: offer } = await
@@ -746,8 +742,6 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
       protocol_address: SEAPORT_CONTRACT_ADDRESS,
     }
 
-    if (isTaskAborted(taskId)) return
-
     try {
       const { data } = await limiter.schedule(() => axiosInstance.post(`https://nfttools.pro/opensea/api/v2/orders/ethereum/seaport/offers`, payload, {
         headers: {
@@ -787,14 +781,13 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
         console.log(RED + `REMOVING ${openseaJobs.length} OPENSEA JOB(S) DUE TO OUTSTANDING ORDER TO WALLET BALANCE RATIO EXCEEDING ALLOWED LIMIT.` + RESET);
         await queue.resume()
       }
-    } else if (typeof errorMessage === 'string' && /Trading is not enabled for this item/i.test(errorMessage)) {
-      console.log(RED + "TRADING IS NOT ENABLED FOR THIS ITEM." + RESET);
+
     } else if (typeof errorMessage === 'string' && /Asset does not exist/i.test(errorMessage)) {
       console.log(RED + "ASSET DOES NOT EXIST." + RESET);
     }
     // Handle socket hang up error specifically
     else if (error?.message?.includes('socket hang up')) {
-      console.log(RED + `ERROR: SOCKET HANG UP - CONNECTION CLOSED UNEXPECTEDLY` + RESET);
+      throw new Error(`ERROR: SOCKET HANG UP - CONNECTION CLOSED UNEXPECTEDLY`)
     }
     // Handle ECONNRESET error specifically
     else if (error?.message?.includes('ECONNRESET')) {
