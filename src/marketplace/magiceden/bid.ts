@@ -1,7 +1,7 @@
 import { ethers, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
 import { config } from "dotenv";
-import { activeTasks, API_KEY, currentTasks, decrementBidCount, errorStats, logBidError, MAGENTA, redis, trackBidRate } from "../..";
+import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, redis, trackBidRate } from "../..";
 import { createBalanceChecker } from "../../utils/balance";
 import { DistributedLockManager } from '../../utils/lock';
 import { PrismaClient } from '@prisma/client'
@@ -53,6 +53,7 @@ export async function bidOnMagiceden(
   weiPrice: string,
   privateKey: string,
   slug: string,
+  bidExpiry: number,
   trait?: Trait,
   tokenId?: string | number
 ) {
@@ -60,11 +61,9 @@ export async function bidOnMagiceden(
     const task = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase() && task.selectedMarketplaces.includes("MagicEden"))
     if (!task) return
 
-    const bidExpiry = await getExpiry(task.bidDuration)
     const duration = bidExpiry / 60 || 15; // minutes
     const currentTime = new Date().getTime();
     const expiration = Math.floor((currentTime + (duration * 60 * 1000)) / 1000);
-    const expiry = Math.ceil(Number(expiration) - (Date.now() / 1000))
 
     const wallet = new Wallet(privateKey, provider);
     const offerPriceEth = Number(weiPrice) / 1e18
@@ -87,11 +86,7 @@ export async function bidOnMagiceden(
     if (offerPriceEth > wethBalance) {
       const identifier = trait ? `${trait.attributeKey}:${trait.attributeValue}` : tokenId ? tokenId : 'collection';
       const message = `[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEth} WETH is greater than available WETH balance: ${wethBalance} WETH. SKIPPING  MAGICEDEN...`
-      await logBidError(taskId, "INSUFFICIENT WETH BALANCE", message, "error", "magiceden");
-      console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(RED + message.toUpperCase() + RESET);
-      console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-      return
+      throw new Error(message)
     }
 
     const order = await createBidData(taskId, slug, maker, collection, quantity, weiPrice.toString(), expiration.toString(), trait, tokenId);
@@ -99,41 +94,18 @@ export async function bidOnMagiceden(
     if (!order) return
     try {
       if (tokenId) {
-        await submitSignedOrderData(taskId, roundedWei.toString(), privateKey, bidCount, order, wallet, slug, expiry, undefined, tokenId)
+        await submitSignedOrderData(taskId, roundedWei.toString(), privateKey, bidCount, order, wallet, slug, bidExpiry, undefined, tokenId)
       } else if (trait) {
-        await submitSignedOrderData(taskId, roundedWei.toString(), privateKey, bidCount, order, wallet, slug, expiry, trait, undefined)
+        await submitSignedOrderData(taskId, roundedWei.toString(), privateKey, bidCount, order, wallet, slug, bidExpiry, trait, undefined)
       } else {
-        await submitSignedOrderData(taskId, roundedWei.toString(), privateKey, bidCount, order, wallet, slug, expiry, undefined, undefined)
+        await submitSignedOrderData(taskId, roundedWei.toString(), privateKey, bidCount, order, wallet, slug, bidExpiry, undefined, undefined)
       }
     } catch (error: any) {
-      const message = `Error submitting MagicEden bid: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-      console.log(RED + message + RESET);
-      await logBidError(taskId, "SUBMIT BID ERROR", message, "error", "magiceden");
       throw error
     }
     return order
   } catch (error: any) {
-    const identifier = trait ? `${trait.attributeKey}:${trait.attributeValue}` : tokenId ? tokenId : 'collection';
-
-    // More robust error message extraction
-    const errorMessage = error?.response?.data?.message?.errors?.[0] ||
-      error?.response?.data?.message ||
-      error?.message ||
-      'Unknown error';
-
-    const errorText = `magiceden post offer error task ${slug}${identifier ? ` - ${identifier}` : ''}: ${errorMessage}`;
-    await logBidError(taskId, "SUBMIT BID ERROR", errorText, "error", "magiceden");
-    console.log(errorText);
-
-    if (!errorStats[taskId]) {
-      errorStats[taskId] = {
-        magiceden: 0,
-        opensea: 0,
-        blur: 0
-      }
-    }
-
-    errorStats[taskId]['magiceden']++
+    throw error
   }
 }
 
@@ -163,11 +135,6 @@ async function createBidData(
 
   if (!task) return
 
-  const bidExpiry = await getExpiry(task.bidDuration)
-  const duration = bidExpiry / 60 || 15; // minutes
-  const currentTime = new Date().getTime();
-  const expiration = Math.floor((currentTime + (duration * 60 * 1000)) / 1000);
-
   const options = trait || tokenId ? {
     "seaport-v1.6": {
       "useOffChainCancellation": true,
@@ -181,13 +148,14 @@ async function createBidData(
   }
 
   const orderKind = trait || tokenId ? "seaport-v1.6" : "payment-processor-v2"
+
   const params = [
     {
       ...(tokenId ? {} : { collection: collection }),
       currency: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
       quantity: quantity,
       weiPrice: weiPrice.toString(),
-      expirationTime: expiration.toString(),
+      expirationTime: expirationTime.toString(),
       orderKind: orderKind,
       orderbook: "reservoir",
       options: options,
@@ -290,9 +258,7 @@ async function signOrderData(taskId: string, wallet: ethers.Wallet, signData: an
     );
     return signature;
   } catch (error: any) {
-    const message = `Error signing MagicEden bid: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-    await logBidError(taskId, "SIGN BID ERROR", message, "error", "magiceden");
-    throw error;
+    throw error
   }
 }
 
@@ -307,7 +273,7 @@ async function signOrderData(taskId: string, wallet: ethers.Wallet, signData: an
 * @param trait - Collection trait
  * @returns The response from the API.
  */
-async function sendSignedOrderData(order: any, taskId: string, offerPrice: string | number, privateKey: string, bidCount: string, signature: string, data: any, slug: string, expiry = 900, trait?: Trait, tokenId?: number | string) {
+async function sendSignedOrderData(taskId: string, offerPrice: string | number, privateKey: string, bidCount: string, signature: string, data: any, slug: string, expiry: number, trait?: Trait, tokenId?: number | string) {
   try {
 
     const [taskId, count] = bidCount.split(":")
@@ -356,17 +322,6 @@ async function sendSignedOrderData(order: any, taskId: string, offerPrice: strin
 
       const task = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase() && task.selectedMarketplaces.includes("MagicEden"))
       if (!task) return
-      const bidExpiry = await getExpiry(task.bidDuration)
-      const duration = bidExpiry / 60 || 15; // minutes
-      const currentTime = new Date().getTime();
-      const expiration = Math.floor((currentTime + (duration * 60 * 1000)) / 1000);
-      const expiry = Math.ceil(Number(expiration) - (Date.now() / 1000))
-
-      const order = JSON.stringify({
-        offer: offerPrice.toString(),
-        payload: payload,
-        createdAt: Date.now()
-      })
 
       await prisma.order.create({
         data: {
@@ -398,8 +353,6 @@ async function sendSignedOrderData(order: any, taskId: string, offerPrice: strin
       console.log(`Request for task ${taskId} was cancelled`);
       return null;
     }
-    const message = `Error sending MagicEden bid: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-    await logBidError(taskId, "SEND BID ERROR", message, "error", "magiceden");
     throw error
   }
 }
@@ -412,7 +365,7 @@ async function sendSignedOrderData(order: any, taskId: string, offerPrice: strin
  * @param slug - Collection slug
 
  */
-export async function submitSignedOrderData(taskId: string, offerPrice: string | number, privateKey: string, bidCount: string, order: CreateBidData, wallet: ethers.Wallet, slug: string, expiry = 900, trait?: Trait, tokenId?: number | string) {
+export async function submitSignedOrderData(taskId: string, offerPrice: string | number, privateKey: string, bidCount: string, order: CreateBidData, wallet: ethers.Wallet, slug: string, expiry: number, trait?: Trait, tokenId?: number | string) {
   const task = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase() && task.selectedMarketplaces.includes("MagicEden"))
   if (!task) return
 
@@ -447,10 +400,6 @@ export async function submitSignedOrderData(taskId: string, offerPrice: string |
     const signData = order?.steps
       ?.find((step) => step.id === "order-signature")
       ?.items?.[0]?.data?.sign;
-
-    if (!signData || !signData.value) {
-      throw new Error('Invalid order signature data');
-    }
 
     const signature = await signOrderData(taskId, wallet, signData, trait);
     let data: any;
@@ -511,7 +460,8 @@ export async function submitSignedOrderData(taskId: string, offerPrice: string |
       }
 
     }
-    const result = await sendSignedOrderData(order, taskId, offerPrice, privateKey, bidCount, signature, data, slug, expiry, trait, tokenId);
+
+    const result = await sendSignedOrderData(taskId, offerPrice, privateKey, bidCount, signature, data, slug, expiry, trait, tokenId);
     return result;
   } catch (error: any) {
     throw error
@@ -588,19 +538,18 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
     });
 
   } catch (error: any) {
-    const message = `Error cancelling MagicEden bid: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-    await logBidError(taskId, "CANCEL BID ERROR", message, "error", "magiceden");
-    console.log(error.response.data || error.message);
+    const message = `Error cancelling MagicEden bid: ${error?.response?.data?.message || error?.message || error}`
+    console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
+    console.log(RED + message + RESET)
+    console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
   }
 }
 
 
 async function signCancelOrder(taskId: string, cancelItem: any | undefined, privateKey: string) {
   try {
-    if (!cancelItem) {
-      console.log('INVALID CANCEL DATA');
-      return
-    }
+    if (!cancelItem) return
+
     const wallet = new Wallet(privateKey, provider);
 
     const signature = await wallet._signTypedData(
@@ -611,29 +560,15 @@ async function signCancelOrder(taskId: string, cancelItem: any | undefined, priv
 
     return signature;
   } catch (error: any) {
-    const message = `Error signing MagicEden cancel order: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-    await logBidError(taskId, "SIGN CANCEL ORDER ERROR", message, "error", "magiceden");
     throw error
   }
 }
 
-export async function fetchMagicEdenOffer(taskId: string, type: "COLLECTION" | "TRAIT" | "TOKEN", contractAddress: string, identifier?: string | Record<string, string>) {
+export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN", contractAddress: string, identifier?: string | Record<string, string>) {
   try {
-    const URL = `https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6`;
     if (type === "COLLECTION") {
-      const queryParams = {
-        collection: contractAddress,
-        sortBy: 'price',
-        status: 'active',
-        excludeEOA: 'false',
-        includeCriteriaMetadata: 'true',
-        includeDepth: 'true',
-        normalizeRoyalties: 'false',
-      }
-
       const { data } = await limiter?.schedule(() =>
-        axiosInstance.get<MagicedenCollectionResponse>(URL, {
-          params: queryParams,
+        axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6?collection=${contractAddress}&sortBy=price&status=active&excludeEOA=false&includeCriteriaMetadata=true&includeDepth=true&normalizeRoyalties=false`, {
           headers: {
             'content-type': 'application/json',
             'X-NFT-API-Key': API_KEY
@@ -648,17 +583,31 @@ export async function fetchMagicEdenOffer(taskId: string, type: "COLLECTION" | "
       return offers?.map(offer => ({ amount: offer?.price?.amount?.raw, owner: offer?.maker }))
 
     } else if (type === "TOKEN") {
-      const url = `https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${identifier}&sortBy=price&status=active&excludeEOA=false&limit=2`
-      const { data } = await limiter.schedule(() =>
-        axiosInstance.get<any>(url, {
+
+      const tasks = [
+        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${identifier}&sortBy=price&status=active&excludeEOA=false&limit=2`, {
           headers: {
             'content-type': 'application/json',
             'X-NFT-API-Key': API_KEY
           }
-        })
-      );
+        })),
 
-      const offers = data?.orders
+        () => limiter?.schedule(() =>
+          axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6?collection=${contractAddress}&sortBy=price&status=active&excludeEOA=false&includeCriteriaMetadata=true&includeDepth=true&normalizeRoyalties=false`, {
+            headers: {
+              'content-type': 'application/json',
+              'X-NFT-API-Key': API_KEY
+            }
+          })
+        )
+      ]
+
+      const [tokenResponse, collectionResponse] = await pQueue.addAll(tasks, {
+        throwOnTimeout: true,
+      });
+
+      const data = [...tokenResponse.data.orders, ...collectionResponse.data.orders]
+      const offers = data
         ?.filter((data: any) => data?.price?.currency?.symbol === "WETH")
         ?.sort((a: any, b: any) => Number(b?.price?.amount?.raw) - Number(a?.price?.amount?.raw))
         ?.slice(0, 2)
@@ -667,6 +616,8 @@ export async function fetchMagicEdenOffer(taskId: string, type: "COLLECTION" | "
       return offers?.map((offer: any) => ({ amount: offer?.price?.amount?.raw, owner: offer?.maker }))
 
     } else if (type === "TRAIT") {
+      const URL = `https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6`;
+
       interface TraitQueryParams {
         collection: string;
         [key: string]: string | string[];
@@ -700,13 +651,11 @@ export async function fetchMagicEdenOffer(taskId: string, type: "COLLECTION" | "
     }
     return [{ amount: "0", owner: "" }]
   } catch (error: any) {
-    const message = `Error fetching MagicEden offer: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-    await logBidError(taskId, "FETCH OFFER ERROR", message, "error", "magiceden");
     throw error
   }
 }
 
-export async function fetchMagicEdenCollectionStats(taskId: string, contractAddress: string) {
+export async function fetchMagicEdenCollectionStats(contractAddress: string) {
   const queryParams = {
     includeQuantity: true,
     includeLastSale: true,
@@ -733,10 +682,8 @@ export async function fetchMagicEdenCollectionStats(taskId: string, contractAddr
     const token: TokenData = data?.tokens?.filter((token: TokenData) => token?.market?.floorAsk?.price?.currency?.symbol?.toLowerCase() === "weth" || token?.market?.floorAsk?.price?.currency?.symbol?.toLowerCase())[0]
     return token?.market?.floorAsk?.price?.amount?.decimal
   } catch (error: any) {
-    const message = `Error fetching Magic Eden collection stats: ${error?.response?.data || error?.response || error?.message || error}`
-    await logBidError(taskId, "FETCH COLLECTION STATS ERROR", message, "error", "magiceden");
-    throw new Error(message)
-   
+    throw error
+
   }
 }
 
@@ -783,28 +730,12 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
 
         return allTokens.slice(0, limit);
       } catch (error: any) {
-        const message = `Error fetching Magic Eden tokens: ${error?.response?.data || error?.response || error?.message || error}`
-        await logBidError(taskId, "FETCH TOKENS ERROR", message, "error", "magiceden");
-        console.error("Error fetching Magic Eden tokens:", error);
-        return []
+        throw error
       }
     },
     60 // Lock TTL in seconds - longer for token fetching since it's paginated
   );
 }
-
-function getExpiry(bidDuration: { value: number; unit: string }) {
-  const expiry = bidDuration.unit === 'minutes'
-    ? bidDuration.value * 60
-    : bidDuration.unit === 'hours'
-      ? bidDuration.value * 3600
-      : bidDuration.unit === 'days'
-        ? bidDuration.value * 86400
-        : 900;
-
-  return expiry;
-}
-
 interface TokenMagiceden {
   chainId: number;
   contract: string;

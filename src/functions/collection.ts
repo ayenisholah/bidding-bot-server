@@ -83,7 +83,7 @@ export async function getCollectionDetails(slug: string, contractAddress: string
   return result;
 }
 
-export async function getOpenseaFloor(taskId: string, collectionSlug: string) {
+export async function getOpenseaFloor(collectionSlug: string) {
   try {
     const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
       `https://nfttools.pro/opensea/api/v2/listings/collection/${collectionSlug}/best`,
@@ -91,37 +91,17 @@ export async function getOpenseaFloor(taskId: string, collectionSlug: string) {
         headers: { 'X-NFT-API-Key': API_KEY }
       }
     ));
-    
+
     // Check if listings exist and has items
     if (!data?.listings || data.listings.length === 0) {
-      await logBidError(taskId, "NO_LISTINGS_FOUND", `No listings found for collection ${collectionSlug}`, "warning", "opensea");
-      return 0;
+      throw new Error(`No listings found for collection ${collectionSlug}`);
     }
-    
-    // Filter out any listings with invalid price data
-    const validListings = data.listings.filter(listing => 
-      listing?.price?.current?.value !== undefined && 
-      listing?.price?.current?.value !== null
-    );
-    
-    if (validListings.length === 0) {
-      await logBidError(taskId, "INVALID_LISTINGS_DATA", `No valid price data in listings for ${collectionSlug}`, "warning", "opensea");
-      return 0;
-    }
-    
-    // Sort the valid listings by price
-    const sortedListings = validListings.sort((a, b) => 
-      Number(a.price.current.value) - Number(b.price.current.value)
-    );
-    
-    const floor_price = Number(sortedListings[0].price.current.value) / 1e18;
+
+    const floor_price = Number(data.listings.sort((a, b) => Number(a?.price?.current?.value) - Number(b?.price?.current?.value))[0].price.current.value) / 1e18;
     return floor_price;
   } catch (error: any) {
     const errorMessage = error?.response?.data?.errors?.[0] || error.message || 'Unknown error';
     const formattedError = `Failed to fetch opensea floor price for ${collectionSlug}: ${errorMessage}`;
-
-    await logBidError(taskId, "ERROR_FETCHING_COLLECTION_STATS", formattedError, "error", "opensea");
-
     throw new Error(formattedError);
   }
 }

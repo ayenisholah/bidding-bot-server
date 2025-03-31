@@ -1,6 +1,6 @@
 import { BigNumber, ethers, utils, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, API_KEY, BLUR_SCHEDULE, BLUR_TRAIT_BID, currentTasks, decrementBidCount, errorStats, logBidError, pQueue, queue, redis, RESET, trackBidRate } from "../..";
+import { activeTasks, API_KEY, BLUR_SCHEDULE, BLUR_TRAIT_BID, currentTasks, decrementBidCount, errorStats, pQueue, queue, redis, RESET, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { createBalanceChecker } from "../../utils/balance";
 import { Job } from "bullmq";
@@ -98,23 +98,18 @@ export async function bidOnBlur(
       console.log(RED + `REMOVING ${blurJobs.length} BLUR JOB(S) DUE TO INSUFFICIENT BETH BALANCE` + RESET);
       await queue.resume()
     }
-    console.log(`Total offer amount: ${totalOfferAmount} + offer price: ${offerPriceEth} is greater than the leverage: ${leverage} * weth balance: ${bethBalance}`);
-    await logBidError(taskId, "INSUFFICIENT BETH BALANCE", `Total offer amount: ${totalOfferAmount} + offer price: ${offerPriceEth} is greater than the leverage: ${leverage} * weth balance: ${bethBalance}`, "error", "blur");
     return
   }
 
   if (offerPriceEth > bethBalance) {
 
     const message = `Offer price: ${offerPriceEth} BETH  is greater than available BETH balance: ${bethBalance} BETH. SKIPPING ...`
-    await logBidError(taskId, "INSUFFICIENT BETH BALANCE", message, "error", "blur");
-    console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-    console.log(RED + message.toUpperCase() + RESET);
-    console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-    return
+    throw new Error(message)
+
   }
 
   const offerPrice = BigNumber.from(offer_price.toString());
-  const accessToken = await getAccessToken(taskId, BLUR_API_URL, private_key);
+  const accessToken = await getAccessToken(BLUR_API_URL, private_key);
 
   offerPriceEth = (Math.floor(Number(utils.formatUnits(offerPrice)) * 100) / 100).toFixed(2);
 
@@ -152,18 +147,7 @@ export async function bidOnBlur(
     build = await formatBidOnBlur(taskId, BLUR_API_URL, accessToken, wallet_address, buildPayload);
 
   } catch (error: any) {
-    const message = `Error formatting Blur bid: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-    await logBidError(taskId, "FORMAT BID ERROR", message, "error", "blur");
-
-    if (!errorStats[taskId]) {
-      errorStats[taskId] = {
-        magiceden: 0,
-        opensea: 0,
-        blur: 0
-      }
-    }
-    errorStats[taskId]['blur']++
-    return
+    throw error
   }
 
   let data = build?.signatures?.[0];
@@ -203,17 +187,7 @@ export async function bidOnBlur(
     await submitBidToBlur(taskId, bidCount, offer_price, BLUR_API_URL, accessToken, wallet_address, submitPayload, slug, cancelPayload, expiry, traits);
 
   } catch (error: any) {
-    const message = `Error submitting Blur bid: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-    await logBidError(taskId, "SUBMIT BID ERROR", message, "error", "blur");
-
-    if (!errorStats[taskId]) {
-      errorStats[taskId] = {
-        magiceden: 0,
-        opensea: 0,
-        blur: 0
-      }
-    }
-    errorStats[taskId]['blur']++
+    throw error
   }
 };
 
@@ -223,7 +197,7 @@ export async function bidOnBlur(
  * @param privateKey - The private key of the wallet.
  * @returns The access token.
  */
-async function getAccessToken(taskId: string, url: string, private_key: string): Promise<string | undefined> {
+async function getAccessToken(url: string, private_key: string): Promise<string | undefined> {
   const wallet = new Wallet(private_key, provider);
   const lockKey = `auth:${wallet.address}`;
 
@@ -259,9 +233,6 @@ async function getAccessToken(taskId: string, url: string, private_key: string):
 
       return accessToken;
     } catch (error: any) {
-      const message = `Error getting Blur access token: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-      await logBidError(taskId, "GET ACCESS TOKEN ERROR", message, "error", "blur");
-
       throw error
     }
   });
@@ -305,16 +276,6 @@ async function formatBidOnBlur(
     if (axios.isCancel(error)) {
       console.log(`Request for task ${taskId} was cancelled`);
       return null;
-    }
-
-    const message = `Error formatting Blur bid: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-    await logBidError(taskId, "FORMAT BID ERROR", message, "error", "blur");
-
-    if (error.response?.data?.message === 'Balance over-utilized' || error.message?.message === 'Balance over-utilized') {
-      console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(RED + 'BALANCE OVER-UTILIZED: BETH balance is being used in too many active orders' + RESET);
-      console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-      return;
     }
     throw error
   } finally {
@@ -411,25 +372,6 @@ async function submitBidToBlur(
       console.log(`Request for task ${taskId} was cancelled`);
       return;
     }
-
-    const message = `Error submitting Blur bid: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-    await logBidError(taskId, "SUBMIT BID ERROR", message, "error", "blur");
-
-    if (error.response?.data?.message?.message === 'Balance over-utilized' || error.message.message === 'Balance over-utilized') {
-      const jobs: Job[] = await queue.getJobs(['prioritized']);
-      const blurJobs = jobs.filter(job =>
-        [BLUR_SCHEDULE, BLUR_TRAIT_BID].includes(job.name)
-      );
-
-      if (blurJobs.length > 0) {
-        await queue.pause()
-        await Promise.all(blurJobs.map(job => job.remove()));
-        console.log(RED + `REMOVING ${blurJobs.length} BLUR JOB(S) DUE TO INSUFFICIENT BETH BALANCE` + RESET);
-        await queue.resume()
-      }
-    } else {
-      console.error("Error submitting bid:", error.response?.data || error.message);
-    }
     throw error
   } finally {
     const controllers = activeRequests.get(taskId) || [];
@@ -443,13 +385,13 @@ async function submitBidToBlur(
   }
 }
 
-export async function cancelBlurBid(taskId: string, data: BlurCancelPayload) {
+export async function cancelBlurBid(data: BlurCancelPayload) {
   try {
     if (!data || !data.payload || !data.privateKey) return
     const { payload, privateKey, taskId } = data
     const wallet = new Wallet(privateKey, provider);
     const walletAddress = wallet.address
-    const accessToken = await getAccessToken(taskId, BLUR_API_URL, privateKey);
+    const accessToken = await getAccessToken(BLUR_API_URL, privateKey);
     const endpoint = `${BLUR_API_URL}/v1/collection-bids/cancel`
     const { data: cancelResponse } = await limiter.schedule(() => axiosInstance.post(endpoint, payload, {
       headers: {
@@ -463,9 +405,6 @@ export async function cancelBlurBid(taskId: string, data: BlurCancelPayload) {
     console.log(JSON.stringify(cancelResponse));
 
   } catch (error: any) {
-    const message = `Error canceling Blur bid: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-    await logBidError(taskId, "CANCEL BID ERROR", message, "error", "blur");
-
     if (error.response?.data?.message?.message !== 'No bids found') {
       console.log("cancelBlurBid: ", error?.response?.data || error?.response || error?.code);
     }
@@ -473,7 +412,7 @@ export async function cancelBlurBid(taskId: string, data: BlurCancelPayload) {
   }
 }
 
-export async function fetchBlurBid(taskId: string, collection: string, criteriaType: 'TRAIT' | 'COLLECTION', criteriaValue: Record<string, string>) {
+export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | 'COLLECTION', criteriaValue: Record<string, string>) {
   const url = `https://nfttools.pro/blur/v1/collections/${collection}/executable-bids`;
   try {
 
@@ -547,15 +486,12 @@ export async function fetchBlurBid(taskId: string, collection: string, criteriaT
     }
 
   } catch (error: any) {
-    const message = `Error fetching executable bids: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-    await logBidError(taskId, "FETCH EXECUTABLE BIDS ERROR", message, "error", "blur");
-
-    console.error("Error fetching executable bids:", error.response?.data || error.message);
+    throw error
   }
 }
 
 
-export async function fetchBlurCollectionStats(taskId: string, slug: string) {
+export async function fetchBlurCollectionStats(slug: string) {
   const url = `https://nfttools.pro/blur/v1/collections/${slug}/tokens`;
   try {
     const { data } = await limiter.schedule(() => axiosInstance.get<BlurTokensResponse>(url, {

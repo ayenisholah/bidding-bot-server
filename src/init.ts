@@ -39,7 +39,7 @@ async function initialize(rateLimit: number) {
   axiosInstance = axios.create({ timeout: 60000 });
 
   limiter = new Bottleneck({
-    minTime: 1000 / (rateLimit),
+    minTime: 1000 / (rateLimit * 0.98),
     trackDoneStatus: true,
   });
 

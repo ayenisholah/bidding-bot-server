@@ -1,7 +1,7 @@
-import { BigNumber, Contract, ethers, Wallet } from "ethers";
-import { SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI, WETH_MIN_ABI } from "../../constants";
+import { BigNumber, ethers, Wallet } from "ethers";
+import { SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, API_KEY, BLUE, currentTasks, decrementBidCount, logBidError, markTaskAsAborted, OPENSEA_SCHEDULE, OPENSEA_TOKEN_BID, OPENSEA_TRAIT_BID, queue, redis, skipStats, trackBidRate } from "../..";
+import { activeTasks, API_KEY, BLUE, currentTasks, decrementBidCount, markTaskAsAborted, OPENSEA_SCHEDULE, OPENSEA_TOKEN_BID, OPENSEA_TRAIT_BID, queue, redis, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { createBalanceChecker } from "../../utils/balance";
 import { Job } from "bullmq";
@@ -242,7 +242,6 @@ export async function bidOnOpensea(
         [OPENSEA_SCHEDULE, OPENSEA_TRAIT_BID, OPENSEA_TOKEN_BID].includes(job?.name)
       );
 
-
       if (openseaJobs.length > 0) {
         await queue.pause()
         await Promise.allSettled(openseaJobs.map(job => {
@@ -251,12 +250,10 @@ export async function bidOnOpensea(
             job.moveToCompleted({ message: 'Outstanding order to wallet balance ratio exceeds allowed limit.' }, token, false)
           }
         }));
-        console.log(RED + `REMOVING ${openseaJobs.length} OPENSEA JOB(S) DUE TO OUTSTANDING ORDER TO WALLET BALANCE RATIO EXCEEDING ALLOWED LIMIT.` + RESET);
         await queue.resume()
       }
-      await logBidError(taskId, "INSUFFICIENT WETH BALANCE", `Total offer amount: ${totalOfferAmount} + offer price: ${offerPriceEth} is greater than the leverage: ${leverage} * weth balance: ${wethBalance}`, "error", "opensea");
-      console.log(`Total offer amount: ${totalOfferAmount} + offer price: ${offerPriceEth} is greater than the leverage: ${leverage} * weth balance: ${wethBalance}`);
-      return
+      const identifier = opensea_traits ? opensea_traits : asset?.tokenId ? asset?.tokenId : slug;
+      throw new Error(`INSUFFICIENT WETH BALANCE: Total offer amount: ${totalOfferAmount} + offer price: ${offerPriceEth} is greater than the leverage: ${leverage} * weth balance: ${wethBalance} for ${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}`);
     }
 
     // Determine precision based on price range
@@ -277,18 +274,7 @@ export async function bidOnOpensea(
 
     if (offerPriceEthFinal > wethBalance) {
       const identifier = opensea_traits ? opensea_traits : asset?.tokenId ? asset?.tokenId : slug;
-
-      const message = `[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEthFinal} WETH is greater than available WETH balance: ${wethBalance} WETH. SKIPPING OPENSEA...`
-      await logBidError(taskId, "INSUFFICIENT WETH BALANCE", message, "skipped", "opensea");
-      if (!skipStats[taskId]) {
-        skipStats[taskId] = {
-          opensea: 0,
-          magiceden: 0,
-          blur: 0
-        };
-      }
-      skipStats[taskId].opensea += 1;
-      return
+      throw new Error(`[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEthFinal} WETH is greater than available WETH balance: ${wethBalance} WETH.`);
     }
 
     const wallet = new Wallet(private_key, provider);
@@ -364,7 +350,7 @@ export async function bidOnOpensea(
 
       trackBidRate('opensea', taskId);
       const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()}  TOKEN: ${asset.tokenId} ${Number(offerPriceEthFinal)} WETH 🎉`
-      console.log(BLUE, JSON.stringify(successMessage), RESET);
+      console.log(BLUE, successMessage, RESET);
     }
     else {
       const divider = BigNumber.from(10000);
@@ -482,19 +468,11 @@ export async function bidOnOpensea(
 
         await submitOfferToOpensea(slug, bidCount, offerPrice.toString(), payload, expiry, opensea_traits)
       } catch (error: any) {
-        const tokenIdOrTrait = asset ? `token #${JSON.stringify(asset)}` : opensea_traits ? `trait ${opensea_traits}` : 'collection';
-        const message = `Error submitting OpenSea offer for ${tokenIdOrTrait} in collection ${slug}: ${error?.response?.data?.errors?.[0] || error?.response?.data?.errors || error?.response?.data || error?.response || error}`
-        await logBidError(taskId, "SUBMIT OFFER TO OPENSEA ERROR", message, "error", "opensea");
-        console.error(`OpenSea bidding error: ${message}`);
-        // Don't re-throw the error here, just log it and return
-        return;
+        throw error
       }
     }
   } catch (error: any) {
-    // Top-level error handler to prevent server crashes
-    const errorMessage = error?.message || String(error);
-    await logBidError(taskId, "CRITICAL OPENSEA BID ERROR", errorMessage, "error", "opensea");
-    throw new Error(errorMessage)
+    throw error
   }
 }
 
@@ -505,7 +483,7 @@ export async function bidOnOpensea(
  */
 async function submitOfferToOpensea(slug: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900, opensea_traits?: string) {
   try {
-    const [taskId, count] = bidCount.split(":")
+    const [taskId] = bidCount.split(":")
     const task = activeTasks.get(taskId)
     if (!task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) return
 
@@ -557,34 +535,6 @@ async function submitOfferToOpensea(slug: string, bidCount: string, offerPrice: 
       throw error
     }
   } catch (error: any) {
-    if (error?.response?.data?.message?.errors?.[0] === 'Outstanding order to wallet balance ratio exceeds allowed limit.' ||
-      error?.message?.errors?.[0] === 'Outstanding order to wallet balance ratio exceeds allowed limit.' ||
-      error?.response?.data?.message === 'Outstanding order to wallet balance ratio exceeds allowed limit.' ||
-      error?.message === 'Outstanding order to wallet balance ratio exceeds allowed limit.') {
-      const jobs = await queue.getJobs(['prioritized']);
-      const openseaJobs: Job[] = jobs.filter(job =>
-        [OPENSEA_SCHEDULE, OPENSEA_TRAIT_BID, OPENSEA_TOKEN_BID].includes(job?.name)
-      );
-      if (openseaJobs.length > 0) {
-        await queue.pause()
-        await Promise.allSettled(openseaJobs.map(job => {
-          const token = job.token
-          if (token) {
-            job.moveToCompleted({ message: 'Outstanding order to wallet balance ratio exceeds allowed limit.' }, token, false)
-          }
-        }));
-        console.log(RED + `REMOVING ${openseaJobs.length} OPENSEA JOB(S) DUE TO OUTSTANDING ORDER TO WALLET BALANCE RATIO EXCEEDING ALLOWED LIMIT.` + RESET);
-        await queue.resume()
-      }
-    }
-
-    // Handle ECONNRESET error specifically
-    if (error?.message?.includes('ECONNRESET')) {
-      console.log(RED + `ERROR: READ ECONNRESET - CONNECTION RESET BY PEER` + RESET);
-      return;
-    }
-
-    // Throw other errors
     throw error
   }
 }
@@ -612,7 +562,7 @@ async function buildOffer(taskId: string, buildPayload: any) {
         })
       );
       return data;
-    } catch (error) {
+    } catch (error: any) {
       throw error
     }
     finally {
@@ -630,38 +580,9 @@ async function buildOffer(taskId: string, buildPayload: any) {
       console.log(`Request for task ${taskId} was cancelled`);
       return null;
     }
-    throw error;
+    throw error
   }
 }
-
-
-/**
- * Fetches an order from OpenSea by its hash.
- * @param orderHash - The hash of the order to fetch.
- * @param protocolAddress - The protocol address.
- * @param chain - The blockchain chain (default: 'ethereum').
- * @param taskId - The ID of the task.
- * @returns The order data or null if the request was cancelled.
- */
-async function getOrderByHash(orderHash: string, protocolAddress: string, chain: string = 'ethereum', taskId: string) {
-  try {
-    const { data } = await limiter.schedule(() =>
-      axiosInstance.request({
-        method: 'GET',
-        url: `https://nfttools.pro/opensea/api/v2/orders/chain/${chain}/protocol/${protocolAddress}/${orderHash}`,
-        headers: {
-          'accept': 'application/json',
-          'X-NFT-API-Key': API_KEY,
-        },
-      })
-    );
-    return data;
-  } catch (error: any) {
-    return
-    // console.log(error?.response?.data?.errors?.[0] || error?.response?.data?.errors || error?.response?.data || error?.response);
-  }
-}
-
 
 export async function cancelOrder(orderHash: string, protocolAddress: string, privateKey: string, taskId: string) {
   if (!orderHash || !protocolAddress || !privateKey) return
@@ -684,7 +605,6 @@ export async function cancelOrder(orderHash: string, protocolAddress: string, pr
   } catch (error: any) {
     return
   }
-
 }
 
 async function signCancelOrder(taskId: string, orderHash: string, protocolAddress: string, privateKey: string) {
@@ -708,7 +628,6 @@ async function signCancelOrder(taskId: string, orderHash: string, protocolAddres
     orderHash: orderHash
   };
   try {
-
     if (!value) return
     const signature = await wallet._signTypedData(domain, types, value);
     return signature;
@@ -716,7 +635,6 @@ async function signCancelOrder(taskId: string, orderHash: string, protocolAddres
     throw error
   }
 }
-
 
 async function signOffer(wallet: ethers.Wallet, offer: Record<string, unknown>) {
   return await wallet._signTypedData(domain, types, offer)
@@ -762,42 +680,9 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
       console.log(`Request for task ${taskId} was cancelled`);
       return null;
     }
-
-    const errorMessage = error?.response?.data?.errors?.[0] || error?.response?.data || error?.response || error?.code || error
-    if (error?.response?.data?.errors?.[0] === 'Outstanding order to wallet balance ratio exceeds allowed limit.') {
-      const jobs = await queue.getJobs(['prioritized']);
-      const openseaJobs: Job[] = jobs.filter(job =>
-        [OPENSEA_SCHEDULE, OPENSEA_TRAIT_BID, OPENSEA_TOKEN_BID].includes(job?.name)
-      );
-
-      if (openseaJobs.length > 0) {
-        await queue.pause()
-        await Promise.allSettled(openseaJobs.map(job => {
-          const token = job.token
-          if (token) {
-            job.moveToCompleted({ message: 'Outstanding order to wallet balance ratio exceeds allowed limit.' }, token, false)
-          }
-        }));
-        console.log(RED + `REMOVING ${openseaJobs.length} OPENSEA JOB(S) DUE TO OUTSTANDING ORDER TO WALLET BALANCE RATIO EXCEEDING ALLOWED LIMIT.` + RESET);
-        await queue.resume()
-      }
-
-    } else if (typeof errorMessage === 'string' && /Asset does not exist/i.test(errorMessage)) {
-      console.log(RED + "ASSET DOES NOT EXIST." + RESET);
-    }
-    // Handle socket hang up error specifically
-    else if (error?.message?.includes('socket hang up')) {
-      throw new Error(`ERROR: SOCKET HANG UP - CONNECTION CLOSED UNEXPECTEDLY`)
-    }
-    // Handle ECONNRESET error specifically
-    else if (error?.message?.includes('ECONNRESET')) {
-      console.log(RED + `ERROR: READ ECONNRESET - CONNECTION RESET BY PEER` + RESET);
-    }
-    await logBidError(taskId, "POST ITEM OFFER ERROR", errorMessage, "error", "opensea");
-    throw new Error(errorMessage)
+    throw error
   }
 }
-
 
 const getItemConsideration = (
   assetContractAddress: string,
@@ -950,7 +835,7 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
 
     return topTwoOffers;
   } catch (error: any) {
-    throw error;
+    throw error
   }
 }
 
@@ -961,7 +846,7 @@ export async function fetchOpenseaOffers(
   collectionSlug: string,
   contractAddress: string,
   identifiers: Record<string, string> | string
-): Promise<OpenseaTopOffers[]> {
+) {
   try {
     if (offerType === 'COLLECTION') {
       const url = `https://nfttools.pro/opensea/api/v2/offers/collection/${collectionSlug}`;
@@ -1088,13 +973,9 @@ export async function fetchOpenseaOffers(
       }
 
       return topOffers;
-    } else {
-      throw new Error("Invalid offer type");
     }
   } catch (error: any) {
-    const message = `Error fetching offers: ${error?.response?.data?.message?.errors?.[0] || error?.message?.errors?.[0] || error?.message || error}`
-    await logBidError(taskId, "FETCH OPENSEA OFFERS ERROR", message, "error", "opensea");
-    return [{ amount: 0, owner: "" }, { amount: 0, owner: "" }];
+    throw error
   }
 }
 
@@ -1133,9 +1014,7 @@ export async function fetchOpenseaListings(taskId: string, collectionSlug: strin
 
     return uniqueTokenIds.slice(0, limit);
   } catch (error: any) {
-    const message = `Error fetching OpenSea listings: ${error?.response?.data?.message || error.message}`
-    await logBidError(taskId, "FETCH OPENSEA LISTINGS ERROR", message, "error", "opensea");
-    throw error;
+    throw error
   }
 }
 
