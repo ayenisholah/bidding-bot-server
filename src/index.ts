@@ -1183,6 +1183,7 @@ async function updateConfig(data: any) {
     // Convert Map back to .env file format
     const newContent = Array.from(newEnv.entries())
       .map(([key, value]) => `${key}=${value}`)
+
       .join('\n');
 
     // Write updated content back to .env file
@@ -1220,8 +1221,33 @@ const BLUR_JOBS = [
 ];
 
 const BLUR_LIMIT = 20;
-const RESET_INTERVAL_MS = 5000; // 10 seconds
+const RESET_INTERVAL_MS = 5000; // 5 seconds
 const blurJobTimestamps: number[] = [];
+const blurQueueTimestamps: number[] = []; // New array to track Blur job queue additions
+
+// Add this new function to throttle adding Blur jobs to the queue
+async function enforceBlurQueueLimit() {
+  const now = Date.now();
+
+  // Remove timestamps older than 5 seconds
+  while (blurQueueTimestamps.length > 0 && blurQueueTimestamps[0] <= now - RESET_INTERVAL_MS) {
+    blurQueueTimestamps.shift();
+  }
+
+  if (blurQueueTimestamps.length >= BLUR_LIMIT) {
+    // Calculate the earliest time a job slot will be available
+    const earliestAvailableTime = blurQueueTimestamps[0] + RESET_INTERVAL_MS;
+    const waitTime = earliestAvailableTime - now;
+
+    if (waitTime > 0) {
+      console.log(`Queue rate limit reached: Delaying Blur job queue for ${waitTime}ms`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+
+    // Recheck the queue after waiting
+    return enforceBlurQueueLimit();
+  }
+}
 
 /**
  * Ensures BLUR_JOBS are processed within the rate limit of 40 jobs per 10 seconds.
@@ -1319,7 +1345,6 @@ async function processJob(job: Job) {
     throw error;
   }
 }
-
 
 interface TaskLock {
   locked: boolean;
@@ -1695,14 +1720,9 @@ async function processUpdatedTask(task: ITask) {
 const MAX_MEMORY_USAGE = 75;
 const DRAIN_THRESHOLD = RATE_LIMIT * 2;
 
-// Add tracking interfac
-
-const BLUR_TRAIT_BID_LIMIT = 40;
-const BLUR_TRAIT_BID_WINDOW = 10000; // 10 seconds
 
 async function processBulkJobs(jobs: Job[], createKey = false) {
   if (!jobs?.length) return;
-
 
   const firstJob = jobs[0];
   const taskId = firstJob.data._id;
@@ -1782,54 +1802,39 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
         tracker.percentComplete = Math.round((totalProcessed / tracker.totalJobs) * 100);
         bulkJobTrackers.set(bulkJobId, tracker);
 
-        const validJobs = await Promise.all(currentChunk.map(async (job) => {
-          if (!job?.name || !job?.data) return null;
+        // Group jobs by type (Blur vs non-Blur)
+        const blurJobs = currentChunk.filter(job => BLUR_JOBS.includes(job.name));
+        const nonBlurJobs = currentChunk.filter(job => !BLUR_JOBS.includes(job.name));
 
-          const taskId = job?.data?._id;
-          if (taskId && !activeTasks.get(taskId)?.running) return null;
+        // Process non-Blur jobs as usual
+        if (nonBlurJobs.length > 0) {
+          const validNonBlurJobs = await Promise.all(nonBlurJobs.map(async (job) => {
+            if (!job?.name || !job?.data) return null;
 
-          const isCancel = job.name.toLowerCase().includes('cancel');
-          if (isCancel) {
+            const taskId = job?.data?._id;
+            if (taskId && !activeTasks.get(taskId)?.running) return null;
+
+            const isCancel = job.name.toLowerCase().includes('cancel');
+            if (isCancel) {
+              return {
+                ...job,
+                jobKey: undefined
+              };
+            }
+
+            const jobKey = createKey ? createJobKey(job) : generateJobKey(job);
             return {
               ...job,
-              jobKey: undefined
+              jobKey
             };
-          }
+          }));
 
-          const jobKey = createKey ? createJobKey(job) : generateJobKey(job);
-          return {
-            ...job,
-            jobKey
-          };
-        }));
-        const filteredJobs = validJobs.filter(Boolean);
-        if (!filteredJobs.length) continue;
-
-        // Filter out jobs for stopped tasks
-        const activeJobs = currentChunk.filter(job => {
-          const taskId = job?.data?._id;
-          if (!taskId) return true; // Keep jobs without taskId
-
-          const task = activeTasks.get(taskId);
-          if (task && !task?.running) {
-            return false;
-          }
-          return true;
-        });
-
-        if (!activeJobs.length) {
-          console.log(YELLOW + `No active jobs in chunk ${chunkIndex + 1}, skipping...` + RESET);
-          continue;
-        }
-
-        if (task && task.running) taskStatus[taskId].status = 'QUEUEING'
-
-        let retries = 3;
-        while (retries > 0) {
-          try {
+          const filteredNonBlurJobs = validNonBlurJobs.filter(Boolean);
+          if (filteredNonBlurJobs.length > 0) {
+            // Add non-Blur jobs to the queue
             await rateLimiter.acquire();
             const addedJobs = await queue.addBulk(
-              filteredJobs.filter((job): job is NonNullable<typeof job> => job !== null).map(job => ({
+              filteredNonBlurJobs.filter((job): job is NonNullable<typeof job> => job !== null).map(job => ({
                 name: job.name,
                 data: job.data,
                 opts: {
@@ -1839,24 +1844,79 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
                   removeOnFail: true,
                   attempts: 0,
                 }
-
               }))
             );
 
             totalAdded += addedJobs.length;
             tracker.completedJobs = totalAdded;
-            break;
-          } catch (error) {
-            retries--;
-            totalFailed++;
-            tracker.failedJobs = totalFailed;
-            if (retries === 0) {
-              throw error;
-            }
-            console.log(YELLOW + `Retrying addBulk for chunk ${chunkIndex + 1}. Attempts remaining: ${retries}` + RESET);
-            await new Promise(resolve => setTimeout(resolve, 2000));
           }
         }
+
+        // Process Blur jobs with throttling
+        if (blurJobs.length > 0) {
+          // Process Blur jobs in smaller sub-chunks of max BLUR_LIMIT
+          const blurSubChunks = chunk(blurJobs, BLUR_LIMIT);
+
+          for (const blurSubChunk of blurSubChunks) {
+            // Apply Blur queue rate limiting
+            await enforceBlurQueueLimit();
+
+            const validBlurJobs = await Promise.all(blurSubChunk.map(async (job) => {
+              if (!job?.name || !job?.data) return null;
+
+              const taskId = job?.data?._id;
+              if (taskId && !activeTasks.get(taskId)?.running) return null;
+
+              const isCancel = job.name.toLowerCase().includes('cancel');
+              if (isCancel) {
+                return {
+                  ...job,
+                  jobKey: undefined
+                };
+              }
+
+              const jobKey = createKey ? createJobKey(job) : generateJobKey(job);
+              return {
+                ...job,
+                jobKey
+              };
+            }));
+
+            const filteredBlurJobs = validBlurJobs.filter(Boolean);
+            if (filteredBlurJobs.length > 0) {
+              // Add Blur jobs to the queue
+              await rateLimiter.acquire();
+              const addedJobs = await queue.addBulk(
+                filteredBlurJobs.filter((job): job is NonNullable<typeof job> => job !== null).map(job => ({
+                  name: job.name,
+                  data: job.data,
+                  opts: {
+                    ...(job.jobKey ? { jobId: job.jobKey } : {}),
+                    ...job?.opts,
+                    removeOnComplete: true,
+                    removeOnFail: true,
+                    attempts: 0,
+                  }
+                }))
+              );
+
+              // Mark timestamp for each added Blur job for rate limiting
+              for (let i = 0; i < addedJobs.length; i++) {
+                blurQueueTimestamps.push(Date.now());
+              }
+
+              totalAdded += addedJobs.length;
+              tracker.completedJobs = totalAdded;
+
+              // Wait a bit before processing the next sub-chunk
+              await new Promise(resolve => setTimeout(resolve, 100));
+            }
+          }
+        }
+
+        tracker.processedJobs = totalProcessed;
+        tracker.percentComplete = Math.round((totalProcessed / tracker.totalJobs) * 100);
+        bulkJobTrackers.set(bulkJobId, tracker);
 
         const delay = Math.max(1000, Math.min(5000, prioritizedCount / RATE_LIMIT));
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1878,7 +1938,6 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
   }
 }
 
-
 // Helper function to wait for queue drain
 async function waitForQueueDrain(): Promise<void> {
   while (true) {
@@ -1898,8 +1957,6 @@ function chunk<T>(array: T[], size: number): T[][] {
     return array.slice(start, end);
   });
 }
-
-
 class RateLimiter {
   private tokens: number;
   private lastRefill: number;
@@ -1929,7 +1986,6 @@ class RateLimiter {
     this.tokens--;
   }
 }
-
 
 function createJobKey(job: Job) {
   let uniqueKey;
