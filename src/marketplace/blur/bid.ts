@@ -504,7 +504,7 @@ export async function fetchBlurCollectionStats(slug: string) {
     const floor_price = Number(listings[0]?.price?.amount)
     return floor_price;
   } catch (error: any) {
-    return 0
+    throw error
   }
 }
 

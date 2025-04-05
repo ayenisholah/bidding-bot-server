@@ -275,6 +275,7 @@ export async function bidOnOpensea(
     if (offerPriceEthFinal > wethBalance) {
       const identifier = opensea_traits ? opensea_traits : asset?.tokenId ? asset?.tokenId : slug;
       throw new Error(`[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEthFinal} WETH is greater than available WETH balance: ${wethBalance} WETH.`);
+  
     }
 
     const wallet = new Wallet(private_key, provider);
@@ -528,7 +529,7 @@ async function submitOfferToOpensea(slug: string, bidCount: string, offerPrice: 
       }
       trackBidRate('opensea', taskId);
       const successMessage = opensea_traits ?
-        `TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()}  TRAIT: ${opensea_traits} ${(Number(offerPrice) / 1e18)} WETH 🎉`
+        `🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()}  TRAIT: ${opensea_traits} ${(Number(offerPrice) / 1e18)} WETH 🎉`
         : `🎉 COLLECTION OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()} ${(Number(offerPrice) / 1e18)} WETH 🎉`
       console.log(BLUE, successMessage, RESET);
     } catch (error: any) {

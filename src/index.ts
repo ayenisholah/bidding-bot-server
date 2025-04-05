@@ -27,9 +27,10 @@ import { execSync } from "child_process";
 import net from 'net'
 import BidLogs from "./models/logs.model";
 import PQueue from "p-queue";
-import { randomUUID } from "crypto";
 import { PrismaClient, Order as PrismaOrder } from '@prisma/client'
-import axios from "axios";
+import { Mutex } from 'async-mutex';
+import Bottleneck from "bottleneck";
+import { error } from "console";
 
 const prisma = new PrismaClient()
 
@@ -37,6 +38,7 @@ export let RATE_LIMIT = process.env.RATE_LIMIT ? parseInt(process.env.RATE_LIMIT
 export let API_KEY = process.env.API_KEY;
 const bidStats: BidCounts = {};
 const currentTokenIds: BottomListings = {};
+const currentTraits: CurrentTraits = {}
 const taskStatus: TaskStatus = {};
 const bestOffers: BidCounts = {};
 const floorPrices: BidCounts = {};
@@ -130,13 +132,54 @@ const WORKER_METRICS = new Map<string, {
 //   }
 // ));
 
+
+class RateLimiter {
+  private tokens: number;
+  private lastRefill: number;
+  private readonly rate: number;
+
+  constructor(rate: number) {
+    this.tokens = rate;
+    this.lastRefill = Date.now();
+    this.rate = rate;
+  }
+
+  async acquire(): Promise<void> {
+    while (this.tokens <= 0) {
+      const now = Date.now();
+      const timePassed = now - this.lastRefill;
+      const refillAmount = Math.floor(timePassed * (this.rate / 1000));
+
+      if (refillAmount > 0) {
+        this.tokens = Math.min(this.rate, this.tokens + refillAmount);
+        this.lastRefill = now;
+      }
+
+      if (this.tokens <= 0) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+    this.tokens--;
+  }
+}
+
+const blurLimiter = new Bottleneck({
+  minTime: 250, maxConcurrent: 4,
+})
+
 const workers = new Worker(
   QUEUE_NAME,
   async (job) => {
-
     try {
-      await processJob(job);
-      return;
+      if ([BLUR_COLLECTION_BID, BLUR_TRAIT_BID, BLUR_COLLECTION_BID_COUNTERBID, BLUR_TRAIT_BID_COUNTERBID].includes(job.name)) {
+        // Add 1 second delay for Blur jobs to prevent rate limiting
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        processBlurJob(job);
+
+      } else {
+        await processJob(job);
+      }
+      return
     } catch (error) {
       if (job.token) {
         await job.moveToFailed(new Error("Job failed"), job.token);
@@ -151,7 +194,6 @@ const workers = new Worker(
     lockDuration: 30000,
     stalledInterval: 15000,
     maxStalledCount: 1,
-    // name: `worker-${index + 1}`
   }
 )
 
@@ -205,8 +247,6 @@ export const OPENSEA_COLLECTION_BID = "OPENSEA_COLLECTION_BID"
 export const OPENSEA_TOKEN_BID = "OPENSEA_TOKEN_BID"
 export const OPENSEA_TRAIT_BID = "OPENSEA_TRAIT_BID"
 export const BLUR_SCHEDULE = "BLUR_SCHEDULE"
-export const BLUR_COLLECTION_BID = "BLUR_COLLECTION_BID"
-export const BLUR_TRAIT_BID = "BLUR_TRAIT_BID"
 export const MAGICEDEN_SCHEDULE = "MAGICEDEN_SCHEDULE"
 export const MAGICEDEN_COLLECTION_BID = "MAGICEDEN_COLLECTION_BID"
 export const MAGICEDEN_TOKEN_BID = "MAGICEDEN_TOKEN_BID"
@@ -214,6 +254,8 @@ export const MAGICEDEN_TRAIT_BID = "MAGICEDEN_TRAIT_BID"
 export const OPENSEA_TOKEN_BID_COUNTERBID = "OPENSEA_TOKEN_BID_COUNTERBID"
 export const OPENSEA_TRAIT_BID_COUNTERBID = "OPENSEA_TRAIT_BID_COUNTERBID"
 export const OPENSEA_COLLECTION_BID_COUNTERBID = "OPENSEA_COLLECTION_BID_COUNTERBID"
+export const BLUR_COLLECTION_BID = "BLUR_COLLECTION_BID"
+export const BLUR_TRAIT_BID = "BLUR_TRAIT_BID"
 export const BLUR_COLLECTION_BID_COUNTERBID = "BLUR_COLLECTION_BID_COUNTERBID"
 export const BLUR_TRAIT_BID_COUNTERBID = "BLUR_TRAIT_BID_COUNTERBID"
 export const MAGICEDEN_COLLECTION_BID_COUNTERBID = "MAGICEDEN_COLLECTION_BID_COUNTERBID"
@@ -289,7 +331,7 @@ async function monitorHealth() {
       }, 5000);
     }
 
-    if (counts.active > RATE_LIMIT * 2) {
+    if (counts.active > 1000) {
       await queue.pause();
       setTimeout(async () => {
         await queue.resume();
@@ -571,11 +613,10 @@ const completedTasks: CompletedTasks = {};
 
 queueEvents.on('completed', async ({ jobId }) => {
   if (jobId.includes('CANCEL_OPENSEA_BID') || jobId.includes('CANCEL_MAGICEDEN_BID') || jobId.includes('CANCEL_BLUR_BID')) {
-
     const taskId = jobId.split('-')[1];
     if (!taskStatus[taskId]) {
       taskStatus[taskId] = {
-        status: 'STOPPED',
+        status: 'CANCELLING',
         cancellationPercentage: 0,
         runningPercentage: 0,
         waitingTime: 0,
@@ -583,7 +624,8 @@ queueEvents.on('completed', async ({ jobId }) => {
         processingPercentage: 0
       }
     }
-    taskStatus[taskId].status = 'CANCELING'
+    taskStatus[taskId].status = 'CANCELLING'
+
     const task = activeTasks.get(taskId);
     if (!task) return;
 
@@ -596,9 +638,6 @@ queueEvents.on('completed', async ({ jobId }) => {
     parentJob.completedJobs++;
 
     // Calculate marketplace-specific cancellation percentage
-    const marketplaceCancellationPercentage = parentJob.totalJobs > 0 ?
-
-      ((parentJob.completedJobs + parentJob.failedJobs) / parentJob.totalJobs) * 100 : 0;
 
     // If task is not running, calculate combined cancellation percentage with weighting
     if (!task?.running) {
@@ -623,9 +662,9 @@ queueEvents.on('completed', async ({ jobId }) => {
       const blurCompletedJobs = blurParentJob?.completedJobs || 0;
       const blurFailedJobs = blurParentJob?.failedJobs || 0;
 
-      const magicEdenCompletedJobs = (magicEdenParentJob?.completedJobs || 0) * magicEdenWeight;
       const magicEdenFailedJobs = (magicEdenParentJob?.failedJobs || 0) * magicEdenWeight;
       const magicEdenTotalJobs = (magicEdenParentJob?.totalJobs || 0) * magicEdenWeight;
+      const magicEdenCompletedJobs = (magicEdenParentJob?.totalJobs || 0) < 1 ? (magicEdenParentJob?.totalJobs || 0) * magicEdenWeight : (magicEdenParentJob?.completedJobs || 0) * magicEdenWeight;
 
       const totalJobs = openSeaTotalJobs + magicEdenTotalJobs + blurTotalJobs;
       const completedJobs = openSeaCompletedJobs + magicEdenCompletedJobs + blurCompletedJobs;
@@ -636,12 +675,13 @@ queueEvents.on('completed', async ({ jobId }) => {
 
       taskStatus[taskId].cancellationPercentage = combinedCancellationPercentage;
 
-      if (totalJobs < completedJobs + failedJobs) {
+      if (totalJobs < completedJobs + failedJobs || combinedCancellationPercentage > 99) {
         const orders = await prisma.order.findMany({
           where: {
             taskId: taskId,
           }
         });
+
         if (orders.length > 0) {
           const wallet = await Wallet.findOne({ address: task?.wallet.address });
           const private_key = wallet?.privateKey as string;
@@ -649,12 +689,29 @@ queueEvents.on('completed', async ({ jobId }) => {
           return
         }
         taskStatus[taskId].status = 'STOPPED'
+        delete taskStatus[taskId].nextLoopTime
+        taskStatus[taskId].waitingTime = 0
+      }
+    } else {
+      let marketplaceCancellationPercentage;
+      if (marketplace.toLowerCase() === 'magiceden') {
+        if (parentJob.totalJobs < 1) {
+          marketplaceCancellationPercentage = 100;
+        } else {
+          const weightedCompletedJobs = parentJob.completedJobs * 500;
+          const weightedTotalJobs = parentJob.totalJobs * 500;
+          const weightedFailedJobs = parentJob.failedJobs * 500
+          marketplaceCancellationPercentage = weightedTotalJobs > 0 ?
+            ((weightedCompletedJobs + weightedFailedJobs) / weightedTotalJobs) * 100 : 0;
+        }
+      } else {
+        marketplaceCancellationPercentage = parentJob.totalJobs > 0 ?
+          ((parentJob.completedJobs + parentJob.failedJobs) / parentJob.totalJobs) * 100 : 0;
       }
 
-    } else {
       // If task is running, just update with the marketplace-specific percentage
       taskStatus[taskId].cancellationPercentage = marketplaceCancellationPercentage;
-      if (parentJob.totalJobs < parentJob.completedJobs + parentJob.failedJobs) {
+      if (parentJob.totalJobs < parentJob.completedJobs + parentJob.failedJobs || marketplaceCancellationPercentage > 99) {
         const orders = await prisma.order.findMany({
           where: {
             taskId: taskId,
@@ -668,7 +725,10 @@ queueEvents.on('completed', async ({ jobId }) => {
           await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
           return
         }
-        taskStatus[taskId].status = 'STOPPED'
+        taskStatus[taskId].cancellationPercentage = 100
+        if (taskStatus[taskId].nextLoopTime && taskStatus[taskId].waitingTime > 0) {
+          taskStatus[taskId].status = 'SCHEDULED'
+        }
       }
     }
   }
@@ -732,7 +792,7 @@ queueEvents.on('completed', async ({ jobId }) => {
     completedTasks[taskId][marketplace as 'opensea' | 'magiceden' | 'blur'] = true
     console.log(GREEN + `Task ${taskId} completed for ${marketplace} ` + RESET);
     const task = activeTasks.get(taskId);
-    const availableMarketplaces = task?.selectedMarketplaces.map(m => m.toLowerCase())
+    const availableMarketplaces = enabledAndSelectedMarketplaces.map(m => m.toLowerCase())
 
     // Check if all available marketplaces have completed
     if (availableMarketplaces && availableMarketplaces.length > 0) {
@@ -761,18 +821,18 @@ queueEvents.on('completed', async ({ jobId }) => {
 
           // Create a countdown timer that updates waitingTime every second
           const countdownTimer = setInterval(() => {
-            if (taskStatus[taskId] && taskStatus[taskId].status === 'SCHEDULED') {
-              const remainingSeconds = Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000));
-              taskStatus[taskId].waitingTime = remainingSeconds;
-              taskStatus[taskId].status = 'SCHEDULED';
+            // if (taskStatus[taskId] && taskStatus[taskId].status === 'SCHEDULED') {
+            const remainingSeconds = taskStatus[taskId].nextLoopTime ? Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000)) : 0
+            taskStatus[taskId].waitingTime = remainingSeconds;
+            // taskStatus[taskId].status = 'SCHEDULED';
 
-              // Clear the interval when countdown reaches 0 or task is no longer waiting
-              if (remainingSeconds <= 0) {
-                clearInterval(countdownTimer);
-              }
-            } else {
+            // Clear the interval when countdown reaches 0 or task is no longer waiting
+            if (remainingSeconds <= 0) {
               clearInterval(countdownTimer);
             }
+            // } else {
+            //   clearInterval(countdownTimer);
+            // }
           }, 1000);
 
           const timeoutId = setTimeout(async () => {
@@ -800,7 +860,7 @@ queueEvents.on('failed', async ({ jobId }) => {
     const taskId = jobId.split('-')[1];
     if (!taskStatus[taskId]) {
       taskStatus[taskId] = {
-        status: 'CANCELING',
+        status: 'CANCELLING',
         cancellationPercentage: 0,
         runningPercentage: 0,
         waitingTime: 0,
@@ -808,10 +868,9 @@ queueEvents.on('failed', async ({ jobId }) => {
         processingPercentage: 0
       }
     }
-    taskStatus[taskId].status = 'CANCELING'
+    taskStatus[taskId].status = 'CANCELLING'
     const task = activeTasks.get(taskId);
     if (!task) return;
-
     const marketplace = jobId.includes('CANCEL_OPENSEA_BID') ? 'OPENSEA' : jobId.includes('CANCEL_MAGICEDEN_BID') ? 'MAGICEDEN' : 'BLUR';
     const parentJobId = `${taskId}-CANCEL_${marketplace}_BID`;
     const parentJob = parentJobs.get(parentJobId);
@@ -860,7 +919,7 @@ queueEvents.on('failed', async ({ jobId }) => {
         ((completedJobs + failedJobs) / totalJobs) * 100 : 0;
 
       taskStatus[taskId].cancellationPercentage = combinedCancellationPercentage;
-      if (totalJobs < completedJobs + failedJobs) {
+      if (totalJobs < completedJobs + failedJobs || combinedCancellationPercentage > 99) {
         const orders = await prisma.order.findMany({
           where: {
             taskId: taskId,
@@ -871,15 +930,16 @@ queueEvents.on('failed', async ({ jobId }) => {
           const wallet = await Wallet.findOne({ address: task?.wallet.address });
           const private_key = wallet?.privateKey as string;
           await cancelAllRelatedBids(task, private_key);
-          return
         }
         taskStatus[taskId].status = 'STOPPED'
+        delete taskStatus[taskId].nextLoopTime
+        taskStatus[taskId].waitingTime = 0
       }
 
     } else {
       // If task is running, just update with the marketplace-specific percentage
       taskStatus[taskId].cancellationPercentage = marketplaceCancellationPercentage;
-      if (parentJob.totalJobs < parentJob.completedJobs + parentJob.failedJobs) {
+      if (parentJob.totalJobs < parentJob.completedJobs + parentJob.failedJobs || marketplaceCancellationPercentage > 99) {
         const orders = await prisma.order.findMany({
           where: {
             taskId: taskId,
@@ -891,9 +951,11 @@ queueEvents.on('failed', async ({ jobId }) => {
           const wallet = await Wallet.findOne({ address: task?.wallet.address });
           const private_key = wallet?.privateKey as string;
           await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
-          return
         }
-        taskStatus[taskId].status = 'STOPPED'
+        taskStatus[taskId].cancellationPercentage = 100
+        if (taskStatus[taskId].nextLoopTime && taskStatus[taskId].waitingTime > 0) {
+          taskStatus[taskId].status = 'SCHEDULED'
+        }
       }
     }
   }
@@ -957,7 +1019,7 @@ queueEvents.on('failed', async ({ jobId }) => {
     completedTasks[taskId][marketplace as 'opensea' | 'magiceden' | 'blur'] = true
     console.log(GREEN + `Task ${taskId} completed for ${marketplace} ` + RESET);
     const task = activeTasks.get(taskId);
-    const availableMarketplaces = task?.selectedMarketplaces.map(m => m.toLowerCase())
+    const availableMarketplaces = enabledAndSelectedMarketplaces.map(m => m.toLowerCase())
 
     // Check if all available marketplaces have completed
     if (availableMarketplaces && availableMarketplaces.length > 0) {
@@ -986,18 +1048,18 @@ queueEvents.on('failed', async ({ jobId }) => {
 
           // Create a countdown timer that updates waitingTime every second
           const countdownTimer = setInterval(() => {
-            if (taskStatus[taskId] && taskStatus[taskId].status === 'SCHEDULED') {
-              const remainingSeconds = Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000));
-              taskStatus[taskId].waitingTime = remainingSeconds;
-              taskStatus[taskId].status = 'SCHEDULED';
+            // if (taskStatus[taskId] && taskStatus[taskId].status === 'SCHEDULED') {
+            const remainingSeconds = taskStatus[taskId].nextLoopTime ? Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000)) : 0
+            taskStatus[taskId].waitingTime = remainingSeconds;
+            // taskStatus[taskId].status = 'SCHEDULED';
 
-              // Clear the interval when countdown reaches 0 or task is no longer waiting
-              if (remainingSeconds <= 0) {
-                clearInterval(countdownTimer);
-              }
-            } else {
+            // Clear the interval when countdown reaches 0 or task is no longer waiting
+            if (remainingSeconds <= 0) {
               clearInterval(countdownTimer);
             }
+            // } else {
+            //   clearInterval(countdownTimer);
+            // }
           }, 1000);
 
           const timeoutId = setTimeout(async () => {
@@ -1088,7 +1150,7 @@ wss.on('connection', async (ws) => {
           await processImportedTasks(message.data);
           break;
         case 'updated-task':
-          await processUpdatedTask(message.data);
+          await updateTaskData(message.data);
           break;
         case 'toggle-status':
           await updateStatus(message.data);
@@ -1099,6 +1161,9 @@ wss.on('connection', async (ws) => {
         case 'update-multiple-tasks-status':
           await updateMultipleTasksStatus(message.data);
           break;
+        case 'globalMarketplaces':
+          processGlobalMarketplaces(message.data)
+          break
         case 'update-marketplace':
           await updateMarketplace(message.data)
           break
@@ -1201,6 +1266,8 @@ async function updateConfig(data: any) {
 
     console.log(GREEN + 'Server components restarted successfully' + RESET);
 
+    workers.concurrency = RATE_LIMIT * 1.5
+
     // Return updated config values
     return {
       apiKey: process.env.API_KEY,
@@ -1213,93 +1280,30 @@ async function updateConfig(data: any) {
   }
 }
 
-const BLUR_JOBS = [
-  'BLUR_COLLECTION_BID',
-  'BLUR_COLLECTION_BID_COUNTERBID',
-  'BLUR_TRAIT_BID_COUNTERBID',
-  'BLUR_TRAIT_BID'
-];
 
-const BLUR_LIMIT = 20;
-const RESET_INTERVAL_MS = 5000; // 5 seconds
-const blurJobTimestamps: number[] = [];
-const blurQueueTimestamps: number[] = []; // New array to track Blur job queue additions
-
-// Add this new function to throttle adding Blur jobs to the queue
-async function enforceBlurQueueLimit() {
-  const now = Date.now();
-
-  // Remove timestamps older than 5 seconds
-  while (blurQueueTimestamps.length > 0 && blurQueueTimestamps[0] <= now - RESET_INTERVAL_MS) {
-    blurQueueTimestamps.shift();
-  }
-
-  if (blurQueueTimestamps.length >= BLUR_LIMIT) {
-    // Calculate the earliest time a job slot will be available
-    const earliestAvailableTime = blurQueueTimestamps[0] + RESET_INTERVAL_MS;
-    const waitTime = earliestAvailableTime - now;
-
-    if (waitTime > 0) {
-      console.log(`Queue rate limit reached: Delaying Blur job queue for ${waitTime}ms`);
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-    }
-
-    // Recheck the queue after waiting
-    return enforceBlurQueueLimit();
+async function processBlurJob(job: Job) {
+  switch (job.name) {
+    case BLUR_COLLECTION_BID:
+      return await processBlurCollectionBid(job.data);
+    case BLUR_TRAIT_BID:
+      return await processBlurTraitBid(job.data);
+    case BLUR_COLLECTION_BID_COUNTERBID:
+      return await blurCollectionCounterBid(job.data);
+    case BLUR_TRAIT_BID_COUNTERBID:
+      return await blurTraitCounterBid(job.data);
+    default:
+      throw new Error(`Unknown Blur job type: ${job.name}`);
   }
 }
 
-/**
- * Ensures BLUR_JOBS are processed within the rate limit of 40 jobs per 10 seconds.
- */
-async function enforceBlurRateLimit() {
-  const now = Date.now();
-
-  // Remove timestamps older than 10 seconds
-  while (blurJobTimestamps.length > 0 && blurJobTimestamps[0] <= now - RESET_INTERVAL_MS) {
-    blurJobTimestamps.shift();
-  }
-
-  if (blurJobTimestamps.length >= BLUR_LIMIT) {
-    // Calculate the earliest time a job slot will be available
-    const earliestAvailableTime = blurJobTimestamps[0] + RESET_INTERVAL_MS;
-    const waitTime = earliestAvailableTime - now;
-
-    if (waitTime > 0) {
-      console.log(`Rate limit reached: Delaying Blur job for ${waitTime}ms`);
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-    }
-
-    // Recheck the queue after waiting
-    return enforceBlurRateLimit();
-  }
-
-  // Register this job's timestamp
-  blurJobTimestamps.push(Date.now());
-}
-
-/**
- * Main Job Processor
- */
 async function processJob(job: Job) {
   const startTime = Date.now();
   try {
-    if (BLUR_JOBS.includes(job.name)) {
-      await enforceBlurRateLimit();
-    }
-
+    // Original processing logic
     const result = await (async () => {
       switch (job.name) {
         case 'OPENSEA_COLLECTION_BID':
           return await processOpenseaCollectionBid(job.data);
-        case 'BLUR_COLLECTION_BID':
-          return await processBlurCollectionBid(job.data);
-        case 'BLUR_COLLECTION_BID_COUNTERBID':
-          return await blurCollectionCounterBid(job.data);
-        case 'BLUR_TRAIT_BID_COUNTERBID':
-          return await blurTraitCounterBid(job.data);
-        case 'BLUR_TRAIT_BID':
-          return await processBlurTraitBid(job.data);
         case 'MAGICEDEN_COLLECTION_BID':
           return await processMagicedenCollectionBid(job.data);
         case 'OPENSEA_COLLECTION_BID_COUNTERBID':
@@ -1435,283 +1439,1920 @@ async function processNewTask(task: ITask) {
 }
 
 function processGlobalMarketplaces(data: string[]) {
-  runScheduledLoop().catch(err => {
-    console.error('Failed to restart scheduled loop:', err);
-  });
+  // runScheduledLoop().catch(err => {
+  //   console.error('Failed to restart scheduled loop:', err);
+  // });
   enabledMarketplaces = data
 }
 
-async function processUpdatedTask(task: ITask) {
+// async function processUpdatedTask(task: ITask) {
+//   try {
+//     const existingTaskIndex = currentTasks.findIndex(t => t._id === task._id);
+//     const existingTask = getActiveTaskWithIdByIndex(existingTaskIndex)?.task
+//     skipStats[task._id] = {
+//       opensea: 0,
+//       magiceden: 0,
+//       blur: 0
+//     }
+
+//     errorStats[task._id] = {
+//       opensea: 0,
+//       magiceden: 0,
+//       blur: 0
+//     }
+
+//     for (const marketplace of ['opensea', 'blur', 'opensea']) {
+//       const bulkJobId = `${task._id}-${marketplace}`.toLowerCase();
+//       const parentJob = parentJobs.get(bulkJobId)
+//       if (parentJob) {
+//         parentJob.totalJobs = 0
+//         parentJob.completedJobs = 0
+//         parentJob.failedJobs = 0
+//       }
+//     }
+
+//     const taskDoc = await Task.findById(task._id).select('balance').exec();
+//     const balance = taskDoc?.balance;
+//     balances[task._id] = balance
+//     warningBids[task._id] = {
+//       opensea: false,
+//       magiceden: false,
+//       blur: false
+//     }
+
+//     if (existingTaskIndex !== -1) {
+
+//       const wallet = await Wallet.findOne({ address: task.wallet.address })
+//       const WALLET_PRIVATE_KEY: string = wallet?.privateKey as string
+
+//       currentTasks.splice(existingTaskIndex, 1, task);
+//       activeTasks.set(task._id, task);
+//       console.log(YELLOW + `Updated existing task: ${task.contract.slug} `.toUpperCase() + RESET);
+
+//       const jobs = await queue.getJobs(['prioritized', 'waiting', 'paused'])
+
+//       const filteredTasks = Object.fromEntries(
+//         Object.entries(task?.selectedTraits || {}).map(([category, traits]) => [
+//           category,
+//           traits.filter(trait => trait.availableInMarketplaces
+//             .map((item) => item.toLowerCase())
+//             .includes("blur"))
+//         ]).filter(([_, traits]) => traits.length > 0)
+//       );
+
+//       const oldTraits = Object.fromEntries(
+//         Object.entries(existingTask?.selectedTraits || {}).map(([category, traits]) => [
+//           category,
+//           traits.filter(trait => trait.availableInMarketplaces
+//             .map((item) => item.toLowerCase())
+//             .includes("blur"))
+//         ]).filter(([_, traits]) => traits.length > 0)
+//       );
+
+//       const selectedTraits = transformNewTask(filteredTasks)
+//       const existingTaskTraits = transformNewTask(oldTraits)
+
+
+//       const expiry = getExpiry(task.bidDuration)
+//       let tokenIds: number[] = []
+
+//       const traits = transformOpenseaTraits(selectedTraits)
+//       const staleTraits = transformOpenseaTraits(existingTaskTraits)
+
+//       // Find traits that are in staleTraits but not in traits
+//       const removedTraits = staleTraits.filter(staleTrait =>
+//         !traits.some(trait =>
+//           trait.type === staleTrait.type && trait.value === staleTrait.value
+//         )
+//       );
+
+//       const autoIds = task.tokenIds
+//         .filter(id => id.toString().toLowerCase().startsWith('bot'))
+//         .map(id => {
+//           const matches = id.toString().match(/\d+/);
+//           return matches ? parseInt(matches[0]) : null;
+//         })
+//         .filter(id => id !== null);
+
+//       const amount = autoIds[0]
+//       const taskTokenIds = task.tokenIds
+//       const newTask = { ...task, traits: {}, wallet: { address: task.wallet.address, privateKey: WALLET_PRIVATE_KEY } } as ITask
+
+//       if (removedTraits.length > 0) {
+//         const traits = removedTraits.map((trait) => `${trait.type}:${trait.value}`)
+
+//         const allOrders = await prisma.order.findMany({
+//           where: {
+//             slug: task.contract.slug,
+//             identifier: { in: traits },
+//             taskId: task._id
+//           }
+//         });
+
+//         const blurOrders = allOrders.filter(order => order.marketplace.toLowerCase() === BLUR.toLowerCase());
+//         const openseaOrders = allOrders.filter(order => order.marketplace.toLowerCase() === OPENSEA.toLowerCase());
+//         const magicedenOrders = allOrders.filter(order => order.marketplace.toLowerCase() === MAGICEDEN.toLowerCase());
+
+//         if (blurOrders.length > 0) {
+//           const cancelData = blurOrders.map((order) => {
+//             const payload = JSON.parse(order.orderHash);
+//             return {
+//               name: CANCEL_BLUR_BID,
+//               data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
+//             };
+//           });
+//           await queue.addBulk(cancelData);
+//         }
+
+//         if (openseaOrders.length > 0) {
+//           const cancelData = openseaOrders.map((order) => {
+//             return {
+//               name: CANCEL_OPENSEA_BID,
+//               data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id }
+//             };
+//           });
+//           await queue.addBulk(cancelData);
+//         }
+
+//         if (magicedenOrders.length > 0) {
+//           const extractedOrderIds = await extractMagicedenOrderHash(magicedenOrders);
+//           const orderKeys = magicedenOrders.map((order: PrismaOrder) => order.id);
+//           await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+//         }
+//       }
+
+//       const openseaExistingTokens = currentTokenIds[task._id].opensea
+//       const magicedenExistingTokens = currentTokenIds[task._id].magiceden
+
+//       if (task.selectedMarketplaces.map(m => m.toLowerCase()).includes("blur")) {
+//         const blurJobIds = getJobIds(BLUR.toLowerCase(), task)
+//         jobs.forEach(async (job: Job) => {
+//           if (!job?.id) return
+//           if (blurJobIds.includes(job.id)) {
+//             await job.remove()
+//           }
+//         })
+
+//         const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0
+//         if (traitBid) {
+//           const traits = transformBlurTraits(selectedTraits)
+//           const traitJobs = traits.map((trait) => ({
+//             name: BLUR_TRAIT_BID,
+//             data: {
+//               _id: task._id,
+//               address: task.wallet.address,
+//               privateKey: WALLET_PRIVATE_KEY,
+//               contractAddress: task.contract.contractAddress,
+//               slug: task.contract.slug,
+//               trait: JSON.stringify(trait),
+//               expiry,
+//               outbidOptions: task.outbidOptions,
+//               task: newTask
+//             },
+//             opts: { priority: TRAIT_BID_PRIORITY.BLUR } as JobsOptions
+//           })) as Job[]
+
+//           await processBulkJobs(traitJobs, true);
+
+//         } else {
+//           const orders = await prisma.order.findMany({
+//             where: {
+//               slug: task.contract.slug,
+//               taskId: task._id,
+//               marketplace: BLUR.toLowerCase(),
+//               identifier: "collection"
+//             }
+//           })
+
+//           if (orders.length > 0) {
+//             const cancelData = orders.map((order) => {
+//               const payload = JSON.parse(order.orderHash)
+//               return {
+//                 name: CANCEL_BLUR_BID,
+//                 data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
+//               }
+//             })
+//             await queue.addBulk(cancelData);
+//           }
+//           const jobId = `${task._id}-blur-${task.contract.slug}-collection`
+//           const parentJobId = `${task._id}-blur`.toLowerCase()
+//           parentJobs.set(parentJobId, {
+//             parentId: parentJobId,
+//             totalJobs: 1,
+//             completedJobs: 0,
+//             failedJobs: 0,
+//             startTime: Date.now(),
+//             taskId: task._id,
+//             jobName: BLUR_COLLECTION_BID
+//           })
+
+//           await queue.add(
+//             BLUR_COLLECTION_BID,
+//             { task: newTask },
+//             { priority: COLLECTION_BID_PRIORITY.BLUR, jobId } as JobsOptions
+//           );
+
+//           const currentTask = activeTasks.get(task._id);
+//           if (currentTask && currentTask.running) taskStatus[task._id].status = 'QUEUED'
+//         }
+//       }
+
+//       if (task.selectedMarketplaces.map(m => m.toLowerCase()).includes("opensea")) {
+//         const openseaJobIds = getJobIds(OPENSEA.toLowerCase(), task)
+//         jobs.forEach(async (job: Job) => {
+//           if (!job?.id) return
+//           if (openseaJobIds.includes(job.id)) {
+//             await job.remove()
+//           }
+//         })
+
+//         const bottomListings = autoIds ? await fetchOpenseaListings(task._id, task.contract.slug, amount) ?? [] : []
+
+
+//         if (task.bidType === "token" && selectedTraits && Object.keys(selectedTraits).length > 0) {
+//           const attributes = transformSelectedTraitsToAttributes(selectedTraits)
+//           const expandedAttributes = expandAttributes(attributes)
+//           let tokens: number[] = [...bottomListings, ...taskTokenIds]
+
+//           await pQueue.addAll(
+//             expandedAttributes.map((attribute) => async () => {
+//               const variable: CollectionItemsQueryVariables = {
+//                 collectionSlug: task.contract.slug,
+//                 filter: {
+//                   attributes: [attribute],
+//                 },
+//                 limit: 100,
+//                 sort: {
+//                   by: 'PRICE',
+//                   direction: 'ASC',
+//                 },
+//               };
+
+//               const items = await fetchOpenSeaCollectionItems(variable);
+//               tokens.push(...items);
+//             })
+//           )
+
+//           tokens = [...bottomListings, ...taskTokenIds, ...tokens];
+//           tokenIds = [...new Set(tokens)];
+//         } else if (task.bidType === "token" && Object.keys(selectedTraits).length === 0) {
+//           // Directly combine and deduplicate in one step
+//           tokenIds = [...new Set([...bottomListings, ...taskTokenIds])];
+//           const difference = amount !== undefined ? Math.max(0, amount - tokenIds.length) : 0
+//           skipStats[task._id]['opensea'] += Number(difference)
+//         }
+
+//         const openseaStaleTokens = openseaExistingTokens.filter(id => !tokenIds.includes(id))
+//         const tokensToRemove = openseaStaleTokens.map((token) => token.toString())
+
+//         const openseaOrders = await prisma.order.findMany({
+//           where: {
+//             slug: task.contract.slug,
+//             identifier: { in: tokensToRemove },
+//             taskId: task._id,
+//             marketplace: "opensea"
+//           }
+//         });
+
+//         if (openseaOrders.length > 0) {
+//           const cancelData = openseaOrders.map((order) => ({
+//             name: CANCEL_OPENSEA_BID,
+//             data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id }
+//           }));
+//           await queue.addBulk(cancelData);
+//         }
+
+//         const tokenBid = task.bidType === "token" && tokenIds.length > 0
+//         const traitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
+
+//         const collectionDetails = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
+//         const creatorFees: IFee = collectionDetails.creator_fees.null !== undefined
+//           ? { null: collectionDetails.creator_fees.null }
+//           : Object.fromEntries(Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)]));
+
+//         if (traitBid) {
+//           const traitJobs = traits.map((trait) => ({
+//             name: OPENSEA_TRAIT_BID,
+//             data: {
+//               _id: task._id,
+//               address: task.wallet.address,
+//               privateKey: WALLET_PRIVATE_KEY,
+//               slug: task.contract.slug,
+//               contractAddress: task.contract.contractAddress,
+//               creatorFees,
+//               enforceCreatorFee: collectionDetails.enforceCreatorFee,
+//               trait: JSON.stringify(trait),
+//               outbidOptions: task.outbidOptions,
+//               task: newTask
+//             },
+//             opts: { priority: TRAIT_BID_PRIORITY.OPENSEA } as JobsOptions
+//           })) as Job[]
+
+//           await processBulkJobs(traitJobs, true);
+//         } else if (tokenBid) {
+//           const jobs = tokenIds
+//             .filter(token => !isNaN(Number(token)))
+//             .map((token) => ({
+//               name: OPENSEA_TOKEN_BID,
+//               data: {
+//                 _id: task._id,
+//                 address: task.wallet.address,
+//                 privateKey: WALLET_PRIVATE_KEY,
+//                 slug: task.contract.slug,
+//                 creatorFees,
+//                 enforceCreatorFee: collectionDetails.enforceCreatorFee,
+//                 asset: { contractAddress: task.contract.contractAddress, tokenId: token },
+//                 outbidOptions: task.outbidOptions,
+//                 task: newTask
+//               },
+//               opts: { priority: TOKEN_BID_PRIORITY.OPENSEA } as JobsOptions
+//             })) as Job[]
+
+//           await processBulkJobs(jobs, true);
+//         } else {
+//           const orders = await prisma.order.findMany({
+//             where: {
+//               slug: task.contract.slug,
+//               identifier: 'collection',
+//               taskId: task._id,
+//               marketplace: OPENSEA.toLowerCase()
+//             }
+//           })
+//           if (orders.length > 0) {
+//             const cancelData = orders.map((order) => {
+//               return {
+//                 name: CANCEL_OPENSEA_BID,
+//                 data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id }
+//               }
+//             })
+//             await queue.addBulk(cancelData)
+//           }
+//         }
+//         const jobId = `${task._id}-opensea-${task.contract.slug}-collection`
+//         const parentJobId = `${task._id}-opensea`.toLowerCase()
+//         parentJobs.set(parentJobId, {
+//           parentId: parentJobId,
+//           totalJobs: 1,
+//           completedJobs: 0,
+//           failedJobs: 0,
+//           startTime: Date.now(),
+//           taskId: task._id,
+//           jobName: OPENSEA_COLLECTION_BID
+//         })
+
+//         await queue.add(
+//           OPENSEA_COLLECTION_BID,
+//           { task: newTask, collectionDetails },
+//           { priority: COLLECTION_BID_PRIORITY.OPENSEA, jobId } as JobsOptions
+//         );
+
+//         const currentTask = activeTasks.get(task._id);
+//         if (currentTask && currentTask.running) taskStatus[task._id].status = 'QUEUED'
+
+//       }
+
+//       if (task.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) {
+//         const magicedenJobIds = getJobIds(MAGICEDEN.toLowerCase(), task)
+
+//         jobs.forEach(async (job: Job) => {
+//           if (!job?.id) return
+//           if (magicedenJobIds.includes(job.id)) {
+//             await job.remove()
+//           }
+//         })
+
+//         const bottomListings = amount ? await fetchMagicEdenTokens(task._id, task.contract.contractAddress, amount) ?? [] : []
+
+//         if (task.bidType === "token" && selectedTraits && Object.keys(selectedTraits).length > 0) {
+//           const attributes = transformSelectedTraitsToAttributes(selectedTraits)
+//           const expandedAttributes = expandAttributes(attributes)
+//           let tokens: number[] = [...bottomListings, ...taskTokenIds]
+
+//           await pQueue.addAll(
+//             expandedAttributes.map((attribute) => async () => {
+//               const variable: CollectionItemsQueryVariables = {
+//                 collectionSlug: task.contract.slug,
+//                 filter: {
+//                   attributes: [attribute],
+//                 },
+//                 limit: 100,
+//                 sort: {
+//                   by: 'PRICE',
+//                   direction: 'ASC',
+//                 },
+//               };
+
+//               const items = await fetchOpenSeaCollectionItems(variable);
+//               tokens.push(...items);
+//             })
+//           )
+
+//           tokens = [...bottomListings, ...taskTokenIds, ...tokens];
+//           tokenIds = [...new Set(tokens)];
+//         } else if (task.bidType === "token" && Object.keys(selectedTraits).length === 0) {
+//           // Directly combine and deduplicate in one step
+//           tokenIds = [...new Set([...bottomListings, ...taskTokenIds])];
+//           const difference = amount !== undefined ? Math.max(0, amount - tokenIds.length) : 0
+//           skipStats[task._id]['magiceden'] += Number(difference)
+//         }
+//         const magicedenStaleTokens = magicedenExistingTokens.filter(id => !tokenIds.includes(id)).map((token) => token.toString())
+
+//         const magicedenOrders = await prisma.order.findMany({
+//           where: {
+//             slug: task.contract.slug,
+//             identifier: { in: magicedenStaleTokens },
+//             taskId: task._id,
+//             marketplace: "magiceden"
+//           }
+//         });
+
+//         if (magicedenOrders.length > 0) {
+//           const extractedOrderIds = await extractMagicedenOrderHash(magicedenOrders);
+//           const orderKeys = magicedenOrders.map((order: PrismaOrder) => order.id);
+//           await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+//         }
+
+//         const tokenBid = task.bidType === "token" && tokenIds.length > 0
+//         const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0
+
+//         if (traitBid) {
+//           const traits = Object.entries(selectedTraits).flatMap(([key, values]) =>
+//             values.map(value => ({ attributeKey: key, attributeValue: value })))
+//           const traitJobs = traits.map((trait) => ({
+//             name: MAGICEDEN_TRAIT_BID,
+//             data: {
+//               _id: task._id,
+//               address: task.wallet.address,
+//               contractAddress: task.contract.contractAddress,
+//               quantity: 1,
+//               expiration: expiry,
+//               privateKey: WALLET_PRIVATE_KEY,
+//               slug: task.contract.slug,
+//               trait,
+//               outbidOptions: task.outbidOptions,
+//               task: newTask
+//             },
+//             opts: { priority: TRAIT_BID_PRIORITY.MAGICEDEN } as JobsOptions
+//           })) as Job[]
+
+//           await processBulkJobs(traitJobs, true);
+//         } else if (tokenBid) {
+//           const jobs = tokenIds
+//             .filter(token => !isNaN(Number(token)))
+//             .map((token) => ({
+//               name: MAGICEDEN_TOKEN_BID,
+//               data: {
+//                 _id: task._id,
+//                 address: task.wallet.address,
+//                 contractAddress: task.contract.contractAddress,
+//                 quantity: 1,
+//                 expiration: expiry,
+//                 privateKey: WALLET_PRIVATE_KEY,
+//                 slug: task.contract.slug,
+//                 tokenId: token,
+//                 outbidOptions: task.outbidOptions,
+//                 task: newTask
+//               },
+//               opts: { priority: TOKEN_BID_PRIORITY.MAGICEDEN } as JobsOptions
+//             })) as Job[]
+//           await processBulkJobs(jobs, true);
+//         } else {
+//           const orders = await prisma.order.findMany({
+//             where: {
+//               slug: task.contract.slug,
+//               taskId: task._id,
+//               marketplace: MAGICEDEN.toLowerCase(),
+//               identifier: 'collection',
+//             },
+//             orderBy: {
+//               createdAt: 'desc'
+//             }
+//           })
+
+//           if (orders.length > 0) {
+//             const orderKeys = orders.map(order => order.id)
+//             const extractedOrderIds = await extractMagicedenOrderHash(orders)
+//             await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+//           }
+//           const jobId = `${task._id}-magiceden-${task.contract.slug}-collection`
+//           const parentJobId = `${task._id}-magiceden`.toLowerCase()
+
+//           parentJobs.set(parentJobId, {
+//             parentId: parentJobId,
+//             totalJobs: 1,
+//             completedJobs: 0,
+//             failedJobs: 0,
+//             startTime: Date.now(),
+//             taskId: task._id,
+//             jobName: MAGICEDEN_COLLECTION_BID
+//           })
+
+//           await queue.add(
+//             MAGICEDEN_COLLECTION_BID,
+//             { task: newTask },
+//             { priority: COLLECTION_BID_PRIORITY.MAGICEDEN, jobId } as JobsOptions
+//           );
+//           const currentTask = activeTasks.get(task._id);
+//           if (currentTask && currentTask.running) taskStatus[task._id].status = 'QUEUED'
+//         }
+//       }
+//     } else {
+//       console.log(RED + `Attempted to update non - existent task: ${task.contract.slug} ` + RESET);
+//     }
+//   } catch (error) {
+//     console.error(RED + `Error processing updated task: ${task.contract.slug} ` + RESET, error);
+//   }
+// }
+
+// async function updateTaskData(task: ITask) {
+//   try {
+//     const existingTaskIndex = currentTasks.findIndex(t => t._id === task._id);
+//     const existingTask = getActiveTaskWithIdByIndex(existingTaskIndex)?.task
+//     skipStats[task._id] = {
+//       opensea: 0,
+//       magiceden: 0,
+//       blur: 0
+//     }
+
+//     errorStats[task._id] = {
+//       opensea: 0,
+//       magiceden: 0,
+//       blur: 0
+//     }
+
+//     for (const marketplace of ['opensea', 'blur', 'opensea']) {
+//       const bulkJobId = `${task._id}-${marketplace}`.toLowerCase();
+//       const parentJob = parentJobs.get(bulkJobId)
+//       if (parentJob) {
+//         parentJob.totalJobs = 0
+//         parentJob.completedJobs = 0
+//         parentJob.failedJobs = 0
+//       }
+//     }
+
+//     const taskDoc = await Task.findById(task._id).select('balance').exec();
+//     const balance = taskDoc?.balance;
+//     balances[task._id] = balance
+//     warningBids[task._id] = {
+//       opensea: false,
+//       magiceden: false,
+//       blur: false
+//     }
+
+//     if (existingTaskIndex !== -1) {
+
+//       const wallet = await Wallet.findOne({ address: task.wallet.address })
+//       const WALLET_PRIVATE_KEY: string = wallet?.privateKey as string
+
+//       currentTasks.splice(existingTaskIndex, 1, task);
+//       activeTasks.set(task._id, task);
+//       console.log(YELLOW + `Updated existing task: ${task.contract.slug} `.toUpperCase() + RESET);
+
+//       const jobs = await queue.getJobs(['prioritized', 'waiting', 'paused'])
+
+//       const filteredTasks = Object.fromEntries(
+//         Object.entries(task?.selectedTraits || {}).map(([category, traits]) => [
+//           category,
+//           traits.filter(trait => trait.availableInMarketplaces
+//             .map((item) => item.toLowerCase())
+//             .includes("blur"))
+//         ]).filter(([_, traits]) => traits.length > 0)
+//       );
+
+//       const oldTraits = Object.fromEntries(
+//         Object.entries(existingTask?.selectedTraits || {}).map(([category, traits]) => [
+//           category,
+//           traits.filter(trait => trait.availableInMarketplaces
+//             .map((item) => item.toLowerCase())
+//             .includes("blur"))
+//         ]).filter(([_, traits]) => traits.length > 0)
+//       );
+
+//       const selectedTraits = transformNewTask(filteredTasks)
+//       const existingTaskTraits = transformNewTask(oldTraits)
+
+
+//       const expiry = getExpiry(task.bidDuration)
+//       let openseaTokenIds: number[] = []
+//       let magicedenTokenIds: number[] = []
+
+//       const traits = transformOpenseaTraits(selectedTraits)
+//       const staleTraits = transformOpenseaTraits(existingTaskTraits)
+
+//       // Find traits that are in staleTraits but not in traits
+//       const removedTraits = staleTraits.filter(staleTrait =>
+//         !traits.some(trait =>
+//           trait.type === staleTrait.type && trait.value === staleTrait.value
+//         )
+//       );
+
+//       const autoIds = task.tokenIds
+//         .filter(id => id.toString().toLowerCase().startsWith('bot'))
+//         .map(id => {
+//           const matches = id.toString().match(/\d+/);
+//           return matches ? parseInt(matches[0]) : null;
+//         })
+//         .filter(id => id !== null);
+
+//       const amount = autoIds[0]
+//       const taskTokenIds = task.tokenIds
+//       const newTask = { ...task, traits: {}, wallet: { address: task.wallet.address, privateKey: WALLET_PRIVATE_KEY } } as ITask
+
+//       if (removedTraits.length > 0) {
+//         const traits = removedTraits.map((trait) => `${trait.type}:${trait.value}`)
+
+//         const allOrders = await prisma.order.findMany({
+//           where: {
+//             slug: task.contract.slug,
+//             identifier: { in: traits },
+//             taskId: task._id
+//           }
+//         });
+
+//         const blurOrders = allOrders.filter(order => order.marketplace.toLowerCase() === BLUR.toLowerCase());
+//         const openseaOrders = allOrders.filter(order => order.marketplace.toLowerCase() === OPENSEA.toLowerCase());
+//         const magicedenOrders = allOrders.filter(order => order.marketplace.toLowerCase() === MAGICEDEN.toLowerCase());
+
+//         if (blurOrders.length > 0) {
+//           const cancelData = blurOrders.map((order) => {
+//             const payload = JSON.parse(order.orderHash);
+//             return {
+//               name: CANCEL_BLUR_BID,
+//               data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
+//             };
+//           });
+//           await queue.addBulk(cancelData);
+//         }
+
+//         if (openseaOrders.length > 0) {
+//           const cancelData = openseaOrders.map((order) => {
+//             return {
+//               name: CANCEL_OPENSEA_BID,
+//               data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id }
+//             };
+//           });
+//           await queue.addBulk(cancelData);
+//         }
+
+//         if (magicedenOrders.length > 0) {
+//           const extractedOrderIds = await extractMagicedenOrderHash(magicedenOrders);
+//           const orderKeys = magicedenOrders.map((order: PrismaOrder) => order.id);
+//           await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+//         }
+//       }
+
+//       const openseaExistingTokens = currentTokenIds[task._id].opensea
+//       const magicedenExistingTokens = currentTokenIds[task._id].magiceden
+
+//       const openseaBottomListing = autoIds ? await fetchOpenseaListings(task._id, task.contract.slug, amount) ?? [] : []
+//       const magicedenBottomListing = amount ? await fetchMagicEdenTokens(task._id, task.contract.contractAddress, amount) ?? [] : []
+
+//       if (task.bidType === "token" && selectedTraits && Object.keys(selectedTraits).length > 0) {
+//         const attributes = transformSelectedTraitsToAttributes(selectedTraits)
+//         const expandedAttributes = expandAttributes(attributes)
+//         let tokens: number[] = [...openseaBottomListing, ...taskTokenIds]
+//         let magicedenTokens: number[] = [...magicedenBottomListing, ...taskTokenIds]
+
+//         await pQueue.addAll(
+//           expandedAttributes.map((attribute) => async () => {
+//             const variable: CollectionItemsQueryVariables = {
+//               collectionSlug: task.contract.slug,
+//               filter: {
+//                 attributes: [attribute],
+//               },
+//               limit: 100,
+//               sort: {
+//                 by: 'PRICE',
+//                 direction: 'ASC',
+//               },
+//             };
+
+//             const items = await fetchOpenSeaCollectionItems(variable);
+//             tokens.push(...items);
+//           })
+//         )
+
+//         tokens = [...openseaBottomListing, ...taskTokenIds, ...tokens];
+//         openseaTokenIds = [...new Set(tokens)];
+
+//         magicedenTokens = [...magicedenBottomListing, ...taskTokenIds, ...tokens];
+//         magicedenTokenIds = [...new Set(magicedenTokens)];
+//       } else if (task.bidType === "token" && Object.keys(selectedTraits).length === 0) {
+//         // Directly combine and deduplicate in one step
+//         openseaTokenIds = [...new Set([...openseaBottomListing, ...taskTokenIds])];
+//         magicedenTokenIds = [...new Set(magicedenBottomListing), ...taskTokenIds];
+//         const difference = amount !== undefined ? Math.max(0, amount - openseaTokenIds.length) : 0
+//         skipStats[task._id]['opensea'] += Number(difference)
+
+//         const magicedendDifference = amount !== undefined ? Math.max(0, amount - magicedenTokenIds.length) : 0
+//         skipStats[task._id]['magiceden'] += Number(magicedendDifference)
+//       }
+
+//       const traitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
+//       const tokenBid = task.bidType === "token" && openseaTokenIds.length > 0
+
+//       const collectionDetails = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
+//       const creatorFees: IFee = collectionDetails.creator_fees.null !== undefined
+//         ? { null: collectionDetails.creator_fees.null }
+//         : Object.fromEntries(Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)]));
+
+//       if (traitBid) {
+//         const blurTraits = transformBlurTraits(selectedTraits)
+//         const blurTraitJobs = blurTraits.map((trait) => ({
+//           name: BLUR_TRAIT_BID,
+//           data: {
+//             _id: task._id,
+//             address: task.wallet.address,
+//             privateKey: WALLET_PRIVATE_KEY,
+//             contractAddress: task.contract.contractAddress,
+//             slug: task.contract.slug,
+//             trait: JSON.stringify(trait),
+//             expiry,
+//             outbidOptions: task.outbidOptions,
+//             task: newTask
+//           },
+//           opts: { priority: TRAIT_BID_PRIORITY.BLUR } as JobsOptions
+//         })) as Job[]
+
+//         const openseaTraitJob = traits.map((trait) => ({
+//           name: OPENSEA_TRAIT_BID,
+//           data: {
+//             _id: task._id,
+//             address: task.wallet.address,
+//             privateKey: WALLET_PRIVATE_KEY,
+//             slug: task.contract.slug,
+//             contractAddress: task.contract.contractAddress,
+//             creatorFees,
+//             enforceCreatorFee: collectionDetails.enforceCreatorFee,
+//             trait: JSON.stringify(trait),
+//             outbidOptions: task.outbidOptions,
+//             task: newTask
+//           },
+//           opts: { priority: TRAIT_BID_PRIORITY.OPENSEA } as JobsOptions
+//         })) as Job[]
+
+//         const magicedenTraits = Object.entries(selectedTraits).flatMap(([key, values]) =>
+//           values.map(value => ({ attributeKey: key, attributeValue: value })))
+//         const magicedenTraitJobs = magicedenTraits.map((trait) => ({
+//           name: MAGICEDEN_TRAIT_BID,
+//           data: {
+//             _id: task._id,
+//             address: task.wallet.address,
+//             contractAddress: task.contract.contractAddress,
+//             quantity: 1,
+//             expiration: expiry,
+//             privateKey: WALLET_PRIVATE_KEY,
+//             slug: task.contract.slug,
+//             trait,
+//             outbidOptions: task.outbidOptions,
+//             task: newTask
+//           },
+//           opts: { priority: TRAIT_BID_PRIORITY.MAGICEDEN } as JobsOptions
+//         })) as Job[]
+
+//         await Promise.all([
+//           processBulkJobs(blurTraitJobs, true),
+//           processBulkJobs(openseaTraitJob, true),
+//           processBulkJobs(magicedenTraitJobs, true)
+//         ]);
+
+//       }
+
+//       else if (tokenBid) {
+//         const openseaTokenJobs = openseaTokenIds
+//           .filter(token => !isNaN(Number(token)))
+//           .map((token) => ({
+//             name: OPENSEA_TOKEN_BID,
+//             data: {
+//               _id: task._id,
+//               address: task.wallet.address,
+//               privateKey: WALLET_PRIVATE_KEY,
+//               slug: task.contract.slug,
+//               creatorFees,
+//               enforceCreatorFee: collectionDetails.enforceCreatorFee,
+//               asset: { contractAddress: task.contract.contractAddress, tokenId: token },
+//               outbidOptions: task.outbidOptions,
+//               task: newTask
+//             },
+//             opts: { priority: TOKEN_BID_PRIORITY.OPENSEA } as JobsOptions
+//           })) as Job[]
+
+//         const magicedenTokenJobs = magicedenTokenIds
+//           .filter(token => !isNaN(Number(token)))
+//           .map((token) => ({
+//             name: MAGICEDEN_TOKEN_BID,
+//             data: {
+//               _id: task._id,
+//               address: task.wallet.address,
+//               contractAddress: task.contract.contractAddress,
+//               quantity: 1,
+//               expiration: expiry,
+//               privateKey: WALLET_PRIVATE_KEY,
+//               slug: task.contract.slug,
+//               tokenId: token,
+//               outbidOptions: task.outbidOptions,
+//               task: newTask
+//             },
+//             opts: { priority: TOKEN_BID_PRIORITY.MAGICEDEN } as JobsOptions
+//           })) as Job[]
+
+
+//         await Promise.all([
+//           processBulkJobs(openseaTokenJobs, true),
+//           processBulkJobs(magicedenTokenJobs, true)
+//         ]);
+//       }
+
+//       else {
+//         const orders = await prisma.order.findMany({
+//           where: {
+//             slug: task.contract.slug,
+//             taskId: task._id,
+//             marketplace: BLUR.toLowerCase(),
+//             identifier: "collection"
+//           }
+//         })
+
+//         if (orders.length > 0) {
+//           const cancelData = orders.map((order) => {
+//             const payload = JSON.parse(order.orderHash)
+//             return {
+//               name: CANCEL_BLUR_BID,
+//               data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
+//             }
+//           })
+//           await queue.addBulk(cancelData);
+//         }
+//         const jobId = `${task._id}-blur-${task.contract.slug}-collection`
+//         const parentJobId = `${task._id}-blur`.toLowerCase()
+//         parentJobs.set(parentJobId, {
+//           parentId: parentJobId,
+//           totalJobs: 1,
+//           completedJobs: 0,
+//           failedJobs: 0,
+//           startTime: Date.now(),
+//           taskId: task._id,
+//           jobName: BLUR_COLLECTION_BID
+//         })
+
+//         await queue.add(
+//           BLUR_COLLECTION_BID,
+//           { task: newTask },
+//           { priority: COLLECTION_BID_PRIORITY.BLUR, jobId } as JobsOptions
+//         );
+
+//         const currentTask = activeTasks.get(task._id);
+//         if (currentTask && currentTask.running) taskStatus[task._id].status = 'QUEUED'
+//       }
+
+//       const openseaStaleTokens = openseaExistingTokens.filter(id => !openseaTokenIds.includes(id))
+//       const tokensToRemove = openseaStaleTokens.map((token) => token.toString())
+
+//       const openseaOrders = await prisma.order.findMany({
+//         where: {
+//           slug: task.contract.slug,
+//           identifier: { in: tokensToRemove },
+//           taskId: task._id,
+//           marketplace: "opensea"
+//         }
+//       });
+
+//       if (openseaOrders.length > 0) {
+//         const cancelData = openseaOrders.map((order) => ({
+//           name: CANCEL_OPENSEA_BID,
+//           data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id }
+//         }));
+//         await queue.addBulk(cancelData);
+//       }
+
+
+//       const orders = await prisma.order.findMany({
+//         where: {
+//           slug: task.contract.slug,
+//           identifier: 'collection',
+//           taskId: task._id,
+//           marketplace: OPENSEA.toLowerCase()
+//         }
+//       })
+//       if (orders.length > 0) {
+//         const cancelData = orders.map((order) => {
+//           return {
+//             name: CANCEL_OPENSEA_BID,
+//             data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id }
+//           }
+//         })
+//         await queue.addBulk(cancelData)
+//       }
+
+//       const jobId = `${task._id}-opensea-${task.contract.slug}-collection`
+//       const parentJobId = `${task._id}-opensea`.toLowerCase()
+//       parentJobs.set(parentJobId, {
+//         parentId: parentJobId,
+//         totalJobs: 1,
+//         completedJobs: 0,
+//         failedJobs: 0,
+//         startTime: Date.now(),
+//         taskId: task._id,
+//         jobName: OPENSEA_COLLECTION_BID
+//       })
+
+//       await queue.add(
+//         OPENSEA_COLLECTION_BID,
+//         { task: newTask, collectionDetails },
+//         { priority: COLLECTION_BID_PRIORITY.OPENSEA, jobId } as JobsOptions
+//       );
+
+//       const currentTask = activeTasks.get(task._id);
+//       if (currentTask && currentTask.running) taskStatus[task._id].status = 'QUEUED'
+
+
+//       const magicedenStaleTokens = magicedenExistingTokens.filter(id => !magicedenTokenIds.includes(id)).map((token) => token.toString())
+
+//       const magicedenOrders = await prisma.order.findMany({
+//         where: {
+//           slug: task.contract.slug,
+//           identifier: { in: magicedenStaleTokens },
+//           taskId: task._id,
+//           marketplace: "magiceden"
+//         }
+//       });
+
+//       if (magicedenOrders.length > 0) {
+//         const extractedOrderIds = await extractMagicedenOrderHash(magicedenOrders);
+//         const orderKeys = magicedenOrders.map((order: PrismaOrder) => order.id);
+//         await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+//       }
+
+
+
+//       const orders = await prisma.order.findMany({
+//         where: {
+//           slug: task.contract.slug,
+//           taskId: task._id,
+//           marketplace: MAGICEDEN.toLowerCase(),
+//           identifier: 'collection',
+//         },
+//         orderBy: {
+//           createdAt: 'desc'
+//         }
+//       })
+
+//       if (orders.length > 0) {
+//         const orderKeys = orders.map(order => order.id)
+//         const extractedOrderIds = await extractMagicedenOrderHash(orders)
+//         await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+//       }
+//       const jobId = `${task._id}-magiceden-${task.contract.slug}-collection`
+//       const parentJobId = `${task._id}-magiceden`.toLowerCase()
+
+//       parentJobs.set(parentJobId, {
+//         parentId: parentJobId,
+//         totalJobs: 1,
+//         completedJobs: 0,
+//         failedJobs: 0,
+//         startTime: Date.now(),
+//         taskId: task._id,
+//         jobName: MAGICEDEN_COLLECTION_BID
+//       })
+
+//       await queue.add(
+//         MAGICEDEN_COLLECTION_BID,
+//         { task: newTask },
+//         { priority: COLLECTION_BID_PRIORITY.MAGICEDEN, jobId } as JobsOptions
+//       );
+//       const currentTask = activeTasks.get(task._id);
+//       if (currentTask && currentTask.running) taskStatus[task._id].status = 'QUEUED'
+
+//     } else {
+//       console.log(RED + `Attempted to update non - existent task: ${task.contract.slug} ` + RESET);
+//     }
+//   } catch (error) {
+//     console.error(RED + `Error processing updated task: ${task.contract.slug} ` + RESET, error);
+//   }
+// }
+
+// async function processUpdatedTask(task: ITask) {
+//   try {
+//     const existingTaskIndex = currentTasks.findIndex(t => t._id === task._id);
+//     const existingTask = getActiveTaskWithIdByIndex(existingTaskIndex)?.task
+//     skipStats[task._id] = {
+//       opensea: 0,
+//       magiceden: 0,
+//       blur: 0
+//     }
+
+//     errorStats[task._id] = {
+//       opensea: 0,
+//       magiceden: 0,
+//       blur: 0
+//     }
+
+//     for (const marketplace of ['opensea', 'blur', 'opensea']) {
+//       const bulkJobId = `${task._id}-${marketplace}`.toLowerCase();
+//       const parentJob = parentJobs.get(bulkJobId)
+//       if (parentJob) {
+//         parentJob.totalJobs = 0
+//         parentJob.completedJobs = 0
+//         parentJob.failedJobs = 0
+//       }
+//     }
+
+//     const taskDoc = await Task.findById(task._id).select('balance').exec();
+//     const balance = taskDoc?.balance;
+//     balances[task._id] = balance
+//     warningBids[task._id] = {
+//       opensea: false,
+//       magiceden: false,
+//       blur: false
+//     }
+
+//     if (existingTaskIndex !== -1) {
+
+//       const wallet = await Wallet.findOne({ address: task.wallet.address })
+//       const WALLET_PRIVATE_KEY: string = wallet?.privateKey as string
+
+//       currentTasks.splice(existingTaskIndex, 1, task);
+//       activeTasks.set(task._id, task);
+//       console.log(YELLOW + `Updated existing task: ${task.contract.slug} `.toUpperCase() + RESET);
+
+//       const jobs = await queue.getJobs(['prioritized', 'waiting', 'paused'])
+
+//       const filteredTasks = Object.fromEntries(
+//         Object.entries(task?.selectedTraits || {}).map(([category, traits]) => [
+//           category,
+//           traits.filter(trait => trait.availableInMarketplaces
+//             .map((item) => item.toLowerCase())
+//             .includes("blur"))
+//         ]).filter(([_, traits]) => traits.length > 0)
+//       );
+
+//       const oldTraits = Object.fromEntries(
+//         Object.entries(existingTask?.selectedTraits || {}).map(([category, traits]) => [
+//           category,
+//           traits.filter(trait => trait.availableInMarketplaces
+//             .map((item) => item.toLowerCase())
+//             .includes("blur"))
+//         ]).filter(([_, traits]) => traits.length > 0)
+//       );
+
+//       const selectedTraits = transformNewTask(filteredTasks)
+//       const existingTaskTraits = transformNewTask(oldTraits)
+
+
+//       const expiry = getExpiry(task.bidDuration)
+//       let tokenIds: number[] = []
+
+//       const traits = transformOpenseaTraits(selectedTraits)
+//       const staleTraits = transformOpenseaTraits(existingTaskTraits)
+
+//       // Find traits that are in staleTraits but not in traits
+//       const removedTraits = staleTraits.filter(staleTrait =>
+//         !traits.some(trait =>
+//           trait.type === staleTrait.type && trait.value === staleTrait.value
+//         )
+//       );
+
+//       const autoIds = task.tokenIds
+//         .filter(id => id.toString().toLowerCase().startsWith('bot'))
+//         .map(id => {
+//           const matches = id.toString().match(/\d+/);
+//           return matches ? parseInt(matches[0]) : null;
+//         })
+//         .filter(id => id !== null);
+
+//       const amount = autoIds[0]
+//       const taskTokenIds = task.tokenIds
+//       const newTask = { ...task, traits: {}, wallet: { address: task.wallet.address, privateKey: WALLET_PRIVATE_KEY } } as ITask
+
+//       if (removedTraits.length > 0) {
+//         const traits = removedTraits.map((trait) => `${trait.type}:${trait.value}`)
+
+//         const allOrders = await prisma.order.findMany({
+//           where: {
+//             slug: task.contract.slug,
+//             identifier: { in: traits },
+//             taskId: task._id
+//           }
+//         });
+
+//         const blurOrders = allOrders.filter(order => order.marketplace.toLowerCase() === BLUR.toLowerCase());
+//         const openseaOrders = allOrders.filter(order => order.marketplace.toLowerCase() === OPENSEA.toLowerCase());
+//         const magicedenOrders = allOrders.filter(order => order.marketplace.toLowerCase() === MAGICEDEN.toLowerCase());
+
+//         if (blurOrders.length > 0) {
+//           const cancelData = blurOrders.map((order) => {
+//             const payload = JSON.parse(order.orderHash);
+//             return {
+//               name: CANCEL_BLUR_BID,
+//               data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
+//             };
+//           });
+//           await queue.addBulk(cancelData);
+//         }
+
+//         if (openseaOrders.length > 0) {
+//           const cancelData = openseaOrders.map((order) => {
+//             return {
+//               name: CANCEL_OPENSEA_BID,
+//               data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id }
+//             };
+//           });
+//           await queue.addBulk(cancelData);
+//         }
+
+//         if (magicedenOrders.length > 0) {
+//           const extractedOrderIds = await extractMagicedenOrderHash(magicedenOrders);
+//           const orderKeys = magicedenOrders.map((order: PrismaOrder) => order.id);
+//           await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+//         }
+//       }
+
+//       const openseaExistingTokens = currentTokenIds[task._id].opensea
+//       const magicedenExistingTokens = currentTokenIds[task._id].magiceden
+
+//       if (task.selectedMarketplaces.map(m => m.toLowerCase()).includes("blur")) {
+//         const blurJobIds = getJobIds(BLUR.toLowerCase(), task)
+//         jobs.forEach(async (job: Job) => {
+//           if (!job?.id) return
+//           if (blurJobIds.includes(job.id)) {
+//             await job.remove()
+//           }
+//         })
+
+//         const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0
+//         if (traitBid) {
+//           const traits = transformBlurTraits(selectedTraits)
+//           const traitJobs = traits.map((trait) => ({
+//             name: BLUR_TRAIT_BID,
+//             data: {
+//               _id: task._id,
+//               address: task.wallet.address,
+//               privateKey: WALLET_PRIVATE_KEY,
+//               contractAddress: task.contract.contractAddress,
+//               slug: task.contract.slug,
+//               trait: JSON.stringify(trait),
+//               expiry,
+//               outbidOptions: task.outbidOptions,
+//               task: newTask
+//             },
+//             opts: { priority: TRAIT_BID_PRIORITY.BLUR } as JobsOptions
+//           })) as Job[]
+
+//           await processBulkJobs(traitJobs, true);
+
+//         } else {
+//           const orders = await prisma.order.findMany({
+//             where: {
+//               slug: task.contract.slug,
+//               taskId: task._id,
+//               marketplace: BLUR.toLowerCase(),
+//               identifier: "collection"
+//             }
+//           })
+
+//           if (orders.length > 0) {
+//             const cancelData = orders.map((order) => {
+//               const payload = JSON.parse(order.orderHash)
+//               return {
+//                 name: CANCEL_BLUR_BID,
+//                 data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
+//               }
+//             })
+//             await queue.addBulk(cancelData);
+//           }
+//           const jobId = `${task._id}-blur-${task.contract.slug}-collection`
+//           const parentJobId = `${task._id}-blur`.toLowerCase()
+//           parentJobs.set(parentJobId, {
+//             parentId: parentJobId,
+//             totalJobs: 1,
+//             completedJobs: 0,
+//             failedJobs: 0,
+//             startTime: Date.now(),
+//             taskId: task._id,
+//             jobName: BLUR_COLLECTION_BID
+//           })
+
+//           await queue.add(
+//             BLUR_COLLECTION_BID,
+//             { task: newTask },
+//             { priority: COLLECTION_BID_PRIORITY.BLUR, jobId } as JobsOptions
+//           );
+
+//           const currentTask = activeTasks.get(task._id);
+//           if (currentTask && currentTask.running) taskStatus[task._id].status = 'QUEUED'
+//         }
+//       }
+
+//       if (task.selectedMarketplaces.map(m => m.toLowerCase()).includes("opensea")) {
+//         const openseaJobIds = getJobIds(OPENSEA.toLowerCase(), task)
+//         jobs.forEach(async (job: Job) => {
+//           if (!job?.id) return
+//           if (openseaJobIds.includes(job.id)) {
+//             await job.remove()
+//           }
+//         })
+
+//         const bottomListings = autoIds ? await fetchOpenseaListings(task._id, task.contract.slug, amount) ?? [] : []
+
+
+//         if (task.bidType === "token" && selectedTraits && Object.keys(selectedTraits).length > 0) {
+//           const attributes = transformSelectedTraitsToAttributes(selectedTraits)
+//           const expandedAttributes = expandAttributes(attributes)
+//           let tokens: number[] = [...bottomListings, ...taskTokenIds]
+
+//           await pQueue.addAll(
+//             expandedAttributes.map((attribute) => async () => {
+//               const variable: CollectionItemsQueryVariables = {
+//                 collectionSlug: task.contract.slug,
+//                 filter: {
+//                   attributes: [attribute],
+//                 },
+//                 limit: 100,
+//                 sort: {
+//                   by: 'PRICE',
+//                   direction: 'ASC',
+//                 },
+//               };
+
+//               const items = await fetchOpenSeaCollectionItems(variable);
+//               tokens.push(...items);
+//             })
+//           )
+
+//           tokens = [...bottomListings, ...taskTokenIds, ...tokens];
+//           tokenIds = [...new Set(tokens)];
+//         } else if (task.bidType === "token" && Object.keys(selectedTraits).length === 0) {
+//           // Directly combine and deduplicate in one step
+//           tokenIds = [...new Set([...bottomListings, ...taskTokenIds])];
+//           const difference = amount !== undefined ? Math.max(0, amount - tokenIds.length) : 0
+//           skipStats[task._id]['opensea'] += Number(difference)
+//         }
+
+//         const openseaStaleTokens = openseaExistingTokens.filter(id => !tokenIds.includes(id))
+//         const tokensToRemove = openseaStaleTokens.map((token) => token.toString())
+
+//         const openseaOrders = await prisma.order.findMany({
+//           where: {
+//             slug: task.contract.slug,
+//             identifier: { in: tokensToRemove },
+//             taskId: task._id,
+//             marketplace: "opensea"
+//           }
+//         });
+
+//         if (openseaOrders.length > 0) {
+//           const cancelData = openseaOrders.map((order) => ({
+//             name: CANCEL_OPENSEA_BID,
+//             data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id }
+//           }));
+//           await queue.addBulk(cancelData);
+//         }
+
+//         const tokenBid = task.bidType === "token" && tokenIds.length > 0
+//         const traitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
+
+//         const collectionDetails = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
+//         const creatorFees: IFee = collectionDetails.creator_fees.null !== undefined
+//           ? { null: collectionDetails.creator_fees.null }
+//           : Object.fromEntries(Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)]));
+
+//         if (traitBid) {
+//           const traitJobs = traits.map((trait) => ({
+//             name: OPENSEA_TRAIT_BID,
+//             data: {
+//               _id: task._id,
+//               address: task.wallet.address,
+//               privateKey: WALLET_PRIVATE_KEY,
+//               slug: task.contract.slug,
+//               contractAddress: task.contract.contractAddress,
+//               creatorFees,
+//               enforceCreatorFee: collectionDetails.enforceCreatorFee,
+//               trait: JSON.stringify(trait),
+//               outbidOptions: task.outbidOptions,
+//               task: newTask
+//             },
+//             opts: { priority: TRAIT_BID_PRIORITY.OPENSEA } as JobsOptions
+//           })) as Job[]
+
+//           await processBulkJobs(traitJobs, true);
+//         } else if (tokenBid) {
+//           const jobs = tokenIds
+//             .filter(token => !isNaN(Number(token)))
+//             .map((token) => ({
+//               name: OPENSEA_TOKEN_BID,
+//               data: {
+//                 _id: task._id,
+//                 address: task.wallet.address,
+//                 privateKey: WALLET_PRIVATE_KEY,
+//                 slug: task.contract.slug,
+//                 creatorFees,
+//                 enforceCreatorFee: collectionDetails.enforceCreatorFee,
+//                 asset: { contractAddress: task.contract.contractAddress, tokenId: token },
+//                 outbidOptions: task.outbidOptions,
+//                 task: newTask
+//               },
+//               opts: { priority: TOKEN_BID_PRIORITY.OPENSEA } as JobsOptions
+//             })) as Job[]
+
+//           await processBulkJobs(jobs, true);
+//         } else {
+//           const orders = await prisma.order.findMany({
+//             where: {
+//               slug: task.contract.slug,
+//               identifier: 'collection',
+//               taskId: task._id,
+//               marketplace: OPENSEA.toLowerCase()
+//             }
+//           })
+//           if (orders.length > 0) {
+//             const cancelData = orders.map((order) => {
+//               return {
+//                 name: CANCEL_OPENSEA_BID,
+//                 data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id }
+//               }
+//             })
+//             await queue.addBulk(cancelData)
+//           }
+//         }
+//         const jobId = `${task._id}-opensea-${task.contract.slug}-collection`
+//         const parentJobId = `${task._id}-opensea`.toLowerCase()
+//         parentJobs.set(parentJobId, {
+//           parentId: parentJobId,
+//           totalJobs: 1,
+//           completedJobs: 0,
+//           failedJobs: 0,
+//           startTime: Date.now(),
+//           taskId: task._id,
+//           jobName: OPENSEA_COLLECTION_BID
+//         })
+
+//         await queue.add(
+//           OPENSEA_COLLECTION_BID,
+//           { task: newTask, collectionDetails },
+//           { priority: COLLECTION_BID_PRIORITY.OPENSEA, jobId } as JobsOptions
+//         );
+
+//         const currentTask = activeTasks.get(task._id);
+//         if (currentTask && currentTask.running) taskStatus[task._id].status = 'QUEUED'
+
+//       }
+
+//       if (task.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) {
+//         const magicedenJobIds = getJobIds(MAGICEDEN.toLowerCase(), task)
+
+//         jobs.forEach(async (job: Job) => {
+//           if (!job?.id) return
+//           if (magicedenJobIds.includes(job.id)) {
+//             await job.remove()
+//           }
+//         })
+
+//         const bottomListings = amount ? await fetchMagicEdenTokens(task._id, task.contract.contractAddress, amount) ?? [] : []
+
+//         if (task.bidType === "token" && selectedTraits && Object.keys(selectedTraits).length > 0) {
+//           const attributes = transformSelectedTraitsToAttributes(selectedTraits)
+//           const expandedAttributes = expandAttributes(attributes)
+//           let tokens: number[] = [...bottomListings, ...taskTokenIds]
+
+//           await pQueue.addAll(
+//             expandedAttributes.map((attribute) => async () => {
+//               const variable: CollectionItemsQueryVariables = {
+//                 collectionSlug: task.contract.slug,
+//                 filter: {
+//                   attributes: [attribute],
+//                 },
+//                 limit: 100,
+//                 sort: {
+//                   by: 'PRICE',
+//                   direction: 'ASC',
+//                 },
+//               };
+
+//               const items = await fetchOpenSeaCollectionItems(variable);
+//               tokens.push(...items);
+//             })
+//           )
+
+//           tokens = [...bottomListings, ...taskTokenIds, ...tokens];
+//           tokenIds = [...new Set(tokens)];
+//         } else if (task.bidType === "token" && Object.keys(selectedTraits).length === 0) {
+//           // Directly combine and deduplicate in one step
+//           tokenIds = [...new Set([...bottomListings, ...taskTokenIds])];
+//           const difference = amount !== undefined ? Math.max(0, amount - tokenIds.length) : 0
+//           skipStats[task._id]['magiceden'] += Number(difference)
+//         }
+//         const magicedenStaleTokens = magicedenExistingTokens.filter(id => !tokenIds.includes(id)).map((token) => token.toString())
+
+//         const magicedenOrders = await prisma.order.findMany({
+//           where: {
+//             slug: task.contract.slug,
+//             identifier: { in: magicedenStaleTokens },
+//             taskId: task._id,
+//             marketplace: "magiceden"
+//           }
+//         });
+
+//         if (magicedenOrders.length > 0) {
+//           const extractedOrderIds = await extractMagicedenOrderHash(magicedenOrders);
+//           const orderKeys = magicedenOrders.map((order: PrismaOrder) => order.id);
+//           await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+//         }
+
+//         const tokenBid = task.bidType === "token" && tokenIds.length > 0
+//         const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0
+
+//         if (traitBid) {
+//           const traits = Object.entries(selectedTraits).flatMap(([key, values]) =>
+//             values.map(value => ({ attributeKey: key, attributeValue: value })))
+//           const traitJobs = traits.map((trait) => ({
+//             name: MAGICEDEN_TRAIT_BID,
+//             data: {
+//               _id: task._id,
+//               address: task.wallet.address,
+//               contractAddress: task.contract.contractAddress,
+//               quantity: 1,
+//               expiration: expiry,
+//               privateKey: WALLET_PRIVATE_KEY,
+//               slug: task.contract.slug,
+//               trait,
+//               outbidOptions: task.outbidOptions,
+//               task: newTask
+//             },
+//             opts: { priority: TRAIT_BID_PRIORITY.MAGICEDEN } as JobsOptions
+//           })) as Job[]
+
+//           await processBulkJobs(traitJobs, true);
+//         } else if (tokenBid) {
+//           const jobs = tokenIds
+//             .filter(token => !isNaN(Number(token)))
+//             .map((token) => ({
+//               name: MAGICEDEN_TOKEN_BID,
+//               data: {
+//                 _id: task._id,
+//                 address: task.wallet.address,
+//                 contractAddress: task.contract.contractAddress,
+//                 quantity: 1,
+//                 expiration: expiry,
+//                 privateKey: WALLET_PRIVATE_KEY,
+//                 slug: task.contract.slug,
+//                 tokenId: token,
+//                 outbidOptions: task.outbidOptions,
+//                 task: newTask
+//               },
+//               opts: { priority: TOKEN_BID_PRIORITY.MAGICEDEN } as JobsOptions
+//             })) as Job[]
+//           await processBulkJobs(jobs, true);
+//         } else {
+//           const orders = await prisma.order.findMany({
+//             where: {
+//               slug: task.contract.slug,
+//               taskId: task._id,
+//               marketplace: MAGICEDEN.toLowerCase(),
+//               identifier: 'collection',
+//             },
+//             orderBy: {
+//               createdAt: 'desc'
+//             }
+//           })
+
+//           if (orders.length > 0) {
+//             const orderKeys = orders.map(order => order.id)
+//             const extractedOrderIds = await extractMagicedenOrderHash(orders)
+//             await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+//           }
+//           const jobId = `${task._id}-magiceden-${task.contract.slug}-collection`
+//           const parentJobId = `${task._id}-magiceden`.toLowerCase()
+
+//           parentJobs.set(parentJobId, {
+//             parentId: parentJobId,
+//             totalJobs: 1,
+//             completedJobs: 0,
+//             failedJobs: 0,
+//             startTime: Date.now(),
+//             taskId: task._id,
+//             jobName: MAGICEDEN_COLLECTION_BID
+//           })
+
+//           await queue.add(
+//             MAGICEDEN_COLLECTION_BID,
+//             { task: newTask },
+//             { priority: COLLECTION_BID_PRIORITY.MAGICEDEN, jobId } as JobsOptions
+//           );
+//           const currentTask = activeTasks.get(task._id);
+//           if (currentTask && currentTask.running) taskStatus[task._id].status = 'QUEUED'
+//         }
+//       }
+//     } else {
+//       console.log(RED + `Attempted to update non - existent task: ${task.contract.slug} ` + RESET);
+//     }
+//   } catch (error) {
+//     console.error(RED + `Error processing updated task: ${task.contract.slug} ` + RESET, error);
+//   }
+// }
+
+let chunks: Job<any, any, string>[][]
+
+async function updateTaskData(task: ITask) {
   try {
     const existingTaskIndex = currentTasks.findIndex(t => t._id === task._id);
     const existingTask = getActiveTaskWithIdByIndex(existingTaskIndex)?.task
 
-    const taskDoc = await Task.findById(task._id).select('balance').exec();
-    const balance = taskDoc?.balance;
-    balances[task._id] = balance
     warningBids[task._id] = {
       opensea: false,
       magiceden: false,
       blur: false
+    };
+
+    if (existingTaskIndex === -1 || !existingTask) return
+
+    const wallet = await Wallet.findOne({ address: task.wallet.address })
+    const WALLET_PRIVATE_KEY: string = wallet?.privateKey as string
+    currentTasks.splice(existingTaskIndex, 1, task);
+    activeTasks.set(task._id, task);
+
+    console.log(YELLOW + `Updated existing task: ${task.contract.slug} `.toUpperCase() + RESET);
+
+    const filteredTasks = Object.fromEntries(
+      Object.entries(task?.selectedTraits || {}).map(([category, traits]) => [
+        category,
+        traits
+      ]).filter(([_, traits]) => traits.length > 0)
+    );
+
+    const openseaTraits = Object.fromEntries(
+      Object.entries(task?.selectedTraits || {}).map(([category, traits]) => [
+        category,
+
+        traits.filter(trait => trait.availableInMarketplaces.includes("opensea"))
+      ]).filter(([_, traits]) => traits.length > 0)
+    );
+
+    const magicedenTraits = Object.fromEntries(
+      Object.entries(task?.selectedTraits || {}).map(([category, traits]) => [
+        category,
+        traits.filter(trait => trait.availableInMarketplaces.includes("magiceden"))
+      ]).filter(([_, traits]) => traits.length > 0)
+    );
+
+    const blurTraits = Object.fromEntries(
+      Object.entries(task?.selectedTraits || {}).map(([category, traits]) => [
+        category,
+        traits.filter(trait => trait.availableInMarketplaces
+          .map((item) => item.toLowerCase())
+          .includes("blur"))
+      ]).filter(([_, traits]) => traits.length > 0)
+    );
+
+    const openseaSelectedTraits = transformNewTask(openseaTraits)
+    const magicedenSelectedTraits = transformNewTask(magicedenTraits)
+    const blurSelectedTraits = transformNewTask(blurTraits)
+
+
+    if (!currentTraits[task._id]) {
+      currentTraits[task._id] = {
+        opensea: {},
+        magiceden: {},
+        blur: {}
+      }
+    }
+    currentTraits[task._id].opensea = openseaSelectedTraits
+    currentTraits[task._id].magiceden = magicedenSelectedTraits
+    currentTraits[task._id].blur = blurSelectedTraits
+
+    const oldTraits = Object.fromEntries(
+      Object.entries(existingTask?.selectedTraits || {}).map(([category, traits]) => [
+        category,
+        traits
+      ]).filter(([_, traits]) => traits.length > 0)
+    );
+
+    const selectedTraits = transformNewTask(filteredTasks)
+    const existingTaskTraits = transformNewTask(oldTraits)
+
+    const traits = transformOpenseaTraits(selectedTraits)
+    const staleTraits = transformOpenseaTraits(existingTaskTraits)
+
+    const traitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
+    const tokenBid = task.bidType === "token"
+    const taskTokenIds = task.tokenIds
+
+    const autoIds = existingTask.tokenIds
+      .filter(id => id.toString().toLowerCase().startsWith('bot'))
+      .map(id => {
+        const matches = id.toString().match(/\d+/);
+        return matches ? parseInt(matches[0]) : null;
+      })
+      .filter(id => id !== null);
+
+    const amount = autoIds[0]
+    let openseaTokenIds: number[] = []
+    let magicedenTokenIds: number[] = []
+
+    if (!currentTokenIds[task._id]) {
+      currentTokenIds[task._id] = {
+        opensea: [],
+        magiceden: []
+      }
     }
 
-    if (existingTaskIndex !== -1) {
+    const previousOpenseaTokens = [...currentTokenIds[task._id]?.opensea, ...existingTask.tokenIds]
+    const previousMagicedenTokens = [...currentTokenIds[task._id]?.magiceden, ...existingTask.tokenIds]
 
-      const wallet = await Wallet.findOne({ address: task.wallet.address })
-      const WALLET_PRIVATE_KEY: string = wallet?.privateKey as string
+    const openseaBottonListings = autoIds ? await fetchOpenseaListings(task._id, task.contract.slug, amount) ?? [] : []
+    const magicedenBottomListings = amount ? await fetchMagicEdenTokens(task._id, task.contract.contractAddress, amount) ?? [] : []
 
-      currentTasks.splice(existingTaskIndex, 1, task);
-      activeTasks.set(task._id, task);
-      console.log(YELLOW + `Updated existing task: ${task.contract.slug} `.toUpperCase() + RESET);
+    if (task.bidType === "token" && selectedTraits && Object.keys(selectedTraits).length > 0) {
+      const attributes = transformSelectedTraitsToAttributes(selectedTraits)
+      const expandedAttributes = expandAttributes(attributes)
+      // Initialize tokens with bottomListings and taskTokenIds
+      let openseaTokens: number[] = [...openseaBottonListings, ...taskTokenIds]
+      let magicedenTokens: number[] = [...magicedenBottomListings, ...taskTokenIds]
 
-      const jobs = await queue.getJobs(['prioritized', 'waiting', 'paused'])
+      await pQueue.addAll(
+        expandedAttributes.map((attribute) => async () => {
+          const variable: CollectionItemsQueryVariables = {
+            collectionSlug: task.contract.slug,
+            filter: {
+              attributes: [attribute],
+            },
+            limit: 100,
+            sort: {
+              by: 'PRICE',
+              direction: 'ASC',
+            },
+          };
 
-      const filteredTasks = Object.fromEntries(
-        Object.entries(task?.selectedTraits || {}).map(([category, traits]) => [
-          category,
-          traits.filter(trait => trait.availableInMarketplaces
-            .map((item) => item.toLowerCase())
-            .includes("blur"))
-        ]).filter(([_, traits]) => traits.length > 0)
-      );
-
-      const oldTraits = Object.fromEntries(
-        Object.entries(existingTask?.selectedTraits || {}).map(([category, traits]) => [
-          category,
-          traits.filter(trait => trait.availableInMarketplaces
-            .map((item) => item.toLowerCase())
-            .includes("blur"))
-        ]).filter(([_, traits]) => traits.length > 0)
-      );
-
-      const selectedTraits = transformNewTask(filteredTasks)
-      const existingTaskTraits = transformNewTask(oldTraits)
-
-
-      const expiry = getExpiry(task.bidDuration)
-      let tokenIds: number[] = []
-
-
-      if (task.selectedMarketplaces.map(m => m.toLowerCase()).includes("blur")) {
-        const blurJobIds = getJobIds(BLUR.toLowerCase(), task)
-        jobs.forEach(async (job) => {
-          if (!job?.id) return
-          if (blurJobIds.includes(job.id)) {
-            if (!job.token) {
-              await job.remove()
-            }
-          }
+          const items = await fetchOpenSeaCollectionItems(variable);
+          openseaTokens.push(...items);
+          magicedenTokens.push(...items)
         })
+      )
 
-        const traits = transformBlurTraits(selectedTraits)
-        const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0
-        let floor_price: number = 0
+      openseaTokens = [...openseaBottonListings, ...taskTokenIds, ...openseaTokens];
+      openseaTokenIds = [...new Set(openseaTokens)];
 
-        if (task.bidPrice.minType == "eth" || task.openseaBidPrice.minType === "eth") {
-          floor_price = 0
-        } else {
-          const stats = await fetchBlurCollectionStats(task.contract.slug);
-          if (!stats || stats === 0) return
-          floor_price = Number(stats)
-        }
+      magicedenTokens = [...magicedenBottomListings, ...taskTokenIds, ...magicedenTokens]
+      magicedenTokenIds = [...new Set(magicedenTokens)]
 
-        const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, floor_price, "blur")
-        const offerPrice = BigInt(Math.round(offerPriceEth * 1e18 / 1e16) * 1e16);
+    } else if (task.bidType === "token") {
+      // Directly combine and deduplicate in one step
+      openseaTokenIds = [...new Set([...openseaBottonListings, ...taskTokenIds])];
+      magicedenTokenIds = [...new Set([...magicedenBottomListings, ...taskTokenIds])];
+    }
 
-        if (traitBid) {
-          await processBlurTraitJobs(task, traits, offerPrice, expiry, maxBidPriceEth, minBidPriceEth)
-        }
+    const openseaTokensToRemove = previousOpenseaTokens.filter(token => !openseaTokenIds.includes(token)).map((token) => token.toString())
+    const openseaTokensToAdd = openseaTokenIds.filter(token => !previousOpenseaTokens.includes(token));
+
+    const magicedenTokensToRemove = previousMagicedenTokens.filter(token => !magicedenTokenIds.includes(token)).map((token) => token.toString())
+    const magicedenTokensToAdd = magicedenTokenIds.filter(token => !previousMagicedenTokens.includes(token));
+
+    const removedTraits = staleTraits.filter(staleTrait =>
+      !traits.some(trait =>
+        trait.type === staleTrait.type && trait.value === staleTrait.value
+      )
+    );
+
+    const addedTraits = traits.filter(staleTrait =>
+      !staleTraits.some(trait =>
+        trait.type === staleTrait.type && trait.value === staleTrait.value
+      )
+    );
+
+    const traitsToRemove = removedTraits.map((trait) => `${trait.type}:${trait.value}`)
+    // 
+    const ordersToCancel = await prisma.order.findMany({
+      where: {
+        taskId: task._id,
+        identifier: { in: traitsToRemove }
       }
+    })
 
-      else if (task.selectedMarketplaces.map(m => m.toLowerCase()).includes("opensea")) {
-        const openseaJobIds = getJobIds(OPENSEA.toLowerCase(), task)
-        jobs.forEach(async (job: Job) => {
-          if (!job?.id) return
-          if (openseaJobIds.includes(job.id)) {
+    console.log(RED + '--------------------------------------------------------------' + RESET);
+    console.log(RED + `OLD TRAIT BIDS TO CANCEL: ${ordersToCancel.length}`.toUpperCase() + RESET);
+    console.log(RED + '--------------------------------------------------------------' + RESET);
 
-            const token = job.token
-            if (token) {
-              await job.moveToCompleted({ message: "job removed" }, token, false)
-            }
-          }
-        })
+    console.log(GREEN + '--------------------------------------------------------------' + RESET);
+    console.log(GREEN + `NEW TRAIT BIDS TO ADD: ${addedTraits.length}`.toUpperCase() + RESET);
+    console.log(GREEN + '--------------------------------------------------------------' + RESET);
 
-        const traits = transformOpenseaTraits(selectedTraits)
-        const staleTraits = transformOpenseaTraits(existingTaskTraits)
+    const blurOrders = ordersToCancel.filter(order => order.marketplace.toLowerCase() === BLUR.toLowerCase());
+    const openseaOrders = ordersToCancel.filter(order => order.marketplace.toLowerCase() === OPENSEA.toLowerCase());
+    const magicedenOrders = ordersToCancel.filter(order => order.marketplace.toLowerCase() === MAGICEDEN.toLowerCase());
 
-        // Find traits that are in staleTraits but not in traits
-        const removedTraits = staleTraits.filter(staleTrait =>
-          !traits.some(trait =>
-            trait.type === staleTrait.type && trait.value === staleTrait.value
-          )
-        );
-
-        const autoIds = task.tokenIds
-          .filter(id => id.toString().toLowerCase().startsWith('bot'))
-          .map(id => {
-            const matches = id.toString().match(/\d+/);
-            return matches ? parseInt(matches[0]) : null;
-          })
-          .filter(id => id !== null);
-
-        const amount = autoIds[0]
-        const taskTokenIds = task.tokenIds
-
-        const bottomListings = autoIds ? await fetchOpenseaListings(task._id, task.contract.slug, amount) ?? [] : []
-
-        if (task.bidType === "token" && selectedTraits && Object.keys(selectedTraits).length > 0) {
-          const attributes = transformSelectedTraitsToAttributes(selectedTraits)
-          const expandedAttributes = expandAttributes(attributes)
-          let tokens: number[] = [...bottomListings, ...taskTokenIds]
-
-          await pQueue.addAll(
-            expandedAttributes.map((attribute) => async () => {
-              const variable: CollectionItemsQueryVariables = {
-                collectionSlug: task.contract.slug,
-                filter: {
-                  attributes: [attribute],
-                },
-                limit: 100,
-                sort: {
-                  by: 'PRICE',
-                  direction: 'ASC',
-                },
-              };
-
-              const items = await fetchOpenSeaCollectionItems(variable);
-              tokens.push(...items);
-            })
-          )
-
-          // Ensure bottomListings and taskTokenIds are included by adding them again before deduplication
-          tokens = [...bottomListings, ...taskTokenIds, ...tokens];
-          tokenIds = [...new Set(tokens)];
-        } else if (task.bidType === "token" && Object.keys(selectedTraits).length === 0) {
-          // Directly combine and deduplicate in one step
-          tokenIds = [...new Set([...bottomListings, ...taskTokenIds])];
-          const difference = amount !== undefined ? Math.max(0, amount - tokenIds.length) : 0
-          skipStats[task._id]['opensea'] += Number(difference)
-        }
-
-        const existingTokenIds = currentTokenIds[task._id].opensea
-        const tokenBid = task.bidType === "token" && tokenIds.length > 0
-        const traitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
-
-        const tokenIdsToCancel = existingTokenIds.filter(id => !tokenIds.includes(id))
-
-
-        if (tokenIdsToCancel.length > 0) {
-          for (const token of tokenIdsToCancel) {
-            const orders = await prisma.order.findMany({
-              where: {
-                slug: task.contract.slug,
-                identifier: token.toString(),
-                taskId: task._id
-              }
-            })
-
-            if (orders.length > 0) {
-              const cancelData = orders.map((order, index) => {
-                return {
-                  name: CANCEL_OPENSEA_BID,
-                  data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id }
-                }
-              })
-              await queue.addBulk(cancelData)
-            }
-          }
-        }
-
-        if (removedTraits.length > 0) {
-          console.log(`REMOVED TRAIT BIDS: ${removedTraits.length}`);
-
-          for (const trait of removedTraits) {
-            const identifier = `${trait.type}:${trait.value}`
-
-            const orders = await prisma.order.findMany({
-              where: {
-                slug: task.contract.slug,
-                identifier: identifier,
-                taskId: task._id
-              }
-            })
-
-            if (orders.length > 0) {
-              const cancelData = orders.map((order, index) => {
-                if (!order) return
-                return {
-                  name: CANCEL_OPENSEA_BID,
-                  data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id }
-                }
-              }).filter((item) => item !== undefined)
-              await queue.addBulk(cancelData)
-            }
-          }
-        }
-
-        const collectionDetails = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
-
-        const creatorFees: IFee = collectionDetails.creator_fees.null !== undefined
-          ? { null: collectionDetails.creator_fees.null }
-          : Object.fromEntries(Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)]));
-
-        if (traitBid) {
-          await processUpdatedOpenseaTraitJob(task, traits, creatorFees, collectionDetails)
-        } else if (tokenBid) {
-          await processUpdatedOpenseaTokenJob(task, tokenIds, creatorFees, collectionDetails)
-        }
-
-      } else if (task.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) {
-        const filteredTasks = Object.fromEntries(
-          Object.entries(task?.selectedTraits || {}).map(([category, traits]) => [
-            category,
-            traits.filter(trait => trait.availableInMarketplaces.includes("magiceden"))
-          ]).filter(([_, traits]) => traits.length > 0)
-        );
-        const selectedTraits = transformNewTask(filteredTasks)
-        const magicedenJobIds = getJobIds(MAGICEDEN.toLowerCase(), task)
-        jobs.forEach(async (job) => {
-          if (!job?.id) return
-          if (magicedenJobIds.includes(job.id)) {
-            if (!job.token) {
-              await job.remove()
-            }
-          }
-        })
-        const traits = Object.entries(selectedTraits).flatMap(([key, values]) =>
-          values.map(value => ({ attributeKey: key, attributeValue: value })))
-        const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0
-
-        const autoIds = task.tokenIds
-          .filter(id => id.toString().toLowerCase().startsWith('bot'))
-          .map(id => {
-            const matches = id.toString().match(/\d+/);
-            return matches ? parseInt(matches[0]) : null;
-          })
-          .filter(id => id !== null);
-
-        const amount = autoIds[0]
-        const bottomListings = amount ? await fetchMagicEdenTokens(task._id, task.contract.contractAddress, amount) : []
-        const taskTokenIds = task.tokenIds
-        const tokenIds = bottomListings ? [...bottomListings, ...taskTokenIds] : [...taskTokenIds]
-        const tokenBid = task.bidType === "token" && tokenIds.length > 0
-
-        if (traitBid) {
-          await updateMagicedenTraitBid(task, traits)
-        } else if (tokenBid) {
-          await updateMagicEdenTokenJobs(task, tokenIds)
-        }
+    const openseaTokensToCancel = await prisma.order.findMany({
+      where: {
+        taskId: task._id,
+        identifier: { in: openseaTokensToRemove },
+        marketplace: "opensea"
       }
+    })
+
+    const magicedenTokensToCancel = await prisma.order.findMany({
+      where: {
+        taskId: task._id,
+        identifier: { in: magicedenTokensToRemove },
+        marketplace: "magiceden"
+      }
+    })
+
+    if (blurOrders.length > 0) {
+      const cancelData = blurOrders.map((order) => {
+        const payload = JSON.parse(order.orderHash);
+        return {
+          name: CANCEL_BLUR_BID,
+          data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
+        };
+      });
+      await queue.addBulk(cancelData);
+    }
+
+    if (openseaOrders.length > 0) {
+      const cancelData = openseaOrders.map((order) => {
+        return {
+          name: CANCEL_OPENSEA_BID,
+          data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id }
+        };
+      });
+      await queue.addBulk(cancelData);
+    }
+
+    if (openseaTokensToCancel.length > 0) {
+      const cancelData = openseaTokensToCancel.map((order) => {
+        return {
+          name: CANCEL_OPENSEA_BID,
+          data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id }
+        };
+      });
+      await queue.addBulk(cancelData);
+    }
+
+    for (let i = 0; i < magicedenOrders.length; i += 500) {
+      const batchOrders = magicedenOrders.slice(i, i + 500);
+      const extractedOrderIds = await extractMagicedenOrderHash(batchOrders)
+      const orderKeys = batchOrders.map((order: PrismaOrder) => order.id)
+      await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys, taskId: task._id });
+    }
+
+    for (let i = 0; i < magicedenTokensToCancel.length; i += 500) {
+      const batchOrders = magicedenTokensToCancel.slice(i, i + 500);
+      const extractedOrderIds = await extractMagicedenOrderHash(batchOrders)
+      const orderKeys = batchOrders.map((order: PrismaOrder) => order.id)
+      await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys, taskId: task._id });
+    }
+
+    const newTask = { ...task, traits: {}, wallet: { address: task.wallet.address, privateKey: WALLET_PRIVATE_KEY } } as ITask
+    const collectionDetails = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
+
+    const creatorFees: IFee = collectionDetails.creator_fees.null !== undefined
+      ? { null: collectionDetails.creator_fees.null }
+      : Object.fromEntries(Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)]));
+
+    const currentTask = activeTasks.get(task._id)
+    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) return;
+    const expiration = getExpiry(currentTask.bidDuration)
+
+    if (traitBid) {
+      const openseaTraitJobs = (currentTask && currentTask.running && currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") && enabledMarketplaces.includes('OpenSea')) ? addedTraits.map((trait) => ({
+        name: OPENSEA_TRAIT_BID,
+        data: {
+          _id: task._id,
+          address: task.wallet.address,
+          privateKey: WALLET_PRIVATE_KEY,
+          slug: task.contract.slug,
+          contractAddress: task.contract.contractAddress,
+          creatorFees,
+          enforceCreatorFee: collectionDetails.enforceCreatorFee,
+          trait: JSON.stringify(trait),
+          outbidOptions: task.outbidOptions,
+          task: newTask
+        },
+        opts: { priority: TRAIT_BID_PRIORITY.OPENSEA } as JobsOptions
+      })) as Job[] : [] as Job[]
+
+      const magicedenTraits = addedTraits.map((trait) => ({ attributeKey: trait.type, attributeValue: trait.value }))
+      const magicedenTraitJobs = (currentTask && currentTask.running && currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") && enabledMarketplaces.includes('MagicEden')) ? magicedenTraits.map((trait) => ({
+        name: MAGICEDEN_TRAIT_BID,
+        data: {
+          _id: task._id,
+          address: task.wallet.address,
+          contractAddress: task.contract.contractAddress,
+          quantity: 1,
+          expiration: expiration,
+          privateKey: WALLET_PRIVATE_KEY,
+          slug: task.contract.slug,
+          trait,
+          outbidOptions: task.outbidOptions,
+          task: newTask
+        },
+        opts: { priority: TRAIT_BID_PRIORITY.MAGICEDEN } as JobsOptions
+      })) as Job[] : [] as Job[]
+
+
+      const blurTraits = addedTraits.map((trait) => ({
+        [trait.type]: trait.value
+      }));
+
+      const blurTraitJobs = (currentTask && currentTask.running && currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") && enabledMarketplaces.includes('Blur')) ? blurTraits.map((trait) => ({
+        name: BLUR_TRAIT_BID,
+        data: {
+          _id: task._id,
+          address: task.wallet.address,
+          privateKey: WALLET_PRIVATE_KEY,
+          contractAddress: task.contract.contractAddress,
+          slug: task.contract.slug,
+          trait: JSON.stringify(trait),
+          expiry: expiration,
+          outbidOptions: task.outbidOptions,
+          task: newTask
+        },
+        opts: { priority: TRAIT_BID_PRIORITY.BLUR } as JobsOptions
+      })) as Job[] : [] as Job[]
+
+      const openseaTraits = currentTraits[task._id].opensea
+      const magicedenSelectedTraits = currentTraits[task._id].magiceden
+      const blurSelectedTraits = currentTraits[task._id].blur
+
+      const openseaJobId = `${task._id}-opensea`.toLowerCase();
+      const openseaJob = parentJobs.get(openseaJobId)
+      if (openseaJob) openseaJob.totalJobs = Object.keys(openseaTraits).length
+
+      const magicedenJobId = `${task._id}-magiceden`.toLowerCase();
+      const magicedenJob = parentJobs.get(magicedenJobId)
+      if (magicedenJob) magicedenJob.totalJobs = Object.keys(magicedenSelectedTraits).length
+
+      const blurJobId = `${task._id}-blur`.toLowerCase();
+      const blurJob = parentJobs.get(blurJobId)
+      if (blurJob) blurJob.totalJobs = Object.keys(blurSelectedTraits).length
+
+      await Promise.all([
+        processBulkJobs(openseaTraitJobs, true),
+        processBulkJobs(magicedenTraitJobs, true),
+        processBulkJobs(blurTraitJobs, true)
+      ])
+    } else if (tokenBid) {
+      const openseaTokenJob = (currentTask && currentTask.running && currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") && enabledMarketplaces.includes('OpenSea')) ? openseaTokensToAdd
+        .filter(token => !isNaN(Number(token)) && String(token).toLowerCase().indexOf('bot') === -1)
+        .map((token) => ({
+          name: OPENSEA_TOKEN_BID,
+          data: {
+            _id: task._id,
+            address: task.wallet.address,
+            privateKey: WALLET_PRIVATE_KEY,
+            slug: task.contract.slug,
+            creatorFees,
+            enforceCreatorFee: collectionDetails.enforceCreatorFee,
+            asset: { contractAddress: task.contract.contractAddress, tokenId: token },
+            outbidOptions: task.outbidOptions,
+            task: newTask
+          },
+          opts: { priority: TOKEN_BID_PRIORITY.OPENSEA } as JobsOptions,
+        })) as Job[] : [] as Job[]
+
+
+      const magicedenTokenJob = (currentTask && currentTask.running && currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") && enabledMarketplaces.includes('MagicEden')) ? magicedenTokensToAdd
+        .filter(token => !isNaN(Number(token)))
+        .map((token) => ({
+          name: MAGICEDEN_TOKEN_BID,
+          data: {
+            _id: task._id,
+            address: task.wallet.address,
+            contractAddress: task.contract.contractAddress,
+            quantity: 1,
+            expiration: expiration,
+            privateKey: WALLET_PRIVATE_KEY,
+            slug: task.contract.slug,
+            tokenId: token,
+            outbidOptions: task.outbidOptions,
+            task: newTask
+          },
+          opts: { priority: TOKEN_BID_PRIORITY.MAGICEDEN } as JobsOptions
+        })) as Job[] : [] as Job[]
+
       if (!currentTokenIds[task._id]) {
         currentTokenIds[task._id] = {
           opensea: [],
           magiceden: []
         }
       }
-      currentTokenIds[task._id].opensea = [...tokenIds]
-    } else {
-      console.log(RED + `Attempted to update non - existent task: ${task.contract.slug} ` + RESET);
+      currentTokenIds[task._id].opensea = openseaTokenIds
+      currentTokenIds[task._id].magiceden = magicedenTokenIds
+
+
+      const openseaJobId = `${task._id}-opensea`.toLowerCase();
+      const openseaJob = parentJobs.get(openseaJobId)
+      if (openseaJob) openseaJob.totalJobs = openseaTokenIds.length
+
+      const magicedenJobId = `${task._id}-magiceden`.toLowerCase();
+      const magicedenJob = parentJobs.get(magicedenJobId)
+      if (magicedenJob) magicedenJob.totalJobs = magicedenTokenIds.length
+
+      // update parentjon
+      await Promise.all([
+        processBulkJobs(magicedenTokenJob, true),
+        processBulkJobs(openseaTokenJob, true)
+      ]);
     }
+
   } catch (error) {
     console.error(RED + `Error processing updated task: ${task.contract.slug} ` + RESET, error);
   }
@@ -1719,6 +3360,13 @@ async function processUpdatedTask(task: ITask) {
 
 const MAX_MEMORY_USAGE = 75;
 const DRAIN_THRESHOLD = RATE_LIMIT * 2;
+
+const BLUR_JOBS = [
+  'BLUR_COLLECTION_BID',
+  'BLUR_COLLECTION_BID_COUNTERBID',
+  'BLUR_TRAIT_BID_COUNTERBID',
+  'BLUR_TRAIT_BID'
+];
 
 
 async function processBulkJobs(jobs: Job[], createKey = false) {
@@ -1730,7 +3378,6 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
   const bulkJobId = `${firstJob.data._id}-${marketplace}`.toLowerCase();
 
   const task = activeTasks.get(taskId);
-
 
   parentJobs.set(bulkJobId, {
     parentId: bulkJobId,
@@ -1758,8 +3405,8 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
   bulkJobTrackers.set(bulkJobId, tracker);
 
   if (!task || !task.running) return
-  const rateLimiter = new RateLimiter(RATE_LIMIT);
-  const chunks = chunk(jobs, RATE_LIMIT);
+  const rateLimiter = new RateLimiter(1000);
+  const chunks = chunk(jobs, 1000);
 
   let totalProcessed = 0;
   let totalAdded = 0;
@@ -1782,7 +3429,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
           const counts = await queue.getJobCounts();
           const prioritizedCount = counts.prioritized || 0;
 
-          if (prioritizedCount <= DRAIN_THRESHOLD) {
+          if (prioritizedCount <= 1000) {
             break;
           }
           const delay = (prioritizedCount / DRAIN_THRESHOLD);
@@ -1793,7 +3440,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
         const counts = await queue.getJobCounts();
         const prioritizedCount = counts.prioritized || 0;
 
-        if (prioritizedCount > DRAIN_THRESHOLD) {
+        if (prioritizedCount > 1000) {
           await waitForQueueDrain();
         }
 
@@ -1802,92 +3449,57 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
         tracker.percentComplete = Math.round((totalProcessed / tracker.totalJobs) * 100);
         bulkJobTrackers.set(bulkJobId, tracker);
 
-        // Group jobs by type (Blur vs non-Blur)
-        const blurJobs = currentChunk.filter(job => BLUR_JOBS.includes(job.name));
-        const nonBlurJobs = currentChunk.filter(job => !BLUR_JOBS.includes(job.name));
+        const validJobs = await Promise.all(currentChunk.map(async (job) => {
+          if (!job?.name || !job?.data) return null;
 
-        // Process non-Blur jobs as usual
-        if (nonBlurJobs.length > 0) {
-          const validNonBlurJobs = await Promise.all(nonBlurJobs.map(async (job) => {
-            if (!job?.name || !job?.data) return null;
+          const taskId = job?.data?._id;
+          if (taskId && !activeTasks.get(taskId)?.running) return null;
 
-            const taskId = job?.data?._id;
-            if (taskId && !activeTasks.get(taskId)?.running) return null;
-
-            const isCancel = job.name.toLowerCase().includes('cancel');
-            if (isCancel) {
-              return {
-                ...job,
-                jobKey: undefined
-              };
-            }
-
-            const jobKey = createKey ? createJobKey(job) : generateJobKey(job);
+          const isCancel = job.name.toLowerCase().includes('cancel');
+          if (isCancel) {
             return {
               ...job,
-              jobKey
+              jobKey: undefined
             };
-          }));
-
-          const filteredNonBlurJobs = validNonBlurJobs.filter(Boolean);
-          if (filteredNonBlurJobs.length > 0) {
-            // Add non-Blur jobs to the queue
-            await rateLimiter.acquire();
-            const addedJobs = await queue.addBulk(
-              filteredNonBlurJobs.filter((job): job is NonNullable<typeof job> => job !== null).map(job => ({
-                name: job.name,
-                data: job.data,
-                opts: {
-                  ...(job.jobKey ? { jobId: job.jobKey } : {}),
-                  ...job?.opts,
-                  removeOnComplete: true,
-                  removeOnFail: true,
-                  attempts: 0,
-                }
-              }))
-            );
-
-            totalAdded += addedJobs.length;
-            tracker.completedJobs = totalAdded;
           }
+
+          const jobKey = createKey ? createJobKey(job) : generateJobKey(job);
+          return {
+            ...job,
+            jobKey
+          };
+        }));
+        const filteredJobs = validJobs.filter(Boolean);
+        if (!filteredJobs.length) continue;
+
+        // Filter out jobs for stopped tasks
+        const activeJobs = currentChunk.filter(job => {
+          const taskId = job?.data?._id;
+          if (!taskId) return true; // Keep jobs without taskId
+
+          const task = activeTasks.get(taskId);
+          if (task && !task?.running) {
+            return false;
+          }
+          return true;
+        });
+
+        if (!activeJobs.length) {
+          console.log(YELLOW + `No active jobs in chunk ${chunkIndex + 1}, skipping...` + RESET);
+          continue;
         }
 
-        // Process Blur jobs with throttling
-        if (blurJobs.length > 0) {
-          // Process Blur jobs in smaller sub-chunks of max BLUR_LIMIT
-          const blurSubChunks = chunk(blurJobs, BLUR_LIMIT);
+        if (task && task.running) taskStatus[taskId].status = 'QUEUEING'
 
-          for (const blurSubChunk of blurSubChunks) {
-            // Apply Blur queue rate limiting
-            await enforceBlurQueueLimit();
-
-            const validBlurJobs = await Promise.all(blurSubChunk.map(async (job) => {
-              if (!job?.name || !job?.data) return null;
-
-              const taskId = job?.data?._id;
-              if (taskId && !activeTasks.get(taskId)?.running) return null;
-
-              const isCancel = job.name.toLowerCase().includes('cancel');
-              if (isCancel) {
-                return {
-                  ...job,
-                  jobKey: undefined
-                };
-              }
-
-              const jobKey = createKey ? createJobKey(job) : generateJobKey(job);
-              return {
-                ...job,
-                jobKey
-              };
-            }));
-
-            const filteredBlurJobs = validBlurJobs.filter(Boolean);
-            if (filteredBlurJobs.length > 0) {
-              // Add Blur jobs to the queue
-              await rateLimiter.acquire();
-              const addedJobs = await queue.addBulk(
-                filteredBlurJobs.filter((job): job is NonNullable<typeof job> => job !== null).map(job => ({
+        let retries = 3;
+        const blurJobs = filteredJobs.filter((job): job is NonNullable<typeof job> => job !== null).filter(job => BLUR_JOBS.includes(job.name));
+        const nonBlurJobs = filteredJobs.filter((job): job is NonNullable<typeof job> => job !== null).filter(job => !BLUR_JOBS.includes(job.name));
+        while (retries > 0) {
+          try {
+            await rateLimiter.acquire();
+            const addedJobs = await queue.addBulk(
+              [
+                ...nonBlurJobs.map(job => ({
                   name: job.name,
                   data: job.data,
                   opts: {
@@ -1896,29 +3508,33 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
                     removeOnComplete: true,
                     removeOnFail: true,
                     attempts: 0,
-                  }
-                }))
-              );
-
-              // Mark timestamp for each added Blur job for rate limiting
-              for (let i = 0; i < addedJobs.length; i++) {
-                blurQueueTimestamps.push(Date.now());
-              }
-
-              totalAdded += addedJobs.length;
-              tracker.completedJobs = totalAdded;
-
-              // Wait a bit before processing the next sub-chunk
-              await new Promise(resolve => setTimeout(resolve, 100));
+                  },
+                })),
+              ]
+            );
+            for (const [index, job] of blurJobs.entries()) {
+              const delay = (index * 250) % 2000;
+              await new Promise(resolve => setTimeout(resolve, delay));
+              queue.add(job.name, job.data, {
+                ...(job.jobKey ? { jobId: job.jobKey } : {}), removeOnComplete: true,
+                removeOnFail: true,
+                attempts: 0,
+              })
             }
+            totalAdded += (addedJobs.length + blurJobs.length);
+            tracker.completedJobs = totalAdded;
+            break;
+          } catch (error) {
+            retries--;
+            totalFailed++;
+            tracker.failedJobs = totalFailed;
+            if (retries === 0) {
+              throw error;
+            }
+            console.log(YELLOW + `Retrying addBulk for chunk ${chunkIndex + 1}. Attempts remaining: ${retries}` + RESET);
+            await new Promise(resolve => setTimeout(resolve, 2000));
           }
         }
-
-        tracker.processedJobs = totalProcessed;
-        tracker.percentComplete = Math.round((totalProcessed / tracker.totalJobs) * 100);
-        bulkJobTrackers.set(bulkJobId, tracker);
-
-        const delay = Math.max(1000, Math.min(5000, prioritizedCount / RATE_LIMIT));
         await new Promise(resolve => setTimeout(resolve, 1000));
 
       } catch (error) {
@@ -1942,50 +3558,29 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
 async function waitForQueueDrain(): Promise<void> {
   while (true) {
     const counts = await queue.getJobCounts();
-    if ((counts.prioritized || 0) <= DRAIN_THRESHOLD) {
+    if ((counts.prioritized || 0) <= 1000) {
       return;
     }
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise(resolve => setTimeout(resolve, 1000));
   }
 }
 
 // Helper function to chunk array
+/**
+ * Splits an array into smaller arrays (chunks) of a specified size.
+ * 
+ * @param array - The array to be split into chunks.
+ * @param size - The maximum size of each chunk.
+ * @returns An array of arrays (chunks), where each chunk is of the specified size.
+ */
 function chunk<T>(array: T[], size: number): T[][] {
   return Array.from({ length: Math.ceil(array.length / size) }, (_, i) => {
-    const start = i * size;
-    const end = Math.min(start + size, array.length);
-    return array.slice(start, end);
+    const start = i * size; // Calculate the starting index of the current chunk
+    const end = Math.min(start + size, array.length); // Calculate the ending index of the current chunk
+    return array.slice(start, end); // Extract the chunk from the array
   });
 }
-class RateLimiter {
-  private tokens: number;
-  private lastRefill: number;
-  private readonly rate: number;
 
-  constructor(rate: number) {
-    this.tokens = rate;
-    this.lastRefill = Date.now();
-    this.rate = rate;
-  }
-
-  async acquire(): Promise<void> {
-    while (this.tokens <= 0) {
-      const now = Date.now();
-      const timePassed = now - this.lastRefill;
-      const refillAmount = Math.floor(timePassed * (this.rate / 1000));
-
-      if (refillAmount > 0) {
-        this.tokens = Math.min(this.rate, this.tokens + refillAmount);
-        this.lastRefill = now;
-      }
-
-      if (this.tokens <= 0) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-    }
-    this.tokens--;
-  }
-}
 
 function createJobKey(job: Job) {
   let uniqueKey;
@@ -2064,8 +3659,10 @@ async function updateMagicEdenTokenJobs(task: ITask, tokenIds: (number | string)
 }
 
 async function processUpdatedOpenseaTokenJob(task: ITask, tokenIds: (number | string)[], creatorFees: IFee, collectionDetails: any) {
-
   try {
+    // check if the task is running and marketplace contains opensea
+    if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return;
+
     const wallet = await Wallet.findOne({ address: task.wallet.address })
     const WALLET_PRIVATE_KEY: string = wallet?.privateKey as string
 
@@ -2136,6 +3733,7 @@ async function updateMagicedenTraitBid(task: ITask, traits: {
 async function processUpdatedOpenseaTraitJob(task: ITask, traits: {
   [key: string]: string;
 }[], creatorFees: IFee, collectionDetails: any) {
+  if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return;
 
   try {
     const wallet = await Wallet.findOne({ address: task.wallet.address })
@@ -2217,18 +3815,15 @@ async function startTask(task: ITask, start: boolean) {
   };
 
 
-  if (!taskStatus[task._id]) {
-    taskStatus[task._id] = {
-      status: 'STARTED',
-      runningPercentage: 0,
-      waitingTime: 0,
-      cancellationPercentage: 0,
-      processingPercentage: 0,
-      nextLoopTime: new Date()
-    }
+  taskStatus[task._id] = {
+    status: 'STARTED',
+    runningPercentage: 0,
+    waitingTime: 0,
+    cancellationPercentage: 0,
+    processingPercentage: 0,
+    nextLoopTime: new Date()
   }
 
-  taskStatus[task._id].status = 'STARTED'
 
   const taskDoc = await Task.findById(task._id).select('balance').exec();
   await BidLogs.deleteMany({ taskId: task._id });
@@ -2294,12 +3889,26 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
       activeTasks.set(taskId, updatedTask);
     }
 
-    if (!errorStats[taskId]) {
-      errorStats[taskId] = {
-        opensea: 0,
-        magiceden: 0,
-        blur: 0
-      };
+    skipStats[taskId] = {
+      opensea: 0,
+      magiceden: 0,
+      blur: 0
+    };
+    errorStats[taskId] = {
+      opensea: 0,
+      magiceden: 0,
+      blur: 0
+    };
+
+    if (!marketplace) {
+      taskStatus[taskId] = {
+        status: 'CANCELLING',
+        cancellationPercentage: 0,
+        runningPercentage: 0,
+        waitingTime: 0,
+        nextLoopTime: new Date(),
+        processingPercentage: 0
+      }
     }
 
     switch (marketplace?.toLowerCase()) {
@@ -2343,36 +3952,6 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
         break;
     }
 
-    if (marketplace) {
-      if (!skipStats[taskId]) {
-        skipStats[taskId] = {
-          opensea: 0,
-          magiceden: 0,
-          blur: 0
-        };
-      }
-      if (!errorStats[taskId]) {
-        errorStats[taskId] = {
-          opensea: 0,
-          magiceden: 0,
-          blur: 0
-        };
-      }
-      skipStats[taskId][marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur'] = 0;
-      errorStats[taskId][marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur'] = 0;
-    } else {
-      // Reset all stats when no specific marketplace is provided
-      skipStats[taskId] = {
-        opensea: 0,
-        magiceden: 0,
-        blur: 0
-      };
-      errorStats[taskId] = {
-        opensea: 0,
-        magiceden: 0,
-        blur: 0
-      };
-    }
     await updateTaskStatus(task, start, marketplace);
     if (task.outbidOptions.counterbid && !marketplace) {
       try {
@@ -2382,6 +3961,27 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
       }
     }
     await removePendingAndWaitingBids(task, marketplace)
+
+    if (!task?.selectedMarketplaces.length || !task.running) {
+      delete taskStatus[taskId].nextLoopTime
+      taskStatus[taskId].waitingTime = 0
+    }
+
+    // get all the task, if no task, change state to stopped
+
+    const orders = await prisma.order.findMany({
+      where: {
+        taskId: taskId,
+        // ...(marketplace && { marketplace: marketplace.toLowerCase() })
+      }
+    })
+
+    if (!orders.length) {
+      delete taskStatus[taskId].nextLoopTime
+      taskStatus[taskId].waitingTime = 0
+      taskStatus[taskId].status = 'STOPPED'
+    }
+
     await cancelAllRelatedBids(task, WALLET_PRIVATE_KEY, marketplace);
 
   } catch (error: any) {
@@ -2564,6 +4164,14 @@ function getJobIds(marketplace: string, task: ITask) {
 }
 
 async function updateTaskStatus(task: ITask, running: boolean, marketplace?: string) {
+  if (!warningBids[task._id]) {
+    warningBids[task._id] = {
+      opensea: false,
+      magiceden: false,
+      blur: false
+    };
+  }
+
   const taskIndex = currentTasks.findIndex(t => t._id === task._id);
   if (taskIndex !== -1) {
     if (marketplace) {
@@ -2786,11 +4394,33 @@ async function updateStatus(task: ITask) {
       // Update activeTasks Map
       const updatedTask = { ...task, running: true };
       activeTasks.set(taskId, updatedTask);
+      if (!taskStatus[taskId]) {
+        taskStatus[taskId] = {
+          status: 'STARTED',
+          cancellationPercentage: 0,
+          runningPercentage: 0,
+          waitingTime: 0,
+          nextLoopTime: new Date(),
+          processingPercentage: 0
+        }
+      }
+      taskStatus[taskId].status = 'STARTED'
       await startTask(task, true);
     } else {
       // Update activeTasks Map
       const updatedTask = { ...task, running: false };
       activeTasks.set(taskId, updatedTask);
+      if (!taskStatus[taskId]) {
+        taskStatus[taskId] = {
+          status: 'CANCELLING',
+          cancellationPercentage: 0,
+          runningPercentage: 0,
+          waitingTime: 0,
+          nextLoopTime: new Date(),
+          processingPercentage: 0
+        }
+      }
+      taskStatus[taskId].status = 'CANCELLING'
       await stopTask(task, false);
     }
   } catch (error) {
@@ -3089,48 +4719,21 @@ async function handleCounterBidForTask(task: any, message: any) {
 
 async function handleMagicEdenCounterbid(data: any, task: ITask) {
   try {
+    const currentTask = activeTasks.get(task._id)
+    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.includes("MagicEden")) return;
+
+    const expiration = getExpiry(currentTask.bidDuration)
+
     const domain: string = data?.data?.source?.domain
     const wallets = await Wallet.find({})
     const walletAddresses = wallets.map((wallet) => wallet.address.toLowerCase())
-
-
-
     const WALLET_PRIVATE_KEY: string = wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.address.toLowerCase())?.privateKey as string
-
     const maker = data?.data?.maker?.toLowerCase()
 
-    // console.log({ maker, domain });
     if (walletAddresses.includes(maker)) return
 
-    const expiration = getExpiry(task.bidDuration)
-    let floor_price: number = 0
-
-    if (task.bidPrice.minType == "eth" || task.openseaBidPrice.minType === "eth") {
-      floor_price = 0
-    } else {
-      floor_price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress))
-    }
-
-
-    if (!warningBids[task._id]) {
-      warningBids[task._id] = {
-        opensea: false,
-        magiceden: false,
-        blur: false
-      }
-    }
-
-    const balance = balances[task._id]
-    warningBids[task._id].magiceden = false;
-    const stopBid = await stopOption(task, 'magiceden', floor_price, balance)
-
-    if (stopBid) return
-
-
-    const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, floor_price as number, "magiceden")
 
     const magicedenOutbidMargin = task?.outbidOptions?.magicedenOutbidMargin || 0.0001
-
 
     const bidType = data?.data?.criteria?.kind
     const tokenId = +data?.data?.criteria?.data?.token?.tokenId;
@@ -3138,23 +4741,25 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     const incomingBidAmount: number = Number(data?.data?.price?.amount?.raw);
     let offerPrice: number;
 
-    const incomingBidAmountEth = (incomingBidAmount / 1e18);
+    console.log({ maker, incomingBidAmount, bidType });
 
-    if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
-      const reason = incomingBidAmountEth < minBidPriceEth
-        ? `is less than min bid price ${minBidPriceEth} WETH`
-        : `is greater than max bid price ${maxBidPriceEth} WETH`;
-      const message = `incoming bid ${incomingBidAmountEth} WETH for ${task.contract.slug} ${reason}. Skipping ...`.toUpperCase()
-      await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "magiceden");
-      return
+    if (!bestOffers[task._id]) {
+      bestOffers[task._id] = {
+        opensea: 0,
+        magiceden: 0,
+        blur: 0
+      }
+    }
+
+    if (!currentTokenIds[task._id]) {
+      currentTokenIds[task._id] = {
+        opensea: [],
+        magiceden: [],
+      }
     }
 
     const selectedTraits = transformNewTask(task.selectedTraits)
-
     const bestOffer = (bestOffers[task._id]?.magiceden || 0) * 1e18;
-
-    if (incomingBidAmount < bestOffer) return;
-
     const collectionOffer = bidType === "collection" ? incomingBidAmount / 1e18 : 0;
 
     if (collectionOffer > bestOffer) {
@@ -3162,19 +4767,31 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     }
 
     if (bidType === "token") {
-      const currentTask = activeTasks.get(task._id)
-      if (!currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes(MAGICEDEN.toLowerCase())) return
-
-      const tokenIds = task.tokenIds.filter(id => !isNaN(Number(id)));
+      const currentTokens = currentTokenIds[task._id].magiceden
+      const tokenIds = [...task.tokenIds.filter(id => !isNaN(Number(id))), ...currentTokens];
       const tokenBid = task.bidType === "token"
 
-      if (!tokenBid) return
+      if (!tokenBid || !tokenIds.includes(tokenId)) return
       console.log(MAGENTA + '----------------------------------------------------------------------------------' + RESET);
       console.log(MAGENTA + `incoming bid for ${task.contract.slug}:${tokenId} for ${incomingBidAmount / 1e18} WETH on magiceden`.toUpperCase() + RESET);
       console.log(MAGENTA + '----------------------------------------------------------------------------------' + RESET);
 
-      if (!tokenIds.includes(tokenId)) return
+      const floor_price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress))
+      if (!floor_price) return
 
+      const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
+      const incomingBidAmountEth = incomingBidAmount / 1e18
+      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
+        const reason = incomingBidAmountEth < minBidPriceEth
+          ? `is less than min bid price ${minBidPriceEth} WETH`
+          : `is greater than max bid price ${maxBidPriceEth} WETH`;
+        const message = `incoming bid ${incomingBidAmountEth} WETH for ${task.contract.slug}: ${tokenId} ${reason}. Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "magiceden");
+        return
+      }
+
+      const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), balances[task._id])
+      if (stopBid) return
 
       const orders = await prisma.order.findMany({
         where: {
@@ -3185,38 +4802,24 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       })
 
       const offers = orders.map((order: PrismaOrder) => order.offerPrice)
-
       const currentBidPrice = !offers.length ? 0 : Math.max(...offers.map((offer) => Number(offer)))
+
       if (incomingBidAmount < currentBidPrice) return
 
-      const absoluteHighestBidAmount = Math.max(bestOffer, incomingBidAmount, (minBidPriceEth * 1e18))
-      const absoluteHighestBidAmountEth = absoluteHighestBidAmount / 1e18
-      const magicedenOutbidMargin = calculateOutbidMargin(absoluteHighestBidAmountEth)
-      const roundedEth = roundToValidPrecision(absoluteHighestBidAmountEth)
-
-      if (absoluteHighestBidAmount < currentBidPrice || incomingBidAmount < absoluteHighestBidAmount) return
+      const magicedenOutbidMargin = calculateOutbidMargin(incomingBidAmountEth)
+      const roundedEth = roundToValidPrecision(incomingBidAmountEth)
 
       offerPrice = Math.ceil((magicedenOutbidMargin * 1e18) + roundedEth)
-
       const offerPriceEth = offerPrice / 1e18
 
-
-      if (offerPriceEth < absoluteHighestBidAmountEth) {
-        offerPrice = (absoluteHighestBidAmountEth + magicedenOutbidMargin) * 1e18
-      }
-
       if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
-
         const message = `magiceden counter offer ${offerPriceEth} WETH for ${task.contract.slug} ${tokenId} exceeds max bid price ${maxBidPriceEth} WETH ON MAGICEDEN.Skipping ...`.toUpperCase()
-
         await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "magiceden");
 
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
         console.log(RED + message + RESET);
-
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
 
-        skipStats[task._id]['magiceden']++;
         if (orders.length > 0) {
           const orderKeys = orders.map((order: PrismaOrder) => order.id)
           const extractedOrderIds = await extractMagicedenOrderHash(orders)
@@ -3238,9 +4841,8 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         outbidOptions: task.outbidOptions,
         maxBidPriceEth,
         minBidPriceEth,
-        task
+        task: currentTask
       }
-
 
       const jobId = `counterbid-${task._id}-${task.contract.slug}-${MAGICEDEN.toLowerCase()}-${tokenId}`
       const job: Job = await queue.getJob(jobId)
@@ -3293,11 +4895,30 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       console.log(MAGENTA + `incoming bid for ${task.contract.slug} ${JSON.stringify(trait)} for ${incomingBidAmount / 1e18} WETH on magiceden`.toUpperCase() + RESET);
       console.log(MAGENTA + '----------------------------------------------------------------------------------' + RESET);
 
+      const floor_price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress))
+      if (!floor_price) return
+
+      const identifier = `${trait.attributeKey}:${trait.attributeValue}`
+
+      const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
+      const incomingBidAmountEth = incomingBidAmount / 1e18
+      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
+        const reason = incomingBidAmountEth < minBidPriceEth
+          ? `is less than min bid price ${minBidPriceEth} WETH`
+          : `is greater than max bid price ${maxBidPriceEth} WETH`;
+        const message = `incoming bid ${incomingBidAmountEth} WETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "magiceden");
+        return
+      }
+
+      const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), balances[task._id])
+      if (stopBid) return
+
       const orders = await prisma.order.findMany({
         where: {
           taskId: task._id,
           marketplace: MAGICEDEN.toLowerCase(),
-          identifier: `${trait.attributeKey}:${trait.attributeValue}`
+          identifier
         }
       })
 
@@ -3309,20 +4930,17 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       offerPrice = Math.ceil((magicedenOutbidMargin * 1e18) + incomingBidAmount)
       const offerPriceEth = offerPrice / 1e18
 
-      if (offerPriceEth < minBidPriceEth) {
-        offerPrice = minBidPriceEth * 1e18
-      }
       if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
-        const message = `magiceden trait counter offer ${offerPriceEth} WETH for ${task.contract.slug} ${JSON.stringify(trait)} exceeds max bid price ${maxBidPriceEth} WETH ON MAGICEDEN.Skipping ...`.toUpperCase()
+        const message = `magiceden counter offer ${offerPriceEth} WETH for ${task.contract.slug} ${tokenId} exceeds max bid price ${maxBidPriceEth} WETH ON MAGICEDEN.Skipping ...`.toUpperCase()
         await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "magiceden");
+
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
         console.log(RED + message + RESET);
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
 
-        skipStats[task._id]['magiceden']++;
         if (orders.length > 0) {
-          const extractedOrderIds = await extractMagicedenOrderHash(orders)
           const orderKeys = orders.map((order: PrismaOrder) => order.id)
+          const extractedOrderIds = await extractMagicedenOrderHash(orders)
           await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
         }
         return;
@@ -3340,8 +4958,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         slug: task.contract.slug,
         trait: JSON.stringify(trait)
       }
-
-
 
       const jobId = `counterbid-${task._id}-${task.contract.slug}-${MAGICEDEN.toLowerCase()}-${JSON.stringify(trait)}`
       const job: Job = await queue.getJob(jobId)
@@ -3389,6 +5005,22 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       console.log(MAGENTA + `incoming collection offer for ${task.contract.slug} for ${incomingBidAmount / 1e18} WETH on magiceden`.toUpperCase() + RESET);
       console.log(MAGENTA + '----------------------------------------------------------------------------------' + RESET);
 
+      const floor_price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress))
+      if (!floor_price) return
+
+      const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
+      const incomingBidAmountEth = incomingBidAmount / 1e18
+      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
+        const reason = incomingBidAmountEth < minBidPriceEth
+          ? `is less than min bid price ${minBidPriceEth} WETH`
+          : `is greater than max bid price ${maxBidPriceEth} WETH`;
+        const message = `incoming bid ${incomingBidAmountEth} WETH for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "magiceden");
+        return
+      }
+
+      const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), balances[task._id])
+      if (stopBid) return
 
       const orders = await prisma.order.findMany({
         where: {
@@ -3400,25 +5032,17 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       const offers = orders.map((order: PrismaOrder) => order.offerPrice)
       const currentBidPrice = !offers.length ? 0 : Math.max(...offers.map((offer) => Number(offer)))
-      const bestOffer = bestOffers[task._id].magiceden * 1e18;
-      const absoluteHighestBidAmount = Math.max(bestOffer, incomingBidAmount)
 
-      if (incomingBidAmount < currentBidPrice || incomingBidAmount < absoluteHighestBidAmount) return
+      if (incomingBidAmount < currentBidPrice) return
 
-      const absoluteHighestBidAmountEth = absoluteHighestBidAmount / 1e18
-      const magicedenOutbidMargin = calculateOutbidMargin(absoluteHighestBidAmountEth)
-      const roundedEth = roundToValidPrecision(absoluteHighestBidAmountEth)
+      const magicedenOutbidMargin = calculateOutbidMargin(incomingBidAmountEth)
+      const roundedEth = roundToValidPrecision(incomingBidAmountEth)
 
 
       offerPrice = Math.ceil((magicedenOutbidMargin * 1e18) + (roundedEth * 1e18))
       const offerPriceEth = offerPrice / 1e18
 
-      if (offerPriceEth < minBidPriceEth) {
-        offerPrice = minBidPriceEth * 1e18
-      }
-
       if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
-        skipStats[task._id]['magiceden']++;
         const message = `counter Offer ${offerPriceEth} WETH for ${task.contract.slug}  exceeds max bid price ${maxBidPriceEth} WETH.Skipping ...`.toUpperCase()
         await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "magiceden");
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
@@ -3482,7 +5106,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
     }
   } catch (error) {
-    // console.error(RED + `Error handling MAGICEDEN counterbid: ${JSON.stringify(error)} ` + RESET);
+    console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
+    console.log(RED + `Error processing magiceden counterbid: ${error}` + RESET);
+    console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
   }
 }
 
@@ -3490,6 +5116,12 @@ const seenOrderHashes = new Set<string>();
 
 async function handleOpenseaCounterbid(data: any, task: ITask) {
   try {
+    const currentTask = activeTasks.get(task._id)
+    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces.includes("OpenSea")) return;
+
+    const outbidOptions = currentTask.outbidOptions
+    const expiry = getExpiry(currentTask.bidDuration)
+
     const maker = data?.payload?.payload?.maker?.address.toLowerCase()
     const quantity = Number(data?.payload?.payload?.quantity) || 1
     const incomingBidAmount: number = Number(data?.payload?.payload?.base_price) / quantity;
@@ -3500,8 +5132,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       value: data.payload.payload.trait_criteria.trait_name
     } : null
 
-
-    // console.log({ maker, incomingBidAmount, event: data.event });
+    console.log({ maker, incomingBidAmount, event: data.event });
 
 
     const wallets = await Wallet.find({})
@@ -3528,9 +5159,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     seenOrderHashes.add(orderHash)
 
     if (walletAddresses.includes(maker)) return
-    const expiry = getExpiry(task.bidDuration)
 
-    const incomingBidAmountEth = incomingBidAmount / 1e18
+    const incomingBidAmountEth = incomingBidAmount / 1e18;
     const collectionDetails = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
 
     const creatorFees: IFee = collectionDetails.creator_fees.null !== undefined
@@ -3540,7 +5170,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     let offerPrice: number;
     let colletionOffer: bigint;
 
-    const selectedTraits = transformNewTask(task.selectedTraits)
+    const selectedTraits = transformNewTask(currentTask.selectedTraits)
     const bestOffer = (bestOffers[task._id]?.opensea || 0);
 
     const collectionOffer = data.event === "collection_offer" ? incomingBidAmount / 1e18 : 0
@@ -3549,27 +5179,34 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       bestOffers[task._id].opensea = collectionOffer;
     }
 
-    const floor_price = await getOpenseaFloor(task.contract.slug);
-    if (!floor_price) return
-    const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, Number(floor_price), "opensea")
-
-
     if (data.event === "item_received_bid") {
       let tokenOffer: bigint;
       let offerPrice: number;
-      const currentTask = activeTasks.get(task._id)
-      if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes(OPENSEA.toLowerCase())) return
-      const tokenIds = task.tokenIds.filter(id => !isNaN(Number(id)));
+
+      const currentTokens = currentTokenIds[task._id].opensea
+      const tokenIds = [...task.tokenIds.filter(id => !isNaN(Number(id))), ...currentTokens]
       const tokenBid = task.bidType === "token"
 
-      if (!tokenBid) return
-
-      if (!tokenIds.includes(tokenId) || currentTokenIds[task._id]?.opensea?.includes(tokenId)) return
+      if (!tokenBid || !tokenIds.includes(tokenId)) return
 
       console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
       console.log(BLUE + `incoming offer for ${task.contract.slug}:${tokenId} for ${incomingBidAmount / 1e18} WETH on opensea`.toUpperCase() + RESET);
       console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
 
+      const floor_price = await getOpenseaFloor(task.contract.slug);
+      if (!floor_price) return
+
+      const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
+        const reason = incomingBidAmountEth < minBidPriceEth
+          ? `is less than min bid price ${minBidPriceEth} WETH`
+          : `is greater than max bid price ${maxBidPriceEth} WETH`;
+        const message = `incoming bid ${incomingBidAmountEth} WETH for ${task.contract.slug}: ${tokenId} ${reason}. Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
+        return
+      }
+      const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), balances[task._id])
+      if (stopBid) return
 
       const orders = await prisma.order.findMany({
         where: {
@@ -3580,30 +5217,16 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         }
       })
 
-      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
-        const identifier = tokenId ? tokenId : trait && trait.type && trait.value ? `${trait.type}:${trait.value}` : "collection"
-        const reason = incomingBidAmountEth < minBidPriceEth
-          ? `is less than min bid price ${minBidPriceEth} WETH`
-          : `is greater than max bid price ${maxBidPriceEth} WETH`;
-        const message = `incoming bid ${incomingBidAmountEth} WETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
-        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
-        return
-      }
-
       const offers = orders.map((order: PrismaOrder) => order.offerPrice)
-
       const currentBidPrice = offers.length > 0 ? Math.max(...offers.map((offer) => Number(offer))) : 0
 
       if (incomingBidAmount < currentBidPrice) return
+
       const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth)
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
 
       offerPrice = Math.ceil((openseaOutbidMargin * 1e18) + (roundedEth * 1e18))
       const offerPriceEth = offerPrice / 1e18
-
-      if (offerPriceEth < incomingBidAmountEth) {
-        offerPrice = (incomingBidAmountEth + openseaOutbidMargin) * 1e18
-      }
 
       if (offerPriceEth > maxBidPriceEth) {
         const message = `counter offer ${offerPriceEth} WETH for ${task.contract.slug}:${tokenId}  exceeds max bid price ${maxBidPriceEth} WETH ON OPENSEA.Skipping ...`.toUpperCase()
@@ -3640,7 +5263,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         creatorFees,
         enforceCreatorFee: collectionDetails.enforceCreatorFee,
         asset,
-        outbidOptions: task.outbidOptions,
+        outbidOptions: outbidOptions,
         task
       }
 
@@ -3682,16 +5305,35 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
     if (data.event === "trait_offer") {
       if (!trait) return
+      let traitOffer = BigInt(incomingBidAmount)
       const traitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
       const hasTraits = checkOpenseaTrait(selectedTraits, data.payload.payload.trait_criteria)
 
       if (!hasTraits || !traitBid) return
-
-
-      console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
-      console.log(BLUE + `incoming offer for ${task.contract.slug}:${JSON.stringify(trait)} for ${incomingBidAmount / 1e18} WETH on opensea`.toUpperCase() + RESET);
-      console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
       const identifier = `${trait.type}:${trait.value}`
+
+      console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
+      console.log(BLUE + `incoming offer for ${task.contract.slug}:${identifier} for ${incomingBidAmount / 1e18} WETH on opensea`.toUpperCase() + RESET);
+      console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
+
+
+      const floor_price = await getOpenseaFloor(task.contract.slug);
+      if (!floor_price) return
+
+      const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+      const incomingBidAmountEth = incomingBidAmount / 1e18
+
+      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
+        const reason = incomingBidAmountEth < minBidPriceEth
+          ? `is less than min bid price ${minBidPriceEth} WETH`
+          : `is greater than max bid price ${maxBidPriceEth} WETH`;
+        const message = `incoming bid ${incomingBidAmountEth} WETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
+        return
+      }
+
+      const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), balances[task._id])
+      if (stopBid) return
 
       const orders = await prisma.order.findMany({
         where: {
@@ -3703,19 +5345,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       })
 
       const offers = orders.map((order: PrismaOrder) => order.offerPrice)
-
       const currentBidPrice = offers.length > 0 ? Math.max(...offers.map((offer) => Number(offer))) : 0
-      const incomingBidAmountEth = incomingBidAmount / 1e18
-
-      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
-        const identifier = tokenId ? tokenId : trait && trait.type && trait.value ? `${trait.type}:${trait.value}` : "collection"
-        const reason = incomingBidAmountEth < minBidPriceEth
-          ? `is less than min bid price ${minBidPriceEth} WETH`
-          : `is greater than max bid price ${maxBidPriceEth} WETH`;
-        const message = `incoming bid ${incomingBidAmountEth} WETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
-        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
-        return
-      }
 
       if (incomingBidAmount < currentBidPrice) return
 
@@ -3726,10 +5356,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       offerPrice = Math.ceil((openseaOutbidMargin * 1e18) + (roundedEth * 1e18))
       const offerPriceEth = offerPrice / 1e18
 
-
       if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
-
-        skipStats[task._id]['opensea']++;
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
         console.log(RED + `counter Offer ${offerPriceEth} WETH for ${task.contract.slug} ${JSON.stringify(trait)} exceeds max bid price ${maxBidPriceEth} WETH ON OPENSEA.Skipping ...`.toUpperCase() + RESET);
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
@@ -3746,7 +5373,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         return;
       }
 
-      colletionOffer = BigInt(offerPrice)
+      traitOffer = BigInt(offerPrice)
       const jobId = `counterbid-${task._id}-${task.contract.slug}-${OPENSEA.toLowerCase()}-${trait}`
       const job: Job = await queue.getJob(jobId)
       const bidCount = getIncrementedBidCount(OPENSEA, task.contract.slug, task._id)
@@ -3757,7 +5384,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         address: task.wallet.address,
         privateKey: WALLET_PRIVATE_KEY,
         slug: task.contract.slug,
-        offerPrice: Number(colletionOffer),
+        offerPrice: Number(traitOffer),
         creatorFees,
         enforceCreatorFee: collectionDetails.enforceCreatorFee,
         expiry,
@@ -3783,7 +5410,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         );
       }
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(GREEN + `Counterbidding incoming opensea offer of ${Number(incomingBidAmount) / 1e18} WETH for ${task.contract.slug} ${JSON.stringify(trait)} for ${Number(colletionOffer) / 1e18} WETH ON OPENSEA`.toUpperCase() + RESET);
+      console.log(GREEN + `Counterbidding incoming opensea offer of ${Number(incomingBidAmount) / 1e18} WETH for ${task.contract.slug} ${JSON.stringify(trait)} for ${Number(traitOffer) / 1e18} WETH ON OPENSEA`.toUpperCase() + RESET);
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
 
       if (orders.length > 0) {
@@ -3807,6 +5434,24 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       console.log(BLUE + `incoming collection offer for ${task.contract.slug} for ${incomingBidAmount / 1e18} WETH on opensea`.toUpperCase() + RESET);
       console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
 
+      const floor_price = await getOpenseaFloor(task.contract.slug);
+      if (!floor_price) return
+
+      const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+      const incomingBidAmountEth = incomingBidAmount / 1e18
+
+      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
+        const reason = incomingBidAmountEth < minBidPriceEth
+          ? `is less than min bid price ${minBidPriceEth} WETH`
+          : `is greater than max bid price ${maxBidPriceEth} WETH`;
+        const message = `incoming bid ${incomingBidAmountEth} WETH for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
+        return
+      }
+
+      const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), balances[task._id])
+      if (stopBid) return
+
       const orders = await prisma.order.findMany({
         where: {
           slug: task.contract.slug,
@@ -3819,18 +5464,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       const offers = orders.map((order: PrismaOrder) => order.offerPrice)
       const currentBidPrice = offers.length > 0 ? Math.max(...offers.map((offer) => Number(offer))) : 0
 
-      const incomingBidAmountEth = incomingBidAmount / 1e18
-
-      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
-        const identifier = tokenId ? tokenId : trait && trait.type && trait.value ? `${trait.type}:${trait.value}` : "collection"
-        const reason = incomingBidAmountEth < minBidPriceEth
-          ? `is less than min bid price ${minBidPriceEth} WETH`
-          : `is greater than max bid price ${maxBidPriceEth} WETH`;
-        const message = `incoming bid ${incomingBidAmountEth} WETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
-        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
-        return
-      }
-
       if (incomingBidAmount < currentBidPrice) return
 
       const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth)
@@ -3839,9 +5472,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       offerPrice = Math.ceil((openseaOutbidMargin * 1e18) + (roundedEth * 1e18))
       const offerPriceEth = offerPrice / 1e18
 
-
       if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
-        skipStats[task._id]['opensea']++;
         const message = `counter Offer price ${offerPriceEth} WETH for ${task.contract.slug} exceeds max bid price ${maxBidPriceEth} WETH ON OPENSEA.Skipping ...`.toUpperCase()
         await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea");
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
@@ -3923,56 +5554,57 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 async function handleBlurCounterbid(data: any, task: ITask) {
   const incomingBid: CombinedBid = data
   try {
-    const expiry = getExpiry(task.bidDuration)
-    let floor_price: number = 0
+    const currentTask = activeTasks.get(task._id)
+    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur") || !enabledMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur")) return
+
+    const expiry = getExpiry(currentTask.bidDuration)
+
     const wallets = await Wallet.findOne({ address: task.wallet.address })
     const WALLET_PRIVATE_KEY: string = wallets?.privateKey as string
-    if (task.bidPrice.minType == "eth" || task.openseaBidPrice.minType === "eth") {
-      floor_price = 0
-    } else {
-      const stats = await fetchBlurCollectionStats(task.contract.slug);
-      if (!stats || stats === 0) return
-      floor_price = stats;
-    }
 
-    if (!warningBids[task._id]) {
-      warningBids[task._id] = {
-        opensea: false,
-        magiceden: false,
-        blur: false
-      }
-    }
-
-    warningBids[task._id].blur = false;
-    const stopBid = await stopOption(task, 'blur', floor_price, balances[task._id])
-
-    if (stopBid) return
-
-    const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, Number(floor_price), "blur")
     const selectedTraits = transformNewTask(task.selectedTraits)
     const traitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
     const blurOutbidMargin = task.outbidOptions.blurOutbidMargin || 0.01
     const bestOffer = bestOffers[task._id]?.blur || 0
 
     if (traitBid) {
+      const isTraitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
+
+      if (!isTraitBid) return
+
       const traits = transformBlurTraits(selectedTraits)
       const incomingTraitBids = incomingBid?.stats?.filter(item => item.criteriaType.toLowerCase() === "trait") || incomingBid?.updates?.filter(item => item.criteriaType.toLowerCase() === "trait")
       const hasMatchingTraits = checkBlurTraits(incomingTraitBids, traits);
 
       if (!hasMatchingTraits.length) return
+
       for (const traitBid of hasMatchingTraits) {
         const trait = JSON.stringify(traitBid.criteriaValue)
-        const incomingPrice = Number(traitBid.bestPrice)
+        const incomingPrice = Number(traitBid.bestPrice || traitBid.price)
 
-        if (incomingPrice < bestOffer) return
 
         console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
         console.log(GOLD + `incoming trait offer for ${task.contract.slug}: ${trait} for ${incomingPrice} BETH on blur`.toUpperCase() + RESET);
         console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
 
+        const floor_price = await fetchBlurCollectionStats(task.contract.slug);
+        const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, Number(floor_price), "blur")
         const traitsObj = JSON.parse(trait);
         const [traitType, traitValue] = Object.entries(traitsObj)[0];
         const identifier = `${traitType}:${traitValue}`
+
+        if (+incomingPrice < minBidPriceEth || +incomingPrice > maxBidPriceEth) {
+          const reason = +incomingPrice < minBidPriceEth
+            ? `is less than min bid price ${minBidPriceEth} BETH`
+            : `is greater than max bid price ${maxBidPriceEth} BETH`;
+          const message = `incoming bid ${incomingPrice} BETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
+          await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "blur");
+          return
+        }
+
+        const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), balances[task._id])
+        if (stopBid) return
+
         const orders = await prisma.order.findMany({
           where: {
             slug: task.contract.slug,
@@ -3981,8 +5613,8 @@ async function handleBlurCounterbid(data: any, task: ITask) {
             identifier: identifier
           }
         })
-        const offers = orders.map((order: PrismaOrder) => order.offerPrice)
 
+        const offers = orders.map((order: PrismaOrder) => order.offerPrice)
         const currentBidPrice = !offers.length ? 0 : Math.max(...offers.map((offer) => Number(offer)))
         const currentBidPriceEth = currentBidPrice / 1e18
 
@@ -3990,30 +5622,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
         let offerPrice: any = Number((blurOutbidMargin + Number(incomingPrice)).toFixed(2))
         offerPrice = BigNumber.from(utils.parseEther(offerPrice.toString()).toString())
-        const offerPriceEth = offerPrice / 1e18
-        if (offerPriceEth < minBidPriceEth) {
-          offerPrice = minBidPriceEth * 1e18
-        }
-        if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
-          skipStats[task._id]['blur']++;
-          const message = `counter Offer price ${Number(offerPrice) / 1e18} BETH for ${task.contract.slug} ${trait} exceeds max bid price ${maxBidPriceEth} BETH ON BLUR.Skipping ...`.toUpperCase()
-          await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "blur");
-          console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + message + RESET);
-          console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
 
-          if (orders.length > 0) {
-            const cancelData = orders.map((order, index) => {
-              const payload = JSON.parse(order.orderHash)
-              return {
-                name: CANCEL_BLUR_BID,
-                data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
-              }
-            })
-            await queue.addBulk(cancelData);
-          }
-          return;
-        }
         const jobId = `counterbid-${task._id}-${task.contract.slug}-${BLUR.toLowerCase()}-${trait}`
         const job: Job = await queue.getJob(jobId)
         const bidCount = getIncrementedBidCount(BLUR, task.contract.slug, task._id)
@@ -4062,11 +5671,38 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       }
 
     } else {
-      const collectionBid = incomingBid?.stats?.filter(item => item.criteriaType.toLowerCase() === "collection") || incomingBid?.updates?.filter(item => item.criteriaType.toLowerCase() === "collection")
 
-      if (!collectionBid.length) return
-      const bestPrice = collectionBid?.sort((a, b) => +b.bestPrice - +a.bestPrice)[0].bestPrice || "0"
-      const incomingPrice = Number(bestPrice) * 1e18
+      const isTraitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
+      const tokenBid = task.bidType === "token"
+      const collectionBid = !isTraitBid && !tokenBid && task.bidType === "collection"
+      if (!collectionBid) return
+
+      const incomingBidDetails = incomingBid?.stats?.filter(item => item.criteriaType.toLowerCase() === "collection") || incomingBid?.updates?.filter(item => item.criteriaType.toLowerCase() === "collection")
+      if (!incomingBidDetails.length) return
+
+      const incomingBestPrice = incomingBidDetails?.sort((a, b) => +b?.bestPrice - +a?.bestPrice)[0].bestPrice
+      const incomingBidAmount = (incomingBidDetails as any)?.sort((a: any, b: any) => +b.price - +a.price)[0].price
+
+      const bestPrice = +incomingBestPrice > 0 ? incomingBestPrice : +incomingBidAmount > 0 ? incomingBidAmount : "0"
+
+      console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
+      console.log(GOLD + `incoming collection offer for ${task.contract.slug} for ${bestPrice} BETH on blur`.toUpperCase() + RESET);
+      console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
+
+      const floor_price = await fetchBlurCollectionStats(task.contract.slug);
+      const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, Number(floor_price), "blur")
+
+      if (+bestPrice < minBidPriceEth || +bestPrice > maxBidPriceEth) {
+        const reason = +bestPrice < minBidPriceEth
+          ? `is less than min bid price ${minBidPriceEth} BETH`
+          : `is greater than max bid price ${maxBidPriceEth} BETH`;
+        const message = `incoming bid ${bestPrice} BETH for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "blur");
+        return
+      }
+
+      const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), balances[task._id])
+      if (stopBid) return
 
       const orders = await prisma.order.findMany({
         where: {
@@ -4076,43 +5712,14 @@ async function handleBlurCounterbid(data: any, task: ITask) {
           identifier: 'collection'
         }
       })
+      const incomingPrice = Number(bestPrice) * 1e18
       const offers = orders.map((order: PrismaOrder) => order.offerPrice)
       const currentBidPrice = !offers.length ? 0 : Math.max(...offers.map((offer) => Number(offer)))
+
       if (incomingPrice <= currentBidPrice) return
 
-      console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
-      console.log(GOLD + `incoming collection offer for ${task.contract.slug} for ${incomingPrice} BETH on blur`.toUpperCase() + RESET);
-      console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
-
-      const rawPrice = (blurOutbidMargin * 1e18) + Number(incomingPrice)
+      const rawPrice = (+bestPrice + Number(blurOutbidMargin.toFixed(2))) * 1e18
       let offerPrice = BigInt(Math.round(rawPrice / 1e16) * 1e16)
-      const offerPriceEth = Number(offerPrice) / 1e18
-
-      if (offerPriceEth < minBidPriceEth) {
-        offerPrice = BigInt((minBidPriceEth * 1e18))
-      }
-
-      if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
-        skipStats[task._id]['blur']++;
-        const message = `counter Offer price ${Number(offerPrice) / 1e18} BETH for ${task.contract.slug} exceeds max bid price ${maxBidPriceEth} BETH ON BLUR.Skipping ...`.toUpperCase()
-        await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "blur");
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-        console.log(RED + message + RESET);
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-
-
-        if (orders.length > 0) {
-          const cancelData = orders.map((order, index) => {
-            const payload = JSON.parse(order.orderHash)
-            return {
-              name: CANCEL_BLUR_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
-            }
-          })
-          await queue.addBulk(cancelData);
-        }
-        return;
-      }
 
       const jobId = `counterbid-${task._id}-${task.contract.slug}-${BLUR.toLowerCase()}-collection`
       const job: Job = await queue.getJob(jobId)
@@ -4131,7 +5738,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       if (job) {
         if (incomingPrice <= job.data.offerPrice) {
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + `Skipping counterbid since incoming bid ${incomingPrice / 1e18} WETH is less than or equal to existing bid ${Number(job.data.offerPrice) / 1e18} WETH` + RESET);
+          console.log(RED + `Skipping counterbid since incoming bid ${incomingPrice / 1e18} BETH is less than or equal to existing bid ${Number(job.data.offerPrice) / 1e18} WETH` + RESET);
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
           return
         } else {
@@ -4150,7 +5757,9 @@ async function handleBlurCounterbid(data: any, task: ITask) {
     }
 
   } catch (error) {
-    console.error(RED + `Error handling Blur counterbid: ${JSON.stringify(error)} ` + RESET);
+    console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
+    console.log(RED + `Error handling Blur counterbid: ${JSON.stringify(error)}` + RESET);
+    console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
   }
 }
 
@@ -4227,12 +5836,11 @@ async function processOpenseaScheduledBid(task: ITask) {
   try {
     if (!enabledMarketplaces.includes("OpenSea")) return
     const currentTask = activeTasks.get(task._id);
-
     if (!currentTask || !currentTask.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return;
 
     if (!taskStatus[task._id]) {
       taskStatus[task._id] = {
-        status: 'SCHEDULED',
+        status: 'STARTED',
         runningPercentage: 0,
         waitingTime: 0,
         cancellationPercentage: 0,
@@ -4240,6 +5848,8 @@ async function processOpenseaScheduledBid(task: ITask) {
         nextLoopTime: new Date()
       }
     }
+    taskStatus[task._id].status = 'STARTED'
+
 
     if (!currentTokenIds[task._id]) {
       currentTokenIds[task._id] = {
@@ -4256,6 +5866,15 @@ async function processOpenseaScheduledBid(task: ITask) {
       ]).filter(([_, traits]) => traits.length > 0)
     );
     const selectedTraits = transformNewTask(filteredTasks)
+    if (!currentTraits[task._id]) {
+      currentTraits[task._id] = {
+        opensea: selectedTraits,
+        magiceden: {},
+        blur: {}
+      }
+    }
+
+    currentTraits[task._id].opensea = selectedTraits
 
     const WALLET_ADDRESS: string = task.wallet.address;
     taskStatus[task._id].status = 'PROCESSING'
@@ -4337,91 +5956,8 @@ async function processOpenseaScheduledBid(task: ITask) {
     }
 
     taskStatus[task._id].processingPercentage = (3 / 4) * 100
-
     const tokenBid = task.bidType === "token" && tokenIds.length > 0
-
-    const openseaOrders = await prisma.order.findMany({
-      where: {
-        slug: task.contract.slug,
-        taskId: task._id,
-        marketplace: OPENSEA.toLowerCase(),
-      }
-    })
-
-    let openseaBids: any[] = []
-
-    if (currentTask.bidType === "token") {
-      openseaBids = openseaOrders.map((order) => +order.identifier)
-
-    } else if (currentTask.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0) {
-      openseaBids = openseaOrders.map((order) => {
-        if (!order) return null;
-        const parts = order.identifier.split(":");
-        return {
-          traitType: parts[0],
-          traitValue: parts[1],
-        };
-      });
-    }
-
     const traits = selectedTraits && Object.keys(selectedTraits).length > 0 ? transformOpenseaTraits(selectedTraits) : [];
-
-    const removedTraits = currentTask.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0 ? openseaBids.filter(bid =>
-      bid !== null &&
-      !traits.some(trait =>
-        trait.type === bid.traitType &&
-        trait.value === bid.traitValue
-      )
-    ) : [];
-
-    if (removedTraits.length > 0) {
-      for (const trait of removedTraits) {
-        const orders = await prisma.order.findMany({
-          where: {
-            slug: task.contract.slug,
-            taskId: task._id,
-            marketplace: OPENSEA.toLowerCase(),
-            identifier: trait.traitType.toUpperCase() + ":" + trait.traitValue.toUpperCase()
-          }
-        })
-
-        if (orders.length > 0) {
-          console.log(`FOUND ${orders.length.toString().toUpperCase()} ORDERS TO CANCEL FOR TRAIT ${trait.traitType.toUpperCase()}:${trait.traitValue.toUpperCase()}`);
-          const cancelData = orders.map((order, index) => {
-            return {
-              name: CANCEL_OPENSEA_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
-            }
-          })
-          await queue.addBulk(cancelData)
-          console.log(`QUEUED ${cancelData.length.toString().toUpperCase()} CANCELLATIONS FOR TRAIT ${trait.traitType.toUpperCase()}:${trait.traitValue.toUpperCase()}`);
-        }
-      }
-    }
-
-    const tokensToCancel = currentTask.bidType === "token" ? [...openseaBids].filter(listing => !tokenIds.includes(listing)) : []
-
-    if (tokensToCancel.length > 0) {
-      for (const token of tokensToCancel) {
-        const orders = await prisma.order.findMany({
-          where: {
-            slug: task.contract.slug,
-            taskId: task._id,
-            marketplace: OPENSEA.toLowerCase(),
-            identifier: token.toString()
-          }
-        })
-        if (orders.length > 0) {
-          const cancelData = orders.map((order, index) => {
-            return {
-              name: CANCEL_OPENSEA_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
-            }
-          })
-          await queue.addBulk(cancelData)
-        }
-      }
-    }
 
     const approved = await approveMarketplace(SEAPORT, WALLET_PRIVATE_KEY);
     taskStatus[task._id].processingPercentage = (4 / 4) * 100
@@ -4447,17 +5983,11 @@ async function processOpenseaScheduledBid(task: ITask) {
       ? { null: collectionDetails.creator_fees.null }
       : Object.fromEntries(Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)]));
 
-    if (!taskStatus[task._id]) {
-      taskStatus[task._id] = {
-        status: 'SCHEDULED',
-        runningPercentage: 0,
-        waitingTime: 0,
-        cancellationPercentage: 0,
-        processingPercentage: 0,
-        nextLoopTime: new Date()
-      }
-    }
+    taskStatus[task._id].status = 'SCHEDULED'
+
     const newTask = { ...task, traits: {}, wallet: { address: WALLET_ADDRESS, privateKey: WALLET_PRIVATE_KEY } } as ITask
+
+    console.log({ tokenIds: tokenIds.length });
 
     if (tokenBid) {
       const jobs = tokenIds
@@ -4560,44 +6090,42 @@ function transformSelectedTraitsToAttributes(selectedTraits: Record<string, stri
 async function processOpenseaCollectionBid(data: { task: ITask, collectionDetails: any }) {
   try {
     const { task, collectionDetails } = data
-
     const currentTask = activeTasks.get(task._id)
-
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces.includes("OpenSea")) return;
 
-    const floor_price = await getOpenseaFloor(task.contract.slug);
-
+    const floor_price = await getOpenseaFloor(currentTask.contract.slug);
     if (!floor_price) return
 
-    if (!floorPrices[task._id]) {
-      floorPrices[task._id] = {
+    if (!floorPrices[currentTask._id]) {
+      floorPrices[currentTask._id] = {
         opensea: floor_price as number,
         magiceden: 0,
         blur: 0
       };
     }
 
-    if (!skipStats[task._id]) {
-      skipStats[task._id] = {
+    if (!skipStats[currentTask._id]) {
+      skipStats[currentTask._id] = {
         opensea: 0,
         magiceden: 0,
         blur: 0
       }
     }
 
-    floorPrices[task._id].opensea = floor_price as number;
-    const stopBid = await stopOption(task, 'opensea', Number(data), balances[task._id])
+    floorPrices[currentTask._id].opensea = floor_price as number;
+
+    const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+    const stopBid = await stopOption(currentTask, 'opensea', Number(data), balances[currentTask._id])
+    const expiry = getExpiry(currentTask.bidDuration)
+
     if (stopBid) return
-
-    const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, floor_price as number, "opensea")
-
     let offerPrice = BigInt(Math.ceil(roundToValidPrecision(offerPriceEth) * 1e18));
 
     let colletionOffer = BigInt(offerPrice)
     const orders = await prisma.order.findMany({
       where: {
-        slug: task.contract.slug,
-        taskId: task._id,
+        slug: currentTask.contract.slug,
+        taskId: currentTask._id,
         marketplace: OPENSEA.toLowerCase(),
         identifier: 'collection',
       },
@@ -4618,15 +6146,14 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       await queue.addBulk(cancelData)
     }
 
-    if (!task.outbidOptions.outbid) {
-      if (ttl >= MIN_BID_DURATION) {
-        return;
-      }
+    if (!currentTask.outbidOptions.outbid) {
+      if (ttl >= MIN_BID_DURATION) return;
+
     }
     else {
-      const walletsArr = await Wallet.find({ user: task.user })
-      const [topOffer, secondOffer] = await fetchOpenseaOffers(task._id, 'COLLECTION', task.contract.slug, task.contract.contractAddress, {})
-      console.log({ slug: task.contract.slug, MARKETPLACE: OPENSEA, TYPE: 'COLLECTION', topOffer, secondOffer });
+      const walletsArr = await Wallet.find({})
+      const [topOffer, secondOffer] = await fetchOpenseaOffers(currentTask._id, 'COLLECTION', currentTask.contract.slug, currentTask.contract.contractAddress, {})
+      console.log({ slug: currentTask.contract.slug, MARKETPLACE: OPENSEA, TYPE: 'COLLECTION', topOffer, secondOffer });
 
       const highestBidAmount = topOffer.amount
       const owner = topOffer.owner.toLowerCase();
@@ -4634,7 +6161,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
         .map(addr => addr.address.toLowerCase())
         .includes(owner);
 
-      const outbidMargin = calculateOutbidMargin(highestBidAmount / 1e18);
+      const outbidMargin = calculateOutbidMargin(highestBidAmount ? highestBidAmount / 1e18 : offerPriceEth);
       // 2. Handle own bid case
       if (isOwnBid) {
         const spread = (Number(topOffer.amount) - Number(secondOffer.amount)) / 1e18;
@@ -4656,7 +6183,6 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
         // Early return if bid isn't close to expiration
         else if (ttl > MIN_BID_DURATION) {
           console.log(YELLOW + `Skipping opensea collection bid for ${task.contract.slug} - we have top bid (${highestBidAmount / 1e18} ETH) with ${ttl / 60} minutes remaining`.toUpperCase() + RESET);
-
           return;
         }
         else {
@@ -4679,8 +6205,6 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       await queue.addBulk(cancelData)
     }
 
-    const expiry = getExpiry(task.bidDuration)
-
     const creatorFees: IFee = collectionDetails.creator_fees.null !== undefined
       ? { null: collectionDetails.creator_fees.null }
       : Object.fromEntries(Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)]));
@@ -4688,7 +6212,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
 
     const offerEth = Number(colletionOffer) / 1e18;
 
-    if (task.outbidOptions.outbid && offerEth > maxBidPriceEth) {
+    if (currentTask.outbidOptions.outbid && offerEth > maxBidPriceEth) {
       skipStats[task._id]['opensea']++;
       const message = `❌ Offer price ${offerEth} WETH for ${task.contract.slug} collection bid exceeds max bid price ${maxBidPriceEth} WETH FOR OPENSEA.Skipping ...`.toUpperCase()
       await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea");
@@ -4713,7 +6237,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
     await bidOnOpensea(
       task._id,
       bidCount,
-      task.wallet.address,
+      currentTask.wallet.address,
       task.wallet.privateKey,
       task.contract.slug,
       Number(colletionOffer),
@@ -4722,7 +6246,15 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       expiry
     )
   } catch (error: any) {
-    console.error(RED + `Error processing OpenSea collection bid for task: ${data.task._id} ` + RESET, error?.response?.data || error?.response || error?.code)
+    if (!errorStats[data.task._id]) {
+      errorStats[data.task._id] = {
+        magiceden: 0,
+        opensea: 0,
+        blur: 0
+      }
+    }
+    await logBidError(data.task._id, "OPENSEA COLLECTION BID ERROR", `Error processing OpenSea collection bid for task: ${data.task._id}: ${error?.response?.data?.errors?.[0] || error?.response?.data || error?.message || String(error)}`, "error", "opensea");
+    errorStats[data.task._id]['opensea']++
   }
 }
 
@@ -4749,6 +6281,16 @@ async function processBlurScheduledBid(task: ITask) {
     const wallets = await Wallet.findOne({ address: task.wallet.address })
     const WALLET_PRIVATE_KEY: string = wallets?.privateKey as string
     const selectedTraits = transformNewTask(filteredTasks)
+
+    if (!currentTraits[task._id]) {
+      currentTraits[task._id] = {
+        opensea: {},
+        magiceden: {},
+        blur: selectedTraits
+      }
+    }
+
+    currentTraits[task._id].blur = selectedTraits
     const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0
 
     if (!warningBids[task._id]) {
@@ -4827,11 +6369,12 @@ async function processBlurCollectionBid(data: { task: ITask }) {
   try {
     const { task } = data
     const currentTask = activeTasks.get(task._id)
-
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((market) => market.toLowerCase()).includes("blur")) return;
 
-    const floor_price: number = Number(await fetchBlurCollectionStats(task.contract.slug));
-    const stopBid = await stopOption(task, 'blur', Number(floor_price), balances[task._id])
+    const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
+    if (!floor_price) return
+
+    const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), balances[task._id])
     if (stopBid) return
 
     if (!floorPrices[task._id]) {
@@ -4841,10 +6384,9 @@ async function processBlurCollectionBid(data: { task: ITask }) {
         blur: floor_price
       };
     }
-
     floorPrices[task._id].blur = floor_price;
-    const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, floor_price, "blur")
 
+    const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "blur")
     let colletionOffer = BigInt(Math.round(offerPriceEth * 1e18))
 
     const orders = await prisma.order.findMany({
@@ -4883,7 +6425,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
       const topOfferAmount = typeof topOffer === 'object' && topOffer ? Number(topOffer.price) : 0
       const secondOfferAmount = typeof secondOffer === 'object' && secondOffer ? Number(secondOffer.price) : 0
 
-      console.log({ slug: task.contract.slug, topOffer, secondOffer });
+      console.log({ marketplace: BLUR, slug: task.contract.slug, TYPE: "COLLECTION", topOffer, secondOffer });
 
       const currentBidPrice = order?.offerPrice || 0
       const currentBidPriceEth = Number((Number(currentBidPrice) / 1e18).toFixed(2));
@@ -4896,10 +6438,8 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 
       if (isTopBid) {
         const spread = (Number(topOfferAmount) - Number(secondOfferAmount));
-
         if (spread > blurOutbidMargin && Number(secondOfferAmount) > 0) {
           if (orders.length > 0) {
-            // Cancel existing bids
             const cancelData = orders.map((order) => {
               const payload = JSON.parse(order.orderHash)
               return {
@@ -4942,7 +6482,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
       await queue.addBulk(cancelData);
     }
 
-    if (task.outbidOptions.outbid && collectionOfferEth > maxBidPriceEth) {
+    if (currentTask.outbidOptions.outbid && collectionOfferEth > maxBidPriceEth) {
       if (!skipStats[task._id]) {
         skipStats[task._id] = {
           opensea: 0,
@@ -4973,10 +6513,18 @@ async function processBlurCollectionBid(data: { task: ITask }) {
       colletionOffer = BigInt(Math.round(minBidPriceEth * 1e18));
     }
 
-    const expiry = getExpiry(task.bidDuration)
+    const expiry = getExpiry(currentTask.bidDuration)
     await bidOnBlur(task._id, bidCount, task.wallet.address, task.wallet.privateKey, task.contract.contractAddress, colletionOffer, task.contract.slug, expiry);
-  } catch (error) {
-    console.error(RED + `Error processing Blur collection bid for task: ${data.task._id} ` + RESET, error);
+  } catch (error: any) {
+    if (!errorStats[data?.task?._id]) {
+      errorStats[data?.task?._id] = {
+        magiceden: 0,
+        opensea: 0,
+        blur: 0
+      }
+    }
+    await logBidError(data.task._id, "BLUR COLLECTION BID ERROR", `Error processing Blur collection bid for task: ${data.task._id}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)}`, "error", "blur");
+    errorStats[data?.task?._id]['blur']++
   }
 }
 
@@ -5001,13 +6549,30 @@ async function processOpenseaTraitBid(data: {
 }) {
   try {
     if (!enabledMarketplaces.includes("OpenSea")) return
-    const { address, privateKey, slug, creatorFees, enforceCreatorFee, trait, outbidOptions, contractAddress, _id, task } = data
+    const { address, privateKey, slug, creatorFees, enforceCreatorFee, trait, contractAddress, _id, task } = data
+
+    const selectedTraits = currentTraits[_id]?.opensea
+    const traits = selectedTraits && Object.keys(selectedTraits).length > 0 ? transformOpenseaTraits(selectedTraits) : [];
+
+    const parsedTrait = JSON.parse(trait);
+    const traitsArray: { type: string; value: string }[] = traits;
+
+    const traitExists = traitsArray.some(
+      (t) => t.type === parsedTrait.type && t.value === parsedTrait.value
+    );
+
+    if (!traitExists) {
+      const parentJobId = `${_id}-opensea`.toLowerCase()
+      const parentJob = parentJobs.get(parentJobId)
+      if (parentJob) parentJob.completedJobs -= 1
+      return
+    };
+
     const currentTask = activeTasks.get(_id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) return;
 
-    const expiry = getExpiry(currentTask.bidDuration)
-
     const floor_price = await getOpenseaFloor(slug);
+
     if (!floor_price) return
 
     if (!floorPrices[_id]) {
@@ -5025,9 +6590,12 @@ async function processOpenseaTraitBid(data: {
       };
     }
     floorPrices[_id].opensea = floor_price as number;
-    const { maxBidPriceEth, offerPriceEth, minBidPriceEth } = await calculateBidPrice(task, floor_price as number, "opensea")
 
-    const stopBid = await stopOption(task, 'opensea', Number(floor_price), balances[_id])
+    const { maxBidPriceEth, offerPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+    const expiry = getExpiry(currentTask.bidDuration)
+    const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), balances[_id])
+    const outbidOptions = currentTask.outbidOptions
+
     if (stopBid) return
 
     let traitOffer = BigInt(Math.round(roundToValidPrecision(offerPriceEth) * 1e18))
@@ -5052,7 +6620,6 @@ async function processOpenseaTraitBid(data: {
     const [order, ...remainingOrders] = orders
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
 
-
     if (remainingOrders.length > 0) {
       const cancelData = remainingOrders.map((order, index) => {
         return {
@@ -5066,9 +6633,10 @@ async function processOpenseaTraitBid(data: {
     if (!outbidOptions.outbid) {
       if (ttl >= MIN_BID_DURATION) return;
     }
+
     else {
       const [topOffer, secondOffer] = await fetchOpenseaOffers(_id, 'TRAIT', slug, contractAddress, JSON.parse(trait)) || [{ amount: 0, owner: "" }, { amount: 0 }];
-      const walletsArr = await Wallet.find({ user: task.user })
+      const walletsArr = await Wallet.find({})
       console.log({ COLLECTION: slug, MARKETPLACE: OPENSEA, TYPE: 'TRAIT', trait, topOffer, secondOffer });
       const highestBidAmount = Number(topOffer?.amount || 0)
       const owner = topOffer && typeof topOffer === 'object' ? topOffer.owner?.toLowerCase() : '';
@@ -5176,11 +6744,22 @@ async function processOpenseaTraitBid(data: {
 async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
   try {
     if (!enabledMarketplaces.includes("OpenSea")) return
-    const { address, privateKey, slug, creatorFees, enforceCreatorFee, asset, outbidOptions, _id, task } = data
+    const { address, privateKey, slug, creatorFees, enforceCreatorFee, asset, _id, task } = data
+    if (!currentTokenIds[_id]?.opensea?.includes(+asset.tokenId)) {
+      const parentJobId = `${_id}-opensea`.toLowerCase()
+      const parentJob = parentJobs.get(parentJobId)
+      if (parentJob) parentJob.completedJobs -= 1
+      return
+    }
+
     const currentTask = activeTasks.get(_id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) return;
-
     const floor_price = await getOpenseaFloor(slug);
+    const { maxBidPriceEth, offerPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+    const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), balances[task._id])
+
+    const outbidOptions = currentTask.outbidOptions
+
     if (!floor_price) return
 
     if (!floorPrices[_id]) {
@@ -5192,7 +6771,8 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     }
     floorPrices[_id].opensea = floor_price as number;
 
-    const { maxBidPriceEth, offerPriceEth, minBidPriceEth } = await calculateBidPrice(task, floor_price as number, "opensea")
+    const expiry = getExpiry(currentTask.bidDuration)
+
     let tokenOffer = BigInt(Math.round(offerPriceEth * 1e18))
     const orders = await prisma.order.findMany({
       where: {
@@ -5218,14 +6798,13 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       })
       await queue.addBulk(cancelData)
     }
-    const stopBid = await stopOption(task, 'opensea', Number(floor_price), balances[task._id])
 
     if (stopBid) return;
 
     if (!outbidOptions.outbid) {
       if (ttl >= MIN_BID_DURATION) return;
     } else {
-      const walletsArr = await Wallet.find({ user: task.user })
+      const walletsArr = await Wallet.find({})
       const highestBid = await fetchItemOffers(asset.contractAddress, asset.tokenId.toString());
       const [topOffer, secondOffer] = highestBid || [{ amount: 0, owner: "" }, { amount: 0, owner: "" }];
 
@@ -5276,10 +6855,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       })
       await queue.addBulk(cancelData)
     }
-    const expiry = getExpiry(task?.bidDuration as {
-      value: number;
-      unit: string;
-    })
 
     const offerEth = Number(tokenOffer) / 1e18;
 
@@ -5342,9 +6917,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
   const { taskId, bidCount, walletAddress, walletPrivateKey, slug, offerPrice, creatorFees, enforceCreatorFee, expiry } = data
   const currentTask = activeTasks.get(taskId)
-  if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces.includes("OpenSea")) {
-    return
-  }
+  if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces.includes("OpenSea")) return
 
   try {
     await bidOnOpensea(
@@ -5359,22 +6932,35 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
       expiry,
     )
   } catch (error: any) {
-    if (error.length > 0 && error[0]?.includes("Duplicate order")) {
-      return;
+    if (!errorStats[data.taskId]) {
+      errorStats[data.taskId] = {
+        magiceden: 0,
+        opensea: 0,
+        blur: 0
+      }
     }
-    console.error(RED + `❌ Error processing OpenSea collection counter bid for task: ${slug} ` + RESET, error?.response?.data || error?.response || error?.code);
+    await logBidError(data.taskId, "OPENSEA COLLECTION COUNTER BID ERROR", `Error processing OpenSea collection counter bid for task: ${data.slug}: ${error?.response?.data?.errors?.[0] || error?.response?.data || error?.message || String(error)}`, "error", "opensea");
+    errorStats[data.taskId]['opensea']++
   }
 }
 
 async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) {
   const { _id, bidCount, address, contractAddress, quantity, offerPrice, expiration, privateKey, slug } = data
   const currentTask = activeTasks.get(_id)
-  if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden")) return
+  if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.includes("MagicEden")) return
 
   try {
     await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, offerPrice.toString(), privateKey, slug, expiration);
-  } catch (error) {
-    console.error(RED + `❌ Error processing MagicEden collection counter bid for task: ${slug} ` + RESET, error);
+  } catch (error: any) {
+    if (!errorStats[data._id]) {
+      errorStats[data._id] = {
+        magiceden: 0,
+        opensea: 0,
+        blur: 0
+      }
+    }
+    await logBidError(data._id, "MAGICEDEN COLLECTION COUNTER BID ERROR", `Error processing MagicEden collection counter bid for task: ${data.slug}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)}`, "error", "magiceden");
+    errorStats[data._id]['magiceden']++
   }
 }
 
@@ -5394,7 +6980,7 @@ interface IMagicedenTraitBidData {
 async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
   const { taskId, bidCount, address, contractAddress, quantity, offerPrice, expiration, privateKey, slug, trait } = data
   const currentTask = activeTasks.get(taskId)
-  if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden")) return
+  if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.includes("MagicEden")) return
   const triatData = JSON.parse(trait)
   const bidTrait = {
     attributeKey: triatData?.attributeKey,
@@ -5402,8 +6988,16 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
   }
   try {
     await bidOnMagiceden(taskId, bidCount, address, contractAddress, quantity, offerPrice.toString(), privateKey, slug, expiration, bidTrait);
-  } catch (error) {
-    console.error(RED + `❌ Error processing MagicEden trait counter bid for task: ${slug} ` + RESET, error);
+  } catch (error: any) {
+    if (!errorStats[data.taskId]) {
+      errorStats[data.taskId] = {
+        magiceden: 0,
+        opensea: 0,
+        blur: 0
+      }
+    }
+    await logBidError(data.taskId, "MAGICEDEN TRAIT COUNTER BID ERROR", `Error processing MagicEden trait counter bid for task: ${data.slug}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)}`, "error", "magiceden");
+    errorStats[data.taskId]['magiceden']++
   }
 }
 
@@ -5411,41 +7005,40 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
   const { taskId, bidCount, address, privateKey, contractAddress, offerPrice, slug, expiry } = data
   const currentTask = activeTasks.get(taskId)
 
-  if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur")) {
-    return
-  }
+  if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.includes("Blur")) return
 
   try {
-    const orderKeyPattern = `{${taskId}:*:blur:order:${slug}}:default`
-    let remainingOffers = await redis.keys(orderKeyPattern)
     await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry);
-    const redisKey = `blur:${slug}`;
-    const offerKey = `{${bidCount}:${redisKey}}:collection`
-    remainingOffers = remainingOffers.filter((offer) => offer !== undefined)
-    if (remainingOffers.length > 0) {
-      const cancelData = remainingOffers.map((orderKey) => {
-        return {
-          name: CANCEL_BLUR_BID,
-          data: { privateKey, orderKey: orderKey, taskId }
-        }
-      }).filter((item) => item !== undefined)
-      await queue.addBulk(cancelData);
+  } catch (error: any) {
+    if (!errorStats[taskId]) {
+      errorStats[taskId] = {
+        magiceden: 0,
+        opensea: 0,
+        blur: 0
+      }
     }
-  } catch (error) {
-    console.error(RED + `❌ Error processing Blur collection counter bid for task: ${slug} ` + RESET, error);
+    await logBidError(taskId, "BLUR COLLECTION COUNTER BID ERROR", `Error processing Blur collection counter bid for task: ${slug}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)}`, "error", "blur");
+    errorStats[taskId]['blur']++
   }
 }
 
 async function blurTraitCounterBid(data: BlurTraitCounterBid) {
   const { taskId, bidCount, address, privateKey, contractAddress, offerPrice, slug, expiry, trait } = data
   const currentTask = activeTasks.get(taskId)
-  if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur")) {
-    return
-  }
+  if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.includes("Blur")) return
+
   try {
     await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry, trait);
-  } catch (error) {
-    console.error(RED + `❌ Error processing Blur trait counter bid for task: ${data?.slug} ` + RESET, error);
+  } catch (error: any) {
+    if (!errorStats[data?.taskId]) {
+      errorStats[data?.taskId] = {
+        magiceden: 0,
+        opensea: 0,
+        blur: 0
+      }
+    }
+    await logBidError(data.taskId, "BLUR TRAIT COUNTER BID ERROR", `Error processing Blur trait counter bid for task: ${data.slug}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)}`, "error", "blur");
+    errorStats[data.taskId]['blur']++
   }
 
 }
@@ -5475,7 +7068,7 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
 
   } = data
   const currentTask = activeTasks.get(_id)
-  if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) return
+  if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces.includes("OpenSea")) return
 
   const expiry = getExpiry(currentTask.bidDuration)
   const bidCount = getIncrementedBidCount(OPENSEA, slug, _id)
@@ -5494,14 +7087,23 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
       asset
     )
   } catch (error: any) {
-    console.error(RED + `❌ Error processing OpenSea token counter bid for task: ${data?.slug} ` + RESET, error?.response?.data?.message || error?.response?.data);
+    if (!errorStats[data._id]) {
+      errorStats[data._id] = {
+        magiceden: 0,
+        opensea: 0,
+        blur: 0
+      }
+    }
+    await logBidError(data.task._id, "OPENSEA TOKEN COUNTER BID ERROR", `Error bidding on token ${data.asset.tokenId} in collection ${data.slug}: ${error?.response?.data?.errors?.[0] || error?.response?.data || error?.message || String(error)}`, "error", "opensea");
+    errorStats[data._id]['opensea']++
   }
 }
 
 async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
   try {
-    if (!enabledMarketplaces.includes("OpenSea")) return
     const { _id, bidCount, address, privateKey, slug, offerPrice, creatorFees, enforceCreatorFee, expiry, trait } = data
+    const currentTask = activeTasks.get(_id)
+    if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces.includes("OpenSea")) return
     if (!trait) return
     bidOnOpensea(
       _id,
@@ -5515,8 +7117,16 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
       expiry,
       trait
     )
-  } catch (error) {
-    console.error(RED + `❌ Error processing OpenSea trait counter bid for task: ${data?.slug} ` + RESET, error);
+  } catch (error: any) {
+    if (!errorStats[data._id]) {
+      errorStats[data._id] = {
+        magiceden: 0,
+        opensea: 0,
+        blur: 0
+      }
+    }
+    await logBidError(data._id, "OPENSEA TRAIT COUNTER BID ERROR", `Error bidding on trait ${data.trait} in collection ${data.slug}: ${error?.response?.data?.errors?.[0] || error?.response?.data || error?.message || String(error)}`, "error", "opensea");
+    errorStats[data._id]['opensea']++
   }
 }
 
@@ -5524,11 +7134,19 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
   try {
     const { _id, address, contractAddress, quantity, offerPrice, privateKey, slug, tokenId, expiration } = data
     const currentTask = activeTasks.get(_id)
-    if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden")) return
+    if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.includes("MagicEden")) return
     const bidCount = getIncrementedBidCount(MAGICEDEN, slug, _id)
     await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, (offerPrice as number).toString(), privateKey, slug, expiration, undefined, tokenId)
-  } catch (error) {
-    console.error('Error in magicedenTokenCounterBid:', error);
+  } catch (error: any) {
+    if (!errorStats[data._id]) {
+      errorStats[data._id] = {
+        magiceden: 0,
+        opensea: 0,
+        blur: 0
+      }
+    }
+    await logBidError(data._id, "MAGICEDEN TOKEN COUNTER BID ERROR", `Error bidding on token ${data.tokenId} in collection ${data.slug}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)}`, "error", "magiceden");
+    errorStats[data._id]['magiceden']++
   }
 }
 
@@ -5550,14 +7168,32 @@ async function processBlurTraitBid(data: {
   };
   task: ITask,
 }) {
-  const { address, privateKey, contractAddress, slug, trait, expiry, outbidOptions, _id, task } = data;
+  const { address, privateKey, contractAddress, slug, trait, _id, task } = data;
+  // { trait: '{"Hair":"Black Teal Bangs"}' }
+  const selectedTraits = currentTraits[_id]?.blur
+  const traits = transformBlurTraits(selectedTraits)
+
+  const parsedTrait = JSON.parse(trait);
+  const traitKey = Object.keys(parsedTrait)[0];
+  const traitValue = parsedTrait[traitKey];
+
+  const traitExists = traits.some(t => t[traitKey] === traitValue);
+
+  if (!traitExists) {
+    const parentJobId = `${_id}-blur`.toLowerCase()
+    const parentJob = parentJobs.get(parentJobId)
+    if (parentJob) parentJob.completedJobs -= 1
+    return;
+  }
 
   const currentTask = activeTasks.get(_id)
-  if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur")) return
-
+  if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.includes("Blur")) return
+  const outbidOptions = currentTask.outbidOptions
   try {
     const floor_price: number = Number(await fetchBlurCollectionStats(task.contract.slug));
-    const stopBid = await stopOption(task, 'blur', Number(floor_price), balances[_id])
+
+    const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), balances[_id])
+    const expiry = getExpiry(currentTask.bidDuration)
 
     if (stopBid) return
     if (!floor_price) return
@@ -5569,7 +7205,7 @@ async function processBlurTraitBid(data: {
         magiceden: 0
       }
     }
-    const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, floor_price, "blur")
+    const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "blur")
     let traitOffer = BigInt(Math.round(Number(offerPriceEth * 1e18) / 1e16) * 1e16);
 
     const traitsObj = JSON.parse(trait);
@@ -5736,6 +7372,8 @@ async function processMagicedenScheduledBid(task: ITask) {
       }
     }
 
+    taskStatus[task._id].status = 'SCHEDULED'
+
     if (!currentTokenIds[task._id]) {
       currentTokenIds[task._id] = {
         opensea: [],
@@ -5750,6 +7388,16 @@ async function processMagicedenScheduledBid(task: ITask) {
       ]).filter(([_, traits]) => traits.length > 0)
     );
     const selectedTraits = transformNewTask(filteredTasks)
+
+    if (!currentTraits[task._id]) {
+      currentTraits[task._id] = {
+        opensea: {},
+        magiceden: selectedTraits,
+        blur: {}
+      }
+    }
+
+    currentTraits[task._id].magiceden = selectedTraits
 
     taskStatus[task._id].status = 'PROCESSING'
 
@@ -5815,12 +7463,12 @@ async function processMagicedenScheduledBid(task: ITask) {
       )
       tokens = [...bottomListings, ...taskTokenIds, ...tokens];
       tokenIds = [...new Set(tokens)];
-      currentTokenIds[task._id].opensea = [...tokenIds]
+      currentTokenIds[task._id].magiceden = [...tokenIds]
 
     } else if (task.bidType === "token") {
       // Directly combine and deduplicate in one step
       tokenIds = [...new Set([...bottomListings, ...taskTokenIds])];
-      currentTokenIds[task._id].opensea = [...tokenIds]
+      currentTokenIds[task._id].magiceden = [...tokenIds]
       const difference = amount !== undefined ? Math.max(0, amount - tokenIds.length) : 0
 
       if (!skipStats[task._id]) {
@@ -5836,7 +7484,10 @@ async function processMagicedenScheduledBid(task: ITask) {
     taskStatus[task._id].processingPercentage = (4 / 4) * 100
     const tokenBid = task.bidType === "token" && tokenIds.length > 0
 
+
     const newTask = { ...task, traits: {}, wallet: { address: WALLET_ADDRESS, privateKey: WALLET_PRIVATE_KEY } } as ITask
+
+    taskStatus[task._id].status = 'SCHEDULED'
 
     if (tokenBid) {
       const jobs = tokenIds
@@ -5914,7 +7565,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
 
     const currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.includes("MagicEden")) return;
-    const expiration = getExpiry(task.bidDuration)
+    const expiration = getExpiry(currentTask.bidDuration)
 
     const floor_price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress))
 
@@ -5934,17 +7585,15 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
       }
     }
 
-    const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, floor_price as number, "magiceden")
-
+    const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
     floorPrices[task._id].magiceden = floor_price;
-
-    const stopBid = await stopOption(task, 'magiceden', floor_price, balances[task._id])
+    const stopBid = await stopOption(currentTask, 'magiceden', floor_price, balances[task._id])
 
     if (stopBid) return
 
     let offerPrice = Math.ceil(offerPriceEth * 1e18)
 
-    let colletionOffer = BigInt(Math.round(offerPrice))
+    let colletionOffer = (Math.round(offerPrice))
 
     const orders = await prisma.order.findMany({
       where: {
@@ -5968,99 +7617,43 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     }
     const outbidMargin = (task.outbidOptions.magicedenOutbidMargin || 0.0001) * 1e18
 
-    const marketDataPromise = task.outbidOptions.outbid ?
-      fetchMagicEdenOffer("COLLECTION", task.contract.contractAddress, {}) :
-      null;
-
     if (!task.outbidOptions.outbid) {
-      if (ttl >= MIN_BID_DURATION) {
-        return;
-      }
+      if (ttl >= MIN_BID_DURATION) return;
     }
 
     else {
-      const [highestBid, secondBestOffer] = await marketDataPromise || [{ amount: "0", owner: "" }];
-
+      const [highestBid, secondBestOffer] = await fetchMagicEdenOffer("COLLECTION", task.contract.contractAddress, {}) || [{ amount: "0", owner: "" }];
       console.log({ MARKETPLACE: MAGICEDEN, TYPE: 'COLLECTION', highestBid, secondBestOffer });
-
+      const walletsArr = await Wallet.find({})
       const highestBidAmount = typeof highestBid === 'object' && highestBid ? Number(highestBid.amount) : Number(highestBid);
-
-      const topOfferEth = Number(highestBidAmount) / 1e18;
-
       const owner = highestBid && typeof highestBid === 'object' ? highestBid.owner?.toLowerCase() : '';
       const isOwnBid = walletsArr
-        .map(addr => addr.toLowerCase())
+        .map(addr => addr.address.toLowerCase())
         .includes(owner);
-      const secondOwner = secondBestOffer?.owner?.toLowerCase();
 
-      const isOwnSecondBid = walletsArr
-        .map(addr => addr.toLowerCase())
-        .includes(secondOwner);
-
-      if (topOfferEth === maxBidPriceEth && (isOwnBid || isOwnSecondBid) && ttl > MIN_BID_DURATION) {
-        console.log(YELLOW + `Skipping magiceden collection bid for ${task.contract.slug} - we have top bid at max price ${maxBidPriceEth} ETH with ${ttl / 60} minutes remaining`.toUpperCase() + RESET);
-        return;
-      }
-
-      if (topOfferEth === 0) {
-        colletionOffer = BigInt(Math.round(offerPriceEth * 1e18));
-      }
-
-      else if (isOwnBid) {
-        const spread = (Number(highestBid?.amount || 0) - Number(secondBestOffer?.amount || 0)) / 1e18;
+      if (isOwnBid) {
+        const spread = (Number(highestBidAmount) - Number(secondBestOffer.amount)) / 1e18;
 
         if (spread > outbidMargin && Number(secondBestOffer.amount) > 0) {
           if (orders.length > 0) {
-            const orderKeys = orders.map(order => order.id)
+            const orderKeys = orders.map((order: PrismaOrder) => order.id)
             const extractedOrderIds = await extractMagicedenOrderHash(orders)
-            await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: task.wallet.privateKey, orderKeys: orderKeys, taskId: task._id });
+            await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: task.wallet.privateKey, orderKeys, taskId: task._id });
           }
-          // Convert to BigInt before arithmetic operations
-          const secondBestOfferBigInt = BigInt(Math.round(secondBestOffer.amount));
-          const outbidMarginBigInt = BigInt(Math.round(outbidMargin * 1e18));
-          colletionOffer = secondBestOfferBigInt + outbidMarginBigInt;
-        }
+          colletionOffer = secondBestOffer.amount + (outbidMargin * 1e18)
+        } else if (ttl > MIN_BID_DURATION) {
+          console.log(YELLOW + `Skipping magiceden collection bid for ${task.contract.slug} - we have top bid (${highestBidAmount / 1e18} ETH) with ${ttl / 60} minutes remaining`.toUpperCase() + RESET);
 
-        else if (ttl > MIN_BID_DURATION) {
           return
-        }
-
-        else {
-          colletionOffer = BigInt(Math.round(highestBidAmount));
+        } else {
+          colletionOffer = highestBidAmount
         }
       }
       else {
-        colletionOffer = BigInt(Math.round(highestBidAmount + outbidMargin))
-        const offerPriceEth = Number(colletionOffer) / 1e18;
-        // Apply price constraints in order:
-        if (topOfferEth === maxBidPriceEth) {
-          colletionOffer = BigInt(Math.round(highestBidAmount));
-        }
-
-        else if (offerPriceEth < minBidPriceEth) {
-          colletionOffer = BigInt(Math.round(minBidPriceEth * 1e18))
-        }
-
-        else if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
-
-          skipStats[task._id]['magiceden']++;
-          const message = `❌ Offer price ${offerPriceEth} WETH for ${task.contract.slug} collection bid exceeds max bid price ${maxBidPriceEth} WETH FOR MAGICEDEN.Skipping ...`.toUpperCase()
-          await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "magiceden");
-          console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + message + RESET);
-          console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-
-
-          if (orders.length > 0) {
-            const orderKeys = orders.map(order => order.id)
-            const extractedOrderIds = await extractMagicedenOrderHash(orders)
-            await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: task.wallet.privateKey, orderKeys: orderKeys, taskId: task._id });
-          }
-          return;
-        }
+        colletionOffer = highestBidAmount + (outbidMargin * 1e18)
       }
     }
-
+    const offerEth = Number(colletionOffer) / 1e18;
     const bidCount = getIncrementedBidCount(MAGICEDEN, task.contract.slug, task._id)
 
     if (orders.length > 0) {
@@ -6068,18 +7661,62 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
       const extractedOrderIds = await extractMagicedenOrderHash(orders)
       await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: task.wallet.privateKey, orderKeys: orderKeys, taskId: task._id });
     }
+
+    const outbidOptions = currentTask.outbidOptions
+
+    if (outbidOptions.outbid && offerEth > maxBidPriceEth) {
+      if (orders.length > 0) {
+        const orderKeys = orders.map((order: PrismaOrder) => order.id)
+        const extractedOrderIds = await extractMagicedenOrderHash(orders)
+        await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: task.wallet.privateKey, orderKeys, taskId: task._id });
+      }
+      const message = `❌ Offer price ${offerEth} WETH for ${task.contract.slug} COLLECTION bid exceeds max bid price ${maxBidPriceEth} WETH FOR MAGICEDEN.Skipping ...`.toUpperCase()
+      console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      console.log(RED + message + RESET);
+      console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", `Offer price ${offerEth} WETH for ${task.contract.slug} COLLECTION bid exceeds max bid price ${maxBidPriceEth} WETH FOR MAGICEDEN.Skipping ...`.toUpperCase(), "skipped", "magiceden");
+
+      if (!skipStats[task._id]) {
+        skipStats[task._id] = {
+          opensea: 0,
+          magiceden: 0,
+          blur: 0
+        }
+      }
+      skipStats[task._id].magiceden++;
+      return;
+    } else if (offerEth < minBidPriceEth) {
+      colletionOffer = minBidPriceEth * 1e18;
+    }
     await bidOnMagiceden(task._id, bidCount, task.wallet.address, task.contract.contractAddress, 1, colletionOffer.toString(), task.wallet.privateKey, task.contract.slug, expiration);
-  } catch (error) {
-    console.error(RED + `Error processing MagicEden collection bid for task: ${data.task._id} ` + RESET, error);
+  } catch (error: any) {
+    await logBidError(data.task._id, "MAGICEDEN COLLECTION BID ERROR", `Error processing MagicEden collection bid for task: ${data.task._id}: ${error?.response?.data?.message || error?.message || String(error)}`, "error", "magiceden");
+    if (!errorStats[data.task._id]) {
+      errorStats[data.task._id] = {
+        magiceden: 0,
+        opensea: 0,
+        blur: 0
+      }
+    }
+    errorStats[data.task._id]['magiceden']++
   }
 }
 
 
 async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
   try {
-    const { contractAddress, address, quantity, privateKey, slug, tokenId, outbidOptions, task, _id, expiration } = data
+    const { contractAddress, address, quantity, privateKey, slug, tokenId, outbidOptions, task, _id } = data
+    if (!currentTokenIds[_id]?.magiceden?.includes(+tokenId)) {
+      const parentJobId = `${_id}-magiceden`.toLowerCase()
+      const parentJob = parentJobs.get(parentJobId)
+      if (parentJob) parentJob.completedJobs -= 1
+      return
+    }
+    const currentTask = activeTasks.get(_id)
+    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.includes("MagicEden")) return;
 
     const floor_price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress))
+    if (!floor_price) return
 
     if (!floorPrices[task._id]) {
       floorPrices[task._id] = {
@@ -6091,9 +7728,12 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
     floorPrices[task._id].magiceden = floor_price;
 
-    const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, floor_price as number, "magiceden")
-    const currentTask = activeTasks.get(_id)
-    if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden")) return;
+    const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
+    const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), balances[task._id])
+    const expiration = getExpiry(currentTask.bidDuration)
+
+    if (stopBid) return;
+
     let tokenOffer = Number(offerPriceEth * 1e18)
 
     const orders = await prisma.order.findMany({
@@ -6116,15 +7756,12 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: task.wallet.privateKey, orderKeys, taskId: task._id });
     }
 
-    const stopBid = await stopOption(task, 'magiceden', Number(floor_price), balances[task._id])
-
-    if (stopBid) return;
 
     if (!outbidOptions.outbid) {
       if (ttl >= MIN_BID_DURATION) return;
 
     } else {
-      const walletsArr = await Wallet.find({ user: task.user })
+      const walletsArr = await Wallet.find({})
       const [topOffer, secondOffer] = await fetchMagicEdenOffer("TOKEN", contractAddress, tokenId.toString()) || [{ amount: 0, owner: "" }, { amount: 0, owner: "" }];
       console.log({ MARKETPLACE: MAGICEDEN, TYPE: 'TOKEN', tokenId: tokenId, topOffer, secondOffer });
 
@@ -6230,13 +7867,36 @@ async function processMagicedenTraitBid(data: {
   minBidPriceEth?: number;
   task: ITask;
 }) {
+  if (!enabledMarketplaces.includes("MagicEden")) return
   try {
     const
-      { contractAddress, address, quantity, privateKey, slug, trait, _id, outbidOptions, task, expiration } = data
+      { contractAddress, address, quantity, privateKey, slug, trait, _id, task } = data
+    const selectedTraits = currentTraits[_id]?.magiceden
+    const traits = Object.entries(selectedTraits).flatMap(([key, values]) =>
+      values.map(value => ({ attributeKey: key, attributeValue: value })))
+
+    const traitExists = traits.some(
+      (t) => t.attributeKey === trait.attributeKey && t.attributeValue === trait.attributeValue
+    );
+
+    if (!traitExists) {
+      const parentJobId = `${_id}-magiceden`.toLowerCase()
+      const parentJob = parentJobs.get(parentJobId)
+      if (parentJob) parentJob.completedJobs -= 1
+      return
+    };
 
     const currentTask = activeTasks.get(_id)
-    const floor_price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress))
+    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.includes("MagicEden")) return;
 
+    const outbidOptions = currentTask.outbidOptions
+
+    const floor_price = Number(await fetchMagicEdenCollectionStats(currentTask.contract.contractAddress))
+    if (!floor_price) return
+    const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
+    const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), balances[task._id])
+    if (stopBid) return;
+    const expiration = getExpiry(currentTask.bidDuration)
     if (!floorPrices[task._id]) {
       floorPrices[task._id] = {
         opensea: 0,
@@ -6246,14 +7906,7 @@ async function processMagicedenTraitBid(data: {
     }
     floorPrices[task._id].magiceden = floor_price;
 
-    const { offerPriceEth, maxBidPriceEth } = await calculateBidPrice(task, floor_price as number, "magiceden")
-
-
-    const outbidMargin = calculateOutbidMargin(maxBidPriceEth);
-
-    const bestOffer = bestOffers[_id]?.magiceden || 0;
-
-    if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden")) return
+    let traitOffer = Number(offerPriceEth * 1e18)
 
     const orders = await prisma.order.findMany({
       where: {
@@ -6261,64 +7914,39 @@ async function processMagicedenTraitBid(data: {
         taskId: _id,
         identifier: `${trait.attributeKey}:${trait.attributeValue}`,
         marketplace: MAGICEDEN.toLowerCase()
+      },
+      orderBy: {
+        createdAt: 'desc'
       }
     })
-
-
     const [order, ...remainingOrders] = orders
+    const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
 
     if (remainingOrders.length > 0) {
       const orderKeys = remainingOrders.map((order: PrismaOrder) => order.id)
       const extractedOrderIds = await extractMagicedenOrderHash(remainingOrders)
-      await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: task.wallet.privateKey, orderKeys, taskId: task._id });
+      await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: task._id });
     }
 
-    const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
-    const marketDataPromise = outbidOptions.outbid ?
-      fetchMagicEdenOffer("TRAIT", contractAddress, trait) :
-      null;
-
-    let traitOffer = Number(offerPriceEth * 1e18)
 
     if (!outbidOptions.outbid) {
-      if (ttl >= MIN_BID_DURATION) {
-        return;
-      }
+      if (ttl >= MIN_BID_DURATION) return;
     }
 
     else {
-      const [highestBid, secondBestOffer] = await marketDataPromise || [{ amount: "0", owner: "" }];
+      const walletsArr = await Wallet.find({})
+      const [highestBid, secondBestOffer] = await fetchMagicEdenOffer("TRAIT", contractAddress, trait) || [{ amount: "0", owner: "" }];
       console.log({ MARKETPLACE: MAGICEDEN, TYPE: 'TRAIT', trait: JSON.stringify(trait), highestBid, secondBestOffer });
       const highestBidAmount = typeof highestBid === 'object' && highestBid ? Number(highestBid.amount) : Number(highestBid);
       const owner = highestBid && typeof highestBid === 'object' ? highestBid.owner?.toLowerCase() : '';
       const isOwnBid = walletsArr
-        .map(addr => addr.toLowerCase())
+        .map(addr => addr.address.toLowerCase())
         .includes(owner);
 
-      const bestOfferWei = bestOffer * 1e18;
-      const absoluteHighestBidAmount = Math.max(highestBidAmount, bestOfferWei);
-      const absoluteHighestBidAmountEth = Number(absoluteHighestBidAmount) / 1e18;
+      const outbidMargin = calculateOutbidMargin(highestBidAmount ? highestBidAmount / 1e18 : offerPriceEth);
 
-      const secondOwner = secondBestOffer?.owner?.toLowerCase();
-
-      const isOwnSecondBid = walletsArr
-        .map(addr => addr.toLowerCase())
-        .includes(secondOwner);
-
-      const topOfferEth = Number(absoluteHighestBidAmount) / 1e18;
-
-      if (topOfferEth === maxBidPriceEth && (isOwnBid || isOwnSecondBid) && ttl > MIN_BID_DURATION) {
-        console.log(YELLOW + `Skipping magiceden trait bid for ${slug} ${JSON.stringify(trait)} - we have top bid at max price ${maxBidPriceEth} ETH with ${ttl / 60} minutes remaining`.toUpperCase() + RESET);
-        return;
-      }
-
-      if (topOfferEth === 0) {
-        traitOffer = Math.ceil(absoluteHighestBidAmount + (outbidMargin * 1e18))
-      }
-
-      else if (isOwnBid) {
-        const absoluteSecondBidAmount = Math.max(Number(secondBestOffer.amount), Number(bestOfferWei));
-        const spread = (Number(highestBidAmount) - Number(absoluteSecondBidAmount)) / 1e18;
+      if (isOwnBid) {
+        const spread = (Number(highestBidAmount) - Number(secondBestOffer.amount)) / 1e18;
 
         if (spread > outbidMargin && Number(secondBestOffer.amount) > 0) {
           if (orders.length > 0) {
@@ -6331,52 +7959,21 @@ async function processMagicedenTraitBid(data: {
               taskId: _id
             });
           }
-          traitOffer = absoluteSecondBidAmount + (outbidMargin * 1e18);
-        }
-        else if (ttl > MIN_BID_DURATION) {
-          return;
-        }
-      }
-
-      else {
-        traitOffer = (highestBidAmount + (outbidMargin * 1e18));
-        const offerPriceEth = Number(traitOffer) / 1e18;
-
-        if (topOfferEth === maxBidPriceEth) {
+          traitOffer = secondBestOffer.amount + (outbidMargin * 1e18);
+        } else if (ttl > MIN_BID_DURATION) {
+          console.log(YELLOW + `Skipping magiceden token bid for ${slug} ${JSON.stringify(trait)} - we have top bid (${highestBidAmount / 1e18} ETH) with ${ttl / 60} minutes remaining`.toUpperCase() + RESET);
+          return
+        } else {
           traitOffer = highestBidAmount
         }
-
-        else if (offerPriceEth < absoluteHighestBidAmountEth) {
-          traitOffer = (absoluteHighestBidAmountEth + outbidMargin) * 1e18
-        }
-
-
-        else if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
-
-          skipStats[_id]['magiceden']++;
-          const message = `❌ Offer price ${offerPriceEth} WETH for ${slug} trait ${JSON.stringify(trait)} bid exceeds max bid price ${maxBidPriceEth} WETH FOR MAGICEDEN.Skipping ...`.toUpperCase()
-          await logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "magiceden");
-          console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + message + RESET);
-          console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-
-          if (orders.length > 0) {
-            const orderKeys = orders.map((order: PrismaOrder) => order.id)
-            const extractedOrderIds = await extractMagicedenOrderHash(orders)
-            await queue.add(CANCEL_MAGICEDEN_BID, {
-              orderIds: extractedOrderIds,
-              privateKey,
-              orderKeys,
-              taskId: _id
-            });
-          }
-          return;
-        }
+      } else {
+        traitOffer = highestBidAmount + (outbidMargin * 1e18)
       }
-
     }
 
+    const offerEth = Number(traitOffer) / 1e18;
     const bidCount = getIncrementedBidCount(MAGICEDEN, slug, _id)
+
     if (orders.length > 0) {
       const orderKeys = orders.map((order: PrismaOrder) => order.id)
       const extractedOrderIds = await extractMagicedenOrderHash(orders)
@@ -6387,7 +7984,30 @@ async function processMagicedenTraitBid(data: {
         taskId: _id
       });
     }
+    if (outbidOptions.outbid && offerEth > maxBidPriceEth) {
+      if (orders.length > 0) {
+        const orderKeys = orders.map((order: PrismaOrder) => order.id)
+        const extractedOrderIds = await extractMagicedenOrderHash(orders)
+        await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: _id });
+      }
+      const message = `❌ Offer price ${offerEth} WETH for ${slug} ${JSON.stringify(trait)} bid exceeds max bid price ${maxBidPriceEth} WETH FOR MAGICEDEN.Skipping ...`.toUpperCase()
+      console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      console.log(RED + message + RESET);
+      console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", `Offer price ${offerEth} WETH for ${slug} ${JSON.stringify(trait)} bid exceeds max bid price ${maxBidPriceEth} WETH FOR MAGICEDEN.Skipping ...`.toUpperCase(), "skipped", "magiceden");
 
+      if (!skipStats[_id]) {
+        skipStats[_id] = {
+          opensea: 0,
+          magiceden: 0,
+          blur: 0
+        }
+      }
+      skipStats[_id].magiceden++;
+      return;
+    } else if (offerEth < minBidPriceEth) {
+      traitOffer = minBidPriceEth * 1e18;
+    }
 
     await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, traitOffer.toString(), privateKey, slug, expiration, trait)
   } catch (error: any) {
@@ -7126,6 +8746,24 @@ async function stopOption(
 ): Promise<boolean> {
   // Early return if stop options aren't configured
 
+  if (!warningBids[task._id]) {
+    warningBids[task._id] = {
+      opensea: false,
+      magiceden: false,
+      blur: false
+    };
+  }
+
+
+  if (!warningMessage[task._id]) {
+    warningMessage[task._id] = {
+      opensea: '',
+      magiceden: '',
+      blur: ''
+    };
+  }
+
+
   try {
     if (!task.stopOptions?.triggerStopOptions || !task.stopOptions?.minFloorPrice || !task.stopOptions?.maxFloorPrice) {
       return false;
@@ -7135,7 +8773,7 @@ async function stopOption(
     // Check if floor price is outside allowed range
     if ((Number(floorPrice) && floorPrice < task.stopOptions.minFloorPrice) || floorPrice > task.stopOptions.maxFloorPrice) {
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(RED + `❌ Floor price ${floorPrice} ETH for ${task.contract.slug} is outside allowed range (${task.stopOptions.minFloorPrice} ETH - ${task.stopOptions.maxFloorPrice} ETH). Skipping...`.toUpperCase() + RESET);
+      console.log(RED + `❌ Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${task.stopOptions.minFloorPrice} ETH - ${task.stopOptions.maxFloorPrice} ETH). Skipping...`.toUpperCase() + RESET);
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
       if (!warningBids[task._id]) {
@@ -7147,7 +8785,7 @@ async function stopOption(
       }
 
       warningBids[task._id][marketplace] = true;
-      warningMessage[task._id][marketplace] = `Floor price ${floorPrice} ETH for ${task.contract.slug} is outside allowed range (${task.stopOptions.minFloorPrice} ETH - ${task.stopOptions.maxFloorPrice} ETH).`;
+      warningMessage[task._id][marketplace] = `Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${task.stopOptions.minFloorPrice} ETH - ${task.stopOptions.maxFloorPrice} ETH).`;
       return true;
     }
 
@@ -7189,13 +8827,7 @@ async function stopOption(
     //   }
     // }
 
-    if (!warningBids[task._id]) {
-      warningBids[task._id] = {
-        opensea: false,
-        magiceden: false,
-        blur: false
-      };
-    }
+
     warningBids[task._id][marketplace] = false;
     return false;
 
@@ -7917,14 +9549,22 @@ interface BottomListings {
     magiceden: number[];
   }
 }
+
+interface CurrentTraits {
+  [key: string]: {
+    opensea: Record<string, string[]>;
+    magiceden: Record<string, string[]>;
+    blur: Record<string, string[]>
+  }
+}
 interface TaskStatus {
   [key: string]: {
-    status: 'RUNNING' | 'WAITING' | 'CANCELING' | 'SCHEDULED' | 'COMPLETED' | 'QUEUED' | 'QUEUEING' | 'STARTED' | "STOPPED" | "PROCESSING",
+    status: 'RUNNING' | 'WAITING' | 'CANCELLING' | 'SCHEDULED' | 'COMPLETED' | 'QUEUED' | 'QUEUEING' | 'STARTED' | "STOPPED" | "PROCESSING",
     runningPercentage: number;
     waitingTime: number;
     cancellationPercentage: number;
     processingPercentage: number;
-    nextLoopTime: Date
+    nextLoopTime?: Date
   };
 }
 

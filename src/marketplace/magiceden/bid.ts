@@ -616,38 +616,51 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
       return offers?.map((offer: any) => ({ amount: offer?.price?.amount?.raw, owner: offer?.maker }))
 
     } else if (type === "TRAIT") {
-      const URL = `https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6`;
-
-      interface TraitQueryParams {
-        collection: string;
-        [key: string]: string | string[];
-      }
-
-      const queryParams: TraitQueryParams = {
-        collection: contractAddress,
-        sortBy: 'price',
-        status: 'active',
-        excludeEOA: 'false',
-      };
-
-      if (identifier && typeof identifier === "object" && identifier?.attributeKey && identifier?.attributeValue) {
-        queryParams[`attributes[${identifier?.attributeKey}]`] = identifier?.attributeValue;
-      }
-
-      const { data } = await limiter.schedule(() => axiosInstance.get<MagicEdenTraitOfferResponse>(
-        URL,
-        {
-          params: queryParams,
+      const tasks = [
+        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6?collection=${contractAddress}&sortBy=price&status=active&excludeEOA=false&includeCriteriaMetadata=true&includeDepth=true&normalizeRoyalties=false`, {
           headers: {
-            'X-NFT-API-Key': API_KEY,
+            'content-type': 'application/json',
+            'X-NFT-API-Key': API_KEY
           }
+        })),
+
+        () => {
+          const URL = `https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v5`;
+          const queryParams = new URLSearchParams({
+            collection: contractAddress,
+            sortBy: 'price',
+            status: 'active',
+            excludeEOA: 'false',
+          });
+
+          if (identifier && typeof identifier === "object" && identifier?.attributeKey && identifier?.attributeValue) {
+            queryParams.append(`attributes[${identifier?.attributeKey}]`, identifier?.attributeValue);
+          }
+
+          return limiter.schedule(() => axiosInstance.get<MagicEdenTraitOfferResponse>(
+            URL,
+            {
+              params: queryParams,
+              headers: {
+                'X-NFT-API-Key': API_KEY,
+              }
+            }
+          ));
         }
-      ));
-      const offers = data?.orders?.filter(data => data?.price?.currency?.symbol === "WETH").slice(0, 2)
-      if (!offers?.length) return [{ amount: "0", owner: "" }]
+      ];
 
+      const [collectionResponse, traitResponse] = await pQueue.addAll(tasks, {
+        throwOnTimeout: true,
+      });
 
-      return offers?.map(offer => ({ amount: offer?.price?.amount?.raw, owner: offer?.maker }))
+      const data = [...collectionResponse.data.orders, ...traitResponse.data.orders];
+      const offers = data
+        ?.filter((data: any) => data?.price?.currency?.symbol === "WETH")
+        ?.sort((a: any, b: any) => Number(b?.price?.amount?.raw) - Number(a?.price?.amount?.raw))
+        ?.slice(0, 2);
+
+      if (!offers?.length) return [{ amount: "0", owner: "" }];
+      return offers?.map((offer: any) => ({ amount: offer?.price?.amount?.raw, owner: offer?.maker }));
     }
     return [{ amount: "0", owner: "" }]
   } catch (error: any) {

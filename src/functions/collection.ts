@@ -67,12 +67,8 @@ export async function getCollectionDetails(slug: string, contractAddress: string
       collectionCache[slug] = result;
       return result;
     } catch (error: any) {
-      console.error('Error fetching collection details:', {
-        slug,
-        error: error?.response?.data || error.message || error
-      });
 
-      throw new Error(`Failed to fetch collection details for ${slug}: ${error?.response?.data?.message || error.message || 'Unknown error'}`);
+      throw error
     }
   });
 
@@ -100,9 +96,7 @@ export async function getOpenseaFloor(collectionSlug: string) {
     const floor_price = Number(data.listings.sort((a, b) => Number(a?.price?.current?.value) - Number(b?.price?.current?.value))[0].price.current.value) / 1e18;
     return floor_price;
   } catch (error: any) {
-    const errorMessage = error?.response?.data?.errors?.[0] || error.message || 'Unknown error';
-    const formattedError = `Failed to fetch opensea floor price for ${collectionSlug}: ${errorMessage}`;
-    throw new Error(formattedError);
+    throw error
   }
 }
 

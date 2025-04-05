@@ -36,7 +36,7 @@ const retryConfig: IAxiosRetryConfig = {
 };
 
 async function initialize(rateLimit: number) {
-  axiosInstance = axios.create({ timeout: 60000 });
+  axiosInstance = axios.create({ timeout: 15000 });
 
   limiter = new Bottleneck({
     minTime: 1000 / (rateLimit * 0.98),
