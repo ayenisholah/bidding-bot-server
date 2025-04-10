@@ -82,21 +82,37 @@ export async function getCollectionDetails(slug: string, contractAddress: string
 export async function getOpenseaFloor(collectionSlug: string) {
   try {
     const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
-      `https://nfttools.pro/opensea/api/v2/listings/collection/${collectionSlug}/best`,
+      `https://nfttools.pro/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
       {
         headers: { 'X-NFT-API-Key': API_KEY }
       }
     ));
-
     // Check if listings exist and has items
     if (!data?.listings || data.listings.length === 0) {
       throw new Error(`No listings found for collection ${collectionSlug}`);
     }
 
-    const floor_price = Number(data.listings.sort((a, b) => Number(a?.price?.current?.value) - Number(b?.price?.current?.value))[0].price.current.value) / 1e18;
+    const floor_price = Number(data.listings[0].price.current.value) / 1e18;
     return floor_price;
   } catch (error: any) {
     throw error
+  }
+}
+
+export async function getOpenseaCollectionStats(collectionSlug: string) {
+  try {
+    const { data } = await limiter.schedule(() => axiosInstance.get(
+      `https://nfttools.pro/opensea/api/v2/collections/${collectionSlug}/stats`,
+      {
+        headers: { 'X-NFT-API-Key': API_KEY }
+      }
+    ));
+    if (!data?.total) {
+      throw new Error(`No listings found for collection ${collectionSlug}`);
+    }
+    return data?.total?.floor_price;
+  } catch (error: any) {
+    throw error;
   }
 }
 

@@ -214,12 +214,21 @@ async function createBidData(
  */
 async function signOrderData(taskId: string, wallet: ethers.Wallet, signData: any, trait?: Trait): Promise<string> {
   try {
+    if (!signData) {
+      throw new Error('signData is undefined. Cannot access domain property.');
+    }
+
     const domain = trait ? {
       "name": "Seaport",
       "version": "1.6",
       "chainId": 1,
       "verifyingContract": "0x0000000000000068f116a894984e2db1123eb395"
-    } : signData.domain
+    } : signData && signData.domain ? signData.domain : {
+      "name": "Seaport",
+      "version": "1.6",
+      "chainId": 1,
+      "verifyingContract": "0x0000000000000068f116a894984e2db1123eb395"
+    }
 
     const types = trait ? {
       "OrderComponents": [
@@ -369,32 +378,40 @@ export async function submitSignedOrderData(taskId: string, offerPrice: string |
   const task = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase() && task.selectedMarketplaces.includes("MagicEden"))
   if (!task) return
 
-  order.steps.forEach((step) => {
-    step.items.forEach((item) => {
-      if (item.data?.post?.body) {
-        item.data.post.body.source = "magiceden.us";
+  if (order && Array.isArray(order.steps)) {
+    order.steps.forEach((step) => {
+      if (Array.isArray(step.items)) {
+        step.items.forEach((item) => {
+          if (item.data?.post?.body) {
+            item.data.post.body.source = "magiceden.us";
+          }
+        });
       }
     });
-  });
+  }
 
-  order.steps.forEach((step) => {
-    step.items.forEach((item) => {
-      if (item.data?.sign?.value?.consideration) {
-        item.data.sign.value.consideration.forEach((considerationItem) => {
-          if (considerationItem.recipient.toLowerCase() === "0x6fa303e72bed54f515a513496f922bc331e2f27e".toLowerCase()) {
-            considerationItem.recipient = "0xca9337244b5f04cb946391bc8b8a980e988f9a6a";
+  if (order && Array.isArray(order.steps)) {
+    order.steps.forEach((step) => {
+      if (Array.isArray(step.items)) {
+        step.items.forEach((item) => {
+          if (Array.isArray(item.data?.sign?.value?.consideration)) {
+            item.data.sign.value.consideration.forEach((considerationItem) => {
+              if (considerationItem.recipient.toLowerCase() === "0x6fa303e72bed54f515a513496f922bc331e2f27e".toLowerCase()) {
+                considerationItem.recipient = "0xca9337244b5f04cb946391bc8b8a980e988f9a6a";
+              }
+            });
           }
-        });
-      }
-      if (item.data?.post?.body?.order?.data?.consideration) {
-        item.data?.post?.body?.order?.data?.consideration?.forEach((considerationItem) => {
-          if (considerationItem.recipient.toLowerCase() === "0x6fa303e72bed54f515a513496f922bc331e2f27e".toLowerCase()) {
-            considerationItem.recipient = "0xca9337244b5f04cb946391bc8b8a980e988f9a6a".toLowerCase();
+          if (Array.isArray(item.data?.post?.body?.order?.data?.consideration)) {
+            item.data?.post?.body?.order?.data?.consideration?.forEach((considerationItem) => {
+              if (considerationItem.recipient.toLowerCase() === "0x6fa303e72bed54f515a513496f922bc331e2f27e".toLowerCase()) {
+                considerationItem.recipient = "0xca9337244b5f04cb946391bc8b8a980e988f9a6a".toLowerCase();
+              }
+            });
           }
         });
       }
     });
-  });
+  }
 
   try {
     const signData = order?.steps
@@ -677,7 +694,7 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
     collection: contractAddress,
     sortBy: 'floorAskPrice',
     sortDirection: 'asc',
-    limit: 50,
+    limit: 1,
     includeAttributes: false,
     // source: ['magiceden.io', 'magiceden.us']
   };
@@ -692,8 +709,7 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
       })
     );
 
-    const token: TokenData = data?.tokens?.filter((token: TokenData) => token?.market?.floorAsk?.price?.currency?.symbol?.toLowerCase() === "weth" || token?.market?.floorAsk?.price?.currency?.symbol?.toLowerCase())[0]
-    return token?.market?.floorAsk?.price?.amount?.decimal
+    return data?.tokens[0]?.market?.floorAsk?.price?.amount?.decimal
   } catch (error: any) {
     throw error
 

@@ -2,7 +2,7 @@ import Bottleneck from "bottleneck";
 import axios, { AxiosInstance } from "axios";
 import axiosRetry, { IAxiosRetryConfig } from "axios-retry";
 import { config } from "dotenv";
-import { rps, WORKER_COUNT } from ".";
+import { RATE_LIMIT, rps, WORKER_COUNT } from ".";
 
 config()
 
@@ -36,11 +36,14 @@ const retryConfig: IAxiosRetryConfig = {
 };
 
 async function initialize(rateLimit: number) {
-  axiosInstance = axios.create({ timeout: 15000 });
+  axiosInstance = axios.create({});
 
   limiter = new Bottleneck({
-    minTime: 1000 / (rateLimit * 0.98),
+    minTime: 1000 / (rateLimit), // Increase rate limit multiplier to allow more requests per second
     trackDoneStatus: true,
+    // reservoir: rateLimit, // Increase initial reservoir value
+    // reservoirRefreshAmount: rateLimit, // Increase reservoir refresh amount
+    // reservoirRefreshInterval: 1000, // Increase reservoir refresh interval to 1 second
   });
 
   axiosRetry(axiosInstance, retryConfig);
@@ -87,6 +90,7 @@ export function stopCountsLogger() {
 setInterval(() => {
   const counts = getLimiterCounts();
   console.log('Current Limiter Stats:', counts);
+  const runningRPS = counts.DONE
 
   // Calculate instantaneous RPS based on completed requests
   const completedInLastSecond = counts.DONE ? counts.DONE - previousDoneCount : 0;
@@ -95,23 +99,26 @@ setInterval(() => {
   // Add current RPS to history
   rpsHistory.push(completedInLastSecond);
 
+
+
   // Keep only the last N seconds of history
   if (rpsHistory.length > RPS_HISTORY_SECONDS) {
     rpsHistory.shift();
   }
 
   // Calculate average RPS over the history window
-  const executing = counts.EXECUTING / WORKER_COUNT
+  const executing = counts.EXECUTING + counts.RUNNING + counts.RECEIVED + counts.QUEUED
   // Filter out 0 values before calculating the average
   const nonZeroRpsHistory = rpsHistory.filter(val => val > 0);
+
   const averageRPS = nonZeroRpsHistory.length > 0
     ? nonZeroRpsHistory.reduce((sum, val) => sum + val, 0) / nonZeroRpsHistory.length
     : 0;
-  trueRPS = Math.max(executing, averageRPS);
+  trueRPS = Math.min(RATE_LIMIT, Math.max(executing, averageRPS));
 
   console.log('Average RPS:', averageRPS.toFixed(2), 'Executing:', executing.toFixed(2), 'True RPS:', trueRPS.toFixed(2));
 
-  rps.currentRPS = averageRPS
+  rps.currentRPS = trueRPS
 
 }, 1000);
 
