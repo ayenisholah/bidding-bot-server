@@ -215,7 +215,7 @@ async function createBidData(
 async function signOrderData(taskId: string, wallet: ethers.Wallet, signData: any, trait?: Trait): Promise<string> {
   try {
     if (!signData) {
-      throw new Error('signData is undefined. Cannot access domain property.');
+      throw new Error('Asset does not exist.');
     }
 
     const domain = trait ? {

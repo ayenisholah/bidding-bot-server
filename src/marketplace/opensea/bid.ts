@@ -244,12 +244,7 @@ export async function bidOnOpensea(
 
       if (openseaJobs.length > 0) {
         await queue.pause()
-        await Promise.allSettled(openseaJobs.map(job => {
-          const token = job.token
-          if (token) {
-            job.moveToCompleted({ message: 'Outstanding order to wallet balance ratio exceeds allowed limit.' }, token, false)
-          }
-        }));
+        await Promise.allSettled(openseaJobs.map(job => job.remove()));
         await queue.resume()
       }
       const identifier = opensea_traits ? opensea_traits : asset?.tokenId ? asset?.tokenId : slug;
@@ -275,7 +270,7 @@ export async function bidOnOpensea(
     if (offerPriceEthFinal > wethBalance) {
       const identifier = opensea_traits ? opensea_traits : asset?.tokenId ? asset?.tokenId : slug;
       throw new Error(`[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEthFinal} WETH is greater than available WETH balance: ${wethBalance} WETH.`);
-  
+
     }
 
     const wallet = new Wallet(private_key, provider);
