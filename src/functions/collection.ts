@@ -80,23 +80,75 @@ export async function getCollectionDetails(slug: string, contractAddress: string
 }
 
 export async function getOpenseaFloor(collectionSlug: string) {
+  const CACHE_TTL = 30; // 30 seconds cache
+  const cacheKey = `opensea:floor:${collectionSlug}`;
+  const lockKey = `floor:${collectionSlug}`;
+
+  // Try to get from cache first
   try {
-    const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
-      `https://nfttools.pro/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
-      {
-        headers: { 'X-NFT-API-Key': API_KEY }
+    const cachedFloor = await redis.get(cacheKey);
+    if (cachedFloor) {
+      return JSON.parse(cachedFloor);
+    }
+  } catch (error) {
+    console.error('Error reading from cache:', error);
+  }
+
+  // If not in cache, try to acquire lock and fetch
+  const result = await lockManager.withLock(lockKey, async () => {
+    // Double check cache after acquiring lock
+    try {
+      const cachedFloor = await redis.get(cacheKey);
+      if (cachedFloor) {
+        return JSON.parse(cachedFloor);
       }
-    ));
-    // Check if listings exist and has items
-    if (!data?.listings || data.listings.length === 0) {
-      throw new Error(`No listings found for collection ${collectionSlug}`);
+    } catch (error) {
+      console.error('Error reading from cache after lock:', error);
     }
 
-    const floor_price = Number(data.listings[0].price.current.value) / 1e18;
-    return floor_price;
-  } catch (error: any) {
-    throw error
+    try {
+      const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
+        `https://nfttools.pro/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
+        {
+          headers: { 'X-NFT-API-Key': API_KEY }
+        }
+      ));
+
+      // Check if listings exist and has items
+      if (!data?.listings || data.listings.length === 0) {
+        throw new Error(`No listings found for collection ${collectionSlug}`);
+      }
+
+      const floor_price = Number(data.listings[0].price.current.value) / 1e18;
+
+      // Cache the result
+      try {
+        await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+      } catch (error) {
+        console.error('Error writing to cache:', error);
+      }
+
+      return floor_price;
+    } catch (error: any) {
+      throw error;
+    }
+  });
+
+  if (!result) {
+    // If we couldn't acquire the lock, wait briefly and try cache again
+    await new Promise(resolve => setTimeout(resolve, 100));
+    try {
+      const cachedFloor = await redis.get(cacheKey);
+      if (cachedFloor) {
+        return JSON.parse(cachedFloor);
+      }
+    } catch (error) {
+      console.error('Error reading from cache after lock failure:', error);
+    }
+    throw new Error('Failed to fetch OpenSea floor price');
   }
+
+  return result;
 }
 
 export async function getOpenseaCollectionStats(collectionSlug: string) {

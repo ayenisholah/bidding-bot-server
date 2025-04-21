@@ -7,6 +7,7 @@ import { createBalanceChecker } from "../../utils/balance";
 import { Job } from "bullmq";
 import axios from "axios";
 import { PrismaClient } from '@prisma/client'
+import { log } from "node:console";
 
 const prisma = new PrismaClient()
 
@@ -876,10 +877,11 @@ export async function fetchOpenseaOffers(
       return topOffers;
 
     } else if (offerType === 'TRAIT') {
+
       const { type, value } = identifiers as Record<string, string>;
 
-      // Make both requests in parallel using Promise.all
-      const [traitResponse, collectionResponse] = await Promise.all([
+      // Make both requests in parallel using Promise.allSettled
+      const [traitResult, collectionResult] = await Promise.allSettled([
         limiter.schedule(() => axiosInstance.get(`https://nfttools.pro/opensea/api/v2/offers/collection/${collectionSlug}/traits`, {
           headers: {
             'accept': 'application/json',
@@ -894,6 +896,9 @@ export async function fetchOpenseaOffers(
           }
         }))
       ]);
+
+      const traitResponse = traitResult.status === 'fulfilled' ? traitResult.value : { data: { offers: [] } };
+      const collectionResponse = collectionResult.status === 'fulfilled' ? collectionResult.value : { data: { offers: [] } };
 
       // Process trait offers
       const traitOffers = traitResponse.data.offers?.length ?

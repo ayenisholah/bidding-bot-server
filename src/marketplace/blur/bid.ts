@@ -492,20 +492,72 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
 
 
 export async function fetchBlurCollectionStats(slug: string) {
-  const url = `https://nfttools.pro/blur/v1/collections/${slug}/tokens`;
+  const CACHE_TTL = 30; // 30 seconds cache
+  const cacheKey = `blur:stats:${slug}`;
+  const lockKey = `stats:${slug}`;
+
+  // Try to get from cache first
   try {
-    const { data } = await limiter.schedule(() => axiosInstance.get<BlurTokensResponse>(url, {
-      headers: {
-        'content-type': 'application/json',
-        'X-NFT-API-Key': API_KEY,
-      }
-    }));
-    const listings = data.tokens.sort((a, b) => Number(a?.price?.amount) - Number(b?.price?.amount))
-    const floor_price = Number(listings[0]?.price?.amount)
-    return floor_price;
-  } catch (error: any) {
-    throw error
+    const cachedStats = await redis.get(cacheKey);
+    if (cachedStats) {
+      return JSON.parse(cachedStats);
+    }
+  } catch (error) {
+    console.error('Error reading from cache:', error);
   }
+
+  // If not in cache, try to acquire lock and fetch
+  const result = await lockManager.withLock(lockKey, async () => {
+    // Double check cache after acquiring lock
+    try {
+      const cachedStats = await redis.get(cacheKey);
+      if (cachedStats) {
+        return JSON.parse(cachedStats);
+      }
+    } catch (error) {
+      console.error('Error reading from cache after lock:', error);
+    }
+
+    try {
+      const url = `https://nfttools.pro/blur/v1/collections/${slug}/tokens`;
+      const { data } = await limiter.schedule(() => axiosInstance.get<BlurTokensResponse>(url, {
+        headers: {
+          'content-type': 'application/json',
+          'X-NFT-API-Key': API_KEY,
+        }
+      }));
+
+      const listings = data.tokens.sort((a, b) => Number(a?.price?.amount) - Number(b?.price?.amount));
+      const floor_price = Number(listings[0]?.price?.amount);
+
+      // Cache the result
+      try {
+        await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+      } catch (error) {
+        console.error('Error writing to cache:', error);
+      }
+
+      return floor_price;
+    } catch (error: any) {
+      throw error;
+    }
+  });
+
+  if (!result) {
+    // If we couldn't acquire the lock, wait briefly and try cache again
+    await new Promise(resolve => setTimeout(resolve, 100));
+    try {
+      const cachedStats = await redis.get(cacheKey);
+      if (cachedStats) {
+        return JSON.parse(cachedStats);
+      }
+    } catch (error) {
+      console.error('Error reading from cache after lock failure:', error);
+    }
+    throw new Error('Failed to fetch Blur collection stats');
+  }
+
+  return result;
 }
 
 

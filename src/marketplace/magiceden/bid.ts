@@ -686,34 +686,86 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
 }
 
 export async function fetchMagicEdenCollectionStats(contractAddress: string) {
-  const queryParams = {
-    includeQuantity: true,
-    includeLastSale: true,
-    excludeSpam: true,
-    excludeBurnt: true,
-    collection: contractAddress,
-    sortBy: 'floorAskPrice',
-    sortDirection: 'asc',
-    limit: 1,
-    includeAttributes: false,
-    // source: ['magiceden.io', 'magiceden.us']
-  };
+  const CACHE_TTL = 30; // 30 seconds cache
+  const cacheKey = `magiceden:stats:${contractAddress}`;
+  const lockKey = `stats:${contractAddress}`;
 
+  // Try to get from cache first
   try {
-    const { data } = await limiter.schedule(() =>
-      axiosInstance.get('https://nfttools.pro/magiceden/v3/rtp/ethereum/tokens/v7', {
-        params: queryParams,
-        headers: {
-          'X-NFT-API-Key': API_KEY
-        }
-      })
-    );
-
-    return data?.tokens[0]?.market?.floorAsk?.price?.amount?.decimal
-  } catch (error: any) {
-    throw error
-
+    const cachedStats = await redis.get(cacheKey);
+    if (cachedStats) {
+      return JSON.parse(cachedStats);
+    }
+  } catch (error) {
+    console.error('Error reading from cache:', error);
   }
+
+  // If not in cache, try to acquire lock and fetch
+  const result = await lockManager.withLock(lockKey, async () => {
+    // Double check cache after acquiring lock
+    try {
+      const cachedStats = await redis.get(cacheKey);
+      if (cachedStats) {
+        return JSON.parse(cachedStats);
+      }
+    } catch (error) {
+      console.error('Error reading from cache after lock:', error);
+    }
+
+    const queryParams = {
+      includeQuantity: true,
+      includeLastSale: true,
+      excludeSpam: true,
+      excludeBurnt: true,
+      collection: contractAddress,
+      sortBy: 'floorAskPrice',
+      sortDirection: 'asc',
+      limit: 1,
+      includeAttributes: false,
+    };
+
+    try {
+      const { data } = await limiter.schedule(() =>
+        axiosInstance.get('https://nfttools.pro/magiceden/v3/rtp/ethereum/tokens/v7', {
+          params: queryParams,
+          headers: {
+            'X-NFT-API-Key': API_KEY
+          }
+        })
+      );
+
+      const stats = data?.tokens[0]?.market?.floorAsk?.price?.amount?.decimal;
+
+      // Cache the result
+      if (stats !== undefined) {
+        try {
+          await redis.set(cacheKey, JSON.stringify(stats), 'EX', CACHE_TTL);
+        } catch (error) {
+          console.error('Error writing to cache:', error);
+        }
+      }
+
+      return stats;
+    } catch (error: any) {
+      throw error;
+    }
+  });
+
+  if (!result) {
+    // If we couldn't acquire the lock, wait briefly and try cache again
+    await new Promise(resolve => setTimeout(resolve, 100));
+    try {
+      const cachedStats = await redis.get(cacheKey);
+      if (cachedStats) {
+        return JSON.parse(cachedStats);
+      }
+    } catch (error) {
+      console.error('Error reading from cache after lock failure:', error);
+    }
+    throw new Error('Failed to fetch collection stats');
+  }
+
+  return result;
 }
 
 export async function fetchMagicEdenTokens(taskId: string, collectionId: string, limit?: number) {

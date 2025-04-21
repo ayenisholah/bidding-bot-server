@@ -42,6 +42,7 @@ const currentTraits: CurrentTraits = {}
 const taskStatus: TaskStatus = {};
 const bestOffers: BidCounts = {};
 const floorPrices: BidCounts = {};
+const balances: BidCounts = {}
 export const warningBids: WarningBids = {};
 export const warningMessage: WarningMessage = {};
 export const errorStats: BidCounts = {};
@@ -95,44 +96,6 @@ const QUEUE_OPTIONS: QueueOptions = {
 };
 
 let netEnabled = true;
-
-const WORKER_METRICS = new Map<string, {
-  lastJobStart: number;
-  lastJobEnd: number;
-  jobCount: number;
-  idleTime: number;
-}>();
-
-// Update the worker configuration with more conservative settings
-// const workers = Array.from({ length: WORKER_COUNT }, (_, index) => new Worker(
-//   QUEUE_NAME,
-//   async (job) => {
-
-//     try {
-//       await processJob(job);
-//       return;
-//     } catch (error) {
-//       if (job.token) {
-//         await job.moveToFailed(new Error("Job failed"), job.token);
-//       }
-//       throw new UnrecoverableError('Unrecoverable');
-//     }
-//   },
-//   {
-//     connection: redis,
-//     prefix: '{bull}',
-//     concurrency: RATE_LIMIT,
-//     limiter: {
-//       max: RATE_LIMIT,
-//       duration: 1000
-//     },
-//     lockDuration: 30000,
-//     stalledInterval: 15000,
-//     maxStalledCount: 1,
-//     name: `worker-${index + 1}`
-//   }
-// ));
-
 
 class RateLimiter {
   private tokens: number;
@@ -192,9 +155,6 @@ const workers = new Worker(
     connection: redis,
     prefix: '{bull}',
     concurrency: RATE_LIMIT,
-    lockDuration: 30000,
-    stalledInterval: 15000,
-    maxStalledCount: 1,
   }
 )
 
@@ -340,6 +300,12 @@ async function monitorHealth() {
     } else {
       await queue.resume();
     }
+
+    // if (counts.waiting > 0) {
+    //   // const jobs: Job[] = await queue.getWaiting()
+    //   // await Promise.all(jobs.map((job) => job.remove()))
+    //   await runScheduledLoop()
+    // }
 
     const totalJobs = Object.values(counts).reduce((a, b) => a + b, 0);
 
@@ -598,7 +564,6 @@ interface CompletedTasks {
 }
 const completedTasks: CompletedTasks = {};
 
-
 queueEvents.on('completed', async ({ jobId }) => {
   if (jobId.includes('CANCEL_OPENSEA_BID') || jobId.includes('CANCEL_MAGICEDEN_BID') || jobId.includes('CANCEL_BLUR_BID')) {
     const taskId = jobId.split('-')[1];
@@ -663,7 +628,7 @@ queueEvents.on('completed', async ({ jobId }) => {
 
       taskStatus[taskId].cancellationPercentage = Math.min(combinedCancellationPercentage, 100);
 
-      if (totalJobs < completedJobs + failedJobs || combinedCancellationPercentage > 95) {
+      if (totalJobs < completedJobs + failedJobs || combinedCancellationPercentage > 99) {
         const orders = await prisma.order.findMany({
           where: {
             taskId: taskId,
@@ -699,7 +664,7 @@ queueEvents.on('completed', async ({ jobId }) => {
 
       // If task is running, just update with the marketplace-specific percentage
       taskStatus[taskId].cancellationPercentage = marketplaceCancellationPercentage;
-      if (parentJob.totalJobs < parentJob.completedJobs + parentJob.failedJobs || marketplaceCancellationPercentage > 95) {
+      if (parentJob.totalJobs < parentJob.completedJobs + parentJob.failedJobs || marketplaceCancellationPercentage > 99) {
         const orders = await prisma.order.findMany({
           where: {
             taskId: taskId,
@@ -758,7 +723,6 @@ queueEvents.on('completed', async ({ jobId }) => {
   const runningPercentage = ((completedJobs + failedJobs) / totalJobs) * 100
   taskStatus[taskId].runningPercentage = Math.min(runningPercentage, 100) // 100 is the max value since it represents 100%
 
-  console.log({ completedJobs, failedJobs, totalJobs });
 
   if (parentJob.completedJobs + parentJob.failedJobs === parentJob.totalJobs) {
     if (!completedTasks[taskId]) {
@@ -778,7 +742,7 @@ queueEvents.on('completed', async ({ jobId }) => {
         completedTasks[taskId]?.[m as 'opensea' | 'magiceden' | 'blur']
       );
 
-      if (allMarketsComplete && runningPercentage > 95) {
+      if (allMarketsComplete && runningPercentage > 99) {
         console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
 
         const wallet = await Wallet.findOne({ address: task.wallet.address })
@@ -814,6 +778,12 @@ queueEvents.on('completed', async ({ jobId }) => {
               clearInterval(countdownTimer);
             }
           }, 1000);
+
+          // Clear any existing timeout for this task
+          const existingTimeout = taskTimeouts.get(taskId);
+          if (existingTimeout) {
+            clearTimeout(existingTimeout);
+          }
 
           const timeoutId = setTimeout(async () => {
             // When we restart, update the status
@@ -858,7 +828,7 @@ queueEvents.on('failed', async ({ jobId }) => {
 
     if (!parentJob) return;
 
-    parentJob.completedJobs++;
+    parentJob.failedJobs++;
 
     // Calculate marketplace-specific cancellation percentage
 
@@ -898,7 +868,7 @@ queueEvents.on('failed', async ({ jobId }) => {
 
       taskStatus[taskId].cancellationPercentage = Math.min(combinedCancellationPercentage, 100);
 
-      if (totalJobs < completedJobs + failedJobs || combinedCancellationPercentage > 95) {
+      if (totalJobs < completedJobs + failedJobs || combinedCancellationPercentage > 99) {
         const orders = await prisma.order.findMany({
           where: {
             taskId: taskId,
@@ -934,7 +904,7 @@ queueEvents.on('failed', async ({ jobId }) => {
 
       // If task is running, just update with the marketplace-specific percentage
       taskStatus[taskId].cancellationPercentage = marketplaceCancellationPercentage;
-      if (parentJob.totalJobs < parentJob.completedJobs + parentJob.failedJobs || marketplaceCancellationPercentage > 95) {
+      if (parentJob.totalJobs < parentJob.completedJobs + parentJob.failedJobs || marketplaceCancellationPercentage > 99) {
         const orders = await prisma.order.findMany({
           where: {
             taskId: taskId,
@@ -970,7 +940,7 @@ queueEvents.on('failed', async ({ jobId }) => {
   if (!parentJob) return;
 
   taskStatus[taskId].status = 'RUNNING'
-  parentJob.completedJobs++;
+  parentJob.failedJobs++;
 
   // Calculate total jobs across all selected and enabled marketplaces for this task
   let totalJobs = 0;
@@ -993,8 +963,6 @@ queueEvents.on('failed', async ({ jobId }) => {
   const runningPercentage = ((completedJobs + failedJobs) / totalJobs) * 100
   taskStatus[taskId].runningPercentage = Math.min(runningPercentage, 100) // 100 is the max value since it represents 100%
 
-  console.log({ completedJobs, failedJobs, totalJobs });
-
   if (parentJob.completedJobs + parentJob.failedJobs === parentJob.totalJobs) {
     if (!completedTasks[taskId]) {
       completedTasks[taskId] = {
@@ -1013,7 +981,7 @@ queueEvents.on('failed', async ({ jobId }) => {
         completedTasks[taskId]?.[m as 'opensea' | 'magiceden' | 'blur']
       );
 
-      if (allMarketsComplete && runningPercentage > 95) {
+      if (allMarketsComplete && runningPercentage > 99) {
         console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
 
         const wallet = await Wallet.findOne({ address: task.wallet.address })
@@ -1050,6 +1018,12 @@ queueEvents.on('failed', async ({ jobId }) => {
             }
           }, 1000);
 
+          // Clear any existing timeout for this task
+          const existingTimeout = taskTimeouts.get(taskId);
+          if (existingTimeout) {
+            clearTimeout(existingTimeout);
+          }
+
           const timeoutId = setTimeout(async () => {
             // When we restart, update the status
             const currentTask = activeTasks.get(taskId);
@@ -1068,7 +1042,6 @@ queueEvents.on('failed', async ({ jobId }) => {
   }
 
 });
-
 
 bidRates = getAllBidRates();
 const clientData = {
@@ -1361,10 +1334,11 @@ async function runScheduledLoop() {
     return
   }
 
-  for (const [taskId, task] of activeTasks.entries()) {
-    if (!task.running) continue;
-    await startTask(task, true);
-  }
+  await Promise.all(
+    Array.from(activeTasks.entries())
+      .filter(([_, task]) => task.running)
+      .map(([_, task]) => startTask(task, true))
+  );
 }
 
 async function processImportedTasks(tasks: ITask[]) {
@@ -1575,34 +1549,6 @@ async function updateTaskData(task: ITask) {
     const existingTaskIndex = currentTasks.findIndex(t => t._id === task._id);
     const existingTask = getActiveTaskWithIdByIndex(existingTaskIndex)?.task
 
-    // Initialize task status if it doesn't exist
-    if (!taskStatus[task._id]) {
-      taskStatus[task._id] = {
-        status: 'PROCESSING',
-        runningPercentage: 0,
-        waitingTime: 0,
-        cancellationPercentage: 0,
-        processingPercentage: 0,
-        nextLoopTime: undefined
-      };
-    }
-
-    // Reset parent jobs tracking
-    const marketplaces = ['opensea', 'magiceden', 'blur'];
-    for (const marketplace of marketplaces) {
-      const parentId = `${task._id}-${marketplace}`;
-      parentJobs.delete(parentId);
-    }
-
-    // Reset completed tasks tracking
-    if (completedTasks[task._id]) {
-      completedTasks[task._id] = {
-        opensea: false,
-        magiceden: false,
-        blur: false
-      };
-    }
-
     warningBids[task._id] = {
       opensea: false,
       magiceden: false,
@@ -1677,10 +1623,11 @@ async function updateTaskData(task: ITask) {
 
     const traits = transformOpenseaTraits(selectedTraits)
     const staleTraits = transformOpenseaTraits(existingTaskTraits)
+    const currentTask = activeTasks.get(task._id)
 
     const traitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
     const tokenBid = task.bidType === "token"
-    const taskTokenIds = task.tokenIds
+    const taskTokenIds = currentTask?.tokenIds ?? []
 
     const autoIds = existingTask.tokenIds
       .filter(id => id.toString().toLowerCase().startsWith('bot'))
@@ -1783,17 +1730,8 @@ async function updateTaskData(task: ITask) {
       ? { null: collectionDetails.creator_fees.null }
       : Object.fromEntries(Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)]));
 
-    const currentTask = activeTasks.get(task._id)
-    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) return;
-    const expiration = getExpiry(currentTask.bidDuration)
-
-    // Update task status to processing
-    taskStatus[task._id].status = 'PROCESSING';
-    taskStatus[task._id].processingPercentage = 0;
-    taskStatus[task._id].runningPercentage = 0;
-
-    currentTokenIds[task._id].opensea = openseaTokenIds
-    currentTokenIds[task._id].magiceden = magicedenTokenIds
+    const bidDuration = currentTask && currentTask.bidDuration ? currentTask.bidDuration : task.bidDuration
+    const expiration = getExpiry(bidDuration)
 
     if (traitBid) {
       const openseaTraitJobs = (currentTask && currentTask.running && currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") && enabledMarketplaces.map((m) => m.toLowerCase()).includes('opensea')) ? addedTraits.map((trait) => ({
@@ -1852,45 +1790,6 @@ async function updateTaskData(task: ITask) {
         opts: { priority: TRAIT_BID_PRIORITY.BLUR } as JobsOptions
       })) as Job[] : [] as Job[]
 
-      // Update parent job counts after creating new jobs
-      if (openseaTraitJobs.length > 0) {
-        const openseaParentJob = {
-          parentId: `${task._id}-opensea`.toLowerCase(),
-          totalJobs: openseaTraitJobs.length,
-          completedJobs: 0,
-          failedJobs: 0,
-          startTime: Date.now(),
-          taskId: task._id,
-          jobName: 'OPENSEA_TRAIT_BID'
-        };
-        parentJobs.set(openseaParentJob.parentId, openseaParentJob);
-      }
-
-      if (magicedenTraitJobs.length > 0) {
-        const magicedenParentJob = {
-          parentId: `${task._id}-magiceden`.toLowerCase(),
-          totalJobs: magicedenTraitJobs.length,
-          completedJobs: 0,
-          failedJobs: 0,
-          startTime: Date.now(),
-          taskId: task._id,
-          jobName: 'MAGICEDEN_TRAIT_BID'
-        };
-        parentJobs.set(magicedenParentJob.parentId, magicedenParentJob);
-      }
-
-      if (blurTraitJobs.length > 0) {
-        const blurParentJob = {
-          parentId: `${task._id}-blur`.toLowerCase(),
-          totalJobs: blurTraitJobs.length,
-          completedJobs: 0,
-          failedJobs: 0,
-          startTime: Date.now(),
-          taskId: task._id,
-          jobName: 'BLUR_TRAIT_BID'
-        };
-        parentJobs.set(blurParentJob.parentId, blurParentJob);
-      }
       await Promise.all([
         processBulkJobs(openseaTraitJobs, true),
         processBulkJobs(magicedenTraitJobs, true),
@@ -1937,32 +1836,6 @@ async function updateTaskData(task: ITask) {
             opts: { priority: TOKEN_BID_PRIORITY.MAGICEDEN } as JobsOptions
           })) as Job[] : [] as Job[]
 
-      // Update parent job counts for token bids
-      if (openseaTokenJob.length > 0) {
-        const openseaParentJob = {
-          parentId: `${task._id}-opensea`.toLowerCase(),
-          totalJobs: openseaTokenJob.length,
-          completedJobs: 0,
-          failedJobs: 0,
-          startTime: Date.now(),
-          taskId: task._id,
-          jobName: 'OPENSEA_TOKEN_BID'
-        };
-        parentJobs.set(openseaParentJob.parentId, openseaParentJob);
-      }
-
-      if (magicedenTokenJob.length > 0) {
-        const magicedenParentJob = {
-          parentId: `${task._id}-magiceden`.toLowerCase(),
-          totalJobs: magicedenTokenJob.length,
-          completedJobs: 0,
-          failedJobs: 0,
-          startTime: Date.now(),
-          taskId: task._id,
-          jobName: 'MAGICEDEN_TOKEN_BID'
-        };
-        parentJobs.set(magicedenParentJob.parentId, magicedenParentJob);
-      }
 
       if (!currentTokenIds[task._id]) {
         currentTokenIds[task._id] = {
@@ -1971,17 +1844,16 @@ async function updateTaskData(task: ITask) {
         }
       }
 
+      currentTokenIds[task._id].opensea = openseaTokenIds
+      currentTokenIds[task._id].magiceden = magicedenTokenIds
+
       await Promise.all([
         processBulkJobs(magicedenTokenJob, true),
         processBulkJobs(openseaTokenJob, true)
       ]);
     }
-
-    // Update final status
-    // taskStatus[task._id].status = 'RUNNING';
   } catch (error) {
     console.error(RED + `Error processing updated task: ${task.contract.slug} ` + RESET, error);
-    // taskStatus[task._id].status = 'STOPPED';
   }
 }
 
@@ -1995,6 +1867,82 @@ const BLUR_JOBS = [
   'BLUR_TRAIT_BID'
 ];
 
+async function processBulkCancellations(jobs: Job[]) {
+  if (!jobs?.length) return;
+
+  const rateLimiter = new RateLimiter(RATE_LIMIT * 2);
+  const chunks = chunk(jobs, RATE_LIMIT * 2);
+
+  try {
+    for (const [chunkIndex, currentChunk] of chunks.entries()) {
+      try {
+        const memUsage = process.memoryUsage();
+        const memoryUsagePercent = (memUsage.heapUsed / os.totalmem()) * 100;
+
+        if (memoryUsagePercent > MAX_MEMORY_USAGE) {
+          console.log(YELLOW + `Memory usage high (${memoryUsagePercent.toFixed(1)}%). Waiting for GC...` + RESET);
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          global.gc?.();
+          continue;
+        }
+
+        while (true) {
+          const counts = await queue.getJobCounts();
+          const prioritizedCount = counts.prioritized || 0;
+
+          if (prioritizedCount <= DRAIN_THRESHOLD * 2) {
+            break;
+          }
+          const delay = (prioritizedCount / DRAIN_THRESHOLD * 2);
+          await new Promise(resolve => setTimeout(resolve, delay * 1000));
+        }
+
+        // Check queue health
+        const counts = await queue.getJobCounts();
+        const prioritizedCount = counts.prioritized || 0;
+
+        if (prioritizedCount > DRAIN_THRESHOLD) {
+          await waitForQueueDrain();
+        }
+
+        let retries = 3;
+        while (retries > 0) {
+          try {
+            await rateLimiter.acquire();
+            await queue.addBulk(
+              currentChunk
+                .filter((job): job is NonNullable<typeof job> => job !== null)
+                .map(job => ({
+                  name: job.name,
+                  data: job.data,
+                  opts: {
+                    ...job?.opts,
+                    removeOnComplete: true,
+                    removeOnFail: true,
+                    attempts: 0,
+                  },
+                }))
+            );
+
+            break;
+          } catch (error) {
+            retries--;
+            if (retries === 0) {
+              throw error;
+            }
+            console.log(YELLOW + `Retrying addBulk for chunk ${chunkIndex + 1}. Attempts remaining: ${retries}` + RESET);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (error) {
+        console.log(RED + `Error processing chunk ${chunkIndex + 1}:`, error, RESET);
+      }
+    }
+  } catch (error) {
+    console.log(RED + 'Error processing bulk jobs:', error, RESET);
+  }
+}
 
 async function processBulkJobs(jobs: Job[], createKey = false) {
   if (!jobs?.length) return;
@@ -2003,10 +1951,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
   const taskId = firstJob.data._id;
   const marketplace = firstJob.name.split('_')[0] || 'UNKNOWN';
   const bulkJobId = `${firstJob.data._id}-${marketplace}`.toLowerCase();
-
   const task = activeTasks.get(taskId);
-  const parentJob = parentJobs.get(bulkJobId)
-
   parentJobs.set(bulkJobId, {
     parentId: bulkJobId,
     totalJobs: jobs.length,
@@ -2839,14 +2784,7 @@ async function fetchAndCancelOpenseaBids(task: ITask, WALLET_PRIVATE_KEY: string
     })
 
     if (allOpenseaBids.length > 0) {
-      for (let i = 0; i < allOpenseaBids.length; i += BATCH_SIZE) {
-        const batchBids = allOpenseaBids.slice(i, i + BATCH_SIZE);
-        await cancelOpenseaBids(batchBids, WALLET_PRIVATE_KEY, task._id);
-        if (i + BATCH_SIZE < allOpenseaBids.length) {
-          const delay = BATCH_SIZE / RATE_LIMIT * 1000
-          await new Promise(resolve => setTimeout(resolve, delay));
-        }
-      }
+      await cancelOpenseaBids(allOpenseaBids, WALLET_PRIVATE_KEY, task._id);
     }
   } catch (error) {
     console.log(error);
@@ -2876,14 +2814,7 @@ async function fetchAndCancelBlurBids(task: ITask, WALLET_PRIVATE_KEY: string) {
     })
 
     if (allBlurBids.length > 0) {
-      for (let i = 0; i < allBlurBids.length; i += BATCH_SIZE) {
-        const batchBids = allBlurBids.slice(i, i + BATCH_SIZE);
-        await cancelBlurBids(batchBids, WALLET_PRIVATE_KEY, task._id);
-        if (i + BATCH_SIZE < allBlurBids.length) {
-          const delay = BATCH_SIZE / RATE_LIMIT * 1000
-          await new Promise(resolve => setTimeout(resolve, delay));
-        }
-      }
+      await cancelBlurBids(allBlurBids, WALLET_PRIVATE_KEY, task._id);
     }
   } catch (error) {
     console.log(error);
@@ -3019,8 +2950,10 @@ async function cancelOpenseaBids(orders: PrismaOrder[], privateKey: string, task
         jobId: `CANCEL_OPENSEA_BID-${taskId}-${order.id}`
       }
     }
-  })
-  await queue.addBulk(cancelData)
+  }) as Job[]
+
+  await processBulkCancellations(cancelData)
+  // await queue.addBulk(cancelData)
 }
 
 async function updateStatus(task: ITask) {
@@ -3261,7 +3194,6 @@ async function connectWebSocket(): Promise<void> {
       }
     });
 
-    console.log(RED + "DISCONNECTED FROM MARKETPLACE EVENTS WEBSCKET" + `_TIME_AT_${String(new Date().getDate()).padStart(2, '0')} / ${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')}` + RESET);
     if (heartbeatIntervalId !== null) {
       clearInterval(heartbeatIntervalId);
       heartbeatIntervalId = null;
@@ -3298,6 +3230,14 @@ function attemptReconnect(): void {
 
 async function handleCounterBid(message: any) {
   try {
+    if (message && message?.event && message.event === "item_transferred") {
+      console.log(GOLD + JSON.stringify(message) + RESET);
+    }
+
+    if (message && message?.event && message.event === "item_sold") {
+      console.log(GOLD + JSON.stringify(message) + RESET);
+    }
+
     const { contractAddress, slug } = getMarketplaceDetails(message);
 
     if (!contractAddress && !slug) {
@@ -3305,12 +3245,47 @@ async function handleCounterBid(message: any) {
       return;
     }
 
-    const relevantTasks = currentTasks.filter(task =>
-      task?.outbidOptions?.counterbid &&
-      task?.running &&
-      (task?.contract?.contractAddress?.toLowerCase() === contractAddress?.toLowerCase() ||
-        task?.contract?.slug?.toLowerCase() === slug?.toLowerCase())
-    );
+    const relevantTasks = currentTasks.filter(task => {
+      // Check if task is valid and running
+      if (!task?.running || !task?.contract) {
+        return false;
+      }
+
+      const taskContractAddress = task.contract.contractAddress?.toLowerCase();
+      const taskSlug = task.contract.slug?.toLowerCase();
+      const messageContractAddress = contractAddress?.toLowerCase();
+      const messageSlug = slug?.toLowerCase();
+
+      // Match by counterbid option
+      const hasCounterbid = task.outbidOptions?.counterbid;
+
+      // Match by contract address or slug
+      const contractMatches = taskContractAddress === messageContractAddress ||
+        taskSlug === messageSlug;
+
+      // Match by stop options
+      const hasValidStopOptions = taskSlug === messageSlug &&
+        task.stopOptions?.triggerStopOptions &&
+        Number(task.stopOptions?.maxPurchase) > 0;
+
+      return (hasCounterbid && contractMatches) || hasValidStopOptions;
+    });
+
+    for (const task of relevantTasks) {
+      if (message && message?.event && message.event === "item_transferred") {
+        const toAccount = message?.payload?.payload?.to_account.toLowerCase() === task.wallet.address.toLowerCase()
+        if (toAccount) {
+          if (!balances[task._id]) {
+            balances[task._id] = {
+              opensea: 0,
+              magiceden: 0,
+              blur: 0
+            }
+          }
+          balances[task._id].opensea++
+        }
+      }
+    }
 
     if (!relevantTasks.length) return;
 
@@ -3357,7 +3332,8 @@ async function handleCounterBidForTask(task: any, message: any) {
 
 async function handleMagicEdenCounterbid(data: any, task: ITask) {
   try {
-    const currentTask = activeTasks.get(task._id)
+    const 
+    currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces
       .map((m) => m.toLowerCase())
       .includes("magiceden")) return;
@@ -3381,7 +3357,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     const incomingBidAmount: number = Number(data?.data?.price?.amount?.raw);
     let offerPrice: number;
 
-    console.log({ maker, incomingBidAmount, bidType });
+    // console.log({ maker, incomingBidAmount, bidType, marketplace: MAGICEDEN });
 
     if (!bestOffers[task._id]) {
       bestOffers[task._id] = {
@@ -3774,7 +3750,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       value: data.payload.payload.trait_criteria.trait_name
     } : null
 
-    console.log({ maker, incomingBidAmount, event: data.event });
+    // console.log({ maker, incomingBidAmount, event: data.event, marketplace: OPENSEA });
 
     const wallets = await Wallet.find({})
     const walletAddresses = wallets.map((wallet) => wallet.address.toLowerCase())
@@ -4500,6 +4476,7 @@ async function processOpenseaScheduledBid(task: ITask) {
         nextLoopTime: new Date()
       }
     }
+
     taskStatus[currentTask._id].status = 'STARTED'
 
     if (!currentTokenIds[currentTask._id]) {
@@ -4555,14 +4532,17 @@ async function processOpenseaScheduledBid(task: ITask) {
     const amount = autoIds[0]
 
     // determine token traits
-    let tokenIds: number[] = []
     const taskTokenIds = currentTask.tokenIds
     const bottomListings = autoIds ? await fetchOpenseaListings(currentTask._id, currentTask.contract.slug, amount) ?? [] : []
+    const difference = amount !== undefined ? Math.max(0, amount - bottomListings.length) : 0
+
+    let tokens: number[] = [...bottomListings, ...taskTokenIds]
+    let tokenIds: number[] = []
 
     if (currentTask.bidType === "token" && selectedTraits && Object.keys(selectedTraits).length > 0) {
       const attributes = transformSelectedTraitsToAttributes(selectedTraits)
       const expandedAttributes = expandAttributes(attributes)
-      let tokens: number[] = [...bottomListings, ...taskTokenIds]
+      let traitTokens: number[] = []
       let skips = 0
 
       await pQueue.addAll(
@@ -4581,17 +4561,16 @@ async function processOpenseaScheduledBid(task: ITask) {
           };
 
           const items = await fetchOpenSeaCollectionItems(variable);
-          tokens.push(...items);
+          traitTokens.push(...items);
           const skipped = count - items.length
           skips += skipped
         })
       )
 
-      tokens = [...bottomListings, ...taskTokenIds, ...tokens];
+      tokens = [...tokens, ...traitTokens]
       tokenIds = [...new Set(tokens)];
       const duplicateCount = tokens.length - tokenIds.length
 
-      currentTokenIds[currentTask._id].opensea = [...tokenIds]
       if (!skipStats[currentTask._id]) {
         skipStats[currentTask._id] = {
           opensea: 0,
@@ -4599,14 +4578,11 @@ async function processOpenseaScheduledBid(task: ITask) {
           blur: 0
         }
       }
-      skipStats[currentTask._id].opensea += (skips + duplicateCount)
+      skipStats[currentTask._id].opensea += (skips + duplicateCount + difference)
     } else if (currentTask.bidType === "token") {
-      // Directly combine and deduplicate in one step
-      tokenIds = [...new Set([...bottomListings, ...taskTokenIds])];
-      const duplicateCount = [...bottomListings, ...taskTokenIds].length - tokenIds.length
+      tokenIds = [...new Set([...tokens])];
+      const duplicateCount = tokens.length - tokenIds.length
 
-      currentTokenIds[currentTask._id].opensea = [...tokenIds]
-      const difference = amount !== undefined ? Math.max(0, amount - tokenIds.length) : 0
 
       if (!skipStats[currentTask._id]) {
         skipStats[currentTask._id] = {
@@ -4618,6 +4594,29 @@ async function processOpenseaScheduledBid(task: ITask) {
       skipStats[currentTask._id]['opensea'] += (difference + duplicateCount)
     }
 
+    const staleTokens = currentTokenIds[currentTask._id].opensea.filter(token => !tokenIds.includes(token)).map((item) => item.toString())
+
+    if (staleTokens.length > 0) {
+      const openseaTokensToCancel = await prisma.order.findMany({
+        where: {
+          taskId: task._id,
+          identifier: { in: staleTokens },
+          marketplace: "opensea"
+        }
+      })
+
+      if (openseaTokensToCancel.length > 0) {
+        const cancelData = openseaTokensToCancel.map((order) => {
+          return {
+            name: CANCEL_OPENSEA_BID,
+            data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id }
+          };
+        });
+        await queue.addBulk(cancelData);
+      }
+    }
+
+    currentTokenIds[currentTask._id].opensea = [...tokenIds]
     taskStatus[currentTask._id].processingPercentage = (3 / 4) * 100
     const tokenBid = currentTask.bidType === "token" && tokenIds.length > 0
     const traits = selectedTraits && Object.keys(selectedTraits).length > 0 ? transformOpenseaTraits(selectedTraits) : [];
@@ -4650,10 +4649,12 @@ async function processOpenseaScheduledBid(task: ITask) {
     const newTask = { ...currentTask, traits: {}, wallet: { address: WALLET_ADDRESS, privateKey: WALLET_PRIVATE_KEY } } as ITask
 
     if (tokenBid) {
-      console.log({ tokenIds: tokenIds.length });
-
-      const jobs = tokenIds
-        .filter(token => !isNaN(Number(token)) && String(token).toLowerCase().indexOf('bot') === -1)
+      // Get the array of OpenSea token IDs for this task, defaulting to empty array if undefined
+      const tokens = currentTokenIds[task._id].opensea
+        .filter(token => !isNaN(Number(token)) && String(token).toLowerCase()
+          .indexOf('bot') === -1)
+        ?? []
+      const jobs = tokens
         .map((token) => ({
           name: OPENSEA_TOKEN_BID,
           data: {
@@ -6073,14 +6074,18 @@ async function processMagicedenScheduledBid(task: ITask) {
 
     const taskTokenIds = currentTask.tokenIds
     let tokenIds: number[] = []
-
     const bottomListings = amount ? await fetchMagicEdenTokens(currentTask._id, currentTask.contract.contractAddress, amount) ?? [] : []
+    const difference = amount !== undefined ? Math.max(0, amount - bottomListings.length) : 0
     taskStatus[currentTask._id].processingPercentage = (3 / 4) * 100
+
+    let tokens: number[] = [...bottomListings, ...taskTokenIds]
+
     if (currentTask.bidType === "token" && selectedTraits && Object.keys(selectedTraits).length > 0) {
       const attributes = transformSelectedTraitsToAttributes(selectedTraits)
       const expandedAttributes = expandAttributes(attributes)
-      let tokens: number[] = [...bottomListings, ...taskTokenIds]
+      let traitTokens: number[] = []
       let skips = 0
+
       await pQueue.addAll(
         expandedAttributes.map((attribute) => async () => {
           const count = getTraitCount(currentTask.traits, attribute)
@@ -6102,11 +6107,9 @@ async function processMagicedenScheduledBid(task: ITask) {
           skips += skipped
         })
       )
-      tokens = [...bottomListings, ...taskTokenIds, ...tokens];
+      tokens = [...tokens, ...traitTokens];
       tokenIds = [...new Set(tokens)];
       const duplicateCount = tokens.length - tokenIds.length
-
-      currentTokenIds[currentTask._id].magiceden = [...tokenIds]
 
       if (!skipStats[currentTask._id]) {
         skipStats[currentTask._id] = {
@@ -6116,15 +6119,11 @@ async function processMagicedenScheduledBid(task: ITask) {
         }
       }
 
-      skipStats[currentTask._id].magiceden += (skips + duplicateCount)
+      skipStats[currentTask._id].magiceden += (skips + duplicateCount + difference)
 
     } else if (currentTask.bidType === "token") {
-      // Directly combine and deduplicate in one step
-      tokenIds = [...new Set([...bottomListings, ...taskTokenIds])];
-      const duplicateCount = [...bottomListings, ...taskTokenIds].length - tokenIds.length
-
-      currentTokenIds[currentTask._id].magiceden = [...tokenIds]
-      const difference = amount !== undefined ? Math.max(0, amount - tokenIds.length) : 0
+      tokenIds = [...new Set([...tokens])];
+      const duplicateCount = tokens.length - tokenIds.length
 
       if (!skipStats[currentTask._id]) {
         skipStats[currentTask._id] = {
@@ -6136,6 +6135,26 @@ async function processMagicedenScheduledBid(task: ITask) {
       skipStats[currentTask._id]['magiceden'] += (difference + duplicateCount)
     }
 
+    const staleTokens = currentTokenIds[currentTask._id].magiceden.filter(token => !tokenIds.includes(token)).map((item) => item.toString())
+
+    if (staleTokens.length > 0) {
+      const magicedenTokensToCancel = await prisma.order.findMany({
+        where: {
+          taskId: task._id,
+          identifier: { in: staleTokens },
+          marketplace: "magiceden"
+        }
+      })
+
+      for (let i = 0; i < magicedenTokensToCancel.length; i += 500) {
+        const batchOrders = magicedenTokensToCancel.slice(i, i + 500);
+        const extractedOrderIds = await extractMagicedenOrderHash(batchOrders)
+        const orderKeys = batchOrders.map((order: PrismaOrder) => order.id)
+        await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys, taskId: task._id });
+      }
+    }
+
+    currentTokenIds[currentTask._id].magiceden = [...tokenIds]
     taskStatus[currentTask._id].processingPercentage = (4 / 4) * 100
     const tokenBid = currentTask.bidType === "token" && tokenIds.length > 0
 
@@ -6144,8 +6163,8 @@ async function processMagicedenScheduledBid(task: ITask) {
     taskStatus[currentTask._id].status = 'SCHEDULED'
 
     if (tokenBid) {
-      const jobs = tokenIds
-        .filter(token => !isNaN(Number(token)))
+      const tokens = currentTokenIds[task._id].magiceden.filter(token => !isNaN(Number(token)))
+      const jobs = tokens
         .map((token) => ({
           name: MAGICEDEN_TOKEN_BID,
           data: {
@@ -6987,8 +7006,7 @@ app.post('/api/floor', async (req, res) => {
           bestOffers[taskId]['opensea'] = topOfferAmount
 
         } catch (error) {
-          console.error(`Error fetching OpenSea floor price for ${taskId}:`, error);
-          floorPrices[taskId]['opensea'] = 0;
+          throw error
         }
 
         try {
@@ -6999,7 +7017,7 @@ app.post('/api/floor', async (req, res) => {
           bestOffers[taskId]['blur'] = bestOfferAmount
 
         } catch (error) {
-          floorPrices[taskId]['blur'] = 0;
+          throw error
         }
 
         try {
@@ -7011,8 +7029,7 @@ app.post('/api/floor', async (req, res) => {
           bestOffers[taskId]['magiceden'] = bestOfferAmount;
 
         } catch (error) {
-          console.error(`Error fetching MagicEden floor price for ${taskId}:`, error);
-          floorPrices[taskId]['magiceden'] = 0;
+          throw error
         }
       } catch (error) {
         console.error(`Error fetching floor prices for task ${taskId}:`, error);
@@ -7376,7 +7393,7 @@ async function calculateBidPrice(task: ITask, floorPrice: number, marketplaceNam
 function stopOption(
   task: ITask,
   marketplace: 'opensea' | 'magiceden' | 'blur',
-  floorPrice: number,
+  floorPrice: number
 ): boolean {
   // Early return if stop options aren't configured
   if (!warningBids[task._id]) {
@@ -7396,18 +7413,50 @@ function stopOption(
   }
 
   try {
-    if (!task.stopOptions?.triggerStopOptions || !task.stopOptions?.minFloorPrice || !task.stopOptions?.maxFloorPrice) {
-      return false;
-    }
+
+    if (!task.stopOptions.triggerStopOptions) return false
     // Check if floor price is outside allowed range
-    if ((Number(floorPrice) && floorPrice < task.stopOptions.minFloorPrice) || floorPrice > task.stopOptions.maxFloorPrice) {
+    if ((Number(floorPrice) && floorPrice < (task?.stopOptions?.minFloorPrice || 0)) || floorPrice > (task?.stopOptions?.maxFloorPrice || 0)) {
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(RED + `❌ Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${task.stopOptions.minFloorPrice} ETH - ${task.stopOptions.maxFloorPrice} ETH). Skipping...`.toUpperCase() + RESET);
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
       warningBids[task._id][marketplace] = true;
       warningMessage[task._id][marketplace] = `Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${task.stopOptions.minFloorPrice} ETH - ${task.stopOptions.maxFloorPrice} ETH).`;
+      updateTaskStatus(task, false, marketplace);
+
       return true;
+    }
+
+    if (
+      // Ensure all required properties exist
+      task?.stopOptions?.maxPurchase &&
+      task.stopOptions.maxPurchase > 0 &&
+      balances[task._id]?.[marketplace] !== undefined
+    ) {
+      const currentBalance = balances[task._id][marketplace];
+      const maxPurchase = task.stopOptions.maxPurchase;
+
+      // Check if balance has reached or exceeded the limit
+      if (currentBalance >= maxPurchase) {
+        // Set warning flags
+        warningBids[task._id] = warningBids[task._id] || {};
+        warningBids[task._id][marketplace] = true;
+
+        // Set warning message
+        warningMessage[task._id] = warningMessage[task._id] || {};
+        warningMessage[task._id][marketplace] =
+          `Maximum purchase amount (${maxPurchase}) for ${task.contract.slug} has been reached. ` +
+          `Current balance: ${currentBalance} items.`;
+
+        // Log the warning
+        console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        console.log(YELLOW + `⚠️ Purchase limit reached for ${task.contract.slug} on ${marketplace}. Current balance: ${currentBalance}/${maxPurchase}` + RESET);
+        console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+
+        updateTaskStatus(task, false, marketplace);
+        return true
+      }
     }
 
     warningBids[task._id][marketplace] = false;
@@ -7471,7 +7520,7 @@ const subscribedTasks = new Map<string, Set<string>>(); // Map<taskId, Set<marke
 function subscribeToCollections(tasks: ITask[]) {
   try {
     // Check if any task has counterbidding enabled
-    const hasCounterbidding = tasks.some(task => task.running && task.outbidOptions.counterbid);
+    const hasCounterbidding = tasks.some(task => task.running && task.outbidOptions.counterbid) || tasks.some((task) => { return task && task.stopOptions && task.stopOptions.triggerStopOptions && task.stopOptions.maxPurchase && task.stopOptions.maxPurchase > 0 });
     if (!hasCounterbidding) return;
 
     // Get unique client IDs from tasks
@@ -7482,9 +7531,8 @@ function subscribeToCollections(tasks: ITask[]) {
         if (ws?.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify(message));
         } else {
-          console.log(YELLOW + 'WebSocket not ready, queuing message for retry...' + RESET);
           // Queue message to be sent when connection is established
-          setTimeout(() => safeSendMessage(message), 10000);
+          setTimeout(() => safeSendMessage(message), 1000);
         }
       } catch (error) {
         console.error(RED + 'Error sending WebSocket message:' + RESET, error);
@@ -7510,12 +7558,12 @@ function subscribeToCollections(tasks: ITask[]) {
 
     // Handle individual marketplace subscriptions
     tasks.forEach(async (task) => {
-      if (!task.running || !task.outbidOptions.counterbid) return;
+      if (!task.running || !task.outbidOptions.counterbid || (task.stopOptions && task.stopOptions.triggerStopOptions && task.stopOptions.maxPurchase && task?.stopOptions?.maxPurchase > 0)) return;
 
       const subscriptionKey = `${task.contract.slug}`;
       const clientId = API_KEY;
       // Handle OpenSea subscription
-      const connectToOpensea = task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea");
+      const connectToOpensea = task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea") || (task.stopOptions && task.stopOptions.maxPurchase && task?.stopOptions?.maxPurchase > 0)
       if (connectToOpensea) {
         const openseaSubscriptionMessage = {
           "slug": task.contract.slug,
@@ -7664,14 +7712,25 @@ const RETRY_DELAY = 1000; // 1 second
 
 const approvalLocks = new Map<string, Promise<boolean>>();
 
+/**
+ * Approves a marketplace contract to spend WETH on behalf of a wallet
+ * @param marketplace The marketplace contract address to approve (e.g. Seaport, MagicEden)
+ * @param privateKey The private key of the wallet to approve from
+ * @returns Promise<boolean> Whether the approval was successful
+ */
 async function approveMarketplace(marketplace: string, privateKey: string): Promise<boolean> {
+  // Set up provider and wallet
   const provider = new ethers.providers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
   const wallet = new Web3Wallet(privateKey, provider);
   const address = (await wallet.address).toLowerCase();
+
+  // Create unique key for tracking approvals for this wallet/marketplace combination
   const approvalKey = `{${address}}:${marketplace.toLowerCase()}:${WETH_CONTRACT_ADDRESS.toLowerCase()}`;
 
-  // 1. Check if approval exists in the database
+  // Check if approval already exists in database
   const existingApproval = await prisma.wallet.findUnique({ where: { address } });
+
+  // Return early if marketplace is already approved
   if (marketplace.toLowerCase() === SEAPORT.toLowerCase() && existingApproval?.openseaApproval) {
     return true;
   }
@@ -7679,20 +7738,21 @@ async function approveMarketplace(marketplace: string, privateKey: string): Prom
     return true;
   }
 
-  // 2. Use locking to prevent duplicate approvals
+  // If approval is already in progress, return existing promise
   if (approvalLocks.has(approvalKey)) {
-    return approvalLocks.get(approvalKey)!; // Return the existing promise
+    return approvalLocks.get(approvalKey)!;
   }
 
-  // Create a new approval process and cache it
+  // Create new approval process and cache it
   const approvalPromise = (async () => {
     try {
+      // Create WETH contract instance
       const wethContract = new Contract(WETH_CONTRACT_ADDRESS, WETH_MIN_ABI, wallet);
 
-      // Check current allowance
+      // Check if sufficient allowance already exists on blockchain
       const allowance = await wethContract.allowance(address, marketplace);
       if (allowance.gte(constants.MaxUint256.div(2))) {
-        // If approval exists in blockchain but not in database, add it to the database
+        // If approval exists on chain but not in DB, update DB
         if (!existingApproval) {
           await prisma.wallet.upsert({
             where: { address },
@@ -7720,11 +7780,11 @@ async function approveMarketplace(marketplace: string, privateKey: string): Prom
         return true;
       }
 
-      // Approve max
+      // Submit approval transaction for maximum amount
       const tx = await wethContract.approve(marketplace, constants.MaxUint256);
       await tx.wait();
 
-      // Update database
+      // Update database with new approval
       const updateData = marketplace.toLowerCase() === SEAPORT.toLowerCase()
         ? { openseaApproval: true }
         : { magicedenApproval: true };
@@ -7747,10 +7807,12 @@ async function approveMarketplace(marketplace: string, privateKey: string): Prom
       console.error(`Approval failed for ${marketplace}: ${error.message}`);
       return false;
     } finally {
-      approvalLocks.delete(approvalKey); // Cleanup
+      // Clean up lock after completion
+      approvalLocks.delete(approvalKey);
     }
   })();
 
+  // Store promise in locks map and return it
   approvalLocks.set(approvalKey, approvalPromise);
   return approvalPromise;
 }
@@ -7773,8 +7835,6 @@ async function hasActivePrioritizedJobs(task: ITask): Promise<boolean> {
     return false;
   }
 }
-
-
 
 export async function logBidError(taskId: string, title: string, message: string, type: "skipped" | "warning" | "error", marketplace: "opensea" | "magiceden" | "blur") {
   try {
@@ -8646,19 +8706,18 @@ async function watchNetworkState() {
   if (previousNetState !== netEnabled) {
     if (netEnabled) {
       // Network restored
-      await queue.pause();
-      await queue.obliterate({ force: true });
       console.log('Network restored, resuming operations...');
-      queue.resume();
-      workers.resume();
+      await queue.resume()
+      await workers.resume()
       runScheduledLoop().catch(err => {
         console.error('Failed to restart scheduled loop:', err);
       });
     } else {
       // Network lost after a full minute
       console.log('Network lost for a full minute, pausing operations...');
-      queue.pause();
-      workers.pause();
+      await queue.pause()
+      await workers.pause()
+      await queue.obliterate({ force: true })
     }
 
     previousNetState = netEnabled;
