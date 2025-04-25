@@ -39,7 +39,7 @@ async function initialize(rateLimit: number) {
   axiosInstance = axios.create({ timeout: 60000 });
 
   limiter = new Bottleneck({
-    minTime: 1000 / (rateLimit), // Increase rate limit multiplier to allow more requests per second
+    minTime: 1000 / (rateLimit * 0.95), // Increase rate limit multiplier to allow more requests per second
     trackDoneStatus: true,
     // reservoir: rateLimit, // Increase initial reservoir value
     // reservoirRefreshAmount: rateLimit, // Increase reservoir refresh amount

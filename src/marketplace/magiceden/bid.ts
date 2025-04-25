@@ -6,6 +6,7 @@ import { createBalanceChecker } from "../../utils/balance";
 import { DistributedLockManager } from '../../utils/lock';
 import { PrismaClient } from '@prisma/client'
 import axios from "axios";
+import { USDC, WETH } from "../../utils/currencies";
 
 const prisma = new PrismaClient()
 
@@ -41,6 +42,7 @@ const activeRequests = new Map<string, AbortController[]>();
  * @param expirationTime - The expiration time of the bid.
  * @param privateKey - The private key of the maker's wallet.
  * @param slug - Collection slug
+ * @param currency - The currency to bid with (defaults to WETH)
  * @param traits - Optional traits for the offer.
  */
 
@@ -54,10 +56,12 @@ export async function bidOnMagiceden(
   privateKey: string,
   slug: string,
   bidExpiry: number,
+  currency = WETH,
   trait?: Trait,
   tokenId?: string | number
 ) {
   try {
+
     const task = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase() && task.selectedMarketplaces.includes("MagicEden"))
     if (!task) return
 
@@ -65,9 +69,11 @@ export async function bidOnMagiceden(
     const currentTime = new Date().getTime();
     const expiration = Math.floor((currentTime + (duration * 60 * 1000)) / 1000);
 
+    const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
+
     const wallet = new Wallet(privateKey, provider);
-    const offerPriceEth = Number(weiPrice) / 1e18
-    const wethBalance = await balanceChecker.getWethBalance(maker);
+    const offerPriceEth = Number(weiPrice) / Math.pow(10, decimal)
+    const wethBalance = await balanceChecker.getERC20Balance(maker, currency);
 
     let decimals;
     if (offerPriceEth >= 1) {
@@ -78,27 +84,28 @@ export async function bidOnMagiceden(
       decimals = 4;
     }
 
-
     const roundedEth = Number(offerPriceEth);
     const basis = decimals === 2 ? 1e16 : decimals === 3 ? 1e15 : 1e14
-    const roundedWei = Math.round(roundedEth * 1e18 / basis) * basis;
+    const roundedWei = decimal === 18 ? Math.round(roundedEth * Math.pow(10, decimal) / basis) * basis : Math.round(roundedEth * Math.pow(10, decimal))
+
+    const currencySymbol = currency.toLowerCase() === USDC.toLowerCase() ? "USDC" : "WETH"
 
     if (offerPriceEth > wethBalance) {
       const identifier = trait ? `${trait.attributeKey}:${trait.attributeValue}` : tokenId ? tokenId : 'collection';
-      const message = `[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEth} WETH is greater than available WETH balance: ${wethBalance} WETH. SKIPPING  MAGICEDEN...`
+      const message = `[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEth} ${currencySymbol} is greater than available ${currencySymbol} balance: ${wethBalance} ${currencySymbol}. SKIPPING  MAGICEDEN...`
       throw new Error(message)
     }
 
-    const order = await createBidData(taskId, slug, maker, collection, quantity, weiPrice.toString(), expiration.toString(), trait, tokenId);
+    const order = await createBidData(taskId, slug, maker, collection, quantity, weiPrice.toString(), expiration.toString(), currency, trait, tokenId);
 
     if (!order) return
     try {
       if (tokenId) {
-        await submitSignedOrderData(taskId, roundedWei.toString(), privateKey, bidCount, order, wallet, slug, bidExpiry, undefined, tokenId)
+        await submitSignedOrderData(taskId, roundedWei.toString(), decimal, currencySymbol, bidCount, order, wallet, slug, bidExpiry, undefined, tokenId)
       } else if (trait) {
-        await submitSignedOrderData(taskId, roundedWei.toString(), privateKey, bidCount, order, wallet, slug, bidExpiry, trait, undefined)
+        await submitSignedOrderData(taskId, roundedWei.toString(), decimal, currencySymbol, bidCount, order, wallet, slug, bidExpiry, trait, undefined)
       } else {
-        await submitSignedOrderData(taskId, roundedWei.toString(), privateKey, bidCount, order, wallet, slug, bidExpiry, undefined, undefined)
+        await submitSignedOrderData(taskId, roundedWei.toString(), decimal, currencySymbol, bidCount, order, wallet, slug, bidExpiry, undefined, undefined)
       }
     } catch (error: any) {
       throw error
@@ -127,6 +134,7 @@ async function createBidData(
   quantity: number,
   weiPrice: string,
   expirationTime: string,
+  currency = WETH,
   trait?: Trait,
   tokenId?: number | string,
 ) {
@@ -152,7 +160,7 @@ async function createBidData(
   const params = [
     {
       ...(tokenId ? {} : { collection: collection }),
-      currency: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+      currency: currency,
       quantity: quantity,
       weiPrice: weiPrice.toString(),
       expirationTime: expirationTime.toString(),
@@ -282,7 +290,7 @@ async function signOrderData(taskId: string, wallet: ethers.Wallet, signData: an
 * @param trait - Collection trait
  * @returns The response from the API.
  */
-async function sendSignedOrderData(taskId: string, offerPrice: string | number, privateKey: string, bidCount: string, signature: string, data: any, slug: string, expiry: number, trait?: Trait, tokenId?: number | string) {
+async function sendSignedOrderData(taskId: string, offerPrice: string | number, decimal: number, currencySymbol: string, bidCount: string, signature: string, data: any, slug: string, expiry: number, trait?: Trait, tokenId?: number | string) {
   try {
 
     const [taskId, count] = bidCount.split(":")
@@ -319,10 +327,10 @@ async function sendSignedOrderData(taskId: string, offerPrice: string | number, 
           }
         )
       );
-      const successMessage = tokenId ? `🎉 TOKEN OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: ${slug.toUpperCase()} TOKEN: ${tokenId} ${Number(offerPrice) / 1e18} WETH 🎉` :
+      const successMessage = tokenId ? `🎉 TOKEN OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: ${slug.toUpperCase()} TOKEN: ${tokenId} ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} 🎉` :
         trait ?
-          `🎉 TRAIT OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: ${slug.toUpperCase()} TRAIT: ${JSON.stringify(trait)} ${Number(offerPrice) / 1e18} WETH 🎉`
-          : `🎉 OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: ${slug.toUpperCase()} ${Number(offerPrice) / 1e18} WETH 🎉`
+          `🎉 TRAIT OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: ${slug.toUpperCase()} TRAIT: ${JSON.stringify(trait)} ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} 🎉`
+          : `🎉 OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: ${slug.toUpperCase()} ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} 🎉`
 
       const identifier = trait ? `${trait.attributeKey}:${trait.attributeValue}` : tokenId ? tokenId : 'collection';
 
@@ -374,7 +382,7 @@ async function sendSignedOrderData(taskId: string, offerPrice: string | number, 
  * @param slug - Collection slug
 
  */
-export async function submitSignedOrderData(taskId: string, offerPrice: string | number, privateKey: string, bidCount: string, order: CreateBidData, wallet: ethers.Wallet, slug: string, expiry: number, trait?: Trait, tokenId?: number | string) {
+export async function submitSignedOrderData(taskId: string, offerPrice: string | number, decimal: number, currencySymbol: string, bidCount: string, order: CreateBidData, wallet: ethers.Wallet, slug: string, expiry: number, trait?: Trait, tokenId?: number | string) {
   const task = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase() && task.selectedMarketplaces.includes("MagicEden"))
   if (!task) return
 
@@ -478,7 +486,7 @@ export async function submitSignedOrderData(taskId: string, offerPrice: string |
 
     }
 
-    const result = await sendSignedOrderData(taskId, offerPrice, privateKey, bidCount, signature, data, slug, expiry, trait, tokenId);
+    const result = await sendSignedOrderData(taskId, offerPrice, decimal, currencySymbol, bidCount, signature, data, slug, expiry, trait, tokenId);
     return result;
   } catch (error: any) {
     throw error
@@ -585,19 +593,19 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
   try {
     if (type === "COLLECTION") {
       const { data } = await limiter?.schedule(() =>
-        axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6?collection=${contractAddress}&sortBy=price&status=active&excludeEOA=false&includeCriteriaMetadata=true&includeDepth=true&normalizeRoyalties=false`, {
+        axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection`, {
           headers: {
             'content-type': 'application/json',
             'X-NFT-API-Key': API_KEY
           }
         })
       );
-
       const offers = data?.orders
         ?.sort((a, b) => Number(b?.price?.amount?.raw) - Number(a?.price?.amount?.raw))
         ?.slice(0, 2) || []
       if (!offers?.length) return [{ amount: "0", owner: "" }]
       return offers?.map(offer => ({ amount: offer?.price?.amount?.raw, owner: offer?.maker }))
+
 
     } else if (type === "TOKEN") {
 

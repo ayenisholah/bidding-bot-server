@@ -4,13 +4,20 @@ import { DistributedLockManager } from './lock';
 import RedisClient from './redis';
 import { formatEther, Interface } from "ethers/lib/utils";
 import { axiosInstance, limiter } from "../init";
+import { WETH } from "./currencies";
 
 // Constants
 const CACHE_EXPIRY_SECONDS = 60;
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
-const WETH_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 const API_ENDPOINT = "https://nfttools.pro";
 const API_KEY = "a4eae399-f135-4627-829a-18435bb631ae";
+
+// ERC20 ABI for balance checking
+const ERC20_ABI = [
+  "function balanceOf(address owner) view returns (uint256)",
+  "function decimals() view returns (uint8)",
+  "function symbol() view returns (string)"
+];
 
 // Environment configuration
 const config = {
@@ -63,12 +70,12 @@ class BalanceChecker {
     }
   }
 
-  async getWethBalance(address: string): Promise<number> {
-    const cacheKey = `weth_balance:${address}`;
+  async getERC20Balance(address: string, tokenAddress: string): Promise<number> {
+    const cacheKey = `erc20:${tokenAddress}:${address}`;
     let cachedBalance = await this.getCachedBalance(cacheKey);
 
     const result = await this.lockManager.withLock(
-      `weth_${address}`,
+      `erc20_${tokenAddress}_${address}`,
       async () => {
         const cachedBalanceAfterLock = await this.getCachedBalance(cacheKey);
         if (cachedBalanceAfterLock !== null) {
@@ -83,33 +90,53 @@ class BalanceChecker {
             "Content-Type": "application/json",
           };
 
-          // WETH Balance Request
-          const wethData = new Interface([
-            "function balanceOf(address owner) view returns (uint256)",
-          ]).encodeFunctionData("balanceOf", [address]);
-
-          const wethBalanceRequest = {
+          // Get decimals first
+          const decimalsData = new Interface(ERC20_ABI).encodeFunctionData("decimals", []);
+          const decimalsRequest = {
             jsonrpc: "2.0",
             method: "eth_call",
             params: [
               {
-                to: WETH_ADDRESS,
-                data: wethData,
+                to: tokenAddress,
+                data: decimalsData,
+              },
+              "latest",
+            ],
+            id: 1,
+          };
+
+          const decimalsResponse = await limiter.schedule(() =>
+            axiosInstance.post(API_ENDPOINT, decimalsRequest, { headers })
+          );
+          const decimals = parseInt(decimalsResponse.data.result, 16);
+
+          // Get balance
+          const balanceData = new Interface(ERC20_ABI).encodeFunctionData("balanceOf", [address]);
+          const balanceRequest = {
+            jsonrpc: "2.0",
+            method: "eth_call",
+            params: [
+              {
+                to: tokenAddress,
+                data: balanceData,
               },
               "latest",
             ],
             id: 2,
           };
 
-          const response = await limiter.schedule(() => axiosInstance.post(API_ENDPOINT, wethBalanceRequest, { headers }));
+          const response = await limiter.schedule(() =>
+            axiosInstance.post(API_ENDPOINT, balanceRequest, { headers })
+          );
           const balance = response.data.result;
-          const formattedBalance = Number(formatEther(balance));
 
+          // Format balance according to token decimals
+          const formattedBalance = Number(ethers.utils.formatUnits(balance, decimals));
           await this.setCachedBalance(cacheKey, formattedBalance);
           return formattedBalance;
 
         } catch (error) {
-          console.error("Error fetching WETH balance:", error);
+          console.error("Error fetching ERC20 balance:", error);
           if (cachedBalance !== null) {
             return cachedBalance;
           }

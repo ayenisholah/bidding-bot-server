@@ -7,7 +7,7 @@ import { createBalanceChecker } from "../../utils/balance";
 import { Job } from "bullmq";
 import axios from "axios";
 import { PrismaClient } from '@prisma/client'
-import { log } from "node:console";
+import { USDC, WETH } from "../../utils/currencies";
 
 const prisma = new PrismaClient()
 
@@ -18,7 +18,6 @@ const OPENSEA_COLLECTION_ZONE = "0x004C00500000aD104D7DBd00e3ae0A5C00560C00"
 const ZONE_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000"
 const CONDUIT_KEY = "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000"
 const SEAPORT_1_6 = "0x0000000000000068f116a894984e2db1123eb395"
-const WETH_CONTRACT_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
 const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1F0DF003000390027140000fAa719"
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 const provider = new ethers.providers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
@@ -140,7 +139,7 @@ const balanceChecker = createBalanceChecker(deps);
 
 const activeRequests = new Map<string, AbortController[]>();
 
-async function buildItemOffer(taskId: string, offerSpecification: ItemOfferSpecification) {
+async function buildItemOffer(taskId: string, offerSpecification: ItemOfferSpecification, currency: string) {
   try {
     const {
       assetContractAddress,
@@ -166,7 +165,7 @@ async function buildItemOffer(taskId: string, offerSpecification: ItemOfferSpeci
 
     const offer = {
       offerer: walletAddress,
-      offer: getOffer(priceWei),
+      offer: getOffer(priceWei, currency),
       consideration,
       startTime,
       endTime,
@@ -205,17 +204,23 @@ export async function bidOnOpensea(
   creator_fees: IFee,
   enforceCreatorFee: boolean,
   expiry: number = 900,
+  currency = WETH,
   opensea_traits?: string,
   asset?: { contractAddress: string, tokenId: number }
 ) {
   try {
     const divider = BigNumber.from(10000);
+    const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
+    const currencySymbol = currency.toLowerCase() === USDC.toLowerCase() ? "USDC" : "WETH"
 
     const task = activeTasks.get(taskId)
     if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return
 
-    let totalOfferAmount = 0;
-    const wethBalance = await balanceChecker.getWethBalance(wallet_address);
+    interface TotalOfferAmount {
+      [currency: string]: number;
+    }
+    const totalOfferAmount: TotalOfferAmount = {};
+    const wethBalance = await balanceChecker.getERC20Balance(wallet_address, currency);
     for (const task of currentTasks) {
       const openseaOrders = await prisma.order.findMany({
         where: {
@@ -228,14 +233,14 @@ export async function bidOnOpensea(
       });
 
       for (const order of openseaOrders) {
-        totalOfferAmount += Number(order.offerPrice) / 1e18; // Convert from wei to ETH
+        totalOfferAmount[currency] += Number(order.offerPrice) / Math.pow(10, decimal); // Convert from wei to ETH
       }
     }
-    const offerPriceEth = Number(offer_price) / 1e18;
+    const offerPriceEth = Number(offer_price) / Math.pow(10, decimal);
 
     const leverage = 1000;
 
-    if (totalOfferAmount + offerPriceEth >= leverage * wethBalance) {
+    if (totalOfferAmount[currency] + offerPriceEth >= leverage * wethBalance) {
       markTaskAsAborted(taskId)
       cancelOpenseaRequest(taskId)
       const jobs = await queue.getJobs(['prioritized']);
@@ -249,7 +254,7 @@ export async function bidOnOpensea(
         await queue.resume()
       }
       const identifier = opensea_traits ? opensea_traits : asset?.tokenId ? asset?.tokenId : slug;
-      throw new Error(`INSUFFICIENT WETH BALANCE: Total offer amount: ${totalOfferAmount} + offer price: ${offerPriceEth} is greater than the leverage: ${leverage} * weth balance: ${wethBalance} for ${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}`);
+      throw new Error(`INSUFFICIENT ${currencySymbol} BALANCE: Total offer amount: ${totalOfferAmount[currency]} + offer price: ${offerPriceEth} is greater than the leverage: ${leverage} * ${currencySymbol} balance: ${wethBalance} for ${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}`);
     }
 
     // Determine precision based on price range
@@ -264,13 +269,13 @@ export async function bidOnOpensea(
 
     const roundedEth = Number(offerPriceEth);
     const basis = decimals === 2 ? 1e16 : decimals === 3 ? 1e15 : 1e14
-    const roundedWei = Math.round(roundedEth * 1e18 / basis) * basis
+    const roundedWei = decimal === 18 ? Math.round(roundedEth * Math.pow(10, decimal) / basis) * basis : Math.round(roundedEth * Math.pow(10, decimal))
     const offerPrice = BigNumber.from(roundedWei.toString());
-    const offerPriceEthFinal = Number(roundedWei) / 1e18;
+    const offerPriceEthFinal = Number(roundedWei) / Math.pow(10, decimal);
 
     if (offerPriceEthFinal > wethBalance) {
       const identifier = opensea_traits ? opensea_traits : asset?.tokenId ? asset?.tokenId : slug;
-      throw new Error(`[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEthFinal} WETH is greater than available WETH balance: ${wethBalance} WETH.`);
+      throw new Error(`[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEthFinal} ${currencySymbol} is greater than available ${currencySymbol} balance: ${wethBalance} ${currencySymbol}.`);
 
     }
 
@@ -285,13 +290,13 @@ export async function bidOnOpensea(
         quantity: 1,
         expirationSeconds: BigInt(expiry),
         priceWei: BigInt(roundedWei)
-      })
+      }, currency)
 
       if (!offer) return
 
       const opensea_consideration = {
         itemType: 1,
-        token: WETH_CONTRACT_ADDRESS,
+        token: currency,
         identifierOrCriteria: "0",
         startAmount: +offerPrice.mul(openseaFee).div(divider).toString(),
         endAmount: +offerPrice.mul(openseaFee).div(divider).toString(),
@@ -306,7 +311,7 @@ export async function bidOnOpensea(
         if (enforceCreatorFee) {
           const consideration_item = {
             itemType: 1,
-            token: WETH_CONTRACT_ADDRESS,
+            token: currency,
             identifierOrCriteria: "0",
             startAmount: Number(offerPrice.mul(fee).div(divider).toString()),
             endAmount: Number(offerPrice.mul(fee).div(divider).toString()),
@@ -346,7 +351,7 @@ export async function bidOnOpensea(
       }
 
       trackBidRate('opensea', taskId);
-      const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()}  TOKEN: ${asset.tokenId} ${Number(offerPriceEthFinal)} WETH 🎉`
+      const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()}  TOKEN: ${asset.tokenId} ${Number(offerPriceEthFinal)} ${currencySymbol} 🎉`
       console.log(BLUE, successMessage, RESET);
     }
     else {
@@ -365,7 +370,7 @@ export async function bidOnOpensea(
             offer: [
               {
                 itemType: 1,
-                token: WETH_CONTRACT_ADDRESS,
+                token: currency,
                 identifierOrCriteria: 0,
                 startAmount: (Date.now() / 1000).toString(),
                 endAmount: (Date.now() / 1000 + 100000).toString()
@@ -414,13 +419,13 @@ export async function bidOnOpensea(
         payload.protocol_data.parameters.endTime = BigInt(Math.floor(Date.now() / 1000 + expiry)).toString();
         payload.protocol_data.parameters.offerer = wallet_address;
         payload.protocol_data.parameters.offer[0].startAmount = offerPrice.toString();
-        payload.protocol_data.parameters.offer[0].token = WETH_CONTRACT_ADDRESS;
+        payload.protocol_data.parameters.offer[0].token = currency;
         payload.protocol_data.parameters.offer[0].endAmount = offerPrice.toString();
         payload.protocol_data.parameters.consideration.push(data.partialParameters.consideration[0]);
 
         const opensea_consideration = {
           itemType: 1,
-          token: WETH_CONTRACT_ADDRESS,
+          token: currency,
           identifierOrCriteria: 0,
           startAmount: offerPrice.mul(openseaFee).div(divider).toString(),
           endAmount: offerPrice.mul(openseaFee).div(divider).toString(),
@@ -434,7 +439,7 @@ export async function bidOnOpensea(
           if (enforceCreatorFee) {
             const consideration_item = {
               itemType: 1,
-              token: WETH_CONTRACT_ADDRESS,
+              token: currency,
               identifierOrCriteria: 0,
               startAmount: offerPrice.mul(fee).div(divider).toString(),
               endAmount: offerPrice.mul(fee).div(divider).toString(),
@@ -463,7 +468,7 @@ export async function bidOnOpensea(
 
         if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return
 
-        await submitOfferToOpensea(slug, bidCount, offerPrice.toString(), payload, expiry, opensea_traits)
+        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry, opensea_traits)
       } catch (error: any) {
         throw error
       }
@@ -478,7 +483,7 @@ export async function bidOnOpensea(
  * Posts an offer to OpenSea.
  * @param payload - The payload of the offer.
  */
-async function submitOfferToOpensea(slug: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900, opensea_traits?: string) {
+async function submitOfferToOpensea(decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900, opensea_traits?: string) {
   try {
     const [taskId] = bidCount.split(":")
     const task = activeTasks.get(taskId)
@@ -525,8 +530,8 @@ async function submitOfferToOpensea(slug: string, bidCount: string, offerPrice: 
       }
       trackBidRate('opensea', taskId);
       const successMessage = opensea_traits ?
-        `🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()}  TRAIT: ${opensea_traits} ${(Number(offerPrice) / 1e18)} WETH 🎉`
-        : `🎉 COLLECTION OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()} ${(Number(offerPrice) / 1e18)} WETH 🎉`
+        `🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()}  TRAIT: ${opensea_traits} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
+        : `🎉 COLLECTION OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
       console.log(BLUE, successMessage, RESET);
     } catch (error: any) {
       throw error
@@ -637,11 +642,11 @@ async function signOffer(wallet: ethers.Wallet, offer: Record<string, unknown>) 
   return await wallet._signTypedData(domain, types, offer)
 }
 
-const getOffer = (priceWei: bigint) => {
+const getOffer = (priceWei: bigint, currency: string) => {
   return [
     {
       itemType: 1, // ERC 20
-      token: WETH_CONTRACT_ADDRESS,
+      token: currency,
       identifierOrCriteria: 0,
       startAmount: priceWei.toString(),
       endAmount: priceWei.toString(),
@@ -719,7 +724,7 @@ type OpenseaTopOffers = {
   owner: string;
 }
 
-export async function fetchItemOffers(contractAddress: string, tokenId: string) {
+export async function fetchItemOffers(contractAddress: string, tokenId: string, decimal: number) {
   const query = {
     operationName: "UseItemOffersQuery",
     query: `query UseItemOffersQuery($filter: ItemOffersFilter, $cursor: String, $limit: Int!) {
@@ -821,7 +826,7 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
       .filter((offer: any) => offer.currency === "WETH")
       .sort((a: any, b: any) => +b.amount - +a.amount)
       .map((offer: any) => ({
-        amount: offer.amount * 1e18,
+        amount: offer.amount * Math.pow(10, decimal),
         owner: offer.owner
       }));
 
@@ -838,7 +843,6 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
 
 
 export async function fetchOpenseaOffers(
-  taskId: string,
   offerType: 'COLLECTION' | 'TRAIT' | 'TOKEN',
   collectionSlug: string,
   contractAddress: string,

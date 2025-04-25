@@ -17,7 +17,8 @@ CREATE TABLE "Wallet" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "address" TEXT NOT NULL,
     "openseaApproval" BOOLEAN NOT NULL DEFAULT false,
-    "magicedenApproval" BOOLEAN NOT NULL DEFAULT false
+    "magicedenApproval" BOOLEAN NOT NULL DEFAULT false,
+    "currency" TEXT NOT NULL
 );
 
 -- CreateIndex

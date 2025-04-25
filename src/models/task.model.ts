@@ -42,29 +42,29 @@ export interface ITask extends Document {
   bidPrice: {
     min: number;
     max: number | null;
-    minType: "percentage" | "eth";
-    maxType: "percentage" | "eth";
+    minType: "percentage" | "eth" | "usdc";
+    maxType: "percentage" | "eth" | "usdc";
   };
 
   openseaBidPrice: {
     min: number;
     max: number | null;
-    minType: "percentage" | "eth";
-    maxType: "percentage" | "eth";
+    minType: "percentage" | "eth" | "usdc";
+    maxType: "percentage" | "eth" | "usdc";
   };
 
   blurBidPrice: {
     min: number;
     max: number | null;
-    minType: "percentage" | "eth";
-    maxType: "percentage" | "eth";
+    minType: "percentage" | "eth" | "usdc";
+    maxType: "percentage" | "eth" | "usdc";
   };
 
   magicEdenBidPrice: {
     min: number;
     max: number | null;
-    minType: "percentage" | "eth";
-    maxType: "percentage" | "eth";
+    minType: "percentage" | "eth" | "usdc";
+    maxType: "percentage" | "eth" | "usdc";
   };
 
   stopOptions: {
@@ -133,26 +133,26 @@ const TaskSchema: Schema = new Schema(
     bidPrice: {
       min: { type: Number, required: true },
       max: { type: Number, required: false, default: null },
-      minType: { type: String, enum: ["percentage", "eth"], required: true },
-      maxType: { type: String, enum: ["percentage", "eth"], required: true },
+      minType: { type: String, enum: ["percentage", "eth", "usdc"], required: true },
+      maxType: { type: String, enum: ["percentage", "eth", "usdc"], required: true },
     },
     openseaBidPrice: {
       min: { type: Number, required: true },
       max: { type: Number, required: false, default: null },
-      minType: { type: String, enum: ["percentage", "eth"], required: true },
-      maxType: { type: String, enum: ["percentage", "eth"], required: true },
+      minType: { type: String, enum: ["percentage", "eth", "usdc"], required: true },
+      maxType: { type: String, enum: ["percentage", "eth", "usdc"], required: true },
     },
     blurBidPrice: {
       min: { type: Number, required: true },
       max: { type: Number, required: false, default: null },
-      minType: { type: String, enum: ["percentage", "eth"], required: true },
-      maxType: { type: String, enum: ["percentage", "eth"], required: true },
+      minType: { type: String, enum: ["percentage", "eth", "usdc"], required: true },
+      maxType: { type: String, enum: ["percentage", "eth", "usdc"], required: true },
     },
     magicEdenBidPrice: {
       min: { type: Number, required: true },
       max: { type: Number, required: false, default: null },
-      minType: { type: String, enum: ["percentage", "eth"], required: true },
-      maxType: { type: String, enum: ["percentage", "eth"], required: true },
+      minType: { type: String, enum: ["percentage", "eth", "usdc"], required: true },
+      maxType: { type: String, enum: ["percentage", "eth", "usdc"], required: true },
     },
     stopOptions: {
       minFloorPrice: { type: Number, required: true },

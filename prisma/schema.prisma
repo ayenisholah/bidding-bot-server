@@ -32,6 +32,7 @@ model Wallet {
   address          String  @unique
   openseaApproval Boolean @default(false)
   magicedenApproval Boolean @default(false)
+  currency String
 
   @@index([address])
 }
