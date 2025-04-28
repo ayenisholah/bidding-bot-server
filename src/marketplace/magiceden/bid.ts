@@ -84,7 +84,8 @@ export async function bidOnMagiceden(
       decimals = 4;
     }
 
-    const roundedEth = Number(offerPriceEth);
+    const roundedEth = currency.toLowerCase() === USDC.toLowerCase() ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
+
     const basis = decimals === 2 ? 1e16 : decimals === 3 ? 1e15 : 1e14
     const roundedWei = decimal === 18 ? Math.round(roundedEth * Math.pow(10, decimal) / basis) * basis : Math.round(roundedEth * Math.pow(10, decimal))
 
@@ -589,7 +590,10 @@ async function signCancelOrder(taskId: string, cancelItem: any | undefined, priv
   }
 }
 
-export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN", contractAddress: string, identifier?: string | Record<string, string>) {
+export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN", contractAddress: string, identifier?: string | {
+  attributeKey: string;
+  attributeValue: string;
+}) {
   try {
     if (type === "COLLECTION") {
       const { data } = await limiter?.schedule(() =>
@@ -600,15 +604,20 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
           }
         })
       );
-      const offers = data?.orders
-        ?.sort((a, b) => Number(b?.price?.amount?.raw) - Number(a?.price?.amount?.raw))
-        ?.slice(0, 2) || []
-      if (!offers?.length) return [{ amount: "0", owner: "" }]
-      return offers?.map(offer => ({ amount: offer?.price?.amount?.raw, owner: offer?.maker }))
 
+      const offers = data?.orders.map((order) => {
+        return {
+          amount: order?.price?.amount?.raw,
+          owner: order?.maker,
+          currency: order?.price.currency.symbol.toUpperCase(),
+          usd: order?.price?.amount?.usd,
+          decimal: order.price.currency.decimals,
+          eth: order.price.amount.native
+        }
+      })?.sort((a, b) => Number(b?.usd) - Number(a?.usd))
 
+      return offers
     } else if (type === "TOKEN") {
-
       const tasks = [
         () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${identifier}&sortBy=price&status=active&excludeEOA=false&limit=2`, {
           headers: {
@@ -617,8 +626,8 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
           }
         })),
 
-        () => limiter?.schedule(() =>
-          axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6?collection=${contractAddress}&sortBy=price&status=active&excludeEOA=false&includeCriteriaMetadata=true&includeDepth=true&normalizeRoyalties=false`, {
+        () => limiter.schedule(() =>
+          axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection`, {
             headers: {
               'content-type': 'application/json',
               'X-NFT-API-Key': API_KEY
@@ -630,42 +639,33 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
       const [tokenResponse, collectionResponse] = await pQueue.addAll(tasks, {
         throwOnTimeout: true,
       });
-
       const data = [...tokenResponse.data.orders, ...collectionResponse.data.orders]
-      const offers = data
-        ?.filter((data: any) => data?.price?.currency?.symbol === "WETH")
-        ?.sort((a: any, b: any) => Number(b?.price?.amount?.raw) - Number(a?.price?.amount?.raw))
-        ?.slice(0, 2)
+      const offers = data.map((order) => {
+        return {
+          amount: order?.price?.amount?.raw,
+          owner: order?.maker,
+          currency: order?.price.currency.symbol.toUpperCase(),
+          usd: order?.price?.amount?.usd,
+          decimal: order.price.currency.decimals,
+          eth: order.price.amount.native
+        }
+      })?.sort((a, b) => Number(b.usd) - Number(a.usd))
 
-      if (!offers?.length) return [{ amount: "0", owner: "" }]
-      return offers?.map((offer: any) => ({ amount: offer?.price?.amount?.raw, owner: offer?.maker }))
+      return offers
 
-    } else if (type === "TRAIT") {
+    } else if (type === "TRAIT" && typeof identifier === "object" && identifier.attributeKey && identifier.attributeValue) {
       const tasks = [
-        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6?collection=${contractAddress}&sortBy=price&status=active&excludeEOA=false&includeCriteriaMetadata=true&includeDepth=true&normalizeRoyalties=false`, {
+        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sources=magiceden.io&sources=magiceden.us`, {
           headers: {
             'content-type': 'application/json',
             'X-NFT-API-Key': API_KEY
           }
         })),
-
         () => {
-          const URL = `https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v5`;
-          const queryParams = new URLSearchParams({
-            collection: contractAddress,
-            sortBy: 'price',
-            status: 'active',
-            excludeEOA: 'false',
-          });
-
-          if (identifier && typeof identifier === "object" && identifier?.attributeKey && identifier?.attributeValue) {
-            queryParams.append(`attributes[${identifier?.attributeKey}]`, identifier?.attributeValue);
-          }
-
+          const URL = `https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v5?collection=${contractAddress}&attribute%5B${identifier?.attributeKey}%5D=${identifier.attributeValue}&sortBy=price&status=active`;
           return limiter.schedule(() => axiosInstance.get<MagicEdenTraitOfferResponse>(
             URL,
             {
-              params: queryParams,
               headers: {
                 'X-NFT-API-Key': API_KEY,
               }
@@ -677,17 +677,19 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
       const [collectionResponse, traitResponse] = await pQueue.addAll(tasks, {
         throwOnTimeout: true,
       });
-
       const data = [...collectionResponse.data.orders, ...traitResponse.data.orders];
-      const offers = data
-        ?.filter((data: any) => data?.price?.currency?.symbol === "WETH")
-        ?.sort((a: any, b: any) => Number(b?.price?.amount?.raw) - Number(a?.price?.amount?.raw))
-        ?.slice(0, 2);
-
-      if (!offers?.length) return [{ amount: "0", owner: "" }];
-      return offers?.map((offer: any) => ({ amount: offer?.price?.amount?.raw, owner: offer?.maker }));
+      const offers = data.map((order) => {
+        return {
+          amount: order?.price?.amount?.raw,
+          owner: order?.maker,
+          currency: order?.price.currency.symbol.toUpperCase(),
+          usd: order?.price?.amount?.usd,
+          decimal: order.price.currency.decimals,
+          eth: order.price.amount.native
+        }
+      })?.sort((a, b) => Number(b.usd) - Number(a.usd))
+      return offers
     }
-    return [{ amount: "0", owner: "" }]
   } catch (error: any) {
     throw error
   }
@@ -1250,7 +1252,7 @@ interface MagicedenCollectionOrder {
   }>;
 }
 
-interface MagicedenCollectionResponse {
+export interface MagicedenCollectionResponse {
   orders: MagicedenCollectionOrder[];
   continuation: string;
 }
@@ -1374,7 +1376,7 @@ export interface MagicedenTraitTokenResponse {
 // ME_KEY="a86c5cf0-205b-4a6c-a317-0bac8dcea553"
 
 
-interface MagicEdenTraitOfferResponse {
+export interface MagicEdenTraitOfferResponse {
   orders: MagicEdenTraitOfferOrder[];
   continuation: string;
 }

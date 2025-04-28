@@ -1,0 +1,3 @@
+- collection loop does not run
+- traitbid over bid
+- 429 errors

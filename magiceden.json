@@ -1,0 +1,109 @@
+{
+	"event": "bid.created",
+	"changed": [],
+	"data": {
+		"id": "0x5821f021ae402db8145d63102b43ed4bd6ba022a75f63eaf4f086f39e7c101e6",
+		"kind": "payment-processor-v2",
+		"side": "buy",
+		"status": "active",
+		"tokenSetId": "contract:0xe83dd605b70b47c8af86580bdd4fcb987ff36e60",
+		"tokenSetSchemaHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+		"nonce": "69005277841611552456666767078621072521642912468796321438269508217196416882528",
+		"contract": "0xe83dd605b70b47c8af86580bdd4fcb987ff36e60",
+		"maker": "0x1b8afd0de8a9368ce635be8b9572c65d8f590b21",
+		"taker": "0x0000000000000000000000000000000000000000",
+		"price": {
+			"currency": {
+				"contract": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+				"name": "Wrapped Ether",
+				"symbol": "WETH",
+				"decimals": 18
+			},
+			"amount": {
+				"raw": "8300000000000001",
+				"decimal": 0.0083,
+				"usd": 14.84963,
+				"native": 0.0083
+			},
+			"netAmount": {
+				"raw": "7760500000000001",
+				"decimal": 0.00776,
+				"usd": 13.8844,
+				"native": 0.00776
+			}
+		},
+		"validFrom": 1745797037,
+		"validUntil": 1745797933,
+		"quantityFilled": 0,
+		"quantityRemaining": 1,
+		"criteria": {
+			"kind": "collection",
+			"data": {
+				"collection": {
+					"id": "0xe83dd605b70b47c8af86580bdd4fcb987ff36e60",
+					"name": "BTFDRabbits",
+					"image": "https://i.seadn.io/s/raw/files/334937567b8fb4c7bd9fbcc8fe346c07.png?w=500&auto=format"
+				}
+			}
+		},
+		"source": {
+			"id": "0x153dd6a2c042bd092b6e59c7ebda365eea35d181",
+			"domain": "magiceden.us",
+			"name": "magiceden.us",
+			"icon": "https://raw.githubusercontent.com/reservoirprotocol/assets/main/sources/magiceden-logo.svg"
+		},
+		"feeBps": 650,
+		"feeBreakdown": [
+			{
+				"bps": 600,
+				"kind": "royalty",
+				"required": false,
+				"recipient": "0x31c1e753722902468c5c2445b4bdb95ef8673fb8"
+			},
+			{
+				"bps": 50,
+				"kind": "marketplace",
+				"recipient": "0xca9337244b5f04cb946391bc8b8a980e988f9a6a"
+			}
+		],
+		"expiration": 1745797933,
+		"isReservoir": true,
+		"isDynamic": false,
+		"createdAt": "2025-04-27T23:37:17.147Z",
+		"updatedAt": "2025-04-27T23:37:17.147Z",
+		"originatedAt": null,
+		"rawData": {
+			"r": "0x01518b50c144afc0edd0dd6d1e459ac3473cb6e1e1d29e18c24d85628830a0c7",
+			"s": "0x510e334e41b534263a32e4aba95898a2b365cb7d4b08c147c1714bb79892ea37",
+			"v": 28,
+			"kind": "collection-offer-approval",
+			"nonce": "69005277841611552456666767078621072521642912468796321438269508217196416882528",
+			"amount": "1",
+			"cosigner": "0x32da57e736e05f75aa4fae2e9be60fd904492726",
+			"protocol": 0,
+			"itemPrice": "8300000000000001",
+			"expiration": "1745797933",
+			"beneficiary": "0x1b8afd0de8a9368ce635be8b9572c65d8f590b21",
+			"marketplace": "0xca9337244b5f04cb946391bc8b8a980e988f9a6a",
+			"masterNonce": "0",
+			"tokenAddress": "0xe83dd605b70b47c8af86580bdd4fcb987ff36e60",
+			"paymentMethod": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+			"sellerOrBuyer": "0x1b8afd0de8a9368ce635be8b9572c65d8f590b21",
+			"marketplaceFeeNumerator": "50",
+			"fallbackRoyaltyRecipient": "0x31c1e753722902468c5c2445b4bdb95ef8673fb8"
+		}
+	},
+	"tags": {
+		"contract": "0xe83dd605b70b47c8af86580bdd4fcb987ff36e60",
+		"source": "magiceden.us",
+		"maker": "0x1b8afd0de8a9368ce635be8b9572c65d8f590b21",
+		"taker": "0x0000000000000000000000000000000000000000"
+	},
+	"offset": "34115132100",
+	"published_at": 1745797037281,
+	"event_id": "6ad0d521-6746-4164-bf0e-d528f843367a",
+	"type": "event",
+	"status": "success",
+	"me_metadata": { "kafka_ts": null, "wss_processor_ts": 1745797037447 },
+	"marketplace": "MAGICEDEN"
+}

@@ -1,197 +1,109 @@
 {
+	"event": "bid.created",
+	"changed": [],
 	"data": {
-		"addressBalances": [
-			{
-				"id": "df99664b9b2634a0840dd131cb27c3ba",
-				"currency": {
-					"id": "956c75fd578a3b76b694c9f9a3c91961",
-					"contractAddress": "0x0000000000000000000000000000000000000000",
-					"chain": {
-						"identifier": "ethereum",
-						"minOfferPriceUsd": "5.00",
-						"__typename": "Chain"
-					},
-					"usdPrice": "1800.82",
-					"symbol": "ETH",
-					"imageUrl": "https://i.seadn.io/s/raw/files/ETH.svg",
-					"name": "Ethereum",
-					"decimals": 18,
-					"stats": {
-						"marketCapUsd": 217542623971,
-						"oneDay": {
-							"priceChange": 0.0232204,
-							"__typename": "CurrencyRollingStats"
-						},
-						"__typename": "CurrencyStats"
-					},
-					"isSwapDisabled": false,
-					"__typename": "Currency"
-				},
-				"quantity": "0.04897635109354917",
-				"usdValue": "88.1975925762852163194",
-				"__typename": "Balance"
+		"id": "0xf5f4a4c25010eedcc359be1a08a63b9f718559e67d155b7ae7268be9436ca9b9",
+		"kind": "payment-processor-v2",
+		"side": "buy",
+		"status": "inactive",
+		"tokenSetId": "contract:0xe83dd605b70b47c8af86580bdd4fcb987ff36e60",
+		"tokenSetSchemaHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+		"nonce": "69005277841611552456666767078621072521642912468796321438269508217196416882527",
+		"contract": "0xe83dd605b70b47c8af86580bdd4fcb987ff36e60",
+		"maker": "0x1b8afd0de8a9368ce635be8b9572c65d8f590b21",
+		"taker": "0x0000000000000000000000000000000000000000",
+		"price": {
+			"currency": {
+				"contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+				"name": "USD Coin",
+				"symbol": "USDC",
+				"decimals": 6
 			},
-			{
-				"id": "900a5aa3de8e3afab387e9d6e27808f7",
-				"currency": {
-					"id": "8ce05d30d5573cf495c7595c2acc3d29",
-					"contractAddress": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
-					"chain": {
-						"identifier": "ethereum",
-						"minOfferPriceUsd": "5.00",
-						"__typename": "Chain"
-					},
-					"usdPrice": "1798.23",
-					"symbol": "WETH",
-					"imageUrl": "https://i.seadn.io/s/raw/files/WETH.svg",
-					"name": "WETH",
-					"decimals": 18,
-					"stats": {
-						"marketCapUsd": 5058913624,
-						"oneDay": {
-							"priceChange": 0.020475,
-							"__typename": "CurrencyRollingStats"
-						},
-						"__typename": "CurrencyStats"
-					},
-					"isSwapDisabled": false,
-					"__typename": "Currency"
-				},
-				"quantity": "0.01",
-				"usdValue": "17.9823",
-				"__typename": "Balance"
+			"amount": {
+				"raw": "15911140",
+				"decimal": 15.91114,
+				"usd": 15.91114,
+				"native": 0.00874
 			},
-			{
-				"id": "1f2cdbf43253391ab97c8d3dd3f7124d",
-				"currency": {
-					"id": "abe3a3ed16b63d03aa3a61ea4998c90a",
-					"contractAddress": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
-					"chain": {
-						"identifier": "ethereum",
-						"minOfferPriceUsd": "5.00",
-						"__typename": "Chain"
-					},
-					"usdPrice": "1.0",
-					"symbol": "USDC",
-					"imageUrl": "https://i.seadn.io/s/raw/files/USDC.svg",
-					"name": "USDC",
-					"decimals": 6,
-					"stats": {
-						"marketCapUsd": 62327271105,
-						"oneDay": {
-							"priceChange": 0.0000613,
-							"__typename": "CurrencyRollingStats"
-						},
-						"__typename": "CurrencyStats"
-					},
-					"isSwapDisabled": false,
-					"__typename": "Currency"
-				},
-				"quantity": "10.556116",
-				"usdValue": "10.5561160",
-				"__typename": "Balance"
-			},
-			{
-				"id": "92784b774b5d336d8cf5e39fdc16b322",
-				"currency": {
-					"id": "40ff3424a1f63cffaa88c9e388c1a083",
-					"contractAddress": "0xdac17f958d2ee523a2206206994597c13d831ec7",
-					"chain": {
-						"identifier": "ethereum",
-						"minOfferPriceUsd": "5.00",
-						"__typename": "Chain"
-					},
-					"usdPrice": "1.001",
-					"symbol": "USDT",
-					"imageUrl": "https://raw2.seadn.io/currency_logos/USDT.webp",
-					"name": "Tether",
-					"decimals": 6,
-					"stats": {
-						"marketCapUsd": 146086301733,
-						"oneDay": {
-							"priceChange": 0.0001928,
-							"__typename": "CurrencyRollingStats"
-						},
-						"__typename": "CurrencyStats"
-					},
-					"isSwapDisabled": false,
-					"__typename": "Currency"
-				},
-				"quantity": "0.348871",
-				"usdValue": "0.349219871",
-				"__typename": "Balance"
-			},
-			{
-				"id": "62dbe4e46a4831808b43e2a53e33d2c6",
-				"currency": {
-					"id": "f0f8d04824ae34b0b3160f89135c65de",
-					"contractAddress": "0x0000000000000000000000000000000000000000",
-					"chain": {
-						"identifier": "base",
-						"minOfferPriceUsd": "0.01",
-						"__typename": "Chain"
-					},
-					"usdPrice": "1800.82",
-					"symbol": "ETH",
-					"imageUrl": "https://i.seadn.io/s/raw/files/ETH.svg",
-					"name": "Ethereum",
-					"decimals": 18,
-					"stats": {
-						"marketCapUsd": 217542623971,
-						"oneDay": {
-							"priceChange": 0.0232204,
-							"__typename": "CurrencyRollingStats"
-						},
-						"__typename": "CurrencyStats"
-					},
-					"isSwapDisabled": false,
-					"__typename": "Currency"
-				},
-				"quantity": "0.000020928930211284",
-				"usdValue": "0.03768923610308445288",
-				"__typename": "Balance"
-			},
-			{
-				"id": "395c6958c3f73a6494b4d0f6ef79d4c5",
-				"currency": {
-					"id": "66e8900c251a3a67b440a58ada8e1ddd",
-					"contractAddress": "0x9704d2adbc02c085ff526a37ac64872027ac8a50",
-					"chain": {
-						"identifier": "base",
-						"minOfferPriceUsd": "0.01",
-						"__typename": "Chain"
-					},
-					"usdPrice": "0.00034177",
-					"symbol": "Bsop",
-					"imageUrl": "https://i2.seadn.io/base/6793ea7825a0ca08961ada80/0fbd8cfd1ac7aa08b27d21d01e5adc/630fbd8cfd1ac7aa08b27d21d01e5adc.png",
-					"name": "Bsop",
-					"decimals": 18,
-					"stats": {
-						"marketCapUsd": 340910,
-						"oneDay": {
-							"priceChange": -0.1378412,
-							"__typename": "CurrencyRollingStats"
-						},
-						"__typename": "CurrencyStats"
-					},
-					"isSwapDisabled": false,
-					"__typename": "Currency"
-				},
-				"quantity": "5",
-				"usdValue": "0.00170885",
-				"__typename": "Balance"
+			"netAmount": {
+				"raw": "14876916",
+				"decimal": 14.87692,
+				"usd": 14.87692,
+				"native": 0.00817
 			}
-		]
-	},
-	"extensions": {
-		"debugInfo": {
-			"additionalInformation": {
-				"x-trace-id": "8784592863507948656",
-				"x-cache-status": "HIT",
-				"age": 2,
-				"cache-control": "public, max-age=2, stale-while-revalidate=3",
-				"x-ratelimit-remaining": 399
+		},
+		"validFrom": 1745796880,
+		"validUntil": 1745797777,
+		"quantityFilled": 0,
+		"quantityRemaining": 1,
+		"criteria": {
+			"kind": "collection",
+			"data": {
+				"collection": {
+					"id": "0xe83dd605b70b47c8af86580bdd4fcb987ff36e60",
+					"name": "BTFDRabbits",
+					"image": "https://i.seadn.io/s/raw/files/334937567b8fb4c7bd9fbcc8fe346c07.png?w=500&auto=format"
+				}
 			}
+		},
+		"source": {
+			"id": "0x153dd6a2c042bd092b6e59c7ebda365eea35d181",
+			"domain": "magiceden.us",
+			"name": "magiceden.us",
+			"icon": "https://raw.githubusercontent.com/reservoirprotocol/assets/main/sources/magiceden-logo.svg"
+		},
+		"feeBps": 650,
+		"feeBreakdown": [
+			{
+				"bps": 600,
+				"kind": "royalty",
+				"required": false,
+				"recipient": "0x31c1e753722902468c5c2445b4bdb95ef8673fb8"
+			},
+			{
+				"bps": 50,
+				"kind": "marketplace",
+				"recipient": "0xca9337244b5f04cb946391bc8b8a980e988f9a6a"
+			}
+		],
+		"expiration": 1745797777,
+		"isReservoir": true,
+		"isDynamic": false,
+		"createdAt": "2025-04-27T23:34:40.354Z",
+		"updatedAt": "2025-04-27T23:34:40.354Z",
+		"originatedAt": null,
+		"rawData": {
+			"r": "0x58322bae99bb1130beae0f53fa4343149edb154dc3c9285895c6f9a91e06d1df",
+			"s": "0x336b19403d8f70718292f37fbde9cc8c5feb2c8a9b205ec92f711dd6feeedc48",
+			"v": 28,
+			"kind": "collection-offer-approval",
+			"nonce": "69005277841611552456666767078621072521642912468796321438269508217196416882527",
+			"amount": "1",
+			"cosigner": "0x32da57e736e05f75aa4fae2e9be60fd904492726",
+			"protocol": 0,
+			"itemPrice": "15911140",
+			"expiration": "1745797777",
+			"beneficiary": "0x1b8afd0de8a9368ce635be8b9572c65d8f590b21",
+			"marketplace": "0xca9337244b5f04cb946391bc8b8a980e988f9a6a",
+			"masterNonce": "0",
+			"tokenAddress": "0xe83dd605b70b47c8af86580bdd4fcb987ff36e60",
+			"paymentMethod": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+			"sellerOrBuyer": "0x1b8afd0de8a9368ce635be8b9572c65d8f590b21",
+			"marketplaceFeeNumerator": "50",
+			"fallbackRoyaltyRecipient": "0x31c1e753722902468c5c2445b4bdb95ef8673fb8"
 		}
-	}
+	},
+	"tags": {
+		"contract": "0xe83dd605b70b47c8af86580bdd4fcb987ff36e60",
+		"source": "magiceden.us",
+		"maker": "0x1b8afd0de8a9368ce635be8b9572c65d8f590b21",
+		"taker": "0x0000000000000000000000000000000000000000"
+	},
+	"offset": "34115055073",
+	"published_at": 1745796880466,
+	"event_id": "14aedcc7-d670-4fea-a86d-e12bda37ec92",
+	"type": "event",
+	"status": "success",
+	"me_metadata": { "kafka_ts": null, "wss_processor_ts": 1745796880525 },
+	"marketplace": "MAGICEDEN"
 }

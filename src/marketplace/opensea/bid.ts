@@ -1,13 +1,14 @@
 import { BigNumber, ethers, Wallet } from "ethers";
 import { SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, API_KEY, BLUE, currentTasks, decrementBidCount, markTaskAsAborted, OPENSEA_SCHEDULE, OPENSEA_TOKEN_BID, OPENSEA_TRAIT_BID, queue, redis, trackBidRate } from "../..";
+import { activeTasks, AddressBalancesResponse, API_KEY, BLUE, currentTasks, decrementBidCount, markTaskAsAborted, OPENSEA_SCHEDULE, OPENSEA_TOKEN_BID, OPENSEA_TRAIT_BID, pQueue, queue, redis, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { createBalanceChecker } from "../../utils/balance";
 import { Job } from "bullmq";
 import axios from "axios";
 import { PrismaClient } from '@prisma/client'
 import { USDC, WETH } from "../../utils/currencies";
+import { MagicedenCollectionResponse, MagicEdenTraitOfferResponse } from "../magiceden";
 
 const prisma = new PrismaClient()
 
@@ -258,6 +259,7 @@ export async function bidOnOpensea(
     }
 
     // Determine precision based on price range
+
     let decimals;
     if (offerPriceEth >= 1) {
       decimals = 2;
@@ -267,7 +269,7 @@ export async function bidOnOpensea(
       decimals = 4;
     }
 
-    const roundedEth = Number(offerPriceEth);
+    const roundedEth = currency.toLowerCase() === USDC.toLowerCase() ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
     const basis = decimals === 2 ? 1e16 : decimals === 3 ? 1e15 : 1e14
     const roundedWei = decimal === 18 ? Math.round(roundedEth * Math.pow(10, decimal) / basis) * basis : Math.round(roundedEth * Math.pow(10, decimal))
     const offerPrice = BigNumber.from(roundedWei.toString());
@@ -724,118 +726,40 @@ type OpenseaTopOffers = {
   owner: string;
 }
 
-export async function fetchItemOffers(contractAddress: string, tokenId: string, decimal: number) {
-  const query = {
-    operationName: "UseItemOffersQuery",
-    query: `query UseItemOffersQuery($filter: ItemOffersFilter, $cursor: String, $limit: Int!) {
-      itemOffers(filter: $filter, cursor: $cursor, limit: $limit) {
-        items {
-          id
-          ...ItemOrdersTableRow
-          ...useCancelOrders
-          __typename
-        }
-        nextPageCursor
-        __typename
-      }
-    }
-    fragment ItemOrdersTableRow on Order {
-      id
-      type
-      pricePerItem {
-        token {
-          unit
-          __typename
-        }
-        ...TokenPrice
-        __typename
-      }
-      quantityRemaining
-      maker {
-        ...AccountLockup
-        __typename
-      }
-      endTime
-      ...useCancelOrders
-      __typename
-    }
-    fragment TokenPrice on Price {
-      usd
-      token {
-        unit
-        symbol
-        contractAddress
-        chain {
-          identifier
-          __typename
-        }
-        __typename
-      }
-      __typename
-    }
-    fragment AccountLockup on ProfileIdentifier {
-      address
-      displayName
-      imageUrl
-      ...profileUrl
-      __typename
-    }
-    fragment profileUrl on ProfileIdentifier {
-      address
-      __typename
-    }
-    fragment useCancelOrders on BaseOrder {
-      id
-      marketplace {
-        identifier
-        __typename
-      }
-      maker {
-        address
-        __typename
-      }
-      __typename
-    }`,
-    variables: {
-      filter: {
-        chain: "ethereum",
-        contractAddress: contractAddress,
-        tokenId: tokenId
-      },
-      limit: 2
-    }
-  };
-
+export async function fetchItemOffers(contractAddress: string, tokenId: string) {
   try {
-    const { data } = await limiter.schedule(() => axiosInstance.post<OpenseaGraphResponse>(
-      'https://nfttools.pro/opensea/graphql',
-      query,
-      {
+    const tasks = [
+      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection`, {
         headers: {
           'content-type': 'application/json',
           'X-NFT-API-Key': API_KEY
         }
+      })),
+
+      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${tokenId}&sortBy=price&status=active&excludeEOA=false&limit=2`, {
+        headers: {
+          'content-type': 'application/json',
+          'X-NFT-API-Key': API_KEY
+        }
+      })),
+    ];
+
+    const [collectionResponse, tokenResponse] = await pQueue.addAll(tasks, {
+      throwOnTimeout: true,
+    });
+
+    const data = [...collectionResponse.data.orders, ...tokenResponse.data.orders].filter((offer) => offer.source.name.toLowerCase() === "opensea")
+    const offers = data.map((order) => {
+      return {
+        amount: order?.price?.amount?.raw,
+        owner: order?.maker,
+        currency: order?.price.currency.symbol.toUpperCase(),
+        usd: order?.price?.amount?.usd,
+        decimal: order.price.currency.decimals,
+        eth: order.price.amount.native
       }
-    ));
-
-    const offers = data.data.itemOffers.items.map((item) => ({
-      amount: item.pricePerItem.token.unit,
-      currency: item.pricePerItem.token.symbol,
-      owner: item.maker.address
-    }))
-      .filter((offer: any) => offer.currency === "WETH")
-      .sort((a: any, b: any) => +b.amount - +a.amount)
-      .map((offer: any) => ({
-        amount: offer.amount * Math.pow(10, decimal),
-        owner: offer.owner
-      }));
-
-    const topTwoOffers = offers.slice(0, 2);
-    while (topTwoOffers.length < 2) {
-      topTwoOffers.push({ amount: 0, owner: "" });
-    }
-
-    return topTwoOffers;
+    })?.sort((a, b) => Number(b.usd) - Number(a.usd))
+    return offers
   } catch (error: any) {
     throw error
   }
@@ -850,134 +774,71 @@ export async function fetchOpenseaOffers(
 ) {
   try {
     if (offerType === 'COLLECTION') {
-      const url = `https://nfttools.pro/opensea/api/v2/offers/collection/${collectionSlug}`;
-      const { data } = await limiter.schedule(() => axiosInstance.get(url, {
-        headers: {
-          'accept': 'application/json',
-          'X-NFT-API-Key': API_KEY
-        }
-      }));
-
-      if (!data.offers?.length) {
-        return [{ amount: 0, owner: "" }, { amount: 0, owner: "" }];
-      }
-
-      const topOffers = data.offers
-        .filter((data: any) => data.price.currency === "WETH" && data.criteria.trait === null)
-        .slice(0, 2)
-        .map((offer: any) => {
-          const quantity = Number(offer.protocol_data.parameters.consideration.find((item: any) => item.token.toLowerCase() === contractAddress.toLowerCase()).startAmount || 1)
-          return {
-            amount: Number(offer.price.value) / quantity,
-            owner: offer.protocol_data.parameters.offerer
-          };
-        });
-
-      // Pad with empty offers if less than 2 offers exist
-      while (topOffers.length < 2) {
-        topOffers.push({ amount: 0, owner: "" });
-      }
-
-      return topOffers;
-
-    } else if (offerType === 'TRAIT') {
-
-      const { type, value } = identifiers as Record<string, string>;
-
-      // Make both requests in parallel using Promise.allSettled
-      const [traitResult, collectionResult] = await Promise.allSettled([
-        limiter.schedule(() => axiosInstance.get(`https://nfttools.pro/opensea/api/v2/offers/collection/${collectionSlug}/traits`, {
+      const { data } = await limiter?.schedule(() =>
+        axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection`, {
           headers: {
-            'accept': 'application/json',
-            'X-NFT-API-Key': API_KEY
-          },
-          params: { type, value }
-        })),
-        limiter.schedule(() => axiosInstance.get(`https://nfttools.pro/opensea/api/v2/offers/collection/${collectionSlug}`, {
-          headers: {
-            'accept': 'application/json',
+            'content-type': 'application/json',
             'X-NFT-API-Key': API_KEY
           }
-        }))
-      ]);
-
-      const traitResponse = traitResult.status === 'fulfilled' ? traitResult.value : { data: { offers: [] } };
-      const collectionResponse = collectionResult.status === 'fulfilled' ? collectionResult.value : { data: { offers: [] } };
-
-      // Process trait offers
-      const traitOffers = traitResponse.data.offers?.length ?
-        traitResponse.data.offers
-          .filter((data: any) => data.price.currency === "WETH")
-          .map((offer: any) => {
-            const quantity = Number(offer.protocol_data.parameters.consideration.find((item: any) =>
-              item.token.toLowerCase() === contractAddress.toLowerCase())?.startAmount || 1);
-            return {
-              amount: Number(offer.price.value) / quantity,
-              owner: offer.protocol_data.parameters.offerer
-            };
-          }) : [];
-
-      // Process collection offers
-      const collectionOffers = collectionResponse.data.offers?.length ?
-        collectionResponse.data.offers
-          .filter((data: any) => data.price.currency === "WETH" && data.criteria.trait === null)
-          .map((offer: any) => {
-            const quantity = Number(offer.protocol_data.parameters.consideration.find((item: any) =>
-              item.token.toLowerCase() === contractAddress.toLowerCase())?.startAmount || 1);
-            return {
-              amount: Number(offer.price.value) / quantity,
-              owner: offer.protocol_data.parameters.offerer
-            };
-          }) : [];
-
-      // Combine all offers, sort by amount, and take top 2
-      const combinedOffers = [...traitOffers, ...collectionOffers]
-        .sort((a, b) => b.amount - a.amount)
-        .slice(0, 2);
+        })
+      );
+      const offers = data?.orders
+        .filter((offer) => offer.source.name.toLowerCase() === "opensea")
+        .map((order) => {
+          return {
+            amount: order?.price?.amount?.raw,
+            owner: order?.maker,
+            currency: order?.price.currency.symbol,
+            usd: order?.price?.amount?.usd,
+            decimal: order.price.currency.decimals,
+            eth: order.price.amount.native
+          }
+        })?.sort((a, b) => Number(b?.usd) - Number(a?.usd))
 
 
+      return offers
+    } else if (offerType === 'TRAIT') {
+      const { type, value } = identifiers as Record<string, string>;
+      const tasks = [
+        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection`, {
+          headers: {
+            'content-type': 'application/json',
+            'X-NFT-API-Key': API_KEY
+          }
+        })),
 
-      // Ensure we always return exactly 2 offers
-      while (combinedOffers.length < 2) {
-        combinedOffers.push({ amount: 0, owner: "" });
-      }
-
-      return combinedOffers;
-    }
+        () => {
 
 
-    else if (offerType === 'TOKEN') {
-      const token = identifiers as string;
-      const url = `https://nfttools.pro/opensea/api/v2/orders/ethereum/seaport/offers`;
-      const params = {
-        asset_contract_address: contractAddress,
-        token_ids: token,
-        order_by: 'eth_price',
-        order_direction: 'desc'
-      };
-      const { data } = await limiter.schedule(() => axiosInstance.get(url, {
-        headers: {
-          'accept': 'application/json',
-          'X-NFT-API-Key': API_KEY
-        },
-        params
-      }));
+          const URL = `https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v5?collection=${contractAddress}&attribute%5B${type}%5D=${value}&sortBy=price&status=active`;
 
-      const topOffers = [];
+          return limiter.schedule(() => axiosInstance.get<MagicEdenTraitOfferResponse>(
+            URL,
+            {
+              headers: {
+                'X-NFT-API-Key': API_KEY,
+              }
+            }
+          ));
+        }
+      ];
 
-      for (let i = 0; i < 2 && i < (data?.orders?.length || 0); i++) {
-        const offer = data.orders[i];
-        topOffers.push({
-          amount: Number(offer.current_price),
-          owner: offer.protocol_data.parameters.offerer
-        });
-      }
+      const [collectionResponse, traitResponse] = await pQueue.addAll(tasks, {
+        throwOnTimeout: true,
+      });
 
-      while (topOffers.length < 2) {
-        topOffers.push({ amount: 0, owner: "" });
-      }
-
-      return topOffers;
+      const data = [...collectionResponse.data.orders, ...traitResponse.data.orders].filter((offer) => offer.source.name.toLowerCase() === "opensea")
+      const offers = data.map((order) => {
+        return {
+          amount: order?.price?.amount?.raw,
+          owner: order?.maker,
+          currency: order?.price.currency.symbol.toUpperCase(),
+          usd: order?.price?.amount?.usd,
+          decimal: order.price.currency.decimals,
+          eth: order.price.amount.native
+        }
+      })?.sort((a, b) => Number(b.usd) - Number(a.usd))
+      return offers
     }
   } catch (error: any) {
     throw error
@@ -1323,4 +1184,166 @@ function addActiveRequest(taskId: string, controller: AbortController) {
     activeRequests.set(taskId, []);
   }
   activeRequests.get(taskId)?.push(controller);
+}
+
+
+interface Chain {
+  identifier: string;
+  arch?: string;
+  __typename: string;
+}
+
+interface TokenPrice {
+  unit: number;
+  __typename: string;
+  contractAddress: string;
+  symbol: string;
+  chain: Chain;
+}
+
+interface Price {
+  token: TokenPrice;
+  __typename: string;
+  usd: number;
+}
+
+interface Bidder {
+  quantity: number;
+  __typename: string;
+  imageUrl: string | null;
+  address: string;
+  displayName: string;
+}
+
+interface CollectionOfferAggregate {
+  id: string;
+  totalOffers: number;
+  offerPrice: Price;
+  totalValue: Price;
+  bidders: Bidder[];
+  __typename: string;
+}
+
+interface CollectionFlags {
+  isOffersEnabled: boolean;
+  __typename: string;
+}
+
+interface Collection {
+  __typename: string;
+  slug: string;
+  flags: CollectionFlags;
+  traitOffersEnabled: boolean;
+  chain: Chain;
+}
+
+interface DebugInformation {
+  'x-trace-id': string;
+  'x-cache-status': string;
+  age: number;
+  'cache-control': string;
+  'x-ratelimit-remaining': number;
+}
+
+interface CollectionOfferAggregatesConnection {
+  items: CollectionOfferAggregate[];
+  nextPageCursor: string;
+  __typename: string;
+}
+
+interface CollectionOfferResponse {
+  data: {
+    collectionOfferAggregates: CollectionOfferAggregatesConnection;
+    collectionBySlug: Collection;
+  };
+  extensions: {
+    debugInfo: {
+      additionalInformation: DebugInformation;
+    };
+  };
+}
+
+export interface OpenseaOfferData {
+  amount: number;
+  owner: string;
+  currency: string;
+  usd: number;
+  eth: number;
+  decimal: number;
+}
+
+interface Chain {
+  identifier: string;
+  arch?: string;
+  __typename: string;
+}
+
+interface TokenPrice {
+  unit: number;
+  contractAddress: string;
+  __typename: string;
+  symbol: string;
+  chain: Chain;
+}
+
+interface Price {
+  usd: number;
+  __typename: string;
+  token: TokenPrice;
+}
+
+interface Bidder {
+  quantity: number;
+  __typename: string;
+  address: string;
+  displayName: string;
+}
+
+interface TraitOfferAggregate {
+  id: string;
+  totalOffers: number;
+  offerPrice: Price;
+  totalValue: {
+    token: TokenPrice;
+    usd: number;
+    __typename: string;
+  };
+  bidders: Bidder[];
+  __typename: string;
+}
+
+interface CollectionFlags {
+  isOffersEnabled: boolean;
+  __typename: string;
+}
+
+interface Collection {
+  __typename: string;
+  slug: string;
+  flags: CollectionFlags;
+  traitOffersEnabled: boolean;
+  chain: Chain;
+}
+
+interface DebugInfo {
+  additionalInformation: {
+    'x-trace-id': string;
+    'x-cache-status': string;
+    'cache-control': string;
+    'x-ratelimit-remaining': number;
+  };
+}
+
+interface TraitOfferResponse {
+  data: {
+    traitOfferAggregates: {
+      items: TraitOfferAggregate[];
+      nextPageCursor: null | string;
+      __typename: string;
+    };
+    collectionBySlug: Collection;
+  };
+  extensions: {
+    debugInfo: DebugInfo;
+  };
 }
