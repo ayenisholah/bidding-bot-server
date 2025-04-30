@@ -1,0 +1,79 @@
+{
+	"event": "trait_offer",
+	"payload": {
+		"event_type": "trait_offer",
+		"payload": {
+			"asset_contract_criteria": {
+				"address": "0xe83dd605b70b47c8af86580bdd4fcb987ff36e60"
+			},
+			"base_price": "7000000",
+			"chain": "ethereum",
+			"collection": { "slug": "btfdrabbits" },
+			"collection_criteria": { "slug": "btfdrabbits" },
+			"created_date": "2025-04-29T10:29:48.000000+00:00",
+			"event_timestamp": "2025-04-29T10:29:49.737874+00:00",
+			"expiration_date": "2025-04-29T10:44:48.000000+00:00",
+			"item": {},
+			"maker": { "address": "0x1b8afd0de8a9368ce635be8b9572c65d8f590b21" },
+			"order_hash": "0xd594ede8954ec7f96270efc7887a71cec23ce14da9c82ed4e5f4b662f7fd80e0",
+			"payment_token": {
+				"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+				"decimals": 6,
+				"eth_price": "0.000545730000000",
+				"name": "USD Coin",
+				"symbol": "USDC",
+				"usd_price": "0.999880000000000000"
+			},
+			"protocol_address": "0x0000000000000068f116a894984e2db1123eb395",
+			"protocol_data": {
+				"parameters": {
+					"conduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+					"consideration": [
+						{
+							"endAmount": "1",
+							"identifierOrCriteria": "107768730270274829061572297700291269627272774272439666304006163676558970275936",
+							"itemType": 4,
+							"recipient": "0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21",
+							"startAmount": "1",
+							"token": "0xe83DD605b70B47c8aF86580bdD4FCb987FF36e60"
+						},
+						{
+							"endAmount": "35000",
+							"identifierOrCriteria": "0",
+							"itemType": 1,
+							"recipient": "0x0000a26b00c1F0DF003000390027140000fAa719",
+							"startAmount": "35000",
+							"token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+						}
+					],
+					"counter": 0,
+					"endTime": "1745923488",
+					"offer": [
+						{
+							"endAmount": "7000000",
+							"identifierOrCriteria": "0",
+							"itemType": 1,
+							"startAmount": "7000000",
+							"token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+						}
+					],
+					"offerer": "0x1b8afd0de8a9368ce635be8b9572c65d8f590b21",
+					"orderType": 2,
+					"salt": "0xeee7",
+					"startTime": "1745922588",
+					"totalOriginalConsiderationItems": 2,
+					"zone": "0x000056F7000000EcE9003ca63978907a00FFD100",
+					"zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+				},
+				"signature": null
+			},
+			"quantity": 1,
+			"taker": null,
+			"trait_criteria": { "trait_name": "Pout", "trait_type": "Mouth" }
+		},
+		"sent_at": "2025-04-29T10:29:50.279026+00:00"
+	},
+	"ref": null,
+	"topic": "collection:btfdrabbits",
+	"marketplace": "OPENSEA"
+}

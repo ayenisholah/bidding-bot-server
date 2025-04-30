@@ -729,7 +729,7 @@ type OpenseaTopOffers = {
 export async function fetchItemOffers(contractAddress: string, tokenId: string) {
   try {
     const tasks = [
-      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection`, {
+      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&limit=2&sortBy=price`, {
         headers: {
           'content-type': 'application/json',
           'X-NFT-API-Key': API_KEY
@@ -775,7 +775,7 @@ export async function fetchOpenseaOffers(
   try {
     if (offerType === 'COLLECTION') {
       const { data } = await limiter?.schedule(() =>
-        axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection`, {
+        axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&limit=2&sortBy=price`, {
           headers: {
             'content-type': 'application/json',
             'X-NFT-API-Key': API_KEY
@@ -800,7 +800,7 @@ export async function fetchOpenseaOffers(
     } else if (offerType === 'TRAIT') {
       const { type, value } = identifiers as Record<string, string>;
       const tasks = [
-        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection`, {
+        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&limit=2&sortBy=price`, {
           headers: {
             'content-type': 'application/json',
             'X-NFT-API-Key': API_KEY
@@ -809,8 +809,7 @@ export async function fetchOpenseaOffers(
 
         () => {
 
-
-          const URL = `https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v5?collection=${contractAddress}&attribute%5B${type}%5D=${value}&sortBy=price&status=active`;
+          const URL = `https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v5?collection=${contractAddress}&attribute%5B${type}%5D=${value}&status=active&limit=2&sortBy=price`;
 
           return limiter.schedule(() => axiosInstance.get<MagicEdenTraitOfferResponse>(
             URL,

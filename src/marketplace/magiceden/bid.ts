@@ -72,7 +72,7 @@ export async function bidOnMagiceden(
     const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
 
     const wallet = new Wallet(privateKey, provider);
-    const offerPriceEth = Number(weiPrice) / Math.pow(10, decimal)
+    const offerPriceEth = Math.round(Number(weiPrice)) / Math.pow(10, decimal)
     const wethBalance = await balanceChecker.getERC20Balance(maker, currency);
 
     let decimals;
@@ -97,7 +97,7 @@ export async function bidOnMagiceden(
       throw new Error(message)
     }
 
-    const order = await createBidData(taskId, slug, maker, collection, quantity, weiPrice.toString(), expiration.toString(), currency, trait, tokenId);
+    const order = await createBidData(taskId, slug, maker, collection, quantity, Math.round(Number(weiPrice)).toString(), expiration.toString(), currency, trait, tokenId);
 
     if (!order) return
     try {
@@ -163,7 +163,7 @@ async function createBidData(
       ...(tokenId ? {} : { collection: collection }),
       currency: currency,
       quantity: quantity,
-      weiPrice: weiPrice.toString(),
+      weiPrice: (Math.round(Number(weiPrice))).toString(),
       expirationTime: expirationTime.toString(),
       orderKind: orderKind,
       orderbook: "reservoir",

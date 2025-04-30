@@ -1,6 +1,6 @@
 import { BigNumber, ethers, utils, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, API_KEY, BLUR_SCHEDULE, BLUR_TRAIT_BID, currentTasks, decrementBidCount, errorStats, pQueue, queue, redis, RESET, trackBidRate } from "../..";
+import { activeTasks, API_KEY, BLUR_SCHEDULE, BLUR_TRAIT_BID, currentTasks, decrementBidCount, errorStats, logBidError, pQueue, queue, redis, RESET, skipStats, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { createBalanceChecker } from "../../utils/balance";
 import { Job } from "bullmq";
@@ -114,9 +114,17 @@ export async function bidOnBlur(
   offerPriceEth = (Math.floor(Number(utils.formatUnits(offerPrice)) * 100) / 100).toFixed(2);
 
   if (Number(offerPriceEth) === 0) {
-    console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-    console.log(RED + `Offer price is less than the minimum Blur offer price. SKIPPING ...`.toUpperCase() + RESET);
-    console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
+    const message = `Offer price is less than the minimum Blur offer price. SKIPPING ...`.toUpperCase()
+
+    if (!errorStats[taskId]) {
+      errorStats[taskId] = {
+        opensea: 0,
+        magiceden: 0,
+        blur: 0
+      }
+    }
+    errorStats[taskId].blur++
+    await logBidError(taskId, "INVALID BID PRICE", message, "error", "blur");
     return
   }
 

@@ -1,0 +1,79 @@
+{
+	"event": "trait_offer",
+	"payload": {
+		"event_type": "trait_offer",
+		"payload": {
+			"asset_contract_criteria": {
+				"address": "0xe83dd605b70b47c8af86580bdd4fcb987ff36e60"
+			},
+			"base_price": "3000000000000000",
+			"chain": "ethereum",
+			"collection": { "slug": "btfdrabbits" },
+			"collection_criteria": { "slug": "btfdrabbits" },
+			"created_date": "2025-04-29T21:58:18.000000+00:00",
+			"event_timestamp": "2025-04-29T21:58:20.841129+00:00",
+			"expiration_date": "2025-04-29T22:13:18.000000+00:00",
+			"item": {},
+			"maker": { "address": "0x1b8afd0de8a9368ce635be8b9572c65d8f590b21" },
+			"order_hash": "0x4d44d2dcb49795963ea3ffeb36d54cb71f04822affccfb5f3377933af7e84dca",
+			"payment_token": {
+				"address": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+				"decimals": 18,
+				"eth_price": "1.000000000000000",
+				"name": "Wrapped Ether",
+				"symbol": "WETH",
+				"usd_price": "1792.829999999999927000"
+			},
+			"protocol_address": "0x0000000000000068f116a894984e2db1123eb395",
+			"protocol_data": {
+				"parameters": {
+					"conduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+					"consideration": [
+						{
+							"endAmount": "1",
+							"identifierOrCriteria": "21711195382513932758966403670226917862760371772552970917256064590893022193218",
+							"itemType": 4,
+							"recipient": "0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21",
+							"startAmount": "1",
+							"token": "0xe83DD605b70B47c8aF86580bdD4FCb987FF36e60"
+						},
+						{
+							"endAmount": "15000000000000",
+							"identifierOrCriteria": "0",
+							"itemType": 1,
+							"recipient": "0x0000a26b00c1F0DF003000390027140000fAa719",
+							"startAmount": "15000000000000",
+							"token": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+						}
+					],
+					"counter": 0,
+					"endTime": "1745964798",
+					"offer": [
+						{
+							"endAmount": "3000000000000000",
+							"identifierOrCriteria": "0",
+							"itemType": 1,
+							"startAmount": "3000000000000000",
+							"token": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+						}
+					],
+					"offerer": "0x1b8afd0de8a9368ce635be8b9572c65d8f590b21",
+					"orderType": 2,
+					"salt": "0xb0d5",
+					"startTime": "1745963898",
+					"totalOriginalConsiderationItems": 2,
+					"zone": "0x000056F7000000EcE9003ca63978907a00FFD100",
+					"zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+				},
+				"signature": null
+			},
+			"quantity": 1,
+			"taker": null,
+			"trait_criteria": { "trait_name": "Old", "trait_type": "Mouth" }
+		},
+		"sent_at": "2025-04-29T21:58:21.400565+00:00"
+	},
+	"ref": null,
+	"topic": "collection:btfdrabbits",
+	"marketplace": "OPENSEA"
+}
