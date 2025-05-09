@@ -35,7 +35,7 @@ export async function getCollectionDetails(slug: string, contractAddress: string
           `https://nfttools.pro/opensea/api/v2/collections/${slug}`,
           {
             headers: {
-              'X-NFT-API-Key': API_KEY
+              'X-NFT-API-KEY': API_KEY
             }
           }
         ));
@@ -110,7 +110,7 @@ export async function getOpenseaFloor(collectionSlug: string) {
       const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
         `https://nfttools.pro/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
         {
-          headers: { 'X-NFT-API-Key': API_KEY }
+          headers: { 'X-NFT-API-KEY': API_KEY }
         }
       ));
 
@@ -156,7 +156,7 @@ export async function getOpenseaCollectionStats(collectionSlug: string) {
     const { data } = await limiter.schedule(() => axiosInstance.get(
       `https://nfttools.pro/opensea/api/v2/collections/${collectionSlug}/stats`,
       {
-        headers: { 'X-NFT-API-Key': API_KEY }
+        headers: { 'X-NFT-API-KEY': API_KEY }
       }
     ));
     if (!data?.total) {
@@ -188,7 +188,7 @@ export async function getCollectionEvents(
       `https://nfttools.pro/opensea/api/v2/events/collection/${collectionSlug}`,
       {
         params: params,
-        headers: { 'X-NFT-API-Key': API_KEY }
+        headers: { 'X-NFT-API-KEY': API_KEY }
       }
     ));
 
@@ -230,7 +230,7 @@ export async function fetchOpenSeaCollectionItems(
 
     const { data } = await limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(GRAPHQL_URL, payload, {
       headers: {
-        'x-nft-api-key': API_KEY,
+        'X-NFT-API-KEY': API_KEY,
       },
     }));
     // Extract token IDs from the current page

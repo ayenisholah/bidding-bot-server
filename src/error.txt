@@ -31,7 +31,7 @@ Error fetching collection stats: AxiosError: stream has been aborted
     headers: Object [AxiosHeaders] {
       Accept: 'application/json, text/plain, */*',
       'Content-Type': undefined,
-      'X-NFT-API-Key': 'a4eae399-f135-4627-829a-18435bb631ae',
+      'X-NFT-API-KEY': 'a4eae399-f135-4627-829a-18435bb631ae',
       'User-Agent': 'axios/1.8.4',
       'Accept-Encoding': 'gzip, compress, deflate, br'
     },
@@ -153,7 +153,7 @@ Error fetching collection stats: AxiosError: stream has been aborted
     },
     _header: 'GET /opensea/api/v2/listings/collection/mutant-hounds/best HTTP/1.1\r\n' +
       'Accept: application/json, text/plain, */*\r\n' +
-      'X-NFT-API-Key: a4eae399-f135-4627-829a-18435bb631ae\r\n' +
+      'X-NFT-API-KEY: a4eae399-f135-4627-829a-18435bb631ae\r\n' +
       'User-Agent: axios/1.8.4\r\n' +
       'Accept-Encoding: gzip, compress, deflate, br\r\n' +
       'Host: nfttools.pro\r\n' +
@@ -252,7 +252,7 @@ Error fetching collection stats: AxiosError: stream has been aborted
     [Symbol(corked)]: 0,
     [Symbol(kOutHeaders)]: [Object: null prototype] {
       accept: [Array],
-      'x-nft-api-key': [Array],
+      'X-NFT-API-KEY': [Array],
       'user-agent': [Array],
       'accept-encoding': [Array],
       host: [Array]

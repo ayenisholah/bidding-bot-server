@@ -499,7 +499,7 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
           url: `https://nfttools.pro/opensea/api/v2/offers`,
           headers: {
             'content-type': 'application/json',
-            'X-NFT-API-Key': API_KEY,
+            'X-NFT-API-KEY': API_KEY,
             "Cache-Control": "no-store", // ⛔ Prevents caching
             "Pragma": "no-cache", // ⛔ Prevents old cache policies from affecting response
             "Expires": "0", // ⛔ Forces fresh reques
@@ -559,7 +559,7 @@ async function buildOffer(taskId: string, buildPayload: any) {
           url: `https://nfttools.pro/opensea/api/v2/offers/build`,
           headers: {
             'content-type': 'application/json',
-            'X-NFT-API-Key': API_KEY,
+            'X-NFT-API-KEY': API_KEY,
           },
           data: JSON.stringify(buildPayload),
           signal: controller.signal
@@ -596,7 +596,7 @@ export async function cancelOrder(orderHash: string, protocolAddress: string, pr
   const url = `https://nfttools.pro/opensea/api/v2/orders/chain/ethereum/protocol/${protocolAddress}/${orderHash}/cancel`;
   const headers = {
     'content-type': 'application/json',
-    'X-NFT-API-Key': API_KEY
+    'X-NFT-API-KEY': API_KEY
   };
 
   const body = { offerer_signature: offererSignature };
@@ -668,7 +668,7 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
       const { data } = await limiter.schedule(() => axiosInstance.post(`https://nfttools.pro/opensea/api/v2/orders/ethereum/seaport/offers`, payload, {
         headers: {
           'content-type': 'application/json',
-          'X-NFT-API-Key': API_KEY,
+          'X-NFT-API-KEY': API_KEY,
           "Cache-Control": "no-store",
           "Pragma": "no-cache",
           "Expires": "0",
@@ -732,14 +732,14 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
       () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&limit=2&sortBy=price`, {
         headers: {
           'content-type': 'application/json',
-          'X-NFT-API-Key': API_KEY
+          'X-NFT-API-KEY': API_KEY
         }
       })),
 
       () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${tokenId}&sortBy=price&status=active&excludeEOA=false&limit=2`, {
         headers: {
           'content-type': 'application/json',
-          'X-NFT-API-Key': API_KEY
+          'X-NFT-API-KEY': API_KEY
         }
       })),
     ];
@@ -778,7 +778,7 @@ export async function fetchOpenseaOffers(
         axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&limit=2&sortBy=price`, {
           headers: {
             'content-type': 'application/json',
-            'X-NFT-API-Key': API_KEY
+            'X-NFT-API-KEY': API_KEY
           }
         })
       );
@@ -803,7 +803,7 @@ export async function fetchOpenseaOffers(
         () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&limit=2&sortBy=price`, {
           headers: {
             'content-type': 'application/json',
-            'X-NFT-API-Key': API_KEY
+            'X-NFT-API-KEY': API_KEY
           }
         })),
 
@@ -815,7 +815,7 @@ export async function fetchOpenseaOffers(
             URL,
             {
               headers: {
-                'X-NFT-API-Key': API_KEY,
+                'X-NFT-API-KEY': API_KEY,
               }
             }
           ));
@@ -863,7 +863,7 @@ export async function fetchOpenseaListings(taskId: string, collectionSlug: strin
       const { data } = await limiter.schedule(() => axiosInstance.get<OpenseaListingData>(baseUrl, {
         headers: {
           'accept': 'application/json',
-          'X-NFT-API-Key': API_KEY
+          'X-NFT-API-KEY': API_KEY
         },
         params: params
       }))

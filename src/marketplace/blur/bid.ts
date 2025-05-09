@@ -213,7 +213,7 @@ async function getAccessToken(url: string, private_key: string): Promise<string 
     const options = { walletAddress: wallet.address };
     const headers = {
       'content-type': 'application/json',
-      'X-NFT-API-Key': API_KEY
+      'X-NFT-API-KEY': API_KEY
     };
 
     try {
@@ -273,7 +273,7 @@ async function formatBidOnBlur(
           'content-type': 'application/json',
           authToken: accessToken,
           walletAddress: walletAddress.toLowerCase(),
-          'X-NFT-API-Key': API_KEY,
+          'X-NFT-API-KEY': API_KEY,
         },
         data: JSON.stringify(buildPayload),
         signal: controller.signal
@@ -338,7 +338,7 @@ async function submitBidToBlur(
           'content-type': 'application/json',
           authToken: accessToken,
           walletAddress: walletAddress.toLowerCase(),
-          'X-NFT-API-Key': API_KEY,
+          'X-NFT-API-KEY': API_KEY,
         },
         data: JSON.stringify(submitPayload),
         signal: controller.signal
@@ -406,7 +406,7 @@ export async function cancelBlurBid(data: BlurCancelPayload) {
         'content-type': 'application/json',
         authToken: accessToken,
         walletAddress: walletAddress.toLowerCase(),
-        'X-NFT-API-Key': API_KEY,
+        'X-NFT-API-KEY': API_KEY,
       }
     }))
     decrementBidCount('blur', taskId);
@@ -438,7 +438,7 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
           },
           headers: {
             'content-type': 'application/json',
-            'X-NFT-API-Key': API_KEY,
+            'X-NFT-API-KEY': API_KEY,
           }
         })),
         () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
@@ -452,7 +452,7 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
           },
           headers: {
             'content-type': 'application/json',
-            'X-NFT-API-Key': API_KEY,
+            'X-NFT-API-KEY': API_KEY,
           }
         }))
       ];
@@ -487,7 +487,7 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
         },
         headers: {
           'content-type': 'application/json',
-          'X-NFT-API-Key': API_KEY,
+          'X-NFT-API-KEY': API_KEY,
         }
       }));
       return data;
@@ -531,7 +531,7 @@ export async function fetchBlurCollectionStats(slug: string) {
       const { data } = await limiter.schedule(() => axiosInstance.get<BlurTokensResponse>(url, {
         headers: {
           'content-type': 'application/json',
-          'X-NFT-API-Key': API_KEY,
+          'X-NFT-API-KEY': API_KEY,
         }
       }));
 
