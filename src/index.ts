@@ -2,8 +2,10 @@ import express from "express";
 import { config } from "dotenv";
 import bodyParser from "body-parser";
 import { clearTimeout } from 'timers';
+import crypto from 'crypto';
 import os from "os"
 import cors from "cors";
+import stringify from 'json-stable-stringify';
 import WebSocket, { Server as WebSocketServer } from 'ws';
 import http from 'http';
 import fs from 'fs/promises';
@@ -30,6 +32,7 @@ import { PrismaClient, Order as PrismaOrder } from '@prisma/client'
 import Bottleneck from "bottleneck";
 import { USDC, WETH } from "./utils/currencies";
 import User from "./models/user.model";
+export const BASE_URL = "https://nfttools.pro/kong"
 const prisma = new PrismaClient()
 
 export let RATE_LIMIT = process.env.RATE_LIMIT ? parseInt(process.env.RATE_LIMIT) : 100;
@@ -745,7 +748,7 @@ queueEvents.on('completed', async ({ jobId }) => {
       }
     }
     completedTasks[taskId][marketplace as 'opensea' | 'magiceden' | 'blur'] = true
-    console.log(GREEN + `Task ${taskId} completed for ${marketplace} ` + RESET);
+    console.log(GREEN + `Task ${taskId} completed for ${marketplace}` + RESET);
     const availableMarketplaces = enabledAndSelectedMarketplaces.map(m => m.toLowerCase())
 
     // Check if all available marketplaces have completed
@@ -984,7 +987,7 @@ queueEvents.on('failed', async ({ jobId }) => {
       }
     }
     completedTasks[taskId][marketplace as 'opensea' | 'magiceden' | 'blur'] = true
-    console.log(GREEN + `Task ${taskId} completed for ${marketplace} ` + RESET);
+    console.log(GREEN + `Task ${taskId} completed for ${marketplace}` + RESET);
     const availableMarketplaces = enabledAndSelectedMarketplaces.map(m => m.toLowerCase())
 
     // Check if all available marketplaces have completed
@@ -1364,7 +1367,7 @@ async function processImportedTasks(tasks: ITask[]) {
     console.log(BLUE + `\n===  Importing ${tasks.length} Tasks === ` + RESET);
 
     tasks.forEach(task => {
-      console.log(`Collection: ${task.contract.slug} `);
+      console.log(`Collection: ${task.contract.slug}`);
       activeTasks.set(task._id, task);
       currentTasks.push(task);
     });
@@ -3268,6 +3271,11 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     const expiration = getExpiry(currentTask.bidDuration)
     if (!currentTask.outbidOptions.counterbid) return
 
+    const orderHash = data?.data?.id
+    if (seenOrderHashes.has(orderHash)) return;
+    seenOrderHashes.add(orderHash)
+
+
     const domain: string = data?.data?.source?.domain
     const wallets = await Wallet.find({})
     const walletAddresses = wallets.map((wallet) => wallet.address.toLowerCase())
@@ -3405,7 +3413,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       if (job) {
         if (incomingBidAmount <= Number(job.data.offerPrice)) {
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + `Skipping counterbid since incoming bid ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol} Domain: ${domain} ` + RESET);
+          console.log(RED + `Skipping counterbid since ${task.contract.slug}:${tokenId} incoming bid ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol} Domain: ${domain}` + RESET);
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
           return
         } else {
@@ -3421,6 +3429,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
         );
       }
+
+      seenOrderHashes.delete(orderHash);
+
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(GREEN + `Counterbidding incoming magiceden offer of ${Number(incomingBidAmount) / Math.pow(10, decimal)} ${currencySymbol} for ${task.contract.slug} ${tokenId} for ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} ON MAGICEDEN`.toUpperCase() + RESET);
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -3521,7 +3532,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       if (job) {
         if (incomingBidAmount <= job.data.offerPrice) {
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + `Skipping counterbid since incoming bid ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol} Domain: ${domain} ` + RESET);
+          console.log(RED + `Skipping counterbid since incoming bid ${task.contract.slug}:${JSON.stringify(trait)} ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol} Domain: ${domain}` + RESET);
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
           return
         } else {
@@ -3536,6 +3547,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           },
         );
       }
+      seenOrderHashes.delete(orderHash);
 
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(GREEN + `Counterbidding incoming offer of ${Number(incomingBidAmount) / Math.pow(10, decimal)} ${currencySymbol} for ${task.contract.slug} trait ${JSON.stringify(trait)} for ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} ON MAGICEDEN `.toUpperCase() + RESET);
@@ -3630,7 +3642,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       if (job) {
         if (incomingBidAmount <= job.data.offerPrice) {
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + `Skipping counterbid since incoming bid ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol} Domain: ${domain} ` + RESET);
+          console.log(RED + `Skipping counterbid since incoming bid ${task.contract.slug}:collection ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol} Domain: ${domain}` + RESET);
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
           return
         } else {
@@ -3646,6 +3658,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
         );
       }
+      seenOrderHashes.delete(orderHash);
 
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(GREEN + `Counterbidding incoming magiceden offer of ${Number(incomingBidAmount) / Math.pow(10, decimal)} ${currencySymbol} for ${task.contract.slug} for ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol}`.toUpperCase() + RESET);
@@ -3860,7 +3873,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       if (job) {
         if (incomingBidAmount <= job.data.offerPrice) {
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + `Skipping counterbid since incoming bid ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
+          console.log(RED + `Skipping counterbid since incoming bid ${task.contract.slug}:${asset.tokenId} ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol} Domain: Opensea` + RESET);
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
           return
         } else {
@@ -3875,7 +3888,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           },
         );
       }
-
+      seenOrderHashes.delete(orderHash);
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(GREEN + `Counterbidding incoming opensea offer of ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}:${asset.tokenId} for ${Number(tokenOffer) / Math.pow(10, decimal)} ${currencySymbol} ON OPENSEA`.toUpperCase() + RESET);
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -3981,7 +3994,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       if (job) {
         if (incomingBidAmount <= job.data.offerPrice) {
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + `Skipping counterbid since incoming bid ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
+          console.log(RED + `Skipping counterbid since incoming bid ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol} domain: opensea` + RESET);
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
           return
         } else {
@@ -3996,6 +4009,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           },
         );
       }
+      seenOrderHashes.delete(orderHash);
+
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(GREEN + `Counterbidding incoming opensea offer of ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug} ${JSON.stringify(trait)} for ${Number(traitOffer) / Math.pow(10, decimal)} ${currencySymbol} ON OPENSEA`.toUpperCase() + RESET);
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -4097,7 +4112,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       if (job) {
         if (incomingBidAmount <= job.data.offerPrice) {
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + `Skipping counterbid since incoming bid ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
+          console.log(RED + `Skipping counterbid since incoming bid ${task.contract.slug}:collection ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol} domain: opensea` + RESET);
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
           return
         } else {
@@ -4113,6 +4128,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
         );
       }
+      seenOrderHashes.delete(orderHash);
+
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(GREEN + `Counterbidding incoming offer of  ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug} for ${Number(colletionOffer) / Math.pow(10, decimal)} ${currencySymbol} ON OPENSEA`.toUpperCase() + RESET);
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -4127,9 +4144,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         await queue.addBulk(cancelData)
       }
     }
-    setTimeout(() => {
-      seenOrderHashes.delete(orderHash);
-    }, 10000); // 10 seconds
+
+    seenOrderHashes.delete(orderHash);
 
   } catch (error) {
     console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -4138,9 +4154,17 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
   }
 }
 
+const seenBids = new Set<string>();
+
 async function handleBlurCounterbid(data: any, task: ITask) {
   const incomingBid: CombinedBid = data
   try {
+    const bidHash = hashBid(data);
+
+    if (seenBids.has(bidHash)) return;
+
+    seenBids.add(bidHash);
+
     const currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur") || !enabledMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur")) return
 
@@ -4165,10 +4189,14 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
       if (!hasMatchingTraits.length) return
 
+      const transformedTraits = selectedTraits && Object.keys(selectedTraits).length > 0 ? transformOpenseaTraits(selectedTraits) : [];
+
+
       for (const traitBid of hasMatchingTraits) {
         const trait = JSON.stringify(traitBid.criteriaValue)
-        const incomingPrice = Number(traitBid.bestPrice || traitBid.price)
+        const incomingPrice = Number(traitBid?.bestPrice || traitBid?.price || 0)
 
+        const traits = JSON.stringify(traitBid.criteriaValue)
 
         console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
         console.log(GOLD + `incoming trait offer for ${task.contract.slug}: ${trait} for ${incomingPrice} BETH on blur`.toUpperCase() + RESET);
@@ -4177,14 +4205,25 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         const floor_price = await fetchBlurCollectionStats(task.contract.slug);
         const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, Number(floor_price), "blur")
         const traitsObj = JSON.parse(trait);
-        const [traitType, traitValue] = Object.entries(traitsObj)[0];
-        const identifier = `${traitType}:${traitValue} `
+        const [traitType, traitValue] = Object.entries(traitsObj)[0] as string[]
+        const identifier = `${traitType}:${traitValue}`
 
-        if (+incomingPrice < minBidPriceEth || +incomingPrice > maxBidPriceEth) {
-          const reason = +incomingPrice < minBidPriceEth
+        const incomingTrait = { type: traitType, value: traitValue }
+        console.log({ incomingPrice, maxBidPriceEth, incomingTrait });
+
+        const activeTrait = transformedTraits.some(function (trait) {
+          return trait.type.toLowerCase() === incomingTrait.type.toLowerCase() && trait.value.toLowerCase() === incomingTrait.value.toLowerCase();
+        });
+
+        if (!activeTrait) return
+
+        const totalOffer = incomingPrice + blurOutbidMargin
+
+        if (+totalOffer < minBidPriceEth || +totalOffer > maxBidPriceEth) {
+          const reason = +totalOffer < minBidPriceEth
             ? `is less than min bid price ${minBidPriceEth} BETH`
             : `is greater than max bid price ${maxBidPriceEth} BETH`;
-          const message = `incoming bid ${incomingPrice} BETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
+          const message = `incoming bid ${incomingPrice} + Blur Outbid Margin (${blurOutbidMargin}) BETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
           await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "blur");
           return
         }
@@ -4213,6 +4252,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         const jobId = `counterbid-${task._id}-${task.contract.slug}-${BLUR.toLowerCase()}-${trait}`
         const job: Job = await queue.getJob(jobId)
         const bidCount = getIncrementedBidCount(BLUR, task.contract.slug, task._id)
+
         const bidData: IBlurBidData = {
           taskId: task._id,
           bidCount: bidCount,
@@ -4221,6 +4261,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
           contractAddress: task.contract.contractAddress,
           offerPrice: Number(offerPrice),
           slug: task.contract.slug,
+          traits,
           expiry
         }
 
@@ -4237,7 +4278,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         if (job) {
           if (incomingPrice <= job.data.offerPrice) {
             console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-            console.log(RED + `Skipping counterbid since incoming bid ${incomingPrice} BETH is less than or equal to existing bid ${Number(job.data.offerPrice)} BETH` + RESET);
+            console.log(RED + `Skipping counterbid since incoming bid ${task.contract.slug}:${JSON.stringify(incomingTrait)} ${incomingPrice} BETH is less than or equal to existing bid ${Number(job.data.offerPrice)} BETH domain: blur` + RESET);
             console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
             return
           } else {
@@ -4252,8 +4293,11 @@ async function handleBlurCounterbid(data: any, task: ITask) {
             },
           );
         }
+
+        // seenBids.delete(bidHash)
+
         console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-        console.log(GREEN + `Counterbidding incoming blur offer of ${Number(incomingPrice)} BETH for ${task.contract.slug} ${trait} for ${Number(offerPrice) / 1e18} BETH ON BLUR`.toUpperCase() + RESET);
+        console.log(GREEN + `Counterbidding incoming blur offer of ${Number(incomingPrice)} BETH for ${task.contract.slug} ${JSON.stringify(incomingTrait)} for ${Number(offerPrice) / 1e18} BETH ON BLUR`.toUpperCase() + RESET);
         console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
       }
 
@@ -4325,7 +4369,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       if (job) {
         if (incomingPrice <= job.data.offerPrice) {
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + `Skipping counterbid since incoming bid ${incomingPrice / 1e18} BETH is less than or equal to existing bid ${Number(job.data.offerPrice) / 1e18} BETH` + RESET);
+          console.log(RED + `Skipping counterbid since incoming bid ${task.contract.slug}:collection ${incomingPrice / 1e18} BETH is less than or equal to existing bid ${Number(job.data.offerPrice) / 1e18} BETH domain: blur` + RESET);
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
           return
         } else {
@@ -4341,11 +4385,13 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
         );
       }
+
+      // seenBids.delete(bidHash)
     }
 
   } catch (error) {
     console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-    console.log(RED + `Error handling Blur counterbid: ${JSON.stringify(error)} ` + RESET);
+    console.log(RED + `Error handling Blur counterbid: ${JSON.stringify(error)}` + RESET);
     console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
   }
 }
@@ -4393,6 +4439,13 @@ function handleBlurMessages(message: any) {
     console.error(`Failed to parse Blur message: `, error);
   }
   return contractAddress
+}
+
+function hashBid(data: any): string {
+  const stableString = stringify(data) as string;
+  return crypto.createHash('sha256')
+    .update(stableString, 'utf8')
+    .digest('hex');
 }
 
 function calculateOutbidMargin(currentPrice: number, currency = WETH): number {
@@ -4702,7 +4755,7 @@ async function processOpenseaScheduledBid(task: ITask) {
       if (currentTask && currentTask.running) taskStatus[currentTask._id].status = 'QUEUED'
     }
   } catch (error) {
-    console.error(RED + `Error processing OpenSea scheduled bid for task: ${task._id} ` + RESET, error);
+    console.error(RED + `Error processing OpenSea scheduled bid for task: ${task._id}` + RESET, error);
   }
 }
 
@@ -4967,7 +5020,7 @@ async function processBlurScheduledBid(task: ITask) {
     if (tokenBid) {
       if (!warningMessage[currentTask._id]) {
         warningMessage[currentTask._id] = {
-          blur: ``,
+          blur: "",
           magiceden: "",
           opensea: ""
         }
@@ -5061,7 +5114,7 @@ async function processBlurScheduledBid(task: ITask) {
       if (currentTask && currentTask.running) taskStatus[currentTask._id].status = 'QUEUED'
     }
   } catch (error) {
-    console.error(RED + `Error processing Blur scheduled bid for task: ${task._id} ` + RESET, error);
+    console.error(RED + `Error processing Blur scheduled bid for task: ${task._id}` + RESET, error);
   }
 }
 
@@ -5447,9 +5500,6 @@ async function processOpenseaTraitBid(data: {
 
 async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
   try {
-
-    console.log({ enabledMarketplaces });
-
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) return
     const { address, privateKey, slug, creatorFees, enforceCreatorFee, asset, _id } = data
     if (!currentTokenIds[_id]?.opensea?.includes(+asset.tokenId)) return
@@ -5563,8 +5613,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         tokenOffer = BigInt(Math.round(highestBidAmount + (outbidMargin * Math.pow(10, decimal))));
       }
     }
-
-    console.log({ ttl, MIN_BID_DURATION, currentPrice, tokenOffer, orderExpiration, expiry });
 
     const bidCount = getIncrementedBidCount(OPENSEA, slug, _id)
     if (orders.length > 0) {
@@ -5742,13 +5790,13 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
   }
 }
 
-async function blurTraitCounterBid(data: BlurTraitCounterBid) {
-  const { taskId, bidCount, address, privateKey, contractAddress, offerPrice, slug, expiry, trait } = data
+async function blurTraitCounterBid(data: IBlurBidData) {
+  const { taskId, bidCount, address, privateKey, contractAddress, offerPrice, slug, expiry, traits } = data
   const currentTask = activeTasks.get(taskId)
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur")) return
 
   try {
-    await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry, trait);
+    await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry, traits);
   } catch (error: any) {
     if (!errorStats[data?.taskId]) {
       errorStats[data?.taskId] = {
@@ -5772,7 +5820,7 @@ interface BlurTraitCounterBid {
   offerPrice: number;
   slug: string;
   expiry: number;
-  trait: string;
+  traits: string;
 }
 
 async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
@@ -5791,7 +5839,6 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
   const expiry = getExpiry(currentTask.bidDuration)
   const bidCount = getIncrementedBidCount(OPENSEA, slug, _id)
   try {
-
     const { currencyType, currency } = await calculateBidPrice(currentTask, 0, "opensea")
 
     await bidOnOpensea(
@@ -5829,9 +5876,9 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) return
     if (!trait) return
 
-    const { currencyType, currency } = await calculateBidPrice(currentTask, 0, "opensea")
+    const { currency } = await calculateBidPrice(currentTask, 0, "opensea")
 
-    bidOnOpensea(
+    await bidOnOpensea(
       _id,
       bidCount,
       address,
@@ -5863,7 +5910,7 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
     const currentTask = activeTasks.get(_id)
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return
 
-    const { currencyType, currency } = await calculateBidPrice(currentTask, 0, "magiceden")
+    const { currency } = await calculateBidPrice(currentTask, 0, "magiceden")
 
     const bidCount = getIncrementedBidCount(MAGICEDEN, slug, _id)
     await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, (offerPrice as number).toString(), privateKey, slug, expiration, currency, undefined, tokenId)
@@ -6484,11 +6531,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
 async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
   try {
     const { contractAddress, address, quantity, privateKey, slug, tokenId, task, _id } = data
-
-    console.log({ enabledMarketplaces });
-
     if (!currentTokenIds[_id]?.magiceden?.includes(+tokenId)) return
-
     const currentTask = activeTasks.get(_id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return;
     const outbidOptions = currentTask.outbidOptions
@@ -6610,8 +6653,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
         tokenOffer = highestBidAmount + (outbidMargin * Math.pow(10, decimal))
       }
     }
-
-    console.log({ ttl, MIN_BID_DURATION, currentPrice, tokenOffer, orderExpiration, expiration });
 
     const offerEth = Number(tokenOffer) / Math.pow(10, decimal);
     const bidCount = getIncrementedBidCount(MAGICEDEN, slug, _id)
@@ -7495,12 +7536,12 @@ app.post('/api/currency/conversion', async (req, res) => {
       }
     };
     const { data } = await limiter.schedule(() => axiosInstance.post<AddressBalancesResponse>(
-      'https://nfttools.pro/opensea/graphql',
+      `${BASE_URL}/opensea/graphql`,
       query,
       {
         headers: {
           'content-type': 'application/json',
-          'X-NFT-API-KEY': API_KEY
+          'x-api-key': API_KEY
         }
       }
     ));
@@ -7516,10 +7557,10 @@ app.post('/api/currency/conversion', async (req, res) => {
 export async function fetchBlurTraits(
   contractAddress: string
 ): Promise<IBlurData> {
-  const url = `https://nfttools.pro/blur/v1/traits/${contractAddress}`;
+  const url = `${BASE_URL}/blur/v1/traits/${contractAddress}`;
   try {
     const { data } = await limiter.schedule(() => axiosInstance.get(url, {
-      headers: { "X-NFT-API-KEY": API_KEY },
+      headers: { "x-api-key": API_KEY },
     }));
     const traits = terraformBlurTraits(data.traits);
     return { traits, blurRaw: data };
@@ -7535,12 +7576,12 @@ export async function fetchBlurTraits(
 export async function fetchMagicEdenAttributes(
   collectionId: string
 ): Promise<MagicEdenData> {
-  const url = `https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${collectionId}/attributes/all/v4`;
+  const url = `${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${collectionId}/attributes/all/v4`;
   try {
     const { data } = await limiter.schedule(() => axiosInstance.get<MagicEdenTraits>(url, {
       headers: {
         accept: "application/json",
-        "X-NFT-API-KEY": API_KEY,
+        "x-api-key": API_KEY,
       },
     }));
 
@@ -7556,23 +7597,23 @@ export async function fetchMagicEdenAttributes(
 }
 
 const fetchCollectionData = async (slug: string) => {
-  const apiUrl: string = `https://nfttools.pro/opensea/api/v2/collections/${slug?.toLowerCase()}`;
+  const apiUrl: string = `${BASE_URL}/opensea/api/v2/collections/${slug?.toLowerCase()}`;
 
   const tasks = [
     () =>
       limiter.schedule(() => axiosInstance.get<CollectionData>(apiUrl, {
-        headers: { "X-NFT-API-KEY": API_KEY },
+        headers: { "x-api-key": API_KEY },
       })),
 
     () =>
       limiter.schedule(() => axiosInstance.post(
-        `https://nfttools.pro/magiceden/v4/collections`,
+        `${BASE_URL}/magiceden/v4/collections`,
         {
           chain: "ethereum",
           collectionSlugs: [slug],
         },
         {
-          headers: { "X-NFT-API-KEY": API_KEY },
+          headers: { "x-api-key": API_KEY },
         }
       )),
   ];
@@ -7743,7 +7784,7 @@ function transformBlurTraits(selectedTraits: Record<string, string[]> | undefine
 const bidCounts = new Map<string, number>();
 
 function getIncrementedBidCount(marketplace: string, slug: string, taskId: string): string {
-  const countKey = `${marketplace}:${slug} `;
+  const countKey = `${marketplace}:${slug}`;
   const currentCount = bidCounts.get(countKey) || 0;
   const newCount = currentCount + 1;
   bidCounts.set(countKey, newCount);
@@ -7919,7 +7960,7 @@ async function unsubscribeFromCollection(task: ITask) {
     await new Promise<void>((resolve, reject) => {
       try {
         ws.send(JSON.stringify(unsubscribeMessage));
-        console.log(`Unsubscribed from collection: ${task.contract.slug} `);
+        console.log(`Unsubscribed from collection: ${task.contract.slug}`);
         // Remove task from subscribedTasks
         subscribedTasks.delete(task._id);
         resolve();
@@ -8575,6 +8616,7 @@ interface IBlurBidData {
   offerPrice: number;
   slug: string;
   expiry: number;
+  traits?: string
 }
 
 interface IProcessOpenseaTraitBidData {
@@ -9380,11 +9422,11 @@ const fetchTraitData = async (collectionSlug: string) => {
     };
 
     const { data: openseaTraits } = await limiter.schedule(() => axiosInstance.post<OpenseaTraits>(
-      "https://nfttools.pro/opensea/__api/graphql/",
+      `${BASE_URL}/opensea/__api/graphql/`,
       data,
       {
         headers: {
-          "X-NFT-API-KEY": API_KEY,
+          "x-api-key": API_KEY,
           "content-type": "application/json",
           "x-signed-query":
             "6ae240a98f748a2ecef0a71cb6424c3d47c9c62691ca07ebadf318bf7fcc9517",

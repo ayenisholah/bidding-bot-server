@@ -1,7 +1,7 @@
 import { BigNumber, ethers, Wallet } from "ethers";
 import { SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, AddressBalancesResponse, API_KEY, BLUE, currentTasks, decrementBidCount, markTaskAsAborted, OPENSEA_SCHEDULE, OPENSEA_TOKEN_BID, OPENSEA_TRAIT_BID, pQueue, queue, redis, trackBidRate } from "../..";
+import { activeTasks, AddressBalancesResponse, API_KEY, BASE_URL, BLUE, currentTasks, decrementBidCount, logBidError, markTaskAsAborted, OPENSEA_SCHEDULE, OPENSEA_TOKEN_BID, OPENSEA_TRAIT_BID, pQueue, queue, redis, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { createBalanceChecker } from "../../utils/balance";
 import { Job } from "bullmq";
@@ -278,7 +278,6 @@ export async function bidOnOpensea(
     if (offerPriceEthFinal > wethBalance) {
       const identifier = opensea_traits ? opensea_traits : asset?.tokenId ? asset?.tokenId : slug;
       throw new Error(`[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEthFinal} ${currencySymbol} is greater than available ${currencySymbol} balance: ${wethBalance} ${currencySymbol}.`);
-
     }
 
     const wallet = new Wallet(private_key, provider);
@@ -496,10 +495,10 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
       const { data: offer } = await
         limiter.schedule(() => axiosInstance.request<OpenseaOffer>({
           method: 'POST',
-          url: `https://nfttools.pro/opensea/api/v2/offers`,
+          url: `${BASE_URL}/opensea/api/v2/offers`,
           headers: {
             'content-type': 'application/json',
-            'X-NFT-API-KEY': API_KEY,
+            'x-api-key': API_KEY,
             "Cache-Control": "no-store", // ⛔ Prevents caching
             "Pragma": "no-cache", // ⛔ Prevents old cache policies from affecting response
             "Expires": "0", // ⛔ Forces fresh reques
@@ -556,10 +555,10 @@ async function buildOffer(taskId: string, buildPayload: any) {
       const { data } = await limiter.schedule(() =>
         axiosInstance.request<PartialParameters>({
           method: 'POST',
-          url: `https://nfttools.pro/opensea/api/v2/offers/build`,
+          url: `${BASE_URL}/opensea/api/v2/offers/build`,
           headers: {
             'content-type': 'application/json',
-            'X-NFT-API-KEY': API_KEY,
+            'x-api-key': API_KEY,
           },
           data: JSON.stringify(buildPayload),
           signal: controller.signal
@@ -593,10 +592,10 @@ export async function cancelOrder(orderHash: string, protocolAddress: string, pr
 
   const offererSignature = await signCancelOrder(taskId, orderHash, protocolAddress, privateKey);
   if (!offererSignature) return;
-  const url = `https://nfttools.pro/opensea/api/v2/orders/chain/ethereum/protocol/${protocolAddress}/${orderHash}/cancel`;
+  const url = `${BASE_URL}/opensea/api/v2/orders/chain/ethereum/protocol/${protocolAddress}/${orderHash}/cancel`;
   const headers = {
     'content-type': 'application/json',
-    'X-NFT-API-KEY': API_KEY
+    'x-api-key': API_KEY
   };
 
   const body = { offerer_signature: offererSignature };
@@ -665,10 +664,10 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
     }
 
     try {
-      const { data } = await limiter.schedule(() => axiosInstance.post(`https://nfttools.pro/opensea/api/v2/orders/ethereum/seaport/offers`, payload, {
+      const { data } = await limiter.schedule(() => axiosInstance.post(`${BASE_URL}/opensea/api/v2/orders/ethereum/seaport/offers`, payload, {
         headers: {
           'content-type': 'application/json',
-          'X-NFT-API-KEY': API_KEY,
+          'x-api-key': API_KEY,
           "Cache-Control": "no-store",
           "Pragma": "no-cache",
           "Expires": "0",
@@ -729,17 +728,17 @@ type OpenseaTopOffers = {
 export async function fetchItemOffers(contractAddress: string, tokenId: string) {
   try {
     const tasks = [
-      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&limit=2&sortBy=price`, {
+      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price`, {
         headers: {
           'content-type': 'application/json',
-          'X-NFT-API-KEY': API_KEY
+          'x-api-key': API_KEY
         }
       })),
 
-      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${tokenId}&sortBy=price&status=active&excludeEOA=false&limit=2`, {
+      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${tokenId}&sortBy=price&status=active&excludeEOA=false`, {
         headers: {
           'content-type': 'application/json',
-          'X-NFT-API-KEY': API_KEY
+          'x-api-key': API_KEY
         }
       })),
     ];
@@ -758,7 +757,7 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
         decimal: order.price.currency.decimals,
         eth: order.price.amount.native
       }
-    })?.sort((a, b) => Number(b.usd) - Number(a.usd))
+    })?.sort((a, b) => Number(b.usd) - Number(a.usd)).slice(0, 2)
     return offers
   } catch (error: any) {
     throw error
@@ -775,10 +774,10 @@ export async function fetchOpenseaOffers(
   try {
     if (offerType === 'COLLECTION') {
       const { data } = await limiter?.schedule(() =>
-        axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&limit=2&sortBy=price`, {
+        axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price`, {
           headers: {
             'content-type': 'application/json',
-            'X-NFT-API-KEY': API_KEY
+            'x-api-key': API_KEY
           }
         })
       );
@@ -793,29 +792,29 @@ export async function fetchOpenseaOffers(
             decimal: order.price.currency.decimals,
             eth: order.price.amount.native
           }
-        })?.sort((a, b) => Number(b?.usd) - Number(a?.usd))
+        })?.sort((a, b) => Number(b?.usd) - Number(a?.usd)).slice(0, 2)
 
 
       return offers
     } else if (offerType === 'TRAIT') {
       const { type, value } = identifiers as Record<string, string>;
       const tasks = [
-        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&limit=2&sortBy=price`, {
+        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price`, {
           headers: {
             'content-type': 'application/json',
-            'X-NFT-API-KEY': API_KEY
+            'x-api-key': API_KEY
           }
         })),
 
         () => {
 
-          const URL = `https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v5?collection=${contractAddress}&attribute%5B${type}%5D=${value}&status=active&limit=2&sortBy=price`;
+          const URL = `${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v5?collection=${contractAddress}&attribute%5B${type}%5D=${value}&status=active&sortBy=price`;
 
           return limiter.schedule(() => axiosInstance.get<MagicEdenTraitOfferResponse>(
             URL,
             {
               headers: {
-                'X-NFT-API-KEY': API_KEY,
+                'x-api-key': API_KEY,
               }
             }
           ));
@@ -836,7 +835,7 @@ export async function fetchOpenseaOffers(
           decimal: order.price.currency.decimals,
           eth: order.price.amount.native
         }
-      })?.sort((a, b) => Number(b.usd) - Number(a.usd))
+      })?.sort((a, b) => Number(b.usd) - Number(a.usd)).slice(0, 2)
       return offers
     }
   } catch (error: any) {
@@ -848,7 +847,7 @@ export async function fetchOpenseaOffers(
 
 export async function fetchOpenseaListings(taskId: string, collectionSlug: string, limit?: number) {
   try {
-    const baseUrl = `https://nfttools.pro/opensea/api/v2/listings/collection/${collectionSlug}/best`;
+    const baseUrl = `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`;
     let allListings: OpenseaOrder[] = [];
     let nextCursor: string | null = null;
     let uniqueTokenIds: number[] = [];
@@ -863,7 +862,7 @@ export async function fetchOpenseaListings(taskId: string, collectionSlug: strin
       const { data } = await limiter.schedule(() => axiosInstance.get<OpenseaListingData>(baseUrl, {
         headers: {
           'accept': 'application/json',
-          'X-NFT-API-KEY': API_KEY
+          'x-api-key': API_KEY
         },
         params: params
       }))

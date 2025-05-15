@@ -2,14 +2,13 @@ import { ethers } from "ethers";
 import { Cluster } from 'ioredis';
 import { DistributedLockManager } from './lock';
 import RedisClient from './redis';
-import { formatEther, Interface } from "ethers/lib/utils";
+import { Interface } from "ethers/lib/utils";
 import { axiosInstance, limiter } from "../init";
-import { WETH } from "./currencies";
+const BASE_URL = "https://nfttools.pro"
 
 // Constants
 const CACHE_EXPIRY_SECONDS = 60;
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
-const API_ENDPOINT = "https://nfttools.pro";
 const API_KEY = "a4eae399-f135-4627-829a-18435bb631ae";
 
 // ERC20 ABI for balance checking
@@ -23,7 +22,7 @@ const ERC20_ABI = [
 const config = {
   API_KEY: API_KEY,
   ALCHEMY_KEY: process.env.ALCHEMY_KEY,
-  OPENSEA_API_URL: 'https://nfttools.pro/opensea/__api/graphql/',
+  OPENSEA_API_URL: `${BASE_URL}/opensea/__api/graphql/`,
 };
 
 // Type Definitions
@@ -106,7 +105,7 @@ class BalanceChecker {
           };
 
           const decimalsResponse = await limiter.schedule(() =>
-            axiosInstance.post(API_ENDPOINT, decimalsRequest, { headers })
+            axiosInstance.post(BASE_URL, decimalsRequest, { headers })
           );
           const decimals = parseInt(decimalsResponse.data.result, 16);
 
@@ -126,7 +125,7 @@ class BalanceChecker {
           };
 
           const response = await limiter.schedule(() =>
-            axiosInstance.post(API_ENDPOINT, balanceRequest, { headers })
+            axiosInstance.post(BASE_URL, balanceRequest, { headers })
           );
           const balance = response.data.result;
 

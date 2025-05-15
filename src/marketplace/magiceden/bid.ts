@@ -1,7 +1,7 @@
 import { ethers, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
 import { config } from "dotenv";
-import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, redis, trackBidRate } from "../..";
+import { activeTasks, API_KEY, BASE_URL, currentTasks, decrementBidCount, MAGENTA, pQueue, redis, trackBidRate } from "../..";
 import { createBalanceChecker } from "../../utils/balance";
 import { DistributedLockManager } from '../../utils/lock';
 import { PrismaClient } from '@prisma/client'
@@ -185,12 +185,12 @@ async function createBidData(
 
     try {
       const { data: order } = await limiter.schedule(() => axiosInstance.post<CreateBidData>(
-        'https://nfttools.pro/magiceden/v3/rtp/ethereum/execute/bid/v5',
+        `${BASE_URL}/magiceden/v3/rtp/ethereum/execute/bid/v5`,
         data,
         {
           headers: {
             'content-type': 'application/json',
-            'X-NFT-API-KEY': API_KEY
+            'x-api-key': API_KEY
           },
           signal: controller.signal
         }
@@ -303,8 +303,8 @@ async function sendSignedOrderData(taskId: string, offerPrice: string | number, 
     if (!task) return
 
     const endpoint = trait || tokenId
-      ? "https://nfttools.pro/magiceden/v3/rtp/ethereum/order/v3"
-      : "https://nfttools.pro/magiceden/v3/rtp/ethereum/order/v4"
+      ? `${BASE_URL}/magiceden/v3/rtp/ethereum/order/v3`
+      : `${BASE_URL}/magiceden/v3/rtp/ethereum/order/v4`
 
 
     // check if the tasks is still active before you make the offer
@@ -322,7 +322,7 @@ async function sendSignedOrderData(taskId: string, offerPrice: string | number, 
           {
             headers: {
               'content-type': 'application/json',
-              'X-NFT-API-KEY': API_KEY,
+              'x-api-key': API_KEY,
             },
             signal: controller.signal
           }
@@ -510,12 +510,12 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
     if (!processedOrderIds.length) return;
 
     const { data } = await limiter.schedule(() => axiosInstance.post<MagicEdenCancelOfferCancel>(
-      'https://nfttools.pro/magiceden/v3/rtp/ethereum/execute/cancel/v3',
+      `${BASE_URL}/magiceden/v3/rtp/ethereum/execute/cancel/v3`,
       { orderIds: processedOrderIds },
       {
         headers: {
           'content-type': 'application/json',
-          'X-NFT-API-KEY': API_KEY
+          'x-api-key': API_KEY
         }
       }
     ));
@@ -548,12 +548,12 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
     }
 
     const { data: cancelResponse } = await limiter.schedule(() => axiosInstance.post(
-      `https://nfttools.pro/magiceden/v3/rtp/ethereum/execute/cancel-signature/v1?signature=${signature}`,
+      `${BASE_URL}/magiceden/v3/rtp/ethereum/execute/cancel-signature/v1?signature=${signature}`,
       cancelBody,
       {
         headers: {
           'content-type': 'application/json',
-          'X-NFT-API-KEY': API_KEY
+          'x-api-key': API_KEY
         }
       }
     ))
@@ -597,10 +597,10 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
   try {
     if (type === "COLLECTION") {
       const { data } = await limiter?.schedule(() =>
-        axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection`, {
+        axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection`, {
           headers: {
             'content-type': 'application/json',
-            'X-NFT-API-KEY': API_KEY
+            'x-api-key': API_KEY
           }
         })
       );
@@ -619,18 +619,18 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
       return offers
     } else if (type === "TOKEN") {
       const tasks = [
-        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${identifier}&sortBy=price&status=active&excludeEOA=false&limit=2`, {
+        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${identifier}&sortBy=price&status=active&excludeEOA=false&limit=2`, {
           headers: {
             'content-type': 'application/json',
-            'X-NFT-API-KEY': API_KEY
+            'x-api-key': API_KEY
           }
         })),
 
         () => limiter.schedule(() =>
-          axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price&status=active&excludeEOA=false&limit=2`, {
+          axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price&status=active&excludeEOA=false&limit=2`, {
             headers: {
               'content-type': 'application/json',
-              'X-NFT-API-KEY': API_KEY
+              'x-api-key': API_KEY
             }
           })
         )
@@ -655,19 +655,19 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
 
     } else if (type === "TRAIT" && typeof identifier === "object" && identifier.attributeKey && identifier.attributeValue) {
       const tasks = [
-        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`https://nfttools.pro/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sources=magiceden.io&sources=magiceden.us&limit=2&sortBy=price`, {
+        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sources=magiceden.io&sources=magiceden.us&limit=2&sortBy=price`, {
           headers: {
             'content-type': 'application/json',
-            'X-NFT-API-KEY': API_KEY
+            'x-api-key': API_KEY
           }
         })),
         () => {
-          const URL = `https://nfttools.pro/magiceden/v3/rtp/ethereum/orders/bids/v5?collection=${contractAddress}&attribute%5B${identifier?.attributeKey}%5D=${identifier.attributeValue}&sortBy=price&status=active&limit=2`;
+          const URL = `${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v5?collection=${contractAddress}&attribute%5B${identifier?.attributeKey}%5D=${identifier.attributeValue}&sortBy=price&status=active&limit=2`;
           return limiter.schedule(() => axiosInstance.get<MagicEdenTraitOfferResponse>(
             URL,
             {
               headers: {
-                'X-NFT-API-KEY': API_KEY,
+                'x-api-key': API_KEY,
               }
             }
           ));
@@ -736,10 +736,10 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
 
     try {
       const { data } = await limiter.schedule(() =>
-        axiosInstance.get('https://nfttools.pro/magiceden/v3/rtp/ethereum/tokens/v7', {
+        axiosInstance.get(`${BASE_URL}/magiceden/v3/rtp/ethereum/tokens/v7`, {
           params: queryParams,
           headers: {
-            'X-NFT-API-KEY': API_KEY
+            'x-api-key': API_KEY
           }
         })
       );
@@ -796,7 +796,7 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
         normalizeRoyalties: false,
         continuation: null
       };
-      const url = `https://nfttools.pro/magiceden/v3/rtp/ethereum/tokens/v7`;
+      const url = `${BASE_URL}/magiceden/v3/rtp/ethereum/tokens/v7`;
       const allTokens: number[] = [];
       try {
         let totalFetched = 0;
@@ -807,7 +807,7 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
             {
               headers: {
                 accept: "application/json",
-                "X-NFT-API-KEY": API_KEY,
+                "x-api-key": API_KEY,
               },
               params
             }

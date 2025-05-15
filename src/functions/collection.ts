@@ -1,14 +1,10 @@
 import { config } from "dotenv";
 import { axiosInstance, limiter } from "../init"; // Import Redis client
 import { DistributedLockManager } from "../utils/lock";
-import { API_KEY, logBidError, redis } from "..";
-import axios from "axios";
+import { API_KEY, BASE_URL, redis } from "..";
 import { CollectionItemsListQuery } from "../queries";
 
-const GRAPHQL_URL = 'https://nfttools.pro/opensea/graphql';
-
 config()
-
 
 const collectionCache: { [key: string]: any } = {};
 const MAX_CACHE_ITEMS = 1000;
@@ -32,10 +28,10 @@ export async function getCollectionDetails(slug: string, contractAddress: string
     try {
       const { data: collection } = await limiter.schedule(() => axiosInstance
         .get(
-          `https://nfttools.pro/opensea/api/v2/collections/${slug}`,
+          `${BASE_URL}/opensea/api/v2/collections/${slug}`,
           {
             headers: {
-              'X-NFT-API-KEY': API_KEY
+              'x-api-key': API_KEY
             }
           }
         ));
@@ -108,9 +104,9 @@ export async function getOpenseaFloor(collectionSlug: string) {
 
     try {
       const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
-        `https://nfttools.pro/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
+        `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
         {
-          headers: { 'X-NFT-API-KEY': API_KEY }
+          headers: { 'x-api-key': API_KEY }
         }
       ));
 
@@ -154,9 +150,9 @@ export async function getOpenseaFloor(collectionSlug: string) {
 export async function getOpenseaCollectionStats(collectionSlug: string) {
   try {
     const { data } = await limiter.schedule(() => axiosInstance.get(
-      `https://nfttools.pro/opensea/api/v2/collections/${collectionSlug}/stats`,
+      `${BASE_URL}/opensea/api/v2/collections/${collectionSlug}/stats`,
       {
-        headers: { 'X-NFT-API-KEY': API_KEY }
+        headers: { 'x-api-key': API_KEY }
       }
     ));
     if (!data?.total) {
@@ -185,10 +181,10 @@ export async function getCollectionEvents(
     params.append('limit', limit.toString());
 
     const { data } = await limiter.schedule(() => axiosInstance.get<CollectionEventResponse>(
-      `https://nfttools.pro/opensea/api/v2/events/collection/${collectionSlug}`,
+      `${BASE_URL}/opensea/api/v2/events/collection/${collectionSlug}`,
       {
         params: params,
-        headers: { 'X-NFT-API-KEY': API_KEY }
+        headers: { 'x-api-key': API_KEY }
       }
     ));
 
@@ -221,16 +217,15 @@ export async function fetchOpenSeaCollectionItems(
       ...variables,
       cursor: cursor
     };
-
     const payload = {
       operationName: 'CollectionItemsListQuery',
       query: CollectionItemsListQuery,
       variables: queryVariables
     };
 
-    const { data } = await limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(GRAPHQL_URL, payload, {
+    const { data } = await limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
       headers: {
-        'X-NFT-API-KEY': API_KEY,
+        "x-api-key": API_KEY
       },
     }));
     // Extract token IDs from the current page
