@@ -1,41 +1,60 @@
 {
-	"contractAddress": "0xbd3531da5cf5857e7cfaa92426877b022e612cf8",
-	"stats": [
+	"listings": [
 		{
-			"criteriaType": "TRAIT",
-			"criteriaValue": { "Body": "Swordman" },
-			"bestPrice": "9.82",
-			"totalValue": "19.63"
-		},
-		{
-			"criteriaType": "COLLECTION",
-			"criteriaValue": {},
-			"bestPrice": "9.58",
-			"totalValue": "412.92"
-		},
-		{
-			"criteriaType": "TRAIT",
-			"criteriaValue": { "Head": "Wizard Hat" },
-			"bestPrice": "10.12",
-			"totalValue": "20.23"
-		},
-		{
-			"criteriaType": "TRAIT",
-			"criteriaValue": { "Head": "Fish Gold" },
-			"bestPrice": "10.69",
-			"totalValue": "21.37"
-		},
-		{
-			"criteriaType": "TRAIT",
-			"criteriaValue": { "Face": "Hero Mask Red" },
-			"bestPrice": null,
-			"totalValue": null
-		},
-		{
-			"criteriaType": "TRAIT",
-			"criteriaValue": { "Skin": "Leopard Gray" },
-			"bestPrice": "9.71",
-			"totalValue": "19.41"
+			"order_hash": "0xcfbc9c8a82900852b5d1b1641b9d159d4ce2fe0c14d22dd043aa2157c6d2d6a9",
+			"chain": "ethereum",
+			"type": "basic",
+			"price": {
+				"current": {
+					"currency": "ETH",
+					"decimals": 18,
+					"value": "534998000000000000"
+				}
+			},
+			"protocol_data": {
+				"parameters": {
+					"offerer": "0xb8dd57c957c76b2d2b1a2932488615d1f28a5e33",
+					"offer": [
+						{
+							"itemType": 2,
+							"token": "0x769272677faB02575E84945F03Eca517ACc544Cc",
+							"identifierOrCriteria": "3759",
+							"startAmount": "1",
+							"endAmount": "1"
+						}
+					],
+					"consideration": [
+						{
+							"itemType": 0,
+							"token": "0x0000000000000000000000000000000000000000",
+							"identifierOrCriteria": "0",
+							"startAmount": "532323010000000000",
+							"endAmount": "532323010000000000",
+							"recipient": "0xb8dd57c957C76B2d2b1A2932488615d1f28A5E33"
+						},
+						{
+							"itemType": 0,
+							"token": "0x0000000000000000000000000000000000000000",
+							"identifierOrCriteria": "0",
+							"startAmount": "2674990000000000",
+							"endAmount": "2674990000000000",
+							"recipient": "0x0000a26b00c1F0DF003000390027140000fAa719"
+						}
+					],
+					"startTime": "1747512663",
+					"endTime": "1747514463",
+					"orderType": 0,
+					"zone": "0x004C00500000aD104D7DBd00e3ae0A5C00560C00",
+					"zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+					"salt": "0x72db8c0b00000000000000000000000000000000000000002451820eced3be60",
+					"conduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+					"totalOriginalConsiderationItems": 2,
+					"counter": 0
+				},
+				"signature": null
+			},
+			"protocol_address": "0x0000000000000068f116a894984e2db1123eb395"
 		}
-	]
+	],
+	"next": "LXBrPTI4NTUwOTAxNDUy"
 }

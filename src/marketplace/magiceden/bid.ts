@@ -743,9 +743,7 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
           }
         })
       );
-
-      const stats = data?.tokens[0]?.market?.floorAsk?.price?.amount?.decimal;
-
+      const stats = data?.tokens[0]?.market?.floorAsk?.price?.amount?.decimal || 0;
       // Cache the result
       if (stats !== undefined) {
         try {
@@ -760,7 +758,6 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
       throw error;
     }
   });
-
   if (!result) {
     // If we couldn't acquire the lock, wait briefly and try cache again
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -774,7 +771,6 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
     }
     throw new Error('Failed to fetch collection stats');
   }
-
   return result;
 }
 

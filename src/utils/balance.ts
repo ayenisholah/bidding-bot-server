@@ -4,6 +4,7 @@ import { DistributedLockManager } from './lock';
 import RedisClient from './redis';
 import { Interface } from "ethers/lib/utils";
 import { axiosInstance, limiter } from "../init";
+import { RED, RESET } from "..";
 const BASE_URL = "https://nfttools.pro"
 
 // Constants
@@ -17,16 +18,6 @@ const ERC20_ABI = [
   "function decimals() view returns (uint8)",
   "function symbol() view returns (string)"
 ];
-
-// Environment configuration
-const config = {
-  API_KEY: API_KEY,
-  ALCHEMY_KEY: process.env.ALCHEMY_KEY,
-  OPENSEA_API_URL: `${BASE_URL}/opensea/__api/graphql/`,
-};
-
-// Type Definitions
-type BalanceType = 'weth' | 'beth';
 
 interface Dependencies {
   provider: ethers.providers.Provider;
@@ -50,8 +41,8 @@ class BalanceChecker {
     try {
       const cachedBalance = await this.redis.get(cacheKey);
       return cachedBalance ? Number(cachedBalance) : null;
-    } catch (error) {
-      console.error('Redis Cluster cache error:', error);
+    } catch (error: any) {
+      console.error('Redis Cluster cache error:', error?.response?.data);
       return null;
     }
   }
@@ -64,8 +55,8 @@ class BalanceChecker {
         'EX',
         CACHE_EXPIRY_SECONDS
       );
-    } catch (error) {
-      console.error('Redis Cluster cache set error:', error);
+    } catch (error: any) {
+      console.error('Redis Cluster cache set error:', error?.response?.data);
     }
   }
 
@@ -88,7 +79,6 @@ class BalanceChecker {
             "x-nft-api-key": API_KEY,
             "Content-Type": "application/json",
           };
-
           // Get decimals first
           const decimalsData = new Interface(ERC20_ABI).encodeFunctionData("decimals", []);
           const decimalsRequest = {
@@ -134,8 +124,8 @@ class BalanceChecker {
           await this.setCachedBalance(cacheKey, formattedBalance);
           return formattedBalance;
 
-        } catch (error) {
-          console.error("Error fetching ERC20 balance:", error);
+        } catch (error: any) {
+          console.error(RED + "Error fetching ERC20 balance:", error?.response?.data + RESET);
           if (cachedBalance !== null) {
             return cachedBalance;
           }
@@ -181,9 +171,9 @@ class BalanceChecker {
 
             await this.setCachedBalance(cacheKey, formattedBalance);
             return formattedBalance;
-          } catch (error) {
+          } catch (error: any) {
             if (attempt === maxRetries) {
-              console.error("Error fetching BETH balance after retries:", error);
+              console.error(RED + "Error fetching BETH balance after retries:", error?.response?.data + RESET);
               if (cachedBalance !== null) {
                 return cachedBalance;
               }

@@ -8,6 +8,7 @@ import { DistributedLockManager } from "../../utils/lock";
 const RED = '\x1b[31m';
 import { PrismaClient } from '@prisma/client'
 import axios from "axios";
+import { decrementOfferAmount, getCachedOfferAmount, incrementOfferAmount } from "../../utils/offerAmountCache";
 
 const prisma = new PrismaClient()
 
@@ -48,6 +49,7 @@ export function cancelBlurRequest(taskId: string): boolean {
   return false;
 }
 
+const OFFER_AMOUNT_KEY = 'blur:total_offer_amount_eth';
 /**
  * Creates an offer on Blur.
  * @param walletAddress - The wallet address of the offerer.
@@ -67,27 +69,11 @@ export async function bidOnBlur(
   expiry = 900,
   traits?: string
 ) {
-
   const bethBalance = await balanceChecker.getBethBalance(wallet_address);
   let offerPriceEth: string | number = (Number(offer_price) / 1e18)
   const leverage = 200
-  let totalOfferAmount = 0;
-
-
-  for (const task of currentTasks) {
-    const blurOrders = await redis.smembers(`{${task._id}}:blur:orders`);
-
-    for (const orderKey of blurOrders) {
-      const orderData = await redis.get(orderKey);
-      if (orderData) {
-        const order = JSON.parse(orderData);
-        totalOfferAmount += Number(order.offer) / 1e18; // Convert from wei to ETH
-      }
-    }
-  }
-
+  const totalOfferAmount = await getCachedOfferAmount(OFFER_AMOUNT_KEY);
   if (totalOfferAmount + offerPriceEth >= leverage * bethBalance) {
-
     const jobs: Job[] = await queue.getJobs(['prioritized']);
     const blurJobs = jobs.filter(job =>
       [BLUR_SCHEDULE, BLUR_TRAIT_BID].includes(job.name)
@@ -103,10 +89,8 @@ export async function bidOnBlur(
   }
 
   if (offerPriceEth > bethBalance) {
-
     const message = `Offer price: ${offerPriceEth} BETH  is greater than available BETH balance: ${bethBalance} BETH. SKIPPING ...`
     throw new Error(message)
-
   }
 
   const offerPrice = BigNumber.from(offer_price.toString());
@@ -374,6 +358,8 @@ async function submitBidToBlur(
           marketplace: "blur"
         }
       })
+      const offerPriceEth = Number(offer_price) / 1e18
+      await incrementOfferAmount(OFFER_AMOUNT_KEY, offerPriceEth);
       trackBidRate("blur", taskId)
     }
   } catch (error: any) {
@@ -397,7 +383,7 @@ async function submitBidToBlur(
 export async function cancelBlurBid(data: BlurCancelPayload) {
   try {
     if (!data || !data.payload || !data.privateKey) return
-    const { payload, privateKey, taskId } = data
+    const { payload, privateKey, taskId, offerPrice } = data
     const wallet = new Wallet(privateKey, provider);
     const walletAddress = wallet.address
     const accessToken = await getAccessToken(BLUR_API_URL, privateKey);
@@ -412,11 +398,13 @@ export async function cancelBlurBid(data: BlurCancelPayload) {
     }))
     decrementBidCount('blur', taskId);
     console.log(JSON.stringify(cancelResponse));
-
+    const offerPriceEth = Number(offerPrice) / 1e18
+    await decrementOfferAmount(OFFER_AMOUNT_KEY, offerPriceEth)
   } catch (error: any) {
     if (error.response?.data?.message?.message !== 'No bids found') {
       console.log("cancelBlurBid: ", error?.response?.data || error?.response || error?.code);
     }
+
     // console.log(error.response.data || error.message);
   }
 }
@@ -517,17 +505,12 @@ export async function fetchBlurCollectionStats(slug: string) {
 
   // If not in cache, try to acquire lock and fetch
   const result = await lockManager.withLock(lockKey, async () => {
-    // Double check cache after acquiring lock
+
     try {
       const cachedStats = await redis.get(cacheKey);
       if (cachedStats) {
         return JSON.parse(cachedStats);
       }
-    } catch (error) {
-      console.error('Error reading from cache after lock:', error);
-    }
-
-    try {
       const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens`;
       const { data } = await limiter.schedule(() => axiosInstance.get<BlurTokensResponse>(url, {
         headers: {
@@ -536,36 +519,19 @@ export async function fetchBlurCollectionStats(slug: string) {
         }
       }));
 
-      const listings = data.tokens.sort((a, b) => Number(a?.price?.amount) - Number(b?.price?.amount));
-      const floor_price = Number(listings[0]?.price?.amount);
+      const listings = data?.tokens?.sort((a, b) => Number(a?.price?.amount) - Number(b?.price?.amount));
+      const floor_price = Number(listings[0]?.price?.amount) || 0;
 
-      // Cache the result
-      try {
-        await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
-      } catch (error) {
-        console.error('Error writing to cache:', error);
-      }
-
+      await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
       return floor_price;
     } catch (error: any) {
-      throw error;
+      return 0
     }
   });
 
   if (!result) {
-    // If we couldn't acquire the lock, wait briefly and try cache again
-    await new Promise(resolve => setTimeout(resolve, 100));
-    try {
-      const cachedStats = await redis.get(cacheKey);
-      if (cachedStats) {
-        return JSON.parse(cachedStats);
-      }
-    } catch (error) {
-      console.error('Error reading from cache after lock failure:', error);
-    }
-    throw new Error('Failed to fetch Blur collection stats');
+    return 0
   }
-
   return result;
 }
 
@@ -597,6 +563,7 @@ interface BlurCancelPayload {
   };
   privateKey: string;
   taskId: string;
+  offerPrice: string;
 }
 
 interface BlurBidResponse {

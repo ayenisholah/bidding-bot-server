@@ -110,13 +110,8 @@ export async function getOpenseaFloor(collectionSlug: string) {
         }
       ));
 
-      // Check if listings exist and has items
-      if (!data?.listings || data.listings.length === 0) {
-        throw new Error(`No listings found for collection ${collectionSlug}`);
-      }
-
-      const floor_price = Number(data.listings[0].price.current.value) / 1e18;
-
+      // Check if listings exist and has item
+      const floor_price = Number(data?.listings[0]?.price?.current?.value) / 1e18 || 0;
       // Cache the result
       try {
         await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
