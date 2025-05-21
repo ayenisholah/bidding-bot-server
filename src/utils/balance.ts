@@ -5,6 +5,7 @@ import RedisClient from './redis';
 import { Interface } from "ethers/lib/utils";
 import { axiosInstance, limiter } from "../init";
 import { RED, RESET } from "..";
+// import { BASE_URL } from "../constants";
 const BASE_URL = "https://nfttools.pro"
 
 // Constants

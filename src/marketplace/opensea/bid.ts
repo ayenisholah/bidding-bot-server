@@ -1,7 +1,7 @@
 import { BigNumber, ethers, Wallet } from "ethers";
-import { SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
+import { BASE_URL, SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, AddressBalancesResponse, API_KEY, BASE_URL, BLUE, currentTasks, decrementBidCount, logBidError, markTaskAsAborted, OPENSEA_SCHEDULE, OPENSEA_TOKEN_BID, OPENSEA_TRAIT_BID, pQueue, queue, redis, trackBidRate } from "../..";
+import { activeTasks, AddressBalancesResponse, API_KEY, BLUE, currentTasks, decrementBidCount, logBidError, markTaskAsAborted, OPENSEA_SCHEDULE, OPENSEA_TOKEN_BID, OPENSEA_TRAIT_BID, pQueue, queue, redis, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { createBalanceChecker } from "../../utils/balance";
 import { Job } from "bullmq";
@@ -9,7 +9,6 @@ import axios from "axios";
 import { PrismaClient } from '@prisma/client'
 import { USDC, WETH } from "../../utils/currencies";
 import { MagicedenCollectionResponse, MagicEdenTraitOfferResponse } from "../magiceden";
-import { getCachedOfferAmount, incrementOfferAmount } from "../../utils/offerAmountCache";
 
 const prisma = new PrismaClient()
 
@@ -213,41 +212,11 @@ export async function bidOnOpensea(
     const divider = BigNumber.from(10000);
     const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
     const currencySymbol = currency.toLowerCase() === USDC.toLowerCase() ? "USDC" : "WETH"
-
-    const OFFER_AMOUNT_KEY = `opensea:total_offer_amount_${currencySymbol}`.toLowerCase();
-
-
     const task = activeTasks.get(taskId)
     if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return
 
-    interface TotalOfferAmount {
-      [currency: string]: number;
-    }
     const wethBalance = await balanceChecker.getERC20Balance(wallet_address, currency);
-    const totalOfferAmount = await getCachedOfferAmount(OFFER_AMOUNT_KEY);
-
     const offerPriceEth = Number(offer_price) / Math.pow(10, decimal);
-
-    const leverage = 1000;
-
-    if (totalOfferAmount + offerPriceEth >= leverage * wethBalance) {
-      markTaskAsAborted(taskId)
-      cancelOpenseaRequest(taskId)
-      const jobs = await queue.getJobs(['prioritized']);
-      const openseaJobs: Job[] = jobs.filter(job =>
-        [OPENSEA_SCHEDULE, OPENSEA_TRAIT_BID, OPENSEA_TOKEN_BID].includes(job?.name)
-      );
-
-      if (openseaJobs.length > 0) {
-        await queue.pause()
-        await Promise.allSettled(openseaJobs.map(job => job.remove()));
-        await queue.resume()
-      }
-      const identifier = opensea_traits ? opensea_traits : asset?.tokenId ? asset?.tokenId : slug;
-      throw new Error(`INSUFFICIENT ${currencySymbol} BALANCE: Total offer amount: ${totalOfferAmount} + offer price: ${offerPriceEth} is greater than the leverage: ${leverage} * ${currencySymbol} balance: ${wethBalance} for ${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}`);
-    }
-
-    // Determine precision based on price range
 
     let decimals;
     if (offerPriceEth >= 1) {
@@ -341,7 +310,6 @@ export async function bidOnOpensea(
         })
 
         const offerPriceEth = Number(offer_price) / 1e18
-        await incrementOfferAmount(OFFER_AMOUNT_KEY, offerPriceEth);
 
       }
 
@@ -522,9 +490,7 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
             marketplace: 'opensea'
           }
         })
-        const OFFER_AMOUNT_KEY = `opensea:total_offer_amount_${currencySymbol}`.toLowerCase();
         const offerPriceEth = Number(offerPrice) / Math.pow(10, decimal)
-        await incrementOfferAmount(OFFER_AMOUNT_KEY, offerPriceEth);
       }
       trackBidRate('opensea', taskId);
       const successMessage = opensea_traits ?
@@ -584,7 +550,7 @@ async function buildOffer(taskId: string, buildPayload: any) {
   }
 }
 
-export async function cancelOrder(orderHash: string, protocolAddress: string, privateKey: string, taskId: string, currencySymbol: string, offerPrice: string) {
+export async function cancelOrder(orderHash: string, protocolAddress: string, privateKey: string, taskId: string) {
   if (!orderHash || !protocolAddress || !privateKey) return
 
   const offererSignature = await signCancelOrder(taskId, orderHash, protocolAddress, privateKey);
@@ -601,9 +567,6 @@ export async function cancelOrder(orderHash: string, protocolAddress: string, pr
     const response = await limiter.schedule(() => axiosInstance.post(url, body, { headers }))
     console.log(JSON.stringify({ cancelled: true }));
     decrementBidCount('opensea', taskId)
-    const offerPriceEth = Number(offerPrice) / 1e18
-    const OFFER_AMOUNT_KEY = `opensea:total_offer_amount_${currencySymbol}`.toLowerCase();
-    await incrementOfferAmount(OFFER_AMOUNT_KEY, offerPriceEth);
     return response.data;
   } catch (error: any) {
     return

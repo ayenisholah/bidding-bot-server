@@ -1,6 +1,6 @@
 import { BigNumber, ethers, utils, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, API_KEY, BASE_URL, BLUR_SCHEDULE, BLUR_TRAIT_BID, currentTasks, decrementBidCount, errorStats, logBidError, pQueue, queue, redis, RESET, skipStats, trackBidRate } from "../..";
+import { activeTasks, API_KEY, BLUR_SCHEDULE, BLUR_TRAIT_BID, currentTasks, decrementBidCount, errorStats, logBidError, pQueue, queue, redis, RESET, skipStats, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { createBalanceChecker } from "../../utils/balance";
 import { Job } from "bullmq";
@@ -8,7 +8,7 @@ import { DistributedLockManager } from "../../utils/lock";
 const RED = '\x1b[31m';
 import { PrismaClient } from '@prisma/client'
 import axios from "axios";
-import { decrementOfferAmount, getCachedOfferAmount, incrementOfferAmount } from "../../utils/offerAmountCache";
+import { BASE_URL } from "../../constants";
 
 const prisma = new PrismaClient()
 
@@ -49,7 +49,6 @@ export function cancelBlurRequest(taskId: string): boolean {
   return false;
 }
 
-const OFFER_AMOUNT_KEY = 'blur:total_offer_amount_eth';
 /**
  * Creates an offer on Blur.
  * @param walletAddress - The wallet address of the offerer.
@@ -71,22 +70,22 @@ export async function bidOnBlur(
 ) {
   const bethBalance = await balanceChecker.getBethBalance(wallet_address);
   let offerPriceEth: string | number = (Number(offer_price) / 1e18)
-  const leverage = 200
-  const totalOfferAmount = await getCachedOfferAmount(OFFER_AMOUNT_KEY);
-  if (totalOfferAmount + offerPriceEth >= leverage * bethBalance) {
-    const jobs: Job[] = await queue.getJobs(['prioritized']);
-    const blurJobs = jobs.filter(job =>
-      [BLUR_SCHEDULE, BLUR_TRAIT_BID].includes(job.name)
-    );
+  // const leverage = 200
+  // const totalOfferAmount = await getCachedOfferAmount(OFFER_AMOUNT_KEY);
+  // if (totalOfferAmount + offerPriceEth >= leverage * bethBalance) {
+  //   const jobs: Job[] = await queue.getJobs(['prioritized']);
+  //   const blurJobs = jobs.filter(job =>
+  //     [BLUR_SCHEDULE, BLUR_TRAIT_BID].includes(job.name)
+  //   );
 
-    if (blurJobs.length > 0) {
-      await queue.pause()
-      await Promise.all(blurJobs.map(job => job.remove()));
-      console.log(RED + `REMOVING ${blurJobs.length} BLUR JOB(S) DUE TO INSUFFICIENT BETH BALANCE` + RESET);
-      await queue.resume()
-    }
-    return
-  }
+  //   if (blurJobs.length > 0) {
+  //     await queue.pause()
+  //     await Promise.all(blurJobs.map(job => job.remove()));
+  //     console.log(RED + `REMOVING ${blurJobs.length} BLUR JOB(S) DUE TO INSUFFICIENT BETH BALANCE` + RESET);
+  //     await queue.resume()
+  //   }
+  //   return
+  // }
 
   if (offerPriceEth > bethBalance) {
     const message = `Offer price: ${offerPriceEth} BETH  is greater than available BETH balance: ${bethBalance} BETH. SKIPPING ...`
@@ -138,7 +137,6 @@ export async function bidOnBlur(
       throw new Error('Access token is undefined');
     }
     build = await formatBidOnBlur(taskId, BLUR_API_URL, accessToken, wallet_address, buildPayload);
-
   } catch (error: any) {
     throw error
   }
@@ -176,9 +174,7 @@ export async function bidOnBlur(
         }
       ]
     }
-
     await submitBidToBlur(taskId, bidCount, offer_price, BLUR_API_URL, accessToken, wallet_address, submitPayload, slug, cancelPayload, expiry, traits);
-
   } catch (error: any) {
     throw error
   }
@@ -359,7 +355,6 @@ async function submitBidToBlur(
         }
       })
       const offerPriceEth = Number(offer_price) / 1e18
-      await incrementOfferAmount(OFFER_AMOUNT_KEY, offerPriceEth);
       trackBidRate("blur", taskId)
     }
   } catch (error: any) {
@@ -383,7 +378,7 @@ async function submitBidToBlur(
 export async function cancelBlurBid(data: BlurCancelPayload) {
   try {
     if (!data || !data.payload || !data.privateKey) return
-    const { payload, privateKey, taskId, offerPrice } = data
+    const { payload, privateKey, taskId } = data
     const wallet = new Wallet(privateKey, provider);
     const walletAddress = wallet.address
     const accessToken = await getAccessToken(BLUR_API_URL, privateKey);
@@ -398,8 +393,6 @@ export async function cancelBlurBid(data: BlurCancelPayload) {
     }))
     decrementBidCount('blur', taskId);
     console.log(JSON.stringify(cancelResponse));
-    const offerPriceEth = Number(offerPrice) / 1e18
-    await decrementOfferAmount(OFFER_AMOUNT_KEY, offerPriceEth)
   } catch (error: any) {
     if (error.response?.data?.message?.message !== 'No bids found') {
       console.log("cancelBlurBid: ", error?.response?.data || error?.response || error?.code);
@@ -563,7 +556,6 @@ interface BlurCancelPayload {
   };
   privateKey: string;
   taskId: string;
-  offerPrice: string;
 }
 
 interface BlurBidResponse {

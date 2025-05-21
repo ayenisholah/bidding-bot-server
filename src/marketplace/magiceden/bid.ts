@@ -1,12 +1,13 @@
 import { ethers, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
 import { config } from "dotenv";
-import { activeTasks, API_KEY, BASE_URL, currentTasks, decrementBidCount, MAGENTA, pQueue, redis, trackBidRate } from "../..";
+import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, redis, trackBidRate } from "../..";
 import { createBalanceChecker } from "../../utils/balance";
 import { DistributedLockManager } from '../../utils/lock';
 import { PrismaClient } from '@prisma/client'
 import axios from "axios";
 import { USDC, WETH } from "../../utils/currencies";
+import { BASE_URL } from "../../constants";
 
 const prisma = new PrismaClient()
 

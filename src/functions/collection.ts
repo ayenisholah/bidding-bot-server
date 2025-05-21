@@ -1,8 +1,9 @@
 import { config } from "dotenv";
 import { axiosInstance, limiter } from "../init"; // Import Redis client
 import { DistributedLockManager } from "../utils/lock";
-import { API_KEY, BASE_URL, redis } from "..";
+import { API_KEY, redis } from "..";
 import { CollectionItemsListQuery } from "../queries";
+import { BASE_URL } from "../constants";
 
 config()
 
