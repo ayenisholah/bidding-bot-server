@@ -696,6 +696,36 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
   }
 }
 
+export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: { attributeKey: string; attributeValue: string }) {
+  try {
+    const queryParams = new URLSearchParams({
+      collection: contractAddress,
+      includeQuantity: "true",
+      includeLastSale: "true",
+      excludeSpam: "true",
+      excludeBurnt: "true",
+      sortBy: "floorAskPrice",
+      sortDirection: "asc",
+      limit: "1",
+      includeAttributes: "false",
+      includeTopBid: "true",
+    });
+    queryParams.append(`attributes[${trait.attributeKey}][]`, `${trait.attributeValue}`);
+    queryParams.append("excludeSources[]", "nftx.io");
+    queryParams.append("excludeSources[]", "sudoswap.xyz");
+    const fullUrl = `${BASE_URL}/magiceden/v3/rtp/ethereum/tokens/v7?${queryParams.toString()}`;
+    const { data } = await limiter.schedule(() => axiosInstance.get<TokenData>(fullUrl, {
+      headers: {
+        'x-api-key': API_KEY,
+      },
+    }))
+    const floor = data?.tokens[0]?.market?.floorAsk?.price?.amount?.native
+    return floor
+  } catch (error) {
+    console.log(error);
+  }
+}
+
 export async function fetchMagicEdenCollectionStats(contractAddress: string) {
   const CACHE_TTL = 30; // 30 seconds cache
   const cacheKey = `magiceden:stats:${contractAddress}`;
@@ -1577,4 +1607,111 @@ function addActiveRequest(taskId: string, controller: AbortController) {
     activeRequests.set(taskId, []);
   }
   activeRequests.get(taskId)?.push(controller);
+}
+
+interface TokenData {
+  tokens: TokenEntry[];
+  continuation: string;
+}
+
+interface TokenEntry {
+  token: TokenDetails;
+  market: MarketDetails;
+  updatedAt: string;
+  media: Media;
+}
+
+interface TokenDetails {
+  chainId: number;
+  contract: string;
+  tokenId: string;
+  name: string;
+  description: string | null;
+  image: string;
+  imageSmall: string;
+  imageLarge: string;
+  metadata: TokenMetadata;
+  media: null;
+  kind: string;
+  isFlagged: boolean;
+  isSpam: boolean;
+  isNsfw: boolean;
+  metadataDisabled: boolean;
+  lastFlagUpdate: string;
+  lastFlagChange: string;
+  supply: string;
+  remainingSupply: string;
+  rarity: number;
+  rarityRank: number;
+  collection: CollectionDetails;
+  owner: string;
+  mintedAt: string;
+  createdAt: string;
+  decimals: number | null;
+  mintStages: any[]; // Could be further typed if schema is known
+}
+
+interface TokenMetadata {
+  imageOriginal: string;
+  imageMimeType: string;
+  tokenURI: string;
+}
+
+interface CollectionDetails {
+  id: string;
+  name: string;
+  image: string;
+  slug: string;
+  symbol: string;
+  creator: string;
+  tokenCount: number;
+  metadataDisabled: boolean;
+  floorAskPrice: FloorAskPrice;
+}
+
+interface FloorAskPrice {
+  currency: Currency;
+  amount: Amount;
+}
+
+interface Currency {
+  contract: string;
+  name: string;
+  symbol: string;
+  decimals: number;
+}
+
+interface Amount {
+  raw: string;
+  decimal: number;
+  usd: number;
+  native: number;
+}
+
+interface MarketDetails {
+  floorAsk: FloorAsk;
+}
+
+interface FloorAsk {
+  id: string;
+  price: FloorAskPrice;
+  maker: string;
+  validFrom: number;
+  validUntil: number;
+  quantityFilled: string;
+  quantityRemaining: string;
+  source: Source;
+}
+
+interface Source {
+  id: string;
+  domain: string;
+  name: string;
+  icon: string;
+  url: string;
+}
+
+interface Media {
+  image: string;
+  imageMimeType: string;
 }

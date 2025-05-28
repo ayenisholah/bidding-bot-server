@@ -327,11 +327,13 @@ async function submitBidToBlur(
     );
 
 
-    const successMessage = traits ? `🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉 TRAIT: ${traits}` : `🎉 OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉`
+    console.log({ offers });
 
-    if (offers.errors) {
-      console.error('Error:', JSON.stringify(offers.errors));
-    } else {
+
+
+
+    if (offers.success) {
+      const successMessage = traits ? `🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉 TRAIT: ${traits}` : `🎉 OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉`
       console.log("\x1b[33m", successMessage, RESET);
 
       let identifier = ''
@@ -354,8 +356,11 @@ async function submitBidToBlur(
           marketplace: "blur"
         }
       })
-      const offerPriceEth = Number(offer_price) / 1e18
       trackBidRate("blur", taskId)
+    }
+
+    if (offers.errors) {
+      console.error('Error:', JSON.stringify(offers.errors));
     }
   } catch (error: any) {
     if (axios.isCancel(error)) {
@@ -528,6 +533,35 @@ export async function fetchBlurCollectionStats(slug: string) {
   return result;
 }
 
+export async function fetchBlurTraitFloor(slug: string, trait: { type: string; value: string; }) {
+  try {
+    const filters = {
+      traits: [{
+        type: trait.type,
+        values: [trait.value],
+      }],
+      hasAsks: true,
+    };
+    const queryParams = {
+      filters: JSON.stringify(filters),
+    };
+
+    const encodedFilters = encodeURIComponent(JSON.stringify(filters));
+
+    const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens?filters=${encodedFilters}`;
+    const { data } = await limiter.schedule(() =>
+      axiosInstance.get<BlurTokensResponse>(url, {
+        headers: {
+          'x-api-key': API_KEY,
+        },
+      })
+    );
+    return Number(data?.tokens[0]?.price?.amount) ?? undefined
+  } catch (error) {
+    console.log(error);
+  }
+}
+
 
 interface PriceLevel {
   criteriaType: string;
@@ -649,10 +683,10 @@ export interface BlurTokensResponse {
   success: boolean;
   contractAddress: string;
   totalCount: number;
-  tokens: BlurToken[];
+  tokens: IBlurToken[];
 }
 
-export interface BlurToken {
+export interface IBlurToken {
   tokenId: string;
   name: string;
   imageUrl: string;
@@ -680,4 +714,53 @@ export interface TokenPrice {
   unit: string;
   listedAt: string;
   marketplace?: string;
+}
+
+
+interface BlurTokenResponse {
+  success: boolean;
+  contractAddress: string;
+  totalCount: number;
+  tokens: BlurToken[];
+}
+
+interface BlurToken {
+  tokenId: string;
+  name: string;
+  imageUrl: string;
+  traits: Record<string, string>;
+  rarityScore: number;
+  rarityRank: number;
+  price: BlurTokenPrice | null;
+  highestBid: BlurTokenBid | null;
+  lastSale: BlurTokenSale | null;
+  lastCostBasis: BlurTokenSale | null;
+  owner: BlurTokenOwner;
+  numberOwnedByOwner: number;
+  isSuspicious: boolean;
+}
+
+interface BlurTokenPrice {
+  amount: string;
+  unit: string;
+  listedAt: string; // ISO date string
+  marketplace: string;
+}
+
+interface BlurTokenBid {
+  amount: string;
+  unit: string;
+  bidder?: string;
+  listedAt: string;
+}
+
+interface BlurTokenSale {
+  amount: string;
+  unit: string;
+  listedAt: string;
+}
+
+interface BlurTokenOwner {
+  address: string;
+  username: string | null;
 }

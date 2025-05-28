@@ -9,6 +9,8 @@ import axios from "axios";
 import { PrismaClient } from '@prisma/client'
 import { USDC, WETH } from "../../utils/currencies";
 import { MagicedenCollectionResponse, MagicEdenTraitOfferResponse } from "../magiceden";
+import { CollectionItemsListQuery } from "../../queries";
+import { CollectionItemsQueryVariables, CollectionItemsResponse } from "../../functions";
 
 const prisma = new PrismaClient()
 
@@ -209,7 +211,7 @@ export async function bidOnOpensea(
   asset?: { contractAddress: string, tokenId: number }
 ) {
   try {
-    const divider = BigNumber.from(10000);
+    const divider = BigNumber.from("10000");
     const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
     const currencySymbol = currency.toLowerCase() === USDC.toLowerCase() ? "USDC" : "WETH"
     const task = activeTasks.get(taskId)
@@ -239,7 +241,7 @@ export async function bidOnOpensea(
     }
 
     const wallet = new Wallet(private_key, provider);
-    const openseaFee = BigNumber.from(50);
+    const openseaFee = BigNumber.from("50");
 
     if (asset) {
       const offer = await buildItemOffer(task._id, {
@@ -257,8 +259,8 @@ export async function bidOnOpensea(
         itemType: 1,
         token: currency,
         identifierOrCriteria: "0",
-        startAmount: +offerPrice.mul(openseaFee).div(divider).toString(),
-        endAmount: +offerPrice.mul(openseaFee).div(divider).toString(),
+        startAmount: offerPrice.mul(openseaFee).div(divider).toString(),
+        endAmount: offerPrice.mul(openseaFee).div(divider).toString(),
         recipient: OPENSEA_FEE_ADDRESS
       };
 
@@ -272,8 +274,8 @@ export async function bidOnOpensea(
             itemType: 1,
             token: currency,
             identifierOrCriteria: "0",
-            startAmount: Number(offerPrice.mul(fee).div(divider).toString()),
-            endAmount: Number(offerPrice.mul(fee).div(divider).toString()),
+            startAmount: offerPrice.mul(fee).div(divider).toString(),
+            endAmount: offerPrice.mul(fee).div(divider).toString(),
             recipient: address
           };
           offer.consideration.push(consideration_item);
@@ -318,7 +320,7 @@ export async function bidOnOpensea(
       console.log(BLUE, successMessage, RESET);
     }
     else {
-      const divider = BigNumber.from(10000);
+      const divider = BigNumber.from("10000");
       const offerPrice = BigNumber.from(roundedWei.toString());
 
       const payload: IPayload = {
@@ -677,40 +679,176 @@ const getItemTokenConsideration = (
     itemType: 2,
     token: assetContractAddress,
     identifierOrCriteria: tokenId,
-    startAmount: quantity,
-    endAmount: quantity,
+    startAmount: quantity.toString(),
+    endAmount: quantity.toString(),
     recipient: walletAddress,
   }
 }
 
-type OpenseaTopOffers = {
-  amount: number;
-  owner: string;
-}
-
 export async function fetchItemOffers(contractAddress: string, tokenId: string) {
   try {
+    const query = {
+      operationName: "UseItemOffersQuery",
+      query: `query UseItemOffersQuery($filter: ItemOffersFilter, $cursor: String, $limit: Int!, $address: Address, $identifier: ItemIdentifierInput!) {
+        itemByIdentifier(identifier: $identifier) {
+          ... on Item {
+            ...ItemOwnedQuantity
+            __typename
+          }
+          __typename
+        }
+        itemOffers(filter: $filter, cursor: $cursor, limit: $limit) {
+          items {
+            id
+            ...ItemOrdersTableRow
+            ...useCancelOrders
+            __typename
+          }
+          nextPageCursor
+          __typename
+        }
+      }
+    
+      fragment ItemOrdersTableRow on Order {
+        id
+        type
+        pricePerItem {
+          token {
+            unit
+            __typename
+          }
+          ...TokenPrice
+          __typename
+        }
+        quantityRemaining
+        maker {
+          ...AccountLockup
+          ...ProfilePreviewTooltip
+          __typename
+        }
+        endTime
+        ...useCancelOrders
+        __typename
+      }
+    
+      fragment TokenPrice on Price {
+        usd
+        token {
+          unit
+          symbol
+          contractAddress
+          chain {
+            identifier
+            __typename
+          }
+          __typename
+        }
+        __typename
+      }
+    
+      fragment AccountLockup on ProfileIdentifier {
+        address
+        displayName
+        imageUrl
+        ...profileUrl
+        __typename
+      }
+    
+      fragment profileUrl on ProfileIdentifier {
+        address
+        __typename
+      }
+    
+      fragment useCancelOrders on BaseOrder {
+        id
+        marketplace {
+          identifier
+          __typename
+        }
+        maker {
+          address
+          __typename
+        }
+        __typename
+      }
+    
+      fragment ProfilePreviewTooltip on ProfileIdentifier {
+        address
+        ...ProfilePreviewTooltipContent
+        __typename
+      }
+    
+      fragment ProfilePreviewTooltipContent on ProfileIdentifier {
+        address
+        __typename
+      }
+    
+      fragment ItemOwnedQuantity on Item {
+        ownership(address: $address) {
+          id
+          quantity
+          __typename
+        }
+        __typename
+      }`,
+      variables: {
+        address: "0x1b8afd0de8a9368ce635be8b9572c65d8f590b21",
+        filter: {
+          chain: "ethereum",
+          contractAddress: contractAddress,
+          tokenId: tokenId
+        },
+        identifier: {
+          chain: "ethereum",
+          contractAddress: contractAddress,
+          tokenId: tokenId
+        },
+        limit: 2
+      }
+    };
     const tasks = [
-      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price`, {
+      () => limiter.schedule(() => axiosInstance.get(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price`, {
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY
+        }
+      })),
+      () => limiter.schedule(() => axiosInstance.get(`${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${tokenId}&sortBy=price&status=active&excludeEOA=false`, {
         headers: {
           'content-type': 'application/json',
           'x-api-key': API_KEY
         }
       })),
 
-      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${tokenId}&sortBy=price&status=active&excludeEOA=false`, {
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY
+      () => limiter.schedule(() => axiosInstance.post(
+        `${BASE_URL}/opensea/graphql`,
+        query,
+        {
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': API_KEY
+          }
         }
-      })),
+      ))
     ];
 
-    const [collectionResponse, tokenResponse] = await pQueue.addAll(tasks, {
+    const [collectionResponse, tokenResponse, itemOffers] = await pQueue.addAll(tasks, {
       throwOnTimeout: true,
     });
 
+    const order = ((itemOffers.data) as unknown as GraphQLItemOfferResponse).data.itemOffers.items
+      .filter((offer) => new Date(offer.endTime).getTime() > Date.now()) // remove expired offers
+      .map((offer) => ({
+        amount: offer.pricePerItem.token.unit,
+        owner: offer.maker.address,
+        currency: offer.pricePerItem.token.symbol.toUpperCase(),
+        usd: offer.pricePerItem.usd,
+        decimal: offer.pricePerItem.token.symbol.toUpperCase() === "WETH" ? 18 : offer.pricePerItem.token.symbol.toUpperCase() === "ETH" ? 18 : offer.pricePerItem.token.symbol.toUpperCase() === "BETH" ? 18 : offer.pricePerItem.token.symbol.toUpperCase() === "USDC" ? 6 : offer.pricePerItem.token.symbol.toUpperCase() === "USDT" ? 6 : 18,
+        eth: offer.pricePerItem.token.unit
+      }))
+
     const data = [...collectionResponse.data.orders, ...tokenResponse.data.orders].filter((offer) => offer.source.name.toLowerCase() === "opensea")
+
     const offers = data.map((order) => {
       return {
         amount: order?.price?.amount?.raw,
@@ -720,8 +858,18 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
         decimal: order.price.currency.decimals,
         eth: order.price.amount.native
       }
-    })?.sort((a, b) => Number(b.usd) - Number(a.usd)).slice(0, 2)
-    return offers
+    })
+    const allOffers = [...offers, ...order]
+    const uniqueKey = (o: { owner: string; amount: string }) => `${o.owner}-${o.amount}`;
+    const seen = new Set<string>();
+
+    const uniqueOffers = allOffers.filter((offer) => {
+      const key = uniqueKey(offer);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).sort((a, b) => Number(b.usd) - Number(a.usd)).slice(0, 2)
+    return uniqueOffers
   } catch (error: any) {
     throw error
   }
@@ -770,7 +918,6 @@ export async function fetchOpenseaOffers(
         })),
 
         () => {
-
           const URL = `${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v5?collection=${contractAddress}&attribute%5B${type}%5D=${value}&status=active&sortBy=price`;
 
           return limiter.schedule(() => axiosInstance.get<MagicEdenTraitOfferResponse>(
@@ -806,6 +953,43 @@ export async function fetchOpenseaOffers(
   }
 }
 
+export async function openseaTraitFloor(slug: string, trait: {
+  traitType: string;
+  values: string[];
+}) {
+  try {
+
+    const variables: CollectionItemsQueryVariables = {
+      collectionSlug: slug,
+      filter: {
+        attributes: [trait]
+      },
+      limit: 1,
+      sort: {
+        by: 'PRICE',
+        direction: 'ASC',
+      },
+    }
+    const queryVariables = {
+      ...variables,
+    };
+    const payload = {
+      operationName: 'CollectionItemsListQuery',
+      query: CollectionItemsListQuery,
+      variables: queryVariables
+    };
+    const { data } = await limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
+      headers: {
+        "x-api-key": API_KEY
+      },
+    }));
+    const floor = data.data.collectionItems.items[0].bestListing?.pricePerItem.token.unit
+    return floor
+  } catch (error) {
+    console.log(error);
+
+  }
+}
 
 
 export async function fetchOpenseaListings(taskId: string, collectionSlug: string, limit?: number) {
@@ -1062,72 +1246,6 @@ interface ItemOfferSpecification {
   walletAddress: string
 }
 
-
-
-interface OpenseaGraphResponse {
-  data: {
-    itemOffers: OpenseaGraphOrdersConnection;
-  };
-  extensions: {
-    debugInfo: {
-      additionalInformation: {
-        'x-trace-id': string;
-        'x-cache-status': string;
-        'cache-control': string;
-        'x-ratelimit-remaining': number;
-      };
-    };
-  };
-}
-
-interface OpenseaGraphOrdersConnection {
-  items: OpenseaGraphOrder[];
-  nextPageCursor: string;
-  __typename: 'OrdersConnection';
-}
-
-interface OpenseaGraphOrder {
-  id: string;
-  type: 'CRITERIA_TRAIT' | 'CRITERIA_COLLECTION';
-  pricePerItem: OpenseaGraphPrice;
-  quantityRemaining: string;
-  maker: OpenseaGraphOrderProfile;
-  endTime: string;
-  marketplace: OpenseaGraphMarketplace;
-  __typename: 'Order';
-}
-
-interface OpenseaGraphPrice {
-  token: OpenseaGraphTokenPrice;
-  usd: number;
-  __typename: 'Price';
-}
-
-interface OpenseaGraphTokenPrice {
-  unit: number;
-  __typename: 'TokenPrice';
-  symbol: string;
-  contractAddress: string;
-  chain: OpenseaGraphChain;
-}
-
-interface OpenseaGraphChain {
-  identifier: string;
-  __typename: 'Chain';
-}
-
-interface OpenseaGraphOrderProfile {
-  address: string;
-  displayName: string | null;
-  imageUrl: string;
-  __typename: 'OrderProfile';
-}
-
-interface OpenseaGraphMarketplace {
-  identifier: string;
-  __typename: 'Marketplace';
-}
-
 export function cancelOpenseaRequest(taskId: string): boolean {
   const controllers = activeRequests.get(taskId);
   if (controllers && controllers.length > 0) {
@@ -1307,4 +1425,65 @@ interface TraitOfferResponse {
   extensions: {
     debugInfo: DebugInfo;
   };
+}
+export interface GraphQLItemOfferResponse {
+  data: {
+    itemByIdentifier: ItemByIdentifier | null;
+    itemOffers: ItemOffers;
+  };
+}
+
+export interface ItemByIdentifier {
+  ownership: Ownership | null;
+  __typename: string;
+}
+
+export interface Ownership {
+  // Define if needed
+}
+
+export interface ItemOffers {
+  items: Order[];
+}
+
+export interface Order {
+  id: string;
+  type: string;
+  pricePerItem: IPrice;
+  quantityRemaining: string;
+  maker: OrderProfile;
+  endTime: string;
+  marketplace: Marketplace;
+  __typename: string;
+}
+
+export interface IPrice {
+  token: ITokenPrice;
+  usd: number;
+  __typename: string;
+}
+
+export interface ITokenPrice {
+  unit: number;
+  symbol: string;
+  contractAddress: string;
+  chain: IChain;
+  __typename: string;
+}
+
+export interface IChain {
+  identifier: string;
+  __typename: string;
+}
+
+export interface OrderProfile {
+  address: string;
+  displayName: string | null;
+  imageUrl: string;
+  __typename: string;
+}
+
+export interface Marketplace {
+  identifier: string;
+  __typename: string;
 }

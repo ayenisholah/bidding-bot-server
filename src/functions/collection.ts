@@ -1,4 +1,6 @@
 import { config } from "dotenv";
+import stringify from 'json-stable-stringify';
+import crypto from 'crypto';
 import { axiosInstance, limiter } from "../init"; // Import Redis client
 import { DistributedLockManager } from "../utils/lock";
 import { API_KEY, redis } from "..";
@@ -192,6 +194,12 @@ export async function getCollectionEvents(
     throw error;
   }
 }
+function hashData(data: any): string {
+  const stableString = stringify(data) as string;
+  return crypto.createHash('sha256')
+    .update(stableString, 'utf8')
+    .digest('hex');
+}
 
 
 export async function fetchOpenSeaCollectionItems(
@@ -201,9 +209,7 @@ export async function fetchOpenSeaCollectionItems(
 ): Promise<number[]> {
   try {
     // Create a cache key based on the variables (excluding cursor for the initial request)
-
-    const cacheKey = `{${variables.collectionSlug}}:${variables.filter?.attributes?.[0]?.traitType}:${variables.filter?.attributes?.[0]?.values?.[0]}`;
-
+    const cacheKey = hashData(variables);
     const cachedData = await redis.get(cacheKey);
     if (cachedData) {
       return JSON.parse(cachedData);
@@ -306,7 +312,7 @@ interface CollectionItem {
   rarity: Rarity;
 }
 
-interface CollectionItemsResponse {
+export interface CollectionItemsResponse {
   data: {
     collectionItems: {
       items: CollectionItem[];

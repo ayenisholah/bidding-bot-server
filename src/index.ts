@@ -11,9 +11,9 @@ import http from 'http';
 import fs from 'fs/promises';
 import path from 'path';
 import { axiosInstance, initialize, limiter } from "./init";
-import { bidOnOpensea, cancelOpenseaRequest, cancelOrder, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData } from "./marketplace/opensea";
-import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats } from "./marketplace/blur/bid";
-import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens } from "./marketplace/magiceden";
+import { bidOnOpensea, cancelOpenseaRequest, cancelOrder, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor } from "./marketplace/opensea";
+import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor } from "./marketplace/blur/bid";
+import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
 import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, getCollectionDetails, getOpenseaFloor } from "./functions";
 import mongoose from 'mongoose';
 import Task from "./models/task.model";
@@ -36,6 +36,7 @@ const prisma = new PrismaClient()
 
 export let RATE_LIMIT = process.env.RATE_LIMIT ? parseInt(process.env.RATE_LIMIT) : 100;
 export let API_KEY = process.env.API_KEY;
+let clientId = process.env.API_KEY
 const bidStats: BidCounts = {};
 const currentTokenIds: BottomListings = {};
 const currentTraits: CurrentTraits = {}

@@ -93,6 +93,7 @@ export interface ITask extends Document {
   magicEdenValid: boolean;
   blurValid: boolean;
   openseaValid: boolean;
+  traitsOperator: { value: string; label: string };
 }
 
 const TaskSchema: Schema = new Schema(
@@ -188,6 +189,10 @@ const TaskSchema: Schema = new Schema(
     magicEdenValid: { type: Boolean, default: null },
     blurValid: { type: Boolean, default: null },
     openseaValid: { type: Boolean, default: null },
+    traitsOperator: {
+      value: { type: String, default: "or" },
+      label: { type: String, default: "OR" }
+    }
   },
   { timestamps: true }
 );
