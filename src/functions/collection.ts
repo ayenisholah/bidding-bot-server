@@ -209,11 +209,11 @@ export async function fetchOpenSeaCollectionItems(
 ): Promise<number[]> {
   try {
     // Create a cache key based on the variables (excluding cursor for the initial request)
-    const cacheKey = hashData(variables);
-    const cachedData = await redis.get(cacheKey);
-    if (cachedData) {
-      return JSON.parse(cachedData);
-    }
+    // const cacheKey = hashData(variables);
+    // const cachedData = await redis.get(cacheKey);
+    // if (cachedData) {
+    //   return JSON.parse(cachedData);
+    // }
 
     const queryVariables = {
       ...variables,
@@ -251,7 +251,7 @@ export async function fetchOpenSeaCollectionItems(
     const uniqueTokenIds = [...new Set(updatedTokenIds)];
 
     // Cache the final result (only for initial requests that completed pagination)
-    await redis.setex(cacheKey, 24 * 60 * 60, JSON.stringify(uniqueTokenIds));
+    // await redis.setex(cacheKey, 24 * 60 * 60, JSON.stringify(uniqueTokenIds));
     return uniqueTokenIds;
   } catch (error) {
     console.error('Error fetching OpenSea collection items:', error);

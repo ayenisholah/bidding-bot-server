@@ -7509,7 +7509,7 @@ app.post('/api/currency/conversion', async (req, res) => {
 
 })
 
-app.post('/api/install-production', async (req, res) => {
+app.post('/api/update-app', async (req, res) => {
   try {
     console.log('Installing production script on host...');
     await installProductionScript();
