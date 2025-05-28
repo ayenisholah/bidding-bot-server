@@ -14,7 +14,7 @@ import { axiosInstance, initialize, limiter } from "./init";
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrder, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
-import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, getCollectionDetails, getOpenseaFloor } from "./functions";
+import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, getCollectionDetails, getOpenseaFloor, installProductionScript } from "./functions";
 import mongoose from 'mongoose';
 import Task from "./models/task.model";
 import { Queue, Worker, Job, QueueOptions, JobType, UnrecoverableError, JobsOptions, QueueEvents } from "bullmq";
@@ -7507,6 +7507,24 @@ app.post('/api/currency/conversion', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch currency conversion' });
   }
 
+})
+
+app.post('/api/install-production', async (req, res) => {
+  try {
+    console.log('Installing production script on host...');
+    await installProductionScript();
+    res.status(200).json({ 
+      success: true, 
+      message: 'Production installation script executed successfully' 
+    });
+  } catch (error: any) {
+    console.error('Failed to install production script:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to execute production installation script',
+      details: error.message 
+    });
+  }
 })
 
 export async function fetchBlurTraits(

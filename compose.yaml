@@ -11,21 +11,17 @@ services:
       REDIS_NET_MAP: '{"redis-node-1:6379":{"host":"redis-node-1","port":6379},"redis-node-2:6379":{"host":"redis-node-2","port":6379},"redis-node-3:6379":{"host":"redis-node-3","port":6379},"redis-node-4:6379":{"host":"redis-node-4","port":6379},"redis-node-5:6379":{"host":"redis-node-5","port":6379},"redis-node-6:6379":{"host":"redis-node-6","port":6379}}'
       ALCHEMY_API_KEY: "HGWgCONolXMB2op5UjPH1YreDCwmSbvx"
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
-      RATE_LIMIT: 32
-      API_KEY: a4eae399-f135-4627-829a-18435bb631ae
+      SERVER_IP: ${SERVER_IP}
     depends_on:
       - mongodb
       - redis-cluster-init
     networks:
       - my_network
     volumes:
-      - ${HOST_DATA_DIR:-./data}:/app/data
-      - ../:/workspace
+      - ./data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
-    group_add:
-      - docker
   client:
-    image: ayenisholah/bidding-bot-client:latest
+    image: ayenisholah/bidding-bot-client-production:latest
     platform: linux/amd64
     restart: always
     ports:
@@ -36,11 +32,9 @@ services:
       REDIS_NET_MAP: '{"redis-node-1:6379":{"host":"redis-node-1","port":6379},"redis-node-2:6379":{"host":"redis-node-2","port":6379},"redis-node-3:6379":{"host":"redis-node-3","port":6379},"redis-node-4:6379":{"host":"redis-node-4","port":6379},"redis-node-5:6379":{"host":"redis-node-5","port":6379},"redis-node-6:6379":{"host":"redis-node-6","port":6379}}'
       NEXT_PUBLIC_ALCHEMY_API_KEY: "HGWgCONolXMB2op5UjPH1YreDCwmSbvx"
       CLIENT_URL: "http://localhost:3001/"
-      NEXT_PUBLIC_CLIENT_URL: "http://localhost:3001/"
       NEXT_PUBLIC_SERVER_WEBSOCKET: "ws://localhost:3003"
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
-      RATE_LIMIT: 32
-      API_KEY: a4eae399-f135-4627-829a-18435bb631ae
+      SERVER_IP: ${SERVER_IP}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001"]
       interval: 30s
@@ -53,20 +47,21 @@ services:
     networks:
       - my_network
     volumes:
-      - ${HOST_DATA_DIR:-./data}:/app/data
+      - ./data:/app/data
 
   mongodb:
-    image: mongo:latest
-    restart: unless-stopped
+    image: "mongo:latest"
+    container_name: "mongodb_container"
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongodb_data:/data/db
     networks:
       - my_network
 
   redis-node-1:
-    image: redis:latest
+    image: "redis:latest"
+    container_name: "redis_node_1"
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
@@ -76,13 +71,30 @@ services:
       --cluster-announce-ip redis-node-1
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
-    volumes:
-      - redis_data_1:/data
+      --maxmemory-policy noeviction
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --appendfsync everysec
+      --no-appendfsync-on-rewrite yes
+      --auto-aof-rewrite-percentage 100
+      --auto-aof-rewrite-min-size 64mb
+      --maxmemory-samples 10
+      --active-defrag-threshold-lower 10
+      --active-defrag-threshold-upper 100
+      --active-defrag-ignore-bytes 100mb
+      --active-defrag-cycle-min 25
+      --active-defrag-cycle-max 75
+    ports:
+      - "8001:6379"
+      - "18001:16379"
     networks:
       - my_network
-
+    volumes:
+      - redis_data_1:/data
   redis-node-2:
-    image: redis:latest
+    image: "redis:latest"
+    container_name: "redis_node_2"
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
@@ -92,13 +104,31 @@ services:
       --cluster-announce-ip redis-node-2
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
-    volumes:
-      - redis_data_2:/data
+      --maxmemory-policy noeviction
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --appendfsync everysec
+      --no-appendfsync-on-rewrite yes
+      --auto-aof-rewrite-percentage 100
+      --auto-aof-rewrite-min-size 64mb
+      --maxmemory-samples 10
+      --active-defrag-threshold-lower 10
+      --active-defrag-threshold-upper 100
+      --active-defrag-ignore-bytes 100mb
+      --active-defrag-cycle-min 25
+      --active-defrag-cycle-max 75
+    ports:
+      - "8002:6379"
+      - "18002:16379"
     networks:
       - my_network
+    volumes:
+      - redis_data_2:/data
 
   redis-node-3:
-    image: redis:latest
+    image: "redis:latest"
+    container_name: "redis_node_3"
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
@@ -108,13 +138,30 @@ services:
       --cluster-announce-ip redis-node-3
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
-    volumes:
-      - redis_data_3:/data
+      --maxmemory-policy noeviction
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --appendfsync everysec
+      --no-appendfsync-on-rewrite yes
+      --auto-aof-rewrite-percentage 100
+      --auto-aof-rewrite-min-size 64mb
+      --maxmemory-samples 10
+      --active-defrag-threshold-lower 10
+      --active-defrag-threshold-upper 100
+      --active-defrag-ignore-bytes 100mb
+      --active-defrag-cycle-min 25
+      --active-defrag-cycle-max 75
+    ports:
+      - "8003:6379"
+      - "18003:16379"
     networks:
       - my_network
-
+    volumes:
+      - redis_data_3:/data
   redis-node-4:
-    image: redis:latest
+    image: "redis:latest"
+    container_name: "redis_node_4"
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
@@ -124,13 +171,30 @@ services:
       --cluster-announce-ip redis-node-4
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
-    volumes:
-      - redis_data_4:/data
+      --maxmemory-policy noeviction
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --appendfsync everysec
+      --no-appendfsync-on-rewrite yes
+      --auto-aof-rewrite-percentage 100
+      --auto-aof-rewrite-min-size 64mb
+      --maxmemory-samples 10
+      --active-defrag-threshold-lower 10
+      --active-defrag-threshold-upper 100
+      --active-defrag-ignore-bytes 100mb
+      --active-defrag-cycle-min 25
+      --active-defrag-cycle-max 75
+    ports:
+      - "8004:6379"
+      - "18004:16379"
     networks:
       - my_network
-
+    volumes:
+      - redis_data_4:/data
   redis-node-5:
-    image: redis:latest
+    image: "redis:latest"
+    container_name: "redis_node_5"
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
@@ -140,13 +204,30 @@ services:
       --cluster-announce-ip redis-node-5
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
-    volumes:
-      - redis_data_5:/data
+      --maxmemory-policy noeviction
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --appendfsync everysec
+      --no-appendfsync-on-rewrite yes
+      --auto-aof-rewrite-percentage 100
+      --auto-aof-rewrite-min-size 64mb
+      --maxmemory-samples 10
+      --active-defrag-threshold-lower 10
+      --active-defrag-threshold-upper 100
+      --active-defrag-ignore-bytes 100mb
+      --active-defrag-cycle-min 25
+      --active-defrag-cycle-max 75
+    ports:
+      - "8005:6379"
+      - "18005:16379"
     networks:
       - my_network
-
+    volumes:
+      - redis_data_5:/data
   redis-node-6:
-    image: redis:latest
+    image: "redis:latest"
+    container_name: "redis_node_6"
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
@@ -156,19 +237,60 @@ services:
       --cluster-announce-ip redis-node-6
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
-    volumes:
-      - redis_data_6:/data
+      --maxmemory-policy noeviction
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --appendfsync everysec
+      --no-appendfsync-on-rewrite yes
+      --auto-aof-rewrite-percentage 100
+      --auto-aof-rewrite-min-size 64mb
+      --maxmemory-samples 10
+      --active-defrag-threshold-lower 10
+      --active-defrag-threshold-upper 100
+      --active-defrag-ignore-bytes 100mb
+      --active-defrag-cycle-min 25
+      --active-defrag-cycle-max 75
+    ports:
+      - "8006:6379"
+      - "18006:16379"
     networks:
       - my_network
+    volumes:
+      - redis_data_6:/data
 
   redis-cluster-init:
     image: redis:latest
     command: >
       /bin/sh -c '
         echo "Waiting for Redis nodes..." &&
-        sleep 15 &&
-        redis-cli --cluster create redis-node-1:6379 redis-node-2:6379 redis-node-3:6379 redis-node-4:6379 redis-node-5:6379 redis-node-6:6379 --cluster-replicas 1 --cluster-yes &&
-        echo "Cluster initialization complete"
+        until redis-cli -h redis-node-1 ping; do sleep 1; done &&
+        until redis-cli -h redis-node-2 ping; do sleep 1; done &&
+        until redis-cli -h redis-node-3 ping; do sleep 1; done &&
+        until redis-cli -h redis-node-4 ping; do sleep 1; done &&
+        until redis-cli -h redis-node-5 ping; do sleep 1; done &&
+        until redis-cli -h redis-node-6 ping; do sleep 1; done &&
+        echo "Flushing existing data..." &&
+        redis-cli -h redis-node-1 FLUSHALL &&
+        redis-cli -h redis-node-2 FLUSHALL &&
+        redis-cli -h redis-node-3 FLUSHALL &&
+        redis-cli -h redis-node-4 FLUSHALL &&
+        redis-cli -h redis-node-5 FLUSHALL &&
+        redis-cli -h redis-node-6 FLUSHALL &&
+        echo "All nodes are up. Resetting cluster state..." &&
+        redis-cli -h redis-node-1 CLUSTER RESET HARD &&
+        redis-cli -h redis-node-2 CLUSTER RESET HARD &&
+        redis-cli -h redis-node-3 CLUSTER RESET HARD &&
+        redis-cli -h redis-node-4 CLUSTER RESET HARD &&
+        redis-cli -h redis-node-5 CLUSTER RESET HARD &&
+        redis-cli -h redis-node-6 CLUSTER RESET HARD &&
+        echo "Creating cluster..." &&
+        redis-cli --cluster create \
+          redis-node-1:6379 redis-node-2:6379 redis-node-3:6379 \
+          redis-node-4:6379 redis-node-5:6379 redis-node-6:6379 \
+          --cluster-replicas 1 --cluster-yes &&
+        echo "Cluster initialization complete. Verifying..." &&
+        redis-cli -h redis-node-1 cluster nodes
       '
     depends_on:
       - redis-node-1
