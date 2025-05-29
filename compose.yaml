@@ -12,6 +12,7 @@ services:
       ALCHEMY_API_KEY: "HGWgCONolXMB2op5UjPH1YreDCwmSbvx"
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
       SERVER_IP: ${SERVER_IP}
+      USERNAME: ${USERNAME}
     depends_on:
       - mongodb
       - redis-cluster-init
@@ -20,6 +21,7 @@ services:
     volumes:
       - ./data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./compose.yaml:/app/compose.yaml:ro
   client:
     image: ayenisholah/bidding-bot-client-production:latest
     platform: linux/amd64
@@ -35,6 +37,7 @@ services:
       NEXT_PUBLIC_SERVER_WEBSOCKET: "ws://localhost:3003"
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
       SERVER_IP: ${SERVER_IP}
+      USERNAME: ${USERNAME}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001"]
       interval: 30s

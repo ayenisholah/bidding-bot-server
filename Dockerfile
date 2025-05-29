@@ -29,6 +29,10 @@ RUN npm ci
 # Copy the rest of the application code
 COPY . .
 
+# Copy the update script
+COPY docker-update.sh /usr/local/bin/docker-update
+RUN chmod +x /usr/local/bin/docker-update
+
 # Build the Next.js application
 RUN npm run build
 
@@ -67,9 +71,14 @@ COPY --from=base /app/src ./src
 # Copy the prisma directory to ensure schema.prisma is available
 COPY --from=base /app/prisma ./prisma
 
+# Copy the update script from build stage
+COPY --from=base /usr/local/bin/docker-update /usr/local/bin/docker-update
+
 # Create workspace directory and set proper permissions
-RUN mkdir -p /workspace && \
-    chown -R app:docker /app /workspace
+RUN mkdir -p /workspace /app/data && \
+    chown -R app:docker /app /workspace /app/data && \
+    chmod 755 /usr/local/bin/docker-update && \
+    chmod 777 /app/data
 
 USER app
 

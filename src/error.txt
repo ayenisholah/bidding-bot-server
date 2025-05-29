@@ -1,0 +1,11 @@
+docker exec nft-bidding-bot-server-1 tail -f /tmp/update.log                                                                                       SIGINT(2) ↵  497  23:01:23 
+ Container redis_node_3  Creating
+ Container redis_node_4  Creating
+ Container redis_node_1  Creating
+ Container mongodb_container  Creating
+ Container redis_node_5  Creating
+ Container redis_node_6  Creating
+ Container redis_node_2  Creating
+Error response from daemon: Conflict. The container name "/redis_node_2" is already in use by container "dbbdc22b72b0968047b9576f30e9930c725701b7741424fc0a68737644b08021". You have to remove (or rename) that container to be able to reuse that name.
+[Wed May 28 23:00:47 UTC 2025] ERROR: Failed to recreate containers
+[Wed May 28 23:00:47 UTC 2025] Checking for specific issues...

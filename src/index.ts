@@ -14,7 +14,7 @@ import { axiosInstance, initialize, limiter } from "./init";
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrder, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
-import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, getCollectionDetails, getOpenseaFloor, installProductionScript } from "./functions";
+import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, getCollectionDetails, getOpenseaFloor } from "./functions";
 import mongoose from 'mongoose';
 import Task from "./models/task.model";
 import { Queue, Worker, Job, QueueOptions, JobType, UnrecoverableError, JobsOptions, QueueEvents } from "bullmq";
@@ -32,6 +32,7 @@ import { PrismaClient, Order as PrismaOrder } from '@prisma/client'
 import Bottleneck from "bottleneck";
 import { USDC, WETH } from "./utils/currencies";
 import User from "./models/user.model";
+import axios from "axios";
 const prisma = new PrismaClient()
 
 export let RATE_LIMIT = process.env.RATE_LIMIT ? parseInt(process.env.RATE_LIMIT) : 100;
@@ -56,7 +57,15 @@ let traitsToRemove: { [key: string]: string[] } = {}
 let removedTokens: { [key: string]: { opensea: string[]; magiceden: string[] } } = {}
 
 const SERVER_IP = process.env.SERVER_IP as string
-const allowedOrigins = [`http://${SERVER_IP}:3001`, `https://${SERVER_IP}:3001`, 'http://localhost:3001', 'https://localhost:3001'];
+const USERNAME = process.env.USERNAME as string
+const allowedOrigins = [
+  'http://localhost:3001',
+  'https://localhost:3001',
+  `http://${SERVER_IP}:3001`,
+  `https://${SERVER_IP}:3001`,
+  `https://${USERNAME}.nfttools.io`,
+  `https://${USERNAME}.nfttools.io`
+];
 
 const SEAPORT = '0x1e0049783f008a0085193e00003d00cd54003c71';
 
@@ -157,7 +166,6 @@ const workers = new Worker(
   }
 )
 
-// Store timeouts for cleanup
 const taskTimeouts = new Map<string, NodeJS.Timeout>();
 
 // Add a Map to track task locks
@@ -348,35 +356,6 @@ async function monitorHealth() {
 
 
 setInterval(monitorHealth, HEALTH_CHECK_INTERVAL);
-
-// Update cleanup function to handle multiple workers
-async function cleanup() {
-  try {
-    console.log(YELLOW + '\n=== Starting Cleanup ===');
-
-    console.log('Closing workers...');
-    await workers.close();
-
-    console.log('Closing queue...');
-    await queue.close();
-
-    console.log(GREEN + '=== Cleanup Complete ===\n' + RESET);
-    await redis.disconnect();
-
-    // Clear all pending timeouts
-    for (const [taskId, timeout] of taskTimeouts) {
-      clearTimeout(timeout);
-      taskTimeouts.delete(taskId);
-    }
-
-  } catch (error) {
-    console.error(RED + 'Error during cleanup:' + RESET, error);
-  }
-}
-
-
-process.on('SIGTERM', cleanup);
-process.on('SIGINT', cleanup);
 
 // Add this near the top with other global variables
 export const activeTasks: Map<string, ITask> = new Map();
@@ -1158,12 +1137,6 @@ wss.on('connection', async (ws) => {
         case 'update-config':
           await updateConfig(message.data)
           break
-        case 'shutdown':
-          await handleShutdown();
-          break;
-        case 'update':
-          await handleUpdate();
-          break;
         default:
           console.warn(YELLOW + `Unknown endpoint: ${message.endpoint}` + RESET);
       }
@@ -3226,8 +3199,6 @@ async function handleCounterBid(message: any) {
 
 }
 
-
-
 function getMarketplaceDetails(message: any): { contractAddress?: string, slug?: string } {
   switch (message.marketplace) {
     case BLUR:
@@ -3241,7 +3212,6 @@ function getMarketplaceDetails(message: any): { contractAddress?: string, slug?:
       return {};
   }
 }
-
 
 async function handleCounterBidForTask(task: any, message: any) {
   const selectedMarketplaces = task.selectedMarketplaces.map((m: string) => m.toLowerCase());
@@ -7511,21 +7481,33 @@ app.post('/api/currency/conversion', async (req, res) => {
 
 app.post('/api/update-app', async (req, res) => {
   try {
-    console.log('Installing production script on host...');
-    await installProductionScript();
-    res.status(200).json({ 
-      success: true, 
-      message: 'Production installation script executed successfully' 
-    });
+    const scriptUrl = "https://gist.githubusercontent.com/ayenisholah/4767c3e4aac92af7c1a1a717c829183b/raw/1ba36d571a71acde139154befa475e44f4a58721/install-production.sh"
+    const SERVER_IP = process.env.SERVER_IP as string
+    await axios.post(`http://${SERVER_IP}:9999/update`, { scriptUrl })
   } catch (error: any) {
-    console.error('Failed to install production script:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Failed to execute production installation script',
-      details: error.message 
+    console.error('Failed to schedule update:', error);
+    res.status(500).json({
+      scheduled: false,
+      message: 'Failed to schedule update',
+      error: error.message
     });
   }
-})
+});
+
+app.get('/api/update-app', async (req, res) => {
+  try {
+    const { getUpdateStatus } = await import('./functions/updateProduction');
+    const status = await getUpdateStatus();
+    res.status(200).json(status);
+  } catch (error: any) {
+    console.error('Failed to get update status:', error);
+    res.status(500).json({
+      updating: false,
+      error: error.message
+    });
+  }
+});
+
 
 export async function fetchBlurTraits(
   contractAddress: string
@@ -8603,78 +8585,6 @@ interface IProcessOpenseaTraitBidData {
   expiry: number;
   trait: string;
 }
-// Add this new function
-async function handleShutdown() {
-  console.log('Shutting down server...');
-  try {
-    console.log(YELLOW + '\n=== Starting Server Shutdown ===' + RESET);
-    // Stop all tasks
-    console.log('Stopping all running tasks...');
-    const runningTasks = Array.from(activeTasks.values()).filter(task => task.running);
-    await Promise.all(runningTasks.map(task => stopTask(task, false)));
-
-    // Clean up resources
-    console.log('Cleaning up resources...');
-    await cleanup();
-
-    // Run docker-compose down with timeout
-    console.log('Shutting down Docker containers...');
-    await new Promise((resolve, reject) => {
-      const dockerDown = exec('docker compose down', { timeout: 30000 }, (error: Error | null) => {
-        if (error) {
-          console.error(RED + 'Error shutting down Docker containers:' + RESET, error);
-          reject(error);
-        } else {
-          console.log(GREEN + 'Docker containers shut down successfully' + RESET);
-          resolve(true);
-        }
-      });
-
-      // Pipe Docker output to console
-      dockerDown.stdout?.pipe(process.stdout);
-      dockerDown.stderr?.pipe(process.stderr);
-    });
-
-    console.log(GREEN + '=== Server Shutdown Complete ===' + RESET);
-
-
-    process.nextTick(() => process.exit(0));
-    process.nextTick(() => process.exit(1));
-
-  } catch (error) {
-    console.error(RED + 'Error during shutdown:' + RESET, error);
-    // Try force shutdown of Docker even if other shutdown steps failed
-    try {
-      execSync('docker-compose down -v --remove-orphans --timeout 30');
-    } catch (dockerError) {
-      console.error(RED + 'Failed to force shutdown Docker containers:' + RESET, dockerError);
-    }
-    process.exit(1);
-  }
-}
-
-// Add signal handlers with a timeout to force exit if shutdown takes too long
-['SIGTERM', 'SIGINT'].forEach(signal => {
-  process.on(signal, () => {
-    console.log(YELLOW + `\nReceived ${signal}, starting graceful shutdown...` + RESET);
-
-    // Force exit after 60 seconds if graceful shutdown hasn't completed
-    const forceExitTimeout = setTimeout(() => {
-      console.error(RED + '\nForce exiting after timeout...' + RESET);
-      process.exit(1);
-
-    }, 60000);
-
-    // Clear timeout if shutdown completes normally
-    handleShutdown().finally(() => clearTimeout(forceExitTimeout));
-  });
-});
-
-// Add signal handlers
-process.on('SIGTERM', handleShutdown);
-process.on('SIGINT', handleShutdown);
-
-
 
 async function executeHostCommand() {
   try {
@@ -8797,17 +8707,6 @@ async function executeUpdate() {
     throw error;
   }
 }
-
-async function handleUpdate() {
-  try {
-    await executeHostCommand();
-
-  } catch (error) {
-    console.error(RED + 'Error during update process:' + RESET, error);
-    process.exit(1);
-  }
-}
-
 interface Currency {
   contract: string;
   name: string;
