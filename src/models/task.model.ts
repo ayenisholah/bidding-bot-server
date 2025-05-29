@@ -68,15 +68,16 @@ export interface ITask {
   };
 
   stopOptions: {
+    minFloorPrice: number | null;
+    maxFloorPrice: number | null;
+    minTraitPrice: number | null;
+    maxTraitPrice: number | null;
+    maxPurchase: number | null;
     pauseAllBids: boolean;
     stopAllBids: boolean;
     cancelAllBids: boolean;
-    minFloorPrice: number;
-    maxFloorPrice: number;
-    minTraitPrice: number;
-    maxTraitPrice: number;
-    maxPurchase: number;
     triggerStopOptions: boolean;
+    traitPrices: Record<string, { min: number; max: number }>;
   };
   bidDuration: {
     value: number;
@@ -164,6 +165,7 @@ const TaskSchema: Schema = new Schema(
       stopAllBids: { type: Boolean, default: false },
       cancelAllBids: { type: Boolean, default: false },
       triggerStopOptions: { type: Boolean, default: false },
+      traitPrices: { type: Schema.Types.Mixed, default: {} },
     },
     bidDuration: {
       value: { type: Number, required: false, default: 15 },
