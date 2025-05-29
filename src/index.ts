@@ -7735,7 +7735,7 @@ function stopOption(
   marketplace: 'opensea' | 'magiceden' | 'blur',
   floorPrice: number
 ): boolean {
-  // Early return if stop options aren't configured
+  // Initialize warning tracking if not exists
   if (!warningBids[task._id]) {
     warningBids[task._id] = {
       opensea: false,
@@ -7753,48 +7753,54 @@ function stopOption(
   }
 
   try {
+    // Early return if stop options aren't enabled
+    if (!task?.stopOptions?.triggerStopOptions) return false;
 
-    if (!task.stopOptions.triggerStopOptions) return false
+    // Return false if minFloorPrice or maxFloorPrice is 0 or undefined
+    const minFloorPrice = task?.stopOptions?.minFloorPrice;
+    const maxFloorPrice = task?.stopOptions?.maxFloorPrice;
+    
+    if (!minFloorPrice || minFloorPrice === 0 || !maxFloorPrice || maxFloorPrice === 0) {
+      return false;
+    }
+
     // Check if floor price is outside allowed range
-    if ((Number(floorPrice) && floorPrice < (task?.stopOptions?.minFloorPrice || 0)) || floorPrice > (task?.stopOptions?.maxFloorPrice || 0)) {
+    if (floorPrice < minFloorPrice || floorPrice > maxFloorPrice) {
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(RED + `❌ Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${task.stopOptions.minFloorPrice} ETH - ${task.stopOptions.maxFloorPrice} ETH). Skipping...`.toUpperCase() + RESET);
+      console.log(RED + `❌ Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${minFloorPrice} ETH - ${maxFloorPrice} ETH). Skipping...`.toUpperCase() + RESET);
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
       warningBids[task._id][marketplace] = true;
-      warningMessage[task._id][marketplace] = `Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${task.stopOptions.minFloorPrice} ETH - ${task.stopOptions.maxFloorPrice} ETH).`;
+      warningMessage[task._id][marketplace] = `Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${minFloorPrice} ETH - ${maxFloorPrice} ETH).`;
       return true;
     }
 
-    if (
-      // Ensure all required properties exist
-      task?.stopOptions?.maxPurchase &&
-      task.stopOptions.maxPurchase > 0 &&
-      balances[task._id]?.[marketplace] !== undefined
-    ) {
-      const currentBalance = balances[task._id][marketplace];
-      const maxPurchase = task.stopOptions.maxPurchase;
+    // Check max purchase limit
+    const maxPurchase = task?.stopOptions?.maxPurchase;
+    const currentBalance = balances[task._id]?.[marketplace];
+    
+    if (maxPurchase && maxPurchase > 0 && currentBalance !== undefined && currentBalance >= maxPurchase) {
+      // Set warning flags and message
+      warningBids[task._id][marketplace] = true;
+      warningMessage[task._id][marketplace] = 
+        `Maximum purchase amount (${maxPurchase}) for ${task.contract.slug} has been reached. ` +
+        `Current balance: ${currentBalance} items.`;
 
-      // Check if balance has reached or exceeded the limit
-      if (currentBalance >= maxPurchase) {
-        // Set warning flags
-        warningBids[task._id][marketplace] = true;
-        // Set warning message
-        warningMessage[task._id][marketplace] =
-          `Maximum purchase amount (${maxPurchase}) for ${task.contract.slug} has been reached. ` +
-          `Current balance: ${currentBalance} items.`;
-
-        // Log the warning
-        console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-        console.log(YELLOW + `⚠️ Purchase limit reached for ${task.contract.slug} on ${marketplace}. Current balance: ${currentBalance}/${maxPurchase}` + RESET);
-        console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-        return true
-      }
+      // Log the warning
+      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      console.log(YELLOW + `⚠️ Purchase limit reached for ${task.contract.slug} on ${marketplace}. Current balance: ${currentBalance}/${maxPurchase}` + RESET);
+      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      return true;
     }
 
+    // Clear warnings if all checks pass
     warningBids[task._id][marketplace] = false;
+    warningMessage[task._id][marketplace] = '';
     return false;
+    
   } catch (error) {
+    console.error(`Error in stopOption for ${task?.contract?.slug || 'unknown'} on ${marketplace}:`, error);
+    // In case of error, don't stop the task to avoid blocking
     return false;
   }
 }
