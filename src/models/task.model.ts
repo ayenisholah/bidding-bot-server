@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 
-interface SelectedTraits {
+export interface SelectedTraits {
   [key: string]: {
     name: string;
     availableInMarketplaces: string[];

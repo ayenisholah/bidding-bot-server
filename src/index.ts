@@ -16,7 +16,7 @@ import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCol
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
 import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, getCollectionDetails, getOpenseaFloor } from "./functions";
 import mongoose from 'mongoose';
-import Task, { ITask } from "./models/task.model";
+import Task, { ITask, SelectedTraits } from "./models/task.model";
 import { Queue, Worker, Job, QueueOptions, JobType, UnrecoverableError, JobsOptions, QueueEvents } from "bullmq";
 import Wallet from "./models/wallet.model";
 import redisClient from "./utils/redis";
@@ -1684,25 +1684,43 @@ async function updateTaskData(task: ITask) {
       let openseaTokens: number[] = [...openseaBottonListings, ...taskTokenIds.map((token) => +token)]
       let magicedenTokens: number[] = [...magicedenBottomListings, ...taskTokenIds.map((token) => +token)]
 
-      await pQueue.addAll(
-        expandedAttributes.map((attribute) => async () => {
-          const variable: CollectionItemsQueryVariables = {
-            collectionSlug: task.contract.slug,
-            filter: {
-              attributes: [attribute],
-            },
-            limit: 100,
-            sort: {
-              by: 'PRICE',
-              direction: 'ASC',
-            },
-          };
+      if (currentTask.traitsOperator.value === "or") {
+        await pQueue.addAll(
+          expandedAttributes.map((attribute) => async () => {
+            const variable: CollectionItemsQueryVariables = {
+              collectionSlug: task.contract.slug,
+              filter: {
+                attributes: [attribute],
+              },
+              limit: 100,
+              sort: {
+                by: 'PRICE',
+                direction: 'ASC',
+              },
+            };
 
-          const items = await fetchOpenSeaCollectionItems(variable);
-          openseaTokens.push(...items);
-          magicedenTokens.push(...items)
-        })
-      )
+            const items = await fetchOpenSeaCollectionItems(variable);
+            openseaTokens.push(...items);
+            magicedenTokens.push(...items)
+          })
+        )
+      } else if (currentTask.traitsOperator.value === "and") {
+        const attributes = transformSelectedTraitsToAttributes(selectedTraits)
+        const variable: CollectionItemsQueryVariables = {
+          collectionSlug: currentTask.contract.slug,
+          filter: {
+            attributes,
+          },
+          limit: 100,
+          sort: {
+            by: 'PRICE',
+            direction: 'ASC',
+          },
+        };
+        const items = await fetchOpenSeaCollectionItems(variable);
+        openseaTokens.push(...items);
+        magicedenTokens.push(...items)
+      }
 
       openseaTokens = [...openseaBottonListings, ...taskTokenIds.map((token) => +token), ...openseaTokens];
       openseaTokenIds = [...new Set(openseaTokens)];
@@ -4545,27 +4563,44 @@ async function processOpenseaScheduledBid(task: ITask) {
       let traitTokens: number[] = []
       let skips = 0
 
-      await pQueue.addAll(
-        expandedAttributes.map((attribute) => async () => {
-          const count = getTraitCount(currentTask.traits, attribute)
-          const variable: CollectionItemsQueryVariables = {
-            collectionSlug: currentTask.contract.slug,
-            filter: {
-              attributes: [attribute],
-            },
-            limit: 100,
-            sort: {
-              by: 'PRICE',
-              direction: 'ASC',
-            },
-          };
+      if (currentTask.traitsOperator.value === "or") {
+        await pQueue.addAll(
+          expandedAttributes.map((attribute) => async () => {
+            const count = getTraitCount(currentTask.traits, attribute)
+            const variable: CollectionItemsQueryVariables = {
+              collectionSlug: currentTask.contract.slug,
+              filter: {
+                attributes: [attribute],
+              },
+              limit: 100,
+              sort: {
+                by: 'PRICE',
+                direction: 'ASC',
+              },
+            };
 
-          const items = await fetchOpenSeaCollectionItems(variable);
-          traitTokens.push(...items);
-          const skipped = count - items.length
-          skips += skipped
-        })
-      )
+            const items = await fetchOpenSeaCollectionItems(variable);
+            traitTokens.push(...items);
+            const skipped = count - items.length
+            skips += skipped
+          })
+        )
+      } else if (currentTask.traitsOperator.value === "and") {
+        const attributes = transformSelectedTraitsToAttributes(selectedTraits)
+        const variable: CollectionItemsQueryVariables = {
+          collectionSlug: currentTask.contract.slug,
+          filter: {
+            attributes,
+          },
+          limit: 100,
+          sort: {
+            by: 'PRICE',
+            direction: 'ASC',
+          },
+        };
+        const items = await fetchOpenSeaCollectionItems(variable);
+        traitTokens.push(...items);
+      }
 
       tokens = [...tokens, ...traitTokens]
       tokenIds = [...new Set(tokens)];
@@ -6145,27 +6180,45 @@ async function processMagicedenScheduledBid(task: ITask) {
       let traitTokens: number[] = []
       let skips = 0
 
-      await pQueue.addAll(
-        expandedAttributes.map((attribute) => async () => {
-          const count = getTraitCount(currentTask.traits, attribute)
-          const variable: CollectionItemsQueryVariables = {
-            collectionSlug: currentTask.contract.slug,
-            filter: {
-              attributes: [attribute],
-            },
-            limit: 100,
-            sort: {
-              by: 'PRICE',
-              direction: 'ASC',
-            },
-          };
+      if (currentTask.traitsOperator.value === "or") {
 
-          const items = await fetchOpenSeaCollectionItems(variable);
-          tokens.push(...items);
-          const skipped = count - items.length
-          skips += skipped
-        })
-      )
+        await pQueue.addAll(
+          expandedAttributes.map((attribute) => async () => {
+            const count = getTraitCount(currentTask.traits, attribute)
+            const variable: CollectionItemsQueryVariables = {
+              collectionSlug: currentTask.contract.slug,
+              filter: {
+                attributes: [attribute],
+              },
+              limit: 100,
+              sort: {
+                by: 'PRICE',
+                direction: 'ASC',
+              },
+            };
+
+            const items = await fetchOpenSeaCollectionItems(variable);
+            tokens.push(...items);
+            const skipped = count - items.length
+            skips += skipped
+          })
+        )
+      } else if (currentTask.traitsOperator.value === "and") {
+        const attributes = transformSelectedTraitsToAttributes(selectedTraits)
+        const variable: CollectionItemsQueryVariables = {
+          collectionSlug: currentTask.contract.slug,
+          filter: {
+            attributes,
+          },
+          limit: 100,
+          sort: {
+            by: 'PRICE',
+            direction: 'ASC',
+          },
+        };
+        const items = await fetchOpenSeaCollectionItems(variable);
+        tokens.push(...items);
+      }
       tokens = [...tokens, ...traitTokens];
       tokenIds = [...new Set(tokens)];
       const duplicateCount = tokens.length - tokenIds.length
@@ -6988,6 +7041,38 @@ app.get("/health", async (req, res) => {
   }
 });
 
+app.post("/api/traits/count", async (req, res) => {
+  try {
+    const { selectedTraits: incomingTraits, slug }: { selectedTraits: SelectedTraits; slug: string } = req.body
+
+    const filteredTasks = Object.fromEntries(
+      Object.entries(incomingTraits || {}).map(([category, traits]) => [
+        category,
+        traits
+      ]).filter(([_, traits]) => traits.length > 0))
+
+    const selectedTraits = transformNewTask(filteredTasks)
+
+    const attributes = transformSelectedTraitsToAttributes(selectedTraits)
+    const variable: CollectionItemsQueryVariables = {
+      collectionSlug: slug,
+      filter: {
+        attributes,
+      },
+      limit: 100,
+      sort: {
+        by: 'PRICE',
+        direction: 'ASC',
+      },
+    };
+    const items = await fetchOpenSeaCollectionItems(variable);
+    res.status(200).json(items.length)
+
+  } catch (error: any) {
+    const err = error?.response?.data || error?.message
+    res.status(500).json(err)
+  }
+})
 
 app.get("/api/task/:taskId", async (req, res) => {
   try {
@@ -7074,8 +7159,6 @@ app.post('/api/task/cancel/:taskId', async (req, res) => {
     const openseaOrders = orders.filter((order: any) => order.marketplace === OPENSEA.toLowerCase())
     const magicedenOrders = orders.filter((order: any) => order.marketplace === 'magiceden')
     const blurOrders = orders.filter((order: any) => order.marketplace === 'blur')
-    const { currencySymbol } = await calculateBidPrice(task, 0, "magiceden")
-
 
     if (openseaOrders.length > 0) {
       const cancelData = openseaOrders.map((order) => {
