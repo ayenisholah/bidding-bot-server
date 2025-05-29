@@ -1,4 +1,4 @@
-import mongoose, { Schema, Document } from "mongoose";
+import mongoose, { Schema, Document, Model } from "mongoose";
 
 interface SelectedTraits {
   [key: string]: {
@@ -7,8 +7,8 @@ interface SelectedTraits {
   }[];
 }
 
-export interface ITask extends Document {
-  _id: mongoose.Types.ObjectId;
+export interface ITask {
+  _id: string;
   user: string;
   contract: {
     slug: string;
@@ -197,5 +197,5 @@ const TaskSchema: Schema = new Schema(
   { timestamps: true }
 );
 
-const Task = mongoose.model<ITask>("Task", TaskSchema);
+const Task = (mongoose.models.Task || mongoose.model<ITask>("Task", TaskSchema)) as Model<ITask>;
 export default Task;

@@ -16,7 +16,7 @@ import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCol
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
 import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, getCollectionDetails, getOpenseaFloor } from "./functions";
 import mongoose from 'mongoose';
-import Task from "./models/task.model";
+import Task, { ITask } from "./models/task.model";
 import { Queue, Worker, Job, QueueOptions, JobType, UnrecoverableError, JobsOptions, QueueEvents } from "bullmq";
 import Wallet from "./models/wallet.model";
 import redisClient from "./utils/redis";
@@ -1681,8 +1681,8 @@ async function updateTaskData(task: ITask) {
       const attributes = transformSelectedTraitsToAttributes(selectedTraits)
       const expandedAttributes = expandAttributes(attributes)
       // Initialize tokens with bottomListings and taskTokenIds
-      let openseaTokens: number[] = [...openseaBottonListings, ...taskTokenIds]
-      let magicedenTokens: number[] = [...magicedenBottomListings, ...taskTokenIds]
+      let openseaTokens: number[] = [...openseaBottonListings, ...taskTokenIds.map((token) => +token)]
+      let magicedenTokens: number[] = [...magicedenBottomListings, ...taskTokenIds.map((token) => +token)]
 
       await pQueue.addAll(
         expandedAttributes.map((attribute) => async () => {
@@ -1704,19 +1704,19 @@ async function updateTaskData(task: ITask) {
         })
       )
 
-      openseaTokens = [...openseaBottonListings, ...taskTokenIds, ...openseaTokens];
+      openseaTokens = [...openseaBottonListings, ...taskTokenIds.map((token) => +token), ...openseaTokens];
       openseaTokenIds = [...new Set(openseaTokens)];
 
-      magicedenTokens = [...magicedenBottomListings, ...taskTokenIds, ...magicedenTokens]
+      magicedenTokens = [...magicedenBottomListings, ...taskTokenIds.map((token) => +token), ...magicedenTokens]
       magicedenTokenIds = [...new Set(magicedenTokens)]
 
     } else if (task.bidType === "token") {
-      openseaTokenIds = [...new Set([...openseaBottonListings, ...taskTokenIds])];
-      magicedenTokenIds = [...new Set([...magicedenBottomListings, ...taskTokenIds])];
+      openseaTokenIds = [...new Set([...openseaBottonListings, ...taskTokenIds.map((token) => +token)])];
+      magicedenTokenIds = [...new Set([...magicedenBottomListings, ...taskTokenIds.map((token) => +token)])];
     }
 
-    const openseaTokensToRemove = previousOpenseaTokens.filter(token => !openseaTokenIds.includes(token)).map((token) => token.toString())
-    const magicedenTokensToRemove = previousMagicedenTokens.filter(token => !magicedenTokenIds.includes(token)).map((token) => token.toString())
+    const openseaTokensToRemove = previousOpenseaTokens.filter(token => !openseaTokenIds.includes(+token)).map((token) => token.toString())
+    const magicedenTokensToRemove = previousMagicedenTokens.filter(token => !magicedenTokenIds.includes(+token)).map((token) => token.toString())
 
     const openseaTokensToAdd = openseaTokenIds.filter(token => !previousOpenseaTokens.includes(token));
     const magicedenTokensToAdd = magicedenTokenIds.filter(token => !previousMagicedenTokens.includes(token));
@@ -4536,7 +4536,7 @@ async function processOpenseaScheduledBid(task: ITask) {
     const bottomListings = autoIds ? await fetchOpenseaListings(currentTask._id, currentTask.contract.slug, amount) ?? [] : []
     const difference = amount !== undefined ? Math.max(0, amount - bottomListings.length) : 0
 
-    let tokens: number[] = [...bottomListings, ...taskTokenIds]
+    let tokens: number[] = [...bottomListings, ...taskTokenIds.map((token) => +token)]
     let tokenIds: number[] = []
 
     if (currentTask.bidType === "token" && selectedTraits && Object.keys(selectedTraits).length > 0) {
@@ -6137,7 +6137,7 @@ async function processMagicedenScheduledBid(task: ITask) {
     const difference = amount !== undefined ? Math.max(0, amount - bottomListings.length) : 0
     taskStatus[currentTask._id].processingPercentage = (3 / 4) * 100
 
-    let tokens: number[] = [...bottomListings, ...taskTokenIds]
+    let tokens: number[] = [...bottomListings, ...taskTokenIds.map((token) => +token)]
 
     if (currentTask.bidType === "token" && selectedTraits && Object.keys(selectedTraits).length > 0) {
       const attributes = transformSelectedTraitsToAttributes(selectedTraits)
@@ -8146,108 +8146,6 @@ export async function logBidError(taskId: string, title: string, message: string
   } catch (error) {
     console.error(RED + `Error logging bid error: ${error}` + RESET);
   }
-}
-
-
-interface SelectedTraits {
-  [key: string]: {
-    name: string;
-    availableInMarketplaces: string[];
-  }[];
-}
-
-export interface ITask {
-  _id: string;
-  user: string;
-  contract: {
-    slug: string;
-    contractAddress: string;
-  };
-  wallet: {
-    address: string;
-    privateKey: string;
-    openseaApproval: boolean;
-    blurApproval: boolean;
-    magicedenApproval: boolean;
-  };
-  selectedMarketplaces: string[];
-  running: boolean;
-  tags: { name: string; color: string }[];
-  selectedTraits: Record<
-    string,
-    { name: string; availableInMarketplaces: string[] }[]
-  >;
-  traits: {
-    categories: Record<string, string>;
-    counts: Record<
-      string,
-      Record<
-        string,
-        {
-          count: number;
-          availableInMarketplaces: string[];
-          magicedenFloor: number;
-          blurFloor: number;
-          openseaFloor: number;
-        }
-      >
-    >;
-  };
-  outbidOptions: {
-    outbid: boolean;
-    blurOutbidMargin: number | null;
-    openseaOutbidMargin: number | null;
-    magicedenOutbidMargin: number | null;
-    counterbid: boolean;
-  };
-  bidPrice: {
-    min: number;
-    max: number | null;
-    minType: "percentage" | "eth" | "usdc";
-    maxType: "percentage" | "eth" | "usdc";
-  };
-
-  openseaBidPrice: {
-    min: number;
-    max: number | null;
-    minType: "percentage" | "eth" | "usdc";
-    maxType: "percentage" | "eth" | "usdc";
-  };
-
-  blurBidPrice: {
-    min: number;
-    max: number | null;
-    minType: "percentage" | "eth" | "usdc";
-    maxType: "percentage" | "eth" | "usdc";
-  };
-
-  magicEdenBidPrice: {
-    min: number;
-    max: number | null;
-    minType: "percentage" | "eth" | "usdc";
-    maxType: "percentage" | "eth" | "usdc";
-  };
-
-  stopOptions: {
-    minFloorPrice: number | null;
-    maxFloorPrice: number | null;
-    minTraitPrice: number | null;
-    maxTraitPrice: number | null;
-    maxPurchase: number | null;
-    pauseAllBids: boolean;
-    stopAllBids: boolean;
-    cancelAllBids: boolean;
-    triggerStopOptions: boolean;
-  };
-  bidDuration: { value: number; unit: string };
-  tokenIds: number[];
-  bidType: string;
-  loopInterval: { value: number; unit: string };
-  bidPriceType: string;
-  slugValid: boolean;
-  magicEdenValid: boolean;
-  blurValid: boolean;
-  openseaValid: boolean;
 }
 
 

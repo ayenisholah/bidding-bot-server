@@ -59,7 +59,7 @@ export async function bidOnMagiceden(
   bidExpiry: number,
   currency = WETH,
   trait?: Trait,
-  tokenId?: string | number
+  tokenId?: number
 ) {
   try {
 

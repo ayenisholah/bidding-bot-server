@@ -69,7 +69,7 @@ export async function bidOnBlur(
   traits?: string
 ) {
   const bethBalance = await balanceChecker.getBethBalance(wallet_address);
-  let offerPriceEth: string | number = (Number(offer_price) / 1e18)
+  let offerPriceEth: string = (Number(offer_price) / 1e18).toString()
   // const leverage = 200
   // const totalOfferAmount = await getCachedOfferAmount(OFFER_AMOUNT_KEY);
   // if (totalOfferAmount + offerPriceEth >= leverage * bethBalance) {
@@ -87,7 +87,7 @@ export async function bidOnBlur(
   //   return
   // }
 
-  if (offerPriceEth > bethBalance) {
+  if (Number(offerPriceEth) > bethBalance) {
     const message = `Offer price: ${offerPriceEth} BETH  is greater than available BETH balance: ${bethBalance} BETH. SKIPPING ...`
     throw new Error(message)
   }
