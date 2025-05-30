@@ -53,7 +53,6 @@ npm test  # Runs test.ts with nodemon
 - **Wallet**: Manages wallet addresses and marketplace-specific approval states
 
 ## Important Notes
-- Server runs with memory optimizations: `--expose-gc --max-old-space-size=8192`
 - Redis is required for queue operations (started automatically in dev mode)
 - Database is reset on each `npm run dev` execution
 - WebSocket connections are managed per marketplace for real-time updates

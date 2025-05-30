@@ -2,8 +2,5 @@
 	"watch": ["src"],
 	"ext": "ts,json",
 	"ignore": ["*.json", "**/*.json", "dist/*", "coverage/*", "node_modules/*"],
-	"exec": "node --expose-gc --max-old-space-size=8192 -r ts-node/register/transpile-only src/index.ts",
-	"env": {
-		"NODE_OPTIONS": "--max-old-space-size=8192"
-	}
+	"exec": "node --expose-gc -r ts-node/register/transpile-only src/index.ts"
 }
