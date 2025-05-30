@@ -2,7 +2,7 @@ import express from "express";
 import { config } from "dotenv";
 import bodyParser from "body-parser";
 import { clearTimeout } from 'timers';
-import crypto from 'crypto';
+import crypto, { randomUUID } from 'crypto';
 import os from "os"
 import cors from "cors";
 import stringify from 'json-stable-stringify';
@@ -33,6 +33,7 @@ import Bottleneck from "bottleneck";
 import { USDC, WETH } from "./utils/currencies";
 import User from "./models/user.model";
 import axios from "axios";
+import { log } from "console";
 const prisma = new PrismaClient()
 
 export let RATE_LIMIT = process.env.RATE_LIMIT ? parseInt(process.env.RATE_LIMIT) : 100;
@@ -54,8 +55,68 @@ export const WORKER_COUNT = 1
 
 let traitsToRemove: { [key: string]: string[] } = {}
 let removedTokens: { [key: string]: { opensea: string[]; magiceden: string[] } } = {}
-const seenOrderHashes = new Set<string>();
-const seenBids = new Set<string>();
+
+// Use Maps instead of Sets to track timestamps for cleanup
+const seenOrderHashes = new Map<string, number>(); // Map<orderHash, timestamp>
+const seenBids = new Map<string, number>(); // Map<bidHash, timestamp>
+
+// Configuration for cleanup
+const SEEN_ITEMS_TTL = 30 * 60 * 1000; // 30 minutes TTL
+const SEEN_ITEMS_MAX_SIZE = 10000; // Maximum items to keep
+const CLEANUP_INTERVAL = 5 * 60 * 1000; // Run cleanup every 5 minutes
+
+// Helper functions for seen items management
+function addSeenItem(map: Map<string, number>, key: string): void {
+  const now = Date.now();
+  map.set(key, now);
+
+  // If map exceeds max size, remove oldest entries
+  if (map.size > SEEN_ITEMS_MAX_SIZE) {
+    const entries = Array.from(map.entries());
+    entries.sort((a, b) => a[1] - b[1]); // Sort by timestamp (oldest first)
+    const toRemove = entries.slice(0, entries.length - SEEN_ITEMS_MAX_SIZE);
+    toRemove.forEach(([key]) => map.delete(key));
+  }
+}
+
+// Note: Manual .delete() calls after queuing counterbids are intentional
+// They allow immediate re-processing of the same order/bid if needed
+// The TTL system acts as a safety net for any items not manually deleted
+
+function hasSeenItem(map: Map<string, number>, key: string): boolean {
+  const timestamp = map.get(key);
+  if (!timestamp) return false;
+
+  // Check if item has expired
+  if (Date.now() - timestamp > SEEN_ITEMS_TTL) {
+    map.delete(key);
+    return false;
+  }
+
+  return true;
+}
+
+function cleanupSeenItems(map: Map<string, number>): void {
+  const now = Date.now();
+  const expiredKeys: string[] = [];
+  const beforeSize = map.size;
+
+  map.forEach((timestamp, key) => {
+    if (now - timestamp > SEEN_ITEMS_TTL) {
+      expiredKeys.push(key);
+    }
+  });
+
+  expiredKeys.forEach(key => map.delete(key));
+
+  if (expiredKeys.length > 0) {
+    const mapName = map === seenOrderHashes ? 'seenOrderHashes' : 'seenBids';
+    console.log(`[Cleanup] ${mapName}: removed ${expiredKeys.length} expired items, ${beforeSize} -> ${map.size} items`);
+  }
+}
+
+// Set up periodic cleanup
+let cleanupIntervalId: NodeJS.Timeout | null = null;
 
 const SERVER_IP = process.env.SERVER_IP as string
 const USERNAME = process.env.USERNAME as string
@@ -241,6 +302,7 @@ const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 const OPENSEA_PROTOCOL_ADDRESS = "0x0000000000000068F116a894984e2DB1123eB395"
 const HEALTH_CHECK_INTERVAL = 5000;
 let enabledMarketplaces: string[] = []
+const clientId = randomUUID()
 
 const app = express();
 const port = process.env.PORT || 3003;
@@ -265,7 +327,8 @@ let heartbeatIntervalId: NodeJS.Timeout | null = null;
 let reconnectTimeoutId: NodeJS.Timeout | null = null;
 let retryCount: number = 0;
 
-const activeSubscriptions: Set<string> = new Set();
+// Track subscriptions by marketplace and collection slug
+const activeSubscriptions: Map<string, Set<string>> = new Map(); // Map<collectionSlug, Set<marketplace>>
 const clients = new Set<WebSocket>();
 
 const walletsArr: string[] = []
@@ -516,6 +579,15 @@ async function startServer() {
       console.log(`Magic happening on http://localhost:${port}`);
       console.log(`WebSocket server is running on ws://localhost:${port}`);
     });
+
+    // Start periodic cleanup of seen items
+    cleanupIntervalId = setInterval(() => {
+      cleanupSeenItems(seenOrderHashes);
+      cleanupSeenItems(seenBids);
+    }, CLEANUP_INTERVAL);
+
+    console.log(`Started periodic cleanup for seen items (every ${CLEANUP_INTERVAL / 1000 / 60} minutes)`);
+
     await fetchCurrentTasks()
 
   } catch (error) {
@@ -523,6 +595,35 @@ async function startServer() {
     process.exit(1);
   }
 }
+
+// Cleanup handler for graceful shutdown
+process.on('SIGINT', () => {
+  console.log('\nReceived SIGINT, cleaning up...');
+  if (cleanupIntervalId) {
+    clearInterval(cleanupIntervalId);
+    console.log('Stopped periodic cleanup');
+  }
+
+  // Final cleanup before exit
+  seenOrderHashes.clear();
+  seenBids.clear();
+
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('\nReceived SIGTERM, cleaning up...');
+  if (cleanupIntervalId) {
+    clearInterval(cleanupIntervalId);
+    console.log('Stopped periodic cleanup');
+  }
+
+  // Final cleanup before exit
+  seenOrderHashes.clear();
+  seenBids.clear();
+
+  process.exit(0);
+});
 
 startServer()
   .then(() => {
@@ -1293,9 +1394,9 @@ async function processJob(job: Job) {
         case 'CANCEL_BLUR_BID':
           return await bulkCancelBlurBid(job.data);
         case BLUR_COLLECTION_BID:
-          return await processBlurCollectionBid(job.data);
+        return await processBlurCollectionBid(job.data);
         case BLUR_TRAIT_BID:
-          return await processBlurTraitBid(job.data);
+        return await processBlurTraitBid(job.data);
         case BLUR_COLLECTION_BID_COUNTERBID:
           return await blurCollectionCounterBid(job.data);
         case BLUR_TRAIT_BID_COUNTERBID:
@@ -3050,7 +3151,7 @@ async function connectWebSocket(): Promise<void> {
   // Check if already connected
   if (ws?.readyState === WebSocket.OPEN) {
     console.log(YELLOW + "WebSocket already connected, sending ping to verify..." + RESET);
-    ws.send(JSON.stringify({ event: 'ping', clientId: API_KEY }));
+    ws.send(JSON.stringify({ event: 'ping', clientId }));
     return;
   }
 
@@ -3068,7 +3169,7 @@ async function connectWebSocket(): Promise<void> {
 
     const pingInterval = setInterval(() => {
       if (Date.now() - lastMessageTime > 30000 && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ event: 'ping', clientId: API_KEY }));
+        ws.send(JSON.stringify({ event: 'ping', clientId }));
         console.log('-----PING------');
       }
     }, 30000);
@@ -3084,6 +3185,10 @@ async function connectWebSocket(): Promise<void> {
     if (heartbeatIntervalId !== null) {
       clearInterval(heartbeatIntervalId);
     }
+
+    // Clear activeSubscriptions on reconnect to ensure fresh state
+    activeSubscriptions.clear();
+    console.log(YELLOW + "Cleared active subscriptions for fresh reconnect" + RESET);
 
     await subscribeToCollections(currentTasks as unknown as ITask[]);
 
@@ -3149,22 +3254,16 @@ function attemptReconnect(): void {
 
 async function handleCounterBid(message: any) {
   try {
-    console.log(JSON.stringify(message));
+    // if (message && message?.event && message.event === "item_transferred") {
+    //   console.log(GOLD + JSON.stringify(message) + RESET);
+    // }
 
-    if (message && message?.event && message.event === "item_transferred") {
-      console.log(GOLD + JSON.stringify(message) + RESET);
-    }
-
-    if (message && message?.event && message.event === "item_sold") {
-      console.log(GOLD + JSON.stringify(message) + RESET);
-    }
+    // if (message && message?.event && message.event === "item_sold") {
+    //   console.log(GOLD + JSON.stringify(message) + RESET);
+    // }
 
     const { contractAddress, slug } = getMarketplaceDetails(message);
-
-    if (!contractAddress && !slug) {
-      console.log("Missing contractAddress and slug in message");
-      return;
-    }
+    if (!contractAddress && !slug) return
 
     const relevantTasks = currentTasks.filter(task => {
       // Check if task is valid and running
@@ -3259,8 +3358,8 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     if (!currentTask.outbidOptions.counterbid) return
 
     const orderHash = data?.data?.id
-    if (seenOrderHashes.has(orderHash)) return;
-    seenOrderHashes.add(orderHash)
+    if (hasSeenItem(seenOrderHashes, orderHash)) return;
+    addSeenItem(seenOrderHashes, orderHash)
 
 
     const domain: string = data?.data?.source?.domain
@@ -3744,8 +3843,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       }
     }
 
-    if (seenOrderHashes.has(orderHash)) return;
-    seenOrderHashes.add(orderHash)
+    if (hasSeenItem(seenOrderHashes, orderHash)) return;
+    addSeenItem(seenOrderHashes, orderHash)
 
     if (walletAddresses.includes(maker)) return
 
@@ -4146,52 +4245,42 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 }
 
 async function handleBlurCounterbid(data: any, task: ITask) {
-  const incomingBid: CombinedBid = data
+  const incomingBid = data
   try {
     const bidHash = hashBid(data);
-
-    if (seenBids.has(bidHash)) return;
-
-    seenBids.add(bidHash);
+    if (hasSeenItem(seenBids, bidHash)) return;
+    addSeenItem(seenBids, bidHash);
 
     const currentTask = activeTasks.get(task._id)
-    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur") || !enabledMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur")) return
-
-    const expiry = getExpiry(currentTask.bidDuration)
-    if (!currentTask.outbidOptions.counterbid) return
-
-    const wallets = await Wallet.findOne({ address: task.wallet.address })
+    if (!currentTask || !currentTask?.running || !currentTask?.selectedMarketplaces?.map((marketplace) => marketplace?.toLowerCase())?.includes("blur") || !enabledMarketplaces?.map((marketplace) => marketplace?.toLowerCase())?.includes("blur")) return
+    const expiry = getExpiry(currentTask?.bidDuration)
+    if (!currentTask?.outbidOptions?.counterbid) return
+    const wallets = await Wallet.findOne({ address: task?.wallet?.address })
     const WALLET_PRIVATE_KEY: string = wallets?.privateKey as string
-
-    const selectedTraits = transformNewTask(task.selectedTraits)
-    const traitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
-    const blurOutbidMargin = task.outbidOptions.blurOutbidMargin || 0.01
+    const selectedTraits = transformNewTask(currentTask?.selectedTraits)
+    const traitBid = currentTask?.bidType === "collection" && selectedTraits && Object.keys(selectedTraits)?.length > 0
+    const blurOutbidMargin = currentTask?.outbidOptions?.blurOutbidMargin || 0.01
 
     if (traitBid) {
-      const isTraitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
-
+      const isTraitBid = currentTask?.bidType === "collection" && selectedTraits && Object.keys(selectedTraits)?.length > 0
       if (!isTraitBid) return
-
       const traits = transformBlurTraits(selectedTraits)
-      const incomingTraitBids = incomingBid?.stats?.filter(item => item.criteriaType.toLowerCase() === "trait") || incomingBid?.updates?.filter(item => item.criteriaType.toLowerCase() === "trait")
+      const incomingTraitBids = incomingBid?.stats?.filter((item: any) => item?.criteriaType?.toLowerCase() === "trait") || incomingBid?.updates?.filter((item: any) => item?.criteriaType?.toLowerCase() === "trait")
+      if (!incomingTraitBids) return
       const hasMatchingTraits = checkBlurTraits(incomingTraitBids, traits);
 
-      if (!hasMatchingTraits.length) return
-
-      const transformedTraits = selectedTraits && Object.keys(selectedTraits).length > 0 ? transformOpenseaTraits(selectedTraits) : [];
-
+      if (!hasMatchingTraits?.length) return
+      const transformedTraits = selectedTraits && Object.keys(selectedTraits)?.length > 0 ? transformOpenseaTraits(selectedTraits) : []
 
       for (const traitBid of hasMatchingTraits) {
-        const trait = JSON.stringify(traitBid.criteriaValue)
+        const trait = JSON.stringify(traitBid?.criteriaValue)
         const incomingPrice = Number(traitBid?.bestPrice || traitBid?.price || 0)
-
-        const traits = JSON.stringify(traitBid.criteriaValue)
-
+        const traits = JSON.stringify(traitBid?.criteriaValue)
         console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
-        console.log(GOLD + `incoming trait offer for ${task.contract.slug}: ${trait} for ${incomingPrice} BETH on blur`.toUpperCase() + RESET);
+        console.log(GOLD + `incoming trait offer for ${task?.contract?.slug}: ${trait} for ${incomingPrice} BETH on blur`.toUpperCase() + RESET);
         console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
 
-        const floor_price = await fetchBlurCollectionStats(task.contract.slug);
+        const floor_price = await fetchBlurCollectionStats(task?.contract?.slug);
         const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, Number(floor_price), "blur")
         const traitsObj = JSON.parse(trait);
         const [traitType, traitValue] = Object.entries(traitsObj)[0] as string[]
@@ -4200,27 +4289,13 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         const incomingTrait = { type: traitType, value: traitValue }
         console.log({ incomingPrice, maxBidPriceEth, incomingTrait });
 
-        const activeTrait = transformedTraits.some(function (trait) {
-          return trait.type.toLowerCase() === incomingTrait.type.toLowerCase() && trait.value.toLowerCase() === incomingTrait.value.toLowerCase();
+        const activeTrait = transformedTraits?.some(function (trait) {
+          return trait?.type?.toLowerCase() === incomingTrait?.type?.toLowerCase() && trait?.value?.toLowerCase() === incomingTrait?.value?.toLowerCase();
         });
 
         if (!activeTrait) return
 
         const totalOffer = incomingPrice + blurOutbidMargin
-
-        if (+totalOffer < minBidPriceEth || +totalOffer > maxBidPriceEth) {
-          const reason = +totalOffer < minBidPriceEth
-            ? `is less than min bid price ${minBidPriceEth} BETH`
-            : `is greater than max bid price ${maxBidPriceEth} BETH`;
-          const message = `incoming bid ${incomingPrice} + Blur Outbid Margin (${blurOutbidMargin}) BETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
-          await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "blur");
-          return
-        }
-
-        const traitFloor = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices ? await fetchBlurTraitFloor(currentTask.contract.slug, { type: traitType, value: traitValue as string }) : undefined
-
-        const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), true, traitFloor, identifier)
-        if (stopBid) return
 
         const orders = await prisma.order.findMany({
           where: {
@@ -4231,14 +4306,54 @@ async function handleBlurCounterbid(data: any, task: ITask) {
           }
         })
 
-        const offers = orders.map((order: PrismaOrder) => order.offerPrice)
-        const currentBidPrice = !offers.length ? 0 : Math.max(...offers.map((offer) => Number(offer)))
+        if (+totalOffer < minBidPriceEth) {
+          const reason = `is less than min bid price ${minBidPriceEth} BETH`
+          const message = `incoming bid ${incomingPrice} + Blur Outbid Margin (${blurOutbidMargin}) BETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
+          await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "blur");
+          return
+        } else if (+totalOffer > maxBidPriceEth) {
+          const reason = `is greater than max bid price ${maxBidPriceEth} BETH`
+          const message = `incoming bid ${incomingPrice} + Blur Outbid Margin (${blurOutbidMargin}) BETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
+          if (orders.length > 0) {
+            const cancelData = orders.map((order, index) => {
+              const payload = JSON.parse(order.orderHash)
+              return {
+                name: CANCEL_BLUR_BID,
+                data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
+              }
+            })
+            await queue.addBulk(cancelData)
+          }
+          await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "blur");
+          return
+        }
+
+        const traitFloor = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices ? await fetchBlurTraitFloor(currentTask?.contract?.slug, { type: traitType, value: traitValue as string }) : undefined
+
+        const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), true, traitFloor, identifier)
+
+        if (stopBid) {
+          if (orders.length > 0) {
+            const cancelData = orders.map((order, index) => {
+              const payload = JSON.parse(order.orderHash)
+              return {
+                name: CANCEL_BLUR_BID,
+                data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
+              }
+            })
+            await queue.addBulk(cancelData)
+          }
+          return
+        }
+
+        const offers = orders?.map((order: PrismaOrder) => order?.offerPrice)
+        const currentBidPrice = !offers?.length ? 0 : Math.max(...offers?.map((offer) => Number(offer)))
         const currentBidPriceEth = currentBidPrice / 1e18
 
         if (incomingPrice <= currentBidPriceEth) return
 
-        let offerPrice: any = Number((blurOutbidMargin + Number(incomingPrice)).toFixed(2))
-        offerPrice = BigNumber.from(utils.parseEther(offerPrice.toString()).toString())
+        let offerPrice: any = Number((blurOutbidMargin + Number(incomingPrice))?.toFixed(2))
+        offerPrice = BigNumber.from(utils.parseEther(offerPrice?.toString())?.toString())
 
         const jobId = `counterbid-${task._id}-${task.contract.slug}-${BLUR.toLowerCase()}-${trait}`
         const job: Job = await queue.getJob(jobId)
@@ -4268,7 +4383,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         }
 
         if (job) {
-          if (incomingPrice <= Number(job.data.offerPrice) / 1e18) {
+          if (incomingPrice <= Number(job?.data?.offerPrice) / 1e18) {
             console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
             console.log(RED + `Skipping counterbid since incoming bid ${task.contract.slug}:${JSON.stringify(incomingTrait)} ${incomingPrice} BETH is less than or equal to existing bid ${Number(job.data.offerPrice) / 1e18} BETH domain: blur` + RESET);
             console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -4294,40 +4409,27 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       }
 
     } else {
-
-      const isTraitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
-      const tokenBid = task.bidType === "token"
-      const collectionBid = !isTraitBid && !tokenBid && task.bidType === "collection"
+      const isTraitBid = selectedTraits && Object.keys(selectedTraits)?.length > 0
+      const tokenBid = task?.bidType === "token"
+      const collectionBid = !isTraitBid && !tokenBid && task?.bidType === "collection"
       if (!collectionBid) return
 
-      const incomingBidDetails = incomingBid?.stats?.filter(item => item.criteriaType.toLowerCase() === "collection") || incomingBid?.updates?.filter(item => item.criteriaType.toLowerCase() === "collection")
-      if (!incomingBidDetails.length) return
+      const incomingBidDetails = incomingBid?.stats?.filter((item: any) => item?.criteriaType?.toLowerCase() === "collection") || incomingBid?.updates?.filter((item: any) => item?.criteriaType?.toLowerCase() === "collection")
 
-      const incomingBestPrice = incomingBidDetails?.sort((a, b) => +b?.bestPrice - +a?.bestPrice)[0].bestPrice
+      if (!incomingBidDetails || !incomingBidDetails?.length) return
+
+      const incomingBestPrice = incomingBidDetails?.sort((a: any, b: any) => +b?.bestPrice - +a?.bestPrice)[0].bestPrice
       const incomingBidAmount = (incomingBidDetails as any)?.sort((a: any, b: any) => +b.price - +a.price)[0].price
 
       const bestPrice = +incomingBestPrice > 0 ? incomingBestPrice : +incomingBidAmount > 0 ? incomingBidAmount : "0"
 
       console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
-      console.log(GOLD + `incoming collection offer for ${task.contract.slug} for ${bestPrice} BETH on blur`.toUpperCase() + RESET);
+      console.log(GOLD + `incoming collection offer for ${task?.contract?.slug} for ${bestPrice} BETH on blur`.toUpperCase() + RESET);
       console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
 
       const floor_price = await fetchBlurCollectionStats(task.contract.slug);
       const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, Number(floor_price), "blur")
 
-
-      if (+bestPrice < minBidPriceEth || +bestPrice > maxBidPriceEth) {
-        const reason = +bestPrice < minBidPriceEth
-          ? `is less than min bid price ${minBidPriceEth} BETH`
-          : `is greater than max bid price ${maxBidPriceEth} BETH`;
-        const message = `incoming bid ${bestPrice} BETH for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
-        console.log({ message });
-
-        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "blur");
-        return
-      }
-      const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), true)
-      if (stopBid) return
       const orders = await prisma.order.findMany({
         where: {
           slug: task.contract.slug,
@@ -4336,14 +4438,36 @@ async function handleBlurCounterbid(data: any, task: ITask) {
           identifier: 'collection'
         }
       })
+
+      if (+bestPrice < minBidPriceEth) {
+        const reason = `is less than min bid price ${minBidPriceEth} BETH`
+        const message = `incoming bid ${bestPrice} BETH for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "blur");
+        return
+      } else if (+bestPrice > maxBidPriceEth) {
+        const reason = `is greater than max bid price ${maxBidPriceEth} BETH`;
+        const message = `incoming bid ${bestPrice} BETH for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "blur");
+
+        const cancelData = orders.map((order) => {
+          const payload = JSON.parse(order.orderHash)
+          return {
+            name: CANCEL_BLUR_BID,
+            data: { privateKey: task.wallet.privateKey, payload, taskId: task._id, orderKey: order.id }
+          }
+        })
+        await queue.addBulk(cancelData);
+        return
+      }
+      const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), true)
+      if (stopBid) return
       const incomingPrice = Number(bestPrice) * 1e18
-      const offers = orders.map((order: PrismaOrder) => order.offerPrice)
-      const currentBidPrice = !offers.length ? 0 : Math.max(...offers.map((offer) => Number(offer)))
+      const offers = orders?.map((order: PrismaOrder) => order?.offerPrice)
+      const currentBidPrice = !offers?.length ? 0 : Math.max(...offers.map((offer) => Number(offer)))
       if (incomingPrice <= currentBidPrice) return
 
       const rawPrice = (+bestPrice + Number(blurOutbidMargin.toFixed(2))) * 1e18
       let offerPrice = BigInt(Math.round(rawPrice / 1e16) * 1e16)
-
 
       const jobId = `counterbid-${task._id}-${task.contract.slug}-${BLUR.toLowerCase()}-collection`
       const job: Job = await queue.getJob(jobId)
@@ -4360,7 +4484,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       }
 
       if (job) {
-        if (+incomingPrice <= +job.data.offerPrice) {
+        if (+incomingPrice <= +job?.data?.offerPrice) {
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
           console.log(RED + `Skipping counterbid since incoming bid ${task.contract.slug}:collection ${incomingPrice / 1e18} BETH is less than or equal to existing bid ${Number(job.data.offerPrice) / 1e18} BETH domain: blur` + RESET);
           console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -4382,10 +4506,8 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(GREEN + `Counterbidding incoming blur collection offer of ${Number(incomingPrice) / 1e18} BETH for ${task.contract.slug} for ${(Number(offerPrice) / 1e18)} BETH ON BLUR`.toUpperCase() + RESET);
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-
       seenBids.delete(bidHash)
     }
-
   } catch (error) {
     console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
     console.log(RED + `Error handling Blur counterbid: ${JSON.stringify(error)}` + RESET);
@@ -5202,18 +5324,14 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 
       console.log({ marketplace: BLUR, slug: task.contract.slug, TYPE: "COLLECTION", topOffer, secondOffer });
 
-      const currentBidPrice = order?.offerPrice || 0
-      const currentBidPriceEth = Number((Number(currentBidPrice) / 1e18).toFixed(2));
       const bidderAddressesSample = topOffer?.bidderAddressesSample || []
-      const executableSize = topOffer?.executableSize || 0
-      const isTopBid = currentBidPriceEth === topOfferAmount && executableSize === 1 && bidderAddressesSample
-        .map((address) => address.toLowerCase())
-        .includes(task.wallet.address.toLowerCase())
+      const numberBidders = topOffer?.numberBidders || 0
+      const isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(task.wallet.address.toLowerCase())
       const blurOutbidMargin = task.outbidOptions.blurOutbidMargin || 0.01
 
       if (isTopBid) {
         const spread = (Number(topOfferAmount) - Number(secondOfferAmount));
-        if (spread > blurOutbidMargin && Number(secondOfferAmount) > 0) {
+        if (+spread.toFixed(2) > blurOutbidMargin && Number(secondOfferAmount) > 0) {
           if (orders.length > 0) {
             const cancelData = orders.map((order) => {
               const payload = JSON.parse(order.orderHash)
@@ -5979,9 +6097,6 @@ async function processBlurTraitBid(data: {
     const expiredAt = new Date(order?.expiresAt).getTime()
     const orderExpiration = order ? Math.round((expiredAt - createdAt) / 1000) : expiry
 
-    console.log({ ttl, MIN_BID_DURATION, currentPrice, traitOffer: Number(traitOffer), orderExpiration, expiry });
-
-
     if (!outbidOptions.outbid) {
       if (ttl >= MIN_BID_DURATION && currentPrice === Number(traitOffer) && Math.abs(orderExpiration - expiry) < 30) return;
     }
@@ -5998,20 +6113,15 @@ async function processBlurTraitBid(data: {
           magiceden: 0
         }
       }
-
-      const currentBidPrice = order?.offerPrice || 0
-      const currentBidPriceEth = Number((Number(currentBidPrice) / Math.pow(10, 18)).toFixed(2));
       const bidderAddressesSample = topOffer?.bidderAddressesSample || []
-      const executableSize = topOffer?.executableSize || 0
+      const numberBidders = topOffer?.numberBidders || 0
       const blurOutbidMargin = outbidOptions.blurOutbidMargin || 0.01
 
-      const isTopBid = currentBidPriceEth === topOfferAmount && executableSize === 1 && bidderAddressesSample
-        .map((address) => address.toLowerCase())
-        .includes(address.toLowerCase())
+      const isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(task.wallet.address.toLowerCase())
 
       if (isTopBid) {
         const spread = (Number(topOfferAmount) - Number(secondOfferAmount));
-        if (spread > blurOutbidMargin && Number(secondOfferAmount) > 0) {
+        if (+spread.toFixed(2) > blurOutbidMargin && Number(secondOfferAmount) > 0) {
           if (orders.length > 0) {
             const cancelData = orders.map((order) => {
               const payload = JSON.parse(order.orderHash)
@@ -7015,6 +7125,46 @@ app.get("/", (req, res) => {
   res.json({ message: "Welcome to the NFTTools bidding bot server! Let's make magic happen! 🚀🚀🚀" });
 });
 
+// Debug endpoint to check active subscriptions
+app.get("/subscriptions", (req, res) => {
+  const subscriptions = getActiveSubscriptions();
+  res.json({
+    total: subscriptions.length,
+    subscriptions: subscriptions
+  });
+});
+
+// Debug endpoint to check seen items status
+app.get("/seen-items", (req, res) => {
+  const now = Date.now();
+  const orderHashesInfo = Array.from(seenOrderHashes.entries()).map(([hash, timestamp]) => ({
+    hash: hash.substring(0, 8) + '...',
+    age: Math.round((now - timestamp) / 1000) + 's',
+    expired: now - timestamp > SEEN_ITEMS_TTL
+  }));
+
+  const bidsInfo = Array.from(seenBids.entries()).map(([hash, timestamp]) => ({
+    hash: hash.substring(0, 8) + '...',
+    age: Math.round((now - timestamp) / 1000) + 's',
+    expired: now - timestamp > SEEN_ITEMS_TTL
+  }));
+
+  res.json({
+    seenOrderHashes: {
+      count: seenOrderHashes.size,
+      items: orderHashesInfo.slice(0, 10), // Show first 10
+      maxSize: SEEN_ITEMS_MAX_SIZE,
+      ttl: SEEN_ITEMS_TTL / 1000 + 's'
+    },
+    seenBids: {
+      count: seenBids.size,
+      items: bidsInfo.slice(0, 10), // Show first 10
+      maxSize: SEEN_ITEMS_MAX_SIZE,
+      ttl: SEEN_ITEMS_TTL / 1000 + 's'
+    }
+  });
+});
+
 app.get("/health", async (req, res) => {
   try {
     const queueCounts = await queue.getJobCounts();
@@ -7817,8 +7967,6 @@ async function stopOption(
       }
     }
 
-
-
     // Check max purchase limit
     const maxPurchase = task?.stopOptions?.maxPurchase;
     const currentBalance = balances[task._id]?.[marketplace];
@@ -7942,7 +8090,7 @@ function subscribeToCollections(tasks: ITask[]) {
     // Send pings
     safeSendMessage({
       event: "ping",
-      clientId: API_KEY
+      clientId
     });
 
     // Set up single interval for ping messages
@@ -7950,7 +8098,7 @@ function subscribeToCollections(tasks: ITask[]) {
       marketplaceIntervals['global'] = setInterval(() => {
         safeSendMessage({
           event: "ping",
-          clientId: API_KEY
+          clientId
         });
       }, 30000);
     }
@@ -7966,58 +8114,89 @@ function subscribeToCollections(tasks: ITask[]) {
       const connectToOpensea = hasOpenseaMarketplace || (hasTriggeredStopOptions && hasMaxPurchaseLimit);
 
       if (connectToOpensea) {
-        const openseaSubscriptionMessage = {
-          "slug": task.contract.slug,
-          "event": "join_the_party",
-          "topic": task.contract.slug,
-          "contractAddress": task.contract.contractAddress,
-          "clientId": API_KEY,
-          "marketplace": OPENSEA
-        };
+        // Check if already subscribed to this collection on OpenSea
+        const collectionSubscriptions = activeSubscriptions.get(subscriptionKey) || new Set<string>();
 
-        safeSendMessage(openseaSubscriptionMessage);
-        activeSubscriptions.add(subscriptionKey);
-        console.log('----------------------------------------------------------------------');
-        console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} OPENSEA`);
-        console.log('----------------------------------------------------------------------');
+        if (!collectionSubscriptions.has(OPENSEA)) {
+          const openseaSubscriptionMessage = {
+            "slug": task.contract.slug,
+            "event": "join_the_party",
+            "topic": task.contract.slug,
+            "contractAddress": task.contract.contractAddress,
+            "clientId": clientId,
+            "marketplace": OPENSEA
+          };
+
+          safeSendMessage(openseaSubscriptionMessage);
+
+          // Add marketplace to the collection's subscription set
+          collectionSubscriptions.add(OPENSEA);
+          activeSubscriptions.set(subscriptionKey, collectionSubscriptions);
+
+          console.log('----------------------------------------------------------------------');
+          console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} OPENSEA`);
+          console.log('----------------------------------------------------------------------');
+        }
       }
 
       // Handle MagicEden subscription
       const connectToMagiceden = task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("magiceden");
       if (connectToMagiceden) {
-        const magicedenSubscriptionMessage = {
-          "slug": task.contract.slug,
-          "event": "join_the_party",
-          "topic": task.contract.slug,
-          "contractAddress": task.contract.contractAddress,
-          "clientId": API_KEY,
-          "marketplace": MAGICEDEN
-        };
+        // Check if already subscribed to this collection on MagicEden
+        const collectionSubscriptions = activeSubscriptions.get(subscriptionKey) || new Set<string>();
 
-        safeSendMessage(magicedenSubscriptionMessage);
-        activeSubscriptions.add(subscriptionKey);
-        console.log('----------------------------------------------------------------------');
-        console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} MAGICEDEN`);
-        console.log('----------------------------------------------------------------------');
+        if (!collectionSubscriptions.has(MAGICEDEN)) {
+          const magicedenSubscriptionMessage = {
+            "slug": task.contract.slug,
+            "event": "join_the_party",
+            "topic": task.contract.slug,
+            "contractAddress": task.contract.contractAddress,
+            "clientId": clientId,
+            "marketplace": MAGICEDEN
+          };
+
+          safeSendMessage(magicedenSubscriptionMessage);
+
+          // Add marketplace to the collection's subscription set
+          collectionSubscriptions.add(MAGICEDEN);
+          activeSubscriptions.set(subscriptionKey, collectionSubscriptions);
+
+          console.log('----------------------------------------------------------------------');
+          console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} MAGICEDEN`);
+          console.log('----------------------------------------------------------------------');
+        } else {
+          console.log(`Already subscribed to ${task.contract.slug} on MAGICEDEN, skipping...`);
+        }
       }
 
       // Handle Blur subscription
       const connectToBlur = task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur");
       if (connectToBlur) {
-        const blurSubscriptionMessage = {
-          "slug": task.contract.slug,
-          "event": "join_the_party",
-          "topic": task.contract.slug,
-          "contractAddress": task.contract.contractAddress,
-          "clientId": API_KEY,
-          "marketplace": BLUR
-        };
+        // Check if already subscribed to this collection on Blur
+        const collectionSubscriptions = activeSubscriptions.get(subscriptionKey) || new Set<string>();
 
-        safeSendMessage(blurSubscriptionMessage);
-        activeSubscriptions.add(subscriptionKey);
-        console.log('----------------------------------------------------------------------');
-        console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} BLUR`);
-        console.log('----------------------------------------------------------------------');
+        if (!collectionSubscriptions.has(BLUR)) {
+          const blurSubscriptionMessage = {
+            "slug": task.contract.slug,
+            "event": "join_the_party",
+            "topic": task.contract.slug,
+            "contractAddress": task.contract.contractAddress,
+            "clientId": clientId,
+            "marketplace": BLUR
+          };
+
+          safeSendMessage(blurSubscriptionMessage);
+
+          // Add marketplace to the collection's subscription set
+          collectionSubscriptions.add(BLUR);
+          activeSubscriptions.set(subscriptionKey, collectionSubscriptions);
+
+          console.log('----------------------------------------------------------------------');
+          console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} BLUR`);
+          console.log('----------------------------------------------------------------------');
+        } else {
+          console.log(`Already subscribed to ${task.contract.slug} on BLUR, skipping...`);
+        }
       }
 
     });
@@ -8029,36 +8208,98 @@ function subscribeToCollections(tasks: ITask[]) {
 }
 
 
-async function unsubscribeFromCollection(task: ITask) {
+async function unsubscribeFromCollection(task: ITask, marketplace?: string) {
   try {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
     }
 
-    const unsubscribeMessage = {
-      "slug": task.contract.slug,
-      "topic": task.contract.slug,
-      "contractAddress": task.contract.contractAddress,
-      "event": "leave_the_party",
-      "clientId": API_KEY,
-    };
+    const subscriptionKey = task.contract.slug;
+    const collectionSubscriptions = activeSubscriptions.get(subscriptionKey);
 
-    await new Promise<void>((resolve, reject) => {
-      try {
-        ws.send(JSON.stringify(unsubscribeMessage));
-        console.log(`Unsubscribed from collection: ${task.contract.slug}`);
-        // Remove task from subscribedTasks
-        subscribedTasks.delete(task._id);
-        resolve();
-      } catch (err) {
-        reject(err);
+    if (!collectionSubscriptions || collectionSubscriptions.size === 0) {
+      console.log(`No active subscriptions found for ${task.contract.slug}`);
+      return;
+    }
+
+    // If marketplace is specified, only unsubscribe from that marketplace
+    if (marketplace) {
+      const marketplaceLower = marketplace.toLowerCase();
+      if (collectionSubscriptions.has(marketplaceLower)) {
+        const unsubscribeMessage = {
+          "slug": task.contract.slug,
+          "topic": task.contract.slug,
+          "contractAddress": task.contract.contractAddress,
+          "event": "leave_the_party",
+          "clientId": clientId,
+          "marketplace": marketplaceLower
+        };
+
+        await new Promise<void>((resolve, reject) => {
+          try {
+            ws.send(JSON.stringify(unsubscribeMessage));
+            console.log(`Unsubscribed from collection: ${task.contract.slug} on ${marketplaceLower}`);
+
+            // Remove marketplace from the collection's subscription set
+            collectionSubscriptions.delete(marketplaceLower);
+            if (collectionSubscriptions.size === 0) {
+              activeSubscriptions.delete(subscriptionKey);
+            } else {
+              activeSubscriptions.set(subscriptionKey, collectionSubscriptions);
+            }
+
+            resolve();
+          } catch (err) {
+            reject(err);
+          }
+        });
       }
-    });
+    } else {
+      // Unsubscribe from all marketplaces for this collection
+      const unsubscribeMessage = {
+        "slug": task.contract.slug,
+        "topic": task.contract.slug,
+        "contractAddress": task.contract.contractAddress,
+        "event": "leave_the_party",
+        "clientId": clientId,
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        try {
+          ws.send(JSON.stringify(unsubscribeMessage));
+          console.log(`Unsubscribed from collection: ${task.contract.slug} (all marketplaces)`);
+
+          // Remove the entire collection from active subscriptions
+          activeSubscriptions.delete(subscriptionKey);
+
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }
+
+    // Remove task from subscribedTasks
+    subscribedTasks.delete(task._id);
   } catch (error) {
     console.error(RED + `Error in unsubscribeFromCollection: ` + RESET, error);
     throw error;
   }
+}
+
+// Helper function to get current active subscriptions
+function getActiveSubscriptions(): { collection: string; marketplaces: string[] }[] {
+  const subscriptions: { collection: string; marketplaces: string[] }[] = [];
+
+  activeSubscriptions.forEach((marketplaces, collection) => {
+    subscriptions.push({
+      collection,
+      marketplaces: Array.from(marketplaces)
+    });
+  });
+
+  return subscriptions;
 }
 
 function checkOpenseaTrait(selectedTraits: any, trait_criteria: any) {
