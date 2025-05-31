@@ -13,15 +13,14 @@ services:
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
       SERVER_IP: ${SERVER_IP}
       USERNAME: ${USERNAME}
+      NEXT_PUBLIC_EMAIL: ${NEXT_PUBLIC_EMAIL}
     depends_on:
       - mongodb
       - redis-cluster-init
     networks:
       - my_network
     volumes:
-      - ./data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./compose.yaml:/app/compose.yaml:ro
+      - server_data:/app/data
   client:
     image: ayenisholah/bidding-bot-client-production:latest
     platform: linux/amd64
@@ -38,6 +37,7 @@ services:
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
       SERVER_IP: ${SERVER_IP}
       USERNAME: ${USERNAME}
+      NEXT_PUBLIC_EMAIL: ${NEXT_PUBLIC_EMAIL}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001"]
       interval: 30s
@@ -49,8 +49,6 @@ services:
       - redis-cluster-init
     networks:
       - my_network
-    volumes:
-      - ./data:/app/data
 
   mongodb:
     image: "mongo:latest"
@@ -313,6 +311,7 @@ volumes:
   redis_data_4:
   redis_data_5:
   redis_data_6:
+  server_data:
 
 networks:
   my_network:
