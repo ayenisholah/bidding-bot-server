@@ -1394,9 +1394,9 @@ async function processJob(job: Job) {
         case 'CANCEL_BLUR_BID':
           return await bulkCancelBlurBid(job.data);
         case BLUR_COLLECTION_BID:
-        return await processBlurCollectionBid(job.data);
+          return await processBlurCollectionBid(job.data);
         case BLUR_TRAIT_BID:
-        return await processBlurTraitBid(job.data);
+          return await processBlurTraitBid(job.data);
         case BLUR_COLLECTION_BID_COUNTERBID:
           return await blurCollectionCounterBid(job.data);
         case BLUR_TRAIT_BID_COUNTERBID:
@@ -3439,10 +3439,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "magiceden");
         return
       }
-
-      const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), true)
-      if (stopBid) return
-
       const orders = await prisma.order.findMany({
         where: {
           taskId: task._id,
@@ -3450,6 +3446,17 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           identifier: tokenId.toString()
         }
       })
+
+      const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), true)
+      if (stopBid) {
+        if (orders.length > 0) {
+          const orderKeys = orders.map((order: PrismaOrder) => order.id)
+          const extractedOrderIds = await extractMagicedenOrderHash(orders)
+          await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+        }
+        return
+      }
+
 
       const offers = orders.map((order: PrismaOrder) => order.offerPrice)
       const currentBidPrice = !offers.length ? 0 : Math.max(...offers.map((offer) => Number(offer)))
@@ -3564,11 +3571,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
 
       const traitFloor = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices ? await fetchMagicEdenTraitFloor(currentTask.contract.contractAddress, { attributeKey: trait.attributeKey, attributeValue: trait.attributeValue }) : undefined
-
-      const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), true, traitFloor, identifier)
-
-      if (stopBid) return
-
       const orders = await prisma.order.findMany({
         where: {
           taskId: task._id,
@@ -3576,6 +3578,18 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           identifier
         }
       })
+
+      const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), true, traitFloor, identifier)
+
+      if (stopBid) {
+        if (orders.length > 0) {
+          const orderKeys = orders.map((order: PrismaOrder) => order.id)
+          const extractedOrderIds = await extractMagicedenOrderHash(orders)
+          await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+        }
+        return
+      }
+
 
       const offers = orders.map((order: PrismaOrder) => order.offerPrice)
       const currentBidPrice = !offers.length ? 0 : Math.max(...offers.map((offer) => Number(offer)))
@@ -3600,7 +3614,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         }
         return;
       }
-
 
       const bidData: IMagicedenTraitBidData = {
         taskId: task._id,
@@ -3676,8 +3689,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
 
       const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), true)
-      if (stopBid) return
-
       const orders = await prisma.order.findMany({
         where: {
           taskId: task._id,
@@ -3685,6 +3696,15 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           identifier: 'collection'
         }
       })
+      if (stopBid) {
+        if (orders.length > 0) {
+          const orderKeys = orders.map((order: PrismaOrder) => order.id)
+          const extractedOrderIds = await extractMagicedenOrderHash(orders)
+          await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+        }
+        return
+      }
+
 
       const offers = orders.map((order: PrismaOrder) => order.offerPrice)
       const currentBidPrice = !offers.length ? 0 : Math.max(...offers.map((offer) => Number(offer)))
@@ -3885,17 +3905,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       if (!floor_price) return
 
       const { maxBidPriceEth, minBidPriceEth, currency } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
-      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
-        const reason = incomingBidAmountEth < minBidPriceEth
-          ? `is less than min bid price ${minBidPriceEth} ${currencySymbol}`
-          : `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
-        const message = `incoming bid ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: ${tokenId} ${reason}. Skipping ...`.toUpperCase()
-        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
-        return
-      }
-      const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true)
-      if (stopBid) return
-
       const orders = await prisma.order.findMany({
         where: {
           slug: task.contract.slug,
@@ -3904,6 +3913,40 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           identifier: tokenId.toString()
         }
       })
+      if (incomingBidAmountEth < minBidPriceEth) {
+        const reason = `is less than min bid price ${minBidPriceEth} ${currencySymbol}`
+        const message = `incoming bid ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: ${tokenId} ${reason}. Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
+        return
+      } else if (incomingBidAmountEth > maxBidPriceEth) {
+        const reason = `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
+        const message = `incoming bid ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: ${tokenId} ${reason}. Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
+        if (orders.length > 0) {
+          const cancelData = orders.map((order, index) => {
+            return {
+              name: CANCEL_OPENSEA_BID,
+              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+
+            }
+          })
+          await queue.addBulk(cancelData)
+        }
+        return
+      }
+      const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true)
+      if (stopBid) {
+        if (orders.length > 0) {
+          const cancelData = orders.map((order, index) => {
+            return {
+              name: CANCEL_OPENSEA_BID,
+              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+            }
+          })
+          await queue.addBulk(cancelData)
+        }
+        return
+      }
 
       const offers = orders.map((order: PrismaOrder) => order.offerPrice)
       const currentBidPrice = offers.length > 0 ? Math.max(...offers.map((offer) => Number(offer))) : 0
@@ -4013,19 +4056,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       const { maxBidPriceEth, minBidPriceEth, currency } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
       const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal)
 
-      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
-        const reason = incomingBidAmountEth < minBidPriceEth
-          ? `is less than min bid price ${minBidPriceEth} ${currencySymbol}`
-          : `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
-        const message = `incoming bid ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: ${identifier} ${reason}.Skipping ...`.toUpperCase()
-        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
-        return
-      }
-
-      const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true, traitFloor, identifier)
-
-      if (stopBid) return
-
       const orders = await prisma.order.findMany({
         where: {
           slug: task.contract.slug,
@@ -4034,6 +4064,43 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           identifier
         }
       })
+
+      if (incomingBidAmountEth < minBidPriceEth) {
+        const reason = `is less than min bid price ${minBidPriceEth} ${currencySymbol}`
+        const message = `incoming bid ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: ${identifier} ${reason}.Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
+        return
+      } else if (incomingBidAmountEth > maxBidPriceEth) {
+        const reason = `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
+        const message = `incoming bid ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: ${identifier} ${reason}.Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
+
+        if (orders.length > 0) {
+          const cancelData = orders.map((order, index) => {
+            return {
+              name: CANCEL_OPENSEA_BID,
+              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+            }
+          })
+          await queue.addBulk(cancelData)
+        }
+        return
+      }
+
+      const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true, traitFloor, identifier)
+
+      if (stopBid) {
+        if (orders.length > 0) {
+          const cancelData = orders.map((order, index) => {
+            return {
+              name: CANCEL_OPENSEA_BID,
+              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+            }
+          })
+          await queue.addBulk(cancelData)
+        }
+        return
+      }
 
       const offers = orders.map((order: PrismaOrder) => order.offerPrice)
       const currentBidPrice = offers.length > 0 ? Math.max(...offers.map((offer) => Number(offer))) : 0
@@ -4132,18 +4199,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       const { maxBidPriceEth, minBidPriceEth, currency } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
       const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal)
 
-      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
-        const reason = incomingBidAmountEth < minBidPriceEth
-          ? `is less than min bid price ${minBidPriceEth} ${currencySymbol}`
-          : `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
-        const message = `incoming bid  ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
-        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
-        return
-      }
-
-      const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true)
-      if (stopBid) return
-
       const orders = await prisma.order.findMany({
         where: {
           slug: task.contract.slug,
@@ -4152,6 +4207,42 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           identifier: 'collection'
         }
       })
+
+      if (incomingBidAmountEth < minBidPriceEth) {
+        const reason = `is less than min bid price ${minBidPriceEth} ${currencySymbol}`
+        const message = `incoming bid  ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
+        return
+      } else if (incomingBidAmountEth > maxBidPriceEth) {
+        const reason = `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
+        const message = `incoming bid  ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
+        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
+
+        if (orders.length > 0) {
+          const cancelData = orders.map((order, index) => {
+            return {
+              name: CANCEL_OPENSEA_BID,
+              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+            }
+          })
+          await queue.addBulk(cancelData)
+        }
+        return
+      }
+
+      const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true)
+      if (stopBid) {
+        if (orders.length > 0) {
+          const cancelData = orders.map((order, index) => {
+            return {
+              name: CANCEL_OPENSEA_BID,
+              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+            }
+          })
+          await queue.addBulk(cancelData)
+        }
+        return
+      }
 
       const offers = orders.map((order: PrismaOrder) => order.offerPrice)
       const currentBidPrice = offers.length > 0 ? Math.max(...offers.map((offer) => Number(offer))) : 0
@@ -4287,8 +4378,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         const identifier = `${traitType}:${traitValue}`
 
         const incomingTrait = { type: traitType, value: traitValue }
-        console.log({ incomingPrice, maxBidPriceEth, incomingTrait });
-
         const activeTrait = transformedTraits?.some(function (trait) {
           return trait?.type?.toLowerCase() === incomingTrait?.type?.toLowerCase() && trait?.value?.toLowerCase() === incomingTrait?.value?.toLowerCase();
         });
@@ -4460,7 +4549,19 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         return
       }
       const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), true)
-      if (stopBid) return
+      if (stopBid) {
+        if (orders.length > 0) {
+          const cancelData = orders.map((order) => {
+            const payload = JSON.parse(order.orderHash)
+            return {
+              name: CANCEL_BLUR_BID,
+              data: { privateKey: task.wallet.privateKey, payload, taskId: task._id, orderKey: order.id }
+            }
+          })
+          await queue.addBulk(cancelData);
+        }
+        return
+      }
       const incomingPrice = Number(bestPrice) * 1e18
       const offers = orders?.map((order: PrismaOrder) => order?.offerPrice)
       const currentBidPrice = !offers?.length ? 0 : Math.max(...offers.map((offer) => Number(offer)))
@@ -5000,8 +5101,6 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
     else {
       const walletsArr = await Wallet.find({})
       const [topOffer, secondOffer] = (await fetchOpenseaOffers('COLLECTION', currentTask.contract.slug, currentTask.contract.contractAddress, {}) as unknown) as OpenseaOfferData[]
-      console.log({ slug: currentTask.contract.slug, MARKETPLACE: OPENSEA, TYPE: 'COLLECTION', topOffer, secondOffer });
-
       const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
       const secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal)
 
@@ -5265,8 +5364,33 @@ async function processBlurCollectionBid(data: { task: ITask }) {
     const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
     if (!floor_price) return
 
+    const orders = await prisma.order.findMany({
+      where: {
+        slug: task.contract.slug,
+        taskId: task._id,
+        marketplace: BLUR.toLowerCase(),
+        identifier: "collection"
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    })
+
     const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), false)
-    if (stopBid) return
+    if (stopBid) {
+      if (orders.length > 0) {
+        const cancelData = orders.map((order) => {
+          const payload = JSON.parse(order.orderHash)
+
+          return {
+            name: CANCEL_BLUR_BID,
+            data: { privateKey: task.wallet.privateKey, payload, taskId: task._id, orderKey: order.id }
+          }
+        })
+        await queue.addBulk(cancelData);
+      }
+      return
+    }
 
     if (!floorPrices[task._id]) {
       floorPrices[task._id] = {
@@ -5280,17 +5404,6 @@ async function processBlurCollectionBid(data: { task: ITask }) {
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "blur")
     let colletionOffer = BigInt(Math.round(offerPriceEth * 1e18))
 
-    const orders = await prisma.order.findMany({
-      where: {
-        slug: task.contract.slug,
-        taskId: task._id,
-        marketplace: BLUR.toLowerCase(),
-        identifier: "collection"
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
-    })
     const [order, ...remainingOrders] = orders
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
     const currentPrice = Number(order ? order.offerPrice : colletionOffer)
@@ -5321,8 +5434,6 @@ async function processBlurCollectionBid(data: { task: ITask }) {
       const [topOffer, secondOffer] = highestBid?.priceLevels?.sort((a, b) => +b.price - +a.price) || [{ price: "0" }, { price: "0" }];
       const topOfferAmount = typeof topOffer === 'object' && topOffer ? Number(topOffer.price) : 0
       const secondOfferAmount = typeof secondOffer === 'object' && secondOffer ? Number(secondOffer.price) : 0
-
-      console.log({ marketplace: BLUR, slug: task.contract.slug, TYPE: "COLLECTION", topOffer, secondOffer });
 
       const bidderAddressesSample = topOffer?.bidderAddressesSample || []
       const numberBidders = topOffer?.numberBidders || 0
@@ -5478,24 +5589,14 @@ async function processOpenseaTraitBid(data: {
         blur: 0
       }
     }
-
     floorPrices[_id].opensea = floor_price as number;
-
     const { maxBidPriceEth, offerPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
     const expiry = getExpiry(currentTask.bidDuration)
     const { type, value } = JSON.parse(trait);
     const identifier = `${type}:${value}`
-
     const traitFloor = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices ? await openseaTraitFloor(slug, { traitType: type, values: [value] }) : undefined
-
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false, traitFloor, identifier)
     const outbidOptions = currentTask.outbidOptions
-
-    if (stopBid) return
-
-    const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
-    let traitOffer = BigInt(Math.round(roundToValidPrecision(offerPriceEth) * Math.pow(10, decimal)))
-
     const orders = await prisma.order.findMany({
       where: {
         slug: slug,
@@ -5508,7 +5609,20 @@ async function processOpenseaTraitBid(data: {
       }
     })
 
-
+    if (stopBid) {
+      if (orders.length > 0) {
+        const cancelData = orders.map((order, index) => {
+          return {
+            name: CANCEL_OPENSEA_BID,
+            data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order.id },
+          }
+        })
+        await queue.addBulk(cancelData)
+      }
+      return
+    }
+    const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
+    let traitOffer = BigInt(Math.round(roundToValidPrecision(offerPriceEth) * Math.pow(10, decimal)))
     const [order, ...remainingOrders] = orders
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
     const currentPrice = Number(order ? order.offerPrice : traitOffer)
@@ -5534,9 +5648,7 @@ async function processOpenseaTraitBid(data: {
     else {
       const [topOffer, secondOffer] = await fetchOpenseaOffers('TRAIT', slug, contractAddress, JSON.parse(trait)) as unknown as OpenseaOfferData[]
       const walletsArr = await Wallet.find({})
-      console.log({ COLLECTION: slug, MARKETPLACE: OPENSEA, TYPE: 'TRAIT', trait, topOffer, secondOffer });
       const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
-
       const secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal)
       const outbidMargin = calculateOutbidMargin(highestBidAmount ? highestBidAmount / Math.pow(10, decimal) : offerPriceEth, currency);
 
@@ -5645,7 +5757,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     const floor_price = await getOpenseaFloor(slug);
     const { maxBidPriceEth, offerPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
 
-    const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false)
     const outbidOptions = currentTask.outbidOptions
     if (!floor_price) return
 
@@ -5684,6 +5795,19 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       }
     })
 
+    const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false)
+    if (stopBid) {
+      if (orders.length > 0) {
+        const cancelData = orders.map((order, index) => {
+          return {
+            name: CANCEL_OPENSEA_BID,
+            data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order.id }
+          }
+        })
+        await queue.addBulk(cancelData)
+      }
+      return
+    };
     const [order, ...remainingOrders] = orders
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
     const currentPrice = Number(order ? order.offerPrice : tokenOffer)
@@ -5698,7 +5822,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       await queue.addBulk(cancelData)
     }
 
-    if (stopBid) return;
 
     const createdAt = new Date(order?.createdAt).getTime()
     const expiredAt = new Date(order?.expiresAt).getTime()
@@ -6050,8 +6173,33 @@ async function processBlurTraitBid(data: {
 
     const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), false, traitFloor, identifier)
     const expiry = getExpiry(currentTask.bidDuration)
+    const orders = await prisma.order.findMany({
+      where: {
+        slug: slug,
+        taskId: _id,
+        marketplace: BLUR.toLowerCase(),
+        identifier
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    })
 
-    if (stopBid) return
+    if (stopBid) {
+      if (orders.length > 0) {
+        const cancelData = orders.map((order) => {
+          const payload = JSON.parse(order.orderHash)
+
+          return {
+            name: CANCEL_BLUR_BID,
+            data: { privateKey, payload, taskId: _id, orderKey: order.id }
+          }
+        })
+        await queue.addBulk(cancelData);
+      }
+      return
+
+    }
     if (!floor_price) return
 
     if (!floorPrices[_id]) {
@@ -6066,17 +6214,6 @@ async function processBlurTraitBid(data: {
 
     let traitOffer = BigInt(Math.round(Number(offerPriceEth * Math.pow(10, 18)) / 1e16) * 1e16);
 
-    const orders = await prisma.order.findMany({
-      where: {
-        slug: slug,
-        taskId: _id,
-        marketplace: BLUR.toLowerCase(),
-        identifier
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
-    })
 
     const [order, ...remainingOrders] = orders
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
@@ -6493,14 +6630,6 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
     floorPrices[task._id].magiceden = floor_price;
     const stopBid = await stopOption(currentTask, 'magiceden', floor_price, false)
-
-    if (stopBid) return
-    const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
-
-    let offerPrice = Math.ceil(offerPriceEth * Math.pow(10, decimal))
-
-    let colletionOffer = (Math.round(offerPrice))
-
     const orders = await prisma.order.findMany({
       where: {
         slug: task.contract.slug,
@@ -6512,6 +6641,21 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
         createdAt: 'desc'
       }
     })
+
+    if (stopBid) {
+      if (orders.length > 0) {
+        const orderKeys = orders.map(order => order.id)
+        const extractedOrderIds = await extractMagicedenOrderHash(orders)
+        await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: task.wallet.privateKey, orderKeys: orderKeys, taskId: task._id });
+      }
+      return
+    }
+    const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
+
+    let offerPrice = Math.ceil(offerPriceEth * Math.pow(10, decimal))
+
+    let colletionOffer = (Math.round(offerPrice))
+
 
     const [order, ...remainingOrders] = orders
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
@@ -6533,7 +6677,6 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
 
     else {
       const [topOffer, secondOffer] = await fetchMagicEdenOffer("COLLECTION", task.contract.contractAddress, "{}") as unknown as OpenseaOfferData[]
-      console.log({ MARKETPLACE: MAGICEDEN, TYPE: 'COLLECTION', topOffer, secondOffer });
       const walletsArr = await Wallet.find({})
 
       const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
@@ -6567,9 +6710,6 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
 
       }
       else {
-
-        console.log({ highestBidAmount, outbidMargin, decimal });
-
         colletionOffer = highestBidAmount + (outbidMargin * Math.pow(10, decimal))
       }
     }
@@ -6654,13 +6794,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
     const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), false)
     const expiration = getExpiry(currentTask.bidDuration)
-
-    if (stopBid) return;
-    const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
-
-
-    let tokenOffer = Number(offerPriceEth * Math.pow(10, decimal))
-
     const orders = await prisma.order.findMany({
       where: {
         slug,
@@ -6672,6 +6805,20 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
         createdAt: 'desc'
       }
     })
+
+    if (stopBid) {
+      if (orders.length > 0) {
+        const orderKeys = orders.map((order: PrismaOrder) => order.id)
+        const extractedOrderIds = await extractMagicedenOrderHash(orders)
+        await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: _id });
+      }
+      return
+    };
+    const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
+
+
+    let tokenOffer = Number(offerPriceEth * Math.pow(10, decimal))
+
     const [order, ...remainingOrders] = orders
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
     const currentPrice = Number(order ? order.offerPrice : tokenOffer)
@@ -6692,8 +6839,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     } else {
       const walletsArr = await Wallet.find({})
       const [topOffer, secondOffer] = await fetchMagicEdenOffer("TOKEN", contractAddress, tokenId.toString()) as unknown as OpenseaOfferData[]
-      console.log({ MARKETPLACE: MAGICEDEN, TYPE: 'TOKEN', tokenId: tokenId, topOffer, secondOffer });
-
       // Add null checks and default values 
       const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
       const secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal)
@@ -6840,10 +6985,33 @@ async function processMagicedenTraitBid(data: {
     const identifier = `${trait.attributeKey}:${trait.attributeValue}`
 
     const traitFloor = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices ? await fetchMagicEdenTraitFloor(contractAddress, { attributeKey: trait.attributeKey, attributeValue: trait.attributeValue }) : undefined
+    const orders = await prisma.order.findMany({
+      where: {
+        slug,
+        taskId: _id,
+        identifier: identifier,
+        marketplace: MAGICEDEN.toLowerCase()
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    })
 
     const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), false, traitFloor, identifier)
 
-    if (stopBid) return;
+    if (stopBid) {
+      if (orders.length > 0) {
+        const orderKeys = orders.map((order: PrismaOrder) => order.id)
+        const extractedOrderIds = await extractMagicedenOrderHash(orders)
+        await queue.add(CANCEL_MAGICEDEN_BID, {
+          orderIds: extractedOrderIds,
+          privateKey,
+          orderKeys,
+          taskId: _id
+        });
+      }
+      return
+    };
     const expiration = getExpiry(currentTask.bidDuration)
     if (!floorPrices[currentTask._id]) {
       floorPrices[currentTask._id] = {
@@ -6857,17 +7025,6 @@ async function processMagicedenTraitBid(data: {
     const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
     let traitOffer = Number(offerPriceEth * Math.pow(10, decimal))
 
-    const orders = await prisma.order.findMany({
-      where: {
-        slug,
-        taskId: _id,
-        identifier: identifier,
-        marketplace: MAGICEDEN.toLowerCase()
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
-    })
     const [order, ...remainingOrders] = orders
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
     const currrentPrice = Number(order ? order.offerPrice : traitOffer)
@@ -6889,7 +7046,6 @@ async function processMagicedenTraitBid(data: {
     else {
       const walletsArr = await Wallet.find({})
       const [topOffer, secondOffer] = await fetchMagicEdenOffer("TRAIT", contractAddress, trait) as unknown as OpenseaOfferData[]
-      console.log({ MARKETPLACE: MAGICEDEN, TYPE: 'TRAIT', trait: JSON.stringify(trait), topOffer, secondOffer });
       const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
       const secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal)
       const owner = topOffer && typeof topOffer === 'object' ? topOffer.owner?.toLowerCase() : '';
@@ -8164,8 +8320,6 @@ function subscribeToCollections(tasks: ITask[]) {
           console.log('----------------------------------------------------------------------');
           console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} MAGICEDEN`);
           console.log('----------------------------------------------------------------------');
-        } else {
-          console.log(`Already subscribed to ${task.contract.slug} on MAGICEDEN, skipping...`);
         }
       }
 
@@ -8194,8 +8348,6 @@ function subscribeToCollections(tasks: ITask[]) {
           console.log('----------------------------------------------------------------------');
           console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} BLUR`);
           console.log('----------------------------------------------------------------------');
-        } else {
-          console.log(`Already subscribed to ${task.contract.slug} on BLUR, skipping...`);
         }
       }
 
