@@ -153,38 +153,43 @@ class BalanceChecker {
     const result = await this.lockManager.withLock(
       `beth_${address}`,
       async () => {
-        const cachedBalanceAfterLock = await this.getCachedBalance(cacheKey);
-        if (cachedBalanceAfterLock !== null) {
-          return cachedBalanceAfterLock;
-        }
+    const cachedBalanceAfterLock = await this.getCachedBalance(cacheKey);
+    if (cachedBalanceAfterLock !== null) {
+      return cachedBalanceAfterLock;
+    }
 
-        const wethContract = new ethers.Contract(
-          BLUR_POOL_ADDRESS,
-          ['function balanceOf(address) view returns (uint256)'],
-          this.deps.provider
-        );
+    const wethContract = new ethers.Contract(
+      BLUR_POOL_ADDRESS,
+      ['function balanceOf(address) view returns (uint256)'],
+      this.deps.provider
+    );
 
-        const maxRetries = 3;
-        for (let attempt = 0; attempt <= maxRetries; attempt++) {
-          try {
-            const balance = await wethContract.balanceOf(address);
-            const formattedBalance = Number(ethers.utils.formatEther(balance));
+    const maxRetries = 3;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const balance = await wethContract.balanceOf(address);
 
-            await this.setCachedBalance(cacheKey, formattedBalance);
-            return formattedBalance;
-          } catch (error: any) {
-            if (attempt === maxRetries) {
-              console.error(RED + "Error fetching BETH balance after retries:", error?.response?.data + RESET);
-              if (cachedBalance !== null) {
-                return cachedBalance;
-              }
-              throw error;
-            }
-            const backoffTime = Math.pow(2, attempt) * 1000; // Exponential backoff
-            await new Promise(resolve => setTimeout(resolve, backoffTime));
+        console.log({ balance });
+
+        const formattedBalance = Number(ethers.utils.formatEther(balance));
+
+        console.log({ formattedBalance });
+
+        await this.setCachedBalance(cacheKey, formattedBalance);
+        return formattedBalance;
+      } catch (error: any) {
+        if (attempt === maxRetries) {
+          console.error(RED + "Error fetching BETH balance after retries:", error?.response?.data + RESET);
+          if (cachedBalance !== null) {
+            return cachedBalance;
           }
+          throw error;
         }
+        const backoffTime = Math.pow(2, attempt) * 1000; // Exponential backoff
+        await new Promise(resolve => setTimeout(resolve, backoffTime));
       }
+    }
+    }
     );
 
     if (result !== undefined && result !== null) {

@@ -7,7 +7,7 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = "file:/app/data/app.db?timeout=10000"
+  url      = env("DATABASE_URL")
 }
 
 model Order {

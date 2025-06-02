@@ -27,48 +27,42 @@ export async function getCollectionDetails(slug: string, contractAddress: string
     if (collectionCache[slug]) {
       return collectionCache[slug];
     }
-
-    try {
-      const { data: collection } = await limiter.schedule(() => axiosInstance
-        .get(
-          `${BASE_URL}/opensea/api/v2/collections/${slug}`,
-          {
-            headers: {
-              'x-api-key': API_KEY
-            }
+    const { data: collection } = await limiter.schedule(() => axiosInstance
+      .get(
+        `${BASE_URL}/opensea/api/v2/collections/${slug}`,
+        {
+          headers: {
+            'x-api-key': API_KEY
           }
-        ));
+        }
+      ));
 
-
-      let creator_fees;
-      let enforceCreatorFee = false;
-      if (collection?.fees?.length > 1) {
-        creator_fees = {
-          [collection.fees[1].recipient]: collection.fees[1].fee * 100
-        };
-        enforceCreatorFee = collection.fees[1].required;
-      } else {
-        creator_fees = { null: 0 }
-      }
-
-      if (Object.keys(collectionCache).length >= MAX_CACHE_ITEMS) {
-        delete collectionCache[Object.keys(collectionCache)[0]];
-      }
-
-      const result = {
-        address: collection.editors[0],
-        primary_asset_contracts_address: contractAddress,
-        creator_fees: creator_fees,
-        enforceCreatorFee: enforceCreatorFee,
-        ...collection
+    let creator_fees;
+    let enforceCreatorFee = false;
+    if (collection?.fees?.length > 1) {
+      creator_fees = {
+        [collection.fees[1].recipient]: collection.fees[1].fee * 100
       };
-
-      collectionCache[slug] = result;
-      return result;
-    } catch (error: any) {
-
-      throw error
+      enforceCreatorFee = collection.fees[1].required;
+    } else {
+      creator_fees = { null: 0 }
     }
+
+    if (Object.keys(collectionCache).length >= MAX_CACHE_ITEMS) {
+      delete collectionCache[Object.keys(collectionCache)[0]];
+    }
+
+    const result = {
+      address: collection.editors[0],
+      primary_asset_contracts_address: contractAddress,
+      creator_fees: creator_fees,
+      enforceCreatorFee: enforceCreatorFee,
+      ...collection
+    };
+
+    collectionCache[slug] = result;
+    return result;
+
   });
 
   if (!result) {
@@ -96,36 +90,21 @@ export async function getOpenseaFloor(collectionSlug: string) {
   // If not in cache, try to acquire lock and fetch
   const result = await lockManager.withLock(lockKey, async () => {
     // Double check cache after acquiring lock
-    try {
-      const cachedFloor = await redis.get(cacheKey);
-      if (cachedFloor) {
-        return JSON.parse(cachedFloor);
-      }
-    } catch (error) {
-      console.error('Error reading from cache after lock:', error);
+    const cachedFloor = await redis.get(cacheKey);
+    if (cachedFloor) {
+      return JSON.parse(cachedFloor);
     }
-
-    try {
-      const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
-        `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
-        {
-          headers: { 'x-api-key': API_KEY }
-        }
-      ));
-
-      // Check if listings exist and has item
-      const floor_price = Number(data?.listings[0]?.price?.current?.value) / 1e18 || 0;
-      // Cache the result
-      try {
-        await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
-      } catch (error) {
-        console.error('Error writing to cache:', error);
+    const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
+      `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
+      {
+        headers: { 'x-api-key': API_KEY }
       }
-
-      return floor_price;
-    } catch (error: any) {
-      throw error;
-    }
+    ));
+    // Check if listings exist and has item
+    const floor_price = Number(data?.listings[0]?.price?.current?.value) / 1e18 || 0;
+    // Cache the result
+    await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+    return floor_price;
   });
 
   if (!result) {
@@ -146,20 +125,16 @@ export async function getOpenseaFloor(collectionSlug: string) {
 }
 
 export async function getOpenseaCollectionStats(collectionSlug: string) {
-  try {
-    const { data } = await limiter.schedule(() => axiosInstance.get(
-      `${BASE_URL}/opensea/api/v2/collections/${collectionSlug}/stats`,
-      {
-        headers: { 'x-api-key': API_KEY }
-      }
-    ));
-    if (!data?.total) {
-      throw new Error(`No listings found for collection ${collectionSlug}`);
+  const { data } = await limiter.schedule(() => axiosInstance.get(
+    `${BASE_URL}/opensea/api/v2/collections/${collectionSlug}/stats`,
+    {
+      headers: { 'x-api-key': API_KEY }
     }
-    return data?.total?.floor_price;
-  } catch (error: any) {
-    throw error;
+  ));
+  if (!data?.total) {
+    throw new Error(`No listings found for collection ${collectionSlug}`);
   }
+  return data?.total?.floor_price;
 }
 
 export async function getCollectionEvents(

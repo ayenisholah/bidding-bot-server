@@ -25,6 +25,10 @@ RUN npm ci
 COPY . .
 
 
+# Set DATABASE_URL for Prisma
+ENV DATABASE_URL="file:/app/data/app.db?timeout=10000"
+
+
 # Build the Next.js application
 RUN npm run build
 

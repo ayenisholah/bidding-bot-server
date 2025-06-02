@@ -61,61 +61,54 @@ export async function bidOnMagiceden(
   trait?: Trait,
   tokenId?: number
 ) {
-  try {
 
-    const task = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase() && task.selectedMarketplaces.includes("MagicEden"))
-    if (!task) return
+  const task = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase() && task.selectedMarketplaces.includes("MagicEden"))
+  if (!task) return
 
-    const duration = bidExpiry / 60 || 15; // minutes
-    const currentTime = new Date().getTime();
-    const expiration = Math.floor((currentTime + (duration * 60 * 1000)) / 1000);
+  const duration = bidExpiry / 60 || 15; // minutes
+  const currentTime = new Date().getTime();
+  const expiration = Math.floor((currentTime + (duration * 60 * 1000)) / 1000);
 
-    const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
+  const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
 
-    const wallet = new Wallet(privateKey, provider);
-    const offerPriceEth = Math.round(Number(weiPrice)) / Math.pow(10, decimal)
-    const wethBalance = await balanceChecker.getERC20Balance(maker, currency);
+  const wallet = new Wallet(privateKey, provider);
+  const offerPriceEth = Math.round(Number(weiPrice)) / Math.pow(10, decimal)
+  const wethBalance = await balanceChecker.getERC20Balance(maker, currency);
 
-    let decimals;
-    if (offerPriceEth >= 1) {
-      decimals = 2;
-    } else if (offerPriceEth >= 0.1) {
-      decimals = 3;
-    } else {
-      decimals = 4;
-    }
-
-    const roundedEth = currency.toLowerCase() === USDC.toLowerCase() ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
-
-    const basis = decimals === 2 ? 1e16 : decimals === 3 ? 1e15 : 1e14
-    const roundedWei = decimal === 18 ? Math.round(roundedEth * Math.pow(10, decimal) / basis) * basis : Math.round(roundedEth * Math.pow(10, decimal))
-
-    const currencySymbol = currency.toLowerCase() === USDC.toLowerCase() ? "USDC" : "WETH"
-
-    if (offerPriceEth > wethBalance) {
-      const identifier = trait ? `${trait.attributeKey}:${trait.attributeValue}` : tokenId ? tokenId : 'collection';
-      const message = `[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEth} ${currencySymbol} is greater than available ${currencySymbol} balance: ${wethBalance} ${currencySymbol}. SKIPPING  MAGICEDEN...`
-      throw new Error(message)
-    }
-
-    const order = await createBidData(taskId, slug, maker, collection, quantity, Math.round(Number(weiPrice)).toString(), expiration.toString(), currency, trait, tokenId);
-
-    if (!order) return
-    try {
-      if (tokenId) {
-        await submitSignedOrderData(taskId, roundedWei.toString(), decimal, currencySymbol, bidCount, order, wallet, slug, bidExpiry, undefined, tokenId)
-      } else if (trait) {
-        await submitSignedOrderData(taskId, roundedWei.toString(), decimal, currencySymbol, bidCount, order, wallet, slug, bidExpiry, trait, undefined)
-      } else {
-        await submitSignedOrderData(taskId, roundedWei.toString(), decimal, currencySymbol, bidCount, order, wallet, slug, bidExpiry, undefined, undefined)
-      }
-    } catch (error: any) {
-      throw error
-    }
-    return order
-  } catch (error: any) {
-    throw error
+  let decimals;
+  if (offerPriceEth >= 1) {
+    decimals = 2;
+  } else if (offerPriceEth >= 0.1) {
+    decimals = 3;
+  } else {
+    decimals = 4;
   }
+
+  const roundedEth = currency.toLowerCase() === USDC.toLowerCase() ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
+
+  const basis = decimals === 2 ? 1e16 : decimals === 3 ? 1e15 : 1e14
+  const roundedWei = decimal === 18 ? Math.round(roundedEth * Math.pow(10, decimal) / basis) * basis : Math.round(roundedEth * Math.pow(10, decimal))
+
+  const currencySymbol = currency.toLowerCase() === USDC.toLowerCase() ? "USDC" : "WETH"
+
+  if (offerPriceEth > wethBalance) {
+    const identifier = trait ? `${trait.attributeKey}:${trait.attributeValue}` : tokenId ? tokenId : 'collection';
+    const message = `[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEth} ${currencySymbol} is greater than available ${currencySymbol} balance: ${wethBalance} ${currencySymbol}. SKIPPING  MAGICEDEN...`
+    throw new Error(message)
+  }
+
+  const order = await createBidData(taskId, slug, maker, collection, quantity, Math.round(Number(weiPrice)).toString(), expiration.toString(), currency, trait, tokenId);
+
+  if (!order) return
+
+  if (tokenId) {
+    await submitSignedOrderData(taskId, roundedWei.toString(), decimal, currencySymbol, bidCount, order, wallet, slug, bidExpiry, undefined, tokenId)
+  } else if (trait) {
+    await submitSignedOrderData(taskId, roundedWei.toString(), decimal, currencySymbol, bidCount, order, wallet, slug, bidExpiry, trait, undefined)
+  } else {
+    await submitSignedOrderData(taskId, roundedWei.toString(), decimal, currencySymbol, bidCount, order, wallet, slug, bidExpiry, undefined, undefined)
+  }
+  return order
 }
 
 /**
@@ -223,62 +216,59 @@ async function createBidData(
  * @returns The signature.
  */
 async function signOrderData(taskId: string, wallet: ethers.Wallet, signData: any, trait?: Trait): Promise<string> {
-  try {
-    if (!signData) {
-      throw new Error('Asset does not exist.');
-    }
-
-    const domain = trait ? {
-      "name": "Seaport",
-      "version": "1.6",
-      "chainId": 1,
-      "verifyingContract": "0x0000000000000068f116a894984e2db1123eb395"
-    } : signData && signData.domain ? signData.domain : {
-      "name": "Seaport",
-      "version": "1.6",
-      "chainId": 1,
-      "verifyingContract": "0x0000000000000068f116a894984e2db1123eb395"
-    }
-
-    const types = trait ? {
-      "OrderComponents": [
-        { "name": "offerer", "type": "address" },
-        { "name": "zone", "type": "address" },
-        { "name": "offer", "type": "OfferItem[]" },
-        { "name": "consideration", "type": "ConsiderationItem[]" },
-        { "name": "orderType", "type": "uint8" },
-        { "name": "startTime", "type": "uint256" },
-        { "name": "endTime", "type": "uint256" },
-        { "name": "zoneHash", "type": "bytes32" },
-        { "name": "salt", "type": "uint256" },
-        { "name": "conduitKey", "type": "bytes32" },
-        { "name": "counter", "type": "uint256" }
-      ],
-      "OfferItem": [
-        { "name": "itemType", "type": "uint8" },
-        { "name": "token", "type": "address" },
-        { "name": "identifierOrCriteria", "type": "uint256" },
-        { "name": "startAmount", "type": "uint256" },
-        { "name": "endAmount", "type": "uint256" }
-      ],
-      "ConsiderationItem": [
-        { "name": "itemType", "type": "uint8" },
-        { "name": "token", "type": "address" },
-        { "name": "identifierOrCriteria", "type": "uint256" },
-        { "name": "startAmount", "type": "uint256" },
-        { "name": "endAmount", "type": "uint256" },
-        { "name": "recipient", "type": "address" }
-      ]
-    } : signData.types
-    const signature = await wallet._signTypedData(
-      domain,
-      types,
-      signData.value
-    );
-    return signature;
-  } catch (error: any) {
-    throw error
+  if (!signData) {
+    throw new Error('Asset does not exist.');
   }
+
+  const domain = trait ? {
+    "name": "Seaport",
+    "version": "1.6",
+    "chainId": 1,
+    "verifyingContract": "0x0000000000000068f116a894984e2db1123eb395"
+  } : signData && signData.domain ? signData.domain : {
+    "name": "Seaport",
+    "version": "1.6",
+    "chainId": 1,
+    "verifyingContract": "0x0000000000000068f116a894984e2db1123eb395"
+  }
+
+  const types = trait ? {
+    "OrderComponents": [
+      { "name": "offerer", "type": "address" },
+      { "name": "zone", "type": "address" },
+      { "name": "offer", "type": "OfferItem[]" },
+      { "name": "consideration", "type": "ConsiderationItem[]" },
+      { "name": "orderType", "type": "uint8" },
+      { "name": "startTime", "type": "uint256" },
+      { "name": "endTime", "type": "uint256" },
+      { "name": "zoneHash", "type": "bytes32" },
+      { "name": "salt", "type": "uint256" },
+      { "name": "conduitKey", "type": "bytes32" },
+      { "name": "counter", "type": "uint256" }
+    ],
+    "OfferItem": [
+      { "name": "itemType", "type": "uint8" },
+      { "name": "token", "type": "address" },
+      { "name": "identifierOrCriteria", "type": "uint256" },
+      { "name": "startAmount", "type": "uint256" },
+      { "name": "endAmount", "type": "uint256" }
+    ],
+    "ConsiderationItem": [
+      { "name": "itemType", "type": "uint8" },
+      { "name": "token", "type": "address" },
+      { "name": "identifierOrCriteria", "type": "uint256" },
+      { "name": "startAmount", "type": "uint256" },
+      { "name": "endAmount", "type": "uint256" },
+      { "name": "recipient", "type": "address" }
+    ]
+  } : signData.types
+  const signature = await wallet._signTypedData(
+    domain,
+    types,
+    signData.value
+  );
+  return signature;
+
 }
 
 /**
@@ -295,7 +285,7 @@ async function signOrderData(taskId: string, wallet: ethers.Wallet, signData: an
 async function sendSignedOrderData(taskId: string, offerPrice: string | number, decimal: number, currencySymbol: string, bidCount: string, signature: string, data: any, slug: string, expiry: number, trait?: Trait, tokenId?: number | string) {
   try {
 
-    const [taskId, count] = bidCount.split(":")
+    const [taskId] = bidCount.split(":")
 
     const task = await currentTasks.find((task) =>
       task.contract.slug.toLowerCase() === slug.toLowerCase() &&
@@ -422,77 +412,73 @@ export async function submitSignedOrderData(taskId: string, offerPrice: string |
       }
     });
   }
+  const signData = order?.steps
+    ?.find((step) => step.id === "order-signature")
+    ?.items?.[0]?.data?.sign;
 
-  try {
-    const signData = order?.steps
+  const signature = await signOrderData(taskId, wallet, signData, trait);
+  let data: any;
+
+  if (trait) {
+    const orderSignatureStep = order.steps.find(step => step.id === "order-signature") as any;
+    const attributeStep = order.steps.find(step => step.id === "order-signature") as any
+    const attribute = attributeStep?.items[0]?.data?.post?.body?.attribute;
+    const valueObject = orderSignatureStep.items[0].data.sign.value;
+
+    data = {
+      "order": {
+        "kind": "seaport-v1.6",
+        "data": {
+          "kind": "token-list",
+          ...valueObject,
+          "signature": "0x0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      },
+      "attribute": {
+        "collection": attribute.collection,
+        "key": trait.attributeKey,
+        "value": trait.attributeValue
+      },
+      "isNonFlagged": false,
+      "orderbook": "reservoir",
+      "source": "magiceden.us"
+    };
+  } else if (tokenId) {
+    data = order?.steps
       ?.find((step) => step.id === "order-signature")
-      ?.items?.[0]?.data?.sign;
-
-    const signature = await signOrderData(taskId, wallet, signData, trait);
-    let data: any;
-
-    if (trait) {
-      const orderSignatureStep = order.steps.find(step => step.id === "order-signature") as any;
-      const attributeStep = order.steps.find(step => step.id === "order-signature") as any
-      const attribute = attributeStep?.items[0]?.data?.post?.body?.attribute;
-      const valueObject = orderSignatureStep.items[0].data.sign.value;
-
+      ?.items?.[0]?.data?.post.body;
+  } else {
+    if (signData) {
+      const payload = signData.value;
+      const { buyer, ...rest } = payload;
       data = {
-        "order": {
-          "kind": "seaport-v1.6",
-          "data": {
-            "kind": "token-list",
-            ...valueObject,
-            "signature": "0x0000000000000000000000000000000000000000000000000000000000000000"
-          }
-        },
-        "attribute": {
-          "collection": attribute.collection,
-          "key": trait.attributeKey,
-          "value": trait.attributeValue
-        },
-        "isNonFlagged": false,
-        "orderbook": "reservoir",
-        "source": "magiceden.us"
-      };
-    } else if (tokenId) {
-      data = order?.steps
-        ?.find((step) => step.id === "order-signature")
-        ?.items?.[0]?.data?.post.body;
-    } else {
-      if (signData) {
-        const payload = signData.value;
-        const { buyer, ...rest } = payload;
-        data = {
-          items: [
-            {
-              order: {
-                kind: "payment-processor-v2",
-                data: {
-                  kind: "collection-offer-approval",
-                  sellerOrBuyer: buyer,
-                  ...rest,
-                  r: "0x0000000000000000000000000000000000000000000000000000000000000000",
-                  s: "0x0000000000000000000000000000000000000000000000000000000000000000",
-                  v: 0,
-                },
+        items: [
+          {
+            order: {
+              kind: "payment-processor-v2",
+              data: {
+                kind: "collection-offer-approval",
+                sellerOrBuyer: buyer,
+                ...rest,
+                r: "0x0000000000000000000000000000000000000000000000000000000000000000",
+                s: "0x0000000000000000000000000000000000000000000000000000000000000000",
+                v: 0,
               },
-              orderbook: "reservoir",
             },
-          ],
-          source: "magiceden.us",
-        };
-      } else {
-        console.error('Sign data not found in order steps.');
-      }
-
+            orderbook: "reservoir",
+          },
+        ],
+        source: "magiceden.us",
+      };
+    } else {
+      console.error('Sign data not found in order steps.');
     }
 
-    const result = await sendSignedOrderData(taskId, offerPrice, decimal, currencySymbol, bidCount, signature, data, slug, expiry, trait, tokenId);
-    return result;
-  } catch (error: any) {
-    throw error
   }
+
+  const result = await sendSignedOrderData(taskId, offerPrice, decimal, currencySymbol, bidCount, signature, data, slug, expiry, trait, tokenId);
+  return result;
+
 
 }
 
@@ -500,12 +486,10 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
   try {
     if (!orderIds?.length) return;
     const processedOrderIds = await Promise.all(orderIds?.map(async (orderId: any) => {
-      try {
-        const parsed = JSON.parse(orderId);
-        return parsed.orderId || orderId;
-      } catch (error: any) {
-        return orderId;
-      }
+
+      const parsed = JSON.parse(orderId);
+      return parsed.orderId || orderId;
+
     }));
 
     if (!processedOrderIds.length) return;
@@ -574,125 +558,120 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
 
 
 async function signCancelOrder(taskId: string, cancelItem: any | undefined, privateKey: string) {
-  try {
-    if (!cancelItem) return
 
-    const wallet = new Wallet(privateKey, provider);
+  if (!cancelItem) return
 
-    const signature = await wallet._signTypedData(
-      cancelItem.domain,
-      cancelItem.types,
-      cancelItem.value
-    );
+  const wallet = new Wallet(privateKey, provider);
 
-    return signature;
-  } catch (error: any) {
-    throw error
-  }
+  const signature = await wallet._signTypedData(
+    cancelItem.domain,
+    cancelItem.types,
+    cancelItem.value
+  );
+
+  return signature;
+
 }
 
 export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN", contractAddress: string, identifier?: string | {
   attributeKey: string;
   attributeValue: string;
 }) {
-  try {
-    if (type === "COLLECTION") {
-      const { data } = await limiter?.schedule(() =>
-        axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection`, {
+
+  if (type === "COLLECTION") {
+    const { data } = await limiter?.schedule(() =>
+      axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection`, {
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY
+        }
+      })
+    );
+
+    const offers = data?.orders.map((order) => {
+      return {
+        amount: order?.price?.amount?.raw,
+        owner: order?.maker,
+        currency: order?.price.currency.symbol.toUpperCase(),
+        usd: order?.price?.amount?.usd,
+        decimal: order.price.currency.decimals,
+        eth: order.price.amount.native
+      }
+    })?.sort((a, b) => Number(b?.usd) - Number(a?.usd))
+
+    return offers
+  } else if (type === "TOKEN") {
+    const tasks = [
+      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${identifier}&sortBy=price&status=active&excludeEOA=false&limit=2`, {
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY
+        }
+      })),
+
+      () => limiter.schedule(() =>
+        axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price&status=active&excludeEOA=false&limit=2`, {
           headers: {
             'content-type': 'application/json',
             'x-api-key': API_KEY
           }
         })
-      );
+      )
+    ]
 
-      const offers = data?.orders.map((order) => {
-        return {
-          amount: order?.price?.amount?.raw,
-          owner: order?.maker,
-          currency: order?.price.currency.symbol.toUpperCase(),
-          usd: order?.price?.amount?.usd,
-          decimal: order.price.currency.decimals,
-          eth: order.price.amount.native
+    const [tokenResponse, collectionResponse] = await pQueue.addAll(tasks, {
+      throwOnTimeout: true,
+    });
+    const data = [...tokenResponse.data.orders, ...collectionResponse.data.orders]
+    const offers = data.map((order) => {
+      return {
+        amount: order?.price?.amount?.raw,
+        owner: order?.maker,
+        currency: order?.price.currency.symbol.toUpperCase(),
+        usd: order?.price?.amount?.usd,
+        decimal: order.price.currency.decimals,
+        eth: order.price.amount.native
+      }
+    })?.sort((a, b) => Number(b.usd) - Number(a.usd))
+
+    return offers
+
+  } else if (type === "TRAIT" && typeof identifier === "object" && identifier.attributeKey && identifier.attributeValue) {
+    const tasks = [
+      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sources=magiceden.io&sources=magiceden.us&limit=2&sortBy=price`, {
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY
         }
-      })?.sort((a, b) => Number(b?.usd) - Number(a?.usd))
-
-      return offers
-    } else if (type === "TOKEN") {
-      const tasks = [
-        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${identifier}&sortBy=price&status=active&excludeEOA=false&limit=2`, {
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': API_KEY
-          }
-        })),
-
-        () => limiter.schedule(() =>
-          axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price&status=active&excludeEOA=false&limit=2`, {
+      })),
+      () => {
+        const URL = `${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v5?collection=${contractAddress}&attribute%5B${identifier?.attributeKey}%5D=${identifier.attributeValue}&sortBy=price&status=active&limit=2`;
+        return limiter.schedule(() => axiosInstance.get<MagicEdenTraitOfferResponse>(
+          URL,
+          {
             headers: {
-              'content-type': 'application/json',
-              'x-api-key': API_KEY
+              'x-api-key': API_KEY,
             }
-          })
-        )
-      ]
-
-      const [tokenResponse, collectionResponse] = await pQueue.addAll(tasks, {
-        throwOnTimeout: true,
-      });
-      const data = [...tokenResponse.data.orders, ...collectionResponse.data.orders]
-      const offers = data.map((order) => {
-        return {
-          amount: order?.price?.amount?.raw,
-          owner: order?.maker,
-          currency: order?.price.currency.symbol.toUpperCase(),
-          usd: order?.price?.amount?.usd,
-          decimal: order.price.currency.decimals,
-          eth: order.price.amount.native
-        }
-      })?.sort((a, b) => Number(b.usd) - Number(a.usd))
-
-      return offers
-
-    } else if (type === "TRAIT" && typeof identifier === "object" && identifier.attributeKey && identifier.attributeValue) {
-      const tasks = [
-        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sources=magiceden.io&sources=magiceden.us&limit=2&sortBy=price`, {
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': API_KEY
           }
-        })),
-        () => {
-          const URL = `${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v5?collection=${contractAddress}&attribute%5B${identifier?.attributeKey}%5D=${identifier.attributeValue}&sortBy=price&status=active&limit=2`;
-          return limiter.schedule(() => axiosInstance.get<MagicEdenTraitOfferResponse>(
-            URL,
-            {
-              headers: {
-                'x-api-key': API_KEY,
-              }
-            }
-          ));
-        }
-      ];
+        ));
+      }
+    ];
 
-      const [collectionResponse, traitResponse] = await pQueue.addAll(tasks, {
-        throwOnTimeout: true,
-      });
-      const data = [...collectionResponse.data.orders, ...traitResponse.data.orders];
-      const offers = data.map((order) => {
-        return {
-          amount: order?.price?.amount?.raw,
-          owner: order?.maker,
-          currency: order?.price.currency.symbol.toUpperCase(),
-          usd: order?.price?.amount?.usd,
-          decimal: order.price.currency.decimals,
-          eth: order.price.amount.native
-        }
-      })?.sort((a, b) => Number(b.usd) - Number(a.usd))
-      return offers
-    }
-  } catch (error: any) {
-    throw error
+    const [collectionResponse, traitResponse] = await pQueue.addAll(tasks, {
+      throwOnTimeout: true,
+    });
+    const data = [...collectionResponse.data.orders, ...traitResponse.data.orders];
+    const offers = data.map((order) => {
+      return {
+        amount: order?.price?.amount?.raw,
+        owner: order?.maker,
+        currency: order?.price.currency.symbol.toUpperCase(),
+        usd: order?.price?.amount?.usd,
+        decimal: order.price.currency.decimals,
+        eth: order.price.amount.native
+      }
+    })?.sort((a, b) => Number(b.usd) - Number(a.usd))
+    return offers
   }
 }
 
@@ -714,7 +693,7 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
     queryParams.append("excludeSources[]", "nftx.io");
     queryParams.append("excludeSources[]", "sudoswap.xyz");
     const fullUrl = `${BASE_URL}/magiceden/v3/rtp/ethereum/tokens/v7?${queryParams.toString()}`;
-    const { data } = await limiter.schedule(() => axiosInstance.get<TokenData>(fullUrl, {
+    const { data } = await limiter.schedule(() => axiosInstance.get<TokenDataList>(fullUrl, {
       headers: {
         'x-api-key': API_KEY,
       },
@@ -765,29 +744,26 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
       includeAttributes: false,
     };
 
-    try {
-      const { data } = await limiter.schedule(() =>
-        axiosInstance.get(`${BASE_URL}/magiceden/v3/rtp/ethereum/tokens/v7`, {
-          params: queryParams,
-          headers: {
-            'x-api-key': API_KEY
-          }
-        })
-      );
-      const stats = data?.tokens[0]?.market?.floorAsk?.price?.amount?.decimal || 0;
-      // Cache the result
-      if (stats !== undefined) {
-        try {
-          await redis.set(cacheKey, JSON.stringify(stats), 'EX', CACHE_TTL);
-        } catch (error) {
-          console.error('Error writing to cache:', error);
+    const { data } = await limiter.schedule(() =>
+      axiosInstance.get(`${BASE_URL}/magiceden/v3/rtp/ethereum/tokens/v7`, {
+        params: queryParams,
+        headers: {
+          'x-api-key': API_KEY
         }
+      })
+    );
+    const stats = data?.tokens[0]?.market?.floorAsk?.price?.amount?.decimal || 0;
+    // Cache the result
+    if (stats !== undefined) {
+      try {
+        await redis.set(cacheKey, JSON.stringify(stats), 'EX', CACHE_TTL);
+      } catch (error) {
+        console.error('Error writing to cache:', error);
       }
-
-      return stats;
-    } catch (error: any) {
-      throw error;
     }
+
+    return stats;
+
   });
   if (!result) {
     // If we couldn't acquire the lock, wait briefly and try cache again
@@ -811,7 +787,6 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
   return await lockManager.withLock(
     lockKey,
     async () => {
-      const startTime = Date.now();
       const params: any = {
         excludeSpam: true,
         excludeBurnt: true,
@@ -825,31 +800,29 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
       };
       const url = `${BASE_URL}/magiceden/v3/rtp/ethereum/tokens/v7`;
       const allTokens: number[] = [];
-      try {
-        let totalFetched = 0;
-        if (!limit) return
-        do {
-          const { data } = await limiter.schedule(() => axiosInstance.get<TokenResponseMagiceden>(
-            url,
-            {
-              headers: {
-                accept: "application/json",
-                "x-api-key": API_KEY,
-              },
-              params
-            }
-          ))
 
-          const tokens = data?.tokens?.map((item: any) => +item?.token?.tokenId);
-          allTokens.push(...tokens);
-          totalFetched += tokens.length;
-          params.continuation = data?.continuation;
-        } while (params.continuation && totalFetched < limit);
+      let totalFetched = 0;
+      if (!limit) return
+      do {
+        const { data } = await limiter.schedule(() => axiosInstance.get<TokenResponseMagiceden>(
+          url,
+          {
+            headers: {
+              accept: "application/json",
+              "x-api-key": API_KEY,
+            },
+            params
+          }
+        ))
 
-        return allTokens.slice(0, limit);
-      } catch (error: any) {
-        throw error
-      }
+        const tokens = data?.tokens?.map((item: any) => +item?.token?.tokenId);
+        allTokens.push(...tokens);
+        totalFetched += tokens.length;
+        params.continuation = data?.continuation;
+      } while (params.continuation && totalFetched < limit);
+
+      return allTokens.slice(0, limit);
+
     },
     60 // Lock TTL in seconds - longer for token fetching since it's paginated
   );
@@ -992,15 +965,6 @@ interface DomainCancel {
   verifyingContract: string;
 }
 
-interface TypesCancel {
-  OrderHashes: OrderHashCancel[];
-}
-
-interface OrderHashCancel {
-  name: string;
-  type: string;
-}
-
 interface ValueCancel {
   orderHashes: string[];
 }
@@ -1081,133 +1045,11 @@ interface CreateBidData {
 
 }
 
-interface OrderData {
-  kind: string;
-  sellerOrBuyer: string;
-  protocol: number;
-  cosigner: string;
-  beneficiary: string;
-  marketplace: string;
-  fallbackRoyaltyRecipient: string;
-  paymentMethod: string;
-  tokenAddress: string;
-  amount: string;
-  itemPrice: string;
-  expiration: string;
-  marketplaceFeeNumerator: string;
-  nonce: string;
-  masterNonce: string;
-  r: string;
-  s: string;
-  v: number;
-}
-
-interface Order {
-  kind: string;
-  data: OrderData;
-}
-
-interface Item {
-  order: Order;
-  orderbook: string;
-}
-
-interface SignedData {
-  items: Item[];
-  source: string;
-}
 
 interface Trait {
   attributeKey: string;
   attributeValue: string;
 };
-
-
-
-interface MagicEdenTokenOrder {
-  id: string;
-  kind: string;
-  side: 'buy' | 'sell';
-  status: 'active' | string;
-  tokenSetId: string;
-  tokenSetSchemaHash: string;
-  contract: string;
-  contractKind: string;
-  maker: string;
-  taker: string;
-  price: MagicEdenTokenPrice;
-  validFrom: number;
-  validUntil: number;
-  quantityFilled: number;
-  quantityRemaining: number;
-  criteria: MagicEdenTokenCriteria;
-  source: MagicEdenTokenSource;
-  feeBps: number;
-  feeBreakdown: MagicEdenTokenFeeBreakdown[];
-  expiration: number;
-  isReservoir: boolean | null;
-  createdAt: string;
-  updatedAt: string;
-  originatedAt: string | null;
-  isNativeOffChainCancellable: boolean;
-}
-
-interface MagicEdenTokenPrice {
-  currency: MagicEdenTokenCurrency;
-  amount: MagicEdenTokenAmount;
-  netAmount: MagicEdenTokenAmount;
-}
-
-interface MagicEdenTokenCurrency {
-  contract: string;
-  name: string;
-  symbol: string;
-  decimals: number;
-}
-
-interface MagicEdenTokenAmount {
-  raw: string;
-  decimal: number;
-  usd: number;
-  native: number;
-}
-
-interface MagicEdenTokenCriteria {
-  kind: 'token' | 'collection' | 'attribute';
-  data: MagicEdenTokenCriteriaData;
-}
-
-interface MagicEdenTokenCriteriaData {
-  token?: {
-    tokenId: string;
-  };
-  collection?: {
-    id: string;
-  };
-  attribute?: {
-    key: string;
-    value: string;
-  };
-}
-
-interface MagicEdenTokenSource {
-  id: string;
-  domain: string;
-  name: string;
-  icon: string;
-  url: string;
-}
-
-interface MagicEdenTokenFeeBreakdown {
-  kind: 'marketplace' | 'royalty';
-  recipient: string;
-  bps: number;
-}
-
-interface MagicEdenTokenResponse {
-  orders: MagicEdenTokenOrder[];
-  continuation: string | null;
-}
 
 interface MagicedenCollectionOrder {
   id: string;
@@ -1284,19 +1126,6 @@ export interface MagicedenCollectionResponse {
   continuation: string;
 }
 
-interface QueryParams {
-  includeQuantity: boolean;
-  includeLastSale: boolean;
-  excludeSpam: boolean;
-  excludeBurnt: boolean;
-  collection: string;
-  sortBy: string;
-  sortDirection: string;
-  limit: number;
-  includeAttributes: boolean;
-  excludeSources: string[];
-  [key: string]: any; // This allows for dynamic keys
-}
 
 export interface MagicedenTraitToken {
   chainId: number;
@@ -1490,72 +1319,6 @@ interface Price {
   currency: Currency;
   amount: PriceAmount;
 }
-
-interface FeeBreakdown {
-  kind: 'royalty' | 'marketplace';
-  bps: number;
-  recipient: string;
-  rawAmount: string;
-  source?: string;
-}
-
-interface LastSale {
-  orderSource: string;
-  fillSource: string;
-  timestamp: number;
-  price: {
-    currency: Currency;
-    amount: PriceAmount;
-    netAmount: PriceAmount;
-  };
-  royaltyFeeBps: number;
-  marketplaceFeeBps: number;
-  paidFullRoyalty: boolean;
-  feeBreakdown: FeeBreakdown[];
-}
-
-interface Collection {
-  id: string;
-  name: string;
-  image: string;
-  slug: string;
-  symbol: string;
-  creator: string;
-  tokenCount: number;
-  metadataDisabled: boolean;
-  floorAskPrice: Price;
-}
-
-interface Token {
-  chainId: number;
-  contract: string;
-  tokenId: string;
-  name: string;
-  description: string;
-  image: string;
-  imageSmall: string;
-  imageLarge: string;
-  media: null;
-  kind: string;
-  isFlagged: boolean;
-  isSpam: boolean;
-  isNsfw: boolean;
-  metadataDisabled: boolean;
-  lastFlagUpdate: string;
-  lastFlagChange: null;
-  supply: string;
-  remainingSupply: string;
-  rarity: number;
-  rarityRank: number;
-  collection: Collection;
-  lastSale: LastSale;
-  owner: string;
-  mintedAt: string;
-  createdAt: string;
-  decimals: null;
-  mintStages: any[];
-}
-
 interface Source {
   id: string;
   domain: string;
@@ -1575,20 +1338,11 @@ interface FloorAsk {
   source: Source;
 }
 
-interface Market {
-  floorAsk: FloorAsk;
-}
 
 interface Media {
   image: string;
 }
 
-interface TokenData {
-  token: Token;
-  market: Market;
-  updatedAt: string;
-  media: Media;
-}
 
 export function cancelMagicedenRequest(taskId: string): boolean {
   const controllers = activeRequests.get(taskId);
@@ -1609,7 +1363,7 @@ function addActiveRequest(taskId: string, controller: AbortController) {
   activeRequests.get(taskId)?.push(controller);
 }
 
-interface TokenData {
+interface TokenDataList {
   tokens: TokenEntry[];
   continuation: string;
 }
@@ -1620,6 +1374,8 @@ interface TokenEntry {
   updatedAt: string;
   media: Media;
 }
+
+
 
 interface TokenDetails {
   chainId: number;
@@ -1674,13 +1430,6 @@ interface FloorAskPrice {
   amount: Amount;
 }
 
-interface Currency {
-  contract: string;
-  name: string;
-  symbol: string;
-  decimals: number;
-}
-
 interface Amount {
   raw: string;
   decimal: number;
@@ -1692,26 +1441,4 @@ interface MarketDetails {
   floorAsk: FloorAsk;
 }
 
-interface FloorAsk {
-  id: string;
-  price: FloorAskPrice;
-  maker: string;
-  validFrom: number;
-  validUntil: number;
-  quantityFilled: string;
-  quantityRemaining: string;
-  source: Source;
-}
 
-interface Source {
-  id: string;
-  domain: string;
-  name: string;
-  icon: string;
-  url: string;
-}
-
-interface Media {
-  image: string;
-  imageMimeType: string;
-}

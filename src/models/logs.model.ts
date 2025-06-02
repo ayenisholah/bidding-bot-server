@@ -1,4 +1,4 @@
-import mongoose, { Schema, Document } from "mongoose";
+import mongoose from "mongoose";
 
 export interface IBidLogs {
   taskId: string;

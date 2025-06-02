@@ -1,1 +1,0 @@
-https://gist.githubusercontent.com/ayenisholah/4767c3e4aac92af7c1a1a717c829183b/raw/5ff1858e4cf71a584ca96680fd57a8d4b28be292/install-production.sh

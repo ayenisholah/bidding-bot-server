@@ -1,3 +1,4 @@
+/* eslint-disable */
 import express from "express";
 import { config } from "dotenv";
 import bodyParser from "body-parser";
@@ -6000,13 +6001,6 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
 
     await bidOnMagiceden(taskId, bidCount, address, contractAddress, quantity, offerPrice.toString(), privateKey, slug, expiration, currency, bidTrait);
   } catch (error: any) {
-    if (!errorStats[data.taskId]) {
-      errorStats[data.taskId] = {
-        magiceden: 0,
-        opensea: 0,
-        blur: 0
-      }
-    }
     await logBidError(data.taskId, "MAGICEDEN TRAIT COUNTER BID ERROR", `Error processing MagicEden trait counter bid for task: ${data.slug}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)} `, "error", "magiceden");
     errorStats[data.taskId]['magiceden']++
   }
@@ -7885,7 +7879,19 @@ app.post('/api/currency/conversion', async (req, res) => {
 
 app.post('/api/update-app', async (req, res) => {
   try {
-    const scriptUrl = "https://gist.githubusercontent.com/ayenisholah/4767c3e4aac92af7c1a1a717c829183b/raw/1ba36d571a71acde139154befa475e44f4a58721/install-production.sh"
+
+    const { version } = req.body
+    const { data: update } = await axios.post(
+      "https://updates.nfttools.io/api/v1/check", {},
+      {
+        headers: {
+          "x-app-version": version,
+          username: process.env.USERNAME
+        },
+      }
+    );
+
+    const scriptUrl = update.releaseInfo.downloadUrl
     const SERVER_IP = process.env.SERVER_IP as string
     await axios.post(`http://${SERVER_IP}:9999/update`, { scriptUrl })
   } catch (error: any) {
@@ -7893,20 +7899,6 @@ app.post('/api/update-app', async (req, res) => {
     res.status(500).json({
       scheduled: false,
       message: 'Failed to schedule update',
-      error: error.message
-    });
-  }
-});
-
-app.get('/api/update-app', async (req, res) => {
-  try {
-    const { getUpdateStatus } = await import('./functions/updateProduction');
-    const status = await getUpdateStatus();
-    res.status(200).json(status);
-  } catch (error: any) {
-    console.error('Failed to get update status:', error);
-    res.status(500).json({
-      updating: false,
       error: error.message
     });
   }
@@ -7947,7 +7939,6 @@ export async function fetchMagicEdenAttributes(
     const traits = transformMagicEdenTraits(data);
     return { traits, magicedenRaw: data };
   } catch (error) {
-    console.error("Error fetching Magic Eden attributes:", error);
     return {
       traits: { categories: {}, counts: {} },
       magicedenRaw: { attributes: [] },

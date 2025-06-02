@@ -1,11 +1,9 @@
 import { BigNumber, ethers, utils, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, API_KEY, BLUR_SCHEDULE, BLUR_TRAIT_BID, currentTasks, decrementBidCount, errorStats, logBidError, pQueue, queue, redis, RESET, skipStats, trackBidRate } from "../..";
+import { activeTasks, API_KEY, currentTasks, decrementBidCount, errorStats, logBidError, pQueue, redis, RESET, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { createBalanceChecker } from "../../utils/balance";
-import { Job } from "bullmq";
 import { DistributedLockManager } from "../../utils/lock";
-const RED = '\x1b[31m';
 import { PrismaClient } from '@prisma/client'
 import axios from "axios";
 import { BASE_URL } from "../../constants";
@@ -132,14 +130,12 @@ export async function bidOnBlur(
   } : basePayload;
 
   let build: any;
-  try {
-    if (!accessToken) {
-      throw new Error('Access token is undefined');
-    }
-    build = await formatBidOnBlur(taskId, BLUR_API_URL, accessToken, wallet_address, buildPayload);
-  } catch (error: any) {
-    throw error
+
+  if (!accessToken) {
+    throw new Error('Access token is undefined');
   }
+  build = await formatBidOnBlur(taskId, BLUR_API_URL, accessToken, wallet_address, buildPayload);
+
 
   let data = build?.signatures?.[0];
   if (!data) {
@@ -161,23 +157,19 @@ export async function bidOnBlur(
     marketplaceData: data?.marketplaceData,
   };
 
-  try {
-    const cancelPayload = {
-      contractAddress,
-      criteriaPrices: [
-        {
-          price: offerPriceEth,
-          criteria: {
-            "type": traits ? "TRAIT" : "COLLECTION",
-            value: traits ? JSON.parse(traits) : {}
-          }
+  const cancelPayload = {
+    contractAddress,
+    criteriaPrices: [
+      {
+        price: offerPriceEth,
+        criteria: {
+          "type": traits ? "TRAIT" : "COLLECTION",
+          value: traits ? JSON.parse(traits) : {}
         }
-      ]
-    }
-    await submitBidToBlur(taskId, bidCount, offer_price, BLUR_API_URL, accessToken, wallet_address, submitPayload, slug, cancelPayload, expiry, traits);
-  } catch (error: any) {
-    throw error
+      }
+    ]
   }
+  await submitBidToBlur(taskId, bidCount, offer_price, BLUR_API_URL, accessToken, wallet_address, submitPayload, slug, cancelPayload, expiry, traits);
 };
 
 /**
@@ -197,33 +189,30 @@ async function getAccessToken(url: string, private_key: string): Promise<string 
       'x-api-key': API_KEY
     };
 
-    try {
-      const key = `{blurAccessToken}:${wallet.address}`
-      const cachedToken = await redis.get(key);
-      if (cachedToken) {
-        return cachedToken;
-      }
-
-      let response: any = await limiter.schedule(() => axiosInstance
-        .post(`${url}/auth/challenge`, options, { headers }));
-      const message = response.data.message;
-      const signature = await wallet.signMessage(message);
-      const data = {
-        message: message,
-        walletAddress: wallet.address,
-        expiresOn: response.data.expiresOn,
-        hmac: response.data.hmac,
-        signature: signature
-      };
-      response = await limiter.schedule(() => axiosInstance
-        .post(`${url}/auth/login`, data, { headers }));
-      const accessToken = response.data.accessToken;
-      await redis.set(key, accessToken, 'EX', 5 * 60);
-
-      return accessToken;
-    } catch (error: any) {
-      throw error
+    const key = `{blurAccessToken}:${wallet.address}`
+    const cachedToken = await redis.get(key);
+    if (cachedToken) {
+      return cachedToken;
     }
+
+    let response: any = await limiter.schedule(() => axiosInstance
+      .post(`${url}/auth/challenge`, options, { headers }));
+    const message = response.data.message;
+    const signature = await wallet.signMessage(message);
+    const data = {
+      message: message,
+      walletAddress: wallet.address,
+      expiresOn: response.data.expiresOn,
+      hmac: response.data.hmac,
+      signature: signature
+    };
+    response = await limiter.schedule(() => axiosInstance
+      .post(`${url}/auth/login`, data, { headers }));
+    const accessToken = response.data.accessToken;
+    await redis.set(key, accessToken, 'EX', 5 * 60);
+
+    return accessToken;
+
   });
 };
 
@@ -304,7 +293,7 @@ async function submitBidToBlur(
   addActiveRequest(taskId, controller);
 
   try {
-    const [taskId, count] = bidCount.split(":")
+    const [taskId] = bidCount.split(":")
 
     const currentTask = activeTasks.get(taskId)
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("BLUR".toLowerCase())) return
@@ -409,61 +398,24 @@ export async function cancelBlurBid(data: BlurCancelPayload) {
 
 export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | 'COLLECTION', criteriaValue: Record<string, string>) {
   const url = `${BASE_URL}/blur/v1/collections/${collection}/executable-bids`;
-  try {
 
-
-    if (criteriaType === 'TRAIT') {
-      const tasks = [
-        () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
-          params: {
-            filters: JSON.stringify({
-              criteria: {
-                type: 'TRAIT',
-                value: criteriaValue
-              }
-            })
-          },
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': API_KEY,
-          }
-        })),
-        () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
-          params: {
-            filters: JSON.stringify({
-              criteria: {
-                type: 'COLLECTION',
-                value: {}
-              }
-            })
-          },
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': API_KEY,
-          }
-        }))
-      ];
-
-      const [traitResponse, collectionResponse] = await pQueue.addAll(tasks, {
-        throwOnTimeout: true,
-      });
-
-      const traitData = traitResponse.data;
-      const collectionData = collectionResponse.data;
-
-      // Combine trait and collection price levels
-      const combinedData = {
-        success: traitData.success && collectionData.success,
-        priceLevels: [
-          ...(traitData.priceLevels || []),
-          ...(collectionData.priceLevels || [])
-        ].sort((a, b) => Number(b.price) - Number(a.price))
-      };
-
-      return combinedData;
-
-    } else {
-      const { data } = await limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+  if (criteriaType === 'TRAIT') {
+    const tasks = [
+      () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+        params: {
+          filters: JSON.stringify({
+            criteria: {
+              type: 'TRAIT',
+              value: criteriaValue
+            }
+          })
+        },
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY,
+        }
+      })),
+      () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
         params: {
           filters: JSON.stringify({
             criteria: {
@@ -476,13 +428,46 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
           'content-type': 'application/json',
           'x-api-key': API_KEY,
         }
-      }));
-      return data;
-    }
+      }))
+    ];
 
-  } catch (error: any) {
-    throw error
+    const [traitResponse, collectionResponse] = await pQueue.addAll(tasks, {
+      throwOnTimeout: true,
+    });
+
+    const traitData = traitResponse.data;
+    const collectionData = collectionResponse.data;
+
+    // Combine trait and collection price levels
+    const combinedData = {
+      success: traitData.success && collectionData.success,
+      priceLevels: [
+        ...(traitData.priceLevels || []),
+        ...(collectionData.priceLevels || [])
+      ].sort((a, b) => Number(b.price) - Number(a.price))
+    };
+
+    return combinedData;
+
+  } else {
+    const { data } = await limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+      params: {
+        filters: JSON.stringify({
+          criteria: {
+            type: 'COLLECTION',
+            value: {}
+          }
+        })
+      },
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': API_KEY,
+      }
+    }));
+    return data;
   }
+
+
 }
 
 
@@ -504,27 +489,24 @@ export async function fetchBlurCollectionStats(slug: string) {
   // If not in cache, try to acquire lock and fetch
   const result = await lockManager.withLock(lockKey, async () => {
 
-    try {
-      const cachedStats = await redis.get(cacheKey);
-      if (cachedStats) {
-        return JSON.parse(cachedStats);
-      }
-      const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens`;
-      const { data } = await limiter.schedule(() => axiosInstance.get<BlurTokensResponse>(url, {
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY,
-        }
-      }));
-
-      const listings = data?.tokens?.sort((a, b) => Number(a?.price?.amount) - Number(b?.price?.amount));
-      const floor_price = Number(listings[0]?.price?.amount) || 0;
-
-      await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
-      return floor_price;
-    } catch (error: any) {
-      return 0
+    const cachedStats = await redis.get(cacheKey);
+    if (cachedStats) {
+      return JSON.parse(cachedStats);
     }
+    const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens`;
+    const { data } = await limiter.schedule(() => axiosInstance.get<BlurTokensResponse>(url, {
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': API_KEY,
+      }
+    }));
+
+    const listings = data?.tokens?.sort((a, b) => Number(a?.price?.amount) - Number(b?.price?.amount));
+    const floor_price = Number(listings[0]?.price?.amount) || 0;
+
+    await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+    return floor_price || 0;
+
   });
 
   if (!result) {
@@ -542,10 +524,6 @@ export async function fetchBlurTraitFloor(slug: string, trait: { type: string; v
       }],
       hasAsks: true,
     };
-    const queryParams = {
-      filters: JSON.stringify(filters),
-    };
-
     const encodedFilters = encodeURIComponent(JSON.stringify(filters));
 
     const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens?filters=${encodedFilters}`;
@@ -556,7 +534,8 @@ export async function fetchBlurTraitFloor(slug: string, trait: { type: string; v
         },
       })
     );
-    return Number(data?.tokens[0]?.price?.amount) ?? undefined
+    const amount = data?.tokens[0]?.price?.amount;
+    return amount !== undefined ? Number(amount) : undefined
   } catch (error) {
     console.log(error);
   }
@@ -590,86 +569,6 @@ interface BlurCancelPayload {
   };
   privateKey: string;
   taskId: string;
-}
-
-interface BlurBidResponse {
-  success: boolean;
-  signatures: Signature[];
-  [key: string]: any;
-}
-
-interface Signature {
-  type: string;
-  signData: SignData;
-  marketplace: string;
-  marketplaceData: string;
-  tokens: any[];
-  [key: string]: any;
-
-}
-
-interface SignData {
-  domain: Domain;
-  types: Types;
-  value: Value;
-  [key: string]: any;
-
-}
-
-interface Domain {
-  name: string;
-  version: string;
-  chainId: string;
-  verifyingContract: string;
-  [key: string]: any;
-}
-
-interface Types {
-  Order: OrderType[];
-  FeeRate: FeeRateType[];
-  [key: string]: any;
-
-}
-interface OrderType {
-  name: string;
-  type: string;
-  [key: string]: any;
-
-}
-
-interface FeeRateType {
-  name: string;
-  type: string;
-  [key: string]: any;
-
-}
-
-interface Value {
-  trader: string;
-  collection: string;
-  listingsRoot: string;
-  numberOfListings: number;
-  expirationTime: string;
-  assetType: number;
-  makerFee: MakerFee;
-  salt: string;
-  orderType: number;
-  nonce: Nonce;
-  [key: string]: any;
-
-}
-
-interface MakerFee {
-  recipient: string;
-  rate: number;
-  [key: string]: any;
-}
-
-interface Nonce {
-  type: string;
-  hex: string;
-  [key: string]: any;
-
 }
 
 interface SubmitPayload {
@@ -714,53 +613,4 @@ export interface TokenPrice {
   unit: string;
   listedAt: string;
   marketplace?: string;
-}
-
-
-interface BlurTokenResponse {
-  success: boolean;
-  contractAddress: string;
-  totalCount: number;
-  tokens: BlurToken[];
-}
-
-interface BlurToken {
-  tokenId: string;
-  name: string;
-  imageUrl: string;
-  traits: Record<string, string>;
-  rarityScore: number;
-  rarityRank: number;
-  price: BlurTokenPrice | null;
-  highestBid: BlurTokenBid | null;
-  lastSale: BlurTokenSale | null;
-  lastCostBasis: BlurTokenSale | null;
-  owner: BlurTokenOwner;
-  numberOwnedByOwner: number;
-  isSuspicious: boolean;
-}
-
-interface BlurTokenPrice {
-  amount: string;
-  unit: string;
-  listedAt: string; // ISO date string
-  marketplace: string;
-}
-
-interface BlurTokenBid {
-  amount: string;
-  unit: string;
-  bidder?: string;
-  listedAt: string;
-}
-
-interface BlurTokenSale {
-  amount: string;
-  unit: string;
-  listedAt: string;
-}
-
-interface BlurTokenOwner {
-  address: string;
-  username: string | null;
 }

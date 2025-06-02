@@ -2,7 +2,7 @@ import Bottleneck from "bottleneck";
 import axios, { AxiosInstance } from "axios";
 import axiosRetry, { IAxiosRetryConfig } from "axios-retry";
 import { config } from "dotenv";
-import { RATE_LIMIT, rps, WORKER_COUNT } from ".";
+import { RATE_LIMIT, rps } from ".";
 
 config()
 
@@ -87,8 +87,6 @@ export function stopCountsLogger() {
 setInterval(() => {
   const counts = getLimiterCounts();
   console.log('Current Limiter Stats:', counts);
-  const runningRPS = counts.DONE
-
   // Calculate instantaneous RPS based on completed requests
   const completedInLastSecond = counts.DONE ? counts.DONE - previousDoneCount : 0;
   previousDoneCount = counts.DONE || 0;
