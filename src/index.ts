@@ -7879,13 +7879,11 @@ app.post('/api/currency/conversion', async (req, res) => {
 
 app.post('/api/update-app', async (req, res) => {
   try {
-
-    const { version } = req.body
     const { data: update } = await axios.post(
       "https://updates.nfttools.io/api/v1/check", {},
       {
         headers: {
-          "x-app-version": version,
+          "x-app-version": "0.0.0",
           username: process.env.USERNAME
         },
       }
@@ -7893,7 +7891,8 @@ app.post('/api/update-app', async (req, res) => {
 
     const scriptUrl = update.releaseInfo.downloadUrl
     const SERVER_IP = process.env.SERVER_IP as string
-    await axios.post(`http://${SERVER_IP}:9999/update`, { scriptUrl })
+    const { data } = await axios.post(`http://${SERVER_IP}:9999/update`, { scriptUrl })
+    res.status(200).json(data)
   } catch (error: any) {
     console.error('Failed to schedule update:', error);
     res.status(500).json({

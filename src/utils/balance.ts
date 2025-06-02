@@ -9,7 +9,7 @@ import { RED, RESET } from "..";
 const BASE_URL = "https://nfttools.pro"
 
 // Constants
-const CACHE_EXPIRY_SECONDS = 60;
+const CACHE_EXPIRY_SECONDS = 30;
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
 const API_KEY = "a4eae399-f135-4627-829a-18435bb631ae";
 
