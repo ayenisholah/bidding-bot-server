@@ -5376,7 +5376,6 @@ async function processBlurCollectionBid(data: { task: ITask }) {
         createdAt: 'desc'
       }
     })
-
     const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), false)
     if (stopBid) {
       if (orders.length > 0) {
@@ -5440,6 +5439,9 @@ async function processBlurCollectionBid(data: { task: ITask }) {
       const numberBidders = topOffer?.numberBidders || 0
       const isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(task.wallet.address.toLowerCase())
       const blurOutbidMargin = task.outbidOptions.blurOutbidMargin || 0.01
+
+      console.log({ isTopBid, topOfferAmount, secondOfferAmount, bidderAddressesSample, numberBidders });
+
 
       if (isTopBid) {
         const spread = (Number(topOfferAmount) - Number(secondOfferAmount));
@@ -6249,6 +6251,9 @@ async function processBlurTraitBid(data: {
       const blurOutbidMargin = outbidOptions.blurOutbidMargin || 0.01
 
       const isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(task.wallet.address.toLowerCase())
+
+      console.log({ isTopBid, topOfferAmount, secondOfferAmount, bidderAddressesSample, numberBidders });
+
 
       if (isTopBid) {
         const spread = (Number(topOfferAmount) - Number(secondOfferAmount));
