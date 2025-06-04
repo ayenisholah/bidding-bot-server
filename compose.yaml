@@ -15,6 +15,7 @@ services:
       SERVER_IP: ${SERVER_IP}
       USERNAME: ${USERNAME}
       NEXT_PUBLIC_EMAIL: ${NEXT_PUBLIC_EMAIL}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
     depends_on:
       - mongodb
       - redis-cluster-init
@@ -34,11 +35,12 @@ services:
       REDIS_NET_MAP: '{"redis-node-1:6379":{"host":"redis-node-1","port":6379},"redis-node-2:6379":{"host":"redis-node-2","port":6379},"redis-node-3:6379":{"host":"redis-node-3","port":6379},"redis-node-4:6379":{"host":"redis-node-4","port":6379},"redis-node-5:6379":{"host":"redis-node-5","port":6379},"redis-node-6:6379":{"host":"redis-node-6","port":6379}}'
       NEXT_PUBLIC_ALCHEMY_API_KEY: "HGWgCONolXMB2op5UjPH1YreDCwmSbvx"
       CLIENT_URL: "http://localhost:3001/"
-      NEXT_PUBLIC_SERVER_WEBSOCKET: "ws://localhost:3003"
+      NEXT_PUBLIC_SERVER_WEBSOCKET: ${NEXT_PUBLIC_SERVER_WEBSOCKET}
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
       SERVER_IP: ${SERVER_IP}
       USERNAME: ${USERNAME}
       NEXT_PUBLIC_EMAIL: ${NEXT_PUBLIC_EMAIL}
+      NEXT_PUBLIC_SERVER_URL: ${NEXT_PUBLIC_SERVER_URL}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001"]
       interval: 30s
