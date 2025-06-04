@@ -168,13 +168,7 @@ class BalanceChecker {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         const balance = await wethContract.balanceOf(address);
-
-        console.log({ balance });
-
         const formattedBalance = Number(ethers.utils.formatEther(balance));
-
-        console.log({ formattedBalance });
-
         await this.setCachedBalance(cacheKey, formattedBalance);
         return formattedBalance;
       } catch (error: any) {

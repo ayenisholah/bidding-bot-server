@@ -35,6 +35,7 @@ import { USDC, WETH } from "./utils/currencies";
 import User from "./models/user.model";
 import axios from "axios";
 import { log } from "console";
+import { encryptPrivateKey, decryptPrivateKey } from "./utils/crypto";
 const prisma = new PrismaClient()
 
 export let RATE_LIMIT = process.env.RATE_LIMIT ? parseInt(process.env.RATE_LIMIT) : 100;
@@ -439,15 +440,16 @@ function getActiveTaskWithIdByIndex(index: number): { id: string, task: ITask } 
 async function fetchCurrentTasks() {
   try {
     console.log(BLUE + '\n=== Fetching Current Tasks ===' + RESET);
-    const tasks = await Task.find({}).lean().exec() as unknown as ITask[];
-    const wallets = (await Wallet.find({}).lean()).map((wallet: any) => wallet.address);
+    const tasks = await Task.find({})
+    // @TODO
+    const wallets = (await Wallet.find({})).map((wallet) => wallet.address)
 
     walletsArr.push(...wallets);
     const formattedTasks = tasks.map((task) => ({
-      ...task,
+      ...task.toObject(),
       _id: task._id.toString(),
       user: task.user.toString()
-    }));
+    })) as ITask[];
 
     // Clear and populate activeTasks Map
     activeTasks.clear();
@@ -463,18 +465,18 @@ async function fetchCurrentTasks() {
     const jobs = formattedTasks
       .filter((task) => task.running)
       .flatMap(task =>
-        task.running && task.selectedMarketplaces.map(m => m.toLowerCase()).includes("opensea")
+        task.running && task.selectedMarketplaces.map((m: string) => m.toLowerCase()).includes("opensea")
           ? [{ name: OPENSEA_SCHEDULE, data: task }]
           : []
       ).concat(
         formattedTasks.flatMap(task =>
-          task.running && task.selectedMarketplaces.map(m => m.toLowerCase()).includes("blur")
+          task.running && task.selectedMarketplaces.map((m: string) => m.toLowerCase()).includes("blur")
             ? [{ name: BLUR_SCHEDULE, data: task }]
             : []
         )
       ).concat(
         formattedTasks.flatMap(task =>
-          task.running && task.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden")
+          task.running && task.selectedMarketplaces.map((m: string) => m.toLowerCase()).includes("magiceden")
             ? [{ name: MAGICEDEN_SCHEDULE, data: task }]
             : []
         )
@@ -733,8 +735,8 @@ queueEvents.on('completed', async ({ jobId }) => {
         });
 
         if (orders.length > 0) {
-          const wallet = await Wallet.findOne({ address: task?.wallet.address });
-          const private_key = wallet?.privateKey as string;
+          const wallet = await Wallet.findById(task.walletId);
+          const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
           await cancelAllRelatedBids(task, private_key);
           return
         }
@@ -770,8 +772,8 @@ queueEvents.on('completed', async ({ jobId }) => {
         });
 
         if (orders.length > 0) {
-          const wallet = await Wallet.findOne({ address: task?.wallet.address });
-          const private_key = wallet?.privateKey as string;
+          const wallet = await Wallet.findById(task.walletId);
+          const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
           await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
           return
         }
@@ -844,10 +846,8 @@ queueEvents.on('completed', async ({ jobId }) => {
 
       if (allMarketsComplete && runningPercentage > 99) {
         console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
-
-
-        const wallet = await Wallet.findOne({ address: task.wallet.address })
-        const WALLET_PRIVATE_KEY: string = wallet?.privateKey as string
+        const wallet = await Wallet.findById(task.walletId)
+        const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
         if (traitsToRemove[taskId]?.length > 0) {
           await cancelRemovedTraitBids(traitsToRemove[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
         }
@@ -977,8 +977,8 @@ queueEvents.on('failed', async ({ jobId }) => {
         });
 
         if (orders.length > 0) {
-          const wallet = await Wallet.findOne({ address: task?.wallet.address });
-          const private_key = wallet?.privateKey as string;
+          const wallet = await Wallet.findById(task.walletId);
+          const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
           await cancelAllRelatedBids(task, private_key);
           return
         }
@@ -1014,8 +1014,8 @@ queueEvents.on('failed', async ({ jobId }) => {
         });
 
         if (orders.length > 0) {
-          const wallet = await Wallet.findOne({ address: task?.wallet.address });
-          const private_key = wallet?.privateKey as string;
+          const wallet = await Wallet.findById(task.walletId);
+          const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
           await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
           return
         }
@@ -1087,8 +1087,8 @@ queueEvents.on('failed', async ({ jobId }) => {
       if (allMarketsComplete && runningPercentage > 99) {
         console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
 
-        const wallet = await Wallet.findOne({ address: task.wallet.address })
-        const WALLET_PRIVATE_KEY: string = wallet?.privateKey as string
+        const wallet = await Wallet.findById(task.walletId)
+        const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
         if (traitsToRemove[taskId]?.length > 0) {
           await cancelRemovedTraitBids(traitsToRemove[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
         }
@@ -1680,8 +1680,8 @@ async function updateTaskData(task: ITask) {
 
     if (existingTaskIndex === -1 || !existingTask) return
 
-    const wallet = await Wallet.findOne({ address: task.wallet.address })
-    const WALLET_PRIVATE_KEY: string = wallet?.privateKey as string
+    const wallet = await Wallet.findById(task.walletId)
+    const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
     currentTasks.splice(existingTaskIndex, 1, task);
     activeTasks.set(task._id, task);
 
@@ -1869,7 +1869,7 @@ async function updateTaskData(task: ITask) {
     console.log(GREEN + `NEW TRAIT BIDS TO ADD: ${addedTraits.length}`.toUpperCase() + RESET);
     console.log(GREEN + '--------------------------------------------------------------' + RESET);
 
-    const newTask = { ...task, traits: {}, wallet: { address: task.wallet.address, privateKey: WALLET_PRIVATE_KEY } } as ITask
+    const newTask = { ...task, traits: {} } as ITask
     const collectionDetails = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
 
     const creatorFees: IFee = collectionDetails.creator_fees.null !== undefined
@@ -1884,7 +1884,7 @@ async function updateTaskData(task: ITask) {
         name: OPENSEA_TRAIT_BID,
         data: {
           _id: task._id,
-          address: task.wallet.address,
+          address: task.wallet,
           privateKey: WALLET_PRIVATE_KEY,
           slug: task.contract.slug,
           contractAddress: task.contract.contractAddress,
@@ -1903,7 +1903,7 @@ async function updateTaskData(task: ITask) {
           name: MAGICEDEN_TRAIT_BID,
           data: {
             _id: task._id,
-            address: task.wallet.address,
+            address: task.wallet,
             contractAddress: task.contract.contractAddress,
             quantity: 1,
             expiration: expiration,
@@ -1924,7 +1924,7 @@ async function updateTaskData(task: ITask) {
         name: BLUR_TRAIT_BID,
         data: {
           _id: task._id,
-          address: task.wallet.address,
+          address: task.wallet,
           privateKey: WALLET_PRIVATE_KEY,
           contractAddress: task.contract.contractAddress,
           slug: task.contract.slug,
@@ -1948,7 +1948,7 @@ async function updateTaskData(task: ITask) {
           name: OPENSEA_TOKEN_BID,
           data: {
             _id: task._id,
-            address: task.wallet.address,
+            address: task.wallet,
             privateKey: WALLET_PRIVATE_KEY,
             slug: task.contract.slug,
             creatorFees,
@@ -1969,7 +1969,7 @@ async function updateTaskData(task: ITask) {
             name: MAGICEDEN_TOKEN_BID,
             data: {
               _id: task._id,
-              address: task.wallet.address,
+              address: task.wallet,
               contractAddress: task.contract.contractAddress,
               quantity: 1,
               expiration: expiration,
@@ -2352,42 +2352,6 @@ function generateJobKey(job: any): string {
 }
 
 
-async function processUpdatedOpenseaTokenJob(task: ITask, tokenIds: (number | string)[], creatorFees: IFee, collectionDetails: any) {
-  try {
-    // check if the task is running and marketplace contains opensea
-    if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return;
-
-    const wallet = await Wallet.findOne({ address: task.wallet.address })
-    const WALLET_PRIVATE_KEY: string = wallet?.privateKey as string
-
-    const newTask = { ...task, traits: {}, wallet: { address: task.wallet.address, privateKey: WALLET_PRIVATE_KEY } } as ITask
-
-    const jobs = tokenIds
-      .filter(token => !isNaN(Number(token)))
-      .map((token) => ({
-        name: OPENSEA_TOKEN_BID,
-        data: {
-          _id: task._id,
-          address: task.wallet.address,
-          privateKey: WALLET_PRIVATE_KEY,
-          slug: task.contract.slug,
-          creatorFees,
-          enforceCreatorFee: collectionDetails.enforceCreatorFee,
-          asset: { contractAddress: task.contract.contractAddress, tokenId: token },
-          outbidOptions: task.outbidOptions,
-          task: newTask
-        },
-        opts: { priority: TOKEN_BID_PRIORITY.OPENSEA } as JobsOptions
-      })) as Job[]
-
-    await processBulkJobs(jobs, true);
-
-  } catch (error) {
-    console.error(RED + `Error updating opensea token jobs: ${task.contract.slug} ` + RESET, error);
-  }
-
-}
-
 async function startTask(task: ITask, start: boolean, marketplace?: string) {
   if (!API_KEY) {
     console.log(RED + 'API_KEY is not set' + RESET);
@@ -2484,8 +2448,8 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
 
 async function stopTask(task: ITask, start: boolean, marketplace?: string) {
   const taskId = task._id.toString();
-  const wallet = await Wallet.findOne({ address: task.wallet.address })
-  const WALLET_PRIVATE_KEY: string = wallet?.privateKey as string
+  const wallet = await Wallet.findById(task.walletId)
+  const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
 
   try {
     if (!marketplace || task.selectedMarketplaces.length === 0) {
@@ -3294,7 +3258,7 @@ async function handleCounterBid(message: any) {
 
     for (const task of relevantTasks) {
       if (message && message?.event && message.event === "item_transferred") {
-        const toAccount = message?.payload?.payload?.to_account.toLowerCase() === task.wallet.address.toLowerCase()
+        const toAccount = message?.payload?.payload?.to_account.toLowerCase() === task.wallet.toLowerCase()
         if (toAccount) {
           if (!balances[task._id]) {
             balances[task._id] = {
@@ -3366,7 +3330,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     const domain: string = data?.data?.source?.domain
     const wallets = await Wallet.find({})
     const walletAddresses = wallets.map((wallet) => wallet.address.toLowerCase())
-    const WALLET_PRIVATE_KEY: string = wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.address.toLowerCase())?.privateKey as string
+    const WALLET_PRIVATE_KEY = decryptPrivateKey(wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.toLowerCase())?.encryptedPrivateKey as string) as string;
     const maker = data?.data?.maker?.toLowerCase()
 
     if (walletAddresses.includes(maker)) return
@@ -3487,7 +3451,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       const bidData: IMagicedenTokenBidData = {
         _id: task._id,
-        address: task.wallet.address,
+        address: task.wallet,
         contractAddress: task.contract.contractAddress,
         quantity: 1,
         offerPrice: Number(offerPrice),
@@ -3619,7 +3583,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       const bidData: IMagicedenTraitBidData = {
         taskId: task._id,
         bidCount: getIncrementedBidCount(MAGICEDEN, task.contract.slug, task._id),
-        address: task.wallet.address,
+        address: task.wallet,
         contractAddress: task.contract.contractAddress,
         quantity: 1,
         offerPrice: offerPrice,
@@ -3664,7 +3628,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
     }
     else if (bidType === "collection") {
-      // if (maker === task.wallet.address.toLowerCase()) return
       const isTraitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
       const tokenBid = task.bidType === "token"
       const collectionBid = !isTraitBid && !tokenBid
@@ -3736,7 +3699,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       const bidData: IMagicedenCollectionBidData = {
         _id: task._id,
         bidCount,
-        address: task.wallet.address,
+        address: task.wallet,
         contractAddress: task.contract.contractAddress,
         quantity: 1,
         offerPrice: offerPrice,
@@ -3846,7 +3809,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
     const wallets = await Wallet.find({})
     const walletAddresses = wallets.map((wallet) => wallet.address.toLowerCase())
-    const WALLET_PRIVATE_KEY: string = wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.address.toLowerCase())?.privateKey as string
+    const WALLET_PRIVATE_KEY = decryptPrivateKey(wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.toLowerCase())?.encryptedPrivateKey as string);
     const orderHash = data.payload.payload.order_hash
 
     if (!bestOffers[task._id]) {
@@ -3988,7 +3951,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       const bidData: IProcessOpenseaTokenBidData = {
         _id: task._id,
-        address: task.wallet.address,
+        address: task.wallet,
         privateKey: WALLET_PRIVATE_KEY,
         slug: task.contract.slug,
         offerPrice: Number(tokenOffer),
@@ -4139,7 +4102,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       const counterbidData: IProcessOpenseaTraitBidData = {
         _id: task._id,
         bidCount,
-        address: task.wallet.address,
+        address: task.wallet,
         privateKey: WALLET_PRIVATE_KEY,
         slug: task.contract.slug,
         offerPrice: Number(traitOffer),
@@ -4280,7 +4243,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       const bidData: IOpenseaBidParams = {
         taskId: task._id,
         bidCount,
-        walletAddress: task.wallet.address,
+        walletAddress: task.wallet,
         walletPrivateKey: WALLET_PRIVATE_KEY,
         slug: task.contract.slug,
         offerPrice: Number(colletionOffer),
@@ -4347,8 +4310,8 @@ async function handleBlurCounterbid(data: any, task: ITask) {
     if (!currentTask || !currentTask?.running || !currentTask?.selectedMarketplaces?.map((marketplace) => marketplace?.toLowerCase())?.includes("blur") || !enabledMarketplaces?.map((marketplace) => marketplace?.toLowerCase())?.includes("blur")) return
     const expiry = getExpiry(currentTask?.bidDuration)
     if (!currentTask?.outbidOptions?.counterbid) return
-    const wallets = await Wallet.findOne({ address: task?.wallet?.address })
-    const WALLET_PRIVATE_KEY: string = wallets?.privateKey as string
+    const wallets = await Wallet.findById(task.walletId)
+    const WALLET_PRIVATE_KEY = decryptPrivateKey(wallets?.encryptedPrivateKey as string);
     const selectedTraits = transformNewTask(currentTask?.selectedTraits)
     const traitBid = currentTask?.bidType === "collection" && selectedTraits && Object.keys(selectedTraits)?.length > 0
     const blurOutbidMargin = currentTask?.outbidOptions?.blurOutbidMargin || 0.01
@@ -4452,7 +4415,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         const bidData: IBlurBidData = {
           taskId: task._id,
           bidCount: bidCount,
-          address: task.wallet.address,
+          address: task.wallet,
           privateKey: WALLET_PRIVATE_KEY,
           contractAddress: task.contract.contractAddress,
           offerPrice: Number(offerPrice),
@@ -4543,7 +4506,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
           const payload = JSON.parse(order.orderHash)
           return {
             name: CANCEL_BLUR_BID,
-            data: { privateKey: task.wallet.privateKey, payload, taskId: task._id, orderKey: order.id }
+            data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
           }
         })
         await queue.addBulk(cancelData);
@@ -4556,7 +4519,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
             const payload = JSON.parse(order.orderHash)
             return {
               name: CANCEL_BLUR_BID,
-              data: { privateKey: task.wallet.privateKey, payload, taskId: task._id, orderKey: order.id }
+              data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
             }
           })
           await queue.addBulk(cancelData);
@@ -4577,7 +4540,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       const bidData: IBlurBidData = {
         taskId: task._id,
         bidCount: bidCount,
-        address: task.wallet.address,
+        address: task.wallet,
         privateKey: WALLET_PRIVATE_KEY,
         contractAddress: task.contract.contractAddress,
         offerPrice: Number(offerPrice),
@@ -4749,11 +4712,11 @@ async function processOpenseaScheduledBid(task: ITask) {
 
     currentTraits[currentTask._id].opensea = selectedTraits
 
-    const WALLET_ADDRESS: string = currentTask.wallet.address;
+    const WALLET_ADDRESS: string = currentTask.wallet;
     taskStatus[currentTask._id].status = 'PROCESSING'
-    const wallets = await Wallet.findOne({ address: currentTask.wallet.address })
+    const wallets = await Wallet.findById(task.walletId)
     taskStatus[currentTask._id].processingPercentage = (1 / 4) * 100
-    const WALLET_PRIVATE_KEY: string = wallets?.privateKey as string
+    const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
     const collectionDetails = await getCollectionDetails(currentTask.contract.slug, currentTask.contract.contractAddress);
     taskStatus[currentTask._id].processingPercentage = (2 / 4) * 100
@@ -4925,7 +4888,7 @@ async function processOpenseaScheduledBid(task: ITask) {
       : Object.fromEntries(Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)]));
 
     taskStatus[currentTask._id].status = 'SCHEDULED'
-    const newTask = { ...currentTask, traits: {}, wallet: { address: WALLET_ADDRESS, privateKey: WALLET_PRIVATE_KEY } } as ITask
+    const newTask = { ...currentTask, traits: {} } as ITask
 
     if (tokenBid) {
       // Get the array of OpenSea token IDs for this task, defaulting to empty array if undefined
@@ -5035,6 +4998,9 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       .map((m) => m.toLowerCase())
       .includes("opensea")) return;
 
+    const wallets = await Wallet.findById(task.walletId)
+    const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+
     const floor_price = await getOpenseaFloor(currentTask.contract.slug);
     if (!floor_price) return
 
@@ -5086,7 +5052,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       const cancelData = remainingOrders.map((order, index) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey: task.wallet.privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+          data: { privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
         }
       })
       await queue.addBulk(cancelData)
@@ -5121,7 +5087,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
             const cancelData = orders.map((order) => {
               return {
                 name: CANCEL_OPENSEA_BID,
-                data: { privateKey: task.wallet.privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+                data: { privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
               }
             })
             await queue.addBulk(cancelData)
@@ -5148,7 +5114,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       const cancelData = orders.map((order, index) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey: task.wallet.privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+          data: { privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
         }
       })
       await queue.addBulk(cancelData)
@@ -5173,7 +5139,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
         const cancelData = orders.map((order, index) => {
           return {
             name: CANCEL_OPENSEA_BID,
-            data: { privateKey: task.wallet.privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+            data: { privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
           }
         })
         await queue.addBulk(cancelData)
@@ -5186,8 +5152,8 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
     await bidOnOpensea(
       task._id,
       bidCount,
-      currentTask.wallet.address,
-      task.wallet.privateKey,
+      currentTask.wallet,
+      privateKey,
       task.contract.slug,
       Number(colletionOffer),
       creatorFees,
@@ -5269,9 +5235,9 @@ async function processBlurScheduledBid(task: ITask) {
 
     const expiry = getExpiry(currentTask.bidDuration)
 
-    const WALLET_ADDRESS: string = currentTask.wallet.address;
-    const wallets = await Wallet.findOne({ address: currentTask.wallet.address })
-    const WALLET_PRIVATE_KEY: string = wallets?.privateKey as string
+    const WALLET_ADDRESS: string = currentTask.wallet;
+    const wallets = await Wallet.findById(task.walletId)
+    const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
     const selectedTraits = transformNewTask(filteredTasks)
 
     if (!currentTraits[currentTask._id]) {
@@ -5306,7 +5272,7 @@ async function processBlurScheduledBid(task: ITask) {
     }
     taskStatus[currentTask._id].status = 'SCHEDULED'
 
-    const newTask = { ...currentTask, traits: {}, wallet: { address: WALLET_ADDRESS, privateKey: WALLET_PRIVATE_KEY } } as ITask
+    const newTask = { ...currentTask, traits: {} } as ITask
 
     if (traitBid) {
       const traits = transformBlurTraits(selectedTraits)
@@ -5362,6 +5328,9 @@ async function processBlurCollectionBid(data: { task: ITask }) {
     const currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((market) => market.toLowerCase()).includes("blur")) return;
 
+    const wallets = await Wallet.findById(currentTask.walletId)
+    const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+
     const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
     if (!floor_price) return
 
@@ -5384,7 +5353,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 
           return {
             name: CANCEL_BLUR_BID,
-            data: { privateKey: task.wallet.privateKey, payload, taskId: task._id, orderKey: order.id }
+            data: { privateKey, payload, taskId: task._id, orderKey: order.id }
           }
         })
         await queue.addBulk(cancelData);
@@ -5413,7 +5382,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
         const payload = JSON.parse(order.orderHash)
         return {
           name: CANCEL_BLUR_BID,
-          data: { privateKey: task.wallet.privateKey, payload, taskId: task._id, orderKey: order.id }
+          data: { privateKey, payload, taskId: task._id, orderKey: order.id }
         }
       })
       await queue.addBulk(cancelData);
@@ -5437,7 +5406,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 
       const bidderAddressesSample = topOffer?.bidderAddressesSample || []
       const numberBidders = topOffer?.numberBidders || 0
-      const isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(task.wallet.address.toLowerCase())
+      const isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(task.wallet.toLowerCase())
       const blurOutbidMargin = task.outbidOptions.blurOutbidMargin || 0.01
 
       console.log({ isTopBid, topOfferAmount, secondOfferAmount, bidderAddressesSample, numberBidders });
@@ -5451,7 +5420,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
               const payload = JSON.parse(order.orderHash)
               return {
                 name: CANCEL_BLUR_BID,
-                data: { privateKey: task.wallet.privateKey, payload, taskId: task._id, orderKey: order.id }
+                data: { privateKey, payload, taskId: task._id, orderKey: order.id }
               }
             })
             await queue.addBulk(cancelData);
@@ -5483,7 +5452,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 
         return {
           name: CANCEL_BLUR_BID,
-          data: { privateKey: task.wallet.privateKey, payload, taskId: task._id, orderKey: order.id }
+          data: { privateKey, payload, taskId: task._id, orderKey: order.id }
         }
       })
       await queue.addBulk(cancelData);
@@ -5510,7 +5479,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 
           return {
             name: CANCEL_BLUR_BID,
-            data: { privateKey: task.wallet.privateKey, payload, taskId: task._id, orderKey: order.id }
+            data: { privateKey, payload, taskId: task._id, orderKey: order.id }
           }
         })
         await queue.addBulk(cancelData);
@@ -5519,9 +5488,9 @@ async function processBlurCollectionBid(data: { task: ITask }) {
     } else if (collectionOfferEth < minBidPriceEth) {
       colletionOffer = BigInt(Math.round(minBidPriceEth * 1e18));
     }
-
-    await bidOnBlur(task._id, bidCount, task.wallet.address, task.wallet.privateKey, task.contract.contractAddress, colletionOffer, task.contract.slug, expiry);
+    await bidOnBlur(task._id, bidCount, task.wallet, privateKey, task.contract.contractAddress, colletionOffer, task.contract.slug, expiry);
   } catch (error: any) {
+    console.log(error);
     if (!errorStats[data?.task?._id]) {
       errorStats[data?.task?._id] = {
         magiceden: 0,
@@ -6250,7 +6219,7 @@ async function processBlurTraitBid(data: {
       const numberBidders = topOffer?.numberBidders || 0
       const blurOutbidMargin = outbidOptions.blurOutbidMargin || 0.01
 
-      const isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(task.wallet.address.toLowerCase())
+      const isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(task.wallet.toLowerCase())
 
       console.log({ isTopBid, topOfferAmount, secondOfferAmount, bidderAddressesSample, numberBidders });
 
@@ -6390,10 +6359,10 @@ async function processMagicedenScheduledBid(task: ITask) {
     currentTraits[currentTask._id].magiceden = selectedTraits
 
     taskStatus[currentTask._id].status = 'PROCESSING'
-    const WALLET_ADDRESS: string = currentTask.wallet.address
-    const wallets = await Wallet.findOne({ address: currentTask.wallet.address })
+    const WALLET_ADDRESS: string = currentTask.wallet
+    const wallets = await Wallet.findById(currentTask.walletId)
     taskStatus[currentTask._id].processingPercentage = (1 / 4) * 100
-    const WALLET_PRIVATE_KEY: string = wallets?.privateKey as string
+    const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
     const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0
 
     const contractAddress = currentTask.contract.contractAddress
@@ -6537,7 +6506,7 @@ async function processMagicedenScheduledBid(task: ITask) {
     currentTokenIds[currentTask._id].magiceden = [...tokenIds]
     taskStatus[currentTask._id].processingPercentage = (4 / 4) * 100
     const tokenBid = currentTask.bidType === "token" && tokenIds.length > 0
-    const newTask = { ...currentTask, traits: {}, wallet: { address: WALLET_ADDRESS, privateKey: WALLET_PRIVATE_KEY } } as ITask
+    const newTask = { ...currentTask, traits: {} } as ITask
     taskStatus[currentTask._id].status = 'SCHEDULED'
 
     if (tokenBid) {
@@ -6615,7 +6584,8 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     const currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return;
     const expiration = getExpiry(currentTask.bidDuration)
-
+    const wallets = await Wallet.findById(task.walletId)
+    const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
     const floor_price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress))
 
     if (!floorPrices[task._id]) {
@@ -6645,7 +6615,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
       if (orders.length > 0) {
         const orderKeys = orders.map(order => order.id)
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
-        await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: task.wallet.privateKey, orderKeys: orderKeys, taskId: task._id });
+        await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys: orderKeys, taskId: task._id });
       }
       return
     }
@@ -6663,7 +6633,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     if (remainingOrders.length > 0) {
       const orderIds = remainingOrders.map(order => order.id)
       const extractedOrderIds = await extractMagicedenOrderHash(remainingOrders)
-      await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: task.wallet.privateKey, orderKeys: orderIds, taskId: task._id });
+      await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys: orderIds, taskId: task._id });
     }
 
     const createdAt = new Date(order?.createdAt).getTime()
@@ -6694,7 +6664,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
           if (orders.length > 0) {
             const orderKeys = orders.map((order: PrismaOrder) => order.id)
             const extractedOrderIds = await extractMagicedenOrderHash(orders)
-            await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: task.wallet.privateKey, orderKeys, taskId: task._id });
+            await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: task._id });
           }
           colletionOffer = Number(secondTopBidAmount) + (outbidMargin * Math.pow(10, decimal))
         }
@@ -6718,7 +6688,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     if (orders.length > 0) {
       const orderKeys = orders.map(order => order.id)
       const extractedOrderIds = await extractMagicedenOrderHash(orders)
-      await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: task.wallet.privateKey, orderKeys: orderKeys, taskId: task._id });
+      await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys: orderKeys, taskId: task._id });
     }
 
     const outbidOptions = currentTask.outbidOptions
@@ -6727,7 +6697,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
       if (orders.length > 0) {
         const orderKeys = orders.map((order: PrismaOrder) => order.id)
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
-        await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: task.wallet.privateKey, orderKeys, taskId: task._id });
+        await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, orderKeys, taskId: task._id });
       }
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} COLLECTION bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase()
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -6747,7 +6717,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     } else if (offerEth < minBidPriceEth) {
       colletionOffer = minBidPriceEth * Math.pow(10, decimal);
     }
-    await bidOnMagiceden(task._id, bidCount, task.wallet.address, task.contract.contractAddress, 1, colletionOffer.toString(), task.wallet.privateKey, task.contract.slug, expiration, currency);
+    await bidOnMagiceden(task._id, bidCount, task.wallet, task.contract.contractAddress, 1, colletionOffer.toString(), privateKey, task.contract.slug, expiration, currency);
   } catch (error: any) {
     await logBidError(data.task._id, "MAGICEDEN COLLECTION BID ERROR", `Error processing MagicEden collection bid for task: ${data.task._id}: ${error?.response?.data?.message || error?.message || String(error)} `, "error", "magiceden");
     if (!errorStats[data.task._id]) {
@@ -6825,7 +6795,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     if (remainingOrders.length > 0) {
       const extractedOrderIds = await extractMagicedenOrderHash(remainingOrders)
       const orderKeys = remainingOrders.map((order: PrismaOrder) => order.id)
-      await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: task.wallet.privateKey, orderKeys, taskId: task._id });
+      await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: task._id });
     }
 
     const createdAt = new Date(order?.createdAt).getTime()
@@ -7473,8 +7443,8 @@ app.post('/api/task/cancel/:taskId', async (req, res) => {
     if (!task) {
       return res.status(404).json({ error: 'Task not found' });
     }
-    const wallet = await Wallet.findOne({ address: task.wallet.address })
-    const WALLET_PRIVATE_KEY: string = wallet?.privateKey as string
+    const wallet = await Wallet.findById(task.walletId)
+    const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string)
     const orders: PrismaOrder[] = req.body
     const openseaOrders = orders.filter((order: any) => order.marketplace === OPENSEA.toLowerCase())
     const magicedenOrders = orders.filter((order: any) => order.marketplace === 'magiceden')
@@ -7806,7 +7776,7 @@ app.post('/api/collection/stats', async (req, res) => {
 
 app.post('/api/currency/conversion', async (req, res) => {
   try {
-    const wallet = currentTasks && currentTasks.length > 0 ? currentTasks[0].wallet.address : "0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21"
+    const wallet = currentTasks && currentTasks.length > 0 ? currentTasks[0].wallet : "0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21"
     const query = {
       operationName: "BalancesQuery",
       query: `query BalancesQuery($address: Address!) {
@@ -7881,6 +7851,80 @@ app.post('/api/currency/conversion', async (req, res) => {
   }
 
 })
+
+// Wallet encryption endpoint
+app.post('/api/wallet/encrypt', async (req, res) => {
+  try {
+    const { privateKey, userId } = req.body;
+
+    if (!privateKey || !userId) {
+      return res.status(400).json({ error: 'Private key and user ID are required' });
+    }
+
+    // Encrypt the private key
+    const encryptedPrivateKey = encryptPrivateKey(privateKey);
+
+    res.status(200).json({ encryptedPrivateKey });
+  } catch (error: any) {
+    console.error('Failed to encrypt private key:', error);
+    res.status(500).json({
+      error: 'Failed to encrypt private key',
+      message: error.message
+    });
+  }
+});
+
+// Create wallet with encrypted private key
+app.post('/api/wallet/create', async (req, res) => {
+  try {
+    const { privateKey, userId, _id, ...walletData } = req.body;
+
+    if (!privateKey || !userId) {
+      return res.status(400).json({ error: 'Private key and user ID are required' });
+    }
+    // Encrypt the private key
+    const encryptedPrivateKey = encryptPrivateKey(privateKey);
+    const wallet = await Wallet.create({ ...walletData, user: userId, encryptedPrivateKey });
+
+    res.status(201).json({ success: true, wallet });
+  } catch (error: any) {
+    console.error('Failed to create wallet:', error);
+    res.status(500).json({
+      error: 'Failed to create wallet',
+      message: error.message
+    });
+  }
+});
+
+// Decrypt wallet private key for viewing
+app.post('/api/wallet/decrypt', async (req, res) => {
+  try {
+    const { walletId, userId } = req.body;
+
+    console.log({ walletId, userId });
+
+
+    if (!walletId || !userId) {
+      return res.status(400).json({ error: 'Wallet ID and user ID are required' });
+    }
+
+    // Fetch wallet from DB
+    const wallet = await Wallet.findOne({ _id: walletId, user: userId });
+
+    if (!wallet) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+    const privateKey = decryptPrivateKey(wallet.encryptedPrivateKey);
+
+    res.status(200).json({ privateKey });
+  } catch (error: any) {
+    console.error('Failed to decrypt private key:', error);
+    res.status(500).json({
+      error: 'Failed to decrypt private key',
+      message: error.message
+    });
+  }
+});
 
 app.post('/api/update-app', async (req, res) => {
   try {
@@ -8694,8 +8738,6 @@ interface BidStats {
   contractAddress: string;
   stats: BidStat[];
 }
-interface CombinedBid extends BidStats, BidLevel { }
-
 
 function transformNewTask(newTask: Record<string, Array<{ name: string }>>): Record<string, string[]> {
   const transformedTask: Record<string, string[]> = {};

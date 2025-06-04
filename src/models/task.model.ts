@@ -14,13 +14,7 @@ export interface ITask {
     slug: string;
     contractAddress: string;
   };
-  wallet: {
-    address: string;
-    privateKey: string;
-    openseaApproval: boolean;
-    blurApproval: boolean;
-    magicedenApproval: boolean;
-  };
+  wallet: string;
   selectedMarketplaces: string[];
   running: boolean;
   tags: { name: string; color: string }[];
@@ -82,6 +76,7 @@ export interface ITask {
     value: number;
     unit: string;
   };
+  walletId: string;
   tokenIds: (number | string)[];
   bidType: "collection" | "token";
   bidPriceType: "GENERAL_BID_PRICE" | "MARKETPLACE_BID_PRICE";
@@ -99,13 +94,8 @@ const TaskSchema: Schema = new Schema(
       slug: { type: String, required: true },
       contractAddress: { type: String, required: true },
     },
-    wallet: {
-      address: { type: String, required: true },
-      privateKey: { type: String, required: true },
-      openseaApproval: { type: Boolean, default: false },
-      blurApproval: { type: Boolean, default: false },
-      magicedenApproval: { type: Boolean, default: false }
-    },
+    wallet: { type: String, required: true },
+    walletId: { type: mongoose.Schema.Types.ObjectId, ref: 'Wallet', required: true },
     selectedMarketplaces: { type: [String], required: true },
     running: { type: Boolean, default: false },
     tags: [{ name: String, color: String }],

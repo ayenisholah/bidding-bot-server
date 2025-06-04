@@ -294,10 +294,8 @@ async function submitBidToBlur(
 
   try {
     const [taskId] = bidCount.split(":")
-
     const currentTask = activeTasks.get(taskId)
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("BLUR".toLowerCase())) return
-
     let running = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase())
     if (!running) return
     const { data: offers } = await limiter.schedule(() =>
@@ -314,12 +312,6 @@ async function submitBidToBlur(
         signal: controller.signal
       })
     );
-
-
-    console.log({ offers });
-
-
-
 
     if (offers.success) {
       const successMessage = traits ? `🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉 TRAIT: ${traits}` : `🎉 OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉`

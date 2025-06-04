@@ -486,10 +486,13 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
   try {
     if (!orderIds?.length) return;
     const processedOrderIds = await Promise.all(orderIds?.map(async (orderId: any) => {
-
-      const parsed = JSON.parse(orderId);
-      return parsed.orderId || orderId;
-
+      try {
+        const parsed = JSON.parse(orderId);
+        return parsed.orderId || orderId;
+      } catch {
+        // If parsing fails, it's already a plain orderId string
+        return orderId;
+      }
     }));
 
     if (!processedOrderIds.length) return;
