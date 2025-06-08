@@ -16,6 +16,8 @@ services:
       USERNAME: ${USERNAME}
       NEXT_PUBLIC_EMAIL: ${NEXT_PUBLIC_EMAIL}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      API_KEY: ${API_KEY}
+      RATE_LIMIT: ${RATE_LIMIT}
     depends_on:
       - mongodb
       - redis-cluster-init
@@ -39,8 +41,9 @@ services:
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
       SERVER_IP: ${SERVER_IP}
       USERNAME: ${USERNAME}
-      NEXT_PUBLIC_EMAIL: ${NEXT_PUBLIC_EMAIL}
-      NEXT_PUBLIC_SERVER_URL: ${NEXT_PUBLIC_SERVER_URL}
+      EMAIL: ${EMAIL}
+      SERVER_URL: ${NEXT_PUBLIC_SERVER_URL}
+      API_KEY: ${API_KEY}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001"]
       interval: 30s

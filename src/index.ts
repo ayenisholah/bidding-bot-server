@@ -1,6 +1,9 @@
 /* eslint-disable */
 import express from "express";
 import { config } from "dotenv";
+
+config()
+
 import bodyParser from "body-parser";
 import { clearTimeout } from 'timers';
 import crypto, { randomUUID } from 'crypto';
@@ -25,7 +28,6 @@ import { BASE_URL, ERC20_MIN_ABI } from "./constants";
 import { BigNumber, constants, Contract, ethers, utils, Wallet as Web3Wallet } from "ethers";
 import { DistributedLockManager } from "./utils/lock";
 import { exec } from "child_process";
-import { execSync } from "child_process";
 import net from 'net'
 import BidLogs from "./models/logs.model";
 import PQueue from "p-queue";
@@ -35,11 +37,11 @@ import { USDC, WETH } from "./utils/currencies";
 import User from "./models/user.model";
 import axios from "axios";
 import { log } from "console";
-import { encryptPrivateKey, decryptPrivateKey } from "./utils/crypto";
+import { encryptPrivateKey, decryptPrivateKey, setPassword, getPassword } from "./utils/crypto";
 const prisma = new PrismaClient()
 
-export let RATE_LIMIT = process.env.RATE_LIMIT ? parseInt(process.env.RATE_LIMIT) : 100;
-export let API_KEY = process.env.API_KEY;
+export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
+export const API_KEY = process.env.API_KEY;
 const bidStats: BidCounts = {};
 const currentTokenIds: BottomListings = {};
 const currentTraits: CurrentTraits = {}
@@ -150,7 +152,6 @@ const COLLECTION_BID_PRIORITY = {
   MAGICEDEN: 5,
   BLUR: 5
 };
-config()
 
 type JobState = 'completed' | 'failed' | 'delayed' | 'active' | 'waiting' | 'waiting-children' | 'unknown' | 'prioritized' | 'paused';
 const REMOVABLE_STATES: JobState[] = ['prioritized', 'delayed', 'waiting', 'paused'];
@@ -226,7 +227,7 @@ const workers = new Worker(
   {
     connection: redis,
     prefix: '{bull}',
-    concurrency: RATE_LIMIT,
+    concurrency: Number(RATE_LIMIT),
   }
 )
 
@@ -330,7 +331,6 @@ let reconnectTimeoutId: NodeJS.Timeout | null = null;
 let retryCount: number = 0;
 
 // Track subscriptions by marketplace and collection slug
-const activeSubscriptions: Map<string, Set<string>> = new Map(); // Map<collectionSlug, Set<marketplace>>
 const clients = new Set<WebSocket>();
 
 const walletsArr: string[] = []
@@ -519,6 +519,29 @@ interface BulkJobParent {
 
 const parentJobs = new Map<string, BulkJobParent>();
 
+// Queue management for password-based security
+async function pauseQueueAndWorkers() {
+  try {
+    console.log(YELLOW + 'No password set - pausing queue and workers...' + RESET);
+    await queue.pause();
+    await workers.pause();
+    console.log(YELLOW + 'Queue and workers paused. Waiting for password...' + RESET);
+  } catch (error) {
+    console.error(RED + 'Error pausing queue and workers:' + RESET, error);
+  }
+}
+
+async function resumeQueueAndWorkers() {
+  try {
+    console.log(GREEN + 'Password set - resuming queue and workers...' + RESET);
+    await queue.resume();
+    await workers.resume();
+    console.log(GREEN + 'Queue and workers resumed.' + RESET);
+  } catch (error) {
+    console.error(RED + 'Error resuming queue and workers:' + RESET, error);
+  }
+}
+
 async function startServer() {
   try {
 
@@ -561,13 +584,6 @@ async function startServer() {
         }
       }
 
-      const user = await User.findOne({})
-      API_KEY = user && user.apiKey ? user.apiKey : process.env.API_KEY
-      RATE_LIMIT = user && user.rateLimit ? user.rateLimit : Number(process.env.RATE_LIMIT)
-
-      if (user) {
-        updateConfig({ apiKey: user.apiKey, rateLimit: user.rateLimit })
-      }
       await initialize(RATE_LIMIT);
       await redis.set(LAST_RUNTIME_KEY, currentTime.toString());
     } catch (redisError) {
@@ -592,6 +608,11 @@ async function startServer() {
     console.log(`Started periodic cleanup for seen items (every ${CLEANUP_INTERVAL / 1000 / 60} minutes)`);
 
     await fetchCurrentTasks()
+
+    // Check if password is set on startup
+    if (!getPassword()) {
+      await pauseQueueAndWorkers();
+    }
 
   } catch (error) {
     console.error(RED + 'Failed to start server:' + RESET, error);
@@ -1267,9 +1288,6 @@ async function updateConfig(data: any) {
       user.apiKey = apiKey
       await user.save()
     }
-    RATE_LIMIT = Number(rateLimit)
-    API_KEY = apiKey
-
 
     if (typeof process.env.RATE_LIMIT !== 'undefined') {
       process.env.RATE_LIMIT = rateLimit.toString();
@@ -2243,7 +2261,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
               ]
             );
             for (const [index, job] of blurJobs.entries()) {
-              const delay = (index * 250) % 1750;
+              const delay = (index * 250) % 2000;
               await new Promise(resolve => setTimeout(resolve, delay));
               queue.add(job.name, job.data, {
                 ...(job.jobKey ? { jobId: job.jobKey } : {}), removeOnComplete: true,
@@ -3152,7 +3170,6 @@ async function connectWebSocket(): Promise<void> {
     }
 
     // Clear activeSubscriptions on reconnect to ensure fresh state
-    activeSubscriptions.clear();
     console.log(YELLOW + "Cleared active subscriptions for fresh reconnect" + RESET);
 
     await subscribeToCollections(currentTasks as unknown as ITask[]);
@@ -4402,7 +4419,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         const offers = orders?.map((order: PrismaOrder) => order?.offerPrice)
         const currentBidPrice = !offers?.length ? 0 : Math.max(...offers?.map((offer) => Number(offer)))
         const currentBidPriceEth = currentBidPrice / 1e18
-
+        console.log(JSON.stringify(data));
         if (incomingPrice <= currentBidPriceEth) return
 
         let offerPrice: any = Number((blurOutbidMargin + Number(incomingPrice))?.toFixed(2))
@@ -4489,6 +4506,9 @@ async function handleBlurCounterbid(data: any, task: ITask) {
           taskId: task._id,
           marketplace: BLUR.toLowerCase(),
           identifier: 'collection'
+        },
+        orderBy: {
+          createdAt: 'desc'
         }
       })
 
@@ -4506,7 +4526,12 @@ async function handleBlurCounterbid(data: any, task: ITask) {
           const payload = JSON.parse(order.orderHash)
           return {
             name: CANCEL_BLUR_BID,
-            data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
+            data: {
+              privateKey: WALLET_PRIVATE_KEY,
+              payload,
+              taskId: task._id,
+              orderKey: order.id
+            }
           }
         })
         await queue.addBulk(cancelData);
@@ -4519,7 +4544,12 @@ async function handleBlurCounterbid(data: any, task: ITask) {
             const payload = JSON.parse(order.orderHash)
             return {
               name: CANCEL_BLUR_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
+              data: {
+                privateKey: WALLET_PRIVATE_KEY,
+                payload,
+                taskId: task._id,
+                orderKey: order.id
+              }
             }
           })
           await queue.addBulk(cancelData);
@@ -4546,6 +4576,22 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         offerPrice: Number(offerPrice),
         slug: task.contract.slug,
         expiry
+      }
+
+      if (orders.length > 0) {
+        const cancelData = orders.map((order) => {
+          const payload = JSON.parse(order.orderHash)
+          return {
+            name: CANCEL_BLUR_BID,
+            data: {
+              privateKey: WALLET_PRIVATE_KEY,
+              payload,
+              taskId: task._id,
+              orderKey: order.id
+            }
+          }
+        })
+        await queue.addBulk(cancelData);
       }
 
       if (job) {
@@ -4714,7 +4760,7 @@ async function processOpenseaScheduledBid(task: ITask) {
 
     const WALLET_ADDRESS: string = currentTask.wallet;
     taskStatus[currentTask._id].status = 'PROCESSING'
-    const wallets = await Wallet.findById(task.walletId)
+    const wallets = await Wallet.findById(currentTask.walletId)
     taskStatus[currentTask._id].processingPercentage = (1 / 4) * 100
     const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
@@ -4992,6 +5038,7 @@ function transformSelectedTraitsToAttributes(selectedTraits: Record<string, stri
 
 async function processOpenseaCollectionBid(data: { task: ITask, collectionDetails: any }) {
   try {
+    if (!enabledMarketplaces.length) return
     const { task, collectionDetails } = data
     const currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces
@@ -5324,6 +5371,7 @@ async function processBlurScheduledBid(task: ITask) {
 
 async function processBlurCollectionBid(data: { task: ITask }) {
   try {
+    if (!enabledMarketplaces.length) return
     const { task } = data
     const currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((market) => market.toLowerCase()).includes("blur")) return;
@@ -5523,6 +5571,7 @@ async function processOpenseaTraitBid(data: {
   task: ITask;
 }) {
   try {
+    if (!enabledMarketplaces.length) return
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) return
 
     const { address, privateKey, slug, creatorFees, enforceCreatorFee, trait, contractAddress, _id } = data
@@ -5720,6 +5769,7 @@ async function processOpenseaTraitBid(data: {
 
 async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
   try {
+    if (!enabledMarketplaces.length) return
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) return
     const { address, privateKey, slug, creatorFees, enforceCreatorFee, asset, _id } = data
     if (!currentTokenIds[_id]?.opensea?.includes(+asset.tokenId)) return
@@ -5908,6 +5958,8 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 }
 
 async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
+  if (!enabledMarketplaces.length) return
+
   const { taskId, bidCount, walletAddress, walletPrivateKey, slug, offerPrice, creatorFees, enforceCreatorFee, expiry } = data
   const currentTask = activeTasks.get(taskId)
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) return
@@ -5932,6 +5984,7 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
 }
 
 async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) {
+  if (!enabledMarketplaces.length) return
   const { _id, bidCount, address, contractAddress, quantity, offerPrice, expiration, privateKey, slug } = data
   const currentTask = activeTasks.get(_id)
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return
@@ -5959,6 +6012,7 @@ interface IMagicedenTraitBidData {
 }
 
 async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
+  if (!enabledMarketplaces.length) return
   const { taskId, bidCount, address, contractAddress, quantity, offerPrice, expiration, privateKey, slug, trait } = data
   const currentTask = activeTasks.get(taskId)
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return
@@ -5978,6 +6032,7 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
 }
 
 async function blurCollectionCounterBid(data: IBlurBidData) {
+  if (!enabledMarketplaces.length) return
   const { taskId, bidCount, address, privateKey, contractAddress, offerPrice, slug, expiry } = data
   const currentTask = activeTasks.get(taskId)
 
@@ -5991,6 +6046,7 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
 }
 
 async function blurTraitCounterBid(data: IBlurBidData) {
+  if (!enabledMarketplaces.length) return
   const { taskId, bidCount, address, privateKey, contractAddress, offerPrice, slug, expiry, traits } = data
   const currentTask = activeTasks.get(taskId)
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur")) return
@@ -6027,6 +6083,7 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
     asset
   } = data
   const currentTask = activeTasks.get(_id)
+  if (!enabledMarketplaces.length) return
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) return
   const expiry = getExpiry(currentTask.bidDuration)
   const bidCount = getIncrementedBidCount(OPENSEA, slug, _id)
@@ -6055,6 +6112,7 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
 
 async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
   try {
+    if (!enabledMarketplaces.length) return
     const { _id, bidCount, address, privateKey, slug, offerPrice, creatorFees, enforceCreatorFee, expiry, trait } = data
     const currentTask = activeTasks.get(_id)
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) return
@@ -6082,6 +6140,7 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
 
 async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
   try {
+    if (!enabledMarketplaces.length) return
     const { _id, address, contractAddress, quantity, offerPrice, privateKey, slug, tokenId, expiration } = data
     const currentTask = activeTasks.get(_id)
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return
@@ -6113,6 +6172,7 @@ async function processBlurTraitBid(data: {
   };
   task: ITask,
 }) {
+  if (!enabledMarketplaces.length) return
   const { address, privateKey, contractAddress, slug, trait, _id, task } = data;
   const selectedTraits = currentTraits[_id]?.blur
   const traits = transformBlurTraits(selectedTraits)
@@ -6125,12 +6185,11 @@ async function processBlurTraitBid(data: {
   if (!traitExists) return;
 
   const currentTask = activeTasks.get(_id)
+
   if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur")) return
   const outbidOptions = currentTask.outbidOptions
   try {
     const floor_price: number = Number(await fetchBlurCollectionStats(task.contract.slug));
-
-
     const traitsObj = JSON.parse(trait);
     const [traitType, traitValue] = Object.entries(traitsObj)[0];
     const identifier = `${traitType}:${traitValue}`
@@ -6154,7 +6213,6 @@ async function processBlurTraitBid(data: {
       if (orders.length > 0) {
         const cancelData = orders.map((order) => {
           const payload = JSON.parse(order.orderHash)
-
           return {
             name: CANCEL_BLUR_BID,
             data: { privateKey, payload, taskId: _id, orderKey: order.id }
@@ -6216,13 +6274,11 @@ async function processBlurTraitBid(data: {
         }
       }
       const bidderAddressesSample = topOffer?.bidderAddressesSample || []
+      const secondBidder = secondOffer.bidderAddressesSample || []
       const numberBidders = topOffer?.numberBidders || 0
       const blurOutbidMargin = outbidOptions.blurOutbidMargin || 0.01
 
       const isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(task.wallet.toLowerCase())
-
-      console.log({ isTopBid, topOfferAmount, secondOfferAmount, bidderAddressesSample, numberBidders });
-
 
       if (isTopBid) {
         const spread = (Number(topOfferAmount) - Number(secondOfferAmount));
@@ -6580,6 +6636,7 @@ async function processMagicedenScheduledBid(task: ITask) {
 
 async function processMagicedenCollectionBid(data: { task: ITask }) {
   try {
+    if (!enabledMarketplaces.length) return
     const { task } = data
     const currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return;
@@ -6734,6 +6791,8 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
 
 async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
   try {
+
+    if (!enabledMarketplaces.length) return
     const { contractAddress, address, quantity, privateKey, slug, tokenId, task, _id } = data
     if (!currentTokenIds[_id]?.magiceden?.includes(+tokenId)) return
     const currentTask = activeTasks.get(_id)
@@ -6928,6 +6987,7 @@ async function processMagicedenTraitBid(data: {
   minBidPriceEth?: number;
   task: ITask;
 }) {
+  if (!enabledMarketplaces.length) return
   if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return
   try {
     const
@@ -7197,15 +7257,28 @@ async function validateBidCount() {
           }
         })
         // If we got here, the table exists, so delete expired orders
-        await prisma.order.deleteMany({
+
+        const oneMinuteFromNow = new Date(Date.now() + 60 * 1000);
+        const expiringOrders = await prisma.order.findMany({
           where: {
             taskId: task._id,
             expiresAt: {
-              lte: new Date()
+              lte: oneMinuteFromNow
             }
           }
-        });
+        })
 
+        if (expiringOrders.length > 0) {
+          await prisma.order.deleteMany({
+            where: {
+              taskId: task._id,
+              expiresAt: {
+                lte: oneMinuteFromNow
+              }
+            }
+          });
+          await startTask(task, true)
+        }
       } catch (err: any) {
         if (err?.code === 'P2021') {
           // Table doesn't exist yet - likely needs migration
@@ -7248,15 +7321,6 @@ async function bulkCancelBlurBid(data: BlurCancelPayload) {
 
 app.get("/", (req, res) => {
   res.json({ message: "Welcome to the NFTTools bidding bot server! Let's make magic happen! 🚀🚀🚀" });
-});
-
-// Debug endpoint to check active subscriptions
-app.get("/subscriptions", (req, res) => {
-  const subscriptions = getActiveSubscriptions();
-  res.json({
-    total: subscriptions.length,
-    subscriptions: subscriptions
-  });
 });
 
 // Debug endpoint to check seen items status
@@ -7852,6 +7916,40 @@ app.post('/api/currency/conversion', async (req, res) => {
 
 })
 
+// Password endpoint for storing user password in server memory
+app.post('/api/auth/password', async (req, res) => {
+  try {
+    const { password } = req.body;
+
+    if (!password) {
+      return res.status(400).json({ error: 'Password is required' });
+    }
+
+    const wasPasswordSet = !!getPassword();
+
+    // Store password in memory
+    setPassword(password);
+
+    // If this is the first time setting password, resume queue and workers
+    if (!wasPasswordSet) {
+      await resumeQueueAndWorkers();
+    }
+
+    res.status(200).json({ success: true, message: 'Password stored successfully' });
+  } catch (error: any) {
+    console.error('Failed to store password:', error);
+    res.status(500).json({
+      error: 'Failed to store password',
+      message: error.message
+    });
+  }
+});
+
+// Check if password is set
+app.get('/api/auth/password-status', async (req, res) => {
+  res.status(200).json({ hasPassword: !!getPassword() });
+});
+
 // Wallet encryption endpoint
 app.post('/api/wallet/encrypt', async (req, res) => {
   try {
@@ -7867,17 +7965,29 @@ app.post('/api/wallet/encrypt', async (req, res) => {
     res.status(200).json({ encryptedPrivateKey });
   } catch (error: any) {
     console.error('Failed to encrypt private key:', error);
-    res.status(500).json({
-      error: 'Failed to encrypt private key',
-      message: error.message
-    });
+    // Check if error is due to missing password
+    if (error.message.includes('No encryption key available')) {
+      res.status(401).json({
+        error: 'Authentication required',
+        message: 'Please sign in to continue. Server has been restarted.',
+        requiresAuth: true
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to encrypt private key',
+        message: error.message
+      });
+    }
   }
 });
 
 // Create wallet with encrypted private key
 app.post('/api/wallet/create', async (req, res) => {
   try {
-    const { privateKey, userId, _id, ...walletData } = req.body;
+    const { privateKey, userId, ...walletData } = req.body;
+
+    console.log({ privateKey, userId, ...walletData });
+
 
     if (!privateKey || !userId) {
       return res.status(400).json({ error: 'Private key and user ID are required' });
@@ -7889,10 +7999,19 @@ app.post('/api/wallet/create', async (req, res) => {
     res.status(201).json({ success: true, wallet });
   } catch (error: any) {
     console.error('Failed to create wallet:', error);
-    res.status(500).json({
-      error: 'Failed to create wallet',
-      message: error.message
-    });
+    // Check if error is due to missing password
+    if (error.message.includes('No encryption key available')) {
+      res.status(401).json({
+        error: 'Authentication required',
+        message: 'Please sign in to continue. Server has been restarted.',
+        requiresAuth: true
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to create wallet',
+        message: error.message
+      });
+    }
   }
 });
 
@@ -7900,9 +8019,6 @@ app.post('/api/wallet/create', async (req, res) => {
 app.post('/api/wallet/decrypt', async (req, res) => {
   try {
     const { walletId, userId } = req.body;
-
-    console.log({ walletId, userId });
-
 
     if (!walletId || !userId) {
       return res.status(400).json({ error: 'Wallet ID and user ID are required' });
@@ -7919,10 +8035,19 @@ app.post('/api/wallet/decrypt', async (req, res) => {
     res.status(200).json({ privateKey });
   } catch (error: any) {
     console.error('Failed to decrypt private key:', error);
-    res.status(500).json({
-      error: 'Failed to decrypt private key',
-      message: error.message
-    });
+    // Check if error is due to missing password
+    if (error.message.includes('No encryption key available')) {
+      res.status(401).json({
+        error: 'Authentication required',
+        message: 'Please sign in to continue. Server has been restarted.',
+        requiresAuth: true
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to decrypt private key',
+        message: error.message
+      });
+    }
   }
 });
 
@@ -8310,84 +8435,68 @@ function subscribeToCollections(tasks: ITask[]) {
 
       if (connectToOpensea) {
         // Check if already subscribed to this collection on OpenSea
-        const collectionSubscriptions = activeSubscriptions.get(subscriptionKey) || new Set<string>();
+        const openseaSubscriptionMessage = {
+          "slug": task.contract.slug,
+          "event": "join_the_party",
+          "topic": task.contract.slug,
+          "contractAddress": task.contract.contractAddress,
+          "clientId": clientId,
+          "marketplace": OPENSEA
+        };
 
-        if (!collectionSubscriptions.has(OPENSEA)) {
-          const openseaSubscriptionMessage = {
-            "slug": task.contract.slug,
-            "event": "join_the_party",
-            "topic": task.contract.slug,
-            "contractAddress": task.contract.contractAddress,
-            "clientId": clientId,
-            "marketplace": OPENSEA
-          };
+        safeSendMessage(openseaSubscriptionMessage);
 
-          safeSendMessage(openseaSubscriptionMessage);
 
-          // Add marketplace to the collection's subscription set
-          collectionSubscriptions.add(OPENSEA);
-          activeSubscriptions.set(subscriptionKey, collectionSubscriptions);
 
-          console.log('----------------------------------------------------------------------');
-          console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} OPENSEA`);
-          console.log('----------------------------------------------------------------------');
-        }
+        console.log('----------------------------------------------------------------------');
+        console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} OPENSEA`);
+        console.log('----------------------------------------------------------------------');
+
       }
 
       // Handle MagicEden subscription
       const connectToMagiceden = task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("magiceden");
       if (connectToMagiceden) {
         // Check if already subscribed to this collection on MagicEden
-        const collectionSubscriptions = activeSubscriptions.get(subscriptionKey) || new Set<string>();
 
-        if (!collectionSubscriptions.has(MAGICEDEN)) {
-          const magicedenSubscriptionMessage = {
-            "slug": task.contract.slug,
-            "event": "join_the_party",
-            "topic": task.contract.slug,
-            "contractAddress": task.contract.contractAddress,
-            "clientId": clientId,
-            "marketplace": MAGICEDEN
-          };
+        const magicedenSubscriptionMessage = {
+          "slug": task.contract.slug,
+          "event": "join_the_party",
+          "topic": task.contract.slug,
+          "contractAddress": task.contract.contractAddress,
+          "clientId": clientId,
+          "marketplace": MAGICEDEN
+        };
 
-          safeSendMessage(magicedenSubscriptionMessage);
+        safeSendMessage(magicedenSubscriptionMessage);
 
-          // Add marketplace to the collection's subscription set
-          collectionSubscriptions.add(MAGICEDEN);
-          activeSubscriptions.set(subscriptionKey, collectionSubscriptions);
+        console.log('----------------------------------------------------------------------');
+        console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} MAGICEDEN`);
+        console.log('----------------------------------------------------------------------');
 
-          console.log('----------------------------------------------------------------------');
-          console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} MAGICEDEN`);
-          console.log('----------------------------------------------------------------------');
-        }
       }
 
       // Handle Blur subscription
       const connectToBlur = task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur");
       if (connectToBlur) {
         // Check if already subscribed to this collection on Blur
-        const collectionSubscriptions = activeSubscriptions.get(subscriptionKey) || new Set<string>();
+        const blurSubscriptionMessage = {
+          "slug": task.contract.slug,
+          "event": "join_the_party",
+          "topic": task.contract.slug,
+          "contractAddress": task.contract.contractAddress,
+          "clientId": clientId,
+          "marketplace": BLUR
+        };
 
-        if (!collectionSubscriptions.has(BLUR)) {
-          const blurSubscriptionMessage = {
-            "slug": task.contract.slug,
-            "event": "join_the_party",
-            "topic": task.contract.slug,
-            "contractAddress": task.contract.contractAddress,
-            "clientId": clientId,
-            "marketplace": BLUR
-          };
+        safeSendMessage(blurSubscriptionMessage);
 
-          safeSendMessage(blurSubscriptionMessage);
+        // Add marketplace to the collection's subscription set
 
-          // Add marketplace to the collection's subscription set
-          collectionSubscriptions.add(BLUR);
-          activeSubscriptions.set(subscriptionKey, collectionSubscriptions);
+        console.log('----------------------------------------------------------------------');
+        console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} BLUR`);
+        console.log('----------------------------------------------------------------------');
 
-          console.log('----------------------------------------------------------------------');
-          console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} BLUR`);
-          console.log('----------------------------------------------------------------------');
-        }
       }
 
     });
@@ -8407,45 +8516,30 @@ async function unsubscribeFromCollection(task: ITask, marketplace?: string) {
     }
 
     const subscriptionKey = task.contract.slug;
-    const collectionSubscriptions = activeSubscriptions.get(subscriptionKey);
-
-    if (!collectionSubscriptions || collectionSubscriptions.size === 0) {
-      console.log(`No active subscriptions found for ${task.contract.slug}`);
-      return;
-    }
 
     // If marketplace is specified, only unsubscribe from that marketplace
     if (marketplace) {
       const marketplaceLower = marketplace.toLowerCase();
-      if (collectionSubscriptions.has(marketplaceLower)) {
-        const unsubscribeMessage = {
-          "slug": task.contract.slug,
-          "topic": task.contract.slug,
-          "contractAddress": task.contract.contractAddress,
-          "event": "leave_the_party",
-          "clientId": clientId,
-          "marketplace": marketplaceLower
-        };
+      const unsubscribeMessage = {
+        "slug": task.contract.slug,
+        "topic": task.contract.slug,
+        "contractAddress": task.contract.contractAddress,
+        "event": "leave_the_party",
+        "clientId": clientId,
+        "marketplace": marketplaceLower
+      };
 
-        await new Promise<void>((resolve, reject) => {
-          try {
-            ws.send(JSON.stringify(unsubscribeMessage));
-            console.log(`Unsubscribed from collection: ${task.contract.slug} on ${marketplaceLower}`);
+      await new Promise<void>((resolve, reject) => {
+        try {
+          ws.send(JSON.stringify(unsubscribeMessage));
+          console.log(`Unsubscribed from collection: ${task.contract.slug} on ${marketplaceLower}`);
 
-            // Remove marketplace from the collection's subscription set
-            collectionSubscriptions.delete(marketplaceLower);
-            if (collectionSubscriptions.size === 0) {
-              activeSubscriptions.delete(subscriptionKey);
-            } else {
-              activeSubscriptions.set(subscriptionKey, collectionSubscriptions);
-            }
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
 
-            resolve();
-          } catch (err) {
-            reject(err);
-          }
-        });
-      }
     } else {
       // Unsubscribe from all marketplaces for this collection
       const unsubscribeMessage = {
@@ -8460,9 +8554,6 @@ async function unsubscribeFromCollection(task: ITask, marketplace?: string) {
         try {
           ws.send(JSON.stringify(unsubscribeMessage));
           console.log(`Unsubscribed from collection: ${task.contract.slug} (all marketplaces)`);
-
-          // Remove the entire collection from active subscriptions
-          activeSubscriptions.delete(subscriptionKey);
 
           resolve();
         } catch (err) {
@@ -8479,19 +8570,6 @@ async function unsubscribeFromCollection(task: ITask, marketplace?: string) {
   }
 }
 
-// Helper function to get current active subscriptions
-function getActiveSubscriptions(): { collection: string; marketplaces: string[] }[] {
-  const subscriptions: { collection: string; marketplaces: string[] }[] = [];
-
-  activeSubscriptions.forEach((marketplaces, collection) => {
-    subscriptions.push({
-      collection,
-      marketplaces: Array.from(marketplaces)
-    });
-  });
-
-  return subscriptions;
-}
 
 function checkOpenseaTrait(selectedTraits: any, trait_criteria: any) {
   if (selectedTraits.hasOwnProperty(trait_criteria.trait_type)) {
