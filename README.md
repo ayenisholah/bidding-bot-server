@@ -21,7 +21,6 @@ An automated bidding system for NFT marketplaces (OpenSea, Magic Eden, Blur) wit
 - [Configuration](#configuration)
 - [Usage Guide](#usage-guide)
 - [Development](#development)
-- [API Reference](#api-reference)
 - [Security](#security)
 - [Troubleshooting](#troubleshooting)
 
@@ -65,11 +64,6 @@ npm run dc:up
 # Server: http://localhost:3003
 ```
 
-### Using Install Script
-
-```bash
-curl -s "https://raw.githubusercontent.com/nfttools/bidding-bot/main/install.sh" | bash
-```
 
 ## 📦 Installation
 
@@ -262,60 +256,6 @@ npm run build             # Production build
 npm test                  # Run tests
 ```
 
-### Adding a New Marketplace
-
-1. Create adapter in `server/src/marketplace/[name]/`
-2. Implement bid.ts with marketplace-specific logic:
-```typescript
-export async function placeBid(params: BidParams): Promise<BidResult> {
-  // Marketplace-specific implementation
-}
-```
-3. Add WebSocket adapter for real-time monitoring
-4. Update client UI to support new marketplace
-
-## 📡 API Reference
-
-### REST Endpoints
-
-#### Authentication
-```
-POST /api/auth/login     - User login
-POST /api/auth/register  - User registration
-POST /api/auth/logout    - User logout
-```
-
-#### Tasks
-```
-GET    /api/tasks        - List all tasks
-POST   /api/tasks        - Create new task
-PUT    /api/tasks/:id    - Update task
-DELETE /api/tasks/:id    - Delete task
-POST   /api/tasks/bulk   - Bulk operations
-```
-
-#### Wallets
-```
-GET    /api/wallets      - List wallets
-POST   /api/wallets      - Add wallet
-DELETE /api/wallets/:id  - Remove wallet
-```
-
-### WebSocket Events
-
-#### Client → Server
-```javascript
-socket.emit('subscribe', { taskId, collections });
-socket.emit('unsubscribe', { taskId });
-socket.emit('task:status', { taskId, status });
-```
-
-#### Server → Client
-```javascript
-socket.on('bid:placed', { taskId, marketplace, tokenId, price });
-socket.on('bid:cancelled', { taskId, orderId });
-socket.on('error', { message, taskId });
-```
 
 ## 🔐 Security
 
@@ -332,9 +272,8 @@ The system uses advanced password-based encryption:
 
 1. **Never share private keys**
 2. **Use strong passwords**
-3. **Enable 2FA when available**
-4. **Regularly backup wallets**
-5. **Monitor wallet activities**
+3. **Regularly backup wallets**
+4. **Monitor wallet activities**
 
 ### Password Security Flow
 
