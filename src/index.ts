@@ -2968,8 +2968,8 @@ async function cancelBlurBids(orders: PrismaOrder[], privateKey: string, taskId:
         jobId: `CANCEL_BLUR_BID-${taskId}-${order.id}`
       }
     }
-  })
-  await queue.addBulk(cancelData);
+  }) as Job[]
+  await processBulkCancellations(cancelData);
 }
 
 async function cancelOpenseaBids(orders: PrismaOrder[], privateKey: string, taskId: string, currencySymbol: string) {
@@ -5755,6 +5755,7 @@ async function processOpenseaTraitBid(data: {
       trait
     )
   } catch (error: any) {
+    console.log(error?.response?.data);
     if (!errorStats[data.task._id]) {
       errorStats[data.task._id] = {
         magiceden: 0,
@@ -7256,9 +7257,8 @@ async function validateBidCount() {
             }
           }
         })
-        // If we got here, the table exists, so delete expired orders
 
-        const oneMinuteFromNow = new Date(Date.now() + 60 * 1000);
+        const oneMinuteFromNow = new Date(Date.now() + 10 * 1000);
         const expiringOrders = await prisma.order.findMany({
           where: {
             taskId: task._id,
@@ -7841,72 +7841,8 @@ app.post('/api/collection/stats', async (req, res) => {
 app.post('/api/currency/conversion', async (req, res) => {
   try {
     const wallet = currentTasks && currentTasks.length > 0 ? currentTasks[0].wallet : "0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21"
-    const query = {
-      operationName: "BalancesQuery",
-      query: `query BalancesQuery($address: Address!) {
-        addressBalances(address: $address) {
-          ...ContextBalance
-          __typename
-        }
-      }
-      fragment ContextBalance on Balance {
-        id
-        currency {
-          id
-          contractAddress
-          chain {
-            identifier
-            minOfferPriceUsd
-            __typename
-          }
-          usdPrice
-          symbol
-          imageUrl
-          name
-          decimals
-          ...ContextCurrency
-          __typename
-        }
-        quantity
-        usdValue
-        __typename
-      }
-      fragment ContextCurrency on Currency {
-        contractAddress
-        usdPrice
-        stats {
-          marketCapUsd
-          oneDay {
-            priceChange
-            __typename
-          }
-          __typename
-        }
-        symbol
-        decimals
-        name
-        imageUrl
-        chain {
-          identifier
-          __typename
-        }
-        isSwapDisabled
-        __typename
-      }`,
-      variables: {
-        address: wallet
-      }
-    };
-    const { data } = await limiter.schedule(() => axiosInstance.post<AddressBalancesResponse>(
-      `${BASE_URL}/opensea/graphql`,
-      query,
-      {
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY
-        }
-      }
-    ));
+    const data = await fetchAddressBalances(wallet);
+
     const usdPrice = data.data.addressBalances.find((bal) => bal.currency.contractAddress.toLowerCase() === "0x0000000000000000000000000000000000000000".toLowerCase())?.currency.usdPrice ?? 0
     res.status(200).json(usdPrice)
   } catch (error: any) {
@@ -8076,6 +8012,123 @@ app.post('/api/update-app', async (req, res) => {
     });
   }
 });
+
+export async function fetchAddressBalances(walletAddress: string): Promise<AddressBalancesResponse> {
+  const CACHE_EXPIRY_SECONDS = 30;
+  // Use hash tag for deterministic slot assignment in Redis Cluster
+  const cacheKey = `{address_balances:${walletAddress}}`;
+
+  // Check cache first
+  const cachedData = await redis.get(cacheKey);
+  if (cachedData) {
+    try {
+      return JSON.parse(cachedData);
+    } catch (error) {
+      console.error('Error parsing cached address balances:', error);
+    }
+  }
+
+  // Use distributed lock to prevent duplicate requests
+  const lockManager = new DistributedLockManager({
+    lockPrefix: '{address_balances}:lock:',
+    defaultTTLSeconds: CACHE_EXPIRY_SECONDS
+  });
+
+  const result = await lockManager.withLock(
+    `{address_balances}_${walletAddress}`,
+    async () => {
+      // Check cache again after acquiring lock
+      const cachedDataAfterLock = await redis.get(cacheKey);
+      if (cachedDataAfterLock) {
+        try {
+          return JSON.parse(cachedDataAfterLock);
+        } catch (error) {
+          console.error('Error parsing cached address balances after lock:', error);
+        }
+      }
+
+      const query = {
+        operationName: "BalancesQuery",
+        query: `query BalancesQuery($address: Address!) {
+          addressBalances(address: $address) {
+            ...ContextBalance
+            __typename
+          }
+        }
+        fragment ContextBalance on Balance {
+          id
+          currency {
+            id
+            contractAddress
+            chain {
+              identifier
+              minOfferPriceUsd
+              __typename
+            }
+            usdPrice
+            symbol
+            imageUrl
+            name
+            decimals
+            ...ContextCurrency
+            __typename
+          }
+          quantity
+          usdValue
+          __typename
+        }
+        fragment ContextCurrency on Currency {
+          contractAddress
+          usdPrice
+          stats {
+            marketCapUsd
+            oneDay {
+              priceChange
+              __typename
+            }
+            __typename
+          }
+          symbol
+          decimals
+          name
+          imageUrl
+          chain {
+            identifier
+            __typename
+          }
+          isSwapDisabled
+          __typename
+        }`,
+        variables: {
+          address: walletAddress
+        }
+      };
+
+      try {
+        const { data } = await limiter.schedule(() => axiosInstance.post<AddressBalancesResponse>(
+          `${BASE_URL}/opensea/graphql`,
+          query,
+          {
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': API_KEY
+            }
+          }
+        ));
+
+        // Cache the result
+        await redis.set(cacheKey, JSON.stringify(data), 'EX', CACHE_EXPIRY_SECONDS);
+
+        return data;
+      } catch (error) {
+        console.error(RED + "Error fetching address balances:", error + RESET);
+        throw error;
+      }
+    }
+  );
+
+  return result;
+}
 
 
 export async function fetchBlurTraits(
@@ -8757,13 +8810,19 @@ async function approveMarketplace(marketplace: string, privateKey: string, curre
 
 export async function logBidError(taskId: string, title: string, message: string, type: "skipped" | "warning" | "error", marketplace: "opensea" | "magiceden" | "blur") {
   try {
-    // Escape special regex characters in the message
-    const escapedMessage = message.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Create a hash of the message for comparison (to handle long messages)
+    const messageHash = crypto.createHash('md5').update(message).digest('hex');
+    
+    // Truncate message if it's too long for MongoDB
+    const maxMessageLength = 10000; // Safe limit for MongoDB
+    const truncatedMessage = message.length > maxMessageLength 
+      ? message.substring(0, maxMessageLength) + '... (truncated)'
+      : message;
 
-    // Try to find an existing log with the same taskId and message
+    // Try to find an existing log with the same taskId, messageHash, and marketplace
     const existingLog = await BidLogs.findOne({
       taskId,
-      message: { $regex: new RegExp(escapedMessage, 'i') },
+      messageHash,
       marketplace: marketplace.toLowerCase(),
     });
 
@@ -8771,14 +8830,18 @@ export async function logBidError(taskId: string, title: string, message: string
       // Update timestamp of existing log
       await BidLogs.updateOne(
         { _id: existingLog._id },
-        { timestamp: new Date() }
+        { 
+          timestamp: new Date(),
+          message: truncatedMessage // Update message in case it was truncated differently
+        }
       );
     } else {
       // Create new log if no matching record exists
       const bidLogs = new BidLogs({
         taskId,
         title,
-        message,
+        message: truncatedMessage,
+        messageHash, // Store hash for future comparisons
         timestamp: new Date(),
         type: type,
         marketplace: marketplace

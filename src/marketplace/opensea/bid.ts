@@ -1,15 +1,15 @@
 import { BigNumber, ethers, Wallet } from "ethers";
 import { BASE_URL, SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, API_KEY, BLUE, decrementBidCount, pQueue, redis, trackBidRate } from "../..";
+import { activeTasks, API_KEY, BLUE, decrementBidCount, pQueue, trackBidRate } from "../..";
 import { config } from "dotenv";
-import { createBalanceChecker } from "../../utils/balance";
 import axios from "axios";
 import { PrismaClient } from '@prisma/client'
 import { USDC, WETH } from "../../utils/currencies";
 import { MagicedenCollectionResponse, MagicEdenTraitOfferResponse } from "../magiceden";
 import { CollectionItemsListQuery } from "../../queries";
 import { CollectionItemsQueryVariables, CollectionItemsResponse } from "../../functions";
+import { fetchERC20Balance } from "../../utils/balance";
 
 const prisma = new PrismaClient()
 
@@ -129,14 +129,6 @@ const types = {
   ]
 };
 
-
-const deps = {
-  redis: redis,
-  provider: new ethers.providers.AlchemyProvider("mainnet", ALCHEMY_API_KEY),
-};
-
-const balanceChecker = createBalanceChecker(deps);
-
 const activeRequests = new Map<string, AbortController[]>();
 
 async function buildItemOffer(taskId: string, offerSpecification: ItemOfferSpecification, currency: string) {
@@ -210,7 +202,7 @@ export async function bidOnOpensea(
   const task = activeTasks.get(taskId)
   if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return
 
-  const wethBalance = await balanceChecker.getERC20Balance(wallet_address, currency);
+  const wethBalance = await fetchERC20Balance(wallet_address, currency);
   const offerPriceEth = Number(offer_price) / Math.pow(10, decimal);
 
   let decimals;

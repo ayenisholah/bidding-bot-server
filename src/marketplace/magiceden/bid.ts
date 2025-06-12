@@ -2,12 +2,12 @@ import { ethers, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
 import { config } from "dotenv";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, redis, trackBidRate } from "../..";
-import { createBalanceChecker } from "../../utils/balance";
 import { DistributedLockManager } from '../../utils/lock';
 import { PrismaClient } from '@prisma/client'
 import axios from "axios";
 import { USDC, WETH } from "../../utils/currencies";
 import { BASE_URL } from "../../constants";
+import { fetchERC20Balance } from "../../utils/balance";
 
 const prisma = new PrismaClient()
 
@@ -18,14 +18,6 @@ config()
 
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 const provider = new ethers.providers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
-
-
-const deps = {
-  redis: redis,
-  provider: new ethers.providers.AlchemyProvider("mainnet", ALCHEMY_API_KEY),
-};
-
-const balanceChecker = createBalanceChecker(deps);
 
 const lockManager = new DistributedLockManager({
   lockPrefix: '{magiceden}:fetch:',
@@ -73,8 +65,8 @@ export async function bidOnMagiceden(
 
   const wallet = new Wallet(privateKey, provider);
   const offerPriceEth = Math.round(Number(weiPrice)) / Math.pow(10, decimal)
-  const wethBalance = await balanceChecker.getERC20Balance(maker, currency);
-
+  const wethBalance = await fetchERC20Balance(maker, currency);
+  console.log({ wethBalance });
   let decimals;
   if (offerPriceEth >= 1) {
     decimals = 2;

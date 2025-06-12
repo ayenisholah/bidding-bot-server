@@ -2,11 +2,12 @@ import { BigNumber, ethers, utils, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, errorStats, logBidError, pQueue, redis, RESET, trackBidRate } from "../..";
 import { config } from "dotenv";
-import { createBalanceChecker } from "../../utils/balance";
 import { DistributedLockManager } from "../../utils/lock";
 import { PrismaClient } from '@prisma/client'
 import axios from "axios";
 import { BASE_URL } from "../../constants";
+import { fetchERC20Balance } from "../../utils/balance";
+const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
 
 const prisma = new PrismaClient()
 
@@ -14,11 +15,6 @@ config()
 const BLUR_API_URL = `${BASE_URL}/blur`;
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 
-const deps = {
-  redis: redis,
-  provider: new ethers.providers.AlchemyProvider("mainnet", ALCHEMY_API_KEY),
-};
-const balanceChecker = createBalanceChecker(deps);
 const provider = new ethers.providers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 
 const lockManager = new DistributedLockManager({
@@ -66,24 +62,8 @@ export async function bidOnBlur(
   expiry = 900,
   traits?: string
 ) {
-  const bethBalance = await balanceChecker.getBethBalance(wallet_address);
+  const bethBalance = await fetchERC20Balance(wallet_address, BLUR_POOL_ADDRESS);
   let offerPriceEth: string = (Number(offer_price) / 1e18).toString()
-  // const leverage = 200
-  // const totalOfferAmount = await getCachedOfferAmount(OFFER_AMOUNT_KEY);
-  // if (totalOfferAmount + offerPriceEth >= leverage * bethBalance) {
-  //   const jobs: Job[] = await queue.getJobs(['prioritized']);
-  //   const blurJobs = jobs.filter(job =>
-  //     [BLUR_SCHEDULE, BLUR_TRAIT_BID].includes(job.name)
-  //   );
-
-  //   if (blurJobs.length > 0) {
-  //     await queue.pause()
-  //     await Promise.all(blurJobs.map(job => job.remove()));
-  //     console.log(RED + `REMOVING ${blurJobs.length} BLUR JOB(S) DUE TO INSUFFICIENT BETH BALANCE` + RESET);
-  //     await queue.resume()
-  //   }
-  //   return
-  // }
 
   if (Number(offerPriceEth) > bethBalance) {
     const message = `Offer price: ${offerPriceEth} BETH  is greater than available BETH balance: ${bethBalance} BETH. SKIPPING ...`
@@ -461,7 +441,6 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
 
 
 }
-
 
 export async function fetchBlurCollectionStats(slug: string) {
   const CACHE_TTL = 30; // 30 seconds cache
