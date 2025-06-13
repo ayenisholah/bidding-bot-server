@@ -1,6 +1,6 @@
 import { BigNumber, ethers, utils, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, API_KEY, currentTasks, decrementBidCount, errorStats, logBidError, pQueue, redis, RESET, trackBidRate } from "../..";
+import { activeTasks, API_KEY, blurRateLimitInfo, currentTasks, decrementBidCount, errorStats, logBidError, pQueue, redis, RESET, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { DistributedLockManager } from "../../utils/lock";
 import { PrismaClient } from '@prisma/client'
@@ -278,7 +278,20 @@ async function submitBidToBlur(
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("BLUR".toLowerCase())) return
     let running = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase())
     if (!running) return
-    const { data: offers } = await limiter.schedule(() =>
+    const rateLimitInfo = blurRateLimitInfo[walletAddress];
+    if (rateLimitInfo) {
+      if (rateLimitInfo.remaining < 10) {
+        const waitTime = rateLimitInfo.reset * 1000;
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+        blurRateLimitInfo[walletAddress] = {
+          remaining: 40,
+          reset: 10,
+          limit: 40
+        };
+      }
+    }
+
+    const response = await limiter.schedule(() =>
       axiosInstance.request({
         method: 'POST',
         url: `${url}/v1/collection-bids/submit`,
@@ -292,6 +305,23 @@ async function submitBidToBlur(
         signal: controller.signal
       })
     );
+
+    const headers = response.headers;
+    const rateLimitHeaders = {
+      limit: headers['x-ratelimit-limit'],
+      remaining: headers['x-ratelimit-remaining'],
+      reset: headers['x-ratelimit-reset']
+    };
+    const remaining = parseInt(rateLimitHeaders.remaining.toString(), 10);
+    const reset = parseInt(rateLimitHeaders.reset.toString(), 10);
+    const limit = parseInt(rateLimitHeaders.limit.toString(), 10);
+
+    blurRateLimitInfo[walletAddress] = {
+      remaining: remaining,
+      reset: reset,
+      limit: limit
+    }
+    const offers = response.data
 
     if (offers.success) {
       const successMessage = traits ? `🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉 TRAIT: ${traits}` : `🎉 OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉`

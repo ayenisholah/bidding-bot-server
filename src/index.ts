@@ -53,6 +53,7 @@ export const warningBids: WarningBids = {};
 export const warningMessage: WarningMessage = {};
 export const errorStats: BidCounts = {};
 export const skipStats: BidCounts = {};
+export const blurRateLimitInfo: { [walletAddress: string]: { remaining: number; reset: number; limit: number } } = {};
 const redis = redisClient.getClient()
 const QUEUE_NAME = 'BIDDING_BOT';
 export const WORKER_COUNT = 1
@@ -2260,14 +2261,56 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
                 })),
               ]
             );
-            for (const [index, job] of blurJobs.entries()) {
-              const delay = (index * 250) % 2000;
-              await new Promise(resolve => setTimeout(resolve, delay));
-              queue.add(job.name, job.data, {
-                ...(job.jobKey ? { jobId: job.jobKey } : {}), removeOnComplete: true,
-                removeOnFail: true,
-                attempts: 0,
-              })
+            // Group blur jobs by wallet address
+            const blurJobsByWallet = new Map<string, typeof blurJobs>();
+            for (const job of blurJobs) {
+              const wallet = job.data.address;
+              if (!blurJobsByWallet.has(wallet)) {
+                blurJobsByWallet.set(wallet, []);
+              }
+              blurJobsByWallet.get(wallet)?.push(job);
+            }
+            for (const [wallet, walletJobs] of blurJobsByWallet.entries()) {
+              const waitTime = 10 * 1000;
+              const rateLimitInfo = blurRateLimitInfo[wallet];
+              if (rateLimitInfo) {
+                if (rateLimitInfo.remaining === 0) {
+                  await new Promise(resolve => setTimeout(resolve, waitTime));
+                  blurRateLimitInfo[wallet] = {
+                    remaining: 40,
+                    reset: 10,
+                    limit: 40
+                  };
+                }
+              } else {
+                blurRateLimitInfo[wallet] = {
+                  remaining: 40,
+                  reset: 10,
+                  limit: 40
+                };
+              }
+              for (const [index, job] of walletJobs.entries()) {
+                const currentRateLimit = blurRateLimitInfo[wallet];
+                if (currentRateLimit.remaining === 0) {
+                  await new Promise(resolve => setTimeout(resolve, waitTime));
+                  blurRateLimitInfo[wallet] = {
+                    remaining: 40,
+                    reset: 10,
+                    limit: 40
+                  };
+                }
+                if (index > 0) {
+                  const delayBetweenJobs = 250; // 250ms between each job
+                  await new Promise(resolve => setTimeout(resolve, delayBetweenJobs));
+                }
+                blurRateLimitInfo[wallet].remaining = Math.max(0, blurRateLimitInfo[wallet].remaining - 1);
+                queue.add(job.name, job.data, {
+                  ...(job.jobKey ? { jobId: job.jobKey } : {}),
+                  removeOnComplete: true,
+                  removeOnFail: true,
+                  attempts: 0,
+                });
+              }
             }
             totalAdded += (addedJobs.length + blurJobs.length);
             tracker.completedJobs = totalAdded;
@@ -3363,8 +3406,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
     let incomingBidAmount: number = 0
     let offerPrice: number;
-
-    // console.log({ maker, incomingBidAmount, bidType, marketplace: MAGICEDEN });
 
     switch (currencyType) {
       case "eth":
@@ -8812,10 +8853,10 @@ export async function logBidError(taskId: string, title: string, message: string
   try {
     // Create a hash of the message for comparison (to handle long messages)
     const messageHash = crypto.createHash('md5').update(message).digest('hex');
-    
+
     // Truncate message if it's too long for MongoDB
     const maxMessageLength = 10000; // Safe limit for MongoDB
-    const truncatedMessage = message.length > maxMessageLength 
+    const truncatedMessage = message.length > maxMessageLength
       ? message.substring(0, maxMessageLength) + '... (truncated)'
       : message;
 
@@ -8830,7 +8871,7 @@ export async function logBidError(taskId: string, title: string, message: string
       // Update timestamp of existing log
       await BidLogs.updateOne(
         { _id: existingLog._id },
-        { 
+        {
           timestamp: new Date(),
           message: truncatedMessage // Update message in case it was truncated differently
         }

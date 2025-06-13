@@ -66,7 +66,6 @@ export async function bidOnMagiceden(
   const wallet = new Wallet(privateKey, provider);
   const offerPriceEth = Math.round(Number(weiPrice)) / Math.pow(10, decimal)
   const wethBalance = await fetchERC20Balance(maker, currency);
-  console.log({ wethBalance });
   let decimals;
   if (offerPriceEth >= 1) {
     decimals = 2;
