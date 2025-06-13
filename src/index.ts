@@ -4541,6 +4541,13 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       const floor_price = await fetchBlurCollectionStats(task.contract.slug);
       const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, Number(floor_price), "blur")
 
+      const wallets = await Wallet.findById(task.walletId)
+      if (!wallets) {
+        console.log(RED + `Wallet not found for task ${task._id}` + RESET);
+        return
+      }
+      const WALLET_PRIVATE_KEY = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+
       const orders = await prisma.order.findMany({
         where: {
           slug: task.contract.slug,
@@ -4602,6 +4609,8 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       const currentBidPrice = !offers?.length ? 0 : Math.max(...offers.map((offer) => Number(offer)))
       if (incomingPrice <= currentBidPrice) return
 
+      const blurOutbidMargin = currentTask?.outbidOptions?.blurOutbidMargin || 0.01
+      const expiry = getExpiry(currentTask?.bidDuration)
       const rawPrice = (+bestPrice + Number(blurOutbidMargin.toFixed(2))) * 1e18
       let offerPrice = BigInt(Math.round(rawPrice / 1e16) * 1e16)
 
@@ -4660,9 +4669,12 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
       seenBids.delete(bidHash)
     }
-  } catch (error) {
+  } catch (error: any) {
     console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-    console.log(RED + `Error handling Blur counterbid: ${JSON.stringify(error)}` + RESET);
+    console.log(RED + `Error handling Blur counterbid: ${error?.message || error?.toString() || 'Unknown error'}` + RESET);
+    if (error?.stack) {
+      console.log(RED + `Stack trace: ${error.stack}` + RESET);
+    }
     console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
   }
 }
