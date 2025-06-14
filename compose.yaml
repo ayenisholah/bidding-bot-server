@@ -1,6 +1,6 @@
 services:
   server:
-    image: ayenisholah/bidding-bot-server-production:latest
+    image: nfttools/bidding-bot-server-production:latest
     platform: linux/amd64
     restart: always
     ports:
@@ -28,7 +28,7 @@ services:
       - server_data:/app/data
 
   client:
-    image: ayenisholah/bidding-bot-client-production:latest
+    image: nfttools/bidding-bot-client-production:latest
     platform: linux/amd64
     restart: always
     ports:
