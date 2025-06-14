@@ -3387,8 +3387,10 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     if (!currentTask.outbidOptions.counterbid) return
 
     const orderHash = data?.data?.id
-    if (hasSeenItem(seenOrderHashes, orderHash)) return;
-    addSeenItem(seenOrderHashes, orderHash)
+    // Include task ID in the hash to make it task-specific
+    const taskSpecificHash = `${orderHash}-${task._id}`;
+    if (hasSeenItem(seenOrderHashes, taskSpecificHash)) return;
+    addSeenItem(seenOrderHashes, taskSpecificHash)
 
 
     const domain: string = data?.data?.source?.domain
@@ -3889,8 +3891,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       }
     }
 
-    if (hasSeenItem(seenOrderHashes, orderHash)) return;
-    addSeenItem(seenOrderHashes, orderHash)
+    // Include task ID in the hash to make it task-specific
+    const taskSpecificHash = `${orderHash}-${task._id}`;
+    if (hasSeenItem(seenOrderHashes, taskSpecificHash)) return;
+    addSeenItem(seenOrderHashes, taskSpecificHash)
 
     if (walletAddresses.includes(maker)) return
 
@@ -4364,7 +4368,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 async function handleBlurCounterbid(data: any, task: ITask) {
   const incomingBid = data
   try {
-    const bidHash = hashBid(data);
+    // Include task ID in the hash to make it task-specific
+    const bidHash = hashBid({ ...data, taskId: task._id });
     if (hasSeenItem(seenBids, bidHash)) return;
     addSeenItem(seenBids, bidHash);
 
