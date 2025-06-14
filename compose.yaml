@@ -67,7 +67,6 @@ services:
       - mongodb_data:/data/db
     networks:
       - my_network
-    command: mongod --wiredTigerCacheSizeGB 0.5 --nojournal
 
   postgres:
     image: "postgres:16-alpine"
