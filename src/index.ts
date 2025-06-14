@@ -3213,6 +3213,7 @@ async function connectWebSocket(): Promise<void> {
     }
 
     // Clear activeSubscriptions on reconnect to ensure fresh state
+    activeSubscriptions.clear();
     console.log(YELLOW + "Cleared active subscriptions for fresh reconnect" + RESET);
 
     await subscribeToCollections(currentTasks as unknown as ITask[]);
@@ -3256,6 +3257,9 @@ async function connectWebSocket(): Promise<void> {
       clearInterval(heartbeatIntervalId);
       heartbeatIntervalId = null;
     }
+    // Clear subscription cache on disconnect
+    activeSubscriptions.clear();
+    console.log(YELLOW + "WebSocket closed - cleared subscription cache" + RESET);
     attemptReconnect();
   });
 
@@ -8473,6 +8477,7 @@ function transformOpenseaTraits(selectedTraits: Record<string, string[]>): { typ
 
 let marketplaceIntervals: { [key: string]: NodeJS.Timeout } = {};
 const subscribedTasks = new Map<string, Set<string>>(); // Map<taskId, Set<marketplaces>>
+const activeSubscriptions = new Set<string>(); // Set of "slug:marketplace" combinations
 
 function subscribeToCollections(tasks: ITask[]) {
   try {
@@ -8531,8 +8536,6 @@ function subscribeToCollections(tasks: ITask[]) {
 
     // Handle individual marketplace subscriptions
     tasks.forEach(async (task) => {
-
-      const subscriptionKey = `${task.contract.slug}`;
       // Handle OpenSea subscription
       const hasOpenseaMarketplace = task.selectedMarketplaces.map(marketplace => marketplace.toLowerCase()).includes("opensea");
       const hasMaxPurchaseLimit = task.stopOptions?.maxPurchase && task.stopOptions.maxPurchase > 0;
@@ -8540,68 +8543,78 @@ function subscribeToCollections(tasks: ITask[]) {
       const connectToOpensea = hasOpenseaMarketplace || (hasTriggeredStopOptions && hasMaxPurchaseLimit);
 
       if (connectToOpensea) {
+        const subscriptionId = `${task.contract.slug}:${OPENSEA.toLowerCase()}`;
+        
         // Check if already subscribed to this collection on OpenSea
-        const openseaSubscriptionMessage = {
-          "slug": task.contract.slug,
-          "event": "join_the_party",
-          "topic": task.contract.slug,
-          "contractAddress": task.contract.contractAddress,
-          "clientId": clientId,
-          "marketplace": OPENSEA
-        };
+        if (!activeSubscriptions.has(subscriptionId)) {
+          const openseaSubscriptionMessage = {
+            "slug": task.contract.slug,
+            "event": "join_the_party",
+            "topic": task.contract.slug,
+            "contractAddress": task.contract.contractAddress,
+            "clientId": clientId,
+            "marketplace": OPENSEA
+          };
 
-        safeSendMessage(openseaSubscriptionMessage);
+          safeSendMessage(openseaSubscriptionMessage);
+          activeSubscriptions.add(subscriptionId);
 
-
-
-        console.log('----------------------------------------------------------------------');
-        console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} OPENSEA`);
-        console.log('----------------------------------------------------------------------');
+          console.log('----------------------------------------------------------------------');
+          console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} OPENSEA`);
+          console.log('----------------------------------------------------------------------');
+        }
 
       }
 
       // Handle MagicEden subscription
       const connectToMagiceden = task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("magiceden");
       if (connectToMagiceden) {
+        const subscriptionId = `${task.contract.slug}:${MAGICEDEN.toLowerCase()}`;
+        
         // Check if already subscribed to this collection on MagicEden
+        if (!activeSubscriptions.has(subscriptionId)) {
+          const magicedenSubscriptionMessage = {
+            "slug": task.contract.slug,
+            "event": "join_the_party",
+            "topic": task.contract.slug,
+            "contractAddress": task.contract.contractAddress,
+            "clientId": clientId,
+            "marketplace": MAGICEDEN
+          };
 
-        const magicedenSubscriptionMessage = {
-          "slug": task.contract.slug,
-          "event": "join_the_party",
-          "topic": task.contract.slug,
-          "contractAddress": task.contract.contractAddress,
-          "clientId": clientId,
-          "marketplace": MAGICEDEN
-        };
+          safeSendMessage(magicedenSubscriptionMessage);
+          activeSubscriptions.add(subscriptionId);
 
-        safeSendMessage(magicedenSubscriptionMessage);
-
-        console.log('----------------------------------------------------------------------');
-        console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} MAGICEDEN`);
-        console.log('----------------------------------------------------------------------');
+          console.log('----------------------------------------------------------------------');
+          console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} MAGICEDEN`);
+          console.log('----------------------------------------------------------------------');
+        }
 
       }
 
       // Handle Blur subscription
       const connectToBlur = task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur");
       if (connectToBlur) {
+        const subscriptionId = `${task.contract.slug}:${BLUR.toLowerCase()}`;
+        
         // Check if already subscribed to this collection on Blur
-        const blurSubscriptionMessage = {
-          "slug": task.contract.slug,
-          "event": "join_the_party",
-          "topic": task.contract.slug,
-          "contractAddress": task.contract.contractAddress,
-          "clientId": clientId,
-          "marketplace": BLUR
-        };
+        if (!activeSubscriptions.has(subscriptionId)) {
+          const blurSubscriptionMessage = {
+            "slug": task.contract.slug,
+            "event": "join_the_party",
+            "topic": task.contract.slug,
+            "contractAddress": task.contract.contractAddress,
+            "clientId": clientId,
+            "marketplace": BLUR
+          };
 
-        safeSendMessage(blurSubscriptionMessage);
+          safeSendMessage(blurSubscriptionMessage);
+          activeSubscriptions.add(subscriptionId);
 
-        // Add marketplace to the collection's subscription set
-
-        console.log('----------------------------------------------------------------------');
-        console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} BLUR`);
-        console.log('----------------------------------------------------------------------');
+          console.log('----------------------------------------------------------------------');
+          console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} BLUR`);
+          console.log('----------------------------------------------------------------------');
+        }
 
       }
 
@@ -8621,8 +8634,6 @@ async function unsubscribeFromCollection(task: ITask, marketplace?: string) {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
     }
 
-    const subscriptionKey = task.contract.slug;
-
     // If marketplace is specified, only unsubscribe from that marketplace
     if (marketplace) {
       const marketplaceLower = marketplace.toLowerCase();
@@ -8639,6 +8650,10 @@ async function unsubscribeFromCollection(task: ITask, marketplace?: string) {
         try {
           ws.send(JSON.stringify(unsubscribeMessage));
           console.log(`Unsubscribed from collection: ${task.contract.slug} on ${marketplaceLower}`);
+          
+          // Remove from activeSubscriptions
+          const subscriptionId = `${task.contract.slug}:${marketplaceLower}`;
+          activeSubscriptions.delete(subscriptionId);
 
           resolve();
         } catch (err) {
@@ -8660,6 +8675,14 @@ async function unsubscribeFromCollection(task: ITask, marketplace?: string) {
         try {
           ws.send(JSON.stringify(unsubscribeMessage));
           console.log(`Unsubscribed from collection: ${task.contract.slug} (all marketplaces)`);
+          
+          // Remove all subscriptions for this collection from activeSubscriptions
+          const subscriptionPatterns = [
+            `${task.contract.slug}:opensea`,
+            `${task.contract.slug}:magiceden`,
+            `${task.contract.slug}:blur`
+          ];
+          subscriptionPatterns.forEach(pattern => activeSubscriptions.delete(pattern));
 
           resolve();
         } catch (err) {
