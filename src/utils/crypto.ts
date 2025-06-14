@@ -6,7 +6,7 @@ config()
 const ALGORITHM = 'aes-256-gcm';
 
 // Import PASSWORD from index.ts
-let PASSWORD: string | undefined;
+let PASSWORD: string | undefined = process.env.PASSWORD
 
 export function setPassword(password: string) {
   PASSWORD = password;

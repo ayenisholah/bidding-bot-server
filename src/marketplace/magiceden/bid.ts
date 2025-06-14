@@ -8,6 +8,7 @@ import axios from "axios";
 import { USDC, WETH } from "../../utils/currencies";
 import { BASE_URL } from "../../constants";
 import { fetchERC20Balance } from "../../utils/balance";
+import { convertBigNumbers } from "../../utils/bigNumberConverter";
 
 const prisma = new PrismaClient()
 
@@ -17,7 +18,7 @@ const RESET = '\x1b[0m';
 config()
 
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
-const provider = new ethers.providers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
+const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 
 const lockManager = new DistributedLockManager({
   lockPrefix: '{magiceden}:fetch:',
@@ -253,10 +254,10 @@ async function signOrderData(taskId: string, wallet: ethers.Wallet, signData: an
       { "name": "recipient", "type": "address" }
     ]
   } : signData.types
-  const signature = await wallet._signTypedData(
+  const signature = await wallet.signTypedData(
     domain,
     types,
-    signData.value
+    convertBigNumbers(signData.value)
   );
   return signature;
 
@@ -557,10 +558,10 @@ async function signCancelOrder(taskId: string, cancelItem: any | undefined, priv
 
   const wallet = new Wallet(privateKey, provider);
 
-  const signature = await wallet._signTypedData(
+  const signature = await wallet.signTypedData(
     cancelItem.domain,
     cancelItem.types,
-    cancelItem.value
+    convertBigNumbers(cancelItem.value)
   );
 
   return signature;

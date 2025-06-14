@@ -1,4 +1,4 @@
-import { ethers } from "ethers";
+import {  formatEther, JsonRpcProvider, Contract } from "ethers";
 import { DistributedLockManager } from "./lock";
 import redisClient from "./redis";
 import { RED, RESET } from "..";
@@ -42,13 +42,13 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
             'https://cloudflare-eth.com'
           ];
           
-          let provider: ethers.providers.JsonRpcProvider | null = null;
+          let provider: JsonRpcProvider | null = null;
           let providerError: any = null;
           
           // Try each RPC provider until one works
           for (const rpcUrl of rpcUrls) {
             try {
-              provider = new ethers.providers.JsonRpcProvider(rpcUrl);
+              provider = new JsonRpcProvider(rpcUrl);
               await provider.getBlockNumber();
               break;
             } catch (err) {
@@ -61,7 +61,7 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
             throw new Error(`All RPC providers failed. Last error: ${providerError?.message}`);
           }
 
-          const tokenContract = new ethers.Contract(
+          const tokenContract = new Contract(
             tokenAddress,
             ['function balanceOf(address) view returns (uint256)'],
             provider
@@ -72,7 +72,7 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
           for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
               const balance = await tokenContract.balanceOf(walletAddress);
-              const formattedBalance = Number(ethers.utils.formatEther(balance));
+              const formattedBalance = Number(formatEther(balance));
               
               // Store in both fresh and stale cache
               await redis.set(cacheKey, formattedBalance.toString(), 'EX', CACHE_EXPIRY_SECONDS);

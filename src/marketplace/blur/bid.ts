@@ -1,4 +1,4 @@
-import { BigNumber, ethers, utils, Wallet } from "ethers";
+import { ethers, Wallet, formatUnits } from "ethers";
 import { axiosInstance, limiter } from "../../init";
 import { activeTasks, API_KEY, blurRateLimitInfo, currentTasks, decrementBidCount, errorStats, logBidError, pQueue, redis, RESET, trackBidRate } from "../..";
 import { config } from "dotenv";
@@ -7,6 +7,7 @@ import { PrismaClient } from '@prisma/client'
 import axios from "axios";
 import { BASE_URL } from "../../constants";
 import { fetchERC20Balance } from "../../utils/balance";
+import { convertBigNumbers } from "../../utils/bigNumberConverter";
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
 
 const prisma = new PrismaClient()
@@ -15,7 +16,7 @@ config()
 const BLUR_API_URL = `${BASE_URL}/blur`;
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 
-const provider = new ethers.providers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
+const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 
 const lockManager = new DistributedLockManager({
   lockPrefix: '{blur}:lock:',
@@ -57,7 +58,7 @@ export async function bidOnBlur(
   wallet_address: string,
   private_key: string,
   contractAddress: string,
-  offer_price: BigNumber | bigint,
+  offer_price: bigint,
   slug: string,
   expiry = 900,
   traits?: string
@@ -70,10 +71,10 @@ export async function bidOnBlur(
     throw new Error(message)
   }
 
-  const offerPrice = BigNumber.from(offer_price.toString());
+  const offerPrice = BigInt(offer_price.toString());
   const accessToken = await getAccessToken(BLUR_API_URL, private_key);
 
-  offerPriceEth = (Math.floor(Number(utils.formatUnits(offerPrice)) * 100) / 100).toFixed(2);
+  offerPriceEth = (Math.floor(Number(formatUnits(offerPrice.toString(), 18)) * 100) / 100).toFixed(2);
 
   if (Number(offerPriceEth) === 0) {
     const message = `Offer price is less than the minimum Blur offer price. SKIPPING ...`.toUpperCase()
@@ -126,10 +127,10 @@ export async function bidOnBlur(
     return;
   }
 
-  const signObj = await wallet._signTypedData(
+  const signObj = await wallet.signTypedData(
     data?.signData?.domain,
     data?.signData?.types,
-    data?.signData?.value
+    convertBigNumbers(data?.signData?.value)
   );
 
   const submitPayload = {
@@ -259,7 +260,7 @@ async function formatBidOnBlur(
 async function submitBidToBlur(
   taskId: string,
   bidCount: string,
-  offer_price: BigNumber | bigint,
+  offer_price: bigint,
   url: string,
   accessToken: string,
   walletAddress: string,

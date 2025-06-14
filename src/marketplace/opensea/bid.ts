@@ -1,4 +1,4 @@
-import { BigNumber, ethers, Wallet } from "ethers";
+import { ethers, Wallet } from "ethers";
 import { BASE_URL, SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter } from "../../init";
 import { activeTasks, API_KEY, BLUE, decrementBidCount, pQueue, trackBidRate } from "../..";
@@ -21,7 +21,7 @@ const CONDUIT_KEY = "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b81042
 const SEAPORT_1_6 = "0x0000000000000068f116a894984e2db1123eb395"
 const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1F0DF003000390027140000fAa719"
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
-const provider = new ethers.providers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
+const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 const SEAPORT_CONTRACT = new ethers.Contract(SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI, provider);
 const RESET = '\x1b[0m';
 
@@ -196,7 +196,7 @@ export async function bidOnOpensea(
   opensea_traits?: string,
   asset?: { contractAddress: string, tokenId: number }
 ) {
-  const divider = BigNumber.from("10000");
+  const divider = 10000n;
   const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
   const currencySymbol = currency.toLowerCase() === USDC.toLowerCase() ? "USDC" : "WETH"
   const task = activeTasks.get(taskId)
@@ -217,7 +217,7 @@ export async function bidOnOpensea(
   const roundedEth = currency.toLowerCase() === USDC.toLowerCase() ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
   const basis = decimals === 2 ? 1e16 : decimals === 3 ? 1e15 : 1e14
   const roundedWei = decimal === 18 ? Math.round(roundedEth * Math.pow(10, decimal) / basis) * basis : Math.round(roundedEth * Math.pow(10, decimal))
-  const offerPrice = BigNumber.from(roundedWei.toString());
+  const offerPrice = BigInt(roundedWei.toString());
   const offerPriceEthFinal = Number(roundedWei) / Math.pow(10, decimal);
 
   if (offerPriceEthFinal > wethBalance) {
@@ -226,7 +226,7 @@ export async function bidOnOpensea(
   }
 
   const wallet = new Wallet(private_key, provider);
-  const openseaFee = BigNumber.from("50");
+  const openseaFee = 50n;
 
   if (asset) {
     const offer = await buildItemOffer(task._id, {
@@ -244,23 +244,23 @@ export async function bidOnOpensea(
       itemType: 1,
       token: currency,
       identifierOrCriteria: "0",
-      startAmount: offerPrice.mul(openseaFee).div(divider).toString(),
-      endAmount: offerPrice.mul(openseaFee).div(divider).toString(),
+      startAmount: ((offerPrice * openseaFee) / divider).toString(),
+      endAmount: ((offerPrice * openseaFee) / divider).toString(),
       recipient: OPENSEA_FEE_ADDRESS
     };
 
     offer.consideration.push(opensea_consideration);
     offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
     for (const address in creator_fees) {
-      let fee: BigNumber | number = creator_fees[address];
-      fee = BigNumber.from(Math.round(fee).toString());
+      let fee: bigint | number = creator_fees[address];
+      fee = BigInt(Math.round(fee).toString());
       if (enforceCreatorFee) {
         const consideration_item = {
           itemType: 1,
           token: currency,
           identifierOrCriteria: "0",
-          startAmount: offerPrice.mul(fee).div(divider).toString(),
-          endAmount: offerPrice.mul(fee).div(divider).toString(),
+          startAmount: ((offerPrice * fee) / divider).toString(),
+          endAmount: ((offerPrice * fee) / divider).toString(),
           recipient: address
         };
         offer.consideration.push(consideration_item);
@@ -297,8 +297,8 @@ export async function bidOnOpensea(
     console.log(BLUE, successMessage, RESET);
   }
   else {
-    const divider = BigNumber.from("10000");
-    const offerPrice = BigNumber.from(roundedWei.toString());
+    const divider = 10000n;
+    const offerPrice = BigInt(roundedWei.toString());
 
     const payload: IPayload = {
       criteria: {
@@ -368,22 +368,22 @@ export async function bidOnOpensea(
       itemType: 1,
       token: currency,
       identifierOrCriteria: 0,
-      startAmount: offerPrice.mul(openseaFee).div(divider).toString(),
-      endAmount: offerPrice.mul(openseaFee).div(divider).toString(),
+      startAmount: ((offerPrice * openseaFee) / divider).toString(),
+      endAmount: ((offerPrice * openseaFee) / divider).toString(),
       recipient: OPENSEA_FEE_ADDRESS
     };
     payload.protocol_data.parameters.consideration.push(opensea_consideration);
 
     for (const address in creator_fees) {
-      let fee: BigNumber | number = creator_fees[address];
-      fee = BigNumber.from(Math.round(fee).toString());
+      let fee: bigint | number = creator_fees[address];
+      fee = BigInt(Math.round(fee).toString());
       if (enforceCreatorFee) {
         const consideration_item = {
           itemType: 1,
           token: currency,
           identifierOrCriteria: 0,
-          startAmount: offerPrice.mul(fee).div(divider).toString(),
-          endAmount: offerPrice.mul(fee).div(divider).toString(),
+          startAmount: ((offerPrice * fee) / divider).toString(),
+          endAmount: ((offerPrice * fee) / divider).toString(),
           recipient: address
         };
 
@@ -398,7 +398,7 @@ export async function bidOnOpensea(
     const counter = await SEAPORT_CONTRACT.getCounter(wallet_address);
     payload.protocol_data.parameters.counter = counter.toString();
 
-    const signObj = await wallet._signTypedData(
+    const signObj = await wallet.signTypedData(
       domain,
       types,
       payload.protocol_data.parameters
@@ -547,12 +547,12 @@ async function signCancelOrder(taskId: string, orderHash: string, protocolAddres
     orderHash: orderHash
   };
   if (!value) return
-  const signature = await wallet._signTypedData(domain, types, value);
+  const signature = await wallet.signTypedData(domain, types, value);
   return signature;
 }
 
 async function signOffer(wallet: ethers.Wallet, offer: Record<string, unknown>) {
-  return await wallet._signTypedData(domain, types, offer)
+  return await wallet.signTypedData(domain, types, offer)
 }
 
 const getOffer = (priceWei: bigint, currency: string) => {

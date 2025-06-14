@@ -25,7 +25,7 @@ import { Queue, Worker, Job, QueueOptions, JobType, UnrecoverableError, JobsOpti
 import Wallet from "./models/wallet.model";
 import redisClient from "./utils/redis";
 import { BASE_URL, ERC20_MIN_ABI } from "./constants";
-import { BigNumber, constants, Contract, ethers, utils, Wallet as Web3Wallet } from "ethers";
+import { Contract, ethers, Wallet as Web3Wallet, formatEther, parseEther, ZeroAddress, MaxUint256 } from "ethers";
 import { DistributedLockManager } from "./utils/lock";
 import { exec } from "child_process";
 import net from 'net'
@@ -4473,7 +4473,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         if (incomingPrice <= currentBidPriceEth) return
 
         let offerPrice: any = Number((blurOutbidMargin + Number(incomingPrice))?.toFixed(2))
-        offerPrice = BigNumber.from(utils.parseEther(offerPrice?.toString())?.toString())
+        offerPrice = parseEther(offerPrice?.toString())
 
         const jobId = `counterbid-${task._id}-${task.contract.slug}-${BLUR.toLowerCase()}-${trait}`
         const job: Job = await queue.getJob(jobId)
@@ -8785,7 +8785,7 @@ async function approveMarketplace(marketplace: string, privateKey: string, curre
   try {
     // Set up provider and wallet with retry
     const provider = await withRetry(async () => {
-      const p = new ethers.providers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
+      const p = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
       // Test the connection
       await p.getNetwork();
       return p;
@@ -8825,7 +8825,7 @@ async function approveMarketplace(marketplace: string, privateKey: string, curre
           return result;
         });
 
-        if (allowance.gte(constants.MaxUint256.div(2))) {
+        if (allowance >= (MaxUint256 / 2n)) {
           // Update database logic...
           // ... existing database update code ...
           return true;
@@ -8833,7 +8833,7 @@ async function approveMarketplace(marketplace: string, privateKey: string, curre
 
         // Submit approval transaction for maximum amount with retry
         const tx = await withRetry(async () => {
-          const transaction = await erc20Contract.approve(marketplace, constants.MaxUint256);
+          const transaction = await erc20Contract.approve(marketplace, MaxUint256);
           return transaction;
         });
 
