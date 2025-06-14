@@ -11,7 +11,7 @@ services:
       REDIS_NET_MAP: '{"redis-node-1:6379":{"host":"redis-node-1","port":6379},"redis-node-2:6379":{"host":"redis-node-2","port":6379},"redis-node-3:6379":{"host":"redis-node-3","port":6379},"redis-node-4:6379":{"host":"redis-node-4","port":6379},"redis-node-5:6379":{"host":"redis-node-5","port":6379},"redis-node-6:6379":{"host":"redis-node-6","port":6379}}'
       ALCHEMY_API_KEY: "HGWgCONolXMB2op5UjPH1YreDCwmSbvx"
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
-      DATABASE_URL: "file:/app/data/app.db?timeout=10000"
+      DATABASE_URL: "postgresql://bidding_bot:bidding_bot_password@postgres:5432/bidding_bot_db?schema=public"
       SERVER_IP: ${SERVER_IP}
       USERNAME: ${USERNAME}
       NEXT_PUBLIC_EMAIL: ${NEXT_PUBLIC_EMAIL}
@@ -20,11 +20,13 @@ services:
       RATE_LIMIT: ${RATE_LIMIT}
     depends_on:
       - mongodb
+      - postgres
       - redis-cluster-init
     networks:
       - my_network
     volumes:
       - server_data:/app/data
+
   client:
     image: ayenisholah/bidding-bot-client-production:latest
     platform: linux/amd64
@@ -65,6 +67,48 @@ services:
       - mongodb_data:/data/db
     networks:
       - my_network
+    command: mongod --wiredTigerCacheSizeGB 0.5 --nojournal
+
+  postgres:
+    image: "postgres:16-alpine"
+    container_name: "postgres_container"
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: bidding_bot
+      POSTGRES_PASSWORD: bidding_bot_password
+      POSTGRES_DB: bidding_bot_db
+      # Performance tuning for 128 ops/sec on 2 vCPU, 4GB RAM
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+    command: >
+      postgres
+      -c shared_buffers=128MB
+      -c effective_cache_size=512MB
+      -c maintenance_work_mem=32MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=4MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=2MB
+      -c min_wal_size=256MB
+      -c max_wal_size=1GB
+      -c max_worker_processes=2
+      -c max_parallel_workers_per_gather=0
+      -c max_parallel_workers=2
+      -c max_connections=50
+      -c shared_preload_libraries='pg_stat_statements'
+      -c log_min_duration_statement=2000
+      -c log_line_prefix='%t [%p]: user=%u,db=%d '
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - my_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bidding_bot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis-node-1:
     image: "redis:latest"
@@ -78,7 +122,8 @@ services:
       --cluster-announce-ip redis-node-1
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
-      --maxmemory-policy noeviction
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
       --save 900 1
       --save 300 10
       --save 60 10000
@@ -86,12 +131,12 @@ services:
       --no-appendfsync-on-rewrite yes
       --auto-aof-rewrite-percentage 100
       --auto-aof-rewrite-min-size 64mb
-      --maxmemory-samples 10
+      --maxmemory-samples 5
       --active-defrag-threshold-lower 10
       --active-defrag-threshold-upper 100
       --active-defrag-ignore-bytes 100mb
-      --active-defrag-cycle-min 25
-      --active-defrag-cycle-max 75
+      --active-defrag-cycle-min 5
+      --active-defrag-cycle-max 25
     ports:
       - "8001:6379"
       - "18001:16379"
@@ -99,6 +144,7 @@ services:
       - my_network
     volumes:
       - redis_data_1:/data
+
   redis-node-2:
     image: "redis:latest"
     container_name: "redis_node_2"
@@ -111,7 +157,8 @@ services:
       --cluster-announce-ip redis-node-2
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
-      --maxmemory-policy noeviction
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
       --save 900 1
       --save 300 10
       --save 60 10000
@@ -119,12 +166,12 @@ services:
       --no-appendfsync-on-rewrite yes
       --auto-aof-rewrite-percentage 100
       --auto-aof-rewrite-min-size 64mb
-      --maxmemory-samples 10
+      --maxmemory-samples 5
       --active-defrag-threshold-lower 10
       --active-defrag-threshold-upper 100
       --active-defrag-ignore-bytes 100mb
-      --active-defrag-cycle-min 25
-      --active-defrag-cycle-max 75
+      --active-defrag-cycle-min 5
+      --active-defrag-cycle-max 25
     ports:
       - "8002:6379"
       - "18002:16379"
@@ -145,7 +192,8 @@ services:
       --cluster-announce-ip redis-node-3
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
-      --maxmemory-policy noeviction
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
       --save 900 1
       --save 300 10
       --save 60 10000
@@ -153,12 +201,12 @@ services:
       --no-appendfsync-on-rewrite yes
       --auto-aof-rewrite-percentage 100
       --auto-aof-rewrite-min-size 64mb
-      --maxmemory-samples 10
+      --maxmemory-samples 5
       --active-defrag-threshold-lower 10
       --active-defrag-threshold-upper 100
       --active-defrag-ignore-bytes 100mb
-      --active-defrag-cycle-min 25
-      --active-defrag-cycle-max 75
+      --active-defrag-cycle-min 5
+      --active-defrag-cycle-max 25
     ports:
       - "8003:6379"
       - "18003:16379"
@@ -166,6 +214,7 @@ services:
       - my_network
     volumes:
       - redis_data_3:/data
+
   redis-node-4:
     image: "redis:latest"
     container_name: "redis_node_4"
@@ -178,7 +227,8 @@ services:
       --cluster-announce-ip redis-node-4
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
-      --maxmemory-policy noeviction
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
       --save 900 1
       --save 300 10
       --save 60 10000
@@ -186,12 +236,12 @@ services:
       --no-appendfsync-on-rewrite yes
       --auto-aof-rewrite-percentage 100
       --auto-aof-rewrite-min-size 64mb
-      --maxmemory-samples 10
+      --maxmemory-samples 5
       --active-defrag-threshold-lower 10
       --active-defrag-threshold-upper 100
       --active-defrag-ignore-bytes 100mb
-      --active-defrag-cycle-min 25
-      --active-defrag-cycle-max 75
+      --active-defrag-cycle-min 5
+      --active-defrag-cycle-max 25
     ports:
       - "8004:6379"
       - "18004:16379"
@@ -199,6 +249,7 @@ services:
       - my_network
     volumes:
       - redis_data_4:/data
+
   redis-node-5:
     image: "redis:latest"
     container_name: "redis_node_5"
@@ -211,7 +262,8 @@ services:
       --cluster-announce-ip redis-node-5
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
-      --maxmemory-policy noeviction
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
       --save 900 1
       --save 300 10
       --save 60 10000
@@ -219,12 +271,12 @@ services:
       --no-appendfsync-on-rewrite yes
       --auto-aof-rewrite-percentage 100
       --auto-aof-rewrite-min-size 64mb
-      --maxmemory-samples 10
+      --maxmemory-samples 5
       --active-defrag-threshold-lower 10
       --active-defrag-threshold-upper 100
       --active-defrag-ignore-bytes 100mb
-      --active-defrag-cycle-min 25
-      --active-defrag-cycle-max 75
+      --active-defrag-cycle-min 5
+      --active-defrag-cycle-max 25
     ports:
       - "8005:6379"
       - "18005:16379"
@@ -232,6 +284,7 @@ services:
       - my_network
     volumes:
       - redis_data_5:/data
+
   redis-node-6:
     image: "redis:latest"
     container_name: "redis_node_6"
@@ -244,7 +297,8 @@ services:
       --cluster-announce-ip redis-node-6
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
-      --maxmemory-policy noeviction
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
       --save 900 1
       --save 300 10
       --save 60 10000
@@ -252,12 +306,12 @@ services:
       --no-appendfsync-on-rewrite yes
       --auto-aof-rewrite-percentage 100
       --auto-aof-rewrite-min-size 64mb
-      --maxmemory-samples 10
+      --maxmemory-samples 5
       --active-defrag-threshold-lower 10
       --active-defrag-threshold-upper 100
       --active-defrag-ignore-bytes 100mb
-      --active-defrag-cycle-min 25
-      --active-defrag-cycle-max 75
+      --active-defrag-cycle-min 5
+      --active-defrag-cycle-max 25
     ports:
       - "8006:6379"
       - "18006:16379"
@@ -311,6 +365,7 @@ services:
 
 volumes:
   mongodb_data:
+  postgres_data:
   redis_data_1:
   redis_data_2:
   redis_data_3:
