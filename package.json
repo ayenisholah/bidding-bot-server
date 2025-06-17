@@ -5,8 +5,8 @@
 	"main": "index.js",
 	"scripts": {
 		"build": "npx prisma generate && tsc",
-		"start": "npx prisma migrate deploy && node --expose-gc dist/src/index.js",
-		"dev": "docker compose -f compose.dev.yaml up -d && npx prisma migrate dev && nodemon",
+		"start": "npx prisma generate && npx prisma migrate deploy && node --expose-gc dist/src/index.js",
+		"dev": "docker compose -f compose.dev.yaml up -d && npx prisma migrate dev --name init && nodemon",
 		"ci": "npm install --frozen-lockfile",
 		"dc:down": "docker compose down -v",
 		"dc:destroy": "docker stop $(docker ps -aq) || true sleep 3 docker compose down --volumes --remove-orphans --timeout 15 && docker system prune -af --volumes",
