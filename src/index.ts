@@ -5235,6 +5235,19 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
 
     const offerEth = Number(colletionOffer) / Math.pow(10, decimal);
 
+    // Check if offer exceeds floor price (only for WETH)
+    if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
+
+      warningBids[task._id] = { opensea: true, magiceden: true, blur: true };
+
+      const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA. Stopping bid...`.toUpperCase();
+      await logBidError(task._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "opensea");
+      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      console.log(YELLOW + message + RESET);
+      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      return;
+    }
+
     if (currentTask.outbidOptions.outbid && offerEth > maxBidPriceEth) {
       skipStats[task._id]['opensea']++;
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR OPENSEA.Skipping ...`.toUpperCase()
@@ -5481,6 +5494,26 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "blur")
     let colletionOffer = BigInt(Math.round(offerPriceEth * 1e18))
+
+    // Check if offer exceeds floor price (only for WETH)
+    const offerEth = Number(colletionOffer) / 1e18;
+    if (offerEth > floor_price) {
+      if (!warningBids[task._id]) {
+        warningBids[task._id] = {
+          opensea: false,
+          magiceden: false,
+          blur: false
+        };
+      }
+      warningBids[task._id] = { opensea: true, magiceden: true, blur: true };
+
+      const message = `⚠️ Offer price ${offerEth} WETH for ${task.contract.slug} collection bid exceeds floor price ${floor_price} WETH FOR BLUR. Stopping bid...`.toUpperCase();
+      await logBidError(task._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "blur");
+      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      console.log(YELLOW + message + RESET);
+      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      return;
+    }
 
     const [order, ...remainingOrders] = orders
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
@@ -6026,7 +6059,31 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
   const currentTask = activeTasks.get(taskId)
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) return
 
-  const { currency } = await calculateBidPrice(currentTask, 0, "opensea")
+  const floor_price = await getOpenseaFloor(currentTask.contract.slug);
+  if (!floor_price) return
+
+  const { currency, decimal, currencySymbol } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+  const offerEth = Number(offerPrice) / Math.pow(10, decimal);
+
+  // Check if offer exceeds floor price (only for WETH)
+  if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
+    if (!warningBids[taskId]) {
+      warningBids[taskId] = {
+        opensea: false,
+        magiceden: false,
+        blur: false
+      };
+    }
+    warningBids[taskId] = { opensea: true, magiceden: true, blur: true };
+
+    const message = `⚠️ Counter bid offer price ${offerEth} ${currencySymbol} for ${slug} collection exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA. Stopping bid...`.toUpperCase();
+    await logBidError(taskId, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "opensea");
+    console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+    console.log(YELLOW + message + RESET);
+    console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+    return;
+  }
+
   try {
     await bidOnOpensea(
       taskId,
@@ -6051,8 +6108,32 @@ async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) 
   const currentTask = activeTasks.get(_id)
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return
 
+  const floor_price = Number(await fetchMagicEdenCollectionStats(contractAddress));
+  if (!floor_price) return
+
   try {
-    const { currencyType, currency } = await calculateBidPrice(currentTask, 0, "magiceden")
+    const { currencyType, currency, decimal, currencySymbol } = await calculateBidPrice(currentTask, floor_price, "magiceden")
+    const offerEth = Number(offerPrice) / Math.pow(10, decimal);
+
+    // Check if offer exceeds floor price (only for WETH)
+    if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
+      if (!warningBids[_id]) {
+        warningBids[_id] = {
+          opensea: false,
+          magiceden: false,
+          blur: false
+        };
+      }
+      warningBids[_id] = { opensea: true, magiceden: true, blur: true };
+
+      const message = `⚠️ Counter bid offer price ${offerEth} ${currencySymbol} for ${slug} collection exceeds floor price ${floor_price} ${currencySymbol} FOR MAGICEDEN. Stopping bid...`.toUpperCase();
+      await logBidError(_id, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "magiceden");
+      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      console.log(YELLOW + message + RESET);
+      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      return;
+    }
+
     await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, offerPrice.toString(), privateKey, slug, expiration, currency);
 
   } catch (error: any) {
@@ -6099,6 +6180,29 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
   const currentTask = activeTasks.get(taskId)
 
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur")) return
+
+  const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
+  if (!floor_price) return
+
+  const offerEth = Number(offerPrice) / 1e18;
+
+  if (offerEth > floor_price) {
+    if (!warningBids[taskId]) {
+      warningBids[taskId] = {
+        opensea: false,
+        magiceden: false,
+        blur: false
+      };
+    }
+    warningBids[taskId] = { opensea: true, magiceden: true, blur: true };
+
+    const message = `⚠️ Counter bid offer price ${offerEth} WETH for ${slug} collection exceeds floor price ${floor_price} WETH FOR BLUR. Stopping bid...`.toUpperCase();
+    await logBidError(taskId, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "blur");
+    console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+    console.log(YELLOW + message + RESET);
+    console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+    return;
+  }
 
   try {
     await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry);
@@ -6802,6 +6906,25 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
       }
     }
     const offerEth = Number(colletionOffer) / Math.pow(10, decimal);
+
+    if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
+      if (!warningBids[task._id]) {
+        warningBids[task._id] = {
+          opensea: false,
+          magiceden: false,
+          blur: false
+        };
+      }
+      warningBids[task._id] = { opensea: true, magiceden: true, blur: true };
+
+      const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR MAGICEDEN. Stopping bid...`.toUpperCase();
+      await logBidError(task._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "magiceden");
+      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      console.log(YELLOW + message + RESET);
+      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      return;
+    }
+
     const bidCount = getIncrementedBidCount(MAGICEDEN, task.contract.slug, task._id)
 
     if (orders.length > 0) {
@@ -8548,7 +8671,7 @@ function subscribeToCollections(tasks: ITask[]) {
 
       if (connectToOpensea) {
         const subscriptionId = `${task.contract.slug}:${OPENSEA.toLowerCase()}`;
-        
+
         // Check if already subscribed to this collection on OpenSea
         if (!activeSubscriptions.has(subscriptionId)) {
           const openseaSubscriptionMessage = {
@@ -8574,7 +8697,7 @@ function subscribeToCollections(tasks: ITask[]) {
       const connectToMagiceden = task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("magiceden");
       if (connectToMagiceden) {
         const subscriptionId = `${task.contract.slug}:${MAGICEDEN.toLowerCase()}`;
-        
+
         // Check if already subscribed to this collection on MagicEden
         if (!activeSubscriptions.has(subscriptionId)) {
           const magicedenSubscriptionMessage = {
@@ -8600,7 +8723,7 @@ function subscribeToCollections(tasks: ITask[]) {
       const connectToBlur = task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur");
       if (connectToBlur) {
         const subscriptionId = `${task.contract.slug}:${BLUR.toLowerCase()}`;
-        
+
         // Check if already subscribed to this collection on Blur
         if (!activeSubscriptions.has(subscriptionId)) {
           const blurSubscriptionMessage = {
@@ -8654,7 +8777,7 @@ async function unsubscribeFromCollection(task: ITask, marketplace?: string) {
         try {
           ws.send(JSON.stringify(unsubscribeMessage));
           console.log(`Unsubscribed from collection: ${task.contract.slug} on ${marketplaceLower}`);
-          
+
           // Remove from activeSubscriptions
           const subscriptionId = `${task.contract.slug}:${marketplaceLower}`;
           activeSubscriptions.delete(subscriptionId);
@@ -8679,7 +8802,7 @@ async function unsubscribeFromCollection(task: ITask, marketplace?: string) {
         try {
           ws.send(JSON.stringify(unsubscribeMessage));
           console.log(`Unsubscribed from collection: ${task.contract.slug} (all marketplaces)`);
-          
+
           // Remove all subscriptions for this collection from activeSubscriptions
           const subscriptionPatterns = [
             `${task.contract.slug}:opensea`,
