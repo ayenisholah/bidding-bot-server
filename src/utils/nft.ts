@@ -10,6 +10,8 @@ const RESET = '\x1b[0m';
 interface NFTItem {
   contractAddress: string;
   tokenId: string;
+  wallet: string;
+  walletId: string
   tokenType: string;
   name?: string;
   imageUrl?: string;
@@ -43,7 +45,6 @@ interface NFTItem {
       };
     };
   }>;
-  owner: string;
   lastSale?: {
     usd?: number;
     token?: {
@@ -124,7 +125,7 @@ export async function fetchWalletNFTs(wallets: { address: string, walletId: stri
 
     try {
       try {
-        const nfts = await fetchNFTsFromOpenSea(wallet.address);
+        const nfts = await fetchNFTsFromOpenSea({ wallet: wallet.address, walletId: wallet.walletId });
 
         const response: WalletNFTsResponse = {
           wallet: wallet.address,
@@ -151,7 +152,7 @@ export async function fetchWalletNFTs(wallets: { address: string, walletId: stri
   return results;
 }
 
-async function fetchNFTsFromOpenSea(wallet: string): Promise<NFTItem[]> {
+async function fetchNFTsFromOpenSea({ wallet, walletId }: { wallet: string; walletId: string }): Promise<NFTItem[]> {
   const nfts: NFTItem[] = [];
   let cursor: string | undefined;
 
@@ -229,6 +230,8 @@ async function fetchNFTsFromOpenSea(wallet: string): Promise<NFTItem[]> {
           })) : [];
 
           nfts.push({
+            walletId,
+            wallet,
             contractAddress: item.contractAddress,
             tokenId: item.tokenId,
             tokenType: tokenType,
@@ -247,7 +250,6 @@ async function fetchNFTsFromOpenSea(wallet: string): Promise<NFTItem[]> {
               } : undefined
             },
             attributes,
-            owner: wallet,
             lastSale: item.lastSale ? {
               usd: item.lastSale.usd,
               token: item.lastSale.token ? {

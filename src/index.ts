@@ -8203,7 +8203,7 @@ app.post('/api/wallet/nfts', async (req, res) => {
 
     // Get all wallet addresses from the database
     const wallets = await Wallet.find({}, 'address');
-    const walletAddresses = [{ address: "0x1fee3385b22d69e93209db2042be58fcac57b59b", walletId: randomUUID() }, { address: "0xd83ceeb78c3b94eda193a34c1298847afc5b89ba", walletId: randomUUID() }]
+    const walletAddresses = wallets.map((item) => ({ walletId: item._id.toString(), address: item.address }))
 
     if (walletAddresses.length === 0) {
       return res.status(200).json({
