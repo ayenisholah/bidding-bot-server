@@ -38,6 +38,7 @@ import User from "./models/user.model";
 import axios from "axios";
 import { log } from "console";
 import { encryptPrivateKey, decryptPrivateKey, setPassword, getPassword } from "./utils/crypto";
+import { fetchWalletNFTs } from "./utils/nft";
 const prisma = new PrismaClient()
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
@@ -8192,6 +8193,39 @@ app.post('/api/update-app', async (req, res) => {
     res.status(500).json({
       scheduled: false,
       message: 'Failed to schedule update',
+      error: error.message
+    });
+  }
+});
+
+app.post('/api/wallet/nfts', async (req, res) => {
+  try {
+
+    // Get all wallet addresses from the database
+    const wallets = await Wallet.find({}, 'address');
+    const walletAddresses = [{ address: "0x1fee3385b22d69e93209db2042be58fcac57b59b", walletId: randomUUID() }, { address: "0xd83ceeb78c3b94eda193a34c1298847afc5b89ba", walletId: randomUUID() }]
+
+    if (walletAddresses.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        message: 'No wallets found'
+      });
+    }
+
+    // Fetch NFTs for all wallets
+    const nftData = await fetchWalletNFTs(walletAddresses);
+
+    res.status(200).json({
+      success: true,
+      data: nftData,
+      count: nftData.length
+    });
+  } catch (error: any) {
+    console.error('Failed to fetch wallet NFTs:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch wallet NFTs',
       error: error.message
     });
   }
