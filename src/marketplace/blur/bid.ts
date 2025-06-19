@@ -72,7 +72,7 @@ export async function bidOnBlur(
   }
 
   const offerPrice = BigInt(offer_price.toString());
-  const accessToken = await getAccessToken(BLUR_API_URL, private_key);
+  const accessToken = await getAccessToken(private_key);
 
   offerPriceEth = (Math.floor(Number(formatUnits(offerPrice.toString(), 18)) * 100) / 100).toFixed(2);
 
@@ -159,7 +159,7 @@ export async function bidOnBlur(
  * @param privateKey - The private key of the wallet.
  * @returns The access token.
  */
-async function getAccessToken(url: string, private_key: string): Promise<string | undefined> {
+export async function getAccessToken(private_key: string): Promise<string | undefined> {
   const wallet = new Wallet(private_key, provider);
   const lockKey = `auth:${wallet.address}`;
 
@@ -177,7 +177,7 @@ async function getAccessToken(url: string, private_key: string): Promise<string 
     }
 
     let response: any = await limiter.schedule(() => axiosInstance
-      .post(`${url}/auth/challenge`, options, { headers }));
+      .post(`${BLUR_API_URL}/auth/challenge`, options, { headers }));
     const message = response.data.message;
     const signature = await wallet.signMessage(message);
     const data = {
@@ -188,7 +188,7 @@ async function getAccessToken(url: string, private_key: string): Promise<string 
       signature: signature
     };
     response = await limiter.schedule(() => axiosInstance
-      .post(`${url}/auth/login`, data, { headers }));
+      .post(`${BLUR_API_URL}/auth/login`, data, { headers }));
     const accessToken = response.data.accessToken;
     await redis.set(key, accessToken, 'EX', 5 * 60);
 
@@ -378,7 +378,7 @@ export async function cancelBlurBid(data: BlurCancelPayload) {
     const { payload, privateKey, taskId } = data
     const wallet = new Wallet(privateKey, provider);
     const walletAddress = wallet.address
-    const accessToken = await getAccessToken(BLUR_API_URL, privateKey);
+    const accessToken = await getAccessToken(privateKey);
     const endpoint = `${BLUR_API_URL}/v1/collection-bids/cancel`
     const { data: cancelResponse } = await limiter.schedule(() => axiosInstance.post(endpoint, payload, {
       headers: {

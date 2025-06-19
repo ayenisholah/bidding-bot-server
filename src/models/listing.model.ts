@@ -23,6 +23,16 @@ const ListingSchema: Schema = new Schema(
       blur: { type: Number, default: 0 },
       magiceden: { type: Number, default: 0 },
     },
+    listingExpiration: {
+      opensea: { type: Date },
+      blur: { type: Date },
+      magiceden: { type: Date },
+    },
+    lastListedAt: {
+      opensea: { type: Date },
+      blur: { type: Date },
+      magiceden: { type: Date },
+    },
     instantPriceMatching: { type: Boolean, default: false },
     listingPrice: {
       value: { type: String },

@@ -6,6 +6,9 @@ import { listOnOpensea } from "../marketplace/opensea/list";
 import Wallet from "../models/wallet.model";
 import { decryptPrivateKey } from "../utils/crypto";
 import { AlchemyProvider, Wallet as Web3Wallet } from "ethers";
+import { listOnBlur } from "../marketplace/blur/list";
+import { getAccessToken } from "../marketplace/blur";
+import { listOnMagicEden } from "../marketplace/magiceden/list";
 const API_KEY = process.env.API_KEY;
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY
 
@@ -81,32 +84,41 @@ export async function createListing(data: IListingData) {
 
     const wallet = await Wallet.findById(data.walletId.toString());
 
-    console.log({ wallet });
-
     const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+    const web3Wallet = new Web3Wallet(private_key, provider)
+    const collectionData = await getCollectionData(data.contract.slug);
+    const creatorFees = collectionData?.creator_fees as IFee
+    const enforceCreatorFee = collectionData?.enforceCreatorFee as boolean
+
+    // Calculate total creator fee as a number (sum of all fees)
+    const totalCreatorFee = creatorFees ? Object.values(creatorFees).reduce((sum, fee) => sum + fee, 0) : 0;
+    const durationInSeconds = convertToSeconds(data.listDuration.value, data.listDuration.unit);
+
+
     if (data.selectedMarketplaces.includes("opensea")) {
-      console.log("Listing on OpenSea...");
+      const price = calculateListingPrice(data, 'opensea');
+      await listOnOpensea(
+        data.contract.contractAddress,
+        data.tokenId,
+        price,
+        web3Wallet,
+        enforceCreatorFee,
+        durationInSeconds,
+        creatorFees
+      );
 
-      const web3Wallet = new Web3Wallet(private_key, provider)
+    }
 
-      const collectionData = await getCollectionData(data.contract.slug);
+    if (data.selectedMarketplaces.includes("blur")) {
+      const price = calculateListingPrice(data, 'blur');
+      const feeRate = enforceCreatorFee ? totalCreatorFee / 100 : 0
+      const accessToken = await getAccessToken(private_key) as string;
+      await listOnBlur(data.contract.contractAddress, data.tokenId, price.toFixed(4), web3Wallet, accessToken, durationInSeconds, feeRate)
+    }
 
-      if (collectionData) {
-        // Calculate the listing price using the comprehensive pricing function
-        const price = calculateListingPrice(data, 'opensea');
-
-        const durationInSeconds = convertToSeconds(data.listDuration.value, data.listDuration.unit);
-
-        await listOnOpensea(
-          data.contract.contractAddress,
-          data.tokenId,
-          price,
-          web3Wallet,
-          collectionData.enforceCreatorFee,
-          durationInSeconds,
-          collectionData.creator_fees,
-        );
-      }
+    if (data.selectedMarketplaces.includes("magiceden")) {
+      const price = calculateListingPrice(data, 'magiceden');
+      await listOnMagicEden(web3Wallet.address, data.contract.contractAddress, data.tokenId, price, durationInSeconds, web3Wallet)
     }
 
   } catch (error) {
@@ -173,9 +185,6 @@ export async function getCollectionData(collectionSlug: string) {
       ))
 
     let creator_fees: IFee;
-
-    console.table(collection.fees)
-
     let enforceCreatorFee = false;
 
     if (collection.fees.length > 1) {

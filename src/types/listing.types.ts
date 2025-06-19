@@ -50,6 +50,16 @@ export interface IListingBase {
   floorPrice: number;
   buyPrice: number;
   finalListingPrice?: { opensea: number; blur: number; magiceden: number }
+  listingExpiration?: {
+    opensea?: Date;
+    blur?: Date;
+    magiceden?: Date;
+  };
+  lastListedAt?: {
+    opensea?: Date;
+    blur?: Date;
+    magiceden?: Date;
+  };
   listed: boolean;
   createdAt?: Date;
   updatedAt?: Date;

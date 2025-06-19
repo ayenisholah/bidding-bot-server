@@ -170,7 +170,6 @@ export const listOnOpensea = async (
   // Round price to 4 decimal places to avoid floating point precision errors
   const roundedPrice = Math.round(price * 10000) / 10000;
   const offerPrice = parseEther(roundedPrice.toString());
-  console.log({ originalPrice: price, roundedPrice, offerPrice, offerPriceString: offerPrice.toString() });
 
   // Payload data
   listingPayload.parameters.startTime = BigInt(
@@ -291,8 +290,9 @@ export const listOnOpensea = async (
   } else {
     console.log('NFT listed successfully on opensea');
 
-    // Update finalListingPrice.opensea in the database
+    // Update finalListingPrice.opensea and expiration in the database
     try {
+      const expirationTime = new Date(Date.now() + endTime * 1000);
       const updatedListing = await Listing.findOneAndUpdate(
         { 
           "contract.contractAddress": nftAddress, 
@@ -301,6 +301,8 @@ export const listOnOpensea = async (
         {
           $set: {
             "finalListingPrice.opensea": roundedPrice,
+            "listingExpiration.opensea": expirationTime,
+            "lastListedAt.opensea": new Date(),
             listed: true
           }
         },
@@ -308,7 +310,7 @@ export const listOnOpensea = async (
       );
       
       if (updatedListing) {
-        console.log(`Updated listing ${nftAddress} #${tokenId} with opensea price: ${roundedPrice} ETH`);
+        console.log(`Updated listing ${nftAddress} #${tokenId} with opensea price: ${roundedPrice} ETH, expires at: ${expirationTime.toISOString()}`);
       } else {
         console.log(`No listing found for ${nftAddress} #${tokenId}`);
       }
