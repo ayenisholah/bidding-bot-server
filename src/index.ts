@@ -18,7 +18,7 @@ import { axiosInstance, initialize, limiter } from "./init";
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrder, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
-import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, getCollectionDetails, getOpenseaFloor } from "./functions";
+import { CollectionItemsQueryVariables, createListing, fetchOpenSeaCollectionItems, getCollectionDetails, getOpenseaFloor } from "./functions";
 import mongoose from 'mongoose';
 import Task, { ITask, SelectedTraits } from "./models/task.model";
 import { Queue, Worker, Job, QueueOptions, JobType, UnrecoverableError, JobsOptions, QueueEvents } from "bullmq";
@@ -1261,6 +1261,9 @@ wss.on('connection', async (ws) => {
           break
         case 'update-config':
           await updateConfig(message.data)
+          break
+        case 'create-listing':
+          await createListing(message.data)
           break
         default:
           console.warn(YELLOW + `Unknown endpoint: ${message.endpoint}` + RESET);
@@ -10233,3 +10236,4 @@ export interface AddressBalancesResponse {
     debugInfo: DebugInfo;
   };
 }
+
