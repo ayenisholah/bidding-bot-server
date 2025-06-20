@@ -1,7 +1,6 @@
 import { config } from "dotenv";
-import { axiosInstance, limiter } from "../init";
 import { IListingData, IFee } from "../types/listing.types";
-import { BASE_URL, NETWORK } from "../constants";
+import { NETWORK } from "../constants";
 import { listOnOpensea } from "../marketplace/opensea/list";
 import Wallet from "../models/wallet.model";
 import { decryptPrivateKey } from "../utils/crypto";
@@ -9,7 +8,7 @@ import { AlchemyProvider, Wallet as Web3Wallet } from "ethers";
 import { listOnBlur } from "../marketplace/blur/list";
 import { getAccessToken } from "../marketplace/blur";
 import { listOnMagicEden } from "../marketplace/magiceden/list";
-const API_KEY = process.env.API_KEY;
+import { getCollectionDetails } from "./collection";
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY
 
 const provider = new AlchemyProvider(NETWORK, ALCHEMY_API_KEY)
@@ -86,7 +85,7 @@ export async function createListing(data: IListingData) {
 
     const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
     const web3Wallet = new Web3Wallet(private_key, provider)
-    const collectionData = await getCollectionData(data.contract.slug);
+    const collectionData = await getCollectionDetails(data.contract.slug, data.contract.contractAddress);
     const creatorFees = collectionData?.creator_fees as IFee
     const enforceCreatorFee = collectionData?.enforceCreatorFee as boolean
 
@@ -170,38 +169,4 @@ export const ListingData: IListingData = {
   collectionFloor: 0.005,
   wallet: "0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21",
   walletId: "684be3548d0934d32c507154"
-};
-
-export async function getCollectionData(collectionSlug: string) {
-  try {
-    const { data: collection } = await limiter.schedule(() => axiosInstance
-      .get(
-        `${BASE_URL}/opensea/api/v2/collections/${collectionSlug}`,
-        {
-          headers: {
-            'x-api-key': API_KEY
-          }
-        }
-      ))
-
-    let creator_fees: IFee;
-    let enforceCreatorFee = false;
-
-    if (collection.fees.length > 1) {
-      creator_fees = {
-        [collection.fees[1].recipient]: collection.fees[1].fee * 100
-      };
-      enforceCreatorFee = collection.fees[1].required;
-    } else {
-      creator_fees = { "null": 0 }
-    }
-    return {
-      address: collection.editors[0],
-      primary_asset_contracts_address: collection.contracts[0].address,
-      creator_fees: creator_fees,
-      enforceCreatorFee: enforceCreatorFee
-    };
-  } catch (error) {
-    console.log('🌵💜🐢 error', error);
-  }
 };
