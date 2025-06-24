@@ -39,7 +39,6 @@ import axios from "axios";
 import { log } from "console";
 import { encryptPrivateKey, decryptPrivateKey, setPassword, getPassword } from "./utils/crypto";
 import { fetchWalletNFTs } from "./utils/nft";
-import { startListingScheduler } from "./functions/listingScheduler";
 const prisma = new PrismaClient()
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
@@ -609,8 +608,6 @@ async function startServer() {
 
     console.log(`Started periodic cleanup for seen items (every ${CLEANUP_INTERVAL / 1000 / 60} minutes)`);
 
-    // Start listing scheduler to handle expired listings and relisting
-    startListingScheduler(5); // Check every 5 minutes
     console.log('Started listing scheduler for automatic relisting of expired listings');
 
     await fetchCurrentTasks()
@@ -7584,86 +7581,6 @@ app.get("/health", async (req, res) => {
       status: "error",
       timestamp: new Date().toISOString(),
       error: error.message
-    });
-  }
-});
-
-// Listing management endpoints
-app.post("/api/listings/process-expired", async (req, res) => {
-  try {
-    const { processExpiredListings } = await import("./functions/relistExpired");
-    await processExpiredListings();
-    res.json({ 
-      status: "success", 
-      message: "Expired listings processed successfully",
-      timestamp: new Date().toISOString()
-    });
-  } catch (error: any) {
-    console.error("Error processing expired listings:", error);
-    res.status(500).json({
-      status: "error",
-      message: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-app.get("/api/listings/upcoming-expirations", async (req, res) => {
-  try {
-    const hoursAhead = parseInt(req.query.hours as string) || 1;
-    const { getUpcomingExpirations } = await import("./functions/listingScheduler");
-    const expirations = await getUpcomingExpirations(hoursAhead);
-    res.json({ 
-      status: "success", 
-      data: expirations,
-      hoursAhead,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error: any) {
-    console.error("Error fetching upcoming expirations:", error);
-    res.status(500).json({
-      status: "error",
-      message: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-app.get("/api/listings/scheduler-status", async (req, res) => {
-  try {
-    const { getSchedulerStatus } = await import("./functions/listingScheduler");
-    const status = getSchedulerStatus();
-    res.json({ 
-      status: "success", 
-      data: status,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error: any) {
-    console.error("Error getting scheduler status:", error);
-    res.status(500).json({
-      status: "error",
-      message: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-app.post("/api/listings/:listingId/relist-expired", async (req, res) => {
-  try {
-    const { listingId } = req.params;
-    const { relistExpiredMarketplaces } = await import("./functions/relistExpired");
-    await relistExpiredMarketplaces(listingId);
-    res.json({ 
-      status: "success", 
-      message: `Expired marketplaces for listing ${listingId} processed`,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error: any) {
-    console.error("Error relisting expired marketplaces:", error);
-    res.status(500).json({
-      status: "error",
-      message: error.message,
-      timestamp: new Date().toISOString()
     });
   }
 });
