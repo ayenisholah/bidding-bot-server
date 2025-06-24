@@ -7868,12 +7868,49 @@ app.post('/api/collection/stats', async (req, res) => {
   try {
     const slug = req.body.slug as string;
     const contractAddress = req.body.address as string;
+    
+    // Wrap each task to handle failures gracefully
     const tasks: (() => Promise<unknown>)[] = [
-      () => fetchBlurCollectionStats(slug),
-      () => fetchMagicEdenCollectionStats(contractAddress),
-      () => getOpenseaFloor(slug),
-      () => fetchBlurTraits(contractAddress),
-      () => fetchMagicEdenAttributes(contractAddress),
+      async () => {
+        try {
+          return await fetchBlurCollectionStats(slug);
+        } catch (error) {
+          console.error('Failed to fetch Blur collection stats:', error);
+          return 0;
+        }
+      },
+      async () => {
+        try {
+          return await fetchMagicEdenCollectionStats(contractAddress);
+        } catch (error) {
+          console.error('Failed to fetch MagicEden collection stats:', error);
+          return 0;
+        }
+      },
+      async () => {
+        try {
+          return await getOpenseaFloor(slug);
+        } catch (error) {
+          console.error('Failed to fetch OpenSea floor:', error);
+          return 0;
+        }
+      },
+      async () => {
+        try {
+          return await fetchBlurTraits(contractAddress);
+        } catch (error) {
+          console.error('Failed to fetch Blur traits:', error);
+          return { traits: { categories: {}, counts: {} }, blurRaw: null };
+        }
+      },
+      async () => {
+        try {
+          return await fetchMagicEdenAttributes(contractAddress);
+        } catch (error) {
+          console.error('Failed to fetch MagicEden attributes:', error);
+          return { traits: { categories: {}, counts: {} }, magicedenRaw: null };
+        }
+      },
     ];
 
     const results = await pQueue.addAll(tasks);
@@ -7910,13 +7947,18 @@ app.post('/api/collection/stats', async (req, res) => {
 
     const marketplaces = ["opensea", "magiceden", "blur"] as const;
     const traitsData = [
-      (openseaTraits as MagicEdenData).traits,
-      (magicEdenTraits as MagicEdenData).traits,
-      (blurTraits as IBlurData)?.traits,
+      (openseaTraits as MagicEdenData)?.traits || { categories: {}, counts: {} },
+      (magicEdenTraits as MagicEdenData)?.traits || { categories: {}, counts: {} },
+      (blurTraits as IBlurData)?.traits || { categories: {}, counts: {} },
     ];
 
     marketplaces.forEach((marketplace, index) => {
       const traits = traitsData[index];
+      
+      // Skip if traits is invalid
+      if (!traits || !traits.categories || !traits.counts) {
+        return;
+      }
 
       Object.entries(traits.categories).forEach(([category]) => {
         if (!combinedTraits.categories[category]) {
@@ -8024,7 +8066,8 @@ app.post('/api/collection/stats', async (req, res) => {
 
     res.status(200).json(data);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch collection stats' });
+    console.error('Unexpected error in collection stats endpoint:', error);
+    res.status(500).json({ error: 'Failed to process collection stats' });
   }
 })
 
