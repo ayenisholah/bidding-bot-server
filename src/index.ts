@@ -18,7 +18,7 @@ import { axiosInstance, initialize, limiter } from "./init";
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrder, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
-import { CollectionItemsQueryVariables, createListing, fetchOpenSeaCollectionItems, getCollectionDetails, getOpenseaFloor } from "./functions";
+import { CollectionItemsQueryVariables, createListing, fetchOpenSeaCollectionItems, fetchOpenseaTraits, getCollectionDetails, getOpenseaFloor } from "./functions";
 import mongoose from 'mongoose';
 import Task, { ITask, SelectedTraits } from "./models/task.model";
 import { Queue, Worker, Job, QueueOptions, JobType, UnrecoverableError, JobsOptions, QueueEvents } from "bullmq";
@@ -269,7 +269,7 @@ export const RESET = '\x1b[0m';
 const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
 export const RED = '\x1b[31m';
-const GOLD = '\x1b[33m';
+export const GOLD = '\x1b[33m';
 
 const OPENSEA = "OPENSEA";
 const MAGICEDEN = "MAGICEDEN";
@@ -1712,34 +1712,19 @@ async function updateTaskData(task: ITask) {
     console.log(YELLOW + `Updated existing task: ${task.contract.slug}`.toUpperCase() + RESET);
 
     const filteredTasks = Object.fromEntries(
-      Object.entries(task?.selectedTraits || {}).map(([category, traits]) => [
-        category,
-        traits
-      ]).filter(([_, traits]) => traits.length > 0)
+      Object.entries(task?.selectedTraits?.opensea || {}).filter(([_, traits]) => traits.length > 0)
     );
 
     const openseaTraits = Object.fromEntries(
-      Object.entries(task?.selectedTraits || {}).map(([category, traits]) => [
-        category,
-
-        traits.filter(trait => trait.availableInMarketplaces.includes("opensea"))
-      ]).filter(([_, traits]) => traits.length > 0)
+      Object.entries(task?.selectedTraits?.opensea || {}).filter(([_, traits]) => traits.length > 0)
     );
 
     const magicedenTraits = Object.fromEntries(
-      Object.entries(task?.selectedTraits || {}).map(([category, traits]) => [
-        category,
-        traits.filter(trait => trait.availableInMarketplaces.includes("magiceden"))
-      ]).filter(([_, traits]) => traits.length > 0)
+      Object.entries(task?.selectedTraits?.magiceden || {}).filter(([_, traits]) => traits.length > 0)
     );
 
     const blurTraits = Object.fromEntries(
-      Object.entries(task?.selectedTraits || {}).map(([category, traits]) => [
-        category,
-        traits.filter(trait => trait.availableInMarketplaces
-          .map((item) => item.toLowerCase())
-          .includes("blur"))
-      ]).filter(([_, traits]) => traits.length > 0)
+      Object.entries(task?.selectedTraits?.blur || {}).filter(([_, traits]) => traits.length > 0)
     );
 
     const openseaSelectedTraits = transformNewTask(openseaTraits)
@@ -1760,10 +1745,7 @@ async function updateTaskData(task: ITask) {
     currentTraits[task._id].blur = blurSelectedTraits
 
     const oldTraits = Object.fromEntries(
-      Object.entries(existingTask?.selectedTraits || {}).map(([category, traits]) => [
-        category,
-        traits
-      ]).filter(([_, traits]) => traits.length > 0)
+      Object.entries(existingTask?.selectedTraits?.opensea || {}).filter(([_, traits]) => traits.length > 0)
     );
 
     const selectedTraits = transformNewTask(filteredTasks)
@@ -2723,85 +2705,13 @@ async function removePendingAndWaitingBids(task: ITask, marketplace?: string) {
   }
 }
 
-async function waitForRunningJobsToComplete(task: ITask, marketplace?: string) {
-  try {
-    const checkInterval = 1000;
-    let jobnames: string[] = [OPENSEA_SCHEDULE, OPENSEA_TRAIT_BID, OPENSEA_TOKEN_BID, MAGICEDEN_SCHEDULE, MAGICEDEN_TRAIT_BID, MAGICEDEN_TOKEN_BID, BLUR_SCHEDULE, OPENSEA_COLLECTION_BID, MAGICEDEN_COLLECTION_BID, BLUR_COLLECTION_BID]
-
-    switch (marketplace?.toLowerCase()) {
-      case OPENSEA.toLowerCase():
-        jobnames = [OPENSEA_SCHEDULE, OPENSEA_TRAIT_BID, OPENSEA_TOKEN_BID, OPENSEA_COLLECTION_BID]
-        break;
-
-      case MAGICEDEN.toLowerCase():
-        jobnames = [MAGICEDEN_SCHEDULE, MAGICEDEN_TRAIT_BID, MAGICEDEN_TOKEN_BID, MAGICEDEN_COLLECTION_BID]
-        break;
-
-      case BLUR.toLowerCase():
-        jobnames = [BLUR_SCHEDULE, BLUR_TRAIT_BID, BLUR_COLLECTION_BID]
-        break;
-      default:
-        jobnames = [OPENSEA_SCHEDULE, OPENSEA_TRAIT_BID, OPENSEA_TOKEN_BID, MAGICEDEN_SCHEDULE, MAGICEDEN_TRAIT_BID, MAGICEDEN_TOKEN_BID, BLUR_SCHEDULE, BLUR_TRAIT_BID, BLUR_COLLECTION_BID]
-    }
-
-    console.log(YELLOW + 'Waiting for running jobs to complete...'.toUpperCase() + RESET);
-    const activeJobs = await queue.getJobs();
-    const relatedJobs = activeJobs?.filter(job => {
-      const matchedId = job?.data?._id === task._id
-      if (jobnames && jobnames?.length > 0) {
-        return matchedId && jobnames?.includes(job?.name);
-      }
-      return matchedId;
-    });
-
-    if (relatedJobs?.length === 0) {
-      return
-    } else {
-      let completedCount = 0;
-      let failedCount = 0;
-
-      await Promise.allSettled(relatedJobs.map(async (job: Job) => {
-        try {
-          if (!job.token) {
-            await job.remove()
-          }
-          completedCount++;
-        } catch (err) {
-          failedCount++;
-        }
-      }));
-
-      // Wait for jobs to finish their current processing
-      let maxAttempts = 10;
-      while (maxAttempts > 0) {
-        const currentActiveJobs = await queue.getJobs(['active']);
-        const remainingJobs = currentActiveJobs?.filter(job =>
-          job?.data?._id === task._id && jobnames?.includes(job?.name)
-        );
-
-        if (remainingJobs?.length === 0) {
-          console.log('All jobs have completed');
-          break;
-        }
-
-        console.log(`Waiting for ${remainingJobs.length} jobs to complete...`);
-        await new Promise(resolve => setTimeout(resolve, checkInterval));
-        maxAttempts--;
-      }
-    }
-
-  } catch (error: any) {
-    console.error(RED + `Error waiting for running jobs to complete for task ${task.contract.slug}: ${error.message} ` + RESET);
-  }
-}
 
 function getJobIds(marketplace: string, task: ITask) {
   const jobIds: string[] = []
-  const selectedTraits = transformNewTask(task.selectedTraits)
+  const selectedTraits = transformNewTask(task.selectedTraits[marketplace.toLowerCase()])
   const isTraitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
 
   const tokenBid = task.bidType === "token"
-
   const traits = transformOpenseaTraits(selectedTraits);
 
   if (isTraitBid) {
@@ -3442,7 +3352,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
     }
 
-    const selectedTraits = transformNewTask(task.selectedTraits)
+    const selectedTraits = transformNewTask(task?.selectedTraits?.magiceden)
     const bestOffer = (bestOffers[task._id]?.magiceden || 0) * Math.pow(10, decimal);
     const collectionOffer = bidType === "collection" ? incomingBidAmount / Math.pow(10, decimal) : 0;
 
@@ -3699,7 +3609,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     else if (bidType === "collection") {
       const isTraitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
       const tokenBid = task.bidType === "token"
-      const collectionBid = !isTraitBid && !tokenBid
+      const collectionBid = task.bidType.toLowerCase() === "collection" && Object.keys(task?.selectedTraits?.magiceden || {}).length === 0
 
       if (!collectionBid) return
 
@@ -3913,7 +3823,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     let offerPrice: number;
     let colletionOffer: bigint;
 
-    const selectedTraits = transformNewTask(currentTask.selectedTraits)
+    const selectedTraits = transformNewTask(currentTask?.selectedTraits?.opensea)
     const bestOffer = (bestOffers[task._id]?.opensea || 0);
 
     const collectionOffer = data.event === "collection_offer" ? incomingBidAmount / Math.pow(10, decimal) : 0
@@ -4220,7 +4130,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     if (data.event === "collection_offer") {
       const isTraitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
       const tokenBid = task.bidType === "token"
-      const collectionBid = !isTraitBid && !tokenBid && task.bidType === "collection"
+      const collectionBid = task.bidType.toLowerCase() === "collection" && Object.keys(task?.selectedTraits?.opensea || {}).length === 0
 
       if (!collectionBid) return
 
@@ -4384,7 +4294,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
     if (!currentTask?.outbidOptions?.counterbid) return
     const wallets = await Wallet.findById(task.walletId)
     const WALLET_PRIVATE_KEY = decryptPrivateKey(wallets?.encryptedPrivateKey as string);
-    const selectedTraits = transformNewTask(currentTask?.selectedTraits)
+    const selectedTraits = transformNewTask(currentTask?.selectedTraits?.blur)
     const traitBid = currentTask?.bidType === "collection" && selectedTraits && Object.keys(selectedTraits)?.length > 0
     const blurOutbidMargin = currentTask?.outbidOptions?.blurOutbidMargin || 0.01
 
@@ -4534,9 +4444,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       }
 
     } else {
-      const isTraitBid = selectedTraits && Object.keys(selectedTraits)?.length > 0
-      const tokenBid = task?.bidType === "token"
-      const collectionBid = !isTraitBid && !tokenBid && task?.bidType === "collection"
+      const collectionBid = task.bidType.toLowerCase() === "collection" && Object.keys(task?.selectedTraits?.blur || {}).length === 0
       if (!collectionBid) return
 
       const incomingBidDetails = incomingBid?.stats?.filter((item: any) => item?.criteriaType?.toLowerCase() === "collection") || incomingBid?.updates?.filter((item: any) => item?.criteriaType?.toLowerCase() === "collection")
@@ -4809,10 +4717,7 @@ async function processOpenseaScheduledBid(task: ITask) {
     }
 
     const filteredTasks = Object.fromEntries(
-      Object.entries(currentTask?.selectedTraits || {}).map(([category, traits]) => [
-        category,
-        traits.filter(trait => trait.availableInMarketplaces.includes("opensea"))
-      ]).filter(([_, traits]) => traits.length > 0)
+      Object.entries(currentTask?.selectedTraits?.opensea || {}).filter(([_, traits]) => traits.length > 0)
     );
     const selectedTraits = transformNewTask(filteredTasks)
     if (!currentTraits[currentTask._id]) {
@@ -4948,7 +4853,7 @@ async function processOpenseaScheduledBid(task: ITask) {
     }
 
     const staleTokens = currentTokenIds[currentTask._id].opensea.filter(token => !tokenIds.includes(token)).map((item) => item.toString())
-    const { currency, currencySymbol } = await calculateBidPrice(currentTask, 0, "opensea")
+    const { currency } = await calculateBidPrice(currentTask, 0, "opensea")
 
 
     if (staleTokens.length > 0) {
@@ -5003,6 +4908,8 @@ async function processOpenseaScheduledBid(task: ITask) {
     taskStatus[currentTask._id].status = 'SCHEDULED'
     const newTask = { ...currentTask, traits: {} } as ITask
 
+    const collectionBid = currentTask.bidType.toLowerCase() === "collection" && Object.keys(currentTask.selectedTraits?.opensea || {}).length === 0
+
     if (tokenBid) {
       // Get the array of OpenSea token IDs for this task, defaulting to empty array if undefined
       const tokens = currentTokenIds[task._id].opensea
@@ -5047,7 +4954,7 @@ async function processOpenseaScheduledBid(task: ITask) {
       await processBulkJobs(traitJobs, true);
 
       console.log(`ADDED ${traitJobs.length} ${currentTask.contract.slug} OPENSEA TRAIT BID JOBS TO QUEUE`);
-    } else if (currentTask.bidType.toLowerCase() === "collection" && !traitBid) {
+    } else if (collectionBid) {
       const jobId = `${currentTask._id}-opensea-${currentTask.contract.slug}-collection`
       const parentJobId = `${currentTask._id}-opensea`.toLowerCase()
 
@@ -5338,12 +5245,7 @@ async function processBlurScheduledBid(task: ITask) {
     }
 
     const filteredTasks = Object.fromEntries(
-      Object.entries(currentTask?.selectedTraits || {}).map(([category, traits]) => [
-        category,
-        traits.filter(trait => trait.availableInMarketplaces
-          .map((item) => item.toLowerCase())
-          .includes("blur"))
-      ]).filter(([_, traits]) => traits.length > 0)
+      Object.entries(currentTask?.selectedTraits?.blur || {}).filter(([_, traits]) => traits.length > 0)
     );
 
     const tokenBid = currentTask.bidType === "token"
@@ -6569,10 +6471,7 @@ async function processMagicedenScheduledBid(task: ITask) {
     }
 
     const filteredTasks = Object.fromEntries(
-      Object.entries(currentTask?.selectedTraits || {}).map(([category, traits]) => [
-        category,
-        traits.filter(trait => trait.availableInMarketplaces.includes("magiceden"))
-      ]).filter(([_, traits]) => traits.length > 0)
+      Object.entries(currentTask?.selectedTraits?.magiceden || {}).filter(([_, traits]) => traits.length > 0)
     );
     const selectedTraits = transformNewTask(filteredTasks)
 
@@ -6627,6 +6526,11 @@ async function processMagicedenScheduledBid(task: ITask) {
     let tokens: number[] = [...bottomListings, ...taskTokenIds.map((token) => +token)]
 
     if (currentTask.bidType === "token" && selectedTraits && Object.keys(selectedTraits).length > 0) {
+
+      const filteredTasks = Object.fromEntries(
+        Object.entries(currentTask?.selectedTraits?.opensea || {}).filter(([_, traits]) => traits.length > 0)
+      );
+      const selectedTraits = transformNewTask(filteredTasks)
       const attributes = transformSelectedTraitsToAttributes(selectedTraits)
       const expandedAttributes = expandAttributes(attributes)
       let traitTokens: number[] = []
@@ -6737,6 +6641,8 @@ async function processMagicedenScheduledBid(task: ITask) {
     const newTask = { ...currentTask, traits: {} } as ITask
     taskStatus[currentTask._id].status = 'SCHEDULED'
 
+    const collectionBid = currentTask.bidType.toLowerCase() === "collection" && Object.keys(currentTask?.selectedTraits?.magiceden || {}).length === 0
+
     if (tokenBid) {
       const tokens = currentTokenIds[task._id].magiceden.filter(token => !isNaN(Number(token)))
       const jobs = tokens
@@ -6780,7 +6686,7 @@ async function processMagicedenScheduledBid(task: ITask) {
 
       await processBulkJobs(traitJobs, true);
     }
-    else if (currentTask.bidType.toLowerCase() === "collection" && !traitBid) {
+    else if (collectionBid) {
       const jobId = `${currentTask._id}-magiceden-${currentTask.contract.slug}-collection`
       const parentJobId = `${currentTask._id}-magiceden`.toLowerCase()
 
@@ -7588,13 +7494,7 @@ app.get("/health", async (req, res) => {
 app.post("/api/traits/count", async (req, res) => {
   try {
     const { selectedTraits: incomingTraits, slug }: { selectedTraits: SelectedTraits; slug: string } = req.body
-
-    const filteredTasks = Object.fromEntries(
-      Object.entries(incomingTraits || {}).map(([category, traits]) => [
-        category,
-        traits
-      ]).filter(([_, traits]) => traits.length > 0))
-
+    const filteredTasks = Object.fromEntries(Object.entries(incomingTraits?.opensea || {}).filter(([_, traits]) => traits.length > 0))
     const selectedTraits = transformNewTask(filteredTasks)
 
     const attributes = transformSelectedTraitsToAttributes(selectedTraits)
@@ -7611,7 +7511,6 @@ app.post("/api/traits/count", async (req, res) => {
     };
     const items = await fetchOpenSeaCollectionItems(variable);
     res.status(200).json(items.length)
-
   } catch (error: any) {
     const err = error?.response?.data || error?.message
     res.status(500).json(err)
@@ -7868,7 +7767,8 @@ app.post('/api/collection/stats', async (req, res) => {
   try {
     const slug = req.body.slug as string;
     const contractAddress = req.body.address as string;
-    
+
+
     // Wrap each task to handle failures gracefully
     const tasks: (() => Promise<unknown>)[] = [
       async () => {
@@ -7911,6 +7811,14 @@ app.post('/api/collection/stats', async (req, res) => {
           return { traits: { categories: {}, counts: {} }, magicedenRaw: null };
         }
       },
+      async () => {
+        try {
+          return await fetchOpenseaTraits(slug);
+        } catch (error) {
+          console.error('Failed to fetch MagicEden attributes:', error);
+          return { traits: { categories: {}, counts: {} }, magicedenRaw: null };
+        }
+      },
     ];
 
     const results = await pQueue.addAll(tasks);
@@ -7921,9 +7829,8 @@ app.post('/api/collection/stats', async (req, res) => {
       openseaFloorPrice,
       blurTraits,
       magicEdenTraits,
+      openseaTraits
     ] = results
-
-    const openseaTraits = magicEdenTraits
 
     const combinedTraits: {
       categories: Record<string, string>;
@@ -7945,16 +7852,49 @@ app.post('/api/collection/stats', async (req, res) => {
       counts: {},
     };
 
-    const marketplaces = ["opensea", "magiceden", "blur"] as const;
+    if (Array.isArray(openseaTraits)) {
+
+      openseaTraits.forEach((trait: any) => {
+        const category = trait.traitType;
+        if (!combinedTraits.categories[category]) {
+          combinedTraits.categories[category] = "string";
+        }
+        if (!combinedTraits.counts[category]) {
+          combinedTraits.counts[category] = {};
+        }
+
+        if (trait.values && Array.isArray(trait.values)) {
+          trait.values.forEach((valueObj: any) => {
+            const traitValue = valueObj.value;
+            const count = valueObj.count || 0;
+
+            if (!combinedTraits.counts[category][traitValue]) {
+              combinedTraits.counts[category][traitValue] = {
+                count: 0,
+                availableInMarketplaces: [],
+                magicedenFloor: 0,
+                blurFloor: 0,
+                openseaFloor: 0,
+              };
+            }
+
+            combinedTraits.counts[category][traitValue].count = count;
+            combinedTraits.counts[category][traitValue].availableInMarketplaces.push("opensea");
+          });
+        }
+      });
+    }
+
+    // Process MagicEden and Blur traits (object format)
+    const marketplaces = ["magiceden", "blur"] as const;
     const traitsData = [
-      (openseaTraits as MagicEdenData)?.traits || { categories: {}, counts: {} },
       (magicEdenTraits as MagicEdenData)?.traits || { categories: {}, counts: {} },
       (blurTraits as IBlurData)?.traits || { categories: {}, counts: {} },
     ];
 
     marketplaces.forEach((marketplace, index) => {
       const traits = traitsData[index];
-      
+
       // Skip if traits is invalid
       if (!traits || !traits.categories || !traits.counts) {
         return;
@@ -7995,6 +7935,7 @@ app.post('/api/collection/stats', async (req, res) => {
               marketplace
             );
           }
+
           if (
             marketplace === "blur" &&
             (blurTraits as IBlurData)?.blurRaw?.traits &&
@@ -8008,7 +7949,6 @@ app.post('/api/collection/stats', async (req, res) => {
             combinedTraits.counts[category][trait].blurFloor = blurFloor;
           }
 
-          // Add MagicEden floor price
           if (
             marketplace === "magiceden" &&
             (magicEdenTraits as MagicEdenData)?.magicedenRaw?.attributes
@@ -8023,32 +7963,19 @@ app.post('/api/collection/stats', async (req, res) => {
                 (value: any) => value.value === trait
               );
               if (magicEdenValue && magicEdenValue.floorAskPrice) {
-                combinedTraits.counts[category][trait].magicedenFloor =
-                  magicEdenValue?.floorAskPrice?.amount?.decimal;
-              }
-            }
-          }
-
-          if (
-            marketplace === "opensea" &&
-            (magicEdenTraits as MagicEdenData)?.magicedenRaw?.attributes
-          ) {
-            const magicEdenAttribute = (
-              magicEdenTraits as MagicEdenData
-            )?.magicedenRaw?.attributes.find(
-              (attr: any) => attr.key === category
-            );
-            if (magicEdenAttribute) {
-              const magicEdenValue = magicEdenAttribute.values.find(
-                (value: any) => value.value === trait
-              );
-              if (magicEdenValue && magicEdenValue.floorAskPrice) {
-                combinedTraits.counts[category][trait].openseaFloor =
-                  magicEdenValue?.floorAskPrice?.amount?.decimal;
+                const meFloor = magicEdenValue?.floorAskPrice?.amount?.decimal;
+                combinedTraits.counts[category][trait].magicedenFloor = meFloor;
               }
             }
           }
         });
+      });
+    });
+
+    Object.keys(combinedTraits.counts).forEach(category => {
+      Object.keys(combinedTraits.counts[category]).forEach(trait => {
+        const traitData = combinedTraits.counts[category][trait];
+        traitData.openseaFloor = traitData.magicedenFloor;
       });
     });
 
@@ -9548,49 +9475,6 @@ export interface Orders {
   originatedAt: string | null;
 }
 
-interface ApiResponse {
-  orders: Orders[],
-  continuation: string | null
-}
-
-function getJobNames(marketplace: string, task: ITask) {
-  const jobNames: string[] = []
-  const selectedTraits = transformNewTask(task.selectedTraits)
-  const isTraitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
-  const tokenBid = task.bidType === "token"
-
-  // Determine base job type based on marketplace
-  let collectionBidType, tokenBidType, traitBidType;
-  switch (marketplace.toLowerCase()) {
-    case 'opensea':
-      collectionBidType = OPENSEA_COLLECTION_BID
-      tokenBidType = OPENSEA_TOKEN_BID
-      traitBidType = OPENSEA_TRAIT_BID
-      break;
-    case 'magiceden':
-      collectionBidType = MAGICEDEN_COLLECTION_BID
-      tokenBidType = MAGICEDEN_TOKEN_BID
-      traitBidType = MAGICEDEN_TRAIT_BID
-      break;
-    case 'blur':
-      collectionBidType = BLUR_COLLECTION_BID
-      tokenBidType = null // Blur doesn't support token bids
-      traitBidType = BLUR_TRAIT_BID
-      break;
-    default:
-      return jobNames;
-  }
-
-  if (isTraitBid) {
-    jobNames.push(`${task._id}-${traitBidType}`)
-  } else if (tokenBid && tokenBidType) { // Only add token bids if supported
-    jobNames.push(`${task._id}-${tokenBidType}`)
-  } else {
-    jobNames.push(`${task._id}-${collectionBidType}`)
-  }
-
-  return jobNames
-}
 
 /**
  * Network Monitoring System
