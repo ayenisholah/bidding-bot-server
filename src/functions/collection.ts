@@ -3,7 +3,7 @@ import stringify from 'json-stable-stringify';
 import crypto from 'crypto';
 import { axiosInstance, limiter } from "../init"; // Import Redis client
 import { DistributedLockManager } from "../utils/lock";
-import { API_KEY, redis } from "..";
+import { API_KEY, BLUE, redis, RESET } from "..";
 import { CollectionItemsListQuery } from "../queries";
 import { BASE_URL } from "../constants";
 
@@ -205,6 +205,9 @@ export async function fetchOpenSeaCollectionItems(
         "x-api-key": API_KEY
       },
     }));
+
+    console.log(BLUE + JSON.stringify(data) + RESET);
+
     // Extract token IDs from the current page
     const tokenIds = data.data.collectionItems.items.map((item) => {
       const match = item.name.match(/#(\d+)$/);
@@ -231,6 +234,264 @@ export async function fetchOpenSeaCollectionItems(
   } catch (error) {
     console.error('Error fetching OpenSea collection items:', error);
     throw new Error(`Failed to fetch collection items`);
+  }
+}
+
+
+interface TraitValue {
+  value: string;
+  count: number;
+  __typename?: string;
+}
+
+interface TraitRange {
+  min: number;
+  max: number;
+  __typename?: string;
+}
+
+interface CollectionAttribute {
+  traitType: string;
+  values?: TraitValue[];
+  range?: TraitRange;
+  __typename?: string;
+}
+
+interface TraitResponse {
+  data: {
+    collectionBySlug: {
+      id: string;
+      attributes: {
+        items: CollectionAttribute[];
+        nextPageCursor: string | null;
+      };
+      __typename: string;
+    };
+  };
+}
+
+export async function fetchOpenseaTraits(
+  slug: string,
+  limit: number = 100,
+  cursor?: string
+): Promise<CollectionAttribute[]> {
+  const startTime = Date.now();
+  const CACHE_TTL = 3600; // 1 hour cache
+  const cacheKey = `opensea:traits:${slug}`;
+
+  // Try to get from cache first if no cursor (first page)
+  if (!cursor) {
+    try {
+      const cachedTraits = await redis.get(cacheKey);
+      if (cachedTraits) {
+        console.log(`✅ Fetched traits from cache for ${slug} in ${Date.now() - startTime}ms`);
+        return JSON.parse(cachedTraits);
+      }
+    } catch (error) {
+      console.error('Error reading traits from cache:', error);
+    }
+  }
+
+  try {
+    const payload = {
+      operationName: 'TraitFiltersSectionQuery',
+      query: "query TraitFiltersSectionQuery($slug: String!, $limit: Int!, $cursor: String) {\n  collectionBySlug(slug: $slug) {\n    __typename\n    ... on Collection {\n      id\n      attributes(limit: $limit, cursor: $cursor) {\n        items {\n          traitType\n          ...TraitFilterPanelFragment\n          __typename\n        }\n        nextPageCursor\n        __typename\n      }\n      __typename\n    }\n  }\n}\nfragment TraitFilterPanelFragment on CollectionAttribute {\n  traitType\n  range {\n    __typename\n  }\n  values {\n    __typename\n  }\n  ...TraitFiltersStringTraitInputFragment\n  ...TraitFiltersNumericTraitInputFragment\n  __typename\n}\nfragment TraitFiltersStringTraitInputFragment on CollectionAttribute {\n  traitType\n  values {\n    value\n    count\n    __typename\n  }\n  __typename\n}\nfragment TraitFiltersNumericTraitInputFragment on CollectionAttribute {\n  traitType\n  range {\n    min\n    max\n    __typename\n  }\n  __typename\n}",
+      variables: {
+        limit,
+        slug,
+        cursor
+      }
+    };
+
+    const { data } = await limiter.schedule(() =>
+      axiosInstance.post<TraitResponse>(`${BASE_URL}/opensea/graphql`, payload, {
+        headers: {
+          "x-api-key": API_KEY
+        },
+      })
+    );
+
+    if (!data?.data?.collectionBySlug?.attributes) {
+      throw new Error(`No attributes found for collection ${slug}`);
+    }
+
+    let attributes = data.data.collectionBySlug.attributes.items;
+    const nextCursor = data.data.collectionBySlug.attributes.nextPageCursor;
+
+    // If there's more data, fetch recursively
+    if (nextCursor) {
+      const nextPageAttributes = await fetchOpenseaTraits(slug, limit, nextCursor);
+      attributes = [...attributes, ...nextPageAttributes];
+    }
+
+    // Clean up the attributes data structure
+    const cleanedAttributes = attributes.map(attr => {
+      const cleaned: any = {
+        traitType: attr.traitType,
+        values: attr.values?.map(v => ({
+          value: v.value,
+          count: v.count
+        })) || []
+      };
+
+      // Only include range if it exists and is not null
+      if (attr.range) {
+        cleaned.range = {
+          min: attr.range.min,
+          max: attr.range.max
+        };
+      }
+
+      return cleaned;
+    });
+
+    // Cache the complete result (only for initial requests)
+    if (!cursor && cleanedAttributes.length > 0) {
+      await redis.set(cacheKey, JSON.stringify(cleanedAttributes), 'EX', CACHE_TTL);
+    }
+
+    const totalTime = Date.now() - startTime;
+    console.log(`✅ Total time for fetchOpenseaTraits(${slug}): ${totalTime}ms`);
+    console.log(`📊 Retrieved ${cleanedAttributes.length} trait categories`);
+
+    console.log(BLUE + JSON.stringify(cleanedAttributes) + RESET);
+
+    return cleanedAttributes;
+  } catch (error) {
+    console.error(`Error fetching OpenSea traits for ${slug}:`, error);
+    throw new Error(`Failed to fetch traits for collection ${slug}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+
+interface TraitFloorPrice {
+  native?: {
+    unit: string;
+    __typename?: string;
+  };
+  usd?: number;
+  token?: {
+    unit: string;
+    symbol: string;
+    contractAddress: string;
+    __typename?: string;
+  };
+  __typename?: string;
+}
+
+interface TraitWithFloorPrice {
+  traitType: string;
+  value: string;
+  count: number;
+  floorPrice?: TraitFloorPrice;
+}
+
+export async function fetchOpenseaTraitFloors(
+  slug: string,
+  traits: Array<{ traitType: string; values: string[] }>
+): Promise<TraitWithFloorPrice[]> {
+  try {
+    // Build the attributes filter for the query
+    const attributesFilter = traits.map(trait => ({
+      traitType: trait.traitType,
+      values: trait.values
+    }));
+
+    const payload = {
+      operationName: 'CollectionItemsListQuery',
+      query: `query CollectionItemsListQuery($collectionSlug: String!, $filter: CollectionItemsFilter, $limit: Int!) {
+        collectionItems(
+          collectionSlug: $collectionSlug
+          filter: $filter
+          limit: $limit
+          sort: { by: PRICE, direction: ASC }
+        ) {
+          items {
+            id
+            tokenId
+            attributes {
+              traitType
+              value
+              floorPrice {
+                native {
+                  unit
+                  __typename
+                }
+                usd
+                token {
+                  unit
+                  symbol
+                  contractAddress
+                  __typename
+                }
+                __typename
+              }
+              stats {
+                itemCount
+                percent
+                __typename
+              }
+              __typename
+            }
+            bestListing {
+              pricePerItem {
+                usd
+                token {
+                  unit
+                  symbol
+                  __typename
+                }
+                __typename
+              }
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
+      }`,
+      variables: {
+        collectionSlug: slug,
+        filter: {
+          attributes: attributesFilter
+        },
+        limit: 1  // We only need one item per trait combo to get floor prices
+      }
+    };
+
+    const { data } = await limiter.schedule(() =>
+      axiosInstance.post(`${BASE_URL}/opensea/graphql`, payload, {
+        headers: {
+          "x-api-key": API_KEY
+        },
+      })
+    );
+
+    // Extract unique trait floor prices from the response
+    const traitFloorMap = new Map<string, TraitWithFloorPrice>();
+
+    if (data?.data?.collectionItems?.items) {
+      for (const item of data.data.collectionItems.items) {
+        if (item.attributes) {
+          for (const attr of item.attributes) {
+            const key = `${attr.traitType}:${attr.value}`;
+            if (!traitFloorMap.has(key) && attr.floorPrice) {
+              traitFloorMap.set(key, {
+                traitType: attr.traitType,
+                value: attr.value,
+                count: attr.stats?.itemCount || 0,
+                floorPrice: attr.floorPrice
+              });
+            }
+          }
+        }
+      }
+    }
+
+    return Array.from(traitFloorMap.values());
+  } catch (error) {
+    console.error(`Error fetching OpenSea trait floors for ${slug}:`, error);
+    throw new Error(`Failed to fetch trait floors for collection ${slug}: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 

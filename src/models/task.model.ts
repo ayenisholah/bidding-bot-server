@@ -1,10 +1,11 @@
 import mongoose, { Schema, Model } from "mongoose";
 
 export interface SelectedTraits {
-  [key: string]: {
-    name: string;
-    availableInMarketplaces: string[];
-  }[];
+  [marketplace: string]: {
+    [category: string]: {
+      name: string;
+    }[];
+  };
 }
 
 export interface ITask {

@@ -48,7 +48,23 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
           // Try each RPC provider until one works
           for (const rpcUrl of rpcUrls) {
             try {
-              provider = new JsonRpcProvider(rpcUrl);
+              provider = new JsonRpcProvider(rpcUrl, undefined, {
+                staticNetwork: true,
+                batchMaxCount: 1
+              });
+              
+              // Set a timeout for network detection
+              const networkDetectionTimeout = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Network detection timeout')), 5000)
+              );
+              
+              // Wait for the provider to be ready with timeout
+              await Promise.race([
+                provider._detectNetwork(),
+                networkDetectionTimeout
+              ]);
+              
+              // Verify connection
               await provider.getBlockNumber();
               break;
             } catch (err) {
