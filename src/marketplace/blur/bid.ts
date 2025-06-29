@@ -67,8 +67,19 @@ export async function bidOnBlur(
   let offerPriceEth: string = (Number(offer_price) / 1e18).toString()
 
   if (Number(offerPriceEth) > bethBalance) {
-    const message = `Offer price: ${offerPriceEth} BETH  is greater than available BETH balance: ${bethBalance} BETH. SKIPPING ...`
-    throw new Error(message)
+    const message = `Offer price: ${offerPriceEth} BETH is greater than available BETH balance: ${bethBalance} BETH. SKIPPING ...`
+    console.log(`\x1b[31m${message}\x1b[0m`);
+    
+    if (!errorStats[taskId]) {
+      errorStats[taskId] = {
+        opensea: 0,
+        magiceden: 0,
+        blur: 0
+      }
+    }
+    errorStats[taskId].blur++
+    await logBidError(taskId, "INSUFFICIENT_BALANCE", message, "error", "blur");
+    return;
   }
 
   const offerPrice = BigInt(offer_price.toString());

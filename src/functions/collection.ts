@@ -350,12 +350,6 @@ export async function fetchOpenseaTraits(
       await redis.set(cacheKey, JSON.stringify(cleanedAttributes), 'EX', CACHE_TTL);
     }
 
-    const totalTime = Date.now() - startTime;
-    console.log(`✅ Total time for fetchOpenseaTraits(${slug}): ${totalTime}ms`);
-    console.log(`📊 Retrieved ${cleanedAttributes.length} trait categories`);
-
-    console.log(BLUE + JSON.stringify(cleanedAttributes) + RESET);
-
     return cleanedAttributes;
   } catch (error) {
     console.error(`Error fetching OpenSea traits for ${slug}:`, error);

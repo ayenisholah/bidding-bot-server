@@ -442,7 +442,6 @@ async function fetchCurrentTasks() {
   try {
     console.log(BLUE + '\n=== Fetching Current Tasks ===' + RESET);
     const tasks = await Task.find({})
-    // @TODO
     const wallets = (await Wallet.find({})).map((wallet) => wallet.address)
 
     walletsArr.push(...wallets);
@@ -3420,11 +3419,14 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         console.log(RED + message + RESET);
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
 
-        if (orders.length > 0) {
-          const orderKeys = orders.map((order: PrismaOrder) => order.id)
-          const extractedOrderIds = await extractMagicedenOrderHash(orders)
-          await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+        if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+          if (orders.length > 0) {
+            const orderKeys = orders.map((order: PrismaOrder) => order.id)
+            const extractedOrderIds = await extractMagicedenOrderHash(orders)
+            await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+          }
         }
+
         return;
       }
 
@@ -3551,10 +3553,12 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         console.log(RED + message + RESET);
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
 
-        if (orders.length > 0) {
-          const orderKeys = orders.map((order: PrismaOrder) => order.id)
-          const extractedOrderIds = await extractMagicedenOrderHash(orders)
-          await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+        if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+          if (orders.length > 0) {
+            const orderKeys = orders.map((order: PrismaOrder) => order.id)
+            const extractedOrderIds = await extractMagicedenOrderHash(orders)
+            await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+          }
         }
         return;
       }
@@ -3665,10 +3669,12 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         console.log(RED + message + RESET);
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
 
-        if (orders.length > 0) {
-          const orderKeys = orders.map((order: PrismaOrder) => order.id)
-          const extractedOrderIds = await extractMagicedenOrderHash(orders)
-          await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+        if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+          if (orders.length > 0) {
+            const orderKeys = orders.map((order: PrismaOrder) => order.id)
+            const extractedOrderIds = await extractMagicedenOrderHash(orders)
+            await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+          }
         }
         return;
       }
@@ -3867,16 +3873,20 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         const reason = `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
         const message = `incoming bid ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: ${tokenId} ${reason}. Skipping ...`.toUpperCase()
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
-        if (orders.length > 0) {
-          const cancelData = orders.map((order, index) => {
-            return {
-              name: CANCEL_OPENSEA_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
 
-            }
-          })
-          await queue.addBulk(cancelData)
+        if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+          if (orders.length > 0) {
+            const cancelData = orders.map((order, index) => {
+              return {
+                name: CANCEL_OPENSEA_BID,
+                data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+
+              }
+            })
+            await queue.addBulk(cancelData)
+          }
         }
+
         return
       }
       const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true)
@@ -3910,16 +3920,17 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
         console.log(RED + message + RESET);
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
+        if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+          if (orders.length > 0) {
+            const cancelData = orders.map((order, index) => {
+              return {
+                name: CANCEL_OPENSEA_BID,
+                data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
 
-        if (orders.length > 0) {
-          const cancelData = orders.map((order, index) => {
-            return {
-              name: CANCEL_OPENSEA_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
-
-            }
-          })
-          await queue.addBulk(cancelData)
+              }
+            })
+            await queue.addBulk(cancelData)
+          }
         }
         return;
       }
@@ -4020,14 +4031,16 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         const message = `incoming bid ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: ${identifier} ${reason}.Skipping ...`.toUpperCase()
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
 
-        if (orders.length > 0) {
-          const cancelData = orders.map((order, index) => {
-            return {
-              name: CANCEL_OPENSEA_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
-            }
-          })
-          await queue.addBulk(cancelData)
+        if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+          if (orders.length > 0) {
+            const cancelData = orders.map((order, index) => {
+              return {
+                name: CANCEL_OPENSEA_BID,
+                data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+              }
+            })
+            await queue.addBulk(cancelData)
+          }
         }
         return
       }
@@ -4063,14 +4076,16 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         console.log(RED + `counter Offer ${offerPriceEth} ${currencySymbol} for ${task.contract.slug} ${JSON.stringify(trait)} exceeds max bid price ${maxBidPriceEth} ${currencySymbol} ON OPENSEA.Skipping ...`.toUpperCase() + RESET);
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
 
-        if (orders.length > 0) {
-          const cancelData = orders.map((order, index) => {
-            return {
-              name: CANCEL_OPENSEA_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
-            }
-          })
-          await queue.addBulk(cancelData)
+        if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+          if (orders.length > 0) {
+            const cancelData = orders.map((order, index) => {
+              return {
+                name: CANCEL_OPENSEA_BID,
+                data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+              }
+            })
+            await queue.addBulk(cancelData)
+          }
         }
         return;
       }
@@ -4163,15 +4178,18 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         const message = `incoming bid  ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
 
-        if (orders.length > 0) {
-          const cancelData = orders.map((order, index) => {
-            return {
-              name: CANCEL_OPENSEA_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
-            }
-          })
-          await queue.addBulk(cancelData)
+        if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+          if (orders.length > 0) {
+            const cancelData = orders.map((order, index) => {
+              return {
+                name: CANCEL_OPENSEA_BID,
+                data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+              }
+            })
+            await queue.addBulk(cancelData)
+          }
         }
+
         return
       }
 
@@ -4207,15 +4225,18 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         console.log(RED + message + RESET);
         console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
 
-        if (orders.length > 0) {
-          const cancelData = orders.map((order, index) => {
-            return {
-              name: CANCEL_OPENSEA_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
-            }
-          })
-          await queue.addBulk(cancelData)
+        if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+          if (orders.length > 0) {
+            const cancelData = orders.map((order, index) => {
+              return {
+                name: CANCEL_OPENSEA_BID,
+                data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+              }
+            })
+            await queue.addBulk(cancelData)
+          }
         }
+
         return;
       }
       colletionOffer = BigInt(offerPrice)
@@ -4349,16 +4370,20 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         } else if (+totalOffer > maxBidPriceEth) {
           const reason = `is greater than max bid price ${maxBidPriceEth} BETH`
           const message = `incoming bid ${incomingPrice} + Blur Outbid Margin (${blurOutbidMargin}) BETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
-          if (orders.length > 0) {
-            const cancelData = orders.map((order, index) => {
-              const payload = JSON.parse(order.orderHash)
-              return {
-                name: CANCEL_BLUR_BID,
-                data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
-              }
-            })
-            await queue.addBulk(cancelData)
+
+          if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+            if (orders.length > 0) {
+              const cancelData = orders.map((order, index) => {
+                const payload = JSON.parse(order.orderHash)
+                return {
+                  name: CANCEL_BLUR_BID,
+                  data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
+                }
+              })
+              await queue.addBulk(cancelData)
+            }
           }
+
           await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "blur");
           return
         }
@@ -4492,21 +4517,24 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         const message = `incoming bid ${bestPrice} BETH for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "blur");
 
-        const cancelData = orders.map((order) => {
-          const payload = JSON.parse(order.orderHash)
-          return {
-            name: CANCEL_BLUR_BID,
-            data: {
-              privateKey: WALLET_PRIVATE_KEY,
-              payload,
-              taskId: task._id,
-              orderKey: order.id
+        if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+          const cancelData = orders.map((order) => {
+            const payload = JSON.parse(order.orderHash)
+            return {
+              name: CANCEL_BLUR_BID,
+              data: {
+                privateKey: WALLET_PRIVATE_KEY,
+                payload,
+                taskId: task._id,
+                orderKey: order.id
+              }
             }
-          }
-        })
-        await queue.addBulk(cancelData);
+          })
+          await queue.addBulk(cancelData);
+        }
         return
       }
+
       const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), true)
       if (stopBid) {
         if (orders.length > 0) {
@@ -5168,15 +5196,16 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(RED + message + RESET);
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-
-      if (orders.length > 0) {
-        const cancelData = orders.map((order, index) => {
-          return {
-            name: CANCEL_OPENSEA_BID,
-            data: { privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
-          }
-        })
-        await queue.addBulk(cancelData)
+      if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+        if (orders.length > 0) {
+          const cancelData = orders.map((order, index) => {
+            return {
+              name: CANCEL_OPENSEA_BID,
+              data: { privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order.id },
+            }
+          })
+          await queue.addBulk(cancelData)
+        }
       }
       return;
     } else if (offerEth < minBidPriceEth) {
@@ -5523,16 +5552,18 @@ async function processBlurCollectionBid(data: { task: ITask }) {
       console.log(RED + message + RESET);
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
-      if (orders.length > 0) {
-        const cancelData = orders.map((order) => {
-          const payload = JSON.parse(order.orderHash)
+      if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+        if (orders.length > 0) {
+          const cancelData = orders.map((order) => {
+            const payload = JSON.parse(order.orderHash)
 
-          return {
-            name: CANCEL_BLUR_BID,
-            data: { privateKey, payload, taskId: task._id, orderKey: order.id }
-          }
-        })
-        await queue.addBulk(cancelData);
+            return {
+              name: CANCEL_BLUR_BID,
+              data: { privateKey, payload, taskId: task._id, orderKey: order.id }
+            }
+          })
+          await queue.addBulk(cancelData);
+        }
       }
       return;
     } else if (collectionOfferEth < minBidPriceEth) {
@@ -5728,16 +5759,18 @@ async function processOpenseaTraitBid(data: {
       console.log(RED + message + RESET);
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
-
-      if (orders.length > 0) {
-        const cancelData = orders.map((order, index) => {
-          return {
-            name: CANCEL_OPENSEA_BID,
-            data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order.id },
-          }
-        })
-        await queue.addBulk(cancelData)
+      if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+        if (orders.length > 0) {
+          const cancelData = orders.map((order, index) => {
+            return {
+              name: CANCEL_OPENSEA_BID,
+              data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order.id },
+            }
+          })
+          await queue.addBulk(cancelData)
+        }
       }
+
       return;
     } else if (offerEth < minBidPriceEth) {
       traitOffer = BigInt(Math.round(minBidPriceEth * Math.pow(10, decimal)));
@@ -5912,15 +5945,18 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     const offerEth = Number(tokenOffer) / Math.pow(10, decimal);
 
     if (outbidOptions.outbid && offerEth > maxBidPriceEth) {
-      if (orders.length > 0) {
-        const cancelData = orders.map((order, index) => {
-          return {
-            name: CANCEL_OPENSEA_BID,
-            data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order.id }
-          }
-        })
-        await queue.addBulk(cancelData)
+      if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+        if (orders.length > 0) {
+          const cancelData = orders.map((order, index) => {
+            return {
+              name: CANCEL_OPENSEA_BID,
+              data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order.id }
+            }
+          })
+          await queue.addBulk(cancelData)
+        }
       }
+
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${slug} ${asset.tokenId} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR OPENSEA.Skipping ...`.toUpperCase()
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(RED + message + RESET);
@@ -6414,17 +6450,18 @@ async function processBlurTraitBid(data: {
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(RED + message + RESET);
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+        if (orders.length > 0) {
+          const cancelData = orders.map((order) => {
+            const payload = JSON.parse(order.orderHash)
 
-      if (orders.length > 0) {
-        const cancelData = orders.map((order) => {
-          const payload = JSON.parse(order.orderHash)
-
-          return {
-            name: CANCEL_BLUR_BID,
-            data: { privateKey, payload, taskId: _id, orderKey: order.id }
-          }
-        })
-        await queue.addBulk(cancelData);
+            return {
+              name: CANCEL_BLUR_BID,
+              data: { privateKey, payload, taskId: _id, orderKey: order.id }
+            }
+          })
+          await queue.addBulk(cancelData);
+        }
       }
       return;
     } else if (offerEth < minBidPriceEth) {
@@ -6848,10 +6885,12 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     const outbidOptions = currentTask.outbidOptions
 
     if (outbidOptions.outbid && offerEth > maxBidPriceEth) {
-      if (orders.length > 0) {
-        const orderKeys = orders.map((order: PrismaOrder) => order.id)
-        const extractedOrderIds = await extractMagicedenOrderHash(orders)
-        await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, orderKeys, taskId: task._id });
+      if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+        if (orders.length > 0) {
+          const orderKeys = orders.map((order: PrismaOrder) => order.id)
+          const extractedOrderIds = await extractMagicedenOrderHash(orders)
+          await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, orderKeys, taskId: task._id });
+        }
       }
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} COLLECTION bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase()
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -7029,10 +7068,12 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     }
 
     if (outbidOptions.outbid && offerEth > maxBidPriceEth) {
-      if (orders.length > 0) {
-        const orderKeys = orders.map((order: PrismaOrder) => order.id)
-        const extractedOrderIds = await extractMagicedenOrderHash(orders)
-        await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: _id });
+      if (currentTask.outbidOptions.outbid) {
+        if (orders.length > 0) {
+          const orderKeys = orders.map((order: PrismaOrder) => order.id)
+          const extractedOrderIds = await extractMagicedenOrderHash(orders)
+          await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: _id });
+        }
       }
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${slug} ${tokenId} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase()
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -7240,10 +7281,12 @@ async function processMagicedenTraitBid(data: {
       });
     }
     if (outbidOptions.outbid && offerEth > maxBidPriceEth) {
-      if (orders.length > 0) {
-        const orderKeys = orders.map((order: PrismaOrder) => order.id)
-        const extractedOrderIds = await extractMagicedenOrderHash(orders)
-        await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: _id });
+      if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
+        if (orders.length > 0) {
+          const orderKeys = orders.map((order: PrismaOrder) => order.id)
+          const extractedOrderIds = await extractMagicedenOrderHash(orders)
+          await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: _id });
+        }
       }
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${slug} ${JSON.stringify(trait)} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase()
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);

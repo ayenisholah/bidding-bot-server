@@ -33,6 +33,7 @@ export interface ITask {
     openseaOutbidMargin: number | null;
     magicedenOutbidMargin: number | null;
     counterbid: boolean;
+    cancelMaxWhenOutbid: boolean;
   };
   bidPrice: {
     min: number;
@@ -116,6 +117,7 @@ const TaskSchema: Schema = new Schema(
       openseaOutbidMargin: { type: Number, default: null },
       magicedenOutbidMargin: { type: Number, default: null },
       counterbid: { type: Boolean, default: false },
+      cancelMaxWhenOutbid: { type: Boolean, default: false },
     },
     bidPrice: {
       min: { type: Number, required: true },
