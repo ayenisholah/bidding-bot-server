@@ -21,13 +21,12 @@ import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicE
 import { CollectionItemsQueryVariables, createListing, fetchOpenSeaCollectionItems, fetchOpenseaTraits, getCollectionDetails, getOpenseaFloor } from "./functions";
 import mongoose from 'mongoose';
 import Task, { ITask, SelectedTraits } from "./models/task.model";
-import { Queue, Worker, Job, QueueOptions, JobType, UnrecoverableError, JobsOptions, QueueEvents } from "bullmq";
+import { Queue, Worker, Job, JobType, UnrecoverableError, JobsOptions, QueueEvents } from "bullmq";
 import Wallet from "./models/wallet.model";
-import redisClient from "./utils/redis";
+import redisClient, { createBullMQConnection } from "./utils/redis";
 import { BASE_URL, ERC20_MIN_ABI } from "./constants";
-import { Contract, ethers, Wallet as Web3Wallet, formatEther, parseEther, ZeroAddress, MaxUint256 } from "ethers";
+import { Contract, ethers, Wallet as Web3Wallet, parseEther, MaxUint256 } from "ethers";
 import { DistributedLockManager } from "./utils/lock";
-import { exec } from "child_process";
 import net from 'net'
 import BidLogs from "./models/logs.model";
 import PQueue from "p-queue";
@@ -36,9 +35,9 @@ import Bottleneck from "bottleneck";
 import { USDC, WETH } from "./utils/currencies";
 import User from "./models/user.model";
 import axios from "axios";
-import { log } from "console";
 import { encryptPrivateKey, decryptPrivateKey, setPassword, getPassword } from "./utils/crypto";
 import { fetchWalletNFTs } from "./utils/nft";
+import { logger, ErrorCategory, DatabaseOperation, QueueOperation } from "./utils/logger";
 const prisma = new PrismaClient()
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
@@ -55,9 +54,10 @@ export const warningMessage: WarningMessage = {};
 export const errorStats: BidCounts = {};
 export const skipStats: BidCounts = {};
 export const blurRateLimitInfo: { [walletAddress: string]: { remaining: number; reset: number; limit: number } } = {};
-const redis = redisClient.getClient()
 const QUEUE_NAME = 'BIDDING_BOT';
 export const WORKER_COUNT = 1
+
+// BullMQ configuration will use the connection from redis.ts
 
 let traitsToRemove: { [key: string]: string[] } = {}
 let removedTokens: { [key: string]: { opensea: string[]; magiceden: string[] } } = {}
@@ -156,24 +156,21 @@ const COLLECTION_BID_PRIORITY = {
 };
 
 type JobState = 'completed' | 'failed' | 'delayed' | 'active' | 'waiting' | 'waiting-children' | 'unknown' | 'prioritized' | 'paused';
-const REMOVABLE_STATES: JobState[] = ['prioritized', 'delayed', 'waiting', 'paused'];
 
 const lockManager = new DistributedLockManager({
   lockPrefix: '{marketplace}:',
   defaultTTLSeconds: 60
 });
 
-export { redis, lockManager, queue };
+// Create a getter for redis to ensure it's always current
 
-const QUEUE_OPTIONS: QueueOptions = {
-  prefix: '{bull}',
-  connection: redis,
-  defaultJobOptions: {
-    removeOnComplete: true,
-    removeOnFail: true,
-    attempts: 0
-  }
-};
+// For internal use
+let redis: any = null;
+
+// Export redis as a getter property
+export { lockManager };
+export { redis };
+export { queue };
 
 let netEnabled = true;
 
@@ -211,27 +208,8 @@ const blurLimiter = new Bottleneck({
   minTime: 250, maxConcurrent: 4,
 })
 
-const workers = new Worker(
-  QUEUE_NAME,
-  async (job) => {
-    try {
-      await processJob(job);
-      return
-    } catch (error) {
-      if (job.token) {
-        await job.moveToFailed(new Error("Job failed"), job.token);
-      } else {
-        await job.remove()
-      }
-      throw new UnrecoverableError('Unrecoverable');
-    }
-  },
-  {
-    connection: redis,
-    prefix: '{bull}',
-    concurrency: Number(RATE_LIMIT),
-  }
-)
+// Initialize worker later in startServer function
+let workers: Worker;
 
 const taskTimeouts = new Map<string, NodeJS.Timeout>();
 
@@ -260,8 +238,9 @@ function extractTaskId(jobName: string): string | null {
 
 
 
-const queue = new Queue(QUEUE_NAME, QUEUE_OPTIONS);
-const queueEvents = new QueueEvents(QUEUE_NAME, QUEUE_OPTIONS);
+// Queue and QueueEvents will be initialized in startServer
+let queue: Queue;
+let queueEvents: QueueEvents;
 
 export const MAGENTA = '\x1b[35m';
 export const BLUE = '\x1b[34m';
@@ -270,6 +249,7 @@ const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
 export const RED = '\x1b[31m';
 export const GOLD = '\x1b[33m';
+const CYAN = '\x1b[36m';
 
 const OPENSEA = "OPENSEA";
 const MAGICEDEN = "MAGICEDEN";
@@ -330,6 +310,39 @@ let ws: WebSocket;
 let heartbeatIntervalId: NodeJS.Timeout | null = null;
 let reconnectTimeoutId: NodeJS.Timeout | null = null;
 let retryCount: number = 0;
+
+// WebSocket Connection Metrics
+interface ConnectionMetrics {
+  connectionStartTime: number | null;
+  connectionEndTime: number | null;
+  connectionDuration: number;
+  totalConnections: number;
+  totalDisconnections: number;
+  averageConnectionDuration: number;
+  longestConnection: number;
+  shortestConnection: number;
+  currentConnectionId: string | null;
+}
+
+const connectionMetrics: ConnectionMetrics = {
+  connectionStartTime: null,
+  connectionEndTime: null,
+  connectionDuration: 0,
+  totalConnections: 0,
+  totalDisconnections: 0,
+  averageConnectionDuration: 0,
+  longestConnection: 0,
+  shortestConnection: Infinity,
+  currentConnectionId: null
+};
+
+const connectionHistory: Array<{
+  id: string;
+  startTime: number;
+  endTime: number;
+  duration: number;
+  reason: string;
+}> = [];
 
 // Track subscriptions by marketplace and collection slug
 const clients = new Set<WebSocket>();
@@ -418,6 +431,11 @@ async function monitorHealth() {
 
   } catch (error) {
     console.error(RED + '❌ Error monitoring health:' + RESET, error);
+    logger.logGeneralError("Health monitoring failed", {
+      error: error as Error,
+      uptime: process.uptime(),
+      memoryUsage: process.memoryUsage()
+    });
   }
 }
 
@@ -485,6 +503,10 @@ async function fetchCurrentTasks() {
     console.log(GREEN + '=== Task Initialization Complete ===\n' + RESET);
   } catch (error) {
     console.error(RED + 'Error fetching current tasks:', error, RESET);
+    logger.logDatabaseError("Failed to fetch current tasks", {
+      error: error as Error,
+      taskCount: currentTasks.length
+    });
   }
 }
 
@@ -524,9 +546,16 @@ async function pauseQueueAndWorkers() {
   try {
     console.log(YELLOW + 'No password set - pausing queue and workers...' + RESET);
     await queue.pause();
-    await workers.pause();
+    if (workers) {
+      await workers.pause();
+    }
     console.log(YELLOW + 'Queue and workers paused. Waiting for password...' + RESET);
   } catch (error) {
+    await logger.logQueueError('Error pausing queue and workers', {
+      queueOperation: QueueOperation.PAUSE_QUEUE,
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
     console.error(RED + 'Error pausing queue and workers:' + RESET, error);
   }
 }
@@ -535,15 +564,68 @@ async function resumeQueueAndWorkers() {
   try {
     console.log(GREEN + 'Password set - resuming queue and workers...' + RESET);
     await queue.resume();
-    await workers.resume();
+    if (workers) {
+      await workers.resume();
+    }
     console.log(GREEN + 'Queue and workers resumed.' + RESET);
   } catch (error) {
+    await logger.logQueueError('Error resuming queue and workers', {
+      queueOperation: QueueOperation.RESUME_QUEUE,
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
     console.error(RED + 'Error resuming queue and workers:' + RESET, error);
   }
 }
 
 async function startServer() {
   try {
+    // Wait for Redis to be ready
+    console.log('Waiting for Redis connection...');
+    while (!redisClient.isReady()) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    console.log('Redis is ready');
+
+    // Initialize redis for internal use
+    redis = redisClient.getClient();
+
+    // Initialize queue and queueEvents with Redis connection
+    const queueConnection = await createBullMQConnection();
+    queue = new Queue(QUEUE_NAME, {
+      connection: queueConnection,
+      prefix: '{bull}'
+    });
+    queueEvents = new QueueEvents(QUEUE_NAME, {
+      connection: await createBullMQConnection(),
+      prefix: '{bull}'
+    });
+
+    // Set up queue event handlers now that queueEvents is initialized
+    setupQueueEventHandlers();
+
+    // Initialize the worker with Redis connection
+    workers = new Worker(
+      QUEUE_NAME,
+      async (job) => {
+        try {
+          await processJob(job);
+          return
+        } catch (error) {
+          if (job.token) {
+            await job.moveToFailed(new Error("Job failed"), job.token);
+          } else {
+            await job.remove()
+          }
+          throw new UnrecoverableError('Unrecoverable');
+        }
+      },
+      {
+        connection: await createBullMQConnection(),
+        prefix: '{bull}',
+        concurrency: Number(RATE_LIMIT),
+      }
+    );
 
     const mongoUri = process.env.MONGODB_URI;
     if (!mongoUri) {
@@ -563,7 +645,7 @@ async function startServer() {
     console.log('Connected to MongoDB successfully');
 
     try {
-      const lastRuntime = await redis.get(LAST_RUNTIME_KEY);
+      const lastRuntime = redis ? await redis.get(LAST_RUNTIME_KEY) : null;
       console.log('Last runtime:', lastRuntime ? new Date(parseInt(lastRuntime)).toLocaleString() : 'Never');
 
       const currentTime = Date.now();
@@ -585,19 +667,34 @@ async function startServer() {
       }
 
       await initialize(RATE_LIMIT);
-      await redis.set(LAST_RUNTIME_KEY, currentTime.toString());
+      if (redis) {
+        await redis.set(LAST_RUNTIME_KEY, currentTime.toString());
+      }
     } catch (redisError) {
+      await logger.logDatabaseError('Redis operation failed during startup', {
+        databaseOperation: DatabaseOperation.CONNECTION,
+        collection_name: 'redis',
+        error: redisError as Error,
+        errorMessage: redisError instanceof Error ? redisError.message : String(redisError)
+      });
       console.error('Redis operation failed:', redisError);
     }
 
     setInterval(async () => {
-      await redis.set(LAST_RUNTIME_KEY, Date.now().toString());
+      if (redis) {
+        await redis.set(LAST_RUNTIME_KEY, Date.now().toString());
+      }
     }, 60000);
 
     server.listen(port, () => {
       console.log(`Magic happening on http://localhost:${port}`);
       console.log(`WebSocket server is running on ws://localhost:${port}`);
     });
+
+    // Initialize WebSocket connection monitoring
+    await loadConnectionMetrics();
+    startConnectionMonitoring();
+    console.log('🔗 WebSocket connection monitoring initialized');
 
     // Start periodic cleanup of seen items
     cleanupIntervalId = setInterval(() => {
@@ -653,15 +750,28 @@ process.on('SIGTERM', () => {
 
 startServer()
   .then(() => {
-    runScheduledLoop().catch(error => {
+    runScheduledLoop().catch(async error => {
+      await logger.logGeneralError('Failed to run scheduled loop', {
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
       console.error('Failed to run scheduled loop:', error);
     })
 
-    connectWebSocket().catch(error => {
+    connectWebSocket().catch(async error => {
+      await logger.logWebSocketError('Failed to connect to WebSocket', {
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        operation: 'initial_connection'
+      });
       console.error('Failed to connect to WebSocket:', error);
     })
   })
-  .catch(error => {
+  .catch(async error => {
+    await logger.logGeneralError('Failed to start server', {
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
     console.error('Failed to start server:', error);
   });
 
@@ -686,488 +796,491 @@ interface CompletedTasks {
 }
 const completedTasks: CompletedTasks = {};
 
-queueEvents.on('completed', async ({ jobId }) => {
-  if (jobId.includes('CANCEL_OPENSEA_BID') || jobId.includes('CANCEL_MAGICEDEN_BID') || jobId.includes('CANCEL_BLUR_BID')) {
-    const taskId = jobId.split('-')[1];
-    if (!taskStatus[taskId]) {
-      taskStatus[taskId] = {
-        status: 'CANCELLING',
-        cancellationPercentage: 0,
-        runningPercentage: 0,
-        waitingTime: 0,
-        nextLoopTime: new Date(),
-        processingPercentage: 0
+// Queue event handlers will be set up after queue initialization
+function setupQueueEventHandlers() {
+  queueEvents.on('completed', async ({ jobId }) => {
+    if (jobId.includes('CANCEL_OPENSEA_BID') || jobId.includes('CANCEL_MAGICEDEN_BID') || jobId.includes('CANCEL_BLUR_BID')) {
+      const taskId = jobId.split('-')[1];
+      if (!taskStatus[taskId]) {
+        taskStatus[taskId] = {
+          status: 'CANCELLING',
+          cancellationPercentage: 0,
+          runningPercentage: 0,
+          waitingTime: 0,
+          nextLoopTime: new Date(),
+          processingPercentage: 0
+        }
+      }
+      taskStatus[taskId].status = 'CANCELLING'
+
+      const task = activeTasks.get(taskId);
+      if (!task) return;
+
+      const marketplace = jobId.includes('CANCEL_OPENSEA_BID') ? 'OPENSEA' : jobId.includes('CANCEL_MAGICEDEN_BID') ? 'MAGICEDEN' : 'BLUR';
+      const parentJobId = `${taskId}-CANCEL_${marketplace}_BID`;
+      const parentJob = parentJobs.get(parentJobId);
+
+      if (!parentJob) return;
+
+      parentJob.completedJobs++;
+
+      // Calculate marketplace-specific cancellation percentage
+
+      // If task is not running, calculate combined cancellation percentage with weighting
+      if (!task?.running) {
+        // Get all parent jobs for this task (both OpenSea and MagicEden)
+        const openSeaParentJobId = `${taskId}-CANCEL_OPENSEA_BID`;
+        const magicEdenParentJobId = `${taskId}-CANCEL_MAGICEDEN_BID`;
+        const blurParentJobId = `${taskId}-CANCEL_BLUR_BID`;
+
+        const openSeaParentJob = parentJobs.get(openSeaParentJobId);
+        const magicEdenParentJob = parentJobs.get(magicEdenParentJobId);
+        const blurParentJob = parentJobs.get(blurParentJobId);
+
+        // Apply a weight of 1000 to MagicEden jobs
+        const magicEdenWeight = 500;
+
+        // Calculate weighted totals across both marketplaces
+        const openSeaTotalJobs = openSeaParentJob?.totalJobs || 0;
+        const openSeaCompletedJobs = openSeaParentJob?.completedJobs || 0;
+        const openSeaFailedJobs = openSeaParentJob?.failedJobs || 0;
+
+        const blurTotalJobs = blurParentJob?.totalJobs || 0;
+        const blurCompletedJobs = blurParentJob?.completedJobs || 0;
+        const blurFailedJobs = blurParentJob?.failedJobs || 0;
+
+        const magicEdenFailedJobs = (magicEdenParentJob?.failedJobs || 0) * magicEdenWeight;
+        const magicEdenTotalJobs = (magicEdenParentJob?.totalJobs || 0) * magicEdenWeight;
+        const magicEdenCompletedJobs = (magicEdenParentJob?.totalJobs || 0) < 1 ? (magicEdenParentJob?.totalJobs || 0) * magicEdenWeight : (magicEdenParentJob?.completedJobs || 0) * magicEdenWeight;
+
+        const totalJobs = openSeaTotalJobs + magicEdenTotalJobs + blurTotalJobs;
+        const completedJobs = openSeaCompletedJobs + magicEdenCompletedJobs + blurCompletedJobs;
+        const failedJobs = openSeaFailedJobs + magicEdenFailedJobs + blurFailedJobs;
+
+        const combinedCancellationPercentage = totalJobs > 0 ?
+          ((completedJobs + failedJobs) / totalJobs) * 100 : 0;
+
+        taskStatus[taskId].cancellationPercentage = Math.min(combinedCancellationPercentage, 100);
+
+        if (totalJobs < completedJobs + failedJobs || combinedCancellationPercentage > 99) {
+          const orders = await prisma.order.findMany({
+            where: {
+              taskId: taskId,
+            }
+          });
+
+          if (orders.length > 0) {
+            const wallet = await Wallet.findById(task.walletId);
+            const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+            await cancelAllRelatedBids(task, private_key);
+            return
+          }
+          taskStatus[taskId].status = 'STOPPED'
+          delete taskStatus[taskId].nextLoopTime
+          taskStatus[taskId].waitingTime = 0
+        }
+      } else {
+        let marketplaceCancellationPercentage;
+        if (marketplace.toLowerCase() === 'magiceden') {
+          if (parentJob.totalJobs < 1) {
+            marketplaceCancellationPercentage = 100;
+          } else {
+            const weightedCompletedJobs = parentJob.completedJobs * 500;
+            const weightedTotalJobs = parentJob.totalJobs * 500;
+            const weightedFailedJobs = parentJob.failedJobs * 500
+            marketplaceCancellationPercentage = weightedTotalJobs > 0 ?
+              ((weightedCompletedJobs + weightedFailedJobs) / weightedTotalJobs) * 100 : 0;
+          }
+        } else {
+          marketplaceCancellationPercentage = parentJob.totalJobs > 0 ?
+            ((parentJob.completedJobs + parentJob.failedJobs) / parentJob.totalJobs) * 100 : 0;
+        }
+
+        // If task is running, just update with the marketplace-specific percentage
+        taskStatus[taskId].cancellationPercentage = marketplaceCancellationPercentage;
+        if (parentJob.totalJobs < parentJob.completedJobs + parentJob.failedJobs || marketplaceCancellationPercentage > 99) {
+          const orders = await prisma.order.findMany({
+            where: {
+              taskId: taskId,
+              marketplace: marketplace.toLowerCase()
+            }
+          });
+
+          if (orders.length > 0) {
+            const wallet = await Wallet.findById(task.walletId);
+            const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+            await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
+            return
+          }
+          taskStatus[taskId].cancellationPercentage = 100
+          if (taskStatus[taskId].nextLoopTime && taskStatus[taskId].waitingTime > 0) {
+            taskStatus[taskId].status = 'SCHEDULED'
+          }
+        }
       }
     }
-    taskStatus[taskId].status = 'CANCELLING'
 
+    if (jobId.split('-').length < 3) return;
+
+    const taskId = jobId.split('-')[0];
     const task = activeTasks.get(taskId);
-    if (!task) return;
 
-    const marketplace = jobId.includes('CANCEL_OPENSEA_BID') ? 'OPENSEA' : jobId.includes('CANCEL_MAGICEDEN_BID') ? 'MAGICEDEN' : 'BLUR';
-    const parentJobId = `${taskId}-CANCEL_${marketplace}_BID`;
-    const parentJob = parentJobs.get(parentJobId);
+    if (!task || !task.running) return;
 
+    const marketplace = jobId.split('-')[1].toLowerCase();
+    const parentId = `${taskId}-${marketplace}`.toLowerCase();
+
+    const { currencySymbol } = await calculateBidPrice(task, 0, "magiceden")
+
+
+    const parentJob = parentJobs.get(parentId);
     if (!parentJob) return;
 
+    taskStatus[taskId].status = 'RUNNING'
     parentJob.completedJobs++;
 
-    // Calculate marketplace-specific cancellation percentage
+    // Calculate total jobs across all selected and enabled marketplaces for this task
+    let totalJobs = 0;
+    let completedJobs = 0;
+    let failedJobs = 0;
+    const selectedMarketplaces = task.selectedMarketplaces.map(m => m.toLowerCase());
+    const enabledAndSelectedMarketplaces = selectedMarketplaces.filter(m =>
+      enabledMarketplaces.map(em => em.toLowerCase()).includes(m)
+    );
 
-    // If task is not running, calculate combined cancellation percentage with weighting
-    if (!task?.running) {
-      // Get all parent jobs for this task (both OpenSea and MagicEden)
-      const openSeaParentJobId = `${taskId}-CANCEL_OPENSEA_BID`;
-      const magicEdenParentJobId = `${taskId}-CANCEL_MAGICEDEN_BID`;
-      const blurParentJobId = `${taskId}-CANCEL_BLUR_BID`;
-
-      const openSeaParentJob = parentJobs.get(openSeaParentJobId);
-      const magicEdenParentJob = parentJobs.get(magicEdenParentJobId);
-      const blurParentJob = parentJobs.get(blurParentJobId);
-
-      // Apply a weight of 1000 to MagicEden jobs
-      const magicEdenWeight = 500;
-
-      // Calculate weighted totals across both marketplaces
-      const openSeaTotalJobs = openSeaParentJob?.totalJobs || 0;
-      const openSeaCompletedJobs = openSeaParentJob?.completedJobs || 0;
-      const openSeaFailedJobs = openSeaParentJob?.failedJobs || 0;
-
-      const blurTotalJobs = blurParentJob?.totalJobs || 0;
-      const blurCompletedJobs = blurParentJob?.completedJobs || 0;
-      const blurFailedJobs = blurParentJob?.failedJobs || 0;
-
-      const magicEdenFailedJobs = (magicEdenParentJob?.failedJobs || 0) * magicEdenWeight;
-      const magicEdenTotalJobs = (magicEdenParentJob?.totalJobs || 0) * magicEdenWeight;
-      const magicEdenCompletedJobs = (magicEdenParentJob?.totalJobs || 0) < 1 ? (magicEdenParentJob?.totalJobs || 0) * magicEdenWeight : (magicEdenParentJob?.completedJobs || 0) * magicEdenWeight;
-
-      const totalJobs = openSeaTotalJobs + magicEdenTotalJobs + blurTotalJobs;
-      const completedJobs = openSeaCompletedJobs + magicEdenCompletedJobs + blurCompletedJobs;
-      const failedJobs = openSeaFailedJobs + magicEdenFailedJobs + blurFailedJobs;
-
-      const combinedCancellationPercentage = totalJobs > 0 ?
-        ((completedJobs + failedJobs) / totalJobs) * 100 : 0;
-
-      taskStatus[taskId].cancellationPercentage = Math.min(combinedCancellationPercentage, 100);
-
-      if (totalJobs < completedJobs + failedJobs || combinedCancellationPercentage > 99) {
-        const orders = await prisma.order.findMany({
-          where: {
-            taskId: taskId,
-          }
-        });
-
-        if (orders.length > 0) {
-          const wallet = await Wallet.findById(task.walletId);
-          const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
-          await cancelAllRelatedBids(task, private_key);
-          return
-        }
-        taskStatus[taskId].status = 'STOPPED'
-        delete taskStatus[taskId].nextLoopTime
-        taskStatus[taskId].waitingTime = 0
+    for (const marketplace of enabledAndSelectedMarketplaces) {
+      const marketplaceParentId = `${taskId}-${marketplace}`.toLowerCase();
+      const marketplaceParentJob = parentJobs.get(marketplaceParentId);
+      if (marketplaceParentJob) {
+        totalJobs += marketplaceParentJob.totalJobs;
+        completedJobs += marketplaceParentJob.completedJobs;
+        failedJobs += marketplaceParentJob.failedJobs;
       }
-    } else {
-      let marketplaceCancellationPercentage;
-      if (marketplace.toLowerCase() === 'magiceden') {
-        if (parentJob.totalJobs < 1) {
-          marketplaceCancellationPercentage = 100;
-        } else {
-          const weightedCompletedJobs = parentJob.completedJobs * 500;
-          const weightedTotalJobs = parentJob.totalJobs * 500;
-          const weightedFailedJobs = parentJob.failedJobs * 500
-          marketplaceCancellationPercentage = weightedTotalJobs > 0 ?
-            ((weightedCompletedJobs + weightedFailedJobs) / weightedTotalJobs) * 100 : 0;
+    }
+    const runningPercentage = ((completedJobs + failedJobs) / totalJobs) * 100
+    taskStatus[taskId].runningPercentage = Math.min(runningPercentage, 100) // 100 is the max value since it represents 100%
+
+
+    if (parentJob.completedJobs + parentJob.failedJobs === parentJob.totalJobs) {
+      if (!completedTasks[taskId]) {
+        completedTasks[taskId] = {
+          opensea: false,
+          magiceden: false,
+          blur: false
+        }
+      }
+      completedTasks[taskId][marketplace as 'opensea' | 'magiceden' | 'blur'] = true
+      console.log(GREEN + `Task ${taskId} completed for ${marketplace}` + RESET);
+      const availableMarketplaces = enabledAndSelectedMarketplaces.map(m => m.toLowerCase())
+
+      // Check if all available marketplaces have completed
+      if (availableMarketplaces && availableMarketplaces.length > 0) {
+        const allMarketsComplete = availableMarketplaces.every(m =>
+          completedTasks[taskId]?.[m as 'opensea' | 'magiceden' | 'blur']
+        );
+
+        if (allMarketsComplete && runningPercentage > 99) {
+          console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
+          const wallet = await Wallet.findById(task.walletId)
+          const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+          if (traitsToRemove[taskId]?.length > 0) {
+            await cancelRemovedTraitBids(traitsToRemove[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
+          }
+
+          if (removedTokens[taskId]?.opensea?.length > 0 || removedTokens[taskId]?.magiceden?.length > 0) {
+            await cancelRemovedTokenBids(removedTokens[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
+          }
+
+          taskStatus[taskId].status = 'COMPLETED';
+          delete traitsToRemove[taskId];
+          delete removedTokens[taskId];
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+          if (task && task.running) {
+            const loopInterval = getExpiry(task.loopInterval) + 1;
+            const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
+            const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
+
+            console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
+            taskStatus[taskId].status = 'SCHEDULED';
+            taskStatus[taskId].waitingTime = secondsUntilNextLoop;
+            taskStatus[taskId].nextLoopTime = nextLoopTime;
+
+            const countdownTimer = setInterval(() => {
+              const remainingSeconds = taskStatus[taskId].nextLoopTime ? Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000)) : 0
+              taskStatus[taskId].waitingTime = remainingSeconds;
+
+              if (remainingSeconds <= 0) {
+                clearInterval(countdownTimer);
+              }
+            }, 1000);
+
+            // Clear any existing timeout for this task
+            const existingTimeout = taskTimeouts.get(taskId);
+            if (existingTimeout) {
+              clearTimeout(existingTimeout);
+            }
+
+            const timeoutId = setTimeout(async () => {
+              // When we restart, update the status
+              const currentTask = activeTasks.get(taskId);
+              if (currentTask?.running) {
+                await startTask(currentTask, true);
+              } else if (currentTask) {
+                await stopTask(currentTask, false);
+              }
+            }, loopInterval * 1000);
+
+            taskTimeouts.set(taskId, timeoutId);
+          }
+          return;
+        }
+      }
+    }
+
+  });
+
+  queueEvents.on('failed', async ({ jobId }) => {
+    if (jobId.includes('CANCEL_OPENSEA_BID') || jobId.includes('CANCEL_MAGICEDEN_BID') || jobId.includes('CANCEL_BLUR_BID')) {
+      const taskId = jobId.split('-')[1];
+      if (!taskStatus[taskId]) {
+        taskStatus[taskId] = {
+          status: 'CANCELLING',
+          cancellationPercentage: 0,
+          runningPercentage: 0,
+          waitingTime: 0,
+          nextLoopTime: new Date(),
+          processingPercentage: 0
+        }
+      }
+      taskStatus[taskId].status = 'CANCELLING'
+
+      const task = activeTasks.get(taskId);
+      if (!task) return;
+
+      const marketplace = jobId.includes('CANCEL_OPENSEA_BID') ? 'OPENSEA' : jobId.includes('CANCEL_MAGICEDEN_BID') ? 'MAGICEDEN' : 'BLUR';
+      const parentJobId = `${taskId}-CANCEL_${marketplace}_BID`;
+      const parentJob = parentJobs.get(parentJobId);
+
+      if (!parentJob) return;
+
+      parentJob.failedJobs++;
+
+      // Calculate marketplace-specific cancellation percentage
+
+      // If task is not running, calculate combined cancellation percentage with weighting
+      if (!task?.running) {
+        // Get all parent jobs for this task (both OpenSea and MagicEden)
+        const openSeaParentJobId = `${taskId}-CANCEL_OPENSEA_BID`;
+        const magicEdenParentJobId = `${taskId}-CANCEL_MAGICEDEN_BID`;
+        const blurParentJobId = `${taskId}-CANCEL_BLUR_BID`;
+
+        const openSeaParentJob = parentJobs.get(openSeaParentJobId);
+        const magicEdenParentJob = parentJobs.get(magicEdenParentJobId);
+        const blurParentJob = parentJobs.get(blurParentJobId);
+
+        // Apply a weight of 1000 to MagicEden jobs
+        const magicEdenWeight = 500;
+
+        // Calculate weighted totals across both marketplaces
+        const openSeaTotalJobs = openSeaParentJob?.totalJobs || 0;
+        const openSeaCompletedJobs = openSeaParentJob?.completedJobs || 0;
+        const openSeaFailedJobs = openSeaParentJob?.failedJobs || 0;
+
+        const blurTotalJobs = blurParentJob?.totalJobs || 0;
+        const blurCompletedJobs = blurParentJob?.completedJobs || 0;
+        const blurFailedJobs = blurParentJob?.failedJobs || 0;
+
+        const magicEdenFailedJobs = (magicEdenParentJob?.failedJobs || 0) * magicEdenWeight;
+        const magicEdenTotalJobs = (magicEdenParentJob?.totalJobs || 0) * magicEdenWeight;
+        const magicEdenCompletedJobs = (magicEdenParentJob?.totalJobs || 0) < 1 ? (magicEdenParentJob?.totalJobs || 0) * magicEdenWeight : (magicEdenParentJob?.completedJobs || 0) * magicEdenWeight;
+
+        const totalJobs = openSeaTotalJobs + magicEdenTotalJobs + blurTotalJobs;
+        const completedJobs = openSeaCompletedJobs + magicEdenCompletedJobs + blurCompletedJobs;
+        const failedJobs = openSeaFailedJobs + magicEdenFailedJobs + blurFailedJobs;
+
+        const combinedCancellationPercentage = totalJobs > 0 ?
+          ((completedJobs + failedJobs) / totalJobs) * 100 : 0;
+
+        taskStatus[taskId].cancellationPercentage = Math.min(combinedCancellationPercentage, 100);
+
+        if (totalJobs < completedJobs + failedJobs || combinedCancellationPercentage > 99) {
+          const orders = await prisma.order.findMany({
+            where: {
+              taskId: taskId,
+            }
+          });
+
+          if (orders.length > 0) {
+            const wallet = await Wallet.findById(task.walletId);
+            const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+            await cancelAllRelatedBids(task, private_key);
+            return
+          }
+          taskStatus[taskId].status = 'STOPPED'
+          delete taskStatus[taskId].nextLoopTime
+          taskStatus[taskId].waitingTime = 0
         }
       } else {
-        marketplaceCancellationPercentage = parentJob.totalJobs > 0 ?
-          ((parentJob.completedJobs + parentJob.failedJobs) / parentJob.totalJobs) * 100 : 0;
-      }
-
-      // If task is running, just update with the marketplace-specific percentage
-      taskStatus[taskId].cancellationPercentage = marketplaceCancellationPercentage;
-      if (parentJob.totalJobs < parentJob.completedJobs + parentJob.failedJobs || marketplaceCancellationPercentage > 99) {
-        const orders = await prisma.order.findMany({
-          where: {
-            taskId: taskId,
-            marketplace: marketplace.toLowerCase()
+        let marketplaceCancellationPercentage;
+        if (marketplace.toLowerCase() === 'magiceden') {
+          if (parentJob.totalJobs < 1) {
+            marketplaceCancellationPercentage = 100;
+          } else {
+            const weightedCompletedJobs = parentJob.completedJobs * 500;
+            const weightedTotalJobs = parentJob.totalJobs * 500;
+            const weightedFailedJobs = parentJob.failedJobs * 500
+            marketplaceCancellationPercentage = weightedTotalJobs > 0 ?
+              ((weightedCompletedJobs + weightedFailedJobs) / weightedTotalJobs) * 100 : 0;
           }
-        });
-
-        if (orders.length > 0) {
-          const wallet = await Wallet.findById(task.walletId);
-          const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
-          await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
-          return
-        }
-        taskStatus[taskId].cancellationPercentage = 100
-        if (taskStatus[taskId].nextLoopTime && taskStatus[taskId].waitingTime > 0) {
-          taskStatus[taskId].status = 'SCHEDULED'
-        }
-      }
-    }
-  }
-
-  if (jobId.split('-').length < 3) return;
-
-  const taskId = jobId.split('-')[0];
-  const task = activeTasks.get(taskId);
-
-  if (!task || !task.running) return;
-
-  const marketplace = jobId.split('-')[1].toLowerCase();
-  const parentId = `${taskId}-${marketplace}`.toLowerCase();
-
-  const { currencySymbol } = await calculateBidPrice(task, 0, "magiceden")
-
-
-  const parentJob = parentJobs.get(parentId);
-  if (!parentJob) return;
-
-  taskStatus[taskId].status = 'RUNNING'
-  parentJob.completedJobs++;
-
-  // Calculate total jobs across all selected and enabled marketplaces for this task
-  let totalJobs = 0;
-  let completedJobs = 0;
-  let failedJobs = 0;
-  const selectedMarketplaces = task.selectedMarketplaces.map(m => m.toLowerCase());
-  const enabledAndSelectedMarketplaces = selectedMarketplaces.filter(m =>
-    enabledMarketplaces.map(em => em.toLowerCase()).includes(m)
-  );
-
-  for (const marketplace of enabledAndSelectedMarketplaces) {
-    const marketplaceParentId = `${taskId}-${marketplace}`.toLowerCase();
-    const marketplaceParentJob = parentJobs.get(marketplaceParentId);
-    if (marketplaceParentJob) {
-      totalJobs += marketplaceParentJob.totalJobs;
-      completedJobs += marketplaceParentJob.completedJobs;
-      failedJobs += marketplaceParentJob.failedJobs;
-    }
-  }
-  const runningPercentage = ((completedJobs + failedJobs) / totalJobs) * 100
-  taskStatus[taskId].runningPercentage = Math.min(runningPercentage, 100) // 100 is the max value since it represents 100%
-
-
-  if (parentJob.completedJobs + parentJob.failedJobs === parentJob.totalJobs) {
-    if (!completedTasks[taskId]) {
-      completedTasks[taskId] = {
-        opensea: false,
-        magiceden: false,
-        blur: false
-      }
-    }
-    completedTasks[taskId][marketplace as 'opensea' | 'magiceden' | 'blur'] = true
-    console.log(GREEN + `Task ${taskId} completed for ${marketplace}` + RESET);
-    const availableMarketplaces = enabledAndSelectedMarketplaces.map(m => m.toLowerCase())
-
-    // Check if all available marketplaces have completed
-    if (availableMarketplaces && availableMarketplaces.length > 0) {
-      const allMarketsComplete = availableMarketplaces.every(m =>
-        completedTasks[taskId]?.[m as 'opensea' | 'magiceden' | 'blur']
-      );
-
-      if (allMarketsComplete && runningPercentage > 99) {
-        console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
-        const wallet = await Wallet.findById(task.walletId)
-        const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
-        if (traitsToRemove[taskId]?.length > 0) {
-          await cancelRemovedTraitBids(traitsToRemove[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
+        } else {
+          marketplaceCancellationPercentage = parentJob.totalJobs > 0 ?
+            ((parentJob.completedJobs + parentJob.failedJobs) / parentJob.totalJobs) * 100 : 0;
         }
 
-        if (removedTokens[taskId]?.opensea?.length > 0 || removedTokens[taskId]?.magiceden?.length > 0) {
-          await cancelRemovedTokenBids(removedTokens[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
-        }
-
-        taskStatus[taskId].status = 'COMPLETED';
-        delete traitsToRemove[taskId];
-        delete removedTokens[taskId];
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        if (task && task.running) {
-          const loopInterval = getExpiry(task.loopInterval) + 1;
-          const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
-          const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
-
-          console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
-          taskStatus[taskId].status = 'SCHEDULED';
-          taskStatus[taskId].waitingTime = secondsUntilNextLoop;
-          taskStatus[taskId].nextLoopTime = nextLoopTime;
-
-          const countdownTimer = setInterval(() => {
-            const remainingSeconds = taskStatus[taskId].nextLoopTime ? Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000)) : 0
-            taskStatus[taskId].waitingTime = remainingSeconds;
-
-            if (remainingSeconds <= 0) {
-              clearInterval(countdownTimer);
+        // If task is running, just update with the marketplace-specific percentage
+        taskStatus[taskId].cancellationPercentage = marketplaceCancellationPercentage;
+        if (parentJob.totalJobs < parentJob.completedJobs + parentJob.failedJobs || marketplaceCancellationPercentage > 99) {
+          const orders = await prisma.order.findMany({
+            where: {
+              taskId: taskId,
+              marketplace: marketplace.toLowerCase()
             }
-          }, 1000);
+          });
 
-          // Clear any existing timeout for this task
-          const existingTimeout = taskTimeouts.get(taskId);
-          if (existingTimeout) {
-            clearTimeout(existingTimeout);
+          if (orders.length > 0) {
+            const wallet = await Wallet.findById(task.walletId);
+            const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+            await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
+            return
           }
-
-          const timeoutId = setTimeout(async () => {
-            // When we restart, update the status
-            const currentTask = activeTasks.get(taskId);
-            if (currentTask?.running) {
-              await startTask(currentTask, true);
-            } else if (currentTask) {
-              await stopTask(currentTask, false);
-            }
-          }, loopInterval * 1000);
-
-          taskTimeouts.set(taskId, timeoutId);
+          taskStatus[taskId].cancellationPercentage = 100
+          if (taskStatus[taskId].nextLoopTime && taskStatus[taskId].waitingTime > 0) {
+            taskStatus[taskId].status = 'SCHEDULED'
+          }
         }
-        return;
       }
     }
-  }
 
-});
+    if (jobId.split('-').length < 3) return;
 
-queueEvents.on('failed', async ({ jobId }) => {
-  if (jobId.includes('CANCEL_OPENSEA_BID') || jobId.includes('CANCEL_MAGICEDEN_BID') || jobId.includes('CANCEL_BLUR_BID')) {
-    const taskId = jobId.split('-')[1];
-    if (!taskStatus[taskId]) {
-      taskStatus[taskId] = {
-        status: 'CANCELLING',
-        cancellationPercentage: 0,
-        runningPercentage: 0,
-        waitingTime: 0,
-        nextLoopTime: new Date(),
-        processingPercentage: 0
-      }
-    }
-    taskStatus[taskId].status = 'CANCELLING'
-
+    const taskId = jobId.split('-')[0];
     const task = activeTasks.get(taskId);
-    if (!task) return;
 
-    const marketplace = jobId.includes('CANCEL_OPENSEA_BID') ? 'OPENSEA' : jobId.includes('CANCEL_MAGICEDEN_BID') ? 'MAGICEDEN' : 'BLUR';
-    const parentJobId = `${taskId}-CANCEL_${marketplace}_BID`;
-    const parentJob = parentJobs.get(parentJobId);
+    if (!task || !task.running) return;
 
+    const marketplace = jobId.split('-')[1].toLowerCase();
+    const parentId = `${taskId}-${marketplace}`.toLowerCase();
+
+    const { currencySymbol } = await calculateBidPrice(task, 0, "magiceden")
+
+    const parentJob = parentJobs.get(parentId);
     if (!parentJob) return;
 
+    taskStatus[taskId].status = 'RUNNING'
     parentJob.failedJobs++;
 
-    // Calculate marketplace-specific cancellation percentage
+    // Calculate total jobs across all selected and enabled marketplaces for this task
+    let totalJobs = 0;
+    let completedJobs = 0;
+    let failedJobs = 0;
+    const selectedMarketplaces = task.selectedMarketplaces.map(m => m.toLowerCase());
+    const enabledAndSelectedMarketplaces = selectedMarketplaces.filter(m =>
+      enabledMarketplaces.map(em => em.toLowerCase()).includes(m)
+    );
 
-    // If task is not running, calculate combined cancellation percentage with weighting
-    if (!task?.running) {
-      // Get all parent jobs for this task (both OpenSea and MagicEden)
-      const openSeaParentJobId = `${taskId}-CANCEL_OPENSEA_BID`;
-      const magicEdenParentJobId = `${taskId}-CANCEL_MAGICEDEN_BID`;
-      const blurParentJobId = `${taskId}-CANCEL_BLUR_BID`;
+    for (const marketplace of enabledAndSelectedMarketplaces) {
+      const marketplaceParentId = `${taskId}-${marketplace}`.toLowerCase();
+      const marketplaceParentJob = parentJobs.get(marketplaceParentId);
+      if (marketplaceParentJob) {
+        totalJobs += marketplaceParentJob.totalJobs;
+        completedJobs += marketplaceParentJob.completedJobs;
+        failedJobs += marketplaceParentJob.failedJobs;
+      }
+    }
+    const runningPercentage = ((completedJobs + failedJobs) / totalJobs) * 100
+    taskStatus[taskId].runningPercentage = Math.min(runningPercentage, 100) // 100 is the max value since it represents 100%
 
-      const openSeaParentJob = parentJobs.get(openSeaParentJobId);
-      const magicEdenParentJob = parentJobs.get(magicEdenParentJobId);
-      const blurParentJob = parentJobs.get(blurParentJobId);
+    if (parentJob.completedJobs + parentJob.failedJobs === parentJob.totalJobs) {
+      if (!completedTasks[taskId]) {
+        completedTasks[taskId] = {
+          opensea: false,
+          magiceden: false,
+          blur: false
+        }
+      }
+      completedTasks[taskId][marketplace as 'opensea' | 'magiceden' | 'blur'] = true
+      console.log(GREEN + `Task ${taskId} completed for ${marketplace}` + RESET);
+      const availableMarketplaces = enabledAndSelectedMarketplaces.map(m => m.toLowerCase())
 
-      // Apply a weight of 1000 to MagicEden jobs
-      const magicEdenWeight = 500;
+      // Check if all available marketplaces have completed
+      if (availableMarketplaces && availableMarketplaces.length > 0) {
+        const allMarketsComplete = availableMarketplaces.every(m =>
+          completedTasks[taskId]?.[m as 'opensea' | 'magiceden' | 'blur']
+        );
 
-      // Calculate weighted totals across both marketplaces
-      const openSeaTotalJobs = openSeaParentJob?.totalJobs || 0;
-      const openSeaCompletedJobs = openSeaParentJob?.completedJobs || 0;
-      const openSeaFailedJobs = openSeaParentJob?.failedJobs || 0;
+        if (allMarketsComplete && runningPercentage > 99) {
+          console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
 
-      const blurTotalJobs = blurParentJob?.totalJobs || 0;
-      const blurCompletedJobs = blurParentJob?.completedJobs || 0;
-      const blurFailedJobs = blurParentJob?.failedJobs || 0;
-
-      const magicEdenFailedJobs = (magicEdenParentJob?.failedJobs || 0) * magicEdenWeight;
-      const magicEdenTotalJobs = (magicEdenParentJob?.totalJobs || 0) * magicEdenWeight;
-      const magicEdenCompletedJobs = (magicEdenParentJob?.totalJobs || 0) < 1 ? (magicEdenParentJob?.totalJobs || 0) * magicEdenWeight : (magicEdenParentJob?.completedJobs || 0) * magicEdenWeight;
-
-      const totalJobs = openSeaTotalJobs + magicEdenTotalJobs + blurTotalJobs;
-      const completedJobs = openSeaCompletedJobs + magicEdenCompletedJobs + blurCompletedJobs;
-      const failedJobs = openSeaFailedJobs + magicEdenFailedJobs + blurFailedJobs;
-
-      const combinedCancellationPercentage = totalJobs > 0 ?
-        ((completedJobs + failedJobs) / totalJobs) * 100 : 0;
-
-      taskStatus[taskId].cancellationPercentage = Math.min(combinedCancellationPercentage, 100);
-
-      if (totalJobs < completedJobs + failedJobs || combinedCancellationPercentage > 99) {
-        const orders = await prisma.order.findMany({
-          where: {
-            taskId: taskId,
+          const wallet = await Wallet.findById(task.walletId)
+          const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+          if (traitsToRemove[taskId]?.length > 0) {
+            await cancelRemovedTraitBids(traitsToRemove[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
           }
-        });
 
-        if (orders.length > 0) {
-          const wallet = await Wallet.findById(task.walletId);
-          const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
-          await cancelAllRelatedBids(task, private_key);
-          return
-        }
-        taskStatus[taskId].status = 'STOPPED'
-        delete taskStatus[taskId].nextLoopTime
-        taskStatus[taskId].waitingTime = 0
-      }
-    } else {
-      let marketplaceCancellationPercentage;
-      if (marketplace.toLowerCase() === 'magiceden') {
-        if (parentJob.totalJobs < 1) {
-          marketplaceCancellationPercentage = 100;
-        } else {
-          const weightedCompletedJobs = parentJob.completedJobs * 500;
-          const weightedTotalJobs = parentJob.totalJobs * 500;
-          const weightedFailedJobs = parentJob.failedJobs * 500
-          marketplaceCancellationPercentage = weightedTotalJobs > 0 ?
-            ((weightedCompletedJobs + weightedFailedJobs) / weightedTotalJobs) * 100 : 0;
-        }
-      } else {
-        marketplaceCancellationPercentage = parentJob.totalJobs > 0 ?
-          ((parentJob.completedJobs + parentJob.failedJobs) / parentJob.totalJobs) * 100 : 0;
-      }
-
-      // If task is running, just update with the marketplace-specific percentage
-      taskStatus[taskId].cancellationPercentage = marketplaceCancellationPercentage;
-      if (parentJob.totalJobs < parentJob.completedJobs + parentJob.failedJobs || marketplaceCancellationPercentage > 99) {
-        const orders = await prisma.order.findMany({
-          where: {
-            taskId: taskId,
-            marketplace: marketplace.toLowerCase()
+          if (removedTokens[taskId]?.opensea?.length > 0 || removedTokens[taskId]?.magiceden?.length > 0) {
+            await cancelRemovedTokenBids(removedTokens[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
           }
-        });
 
-        if (orders.length > 0) {
-          const wallet = await Wallet.findById(task.walletId);
-          const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
-          await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
-          return
-        }
-        taskStatus[taskId].cancellationPercentage = 100
-        if (taskStatus[taskId].nextLoopTime && taskStatus[taskId].waitingTime > 0) {
-          taskStatus[taskId].status = 'SCHEDULED'
-        }
-      }
-    }
-  }
+          taskStatus[taskId].status = 'COMPLETED';
+          delete traitsToRemove[taskId];
+          delete removedTokens[taskId];
+          await new Promise(resolve => setTimeout(resolve, 1000));
 
-  if (jobId.split('-').length < 3) return;
+          if (task && task.running) {
+            const loopInterval = getExpiry(task.loopInterval) + 1;
+            const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
+            const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
-  const taskId = jobId.split('-')[0];
-  const task = activeTasks.get(taskId);
+            console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
+            taskStatus[taskId].status = 'SCHEDULED';
+            taskStatus[taskId].waitingTime = secondsUntilNextLoop;
+            taskStatus[taskId].nextLoopTime = nextLoopTime;
 
-  if (!task || !task.running) return;
+            const countdownTimer = setInterval(() => {
+              const remainingSeconds = taskStatus[taskId].nextLoopTime ? Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000)) : 0
+              taskStatus[taskId].waitingTime = remainingSeconds;
 
-  const marketplace = jobId.split('-')[1].toLowerCase();
-  const parentId = `${taskId}-${marketplace}`.toLowerCase();
+              if (remainingSeconds <= 0) {
+                clearInterval(countdownTimer);
+              }
+            }, 1000);
 
-  const { currencySymbol } = await calculateBidPrice(task, 0, "magiceden")
-
-  const parentJob = parentJobs.get(parentId);
-  if (!parentJob) return;
-
-  taskStatus[taskId].status = 'RUNNING'
-  parentJob.failedJobs++;
-
-  // Calculate total jobs across all selected and enabled marketplaces for this task
-  let totalJobs = 0;
-  let completedJobs = 0;
-  let failedJobs = 0;
-  const selectedMarketplaces = task.selectedMarketplaces.map(m => m.toLowerCase());
-  const enabledAndSelectedMarketplaces = selectedMarketplaces.filter(m =>
-    enabledMarketplaces.map(em => em.toLowerCase()).includes(m)
-  );
-
-  for (const marketplace of enabledAndSelectedMarketplaces) {
-    const marketplaceParentId = `${taskId}-${marketplace}`.toLowerCase();
-    const marketplaceParentJob = parentJobs.get(marketplaceParentId);
-    if (marketplaceParentJob) {
-      totalJobs += marketplaceParentJob.totalJobs;
-      completedJobs += marketplaceParentJob.completedJobs;
-      failedJobs += marketplaceParentJob.failedJobs;
-    }
-  }
-  const runningPercentage = ((completedJobs + failedJobs) / totalJobs) * 100
-  taskStatus[taskId].runningPercentage = Math.min(runningPercentage, 100) // 100 is the max value since it represents 100%
-
-  if (parentJob.completedJobs + parentJob.failedJobs === parentJob.totalJobs) {
-    if (!completedTasks[taskId]) {
-      completedTasks[taskId] = {
-        opensea: false,
-        magiceden: false,
-        blur: false
-      }
-    }
-    completedTasks[taskId][marketplace as 'opensea' | 'magiceden' | 'blur'] = true
-    console.log(GREEN + `Task ${taskId} completed for ${marketplace}` + RESET);
-    const availableMarketplaces = enabledAndSelectedMarketplaces.map(m => m.toLowerCase())
-
-    // Check if all available marketplaces have completed
-    if (availableMarketplaces && availableMarketplaces.length > 0) {
-      const allMarketsComplete = availableMarketplaces.every(m =>
-        completedTasks[taskId]?.[m as 'opensea' | 'magiceden' | 'blur']
-      );
-
-      if (allMarketsComplete && runningPercentage > 99) {
-        console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
-
-        const wallet = await Wallet.findById(task.walletId)
-        const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
-        if (traitsToRemove[taskId]?.length > 0) {
-          await cancelRemovedTraitBids(traitsToRemove[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
-        }
-
-        if (removedTokens[taskId]?.opensea?.length > 0 || removedTokens[taskId]?.magiceden?.length > 0) {
-          await cancelRemovedTokenBids(removedTokens[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
-        }
-
-        taskStatus[taskId].status = 'COMPLETED';
-        delete traitsToRemove[taskId];
-        delete removedTokens[taskId];
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        if (task && task.running) {
-          const loopInterval = getExpiry(task.loopInterval) + 1;
-          const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
-          const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
-
-          console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
-          taskStatus[taskId].status = 'SCHEDULED';
-          taskStatus[taskId].waitingTime = secondsUntilNextLoop;
-          taskStatus[taskId].nextLoopTime = nextLoopTime;
-
-          const countdownTimer = setInterval(() => {
-            const remainingSeconds = taskStatus[taskId].nextLoopTime ? Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000)) : 0
-            taskStatus[taskId].waitingTime = remainingSeconds;
-
-            if (remainingSeconds <= 0) {
-              clearInterval(countdownTimer);
+            // Clear any existing timeout for this task
+            const existingTimeout = taskTimeouts.get(taskId);
+            if (existingTimeout) {
+              clearTimeout(existingTimeout);
             }
-          }, 1000);
 
-          // Clear any existing timeout for this task
-          const existingTimeout = taskTimeouts.get(taskId);
-          if (existingTimeout) {
-            clearTimeout(existingTimeout);
+            const timeoutId = setTimeout(async () => {
+              // When we restart, update the status
+              const currentTask = activeTasks.get(taskId);
+              if (currentTask?.running) {
+                await startTask(currentTask, true);
+              } else if (currentTask) {
+                await stopTask(currentTask, false);
+              }
+            }, loopInterval * 1000);
+
+            taskTimeouts.set(taskId, timeoutId);
           }
-
-          const timeoutId = setTimeout(async () => {
-            // When we restart, update the status
-            const currentTask = activeTasks.get(taskId);
-            if (currentTask?.running) {
-              await startTask(currentTask, true);
-            } else if (currentTask) {
-              await stopTask(currentTask, false);
-            }
-          }, loopInterval * 1000);
-
-          taskTimeouts.set(taskId, timeoutId);
+          return;
         }
-        return;
       }
     }
-  }
 
-});
+  });
+}
 
 bidRates = getAllBidRates();
 const clientData = {
@@ -1271,6 +1384,12 @@ wss.on('connection', async (ws) => {
       }
     } catch (error) {
       console.error(RED + 'Error handling WebSocket message:' + RESET, error);
+      logger.logApiError("WebSocket message handler failed", {
+        error: error as Error,
+        endpoint: 'unknown',
+        messageType: typeof event?.data,
+        rawData: event?.data?.toString()?.substring(0, 100) // First 100 chars for debugging
+      });
     }
   };
 
@@ -1359,7 +1478,9 @@ async function updateConfig(data: any) {
 
     console.log(GREEN + 'Server components restarted successfully' + RESET);
 
-    workers.concurrency = RATE_LIMIT * 1.5
+    if (workers) {
+      workers.concurrency = RATE_LIMIT * 1.5
+    }
 
     // Return updated config values
     return {
@@ -1368,6 +1489,10 @@ async function updateConfig(data: any) {
     };
 
   } catch (error) {
+    await logger.logGeneralError('Error updating configuration', {
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
     console.error(RED + 'Error updating configuration:' + RESET, error);
     throw error;
   }
@@ -1704,7 +1829,7 @@ async function updateTaskData(task: ITask) {
     if (existingTaskIndex === -1 || !existingTask) return
 
     const wallet = await Wallet.findById(task.walletId)
-    const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+    const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
     currentTasks.splice(existingTaskIndex, 1, task);
     activeTasks.set(task._id, task);
 
@@ -2496,7 +2621,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
 async function stopTask(task: ITask, start: boolean, marketplace?: string) {
   const taskId = task._id.toString();
   const wallet = await Wallet.findById(task.walletId)
-  const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+  const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
 
   try {
     if (!marketplace || task.selectedMarketplaces.length === 0) {
@@ -3085,6 +3210,139 @@ async function updateMultipleTasksStatus(data: { tasks: ITask[], running: boolea
 
 let pingIntervalId: NodeJS.Timeout | null = null;
 
+// WebSocket Connection Monitoring Utility Functions
+function updateConnectionStats(duration: number, reason: string) {
+  // Add to history
+  if (connectionMetrics.currentConnectionId) {
+    connectionHistory.push({
+      id: connectionMetrics.currentConnectionId,
+      startTime: connectionMetrics.connectionStartTime!,
+      endTime: connectionMetrics.connectionEndTime!,
+      duration,
+      reason
+    });
+
+    // Keep only last 100 connections
+    if (connectionHistory.length > 100) {
+      connectionHistory.shift();
+    }
+  }
+
+  // Update running averages
+  const totalDuration = connectionHistory.reduce((sum, conn) => sum + conn.duration, 0);
+  connectionMetrics.averageConnectionDuration = connectionHistory.length > 0 ? totalDuration / connectionHistory.length : 0;
+
+  // Update min/max
+  if (duration > connectionMetrics.longestConnection) {
+    connectionMetrics.longestConnection = duration;
+  }
+  if (duration < connectionMetrics.shortestConnection) {
+    connectionMetrics.shortestConnection = duration;
+  }
+}
+
+function formatDuration(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+
+  if (hours > 0) {
+    return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+  } else if (minutes > 0) {
+    return `${minutes}m ${seconds % 60}s`;
+  } else {
+    return `${seconds}s`;
+  }
+}
+
+function getCloseReason(code: number): string {
+  const reasons: Record<number, string> = {
+    1000: 'normal_close',
+    1001: 'going_away',
+    1002: 'protocol_error',
+    1003: 'unsupported_data',
+    1006: 'abnormal_closure',
+    1011: 'internal_error',
+    1012: 'service_restart'
+  };
+  return reasons[code] || 'unknown';
+}
+
+function logConnectionStats() {
+  console.log(CYAN + "=== WebSocket Connection Statistics ===" + RESET);
+  console.log(`Total Connections: ${connectionMetrics.totalConnections}`);
+  console.log(`Total Disconnections: ${connectionMetrics.totalDisconnections}`);
+  console.log(`Average Connection Duration: ${formatDuration(connectionMetrics.averageConnectionDuration)}`);
+  console.log(`Longest Connection: ${formatDuration(connectionMetrics.longestConnection)}`);
+  console.log(`Shortest Connection: ${connectionMetrics.shortestConnection === Infinity ? '0s' : formatDuration(connectionMetrics.shortestConnection)}`);
+
+  if (connectionMetrics.connectionStartTime) {
+    const currentDuration = Date.now() - connectionMetrics.connectionStartTime;
+    console.log(`Current Connection Duration: ${formatDuration(currentDuration)}`);
+  }
+
+  // Recent disconnection reasons
+  const recentDisconnections = connectionHistory.slice(-10);
+  const reasonCounts = recentDisconnections.reduce((acc, conn) => {
+    acc[conn.reason] = (acc[conn.reason] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  console.log(`Recent Disconnection Reasons:`, reasonCounts);
+  console.log(CYAN + "=========================================" + RESET);
+}
+
+async function saveConnectionMetrics() {
+  try {
+    if (redis) {
+      await redis.set('websocket:metrics', JSON.stringify(connectionMetrics));
+      await redis.set('websocket:history', JSON.stringify(connectionHistory));
+    }
+  } catch (error) {
+    console.error('Error saving connection metrics:', error);
+  }
+}
+
+async function loadConnectionMetrics() {
+  try {
+    const metricsData = redis ? await redis.get('websocket:metrics') : null;
+    const historyData = redis ? await redis.get('websocket:history') : null;
+
+    if (metricsData) {
+      const loadedMetrics = JSON.parse(metricsData);
+      // Don't restore connectionStartTime as we want fresh connections
+      connectionMetrics.totalConnections = loadedMetrics.totalConnections || 0;
+      connectionMetrics.totalDisconnections = loadedMetrics.totalDisconnections || 0;
+      connectionMetrics.averageConnectionDuration = loadedMetrics.averageConnectionDuration || 0;
+      connectionMetrics.longestConnection = loadedMetrics.longestConnection || 0;
+      connectionMetrics.shortestConnection = loadedMetrics.shortestConnection === Infinity ? Infinity : loadedMetrics.shortestConnection || Infinity;
+    }
+    if (historyData) {
+      connectionHistory.push(...JSON.parse(historyData));
+    }
+  } catch (error) {
+    console.error('Error loading connection metrics:', error);
+  }
+}
+
+function startConnectionMonitoring() {
+  setInterval(() => {
+    if (connectionMetrics.connectionStartTime && ws?.readyState === WebSocket.OPEN) {
+      const currentDuration = Date.now() - connectionMetrics.connectionStartTime;
+
+      // Log every 5 minutes
+      if (currentDuration % (5 * 60 * 1000) < 10000) { // Within 10 seconds of 5-minute mark
+        console.log(BLUE + `🔗 WebSocket uptime: ${formatDuration(currentDuration)}` + RESET);
+      }
+
+      // Log connection stats every hour
+      if (currentDuration % (60 * 60 * 1000) < 10000) { // Within 10 seconds of hour mark
+        logConnectionStats();
+        saveConnectionMetrics(); // Save metrics every hour
+      }
+    }
+  }, 10000); // Check every 10 seconds
+}
 
 
 async function connectWebSocket(): Promise<void> {
@@ -3099,6 +3357,15 @@ async function connectWebSocket(): Promise<void> {
 
   ws.addEventListener("open", async function open() {
     retryCount = 0;
+
+    // Initialize connection metrics
+    const connectionId = `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    connectionMetrics.connectionStartTime = Date.now();
+    connectionMetrics.currentConnectionId = connectionId;
+    connectionMetrics.totalConnections++;
+
+    console.log(GOLD + `CONNECTED TO MARKETPLACE EVENTS WEBSOCKET (ID: ${connectionId}) at ${new Date().toISOString()}` + RESET);
+
     // Send custom ping messages at regular intervals
     if (pingIntervalId !== null) {
       clearTimeout(pingIntervalId);
@@ -3113,8 +3380,6 @@ async function connectWebSocket(): Promise<void> {
         console.log('-----PING------');
       }
     }, 30000);
-
-    console.log(GOLD + "CONNECTED TO MARKETPLACE EVENTS WEBSOCKET" + RESET);
 
     // Clear existing timeouts/intervals
     if (reconnectTimeoutId !== null) {
@@ -3166,18 +3431,37 @@ async function connectWebSocket(): Promise<void> {
     });
   });
 
-  ws.addEventListener("close", function close() {
+  ws.addEventListener("close", function close(event) {
+    // Calculate connection duration
+    if (connectionMetrics.connectionStartTime) {
+      connectionMetrics.connectionEndTime = Date.now();
+      connectionMetrics.connectionDuration = connectionMetrics.connectionEndTime - connectionMetrics.connectionStartTime;
+
+      // Update statistics
+      connectionMetrics.totalDisconnections++;
+      updateConnectionStats(connectionMetrics.connectionDuration, getCloseReason(event.code));
+
+      console.log(YELLOW + `WebSocket disconnected after ${formatDuration(connectionMetrics.connectionDuration)} (Code: ${event.code}) - cleared subscription cache` + RESET);
+    } else {
+      console.log(YELLOW + "WebSocket closed - cleared subscription cache" + RESET);
+    }
+
     if (heartbeatIntervalId !== null) {
       clearInterval(heartbeatIntervalId);
       heartbeatIntervalId = null;
     }
     // Clear subscription cache on disconnect
     activeSubscriptions.clear();
-    console.log(YELLOW + "WebSocket closed - cleared subscription cache" + RESET);
     attemptReconnect();
   });
 
   ws.addEventListener("error", function error(err) {
+    logger.logWebSocketError("WebSocket connection error", {
+      error: new Error(err.message || 'WebSocket error'),
+      connectionId: connectionMetrics.currentConnectionId || 'unknown',
+      retryCount,
+      connectionDuration: connectionMetrics.connectionStartTime ? Date.now() - connectionMetrics.connectionStartTime : 0
+    });
     attemptReconnect();
   });
 }
@@ -3189,21 +3473,35 @@ function attemptReconnect(): void {
     }
     let delay: number = Math.pow(2, retryCount) * 1000;
     console.log(`Attempting to reconnect in ${delay / 1000} seconds...`);
+
+    logger.logWarning(ErrorCategory.WEBSOCKET, "WebSocket reconnection attempt", {
+      retryCount: retryCount + 1,
+      maxRetries: MAX_RETRIES,
+      delaySeconds: delay / 1000,
+      connectionId: connectionMetrics.currentConnectionId || 'unknown'
+    });
+
     reconnectTimeoutId = setTimeout(connectWebSocket, delay);
     retryCount++;
+  } else {
+    logger.logWebSocketError("WebSocket max reconnection attempts exceeded", {
+      retryCount,
+      maxRetries: MAX_RETRIES,
+      connectionId: connectionMetrics.currentConnectionId || 'unknown'
+    });
   }
 }
 
 
 async function handleCounterBid(message: any) {
   try {
-    // if (message && message?.event && message.event === "item_transferred") {
-    //   console.log(GOLD + JSON.stringify(message) + RESET);
-    // }
+    if (message && message?.event && message.event === "item_transferred") {
+      console.log(GOLD + JSON.stringify(message) + RESET);
+    }
 
-    // if (message && message?.event && message.event === "item_sold") {
-    //   console.log(GOLD + JSON.stringify(message) + RESET);
-    // }
+    if (message && message?.event && message.event === "item_sold") {
+      console.log(GOLD + JSON.stringify(message) + RESET);
+    }
 
     const { contractAddress, slug } = getMarketplaceDetails(message);
     if (!contractAddress && !slug) return
@@ -3310,7 +3608,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     const domain: string = data?.data?.source?.domain
     const wallets = await Wallet.find({})
     const walletAddresses = wallets.map((wallet) => wallet.address.toLowerCase())
-    const WALLET_PRIVATE_KEY = decryptPrivateKey(wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.toLowerCase())?.encryptedPrivateKey as string) as string;
+    const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.toLowerCase())?.encryptedPrivateKey as string) as string;
     const maker = data?.data?.maker?.toLowerCase()
 
     if (walletAddresses.includes(maker)) return
@@ -3794,7 +4092,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
     const wallets = await Wallet.find({})
     const walletAddresses = wallets.map((wallet) => wallet.address.toLowerCase())
-    const WALLET_PRIVATE_KEY = decryptPrivateKey(wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.toLowerCase())?.encryptedPrivateKey as string);
+    const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.toLowerCase())?.encryptedPrivateKey as string);
     const orderHash = data.payload.payload.order_hash
 
     if (!bestOffers[task._id]) {
@@ -4314,7 +4612,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
     const expiry = getExpiry(currentTask?.bidDuration)
     if (!currentTask?.outbidOptions?.counterbid) return
     const wallets = await Wallet.findById(task.walletId)
-    const WALLET_PRIVATE_KEY = decryptPrivateKey(wallets?.encryptedPrivateKey as string);
+    const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallets?.encryptedPrivateKey as string);
     const selectedTraits = transformNewTask(currentTask?.selectedTraits?.blur)
     const traitBid = currentTask?.bidType === "collection" && selectedTraits && Object.keys(selectedTraits)?.length > 0
     const blurOutbidMargin = currentTask?.outbidOptions?.blurOutbidMargin || 0.01
@@ -4493,7 +4791,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         console.log(RED + `Wallet not found for task ${task._id}` + RESET);
         return
       }
-      const WALLET_PRIVATE_KEY = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+      const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
       const orders = await prisma.order.findMany({
         where: {
@@ -4762,7 +5060,7 @@ async function processOpenseaScheduledBid(task: ITask) {
     taskStatus[currentTask._id].status = 'PROCESSING'
     const wallets = await Wallet.findById(currentTask.walletId)
     taskStatus[currentTask._id].processingPercentage = (1 / 4) * 100
-    const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+    const WALLET_PRIVATE_KEY: string = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
     const collectionDetails = await getCollectionDetails(currentTask.contract.slug, currentTask.contract.contractAddress);
     taskStatus[currentTask._id].processingPercentage = (2 / 4) * 100
@@ -5048,7 +5346,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       .includes("opensea")) return;
 
     const wallets = await Wallet.findById(task.walletId)
-    const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+    const privateKey: string = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
     const floor_price = await getOpenseaFloor(currentTask.contract.slug);
     if (!floor_price) return
@@ -5295,7 +5593,7 @@ async function processBlurScheduledBid(task: ITask) {
 
     const WALLET_ADDRESS: string = currentTask.wallet;
     const wallets = await Wallet.findById(task.walletId)
-    const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+    const WALLET_PRIVATE_KEY: string = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
     const selectedTraits = transformNewTask(filteredTasks)
 
     if (!currentTraits[currentTask._id]) {
@@ -5388,7 +5686,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((market) => market.toLowerCase()).includes("blur")) return;
 
     const wallets = await Wallet.findById(currentTask.walletId)
-    const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+    const privateKey: string = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
     const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
     if (!floor_price) return
@@ -6526,7 +6824,7 @@ async function processMagicedenScheduledBid(task: ITask) {
     const WALLET_ADDRESS: string = currentTask.wallet
     const wallets = await Wallet.findById(currentTask.walletId)
     taskStatus[currentTask._id].processingPercentage = (1 / 4) * 100
-    const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+    const WALLET_PRIVATE_KEY: string = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
     const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0
 
     const contractAddress = currentTask.contract.contractAddress
@@ -6757,7 +7055,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return;
     const expiration = getExpiry(currentTask.bidDuration)
     const wallets = await Wallet.findById(task.walletId)
-    const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+    const privateKey: string = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
     const floor_price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress))
 
     if (!floorPrices[task._id]) {
@@ -7504,7 +7802,7 @@ app.get("/health", async (req, res) => {
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       components: {
-        redis: redis.status === "ready" ? "ok" : "error",
+        redis: redis && redis.status === "ready" ? "ok" : "error",
         mongodb: mongoose.connection.readyState === 1 ? "ok" : "error",
         // workers: workerCount > 0 ? "ok" : "error"
       },
@@ -7534,6 +7832,32 @@ app.get("/health", async (req, res) => {
   }
 });
 
+app.get("/api/websocket/stats", (req, res) => {
+  const currentDuration = connectionMetrics.connectionStartTime
+    ? Date.now() - connectionMetrics.connectionStartTime
+    : 0;
+
+  res.json({
+    current: {
+      connected: ws?.readyState === WebSocket.OPEN,
+      duration: currentDuration,
+      durationFormatted: formatDuration(currentDuration),
+      connectionId: connectionMetrics.currentConnectionId
+    },
+    stats: {
+      totalConnections: connectionMetrics.totalConnections,
+      totalDisconnections: connectionMetrics.totalDisconnections,
+      averageConnectionDuration: connectionMetrics.averageConnectionDuration,
+      averageConnectionDurationFormatted: formatDuration(connectionMetrics.averageConnectionDuration),
+      longestConnection: connectionMetrics.longestConnection,
+      longestConnectionFormatted: formatDuration(connectionMetrics.longestConnection),
+      shortestConnection: connectionMetrics.shortestConnection === Infinity ? 0 : connectionMetrics.shortestConnection,
+      shortestConnectionFormatted: connectionMetrics.shortestConnection === Infinity ? '0s' : formatDuration(connectionMetrics.shortestConnection)
+    },
+    history: connectionHistory.slice(-20) // Last 20 connections
+  });
+});
+
 app.post("/api/traits/count", async (req, res) => {
   try {
     const { selectedTraits: incomingTraits, slug }: { selectedTraits: SelectedTraits; slug: string } = req.body
@@ -7556,6 +7880,14 @@ app.post("/api/traits/count", async (req, res) => {
     res.status(200).json(items.length)
   } catch (error: any) {
     const err = error?.response?.data || error?.message
+    await logger.logApiError('Failed to count traits', {
+      endpoint: '/api/traits/count',
+      method: 'POST',
+      collectionSlug: req.body?.slug,
+      error: error,
+      errorMessage: err,
+      statusCode: error?.response?.status || 500
+    })
     res.status(500).json(err)
   }
 })
@@ -7640,7 +7972,7 @@ app.post('/api/task/cancel/:taskId', async (req, res) => {
       return res.status(404).json({ error: 'Task not found' });
     }
     const wallet = await Wallet.findById(task.walletId)
-    const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string)
+    const WALLET_PRIVATE_KEY: string = await decryptPrivateKey(wallet?.encryptedPrivateKey as string)
     const orders: PrismaOrder[] = req.body
     const openseaOrders = orders.filter((order: any) => order.marketplace === OPENSEA.toLowerCase())
     const magicedenOrders = orders.filter((order: any) => order.marketplace === 'magiceden')
@@ -7678,8 +8010,16 @@ app.post('/api/task/cancel/:taskId', async (req, res) => {
     }
 
     res.status(200).json({ message: 'Task cancelled' });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error updating task:', error);
+    await logger.logApiError('Failed to cancel task', {
+      endpoint: '/api/task/cancel/:taskId',
+      method: 'POST',
+      taskId: req.params?.taskId,
+      error: error,
+      errorMessage: error?.message || 'Failed to update task',
+      statusCode: 500
+    })
     res.status(500).json({ error: 'Failed to update task' });
   }
 })
@@ -7748,7 +8088,15 @@ app.post('/api/floor', async (req, res) => {
       }
     }));
     res.status(200).json({ floorPrices, bestOffers });
-  } catch (error) {
+  } catch (error: any) {
+    await logger.logApiError('Failed to fetch floor prices', {
+      endpoint: '/api/floor',
+      method: 'POST',
+      taskCount: req.body?.tasks?.length || 0,
+      error: error,
+      errorMessage: error?.message || 'Failed to fetch floor prices',
+      statusCode: 500
+    })
     res.status(500).json({ error: 'Failed to fetch floor prices' });
   }
 });
@@ -7797,6 +8145,14 @@ app.post('/api/collection', async (req, res) => {
     }
   } catch (error: any) {
     console.log(error.response);
+    await logger.logApiError('Failed to fetch collection details', {
+      endpoint: '/api/collection',
+      method: 'POST',
+      collectionSlug: req.body?.slug,
+      error: error,
+      errorMessage: error instanceof Error ? error.message : "Unknown error",
+      statusCode: error?.response?.status || 500
+    })
 
     return res.status(500).json({
       status: "error",
@@ -8035,8 +8391,17 @@ app.post('/api/collection/stats', async (req, res) => {
     };
 
     res.status(200).json(data);
-  } catch (error) {
+  } catch (error: any) {
     console.error('Unexpected error in collection stats endpoint:', error);
+    await logger.logApiError('Failed to process collection stats', {
+      endpoint: '/api/collection/stats',
+      method: 'POST',
+      collectionSlug: req.body?.slug,
+      contractAddress: req.body?.address,
+      error: error,
+      errorMessage: error?.message || 'Failed to process collection stats',
+      statusCode: 500
+    })
     res.status(500).json({ error: 'Failed to process collection stats' });
   }
 })
@@ -8050,6 +8415,13 @@ app.post('/api/currency/conversion', async (req, res) => {
     res.status(200).json(usdPrice)
   } catch (error: any) {
     console.log(error?.response?.data || error?.message);
+    await logger.logApiError('Failed to fetch currency conversion', {
+      endpoint: '/api/currency/conversion',
+      method: 'POST',
+      error: error,
+      errorMessage: error?.response?.data || error?.message || 'Failed to fetch currency conversion',
+      statusCode: error?.response?.status || 500
+    })
     res.status(500).json({ error: 'Failed to fetch currency conversion' });
   }
 
@@ -8077,6 +8449,13 @@ app.post('/api/auth/password', async (req, res) => {
     res.status(200).json({ success: true, message: 'Password stored successfully' });
   } catch (error: any) {
     console.error('Failed to store password:', error);
+    await logger.logAuthenticationError('Failed to store password', {
+      endpoint: '/api/auth/password',
+      method: 'POST',
+      error: error,
+      errorMessage: error?.message || 'Failed to store password',
+      statusCode: 500
+    })
     res.status(500).json({
       error: 'Failed to store password',
       message: error.message
@@ -8099,19 +8478,35 @@ app.post('/api/wallet/encrypt', async (req, res) => {
     }
 
     // Encrypt the private key
-    const encryptedPrivateKey = encryptPrivateKey(privateKey);
+    const encryptedPrivateKey = await encryptPrivateKey(privateKey);
 
     res.status(200).json({ encryptedPrivateKey });
   } catch (error: any) {
     console.error('Failed to encrypt private key:', error);
     // Check if error is due to missing password
     if (error.message.includes('No encryption key available')) {
+      await logger.logAuthenticationError('No encryption key available', {
+        endpoint: '/api/wallet/encrypt',
+        method: 'POST',
+        userId: req.body?.userId,
+        error: error,
+        errorMessage: error.message,
+        statusCode: 401
+      })
       res.status(401).json({
         error: 'Authentication required',
         message: 'Please sign in to continue. Server has been restarted.',
         requiresAuth: true
       });
     } else {
+      await logger.logSecurityEvent('wallet_encryption_failed', 'Failed to encrypt private key', {
+        endpoint: '/api/wallet/encrypt',
+        method: 'POST',
+        userId: req.body?.userId,
+        error: error,
+        errorMessage: error.message,
+        statusCode: 500
+      })
       res.status(500).json({
         error: 'Failed to encrypt private key',
         message: error.message
@@ -8132,7 +8527,7 @@ app.post('/api/wallet/create', async (req, res) => {
       return res.status(400).json({ error: 'Private key and user ID are required' });
     }
     // Encrypt the private key
-    const encryptedPrivateKey = encryptPrivateKey(privateKey);
+    const encryptedPrivateKey = await encryptPrivateKey(privateKey);
     const wallet = await Wallet.create({ ...walletData, user: userId, encryptedPrivateKey });
 
     res.status(201).json({ success: true, wallet });
@@ -8140,12 +8535,28 @@ app.post('/api/wallet/create', async (req, res) => {
     console.error('Failed to create wallet:', error);
     // Check if error is due to missing password
     if (error.message.includes('No encryption key available')) {
+      await logger.logAuthenticationError('No encryption key available', {
+        endpoint: '/api/wallet/create',
+        method: 'POST',
+        userId: req.body?.userId,
+        error: error,
+        errorMessage: error.message,
+        statusCode: 401
+      })
       res.status(401).json({
         error: 'Authentication required',
         message: 'Please sign in to continue. Server has been restarted.',
         requiresAuth: true
       });
     } else {
+      await logger.logApiError('Failed to create wallet', {
+        endpoint: '/api/wallet/create',
+        method: 'POST',
+        userId: req.body?.userId,
+        error: error,
+        errorMessage: error.message,
+        statusCode: 500
+      })
       res.status(500).json({
         error: 'Failed to create wallet',
         message: error.message
@@ -8169,19 +8580,37 @@ app.post('/api/wallet/decrypt', async (req, res) => {
     if (!wallet) {
       return res.status(404).json({ error: 'Wallet not found' });
     }
-    const privateKey = decryptPrivateKey(wallet.encryptedPrivateKey);
+    const privateKey = await decryptPrivateKey(wallet.encryptedPrivateKey);
 
     res.status(200).json({ privateKey });
   } catch (error: any) {
     console.error('Failed to decrypt private key:', error);
     // Check if error is due to missing password
     if (error.message.includes('No encryption key available')) {
+      await logger.logAuthenticationError('No encryption key available', {
+        endpoint: '/api/wallet/decrypt',
+        method: 'POST',
+        userId: req.body?.userId,
+        walletId: req.body?.walletId,
+        error: error,
+        errorMessage: error.message,
+        statusCode: 401
+      })
       res.status(401).json({
         error: 'Authentication required',
         message: 'Please sign in to continue. Server has been restarted.',
         requiresAuth: true
       });
     } else {
+      await logger.logSecurityEvent('wallet_decryption_failed', 'Failed to decrypt private key', {
+        endpoint: '/api/wallet/decrypt',
+        method: 'POST',
+        userId: req.body?.userId,
+        walletId: req.body?.walletId,
+        error: error,
+        errorMessage: error.message,
+        statusCode: 500
+      })
       res.status(500).json({
         error: 'Failed to decrypt private key',
         message: error.message
@@ -8208,6 +8637,13 @@ app.post('/api/update-app', async (req, res) => {
     res.status(200).json(data)
   } catch (error: any) {
     console.error('Failed to schedule update:', error);
+    await logger.logApiError('Failed to schedule update', {
+      endpoint: '/api/update-app',
+      method: 'POST',
+      error: error,
+      errorMessage: error.message,
+      statusCode: error?.response?.status || 500
+    })
     res.status(500).json({
       scheduled: false,
       message: 'Failed to schedule update',
@@ -8241,6 +8677,13 @@ app.post('/api/wallet/nfts', async (req, res) => {
     });
   } catch (error: any) {
     console.error('Failed to fetch wallet NFTs:', error);
+    await logger.logApiError('Failed to fetch wallet NFTs', {
+      endpoint: '/api/wallet/nfts',
+      method: 'POST',
+      error: error,
+      errorMessage: error.message,
+      statusCode: 500
+    })
     res.status(500).json({
       success: false,
       message: 'Failed to fetch wallet NFTs',
@@ -8255,7 +8698,7 @@ export async function fetchAddressBalances(walletAddress: string): Promise<Addre
   const cacheKey = `{address_balances:${walletAddress}}`;
 
   // Check cache first
-  const cachedData = await redis.get(cacheKey);
+  const cachedData = redis ? await redis.get(cacheKey) : null;
   if (cachedData) {
     try {
       return JSON.parse(cachedData);
@@ -8274,7 +8717,7 @@ export async function fetchAddressBalances(walletAddress: string): Promise<Addre
     `{address_balances}_${walletAddress}`,
     async () => {
       // Check cache again after acquiring lock
-      const cachedDataAfterLock = await redis.get(cacheKey);
+      const cachedDataAfterLock = redis ? await redis.get(cacheKey) : null;
       if (cachedDataAfterLock) {
         try {
           return JSON.parse(cachedDataAfterLock);
@@ -8353,7 +8796,9 @@ export async function fetchAddressBalances(walletAddress: string): Promise<Addre
         ));
 
         // Cache the result
-        await redis.set(cacheKey, JSON.stringify(data), 'EX', CACHE_EXPIRY_SECONDS);
+        if (redis) {
+          await redis.set(cacheKey, JSON.stringify(data), 'EX', CACHE_EXPIRY_SECONDS);
+        }
 
         return data;
       } catch (error) {
