@@ -1,4 +1,5 @@
 import { Contract, Wallet } from "ethers";
+import { logger } from "../utils/logger";
 const approveAbi = [
   {
     inputs: [
@@ -64,6 +65,15 @@ export async function approveNFT(
       console.log('NFT approved successfully');
     }
   } catch (err: any) {
+    await logger.logBlockchainError('Error approving NFT for marketplace', {
+      nftAddress,
+      walletAddress: wallet.address,
+      marketContractAddress,
+      operation: 'approve_nft',
+      error: err,
+      errorCode: err?.code,
+      errorMessage: err?.reason ?? err?.message
+    });
     console.log(err?.reason ?? err?.message);
   }
 };

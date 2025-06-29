@@ -9,6 +9,7 @@ import { listOnBlur } from "../marketplace/blur/list";
 import { getAccessToken } from "../marketplace/blur";
 import { listOnMagicEden } from "../marketplace/magiceden/list";
 import { getCollectionDetails } from "./collection";
+import { logger } from "../utils/logger";
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY
 
 const provider = new AlchemyProvider(NETWORK, ALCHEMY_API_KEY)
@@ -83,7 +84,7 @@ export async function createListing(data: IListingData) {
 
     const wallet = await Wallet.findById(data.walletId.toString());
 
-    const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+    const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
     const web3Wallet = new Web3Wallet(private_key, provider)
     const collectionData = await getCollectionDetails(data.contract.slug, data.contract.contractAddress);
     const creatorFees = collectionData?.creator_fees as IFee
@@ -121,6 +122,14 @@ export async function createListing(data: IListingData) {
     }
 
   } catch (error) {
+    await logger.logMarketplaceError('Error creating listing', {
+      contractAddress: data.contract.contractAddress,
+      tokenId: data.tokenId,
+      selectedMarketplaces: data.selectedMarketplaces,
+      operation: 'create_listing',
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
     console.log(error);
   }
 }

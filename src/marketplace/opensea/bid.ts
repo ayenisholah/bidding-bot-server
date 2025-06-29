@@ -10,6 +10,7 @@ import { MagicedenCollectionResponse, MagicEdenTraitOfferResponse } from "../mag
 import { CollectionItemsListQuery } from "../../queries";
 import { CollectionItemsQueryVariables, CollectionItemsResponse } from "../../functions";
 import { fetchERC20Balance } from "../../utils/balance";
+import { logger } from "../../utils/logger";
 
 const prisma = new PrismaClient()
 
@@ -222,6 +223,21 @@ export async function bidOnOpensea(
 
   if (offerPriceEthFinal > wethBalance) {
     const identifier = opensea_traits ? opensea_traits : asset?.tokenId ? asset?.tokenId : slug;
+    const errorMessage = `Offer price exceeds available balance`;
+    
+    await logger.logOpenseaBidError(errorMessage, {
+      taskId: taskId,
+      collectionSlug: slug,
+      tokenId: asset?.tokenId?.toString(),
+      traitType: opensea_traits,
+      bidAmount: offerPriceEthFinal,
+      currency: currencySymbol,
+      currentBalance: wethBalance,
+      requiredBalance: offerPriceEthFinal,
+      walletAddress: wallet_address,
+      errorCode: 'INSUFFICIENT_BALANCE'
+    });
+    
     throw new Error(`[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEthFinal} ${currencySymbol} is greater than available ${currencySymbol} balance: ${wethBalance} ${currencySymbol}.`);
   }
 
@@ -493,6 +509,13 @@ async function buildOffer(taskId: string, buildPayload: any) {
     if (axios.isCancel(error)) {
       return null;
     }
+    await logger.logOpenseaBidError('Failed to build OpenSea offer', {
+      taskId,
+      operation: 'build_offer',
+      error: error,
+      errorCode: error?.response?.status,
+      errorMessage: error?.response?.data || error?.message || String(error)
+    });
     throw error;
   }
   finally {
@@ -590,6 +613,13 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string) 
     if (axios.isCancel(error)) {
       return null;
     }
+    await logger.logOpenseaBidError('Failed to post item offer to OpenSea', {
+      taskId,
+      operation: 'post_item_offer',
+      error: error,
+      errorCode: error?.response?.status,
+      errorMessage: error?.response?.data || error?.message || String(error)
+    });
     throw error
   }
 }

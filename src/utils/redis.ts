@@ -1,18 +1,23 @@
 import { config } from 'dotenv';
 import Redis, { Cluster } from 'ioredis';
+import { logger, DatabaseOperation } from './logger';
 
 config()
 
 const REDIS_NODES = process.env.REDIS_NODES as string
 
-const getRedisNodes = () => {
+const getRedisNodes = async () => {
   if (!REDIS_NODES) {
+    await logger.logDatabaseConnectionError('REDIS_NODES is not defined in the environment variables', {
+      operation: 'redis_initialization',
+      errorCode: 'MISSING_CONFIG'
+    });
     throw new Error('REDIS_NODES is not defined in the environment variables');
   }
   return JSON.parse(REDIS_NODES)
 };
 
-const REDIS_NET_MAP = JSON.parse(process.env.REDIS_NET_MAP as string)
+const REDIS_NET_MAP = process.env.REDIS_NET_MAP ? JSON.parse(process.env.REDIS_NET_MAP) : null
 
 const RETRY_MAX_ATTEMPTS = 30;
 const INITIAL_RETRY_DELAY = 2000;
@@ -81,24 +86,51 @@ class RedisClient {
 
     if (!this.client) {
       try {
-
-        this.client = new Redis.Cluster(getRedisNodes(), {
+        const nodes = await getRedisNodes();
+        console.log('Connecting to Redis nodes:', nodes);
+        
+        this.client = new Redis.Cluster(nodes, {
           ...defaultConfig,
           scaleReads: 'all',
           redisOptions: {
             ...defaultConfig.redisOptions,
             lazyConnect: true,
+            // Disable auto-discovery of nodes
+            enableAutoPipelining: false,
           },
           enableOfflineQueue: true,
           slotsRefreshTimeout: 30000,
           dnsLookup: (address, callback) => callback(null, address),
-          natMap: REDIS_NET_MAP
+          natMap: REDIS_NET_MAP,
+          // Only use the nodes we explicitly provide
+          slotsRefreshInterval: -1,
+          // Prevent connection to default Redis
+          lazyConnect: true,
         });
 
         this.setupEventHandlers();
+        
+        // Explicitly connect after setup
+        await this.client.connect();
       } catch (error) {
         this.isConnected = false;
         this.client = null;
+        
+        console.error('Failed to connect to Redis cluster:', error);
+
+        // Always log Redis connection errors
+        try {
+          await logger.logDatabaseConnectionError('Failed to connect to Redis cluster', {
+            operation: 'redis_cluster_connection',
+            connectionAttempts: this.connectionAttempts,
+            maxAttempts: this.maxConnectionAttempts,
+            error: error as Error,
+            errorMessage: error instanceof Error ? error.message : String(error)
+          });
+        } catch (logError) {
+          // Fallback if logger fails
+          console.error('Failed to log Redis error:', logError);
+        }
 
         if (this.connectionAttempts < this.maxConnectionAttempts) {
           this.connectionAttempts++;
@@ -125,8 +157,24 @@ class RedisClient {
       console.log('Redis cluster connection established');
     });
 
-    this.client.on('error', (err) => {
+    this.client.on('error', async (err) => {
       console.error('Redis cluster error:', err);
+      
+      // Only log to Better Stack if it's not a connection refused error to localhost:6379
+      // This prevents recursive logging attempts
+      if (!err.message.includes('ECONNREFUSED') || !err.message.includes('127.0.0.1:6379')) {
+        try {
+          await logger.logDatabaseError('Redis cluster error', {
+            databaseOperation: DatabaseOperation.CONNECTION,
+            collection_name: 'redis_cluster',
+            error: err,
+            errorMessage: err.message,
+            connectionAttempts: this.connectionAttempts
+          });
+        } catch (logError) {
+          console.error('Failed to log Redis error:', logError);
+        }
+      }
       this.isConnected = false;
       if (!this.connecting && this.connectionAttempts < this.maxConnectionAttempts) {
         this.connectionAttempts++;
@@ -137,7 +185,14 @@ class RedisClient {
     // Add periodic health check
     setInterval(() => {
       if (this.isConnected && this.client) {
-        this.client.ping().catch(err => {
+        this.client.ping().catch(async err => {
+          await logger.logDatabaseError('Redis health check failed', {
+            databaseOperation: DatabaseOperation.CONNECTION,
+            collection_name: 'redis_cluster',
+            operation: 'health_check_ping',
+            error: err,
+            errorMessage: err.message
+          });
           console.warn('Redis ping failed:', err);
           this.isConnected = false;
           this.connect();
@@ -158,4 +213,28 @@ class RedisClient {
   }
 }
 
-export default RedisClient.getInstance();
+const redisClient = RedisClient.getInstance();
+
+// Export both the client instance and a getter for the actual Redis connection
+export default redisClient;
+export const getRedisConnection = () => redisClient.getClient();
+
+// Create a new Redis Cluster connection for BullMQ
+export const createBullMQConnection = async () => {
+  const nodes = await getRedisNodes();
+  const cluster = new Redis.Cluster(nodes, {
+    clusterRetryStrategy: (times: number) => {
+      const delay = Math.min(times * 2000, 20000);
+      return delay;
+    },
+    enableOfflineQueue: true,
+    redisOptions: {
+      enableReadyCheck: true,
+      maxRetriesPerRequest: null,
+    },
+    natMap: REDIS_NET_MAP,
+    slotsRefreshTimeout: 30000,
+  });
+  
+  return cluster;
+};

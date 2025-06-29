@@ -1,8 +1,8 @@
 import { Cluster } from 'ioredis';
 import RedisClient from './redis';
+import { logger, DatabaseOperation } from './logger';
 
 export class DistributedLockManager {
-  private redis: Cluster;
   private readonly lockPrefix: string;
   private readonly defaultTTLSeconds: number;
 
@@ -10,9 +10,16 @@ export class DistributedLockManager {
     lockPrefix?: string;
     defaultTTLSeconds?: number;
   }) {
-    this.redis = RedisClient.getClient();
     this.lockPrefix = options?.lockPrefix ?? '{lock}:';
     this.defaultTTLSeconds = options?.defaultTTLSeconds ?? 30;
+  }
+
+  private get redis(): Cluster | null {
+    try {
+      return RedisClient.getClient();
+    } catch {
+      return null;
+    }
   }
 
   private getLockKey(key: string): string {
@@ -20,9 +27,13 @@ export class DistributedLockManager {
   }
 
   private async ensureConnection(): Promise<void> {
-    if (!RedisClient.isReady()) {
+    if (!RedisClient.isReady() || !this.redis) {
       await new Promise(resolve => setTimeout(resolve, 1000));
-      if (!RedisClient.isReady()) {
+      if (!RedisClient.isReady() || !this.redis) {
+        await logger.logDatabaseConnectionError('Redis connection not ready for lock operation', {
+          operation: 'distributed_lock',
+          lockPrefix: this.lockPrefix
+        });
         throw new Error('Redis connection not ready');
       }
     }
@@ -35,6 +46,9 @@ export class DistributedLockManager {
     await this.ensureConnection();
     const lockKey = this.getLockKey(key);
 
+    if (!this.redis) {
+      throw new Error('Redis connection not available');
+    }
     const acquired = await this.redis.setex(
       lockKey,
       ttlSeconds,
@@ -47,16 +61,25 @@ export class DistributedLockManager {
   async releaseLock(key: string): Promise<void> {
     await this.ensureConnection();
     const lockKey = this.getLockKey(key);
-    await this.redis.del(lockKey);
+    if (this.redis) {
+      await this.redis.del(lockKey);
+    }
   }
 
   async checkExistLock(key: string): Promise<Boolean> {
     try {
       await this.ensureConnection();
       const lockKey = this.getLockKey(key);
-      const existLockKey = await this.redis.exists(lockKey);
+      const existLockKey = this.redis ? await this.redis.exists(lockKey) : 0;
       return existLockKey === 1;
     } catch (e) {
+      await logger.logDatabaseError('Error checking if lock exists', {
+        databaseOperation: DatabaseOperation.READ,
+        collection_name: 'redis_locks',
+        lockKey: this.getLockKey(key),
+        error: e as Error,
+        errorMessage: e instanceof Error ? e.message : String(e)
+      });
       console.log('error in check ExistLock', e)
       return false;
     }
@@ -77,11 +100,29 @@ export class DistributedLockManager {
       try {
         return await operation();
       } finally {
+        try {
         await this.releaseLock(key);
+      } catch (releaseError) {
+        // Log but don't throw if we can't release the lock
+        console.error(`Failed to release lock for key ${key}:`, releaseError);
+      }
       }
     } catch (error) {
+      await logger.logDatabaseError(`Error in withLock for key ${key}`, {
+        databaseOperation: DatabaseOperation.UPDATE,
+        collection_name: 'redis_locks',
+        lockKey: this.getLockKey(key),
+        ttlSeconds,
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
       console.error(`Error in withLock for key ${key}:`, error);
-      await this.releaseLock(key);
+      try {
+        await this.releaseLock(key);
+      } catch (releaseError) {
+        // Log but don't throw if we can't release the lock
+        console.error(`Failed to release lock for key ${key}:`, releaseError);
+      }
       throw error;
     }
   }

@@ -2,6 +2,7 @@ import {  formatEther, JsonRpcProvider, Contract } from "ethers";
 import { DistributedLockManager } from "./lock";
 import redisClient from "./redis";
 import { RED, RESET } from "..";
+import { logger, ErrorCategory } from "./logger";
 
 const redis = redisClient.getClient()
 
@@ -74,6 +75,13 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
           }
           
           if (!provider) {
+            await logger.logNetworkError('all_rpc_providers', `All RPC providers failed. Last error: ${providerError?.message}`, {
+              walletAddress,
+              tokenAddress,
+              lastError: providerError,
+              errorMessage: providerError?.message,
+              operation: 'fetch_erc20_balance'
+            });
             throw new Error(`All RPC providers failed. Last error: ${providerError?.message}`);
           }
 
@@ -112,6 +120,13 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
 
           throw lastError;
         } catch (error) {
+          await logger.logBlockchainError(`Error fetching ERC20 balance for token ${tokenAddress}`, {
+            walletAddress,
+            tokenAddress,
+            operation: 'fetch_erc20_balance',
+            error: error as Error,
+            errorMessage: error instanceof Error ? error.message : String(error)
+          });
           console.error(RED + `Error fetching ERC20 balance for token ${tokenAddress}:` + RESET, error);
           throw error;
         }
@@ -130,6 +145,11 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
     }
     
     // If no stale cache available, log error and return 0
+    await logger.logWarning(ErrorCategory.BLOCKCHAIN, `No cached balance available for ${walletAddress}/${tokenAddress}`, {
+      walletAddress,
+      tokenAddress,
+      operation: 'fetch_erc20_balance_fallback'
+    });
     console.error(RED + `No cached balance available for ${walletAddress}/${tokenAddress}` + RESET);
     return 0;
   }

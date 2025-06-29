@@ -8,6 +8,7 @@ import axios from "axios";
 import { BASE_URL } from "../../constants";
 import { fetchERC20Balance } from "../../utils/balance";
 import { convertBigNumbers } from "../../utils/bigNumberConverter";
+import { logger, ErrorCategory } from "../../utils/logger";
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
 
 const prisma = new PrismaClient()
@@ -79,6 +80,20 @@ export async function bidOnBlur(
     }
     errorStats[taskId].blur++
     await logBidError(taskId, "INSUFFICIENT_BALANCE", message, "error", "blur");
+    
+    // Better Stack granular logging
+    await logger.logBlurBalanceError("Insufficient BETH balance for bid", {
+      taskId,
+      collectionSlug: slug,
+      contractAddress,
+      bidAmount: Number(offerPriceEth),
+      currency: "BETH",
+      requiredBalance: Number(offerPriceEth),
+      currentBalance: bethBalance,
+      walletAddress: wallet_address,
+      operation: "place_bid"
+    });
+    
     return;
   }
 
@@ -182,7 +197,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
     };
 
     const key = `{blurAccessToken}:${wallet.address}`
-    const cachedToken = await redis.get(key);
+    const cachedToken = redis ? await redis.get(key) : null;
     if (cachedToken) {
       return cachedToken;
     }
@@ -201,7 +216,9 @@ export async function getAccessToken(private_key: string): Promise<string | unde
     response = await limiter.schedule(() => axiosInstance
       .post(`${BLUR_API_URL}/auth/login`, data, { headers }));
     const accessToken = response.data.accessToken;
-    await redis.set(key, accessToken, 'EX', 5 * 60);
+    if (redis) {
+      await redis.set(key, accessToken, 'EX', 5 * 60);
+    }
 
     return accessToken;
 
@@ -491,9 +508,11 @@ export async function fetchBlurCollectionStats(slug: string) {
 
   // Try to get from cache first
   try {
-    const cachedStats = await redis.get(cacheKey);
-    if (cachedStats) {
-      return JSON.parse(cachedStats);
+    if (redis) {
+      const cachedStats = await redis.get(cacheKey);
+      if (cachedStats) {
+        return JSON.parse(cachedStats);
+      }
     }
   } catch (error) {
     console.error('Error reading from cache:', error);
@@ -502,9 +521,11 @@ export async function fetchBlurCollectionStats(slug: string) {
   // If not in cache, try to acquire lock and fetch
   const result = await lockManager.withLock(lockKey, async () => {
 
-    const cachedStats = await redis.get(cacheKey);
-    if (cachedStats) {
-      return JSON.parse(cachedStats);
+    if (redis) {
+      const cachedStats = await redis.get(cacheKey);
+      if (cachedStats) {
+        return JSON.parse(cachedStats);
+      }
     }
     const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens`;
     const { data } = await limiter.schedule(() => axiosInstance.get<BlurTokensResponse>(url, {
@@ -517,7 +538,9 @@ export async function fetchBlurCollectionStats(slug: string) {
     const listings = data?.tokens?.sort((a, b) => Number(a?.price?.amount) - Number(b?.price?.amount));
     const floor_price = Number(listings[0]?.price?.amount) || 0;
 
-    await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+    if (redis) {
+      await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+    }
     return floor_price || 0;
 
   });

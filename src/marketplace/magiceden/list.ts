@@ -3,6 +3,7 @@ import { BASE_URL } from "../../constants";
 import { approveNFT } from "../../functions/approve";
 import { axiosInstance, limiter } from "../../init";
 import Listing from "../../models/listing.model";
+import { logger } from "../../utils/logger";
 
 const API_KEY = process.env.API_KEY;
 
@@ -63,6 +64,14 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
     );
     
     if (!signStep) {
+      await logger.logMagicEdenListingError('No order-signature step found in response', {
+        walletAddress,
+        contractAddress: contract,
+        tokenId,
+        operation: 'create_listing',
+        availableSteps: listResponse.data.steps?.map((s: any) => s.id),
+        errorCode: 'MISSING_SIGNATURE_STEP'
+      });
       console.error('No order-signature step found in response');
       console.error('Available steps:', listResponse.data.steps);
       throw new Error('No order-signature step found');
@@ -131,11 +140,30 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
         console.log(`Updated listing ${contract} #${tokenId} with magiceden price: ${roundedPrice} ETH, expires at: ${expirationTime.toISOString()}`);
       }
     } catch (updateError) {
+      await logger.logMagicEdenListingError('Error updating listing in database', {
+        contractAddress: contract,
+        tokenId,
+        operation: 'update_listing_price',
+        price: roundedPrice,
+        error: updateError as Error,
+        errorMessage: updateError instanceof Error ? updateError.message : String(updateError)
+      });
       console.error('Error updating listing in database:', updateError);
     }
     
     return finalListingResponse.data;
   } catch (error: any) {
+    await logger.logMagicEdenListingError('Magic Eden listing failed', {
+      walletAddress,
+      contractAddress: contract,
+      tokenId,
+      price: roundedPrice,
+      operation: 'submit_listing',
+      error: error,
+      errorCode: error?.response?.status,
+      errorMessage: error?.response?.data || error?.message || String(error),
+      responseData: error?.response?.data
+    });
     console.error("=== Magic Eden Listing Failed ===");
     console.error("Error details:", error?.response?.data || error?.response || error);
     if (error?.response?.data) {

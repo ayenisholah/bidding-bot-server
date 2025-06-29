@@ -9,6 +9,7 @@ import { USDC, WETH } from "../../utils/currencies";
 import { BASE_URL } from "../../constants";
 import { fetchERC20Balance } from "../../utils/balance";
 import { convertBigNumbers } from "../../utils/bigNumberConverter";
+import { logger, DatabaseOperation } from "../../utils/logger";
 
 const prisma = new PrismaClient()
 
@@ -86,6 +87,18 @@ export async function bidOnMagiceden(
   if (offerPriceEth > wethBalance) {
     const identifier = trait ? `${trait.attributeKey}:${trait.attributeValue}` : tokenId ? tokenId : 'collection';
     const message = `[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEth} ${currencySymbol} is greater than available ${currencySymbol} balance: ${wethBalance} ${currencySymbol}. SKIPPING  MAGICEDEN...`
+    await logger.logMagicEdenBidError(message, {
+      taskId,
+      collection: slug,
+      tokenId: tokenId?.toString(),
+      traitType: trait?.attributeKey,
+      traitValue: trait?.attributeValue,
+      bidAmount: offerPriceEth,
+      currency: currencySymbol,
+      currentBalance: wethBalance,
+      walletAddress: maker,
+      errorCode: 'INSUFFICIENT_BALANCE'
+    });
     throw new Error(message)
   }
 
@@ -197,6 +210,17 @@ async function createBidData(
       console.log(`Request for task ${taskId} was cancelled`);
       return null;
     }
+    await logger.logMagicEdenBidError('Failed to create bid data on Magic Eden', {
+      taskId,
+      collection: slug,
+      tokenId: tokenId?.toString(),
+      traitType: trait?.attributeKey,
+      traitValue: trait?.attributeValue,
+      operation: 'create_bid_data',
+      error: error,
+      errorCode: error?.response?.status,
+      errorMessage: error?.response?.data || error?.message || String(error)
+    });
     throw error
   }
 }
@@ -354,6 +378,19 @@ async function sendSignedOrderData(taskId: string, offerPrice: string | number, 
       console.log(`Request for task ${taskId} was cancelled`);
       return null;
     }
+    await logger.logMagicEdenBidError('Failed to send signed order data to Magic Eden', {
+      taskId,
+      collection: slug,
+      tokenId: tokenId?.toString(),
+      traitType: trait?.attributeKey,
+      traitValue: trait?.attributeValue,
+      operation: 'send_signed_order',
+      bidAmount: offerPrice,
+      currency: currencySymbol,
+      error: error,
+      errorCode: error?.response?.status,
+      errorMessage: error?.response?.data || error?.message || String(error)
+    });
     throw error
   }
 }
@@ -463,6 +500,12 @@ export async function submitSignedOrderData(taskId: string, offerPrice: string |
         source: "magiceden.us",
       };
     } else {
+      await logger.logMagicEdenBidError('Sign data not found in order steps', {
+        taskId,
+        collection: slug,
+        operation: 'sign_order',
+        errorCode: 'MISSING_SIGN_DATA'
+      });
       console.error('Sign data not found in order steps.');
     }
 
@@ -517,6 +560,12 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
     }
     const signature = await signCancelOrder(taskId, cancelData, privateKey);
     if (!signature) {
+      await logger.logMagicEdenBidError('Failed to generate signature for cancel order', {
+        taskId,
+        operation: 'cancel_bid_signature',
+        orderIds: processedOrderIds,
+        errorCode: 'SIGNATURE_GENERATION_FAILED'
+      });
       console.error('Failed to generate signature for cancel order');
       return;
     }
@@ -712,6 +761,15 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
       return JSON.parse(cachedStats);
     }
   } catch (error) {
+    await logger.logDatabaseError('Error reading MagicEden stats from Redis cache', {
+      databaseOperation: DatabaseOperation.READ,
+      collection_name: 'redis_cache',
+      operation: 'get_magiceden_stats',
+      contractAddress,
+      cacheKey,
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
     console.error('Error reading from cache:', error);
   }
 
@@ -724,6 +782,15 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
         return JSON.parse(cachedStats);
       }
     } catch (error) {
+      await logger.logDatabaseError('Error reading MagicEden stats from Redis cache after lock', {
+        databaseOperation: DatabaseOperation.READ,
+        collection_name: 'redis_cache',
+        operation: 'get_magiceden_stats_after_lock',
+        contractAddress,
+        cacheKey,
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
       console.error('Error reading from cache after lock:', error);
     }
 
@@ -753,6 +820,15 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
       try {
         await redis.set(cacheKey, JSON.stringify(stats), 'EX', CACHE_TTL);
       } catch (error) {
+        await logger.logDatabaseError('Error writing MagicEden stats to Redis cache', {
+          databaseOperation: DatabaseOperation.CREATE,
+          collection_name: 'redis_cache',
+          operation: 'set_magiceden_stats',
+          contractAddress,
+          cacheKey,
+          error: error as Error,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
         console.error('Error writing to cache:', error);
       }
     }
@@ -769,8 +845,22 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
         return JSON.parse(cachedStats);
       }
     } catch (error) {
+      await logger.logDatabaseError('Error reading from cache after lock failure', {
+        databaseOperation: DatabaseOperation.READ,
+        collection_name: 'redis_cache',
+        operation: 'get_magiceden_stats_retry',
+        contractAddress,
+        cacheKey,
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
       console.error('Error reading from cache after lock failure:', error);
     }
+    await logger.logMagicEdenCollectionError('Failed to fetch collection stats', {
+      contractAddress,
+      operation: 'fetch_collection_stats',
+      errorCode: 'STATS_FETCH_FAILED'
+    });
     throw new Error('Failed to fetch collection stats');
   }
   return result;

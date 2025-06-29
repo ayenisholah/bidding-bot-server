@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { config } from "dotenv"
+import { logger } from './logger';
 
 config()
 
@@ -16,9 +17,12 @@ export function getPassword(): string | undefined {
   return PASSWORD;
 }
 
-function getEncryptionKey(): Buffer {
+async function getEncryptionKey(): Promise<Buffer> {
   // Only use the in-memory password, no fallback
   if (!PASSWORD) {
+    await logger.logSecurityEvent('MISSING_ENCRYPTION_KEY', 'No encryption key available. Please sign in to set the password.', {
+      operation: 'get_encryption_key'
+    });
     throw new Error('No encryption key available. Please sign in to set the password.');
   }
 
@@ -26,8 +30,8 @@ function getEncryptionKey(): Buffer {
   return crypto.scryptSync(PASSWORD, "ENCRYPTION_KEY" as string, 32);
 }
 
-export function encryptPrivateKey(privateKey: string): string {
-  const key = getEncryptionKey();
+export async function encryptPrivateKey(privateKey: string): Promise<string> {
+  const key = await getEncryptionKey();
 
   console.log({ key });
 
@@ -43,11 +47,15 @@ export function encryptPrivateKey(privateKey: string): string {
   return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
 }
 
-export function decryptPrivateKey(encryptedData: string): string {
-  const key = getEncryptionKey();
+export async function decryptPrivateKey(encryptedData: string): Promise<string> {
+  const key = await getEncryptionKey();
   const parts = encryptedData.split(':');
 
   if (parts.length !== 3) {
+    await logger.logSecurityEvent('INVALID_ENCRYPTED_FORMAT', 'Invalid encrypted data format', {
+      operation: 'decrypt_private_key',
+      partsLength: parts.length
+    });
     throw new Error('Invalid encrypted data format');
   }
 

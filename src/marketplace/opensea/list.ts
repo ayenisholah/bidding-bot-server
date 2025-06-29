@@ -5,6 +5,7 @@ import { axiosInstance, limiter } from "../../init";
 import { config } from "dotenv";
 import { BASE_URL, domain, minABI, NETWORK } from "../../constants";
 import Listing from "../../models/listing.model";
+import { logger } from "../../utils/logger";
 
 config()
 
@@ -127,6 +128,13 @@ export const listOnOpensea = async (
       '0x1E0049783F008A0085193E00003D00cd54003c71'
     );
   } catch (error) {
+    await logger.logOpenseaListingError('Error approving NFT for OpenSea listing', {
+      contractAddress: nftAddress,
+      walletAddress: wallet.address,
+      operation: 'approve_nft',
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
     console.log(error);
   }
 
@@ -286,6 +294,15 @@ export const listOnOpensea = async (
     });
 
   if (listings.errors) {
+    await logger.logOpenseaListingError('Failed to list NFT on OpenSea', {
+      contractAddress: nftAddress,
+      tokenId: tokenId,
+      price: roundedPrice,
+      walletAddress: wallet.address,
+      operation: 'submit_listing',
+      error: listings.errors,
+      errorMessage: JSON.stringify(listings.errors)
+    });
     console.log('Error: ', JSON.stringify(listings.errors));
   } else {
     console.log('NFT listed successfully on opensea');
@@ -315,6 +332,14 @@ export const listOnOpensea = async (
         console.log(`No listing found for ${nftAddress} #${tokenId}`);
       }
     } catch (updateError) {
+      await logger.logOpenseaListingError('Error updating listing in database', {
+        contractAddress: nftAddress,
+        tokenId: tokenId,
+        operation: 'update_listing_price',
+        price: roundedPrice,
+        error: updateError as Error,
+        errorMessage: updateError instanceof Error ? updateError.message : String(updateError)
+      });
       console.error('Error updating listing in database:', updateError);
     }
 
