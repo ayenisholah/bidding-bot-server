@@ -5,6 +5,7 @@ import { logger } from './logger';
 config()
 
 const ALGORITHM = 'aes-256-gcm';
+const DETERMINISTIC_ALGORITHM = "aes-256-ecb";
 
 // Import PASSWORD from index.ts
 let PASSWORD: string | undefined = process.env.PASSWORD
@@ -18,23 +19,49 @@ export function getPassword(): string | undefined {
 }
 
 async function getEncryptionKey(): Promise<Buffer> {
-  // Only use the in-memory password, no fallback
-  if (!PASSWORD) {
-    await logger.logSecurityEvent('MISSING_ENCRYPTION_KEY', 'No encryption key available. Please sign in to set the password.', {
-      operation: 'get_encryption_key'
-    });
-    throw new Error('No encryption key available. Please sign in to set the password.');
+  let password = PASSWORD; // Current request
+
+  // If we have a password, use it for encryption
+  if (password) {
+    const salt = crypto
+      .createHash("sha256")
+      .update("NFT_BIDDING_BOT_USER_KEY")
+      .update(process.env.JWT_SECRET || "default")
+      .digest();
+
+    return crypto.scryptSync(password, salt as any, 32);
   }
 
-  // Hash the password to get a consistent 32-byte key  
-  return crypto.scryptSync(PASSWORD, "ENCRYPTION_KEY" as string, 32);
+  // No password available - throw error
+  await logger.logSecurityEvent(
+    "MISSING_PASSWORD",
+    "No password available for encryption",
+    {
+      operation: "get_encryption_key",
+    }
+  );
+  throw new Error("No password available. Please provide a password for encryption.");
+
 }
+
+
+
+// Deterministic password encryption/decryption functions
+// Uses a fixed key derived from JWT_SECRET for deterministic encryption
+async function getPasswordEncryptionKey(): Promise<Buffer> {
+  const secret = process.env.JWT_SECRET || "default-jwt-secret";
+
+  // Create a deterministic key from JWT_SECRET
+  return crypto
+    .createHash("sha256")
+    .update("password-encryption-key")
+    .update(secret)
+    .digest();
+}
+
 
 export async function encryptPrivateKey(privateKey: string): Promise<string> {
   const key = await getEncryptionKey();
-
-  console.log({ key });
-
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
 
@@ -71,4 +98,39 @@ export async function decryptPrivateKey(encryptedData: string): Promise<string> 
   decrypted += decipher.final('utf8');
 
   return decrypted;
+}
+
+export async function encryptPassword(password: string): Promise<string> {
+  const key = await getPasswordEncryptionKey();
+
+  // Use ECB mode for deterministic encryption (same input = same output)
+  const cipher = crypto.createCipheriv(DETERMINISTIC_ALGORITHM, key, null);
+
+  let encrypted = cipher.update(password, "utf8", "hex");
+  encrypted += cipher.final("hex");
+
+  return encrypted;
+}
+
+export async function decryptPassword(encryptedPassword: string): Promise<string> {
+  const key = await getPasswordEncryptionKey();
+
+  try {
+    const decipher = crypto.createDecipheriv(DETERMINISTIC_ALGORITHM, key, null);
+
+    let decrypted = decipher.update(encryptedPassword, "hex", "utf8");
+    decrypted += decipher.final("utf8");
+
+    return decrypted;
+  } catch (error) {
+    await logger.logSecurityEvent(
+      "PASSWORD_DECRYPTION_FAILED",
+      "Failed to decrypt password",
+      {
+        operation: "decrypt_password",
+        error: error instanceof Error ? error.message : "Unknown error",
+      } as any
+    );
+    throw new Error("Failed to decrypt password");
+  }
 }

@@ -35,7 +35,7 @@ import Bottleneck from "bottleneck";
 import { USDC, WETH } from "./utils/currencies";
 import User from "./models/user.model";
 import axios from "axios";
-import { encryptPrivateKey, decryptPrivateKey, setPassword, getPassword } from "./utils/crypto";
+import { decryptPrivateKey, setPassword, getPassword, decryptPassword } from "./utils/crypto";
 import { fetchWalletNFTs } from "./utils/nft";
 import { logger, ErrorCategory, DatabaseOperation, QueueOperation } from "./utils/logger";
 const prisma = new PrismaClient()
@@ -225,20 +225,6 @@ function unlockTask(taskId: string): void {
     currentLock.locked = false;
   }
 }
-
-
-// Helper function for consistent task ID extraction
-function extractTaskId(jobName: string): string | null {
-  try {
-    const [taskId] = jobName.split('-');
-    return taskId || null;
-  } catch {
-    return null;
-  }
-
-}
-
-
 
 // Queue and QueueEvents will be initialized in startServer
 let queue: Queue;
@@ -1358,9 +1344,6 @@ wss.on('connection', async (ws) => {
         case 'retry-connection':
           await connectWebSocket()
           break
-        case 'update-config':
-          await updateConfig(message.data)
-          break
         case 'create-listing':
           await createListing(message.data)
           break
@@ -1384,105 +1367,6 @@ wss.on('connection', async (ws) => {
     console.log(YELLOW + 'Session disconnected' + RESET);
   };
 });
-
-async function updateConfig(data: any) {
-  try {
-    const { apiKey, rateLimit } = data;
-
-    // Update global variables with new values
-    const user = await User.findOne({ apiKey: apiKey })
-
-    if (user) {
-      user.rateLimit = Number(rateLimit)
-      user.apiKey = apiKey
-      await user.save()
-    }
-
-    if (typeof process.env.RATE_LIMIT !== 'undefined') {
-      process.env.RATE_LIMIT = rateLimit.toString();
-    }
-    if (typeof process.env.API_KEY !== 'undefined') {
-      process.env.API_KEY = apiKey;
-    }
-
-    // Get path to .env file in project root
-    const envPath = path.resolve(process.cwd(), '.env');
-
-    // Try to read existing .env file content
-    let envContent = '';
-    try {
-      envContent = await fs.readFile(envPath, 'utf-8');
-    } catch (error) {
-      // If .env doesn't exist, create an empty one
-      console.log(YELLOW + 'Creating new .env file' + RESET);
-      await fs.writeFile(envPath, '', 'utf-8');
-    }
-
-    // Parse existing .env file into key-value pairs
-    // Filter out empty lines and split each line into key and value
-    const envLines = envContent.split('\n').filter(line => line.trim());
-    const newEnv = new Map(
-      envLines.map(line => {
-        // Handle values that may contain = signs by joining remaining parts
-        const [key, ...values] = line.split('=');
-        return [key, values.join('=')];
-      })
-    );
-
-    // Update environment variables in memory and in Map
-    if (apiKey) {
-      newEnv.set('API_KEY', apiKey);
-      process.env.API_KEY = apiKey;
-    }
-
-    if (rateLimit) {
-      newEnv.set('RATE_LIMIT', rateLimit.toString());
-      process.env.RATE_LIMIT = rateLimit.toString();
-    }
-
-    // Convert Map back to .env file format
-    const newContent = Array.from(newEnv.entries())
-      .map(([key, value]) => `${key}=${value}`)
-
-      .join('\n');
-
-    // Write updated content back to .env file
-    await fs.writeFile(envPath, newContent + '\n', 'utf-8');
-
-    console.log(GREEN + 'Configuration updated successfully' + RESET);
-
-    // If rate limit changed, we need to restart server components
-    console.log(YELLOW + 'Rate limit changed. Restarting server components...' + RESET);
-
-    // Reinitialize with new rate limit
-
-    // update the database
-    await initialize(RATE_LIMIT);
-    rps.maxRPS = RATE_LIMIT
-
-
-    console.log(GREEN + 'Server components restarted successfully' + RESET);
-
-    if (workers) {
-      workers.concurrency = RATE_LIMIT * 1.5
-    }
-
-    // Return updated config values
-    return {
-      apiKey: process.env.API_KEY,
-      rateLimit: process.env.RATE_LIMIT
-    };
-
-  } catch (error) {
-    await logger.logGeneralError('Error updating configuration', {
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
-    console.error(RED + 'Error updating configuration:' + RESET, error);
-    throw error;
-  }
-}
-
 
 
 async function processJob(job: Job) {
@@ -8417,17 +8301,15 @@ app.post('/api/currency/conversion', async (req, res) => {
 app.post('/api/auth/password', async (req, res) => {
   try {
     const { encryptedPassword } = req.body;
-    const password = await decryptPrivateKey(encryptedPassword)
+    const password = await decryptPassword(encryptedPassword)
 
     if (!password) {
       return res.status(400).json({ error: 'Password is required' });
     }
-
     const wasPasswordSet = !!getPassword();
 
     // Store password in memory
     setPassword(password);
-
     // If this is the first time setting password, resume queue and workers
     if (!wasPasswordSet) {
       await resumeQueueAndWorkers();
@@ -8455,159 +8337,59 @@ app.get('/api/auth/password-status', async (req, res) => {
   res.status(200).json({ hasPassword: !!getPassword() });
 });
 
-// Wallet encryption endpoint
-app.post('/api/wallet/encrypt', async (req, res) => {
-  try {
-    const { privateKey, userId } = req.body;
 
-    if (!privateKey || !userId) {
-      return res.status(400).json({ error: 'Private key and user ID are required' });
-    }
-
-    // Encrypt the private key
-    const encryptedPrivateKey = await encryptPrivateKey(privateKey);
-
-    res.status(200).json({ encryptedPrivateKey });
-  } catch (error: any) {
-    console.error('Failed to encrypt private key:', error);
-    // Check if error is due to missing password
-    if (error.message.includes('No encryption key available')) {
-      await logger.logAuthenticationError('No encryption key available', {
-        endpoint: '/api/wallet/encrypt',
-        method: 'POST',
-        userId: req.body?.userId,
-        error: error,
-        errorMessage: error.message,
-        statusCode: 401
-      })
-      res.status(401).json({
-        error: 'Authentication required',
-        message: 'Please sign in to continue. Server has been restarted.',
-        requiresAuth: true
-      });
-    } else {
-      await logger.logSecurityEvent('wallet_encryption_failed', 'Failed to encrypt private key', {
-        endpoint: '/api/wallet/encrypt',
-        method: 'POST',
-        userId: req.body?.userId,
-        error: error,
-        errorMessage: error.message,
-        statusCode: 500
-      })
-      res.status(500).json({
-        error: 'Failed to encrypt private key',
-        message: error.message
-      });
-    }
-  }
-});
-
-// Create wallet with encrypted private key
-app.post('/api/wallet/create', async (req, res) => {
-  try {
-    const { privateKey, userId, ...walletData } = req.body;
-
-    console.log({ privateKey, userId, ...walletData });
-
-
-    if (!privateKey || !userId) {
-      return res.status(400).json({ error: 'Private key and user ID are required' });
-    }
-    // Encrypt the private key
-    const encryptedPrivateKey = await encryptPrivateKey(privateKey);
-    const wallet = await Wallet.create({ ...walletData, user: userId, encryptedPrivateKey });
-
-    res.status(201).json({ success: true, wallet });
-  } catch (error: any) {
-    console.error('Failed to create wallet:', error);
-    // Check if error is due to missing password
-    if (error.message.includes('No encryption key available')) {
-      await logger.logAuthenticationError('No encryption key available', {
-        endpoint: '/api/wallet/create',
-        method: 'POST',
-        userId: req.body?.userId,
-        error: error,
-        errorMessage: error.message,
-        statusCode: 401
-      })
-      res.status(401).json({
-        error: 'Authentication required',
-        message: 'Please sign in to continue. Server has been restarted.',
-        requiresAuth: true
-      });
-    } else {
-      await logger.logApiError('Failed to create wallet', {
-        endpoint: '/api/wallet/create',
-        method: 'POST',
-        userId: req.body?.userId,
-        error: error,
-        errorMessage: error.message,
-        statusCode: 500
-      })
-      res.status(500).json({
-        error: 'Failed to create wallet',
-        message: error.message
-      });
-    }
-  }
-});
-
-// Decrypt wallet private key for viewing
-app.post('/api/wallet/decrypt', async (req, res) => {
-  try {
-    const { walletId, userId } = req.body;
-
-    if (!walletId || !userId) {
-      return res.status(400).json({ error: 'Wallet ID and user ID are required' });
-    }
-
-    // Fetch wallet from DB
-    const wallet = await Wallet.findOne({ _id: walletId, user: userId });
-
-    if (!wallet) {
-      return res.status(404).json({ error: 'Wallet not found' });
-    }
-    const privateKey = await decryptPrivateKey(wallet.encryptedPrivateKey);
-
-    res.status(200).json({ privateKey });
-  } catch (error: any) {
-    console.error('Failed to decrypt private key:', error);
-    // Check if error is due to missing password
-    if (error.message.includes('No encryption key available')) {
-      await logger.logAuthenticationError('No encryption key available', {
-        endpoint: '/api/wallet/decrypt',
-        method: 'POST',
-        userId: req.body?.userId,
-        walletId: req.body?.walletId,
-        error: error,
-        errorMessage: error.message,
-        statusCode: 401
-      })
-      res.status(401).json({
-        error: 'Authentication required',
-        message: 'Please sign in to continue. Server has been restarted.',
-        requiresAuth: true
-      });
-    } else {
-      await logger.logSecurityEvent('wallet_decryption_failed', 'Failed to decrypt private key', {
-        endpoint: '/api/wallet/decrypt',
-        method: 'POST',
-        userId: req.body?.userId,
-        walletId: req.body?.walletId,
-        error: error,
-        errorMessage: error.message,
-        statusCode: 500
-      })
-      res.status(500).json({
-        error: 'Failed to decrypt private key',
-        message: error.message
-      });
-    }
-  }
-});
-
+// Secure update endpoint with authentication and rate limiting
 app.post('/api/update-app', async (req, res) => {
   try {
+    // Authentication check - require API key
+    const apiKey = req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
+
+    if (!apiKey || apiKey !== API_KEY) {
+      await logger.logSecurityEvent('UNAUTHORIZED_UPDATE_ATTEMPT', 'Unauthorized update attempt', {
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+        endpoint: '/api/update-app'
+      });
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Additional security: Only allow updates from the server IP
+    const SERVER_IP = process.env.SERVER_IP as string;
+    if (!SERVER_IP) {
+      return res.status(500).json({ error: 'Server IP not configured' });
+    }
+    
+    // Check if request is from the allowed server IP
+    const clientIP = req.ip || req.socket.remoteAddress;
+    if (clientIP !== SERVER_IP && clientIP !== `::ffff:${SERVER_IP}`) {
+      await logger.logSecurityEvent('BLOCKED_UPDATE_IP', 'Update attempt from unauthorized IP', {
+        ip: clientIP,
+        allowedIP: SERVER_IP,
+        endpoint: '/api/update-app'
+      });
+      return res.status(403).json({ error: 'Forbidden: Updates only allowed from server IP' });
+    }
+
+    // Rate limiting check - prevent abuse
+    const rateLimitKey = `update_app_${req.ip}`;
+    const redis = redisClient.getClient();
+    if (redis) {
+      const attempts = await redis.incr(rateLimitKey);
+      if (attempts === 1) {
+        await redis.expire(rateLimitKey, 3600); // 1 hour expiry
+      }
+      if (attempts > 3) { // Max 3 update attempts per hour
+        await logger.logSecurityEvent('RATE_LIMIT_EXCEEDED', 'Update rate limit exceeded', {
+          ip: req.ip,
+          attempts,
+          endpoint: '/api/update-app'
+        });
+        return res.status(429).json({ error: 'Too many requests' });
+      }
+    }
+
+
+    // Check for updates
     const { data: update } = await axios.post(
       "https://updates.nfttools.io/api/v1/check", {},
       {
@@ -8615,13 +8397,40 @@ app.post('/api/update-app', async (req, res) => {
           "x-app-version": "0.0.0",
           username: process.env.USERNAME
         },
+        timeout: 10000 // 10 second timeout
       }
     );
 
-    const scriptUrl = update.releaseInfo.downloadUrl
-    const SERVER_IP = process.env.SERVER_IP as string
-    const { data } = await axios.post(`http://${SERVER_IP}:9999/update`, { scriptUrl })
-    res.status(200).json(data)
+    if (!update?.releaseInfo?.downloadUrl) {
+      return res.status(404).json({ error: 'No update available' });
+    }
+
+    // Validate the download URL is from trusted source
+    const trustedDomains = ['updates.nfttools.io', 'github.com', 'githubusercontent.com'];
+    const urlObj = new URL(update.releaseInfo.downloadUrl);
+    if (!trustedDomains.some(domain => urlObj.hostname.includes(domain))) {
+      await logger.logSecurityEvent('UNTRUSTED_UPDATE_URL', 'Update from untrusted source blocked', {
+        url: update.releaseInfo.downloadUrl,
+        endpoint: '/api/update-app'
+      });
+      return res.status(400).json({ error: 'Invalid update source' });
+    }
+
+    const scriptUrl = update.releaseInfo.downloadUrl;
+
+    // Trigger update with timeout
+    const { data } = await axios.post(`http://${SERVER_IP}:9999/update`,
+      { scriptUrl },
+      { timeout: 30000 } // 30 second timeout
+    );
+
+    await logger.logSecurityEvent('UPDATE_TRIGGERED', 'Application update triggered successfully', {
+      version: update.releaseInfo.version,
+      ip: req.ip,
+      endpoint: '/api/update-app'
+    });
+
+    res.status(200).json(data);
   } catch (error: any) {
     console.error('Failed to schedule update:', error);
     await logger.logApiError('Failed to schedule update', {
@@ -8630,11 +8439,11 @@ app.post('/api/update-app', async (req, res) => {
       error: error,
       errorMessage: error.message,
       statusCode: error?.response?.status || 500
-    })
+    });
     res.status(500).json({
       scheduled: false,
       message: 'Failed to schedule update',
-      error: error.message
+      error: process.env.NODE_ENV === 'production' ? 'Internal server error' : error.message
     });
   }
 });
