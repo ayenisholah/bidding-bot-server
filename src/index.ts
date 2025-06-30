@@ -584,10 +584,7 @@ async function startServer() {
     };
 
     queue = new Queue(QUEUE_NAME, QUEUE_OPTIONS);
-    queueEvents = new QueueEvents(QUEUE_NAME, {
-      connection: await createBullMQConnection(),
-      prefix: '{bull}'
-    });
+    queueEvents = new QueueEvents(QUEUE_NAME, QUEUE_OPTIONS);
 
     // Set up queue event handlers now that queueEvents is initialized
     setupQueueEventHandlers();
@@ -8419,7 +8416,8 @@ app.post('/api/currency/conversion', async (req, res) => {
 // Password endpoint for storing user password in server memory
 app.post('/api/auth/password', async (req, res) => {
   try {
-    const { password } = req.body;
+    const { encryptedPassword } = req.body;
+    const password = await decryptPrivateKey(encryptedPassword)
 
     if (!password) {
       return res.status(400).json({ error: 'Password is required' });
