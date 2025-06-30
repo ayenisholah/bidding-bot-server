@@ -389,25 +389,7 @@ async function monitorHealth() {
       await queue.resume();
     }
 
-    // if (counts.waiting > 0) {
-    //   // const jobs: Job[] = await queue.getWaiting()
-    //   // await Promise.all(jobs.map((job) => job.remove()))
-    //   await runScheduledLoop()
-    // }
-
     const totalJobs = Object.values(counts).reduce((a, b) => a + b, 0);
-
-    // if (totalJobs === 0) {
-    //   rps.currentRPS = 0
-
-    //   bidRateState['opensea'] = { bids: [] }
-    //   bidRateState['blur'] = { bids: [] }
-    //   bidRateState['magiceden'] = { bids: [] }
-
-    //   globalBidRates['opensea'] = { bidsPerSecond: 0, totalBids: 0, windowPeriod: BID_WINDOW_SECONDS }
-    //   globalBidRates['magiceden'] = { bidsPerSecond: 0, totalBids: 0, windowPeriod: BID_WINDOW_SECONDS }
-    //   globalBidRates['blur'] = { bidsPerSecond: 0, totalBids: 0, windowPeriod: BID_WINDOW_SECONDS }
-    // }
 
     console.log('\n📊 ═══════ Health Monitor Stats ═══════ 📊');
 
@@ -423,10 +405,6 @@ async function monitorHealth() {
     });
     console.log(`Total Jobs: ${totalJobs}`);
 
-    // const activeWorkers = workers.filter(w => w.isRunning()).length;
-    // console.log(BLUE + '\n👷 Worker Status:' + RESET, `${GREEN}✅ ${activeWorkers}/${WORKER_COUNT} Workers Active${RESET}`);
-
-    // Update bid rates to ensure they fade during inactivity
     updateAllBidRates();
 
   } catch (error) {
@@ -2832,7 +2810,7 @@ async function removePendingAndWaitingBids(task: ITask, marketplace?: string) {
 
 function getJobIds(marketplace: string, task: ITask) {
   const jobIds: string[] = []
-  const selectedTraits = transformNewTask(task.selectedTraits[marketplace.toLowerCase()])
+  const selectedTraits = transformNewTask(task.selectedTraits?.[marketplace.toLowerCase()])
   const isTraitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
 
   const tokenBid = task.bidType === "token"
@@ -3495,13 +3473,14 @@ function attemptReconnect(): void {
 
 async function handleCounterBid(message: any) {
   try {
-    if (message && message?.event && message.event === "item_transferred") {
-      console.log(GOLD + JSON.stringify(message) + RESET);
-    }
+    // console.log(GOLD + JSON.stringify(message) + RESET);
+    // if (message && message?.event && message.event === "item_transferred") {
+    //   console.log(GOLD + JSON.stringify(message) + RESET);
+    // }
 
-    if (message && message?.event && message.event === "item_sold") {
-      console.log(GOLD + JSON.stringify(message) + RESET);
-    }
+    // if (message && message?.event && message.event === "item_sold") {
+    //   console.log(GOLD + JSON.stringify(message) + RESET);
+    // }
 
     const { contractAddress, slug } = getMarketplaceDetails(message);
     if (!contractAddress && !slug) return

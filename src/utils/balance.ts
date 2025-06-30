@@ -4,7 +4,7 @@ import redisClient from "./redis";
 import { RED, RESET } from "..";
 import { logger, ErrorCategory } from "./logger";
 
-const redis = redisClient.getClient()
+const getRedis = () => redisClient.getClient()
 
 export async function fetchERC20Balance(walletAddress: string, tokenAddress: string): Promise<number> {
   const CACHE_EXPIRY_SECONDS = 60;
@@ -13,9 +13,16 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
   const staleCacheKey = `{erc20_balance_stale:${walletAddress}}:${tokenAddress}`;
 
   // Try to get fresh cached balance first
-  const cachedBalance = await redis.get(cacheKey);
-  if (cachedBalance) {
-    return Number(cachedBalance);
+  try {
+    const redis = getRedis();
+    if (redis) {
+      const cachedBalance = await redis.get(cacheKey);
+      if (cachedBalance) {
+        return Number(cachedBalance);
+      }
+    }
+  } catch (error) {
+    console.warn('Redis not available for cache lookup:', error);
   }
 
   const lockManager = new DistributedLockManager({
@@ -29,9 +36,16 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
     const result = await lockManager.withLock(
       lockKey,
       async () => {
-        const cachedBalanceAfterLock = await redis.get(cacheKey);
-        if (cachedBalanceAfterLock) {
-          return Number(cachedBalanceAfterLock);
+        try {
+          const redis = getRedis();
+          if (redis) {
+            const cachedBalanceAfterLock = await redis.get(cacheKey);
+            if (cachedBalanceAfterLock) {
+              return Number(cachedBalanceAfterLock);
+            }
+          }
+        } catch (error) {
+          console.warn('Redis not available for cache lookup after lock:', error);
         }
 
         try {
@@ -99,8 +113,15 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
               const formattedBalance = Number(formatEther(balance));
               
               // Store in both fresh and stale cache
-              await redis.set(cacheKey, formattedBalance.toString(), 'EX', CACHE_EXPIRY_SECONDS);
-              await redis.set(staleCacheKey, formattedBalance.toString(), 'EX', STALE_CACHE_EXPIRY_SECONDS);
+              try {
+                const redis = getRedis();
+                if (redis) {
+                  await redis.set(cacheKey, formattedBalance.toString(), 'EX', CACHE_EXPIRY_SECONDS);
+                  await redis.set(staleCacheKey, formattedBalance.toString(), 'EX', STALE_CACHE_EXPIRY_SECONDS);
+                }
+              } catch (error) {
+                console.warn('Failed to cache balance:', error);
+              }
 
               return formattedBalance;
             } catch (error: any) {
@@ -138,7 +159,15 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
     // If we get a network error or lock error, try to use stale cache
     console.warn(`Failed to fetch fresh balance for ${walletAddress}/${tokenAddress}, checking stale cache...`, error.message || error);
     
-    const staleBalance = await redis.get(staleCacheKey);
+    let staleBalance = null;
+    try {
+      const redis = getRedis();
+      if (redis) {
+        staleBalance = await redis.get(staleCacheKey);
+      }
+    } catch (error) {
+      console.warn('Failed to get stale cache:', error);
+    }
     if (staleBalance) {
       console.log(`Using stale cached balance for ${walletAddress}/${tokenAddress}: ${staleBalance}`);
       return Number(staleBalance);
