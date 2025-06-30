@@ -21,7 +21,7 @@ import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicE
 import { CollectionItemsQueryVariables, createListing, fetchOpenSeaCollectionItems, fetchOpenseaTraits, getCollectionDetails, getOpenseaFloor } from "./functions";
 import mongoose from 'mongoose';
 import Task, { ITask, SelectedTraits } from "./models/task.model";
-import { Queue, Worker, Job, JobType, UnrecoverableError, JobsOptions, QueueEvents } from "bullmq";
+import { Queue, Worker, Job, JobType, UnrecoverableError, JobsOptions, QueueEvents, QueueOptions } from "bullmq";
 import Wallet from "./models/wallet.model";
 import redisClient, { createBullMQConnection } from "./utils/redis";
 import { BASE_URL, ERC20_MIN_ABI } from "./constants";
@@ -55,6 +55,8 @@ export const errorStats: BidCounts = {};
 export const skipStats: BidCounts = {};
 export const blurRateLimitInfo: { [walletAddress: string]: { remaining: number; reset: number; limit: number } } = {};
 const QUEUE_NAME = 'BIDDING_BOT';
+
+
 export const WORKER_COUNT = 1
 
 // BullMQ configuration will use the connection from redis.ts
@@ -570,10 +572,18 @@ async function startServer() {
 
     // Initialize queue and queueEvents with Redis connection
     const queueConnection = await createBullMQConnection();
-    queue = new Queue(QUEUE_NAME, {
+
+    const QUEUE_OPTIONS: QueueOptions = {
+      prefix: '{bull}',
       connection: queueConnection,
-      prefix: '{bull}'
-    });
+      defaultJobOptions: {
+        removeOnComplete: true,
+        removeOnFail: true,
+        attempts: 0
+      }
+    };
+
+    queue = new Queue(QUEUE_NAME, QUEUE_OPTIONS);
     queueEvents = new QueueEvents(QUEUE_NAME, {
       connection: await createBullMQConnection(),
       prefix: '{bull}'
