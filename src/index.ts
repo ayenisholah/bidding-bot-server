@@ -9,6 +9,7 @@ import { clearTimeout } from 'timers';
 import crypto, { randomUUID } from 'crypto';
 import os from "os"
 import cors from "cors";
+import helmet from "helmet";
 import stringify from 'json-stable-stringify';
 import WebSocket, { Server as WebSocketServer } from 'ws';
 import http from 'http';
@@ -278,7 +279,51 @@ const clientId = randomUUID()
 
 const app = express();
 const port = process.env.PORT || 3003;
-app.use(bodyParser.json());
+
+// Security headers with helmet
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'", "wss:", "https:", "https://nfttools-ws-proxy.nfttools.io", "https://updates.nfttools.io"],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"],
+      upgradeInsecureRequests: [],
+    },
+  },
+  hsts: {
+    maxAge: 31536000, // 1 year
+    includeSubDomains: true,
+    preload: true
+  },
+  noSniff: true,
+  xssFilter: true,
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  frameguard: { action: 'deny' },
+  permittedCrossDomainPolicies: false,
+}));
+
+// Additional security headers
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+
+  // Remove fingerprinting headers
+  res.removeHeader('X-Powered-By');
+
+  next();
+});
+
+app.use(bodyParser.json({ limit: '10mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 
 app.use(cors({
   origin: function (origin, callback) {
@@ -290,6 +335,7 @@ app.use(cors({
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true,
+  maxAge: 86400 // 24 hours
 }));
 
 const server = http.createServer(app);
@@ -7664,9 +7710,6 @@ app.get("/seen-items", (req, res) => {
 app.get("/health", async (req, res) => {
   try {
     const queueCounts = await queue.getJobCounts();
-    // const workerCount = workers.length;
-    // const activeWorkers = workers.forEach((worker) => worker.isRunning());
-
     const metrics = {
       status: "ok",
       timestamp: new Date().toISOString(),
@@ -7674,7 +7717,6 @@ app.get("/health", async (req, res) => {
       components: {
         redis: redis && redis.status === "ready" ? "ok" : "error",
         mongodb: mongoose.connection.readyState === 1 ? "ok" : "error",
-        // workers: workerCount > 0 ? "ok" : "error"
       },
       metrics: {
         memory: {
@@ -7684,13 +7726,8 @@ app.get("/health", async (req, res) => {
           external: `${Math.round(process.memoryUsage().external / 1024 / 1024)}MB`
         },
         queue: queueCounts,
-        // workers: {
-        //   total: workerCount,
-        //   active: activeWorkers
-        // }
       }
     };
-
     res.json(metrics);
   } catch (error: any) {
     console.error("Health check error:", error);
@@ -8358,7 +8395,7 @@ app.post('/api/update-app', async (req, res) => {
     if (!SERVER_IP) {
       return res.status(500).json({ error: 'Server IP not configured' });
     }
-    
+
     // Check if request is from the allowed server IP
     const clientIP = req.ip || req.socket.remoteAddress;
     if (clientIP !== SERVER_IP && clientIP !== `::ffff:${SERVER_IP}`) {
@@ -8486,6 +8523,29 @@ app.post('/api/wallet/nfts', async (req, res) => {
       error: error.message
     });
   }
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  const healthStatus = {
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    security: {
+      headers: {
+        helmet: 'enabled',
+        hsts: 'enabled (max-age: 31536000)',
+        csp: 'enabled',
+        xFrameOptions: 'DENY',
+        xContentTypeOptions: 'nosniff',
+        xssProtection: 'enabled'
+      }
+    },
+    environment: process.env.NODE_ENV || 'development'
+  };
+
+  res.status(200).json(healthStatus);
 });
 
 export async function fetchAddressBalances(walletAddress: string): Promise<AddressBalancesResponse> {
