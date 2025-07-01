@@ -16,6 +16,11 @@ interface NFTItem {
   tokenType: string;
   name?: string;
   imageUrl?: string;
+  rarity?: {
+    rank?: number;
+    category?: string;
+    totalSupply?: number;
+  };
   collection?: {
     name?: string;
     slug?: string;
@@ -260,6 +265,11 @@ async function fetchNFTsFromOpenSea({ wallet, walletId }: { wallet: string; wall
             tokenType: tokenType,
             name: item.name || `${item.collection?.name} #${item.tokenId}`,
             imageUrl: item.imageUrl || '',
+            rarity: item.rarity ? {
+              rank: item.rarity.rank,
+              category: item.rarity.category,
+              totalSupply: item.rarity.totalSupply
+            } : undefined,
             collection: {
               name: item.collection?.name || '',
               slug: item.collection?.slug || '',
