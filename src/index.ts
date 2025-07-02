@@ -13,13 +13,11 @@ import helmet from "helmet";
 import stringify from 'json-stable-stringify';
 import WebSocket, { Server as WebSocketServer } from 'ws';
 import http from 'http';
-import fs from 'fs/promises';
-import path from 'path';
 import { axiosInstance, initialize, limiter } from "./init";
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrder, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
-import { CollectionItemsQueryVariables, createListing, fetchOpenSeaCollectionItems, fetchOpenseaTraits, getCollectionDetails, getOpenseaFloor } from "./functions";
+import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, fetchOpenseaTraits, getCollectionDetails, getOpenseaFloor } from "./functions";
 import mongoose from 'mongoose';
 import Task, { ITask, SelectedTraits } from "./models/task.model";
 import { Queue, Worker, Job, JobType, UnrecoverableError, JobsOptions, QueueEvents, QueueOptions } from "bullmq";
@@ -39,7 +37,10 @@ import axios from "axios";
 import { decryptPrivateKey, setPassword, getPassword, decryptPassword } from "./utils/crypto";
 import { fetchWalletNFTs } from "./utils/nft";
 import { logger, ErrorCategory, DatabaseOperation, QueueOperation } from "./utils/logger";
+import WebSocketManager from "./utils/websocket-manager";
 const prisma = new PrismaClient()
+
+const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
@@ -270,7 +271,6 @@ const CANCEL_MAGICEDEN_BID = "CANCEL_MAGICEDEN_BID"
 const CANCEL_BLUR_BID = "CANCEL_BLUR_BID"
 const MAGICEDEN_MARKETPLACE = "0x9A1D00bEd7CD04BCDA516d721A596eb22Aac6834"
 const MAX_RETRIES: number = 5;
-const MARKETPLACE_WS_URL = "https://nfttools-ws-proxy.nfttools.io";
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 const OPENSEA_PROTOCOL_ADDRESS = "0x0000000000000068F116a894984e2DB1123eB395"
 const HEALTH_CHECK_INTERVAL = 5000;
@@ -340,8 +340,7 @@ app.use(cors({
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
-let ws: WebSocket;
-let heartbeatIntervalId: NodeJS.Timeout | null = null;
+let wsManager: WebSocketManager;
 let reconnectTimeoutId: NodeJS.Timeout | null = null;
 let retryCount: number = 0;
 
@@ -708,6 +707,25 @@ async function startServer() {
       console.log(`WebSocket server is running on ws://localhost:${port}`);
     });
 
+    // Prevent server crashes from unhandled WebSocket errors
+    process.on('unhandledRejection', (reason, promise) => {
+      console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+      logger.logGeneralError('Unhandled Promise Rejection', {
+        operation: 'process_unhandled_rejection',
+        error: reason instanceof Error ? reason : new Error(String(reason))
+      });
+      // Don't exit the process - let the server continue running
+    });
+
+    process.on('uncaughtException', (error) => {
+      console.error('Uncaught Exception:', error);
+      logger.logGeneralError('Uncaught Exception', {
+        operation: 'process_uncaught_exception',
+        error: error
+      });
+      // Don't exit the process - let the server continue running
+    });
+
     // Initialize WebSocket connection monitoring
     await loadConnectionMetrics();
     startConnectionMonitoring();
@@ -744,6 +762,12 @@ process.on('SIGINT', () => {
     console.log('Stopped periodic cleanup');
   }
 
+  // Disconnect WebSocket
+  if (wsManager) {
+    wsManager.disconnect();
+    console.log('WebSocket disconnected');
+  }
+
   // Final cleanup before exit
   seenOrderHashes.clear();
   seenBids.clear();
@@ -756,6 +780,12 @@ process.on('SIGTERM', () => {
   if (cleanupIntervalId) {
     clearInterval(cleanupIntervalId);
     console.log('Stopped periodic cleanup');
+  }
+
+  // Disconnect WebSocket
+  if (wsManager) {
+    wsManager.disconnect();
+    console.log('WebSocket disconnected');
   }
 
   // Final cleanup before exit
@@ -1388,10 +1418,14 @@ wss.on('connection', async (ws) => {
           await updateMarketplace(message.data)
           break
         case 'retry-connection':
-          await connectWebSocket()
+          try {
+            await connectWebSocket()
+          } catch (error) {
+            console.error('Failed to retry WebSocket connection:', error);
+          }
           break
         case 'create-listing':
-          await createListing(message.data)
+          // await createListing(message.data)
           break
         default:
           console.warn(YELLOW + `Unknown endpoint: ${message.endpoint}` + RESET);
@@ -1529,19 +1563,30 @@ async function processImportedTasks(tasks: ITask[]) {
       console.log(`Successfully added ${jobs.length} jobs to the queue.`);
     }
 
-    for (const task of tasks) {
-      if (task.outbidOptions.counterbid || Number(task?.stopOptions?.maxFloorPrice) > 0) {
-        try {
-          if (!ws || ws.readyState !== WebSocket.OPEN) {
-            await connectWebSocket();
-          }
-          console.log("subscribing to collection: ", task.contract.slug);
-          const newTask = { ...task, running: true };
-          await subscribeToCollections([newTask]);
-        } catch (error) {
-          console.error(RED + `Error subscribing to collection ${task.contract.slug}: ` + RESET, error);
-        }
+    // Wait for WebSocket connection if needed
+    const needsWebSocket = tasks.some(task =>
+      task.outbidOptions.counterbid || Number(task?.stopOptions?.maxFloorPrice) > 0
+    );
+
+    if (needsWebSocket && !wsManager?.isConnected()) {
+      console.log(YELLOW + "Waiting for WebSocket connection..." + RESET);
+      try {
+        await connectWebSocket();
+        // Give it a moment to establish connection
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (error) {
+        console.error('Failed to establish WebSocket connection for task subscription:', error);
       }
+    }
+
+    // Now subscribe to all collections that need it
+    const tasksNeedingSubscription = tasks.filter(task =>
+      task.outbidOptions.counterbid || Number(task?.stopOptions?.maxFloorPrice) > 0
+    ).map(task => ({ ...task, running: true }));
+
+    if (tasksNeedingSubscription.length > 0) {
+      console.log(GREEN + `Subscribing to ${tasksNeedingSubscription.length} collections` + RESET);
+      subscribeToCollections(tasksNeedingSubscription);
     }
 
     console.log(GREEN + `=== Imported Tasks Processing Complete ===\n` + RESET);
@@ -1576,13 +1621,20 @@ async function processNewTask(task: ITask) {
 
     if (task.outbidOptions.counterbid || Number(task?.stopOptions?.maxFloorPrice) > 0) {
       try {
-        if (!ws || ws.readyState !== WebSocket.OPEN) {
-          await connectWebSocket();
+        if (!wsManager?.isConnected()) {
+          console.log(YELLOW + "Waiting for WebSocket connection..." + RESET);
+          try {
+            await connectWebSocket();
+            // Give it a moment to establish connection
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } catch (error) {
+            console.error('Failed to establish WebSocket connection for counterbid task:', error);
+          }
         }
 
         console.log("subscribing to collection: ", task.contract.slug);
         const newTask = { ...task, running: true };
-        await subscribeToCollections([newTask]);
+        subscribeToCollections([newTask]);
       } catch (error) {
         console.error(RED + `Error subscribing to collection ${task.contract.slug}: ` + RESET, error);
       }
@@ -2491,8 +2543,12 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     console.log(GREEN + `Updated task ${task.contract.slug} running status to: ${start} `.toUpperCase() + RESET);
     if (task.outbidOptions.counterbid || Number(task?.stopOptions?.maxFloorPrice) > 0) {
       try {
-        if (!ws || ws.readyState !== WebSocket.OPEN) {
-          await connectWebSocket();
+        if (!wsManager?.isConnected()) {
+          try {
+            await connectWebSocket();
+          } catch (error) {
+            console.error('Failed to establish WebSocket connection for task:', error);
+          }
         }
 
 
@@ -3242,7 +3298,7 @@ async function loadConnectionMetrics() {
 
 function startConnectionMonitoring() {
   setInterval(() => {
-    if (connectionMetrics.connectionStartTime && ws?.readyState === WebSocket.OPEN) {
+    if (connectionMetrics.connectionStartTime && wsManager?.isConnected()) {
       const currentDuration = Date.now() - connectionMetrics.connectionStartTime;
 
       // Log every 5 minutes
@@ -3261,149 +3317,106 @@ function startConnectionMonitoring() {
 
 
 async function connectWebSocket(): Promise<void> {
-  // Check if already connected
-  if (ws?.readyState === WebSocket.OPEN) {
-    console.log(YELLOW + "WebSocket already connected, sending ping to verify..." + RESET);
-    ws.send(JSON.stringify({ event: 'ping', clientId }));
-    return;
-  }
+  if (!wsManager) {
+    wsManager = new WebSocketManager({
+      url: MARKETPLACE_WS_URL,
+      clientId: clientId,
+      maxRetries: 0, // 0 means infinite retries
+      reconnectBaseDelay: 1000,
+      reconnectMaxDelay: 60000,
+      heartbeatInterval: 30000, // CLIENT_PROTOCOL.md specifies 30 seconds
+      connectionTimeout: 10000
+    });
 
-  ws = new WebSocket(MARKETPLACE_WS_URL);
+    // Set up event handlers
+    wsManager.on('connected', (connectionId) => {
+      console.log(GOLD + `CONNECTED TO MARKETPLACE EVENTS WEBSOCKET (ID: ${connectionId}) at ${new Date().toISOString()}` + RESET);
 
-  ws.addEventListener("open", async function open() {
-    retryCount = 0;
+      // Update connection metrics
+      connectionMetrics.connectionStartTime = Date.now();
+      connectionMetrics.currentConnectionId = connectionId;
+      connectionMetrics.totalConnections++;
+      retryCount = 0;
 
-    // Initialize connection metrics
-    const connectionId = `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    connectionMetrics.connectionStartTime = Date.now();
-    connectionMetrics.currentConnectionId = connectionId;
-    connectionMetrics.totalConnections++;
+      // Clear activeSubscriptions to sync with server
+      activeSubscriptions.clear();
+      console.log(YELLOW + "Cleared active subscriptions for fresh reconnect" + RESET);
 
-    console.log(GOLD + `CONNECTED TO MARKETPLACE EVENTS WEBSOCKET (ID: ${connectionId}) at ${new Date().toISOString()}` + RESET);
+      // Subscribe to collections after connection
+      subscribeToCollections(currentTasks as unknown as ITask[]);
+    });
 
-    // Send custom ping messages at regular intervals
-    if (pingIntervalId !== null) {
-      clearTimeout(pingIntervalId);
-      pingIntervalId = null;
-    }
+    wsManager.on('disconnected', (event: { code: number; reason: string }) => {
+      // Calculate connection duration
+      if (connectionMetrics.connectionStartTime) {
+        connectionMetrics.connectionEndTime = Date.now();
+        connectionMetrics.connectionDuration = connectionMetrics.connectionEndTime - connectionMetrics.connectionStartTime;
+        connectionMetrics.totalDisconnections++;
 
-    let lastMessageTime = Date.now();
+        updateConnectionStats(connectionMetrics.connectionDuration, getCloseReason(event.code));
 
-    const pingInterval = setInterval(() => {
-      if (Date.now() - lastMessageTime > 30000 && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ event: 'ping', clientId }));
-        console.log('-----PING------');
+        console.log(YELLOW + `WebSocket disconnected after ${formatDuration(connectionMetrics.connectionDuration)} (Code: ${event.code}) - cleared subscription cache` + RESET);
+      } else {
+        console.log(YELLOW + "WebSocket closed - cleared subscription cache" + RESET);
       }
-    }, 30000);
 
-    // Clear existing timeouts/intervals
-    if (reconnectTimeoutId !== null) {
-      clearTimeout(reconnectTimeoutId);
-      reconnectTimeoutId = null;
-    }
+      // Clear subscription cache on disconnect
+      activeSubscriptions.clear();
+    });
 
-    if (heartbeatIntervalId !== null) {
-      clearInterval(heartbeatIntervalId);
-    }
-
-    // Clear activeSubscriptions on reconnect to ensure fresh state
-    activeSubscriptions.clear();
-    console.log(YELLOW + "Cleared active subscriptions for fresh reconnect" + RESET);
-
-    await subscribeToCollections(currentTasks as unknown as ITask[]);
-
-    // Set up reconnection check
-    heartbeatIntervalId = setInterval(() => {
-      if (ws.readyState !== WebSocket.OPEN) {
-
-        console.log(YELLOW + "WebSocket connection lost, attempting reconnect..." + RESET);
-        ws.close();
-        connectWebSocket();
-      }
-    }, 30000);
-
-    ws.on("message", async function incoming(data: string) {
+    wsManager.on('message', async (message: any) => {
       try {
-        lastMessageTime = Date.now(); // Update on message receipt
-        const message = JSON.parse(data.toString())
         if (message.type === 'pong') {
           console.log('Pong received from server.');
-        }
-        // Add handler for the initial data request
-        if (message.endpoint === "get-initial-data") {
-          // Send the current state to the requesting client
-          const initialDataMessage = JSON.stringify({
-            type: 'bidRatesUpdate',
-            data: clientData
-          });
-
-          ws.send(initialDataMessage);
           return;
         }
+
+        // Handle initial data request
+        if (message.endpoint === "get-initial-data") {
+          const initialDataMessage = {
+            type: 'bidRatesUpdate',
+            data: clientData
+          };
+          wsManager.sendMessage(initialDataMessage);
+          return;
+        }
+
+        // Handle counter bid messages
         await handleCounterBid(message);
       } catch (error) {
+        console.error('Error handling message:', error);
       }
     });
-  });
 
-  ws.addEventListener("close", function close(event) {
-    // Calculate connection duration
-    if (connectionMetrics.connectionStartTime) {
-      connectionMetrics.connectionEndTime = Date.now();
-      connectionMetrics.connectionDuration = connectionMetrics.connectionEndTime - connectionMetrics.connectionStartTime;
-
-      // Update statistics
-      connectionMetrics.totalDisconnections++;
-      updateConnectionStats(connectionMetrics.connectionDuration, getCloseReason(event.code));
-
-      console.log(YELLOW + `WebSocket disconnected after ${formatDuration(connectionMetrics.connectionDuration)} (Code: ${event.code}) - cleared subscription cache` + RESET);
-    } else {
-      console.log(YELLOW + "WebSocket closed - cleared subscription cache" + RESET);
-    }
-
-    if (heartbeatIntervalId !== null) {
-      clearInterval(heartbeatIntervalId);
-      heartbeatIntervalId = null;
-    }
-    // Clear subscription cache on disconnect
-    activeSubscriptions.clear();
-    attemptReconnect();
-  });
-
-  ws.addEventListener("error", function error(err) {
-    logger.logWebSocketError("WebSocket connection error", {
-      error: new Error(err.message || 'WebSocket error'),
-      connectionId: connectionMetrics.currentConnectionId || 'unknown',
-      retryCount,
-      connectionDuration: connectionMetrics.connectionStartTime ? Date.now() - connectionMetrics.connectionStartTime : 0
-    });
-    attemptReconnect();
-  });
-}
-
-function attemptReconnect(): void {
-  if (retryCount < MAX_RETRIES) {
-    if (reconnectTimeoutId !== null) {
-      clearTimeout(reconnectTimeoutId);
-    }
-    let delay: number = Math.pow(2, retryCount) * 1000;
-    console.log(`Attempting to reconnect in ${delay / 1000} seconds...`);
-
-    logger.logWarning(ErrorCategory.WEBSOCKET, "WebSocket reconnection attempt", {
-      retryCount: retryCount + 1,
-      maxRetries: MAX_RETRIES,
-      delaySeconds: delay / 1000,
-      connectionId: connectionMetrics.currentConnectionId || 'unknown'
+    wsManager.on('error', (error: Error) => {
+      logger.logWebSocketError("WebSocket connection error", {
+        error: error,
+        connectionId: connectionMetrics.currentConnectionId || 'unknown',
+        retryCount: retryCount,
+        connectionDuration: connectionMetrics.connectionStartTime ? Date.now() - connectionMetrics.connectionStartTime : 0
+      });
     });
 
-    reconnectTimeoutId = setTimeout(connectWebSocket, delay);
-    retryCount++;
-  } else {
-    logger.logWebSocketError("WebSocket max reconnection attempts exceeded", {
-      retryCount,
-      maxRetries: MAX_RETRIES,
-      connectionId: connectionMetrics.currentConnectionId || 'unknown'
+    wsManager.on('server_status', (status: any) => {
+      console.log(`Server Status Update:`, status);
+      // Update any UI or metrics as needed
     });
+
+    wsManager.on('max_retries_exceeded', () => {
+      logger.logWebSocketError("WebSocket max reconnection attempts exceeded", {
+        connectionId: connectionMetrics.currentConnectionId || 'unknown',
+        retryCount: MAX_RETRIES,
+        maxRetries: MAX_RETRIES
+      });
+    });
+  }
+
+  // Connect with error handling
+  try {
+    await wsManager.connect();
+  } catch (error) {
+    logger.logWebSocketError("Failed to initiate WebSocket connection", error as Error);
+    // Don't rethrow - let the WebSocketManager handle reconnection
   }
 }
 
@@ -6328,7 +6341,6 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
     await bidOnMagiceden(taskId, bidCount, address, contractAddress, quantity, offerPrice.toString(), privateKey, slug, expiration, currency, bidTrait);
   } catch (error: any) {
     await logBidError(data.taskId, "MAGICEDEN TRAIT COUNTER BID ERROR", `Error processing MagicEden trait counter bid for task: ${data.slug}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)} `, "error", "magiceden");
-    errorStats[data.taskId]['magiceden']++
   }
 }
 
@@ -7746,7 +7758,7 @@ app.get("/api/websocket/stats", (req, res) => {
 
   res.json({
     current: {
-      connected: ws?.readyState === WebSocket.OPEN,
+      connected: wsManager?.isConnected() || false,
       duration: currentDuration,
       durationFormatted: formatDuration(currentDuration),
       connectionId: connectionMetrics.currentConnectionId
@@ -7763,6 +7775,183 @@ app.get("/api/websocket/stats", (req, res) => {
     },
     history: connectionHistory.slice(-20) // Last 20 connections
   });
+});
+
+// Enhanced WebSocket metrics endpoint
+app.get('/api/websocket/metrics', (req, res) => {
+  if (!wsManager) {
+    return res.json({ error: 'WebSocket manager not initialized' });
+  }
+
+  const metrics = wsManager.getMetrics();
+  const subscriptions = Array.from(wsManager.getActiveSubscriptions().entries()).map(([id, info]) => ({
+    id,
+    ...info
+  }));
+
+  res.json({
+    metrics,
+    subscriptions,
+    isConnected: wsManager.isConnected(),
+    url: MARKETPLACE_WS_URL,
+    clientId: clientId
+  });
+});
+
+// Test endpoint to manually connect WebSocket
+app.post('/api/websocket/connect', async (req, res) => {
+  try {
+    if (!wsManager || !wsManager.isConnected()) {
+      console.log(YELLOW + `Attempting WebSocket connection to ${MARKETPLACE_WS_URL}` + RESET);
+      try {
+        await connectWebSocket();
+      } catch (error) {
+        console.error('Failed to establish WebSocket connection for collection subscription:', error);
+      }
+
+      // Wait up to 3 seconds for connection
+      let attempts = 0;
+      while (!wsManager?.isConnected() && attempts < 6) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        attempts++;
+      }
+    }
+
+    const isConnected = wsManager?.isConnected() || false;
+    const metrics = wsManager?.getMetrics();
+
+    res.json({
+      success: isConnected,
+      isConnected,
+      message: isConnected ? 'WebSocket connected' : 'WebSocket connection failed',
+      url: MARKETPLACE_WS_URL,
+      metrics: metrics ? {
+        connectionQuality: metrics.connectionQuality,
+        totalConnections: metrics.totalConnections,
+        totalErrors: metrics.totalErrors,
+        lastError: metrics.lastError
+      } : undefined
+    });
+  } catch (error) {
+    console.error(RED + 'WebSocket connection error:' + RESET, error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+      url: MARKETPLACE_WS_URL
+    });
+  }
+});
+
+// Test endpoint to manually subscribe to a collection
+app.post('/api/websocket/subscribe-test', async (req, res) => {
+  try {
+    const { slug, contractAddress, marketplace } = req.body;
+
+    if (!slug || !contractAddress || !marketplace) {
+      return res.status(400).json({
+        error: 'Missing required fields: slug, contractAddress, marketplace'
+      });
+    }
+
+    if (!wsManager?.isConnected()) {
+      try {
+        await connectWebSocket();
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (error) {
+        console.error('Failed to establish WebSocket connection for subscription:', error);
+      }
+    }
+
+    await wsManager.subscribe(slug, contractAddress, marketplace.toUpperCase());
+
+    res.json({
+      success: true,
+      message: `Subscribed to ${slug} on ${marketplace}`,
+      subscriptions: Array.from(wsManager.getActiveSubscriptions().entries())
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Test raw WebSocket connectivity
+app.get('/api/websocket/test-raw', async (req, res) => {
+  try {
+    const testWs = new WebSocket(MARKETPLACE_WS_URL);
+    let connected = false;
+
+    const timeout = setTimeout(() => {
+      testWs.close();
+      if (!connected) {
+        res.json({
+          success: false,
+          url: MARKETPLACE_WS_URL,
+          error: 'Connection timeout'
+        });
+      }
+    }, 5000);
+
+    testWs.on('open', () => {
+      connected = true;
+      clearTimeout(timeout);
+      testWs.close();
+      res.json({
+        success: true,
+        url: MARKETPLACE_WS_URL,
+        message: 'Raw WebSocket connection successful'
+      });
+    });
+
+    testWs.on('error', (error) => {
+      clearTimeout(timeout);
+      if (!connected) {
+        res.json({
+          success: false,
+          url: MARKETPLACE_WS_URL,
+          error: error.message
+        });
+      }
+    });
+  } catch (error) {
+    res.json({
+      success: false,
+      url: MARKETPLACE_WS_URL,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Test WebSocket ping without response requirement
+app.post('/api/websocket/test-ping', async (req, res) => {
+  try {
+    if (!wsManager?.isConnected()) {
+      return res.status(400).json({
+        success: false,
+        error: 'WebSocket not connected'
+      });
+    }
+
+    // Send a simple ping message that doesn't require response
+    wsManager.sendMessage({
+      event: 'ping',
+      clientId: clientId,
+      timestamp: Date.now()
+    });
+
+    res.json({
+      success: true,
+      message: 'Ping sent',
+      isConnected: wsManager.isConnected()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
 });
 
 app.post("/api/traits/count", async (req, res) => {
@@ -8961,12 +9150,15 @@ const activeSubscriptions = new Set<string>(); // Set of "slug:marketplace" comb
 
 function subscribeToCollections(tasks: ITask[]) {
   try {
+    console.log(YELLOW + `subscribeToCollections called with ${tasks.length} tasks` + RESET);
+
     // Check if any task has counterbidding enabled or has purchase limits
     const hasCounterbidding = tasks.some(task => {
       if (!task) return false;
 
       // Check for counterbidding
       if (task.running && task.outbidOptions?.counterbid) {
+        console.log(GREEN + `Task ${task.contract.slug} has counterbidding enabled` + RESET);
         return true;
       }
 
@@ -8974,130 +9166,73 @@ function subscribeToCollections(tasks: ITask[]) {
       if (task.stopOptions?.triggerStopOptions &&
         task.stopOptions?.maxPurchase &&
         task.stopOptions.maxPurchase > 0) {
+        console.log(GREEN + `Task ${task.contract.slug} has purchase limits` + RESET);
         return true;
       }
 
       return false;
     });
 
-    if (!hasCounterbidding) return;
+    console.log(YELLOW + `hasCounterbidding: ${hasCounterbidding}, wsManager connected: ${wsManager?.isConnected()}` + RESET);
 
-    // Get unique client IDs from tasks
+    if (!hasCounterbidding || !wsManager?.isConnected()) return;
 
-    // Helper function to safely send WebSocket messages
-    const safeSendMessage = (message: any) => {
-      try {
-        if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify(message));
-        } else {
-          // Queue message to be sent when connection is established
-          setTimeout(() => safeSendMessage(message), 1000);
-        }
-      } catch (error) {
-        console.error(RED + 'Error sending WebSocket message:' + RESET, error);
-      }
-    };
-
-    // Send pings
-    safeSendMessage({
-      event: "ping",
-      clientId
-    });
-
-    // Set up single interval for ping messages
-    if (!marketplaceIntervals['global']) {
-      marketplaceIntervals['global'] = setInterval(() => {
-        safeSendMessage({
-          event: "ping",
-          clientId
-        });
-      }, 30000);
+    // Clear ping interval if it exists (now handled by WebSocketManager)
+    if (marketplaceIntervals['global']) {
+      clearInterval(marketplaceIntervals['global']);
+      delete marketplaceIntervals['global'];
     }
 
-    // Handle individual marketplace subscriptions
-    tasks.forEach(async (task) => {
-      // Handle OpenSea subscription
-      const hasOpenseaMarketplace = task.selectedMarketplaces.map(marketplace => marketplace.toLowerCase()).includes("opensea");
-      const hasMaxPurchaseLimit = task.stopOptions?.maxPurchase && task.stopOptions.maxPurchase > 0;
-      const hasTriggeredStopOptions = task.stopOptions?.triggerStopOptions;
-      const connectToOpensea = hasOpenseaMarketplace || (hasTriggeredStopOptions && hasMaxPurchaseLimit);
+    // Track which collections we've already subscribed to
+    const subscribedCollections = new Set<string>();
 
-      if (connectToOpensea) {
-        const subscriptionId = `${task.contract.slug}:${OPENSEA.toLowerCase()}`;
-
-        // Check if already subscribed to this collection on OpenSea
-        if (!activeSubscriptions.has(subscriptionId)) {
-          const openseaSubscriptionMessage = {
-            "slug": task.contract.slug,
-            "event": "join_the_party",
-            "topic": task.contract.slug,
-            "contractAddress": task.contract.contractAddress,
-            "clientId": clientId,
-            "marketplace": OPENSEA
-          };
-
-          safeSendMessage(openseaSubscriptionMessage);
-          activeSubscriptions.add(subscriptionId);
-
-          console.log('----------------------------------------------------------------------');
-          console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} OPENSEA`);
-          console.log('----------------------------------------------------------------------');
+    // Handle subscriptions
+    tasks.forEach((task) => {
+      try {
+        // Skip if already subscribed to this collection
+        if (subscribedCollections.has(task.contract.slug)) {
+          return;
         }
 
-      }
+        // Check if we need to subscribe
+        const hasOpenseaMarketplace = task.selectedMarketplaces.map(marketplace => marketplace.toLowerCase()).includes("opensea");
+        const hasMagiceden = task.selectedMarketplaces.map(marketplace => marketplace.toLowerCase()).includes("magiceden");
+        const hasBlur = task.selectedMarketplaces.map(marketplace => marketplace.toLowerCase()).includes("blur");
+        const hasMaxPurchaseLimit = task.stopOptions?.maxPurchase && task.stopOptions.maxPurchase > 0;
+        const hasTriggeredStopOptions = task.stopOptions?.triggerStopOptions;
 
-      // Handle MagicEden subscription
-      const connectToMagiceden = task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("magiceden");
-      if (connectToMagiceden) {
-        const subscriptionId = `${task.contract.slug}:${MAGICEDEN.toLowerCase()}`;
+        // Subscribe if any marketplace is selected or if stop options require it
+        if (hasOpenseaMarketplace || hasMagiceden || hasBlur || (hasTriggeredStopOptions && hasMaxPurchaseLimit)) {
+          // Send subscription message directly (server subscribes to ALL marketplaces)
+          wsManager.sendMessage({
+            event: 'join_the_party',
+            clientId: clientId,
+            slug: task.contract.slug,
+            contractAddress: task.contract.contractAddress
+          });
 
-        // Check if already subscribed to this collection on MagicEden
-        if (!activeSubscriptions.has(subscriptionId)) {
-          const magicedenSubscriptionMessage = {
-            "slug": task.contract.slug,
-            "event": "join_the_party",
-            "topic": task.contract.slug,
-            "contractAddress": task.contract.contractAddress,
-            "clientId": clientId,
-            "marketplace": MAGICEDEN
-          };
-
-          safeSendMessage(magicedenSubscriptionMessage);
-          activeSubscriptions.add(subscriptionId);
+          subscribedCollections.add(task.contract.slug);
 
           console.log('----------------------------------------------------------------------');
-          console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} MAGICEDEN`);
+          console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} (ALL MARKETPLACES)`);
           console.log('----------------------------------------------------------------------');
+
+          // Track subscriptions locally in activeSubscriptions for each marketplace
+          if (hasOpenseaMarketplace || (hasTriggeredStopOptions && hasMaxPurchaseLimit)) {
+            activeSubscriptions.add(`${task.contract.slug}:${OPENSEA}`);
+          }
+
+          if (hasMagiceden) {
+            activeSubscriptions.add(`${task.contract.slug}:${MAGICEDEN}`);
+          }
+
+          if (hasBlur) {
+            activeSubscriptions.add(`${task.contract.slug}:${BLUR}`);
+          }
         }
-
+      } catch (error) {
+        console.error(RED + `Error subscribing to collection ${task.contract.slug}:` + RESET, error);
       }
-
-      // Handle Blur subscription
-      const connectToBlur = task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur");
-      if (connectToBlur) {
-        const subscriptionId = `${task.contract.slug}:${BLUR.toLowerCase()}`;
-
-        // Check if already subscribed to this collection on Blur
-        if (!activeSubscriptions.has(subscriptionId)) {
-          const blurSubscriptionMessage = {
-            "slug": task.contract.slug,
-            "event": "join_the_party",
-            "topic": task.contract.slug,
-            "contractAddress": task.contract.contractAddress,
-            "clientId": clientId,
-            "marketplace": BLUR
-          };
-
-          safeSendMessage(blurSubscriptionMessage);
-          activeSubscriptions.add(subscriptionId);
-
-          console.log('----------------------------------------------------------------------');
-          console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} BLUR`);
-          console.log('----------------------------------------------------------------------');
-        }
-
-      }
-
     });
 
   } catch (error) {
@@ -9109,66 +9244,17 @@ function subscribeToCollections(tasks: ITask[]) {
 
 async function unsubscribeFromCollection(task: ITask, marketplace?: string) {
   try {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    if (!wsManager?.isConnected()) {
       await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (!wsManager?.isConnected()) return;
     }
 
-    // If marketplace is specified, only unsubscribe from that marketplace
+    await wsManager.unsubscribe(task.contract.slug, task.contract.contractAddress, marketplace);
+
     if (marketplace) {
-      const marketplaceLower = marketplace.toLowerCase();
-      const unsubscribeMessage = {
-        "slug": task.contract.slug,
-        "topic": task.contract.slug,
-        "contractAddress": task.contract.contractAddress,
-        "event": "leave_the_party",
-        "clientId": clientId,
-        "marketplace": marketplaceLower
-      };
-
-      await new Promise<void>((resolve, reject) => {
-        try {
-          ws.send(JSON.stringify(unsubscribeMessage));
-          console.log(`Unsubscribed from collection: ${task.contract.slug} on ${marketplaceLower}`);
-
-          // Remove from activeSubscriptions
-          const subscriptionId = `${task.contract.slug}:${marketplaceLower}`;
-          activeSubscriptions.delete(subscriptionId);
-
-          resolve();
-        } catch (err) {
-          reject(err);
-        }
-      });
-
+      console.log(`Unsubscribed from collection: ${task.contract.slug} on ${marketplace}`);
     } else {
-      // Unsubscribe from all marketplaces for this collection
-      const unsubscribeMessage = {
-        "slug": task.contract.slug,
-        "topic": task.contract.slug,
-        "contractAddress": task.contract.contractAddress,
-        "event": "leave_the_party",
-        "clientId": clientId,
-      };
-
-      await new Promise<void>((resolve, reject) => {
-        try {
-          ws.send(JSON.stringify(unsubscribeMessage));
-          console.log(`Unsubscribed from collection: ${task.contract.slug} (all marketplaces)`);
-
-          // Remove all subscriptions for this collection from activeSubscriptions
-          const subscriptionPatterns = [
-            `${task.contract.slug}:opensea`,
-            `${task.contract.slug}:magiceden`,
-            `${task.contract.slug}:blur`
-          ];
-          subscriptionPatterns.forEach(pattern => activeSubscriptions.delete(pattern));
-
-          resolve();
-        } catch (err) {
-          reject(err);
-        }
-      });
+      console.log(`Unsubscribed from collection: ${task.contract.slug} (all marketplaces)`);
     }
 
     // Remove task from subscribedTasks
