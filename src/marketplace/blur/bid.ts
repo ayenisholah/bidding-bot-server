@@ -8,7 +8,7 @@ import axios from "axios";
 import { BASE_URL } from "../../constants";
 import { fetchERC20Balance } from "../../utils/balance";
 import { convertBigNumbers } from "../../utils/bigNumberConverter";
-import { logger, ErrorCategory } from "../../utils/logger";
+import { logger } from "../../utils/logger";
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
 
 const prisma = new PrismaClient()
@@ -70,7 +70,7 @@ export async function bidOnBlur(
   if (Number(offerPriceEth) > bethBalance) {
     const message = `Offer price: ${offerPriceEth} BETH is greater than available BETH balance: ${bethBalance} BETH. SKIPPING ...`
     console.log(`\x1b[31m${message}\x1b[0m`);
-    
+
     if (!errorStats[taskId]) {
       errorStats[taskId] = {
         opensea: 0,
@@ -80,7 +80,7 @@ export async function bidOnBlur(
     }
     errorStats[taskId].blur++
     await logBidError(taskId, "INSUFFICIENT_BALANCE", message, "error", "blur");
-    
+
     // Better Stack granular logging
     await logger.logBlurBalanceError("Insufficient BETH balance for bid", {
       taskId,
@@ -93,7 +93,7 @@ export async function bidOnBlur(
       walletAddress: wallet_address,
       operation: "place_bid"
     });
-    
+
     return;
   }
 

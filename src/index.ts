@@ -1417,16 +1417,10 @@ wss.on('connection', async (ws) => {
         case 'update-marketplace':
           await updateMarketplace(message.data)
           break
-        case 'retry-connection':
-          try {
-            await connectWebSocket()
-          } catch (error) {
-            console.error('Failed to retry WebSocket connection:', error);
-          }
-          break
-        case 'create-listing':
+      
+        // case 'create-listing':
           // await createListing(message.data)
-          break
+          // break
         default:
           console.warn(YELLOW + `Unknown endpoint: ${message.endpoint}` + RESET);
       }
@@ -4894,7 +4888,9 @@ function handleOpenSeaMessages(message: any) {
 function handleBlurMessages(message: any) {
   let contractAddress: string | undefined;
   try {
-    contractAddress = message['1'].contractAddress;
+    if (message && message['1'] && message['1'].contractAddress) {
+      contractAddress = message['1'].contractAddress;
+    }
   } catch (error) {
     console.error(`Failed to parse Blur message: `, error);
   }
@@ -4946,7 +4942,7 @@ function getTraitCount(traitsJson: any, attribute: any) {
 }
 
 async function processOpenseaScheduledBid(task: ITask) {
-  try {
+  try {    
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) return
     const currentTask = activeTasks.get(task._id);
     if (!currentTask || !currentTask.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return;
@@ -4990,6 +4986,9 @@ async function processOpenseaScheduledBid(task: ITask) {
     const wallets = await Wallet.findById(currentTask.walletId)
     taskStatus[currentTask._id].processingPercentage = (1 / 4) * 100
     const WALLET_PRIVATE_KEY: string = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+
+    console.log({ WALLET_PRIVATE_KEY });
+
 
     const collectionDetails = await getCollectionDetails(currentTask.contract.slug, currentTask.contract.contractAddress);
     taskStatus[currentTask._id].processingPercentage = (2 / 4) * 100

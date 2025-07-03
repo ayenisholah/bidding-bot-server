@@ -17,7 +17,6 @@ const ListingSchema: Schema = new Schema(
     walletId: { type: mongoose.Schema.Types.ObjectId, ref: "Wallet" },
     selectedMarketplaces: { type: [String], required: true },
     running: { type: Boolean, default: false },
-    tags: [{ name: String, color: String }],
     finalListingPrice: {
       opensea: { type: Number, default: 0 },
       blur: { type: Number, default: 0 },
@@ -34,43 +33,12 @@ const ListingSchema: Schema = new Schema(
       magiceden: { type: Date },
     },
     instantPriceMatching: { type: Boolean, default: false },
-    listingPrice: {
-      value: { type: String },
-      type: {
-        type: String,
-        enum: ["percentage", "eth"],
-      },
-    },
+    listingPrice: { type: String, default: "" },
     underCutMargin: { type: String, default: "" },
-    openseaListingPrice: {
-      value: { type: String },
-      type: {
-        type: String,
-        enum: ["percentage", "eth"],
-      },
-    },
-    blurListingPrice: {
-      value: { type: String },
-      type: {
-        type: String,
-        enum: ["percentage", "eth"],
-      },
-    },
-    magicEdenListingPrice: {
-      value: { type: String },
-      type: {
-        type: String,
-        enum: ["percentage", "eth"],
-      },
-    },
-    minProfit: {
-      value: { type: String, default: "0" },
-      type: {
-        type: String,
-        enum: ["percentage", "eth"],
-        default: "eth",
-      },
-    },
+    openseaListingPrice: { type: String, default: "" },
+    blurListingPrice: { type: String, default: "" },
+    magicEdenListingPrice: { type: String, default: "" },
+    minListingPrice: { type: String, default: "" },
     loopInterval: {
       value: { type: Number, required: false, default: 15 },
       unit: { type: String, required: false, default: "minutes" },
@@ -91,6 +59,20 @@ const ListingSchema: Schema = new Schema(
     },
     floorPrice: { type: Number, default: 0 },
     buyPrice: { type: Number },
+    dynamicPricingBasis: {
+      type: String,
+      enum: [
+        "HIGHEST_TRAIT_FLOOR",
+        "SPECIFIC_TRAIT",
+        "COLLECTION_FLOOR",
+        "BUY_PRICE",
+      ],
+      default: "COLLECTION_FLOOR",
+    },
+    selectedTrait: {
+      trait_type: { type: String },
+      value: { type: Schema.Types.Mixed },
+    },
     listed: { type: Boolean, default: false },
   },
   { timestamps: true }
