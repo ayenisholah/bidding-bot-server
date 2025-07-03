@@ -1557,12 +1557,8 @@ async function processImportedTasks(tasks: ITask[]) {
       console.log(`Successfully added ${jobs.length} jobs to the queue.`);
     }
 
-    // Wait for WebSocket connection if needed
-    const needsWebSocket = tasks.some(task =>
-      task.outbidOptions.counterbid || Number(task?.stopOptions?.maxFloorPrice) > 0
-    );
-
-    if (needsWebSocket && !wsManager?.isConnected()) {
+    // Always ensure WebSocket connection for all tasks
+    if (!wsManager?.isConnected()) {
       console.log(YELLOW + "Waiting for WebSocket connection..." + RESET);
       try {
         await connectWebSocket();
@@ -1573,14 +1569,12 @@ async function processImportedTasks(tasks: ITask[]) {
       }
     }
 
-    // Now subscribe to all collections that need it
-    const tasksNeedingSubscription = tasks.filter(task =>
-      task.outbidOptions.counterbid || Number(task?.stopOptions?.maxFloorPrice) > 0
-    ).map(task => ({ ...task, running: true }));
+    // Subscribe all running tasks to WebSocket
+    const runningTasks = tasks.filter(task => task.running).map(task => ({ ...task, running: true }));
 
-    if (tasksNeedingSubscription.length > 0) {
-      console.log(GREEN + `Subscribing to ${tasksNeedingSubscription.length} collections` + RESET);
-      subscribeToCollections(tasksNeedingSubscription);
+    if (runningTasks.length > 0) {
+      console.log(GREEN + `Subscribing to ${runningTasks.length} collections` + RESET);
+      subscribeToCollections(runningTasks);
     }
 
     console.log(GREEN + `=== Imported Tasks Processing Complete ===\n` + RESET);
@@ -1613,25 +1607,24 @@ async function processNewTask(task: ITask) {
       console.log(`Successfully added ${jobs.length} jobs to the queue.`);
     }
 
-    if (task.outbidOptions.counterbid || Number(task?.stopOptions?.maxFloorPrice) > 0) {
-      try {
-        if (!wsManager?.isConnected()) {
-          console.log(YELLOW + "Waiting for WebSocket connection..." + RESET);
-          try {
-            await connectWebSocket();
-            // Give it a moment to establish connection
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          } catch (error) {
-            console.error('Failed to establish WebSocket connection for counterbid task:', error);
-          }
+    // Always connect to WebSocket and subscribe all tasks
+    try {
+      if (!wsManager?.isConnected()) {
+        console.log(YELLOW + "Waiting for WebSocket connection..." + RESET);
+        try {
+          await connectWebSocket();
+          // Give it a moment to establish connection
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+          console.error('Failed to establish WebSocket connection for task:', error);
         }
-
-        console.log("subscribing to collection: ", task.contract.slug);
-        const newTask = { ...task, running: true };
-        subscribeToCollections([newTask]);
-      } catch (error) {
-        console.error(RED + `Error subscribing to collection ${task.contract.slug}: ` + RESET, error);
       }
+
+      console.log("subscribing to collection: ", task.contract.slug);
+      const newTask = { ...task, running: true };
+      subscribeToCollections([newTask]);
+    } catch (error) {
+      console.error(RED + `Error subscribing to collection ${task.contract.slug}: ` + RESET, error);
     }
 
     console.log(GREEN + `=== New Task Processing Complete ===\n` + RESET);
@@ -2535,23 +2528,21 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       currentTasks[taskIndex].running = true;
     }
     console.log(GREEN + `Updated task ${task.contract.slug} running status to: ${start} `.toUpperCase() + RESET);
-    if (task.outbidOptions.counterbid || Number(task?.stopOptions?.maxFloorPrice) > 0) {
-      try {
-        if (!wsManager?.isConnected()) {
-          try {
-            await connectWebSocket();
-          } catch (error) {
-            console.error('Failed to establish WebSocket connection for task:', error);
-          }
+    // Always connect to WebSocket and subscribe all tasks
+    try {
+      if (!wsManager?.isConnected()) {
+        try {
+          await connectWebSocket();
+        } catch (error) {
+          console.error('Failed to establish WebSocket connection for task:', error);
         }
-
-
-        console.log("subscribing to collection: ", task.contract.slug);
-        const newTask = { ...task, running: true };
-        await subscribeToCollections([newTask]);
-      } catch (error) {
-        console.error(RED + `Error subscribing to collection ${task.contract.slug}: ` + RESET, error);
       }
+
+      console.log("subscribing to collection: ", task.contract.slug);
+      const newTask = { ...task, running: true };
+      await subscribeToCollections([newTask]);
+    } catch (error) {
+      console.error(RED + `Error subscribing to collection ${task.contract.slug}: ` + RESET, error);
     }
 
     const validMarketplaces = ["opensea", "magiceden", "blur"];
@@ -3417,15 +3408,7 @@ async function connectWebSocket(): Promise<void> {
 
 async function handleCounterBid(message: any) {
   try {
-    // console.log(GOLD + JSON.stringify(message) + RESET);
-    // if (message && message?.event && message.event === "item_transferred") {
-    //   console.log(GOLD + JSON.stringify(message) + RESET);
-    // }
-
-    // if (message && message?.event && message.event === "item_sold") {
-    //   console.log(GOLD + JSON.stringify(message) + RESET);
-    // }
-
+ 
     const { contractAddress, slug } = getMarketplaceDetails(message);
     if (!contractAddress && !slug) return
 
@@ -4986,9 +4969,6 @@ async function processOpenseaScheduledBid(task: ITask) {
     const wallets = await Wallet.findById(currentTask.walletId)
     taskStatus[currentTask._id].processingPercentage = (1 / 4) * 100
     const WALLET_PRIVATE_KEY: string = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
-
-    console.log({ WALLET_PRIVATE_KEY });
-
 
     const collectionDetails = await getCollectionDetails(currentTask.contract.slug, currentTask.contract.contractAddress);
     taskStatus[currentTask._id].processingPercentage = (2 / 4) * 100
@@ -9151,30 +9131,11 @@ function subscribeToCollections(tasks: ITask[]) {
   try {
     console.log(YELLOW + `subscribeToCollections called with ${tasks.length} tasks` + RESET);
 
-    // Check if any task has counterbidding enabled or has purchase limits
-    const hasCounterbidding = tasks.some(task => {
-      if (!task) return false;
-
-      // Check for counterbidding
-      if (task.running && task.outbidOptions?.counterbid) {
-        console.log(GREEN + `Task ${task.contract.slug} has counterbidding enabled` + RESET);
-        return true;
-      }
-
-      // Check for purchase limits
-      if (task.stopOptions?.triggerStopOptions &&
-        task.stopOptions?.maxPurchase &&
-        task.stopOptions.maxPurchase > 0) {
-        console.log(GREEN + `Task ${task.contract.slug} has purchase limits` + RESET);
-        return true;
-      }
-
-      return false;
-    });
-
-    console.log(YELLOW + `hasCounterbidding: ${hasCounterbidding}, wsManager connected: ${wsManager?.isConnected()}` + RESET);
-
-    if (!hasCounterbidding || !wsManager?.isConnected()) return;
+    // Always subscribe all tasks to WebSocket
+    if (!wsManager?.isConnected()) {
+      console.log(YELLOW + `WebSocket not connected, skipping subscription` + RESET);
+      return;
+    }
 
     // Clear ping interval if it exists (now handled by WebSocketManager)
     if (marketplaceIntervals['global']) {
@@ -9185,7 +9146,7 @@ function subscribeToCollections(tasks: ITask[]) {
     // Track which collections we've already subscribed to
     const subscribedCollections = new Set<string>();
 
-    // Handle subscriptions
+    // Handle subscriptions - subscribe all tasks by default
     tasks.forEach((task) => {
       try {
         // Skip if already subscribed to this collection
@@ -9193,41 +9154,36 @@ function subscribeToCollections(tasks: ITask[]) {
           return;
         }
 
-        // Check if we need to subscribe
+        // Always subscribe all tasks to WebSocket
+        // Send subscription message directly (server subscribes to ALL marketplaces)
+        wsManager.sendMessage({
+          event: 'join_the_party',
+          clientId: clientId,
+          slug: task.contract.slug,
+          contractAddress: task.contract.contractAddress
+        });
+
+        subscribedCollections.add(task.contract.slug);
+
+        console.log('----------------------------------------------------------------------');
+        console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} (ALL MARKETPLACES)`);
+        console.log('----------------------------------------------------------------------');
+
+        // Track subscriptions locally in activeSubscriptions for all marketplaces
         const hasOpenseaMarketplace = task.selectedMarketplaces.map(marketplace => marketplace.toLowerCase()).includes("opensea");
         const hasMagiceden = task.selectedMarketplaces.map(marketplace => marketplace.toLowerCase()).includes("magiceden");
         const hasBlur = task.selectedMarketplaces.map(marketplace => marketplace.toLowerCase()).includes("blur");
-        const hasMaxPurchaseLimit = task.stopOptions?.maxPurchase && task.stopOptions.maxPurchase > 0;
-        const hasTriggeredStopOptions = task.stopOptions?.triggerStopOptions;
 
-        // Subscribe if any marketplace is selected or if stop options require it
-        if (hasOpenseaMarketplace || hasMagiceden || hasBlur || (hasTriggeredStopOptions && hasMaxPurchaseLimit)) {
-          // Send subscription message directly (server subscribes to ALL marketplaces)
-          wsManager.sendMessage({
-            event: 'join_the_party',
-            clientId: clientId,
-            slug: task.contract.slug,
-            contractAddress: task.contract.contractAddress
-          });
+        if (hasOpenseaMarketplace) {
+          activeSubscriptions.add(`${task.contract.slug}:${OPENSEA}`);
+        }
 
-          subscribedCollections.add(task.contract.slug);
+        if (hasMagiceden) {
+          activeSubscriptions.add(`${task.contract.slug}:${MAGICEDEN}`);
+        }
 
-          console.log('----------------------------------------------------------------------');
-          console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} (ALL MARKETPLACES)`);
-          console.log('----------------------------------------------------------------------');
-
-          // Track subscriptions locally in activeSubscriptions for each marketplace
-          if (hasOpenseaMarketplace || (hasTriggeredStopOptions && hasMaxPurchaseLimit)) {
-            activeSubscriptions.add(`${task.contract.slug}:${OPENSEA}`);
-          }
-
-          if (hasMagiceden) {
-            activeSubscriptions.add(`${task.contract.slug}:${MAGICEDEN}`);
-          }
-
-          if (hasBlur) {
-            activeSubscriptions.add(`${task.contract.slug}:${BLUR}`);
-          }
+        if (hasBlur) {
+          activeSubscriptions.add(`${task.contract.slug}:${BLUR}`);
         }
       } catch (error) {
         console.error(RED + `Error subscribing to collection ${task.contract.slug}:` + RESET, error);
