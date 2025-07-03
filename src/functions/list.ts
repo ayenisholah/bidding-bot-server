@@ -32,27 +32,34 @@ export async function createListing(data: IListing) {
     const tokenId = data.tokenId
     // const instantPriceMatching = data.instantPriceMatching
 
-    // List on selected marketplaces
-    for (const marketplace of selectedMarketplaces) {
+    // Get Blur access token first if needed
+    const needsBlurToken = selectedMarketplaces.some(m => m.toLowerCase() === 'blur');
+    const blurAccessToken = needsBlurToken ? await getAccessToken(private_key) : null;
+    
+    if (needsBlurToken && !blurAccessToken) {
+      throw new Error('Failed to get Blur access token');
+    }
+
+    // Create listing promises for all marketplaces
+    const listingPromises = selectedMarketplaces.map(async (marketplace) => {
       const marketplaceLower = marketplace.toLowerCase() as 'opensea' | 'blur' | 'magiceden';
       const listingPrice = parseFloat(calculateListingPrice(data, marketplaceLower).toFixed(4));
 
       switch (marketplaceLower) {
         case 'opensea':
-          await listOnOpensea(contractAddress, tokenId, listingPrice, web3Wallet, enforceCreatorFee, durationInSeconds, creatorFees);
-          break;
+          return listOnOpensea(contractAddress, tokenId, listingPrice, web3Wallet, enforceCreatorFee, durationInSeconds, creatorFees);
         case 'blur':
-          const accessToken = await getAccessToken(private_key);
-          if (!accessToken) return
-          await listOnBlur(contractAddress, tokenId, listingPrice.toString(), web3Wallet, accessToken, durationInSeconds, totalCreatorFee);
-          break;
+          return listOnBlur(contractAddress, tokenId, listingPrice.toString(), web3Wallet, blurAccessToken!, durationInSeconds, totalCreatorFee);
         case 'magiceden':
-          await listOnMagicEden(walletAddress, contractAddress, tokenId, listingPrice, durationInSeconds, web3Wallet);
-          break;
+          return listOnMagicEden(walletAddress, contractAddress, tokenId, listingPrice, durationInSeconds, web3Wallet);
         default:
           console.warn(`Unknown marketplace: ${marketplace}`);
+          return Promise.resolve();
       }
-    }
+    });
+
+    // Execute all listings concurrently
+    await Promise.all(listingPromises);
 
   } catch (error) {
     await logger.logMarketplaceError('Error creating listing', {
