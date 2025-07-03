@@ -111,13 +111,38 @@ const types = {
 };
 const provider = new AlchemyProvider(NETWORK, ALCHEMY_API_KEY)
 
+/**
+ * Lists an NFT on OpenSea marketplace
+ * 
+ * @param nftAddress - The contract address of the NFT collection
+ * @param tokenId - The token ID of the NFT to list
+ * @param price - The listing price in ETH (e.g., 1.5 for 1.5 ETH)
+ * @param wallet - The wallet instance used for signing the listing transaction
+ * @param enforceCreatorFee - Whether to enforce creator royalties on the listing
+ * @param durationInSeconds - The listing duration in seconds from now
+ * @param creatorFees - Object containing creator fee addresses and their respective fee percentages (in basis points)
+ * @returns Promise<void> - Resolves when the listing is successfully created or throws an error
+ * 
+ * @example
+ * ```typescript
+ * await listOnOpensea(
+ *   "0x524cab2ec69124574082676e6f654a18df49a048",
+ *   "1234",
+ *   1.5, // 1.5 ETH
+ *   wallet,
+ *   true,
+ *   86400, // 24 hours
+ *   { "0x123...": 250 } // 2.5% creator fee
+ * );
+ * ```
+ */
 export const listOnOpensea = async (
   nftAddress: string,
   tokenId: string,
   price: number,
   wallet: Wallet,
   enforceCreatorFee: boolean,
-  endTime: number,
+  durationInSeconds: number,
   creatorFees: IFee | undefined,
 ) => {
 
@@ -184,7 +209,7 @@ export const listOnOpensea = async (
     Math.floor(Date.now() / 1000)
   ).toString();
   listingPayload.parameters.endTime = BigInt(
-    Math.floor(Date.now() / 1000 + endTime)
+    Math.floor(Date.now() / 1000 + durationInSeconds)
   ).toString();
   const itemType = 2;
   listingPayload.parameters.offerer = wallet.address;
@@ -197,24 +222,22 @@ export const listOnOpensea = async (
   let totalCreatorFee = 0;
   const creatorFeeConsideration = [];
   listingPayload.parameters.totalOriginalConsiderationItems = 2;
-  for (const address in creatorFees) {
-    let fee = creatorFees[address];
-    if (address !== 'null') {
-      const consideration_item = {
-        itemType: 0,
-        token: "0x0000000000000000000000000000000000000000",
-        identifierOrCriteria: 0,
-        startAmount: ((offerPrice * BigInt(fee)) / BigInt(divider)).toString(),
-        endAmount: ((offerPrice * BigInt(fee)) / BigInt(divider)).toString(),
-        recipient: address
-      };
-      creatorFeeConsideration.push(consideration_item);
-      if (enforceCreatorFee) {
+
+  if (enforceCreatorFee && creatorFees) {
+    for (const address in creatorFees) {
+      let fee = creatorFees[address];
+      if (address !== 'null') {
+        const consideration_item = {
+          itemType: 0,
+          token: "0x0000000000000000000000000000000000000000",
+          identifierOrCriteria: 0,
+          startAmount: ((offerPrice * BigInt(fee)) / BigInt(divider)).toString(),
+          endAmount: ((offerPrice * BigInt(fee)) / BigInt(divider)).toString(),
+          recipient: address
+        };
+        creatorFeeConsideration.push(consideration_item);
         listingPayload.parameters.totalOriginalConsiderationItems += 1;
         totalCreatorFee += fee;
-
-        console.log({ totalCreatorFee });
-
       }
     }
   }
@@ -309,11 +332,11 @@ export const listOnOpensea = async (
 
     // Update finalListingPrice.opensea and expiration in the database
     try {
-      const expirationTime = new Date(Date.now() + endTime * 1000);
+      const expirationTime = new Date(Date.now() + durationInSeconds * 1000);
       const updatedListing = await Listing.findOneAndUpdate(
-        { 
-          "contract.contractAddress": nftAddress, 
-          tokenId: tokenId 
+        {
+          "contract.contractAddress": nftAddress,
+          tokenId: tokenId
         },
         {
           $set: {
@@ -325,7 +348,7 @@ export const listOnOpensea = async (
         },
         { new: true }
       );
-      
+
       if (updatedListing) {
         console.log(`Updated listing ${nftAddress} #${tokenId} with opensea price: ${roundedPrice} ETH, expires at: ${expirationTime.toISOString()}`);
       } else {

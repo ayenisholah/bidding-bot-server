@@ -7,15 +7,49 @@ import Listing from "../../models/listing.model";
 
 config()
 const API_KEY = process.env.API_KEY;
+
+/**
+ * Lists an NFT on Blur marketplace
+ * 
+ * @param nftAddress - The contract address of the NFT collection
+ * @param tokenId - The token ID of the NFT to list
+ * @param price - The listing price as a string in ETH (e.g., "1.5" for 1.5 ETH)
+ * @param wallet - The wallet instance used for signing the listing transaction
+ * @param authToken - Blur authentication token for API access
+ * @param durationInSeconds - The listing duration in seconds from now
+ * @param feeRate - Creator fee rate as a decimal (e.g., 0.025 for 2.5% creator fee)
+ * @returns Promise<void> - Resolves when the listing is successfully created or throws an error
+ * 
+ * @example
+ * ```typescript
+ * await listOnBlur(
+ *   "0x524cab2ec69124574082676e6f654a18df49a048",
+ *   "1234",
+ *   "1.5", // 1.5 ETH as string
+ *   wallet,
+ *   "blur_auth_token_xyz",
+ *   86400, // 24 hours
+ *   0.025 // 2.5% creator fee
+ * );
+ * ```
+ * 
+ * @description
+ * This function handles the complete Blur listing process:
+ * 1. Approves the NFT for Blur's contract
+ * 2. Formats the order via Blur API
+ * 3. Signs the typed data with the wallet
+ * 4. Submits the signed order to Blur
+ * 5. Updates the database with listing details
+ */
 export async function listOnBlur(
   nftAddress: string,
   tokenId: string,
   price: string,
   wallet: Wallet,
   authToken: string,
-  endTime: number,
+  durationInSeconds: number,
   feeRate: number) {
-  
+
   try {
     await approveNFT(
       nftAddress,
@@ -23,7 +57,7 @@ export async function listOnBlur(
       '0x2f18f339620a63e43f0839eeb18d7de1e1be4dfb'
     );
 
-    const durationMs = endTime * 1000;
+    const durationMs = durationInSeconds * 1000;
     const expirationTime = new Date(Date.now() + durationMs).toISOString();
 
     const options = {
@@ -76,17 +110,17 @@ export async function listOnBlur(
     // Helper function to convert BigNumber objects to strings
     function convertBigNumbers(obj: any): any {
       if (obj === null || obj === undefined) return obj;
-      
+
       // Check if it's a BigNumber object
       if (obj.type === 'BigNumber' && obj.hex) {
         return BigInt(obj.hex).toString();
       }
-      
+
       // Recursively process arrays
       if (Array.isArray(obj)) {
         return obj.map(item => convertBigNumbers(item));
       }
-      
+
       // Recursively process objects
       if (typeof obj === 'object') {
         const result: any = {};
@@ -95,13 +129,13 @@ export async function listOnBlur(
         }
         return result;
       }
-      
+
       return obj;
     }
 
     // Convert the signing data
     const convertedValue = convertBigNumbers(signData.value);
-    
+
     // sign the offer
     try {
       const signObj = await wallet.signTypedData(
@@ -140,17 +174,17 @@ export async function listOnBlur(
         console.error('Blur submit errors:', JSON.stringify(listings.errors, null, 2));
       } else {
         console.log('NFT listed successfully on blur');
-        
+
         // Update finalListingPrice.blur and expiration in the database
         try {
           // Convert price string to number for database storage
           const priceInEth = parseFloat(price);
-          const expirationTime = new Date(Date.now() + endTime * 1000);
-          
+          const expirationTime = new Date(Date.now() + durationInSeconds * 1000);
+
           const updatedListing = await Listing.findOneAndUpdate(
-            { 
-              "contract.contractAddress": nftAddress, 
-              tokenId: tokenId 
+            {
+              "contract.contractAddress": nftAddress,
+              tokenId: tokenId
             },
             {
               $set: {
@@ -162,7 +196,7 @@ export async function listOnBlur(
             },
             { new: true }
           );
-          
+
           if (updatedListing) {
             console.log(`Updated listing ${nftAddress} #${tokenId} with blur price: ${priceInEth} ETH, expires at: ${expirationTime.toISOString()}`);
           }

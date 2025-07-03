@@ -17,7 +17,7 @@ import { axiosInstance, initialize, limiter } from "./init";
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrder, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
-import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, fetchOpenseaTraits, getCollectionDetails, getOpenseaFloor } from "./functions";
+import { CollectionItemsQueryVariables, createListing, fetchOpenSeaCollectionItems, fetchOpenseaTraits, getCollectionDetails, getOpenseaFloor } from "./functions";
 import mongoose from 'mongoose';
 import Task, { ITask, SelectedTraits } from "./models/task.model";
 import { Queue, Worker, Job, JobType, UnrecoverableError, JobsOptions, QueueEvents, QueueOptions } from "bullmq";
@@ -1417,10 +1417,10 @@ wss.on('connection', async (ws) => {
         case 'update-marketplace':
           await updateMarketplace(message.data)
           break
-      
-        // case 'create-listing':
-          // await createListing(message.data)
-          // break
+
+        case 'create-listing':
+          await createListing(message.data)
+          break
         default:
           console.warn(YELLOW + `Unknown endpoint: ${message.endpoint}` + RESET);
       }
@@ -4942,7 +4942,7 @@ function getTraitCount(traitsJson: any, attribute: any) {
 }
 
 async function processOpenseaScheduledBid(task: ITask) {
-  try {    
+  try {
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) return
     const currentTask = activeTasks.get(task._id);
     if (!currentTask || !currentTask.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return;

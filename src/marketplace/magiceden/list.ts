@@ -8,6 +8,41 @@ import { logger } from "../../utils/logger";
 const API_KEY = process.env.API_KEY;
 
 
+/**
+ * Lists an NFT on Magic Eden marketplace
+ * 
+ * @param walletAddress - The wallet address of the NFT owner
+ * @param contract - The contract address of the NFT collection
+ * @param tokenId - The token ID of the NFT to list
+ * @param listingPrice - The listing price in ETH (e.g., 1.5 for 1.5 ETH)
+ * @param durationInSeconds - The listing duration in seconds from now
+ * @param wallet - The wallet instance used for signing the listing transaction
+ * @returns Promise<any|null> - Returns the listing response data on success, null on failure
+ * 
+ * @example
+ * ```typescript
+ * await listOnMagicEden(
+ *   "0x1234567890123456789012345678901234567890",
+ *   "0x524cab2ec69124574082676e6f654a18df49a048",
+ *   "1234",
+ *   1.5, // 1.5 ETH
+ *   86400, // 24 hours
+ *   wallet
+ * );
+ * ```
+ * 
+ * @description
+ * This function handles the complete Magic Eden listing process:
+ * 1. Approves the NFT for Magic Eden's Payment Processor V2 contract
+ * 2. Creates a listing payload with wei-converted price
+ * 3. Calls Magic Eden's execute/list endpoint to get signing data
+ * 4. Signs the typed data with the wallet
+ * 5. Submits the signed order to Magic Eden
+ * 6. Updates the database with listing details and expiration
+ * 
+ * The function uses Magic Eden's Payment Processor V2 orderbook system
+ * and handles automated royalties through their platform.
+ */
 export async function listOnMagicEden(walletAddress: string, contract: string, tokenId: string, listingPrice: number, durationInSeconds: number, wallet: Wallet) {
   const listEndpoint =
     `${BASE_URL}/magiceden/v3/rtp/ethereum/execute/list/v5`;
