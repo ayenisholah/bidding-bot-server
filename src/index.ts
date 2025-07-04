@@ -39,6 +39,9 @@ import { fetchWalletNFTs } from "./utils/nft";
 import { logger, DatabaseOperation, QueueOperation } from "./utils/logger";
 import WebSocketManager from "./utils/websocket-manager";
 import Listing from "./models/listing.model";
+import { initializeListingScheduler, shutdownListingScheduler, scheduleListing, cancelListingJob } from "./functions/listingScheduler";
+import { initializeExpirationMonitor, stopExpirationMonitor } from "./functions/relistExpired";
+import { handleListingPriceUpdate } from "./functions/priceMonitor";
 const prisma = new PrismaClient()
 
 const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
@@ -128,6 +131,7 @@ function cleanupSeenItems(map: Map<string, number>): void {
 
 // Set up periodic cleanup
 let cleanupIntervalId: NodeJS.Timeout | null = null;
+let expirationMonitorInterval: NodeJS.Timer | null = null;
 
 const SERVER_IP = process.env.SERVER_IP as string
 const USERNAME = process.env.USERNAME as string
@@ -740,6 +744,14 @@ async function startServer() {
     startConnectionMonitoring();
     console.log('🔗 WebSocket connection monitoring initialized');
 
+    // Initialize listing scheduler
+    await initializeListingScheduler();
+    console.log('📋 Listing scheduler initialized');
+
+    // Initialize expiration monitor
+    expirationMonitorInterval = initializeExpirationMonitor();
+    console.log('⏰ Expiration monitor initialized');
+
     // Start periodic cleanup of seen items
     cleanupIntervalId = setInterval(() => {
       cleanupSeenItems(seenOrderHashes);
@@ -748,7 +760,8 @@ async function startServer() {
 
     console.log(`Started periodic cleanup for seen items (every ${CLEANUP_INTERVAL / 1000 / 60} minutes)`);
 
-    console.log('Started listing scheduler for automatic relisting of expired listings');
+    // Note: Listing scheduler is already initialized above at line 749
+    // The expiration monitor is also initialized at line 753
 
     await fetchCurrentTasks()
 
@@ -770,11 +783,21 @@ async function startServer() {
 }
 
 // Cleanup handler for graceful shutdown
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   console.log('\nReceived SIGINT, cleaning up...');
   if (cleanupIntervalId) {
     clearInterval(cleanupIntervalId);
     console.log('Stopped periodic cleanup');
+  }
+
+  // Shutdown listing scheduler
+  await shutdownListingScheduler();
+  console.log('Listing scheduler shut down');
+
+  // Stop expiration monitor
+  if (expirationMonitorInterval) {
+    stopExpirationMonitor(expirationMonitorInterval);
+    console.log('Expiration monitor stopped');
   }
 
   // Disconnect WebSocket
@@ -790,11 +813,21 @@ process.on('SIGINT', () => {
   process.exit(0);
 });
 
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('\nReceived SIGTERM, cleaning up...');
   if (cleanupIntervalId) {
     clearInterval(cleanupIntervalId);
     console.log('Stopped periodic cleanup');
+  }
+
+  // Shutdown listing scheduler
+  await shutdownListingScheduler();
+  console.log('Listing scheduler shut down');
+
+  // Stop expiration monitor
+  if (expirationMonitorInterval) {
+    stopExpirationMonitor(expirationMonitorInterval);
+    console.log('Expiration monitor stopped');
   }
 
   // Disconnect WebSocket
@@ -1434,8 +1467,20 @@ wss.on('connection', async (ws) => {
           break
 
         case 'create-listing':
-          await createListing(message.data)
+          await handleStartListing(message.data, ws)
           break
+        // case 'start-listing':
+        //   await handleStartListing(message.data, ws)
+        //   break
+
+        case 'stop-listing':
+          await handleStopListing(message.data, ws)
+          break
+
+        case 'update-listing':
+          await handleUpdateListing(message.data, ws)
+          break
+
         default:
           console.warn(YELLOW + `Unknown endpoint: ${message.endpoint}` + RESET);
       }
@@ -3383,6 +3428,8 @@ async function connectWebSocket(): Promise<void> {
 
         // Handle counter bid messages
         await handleCounterBid(message);
+        // Handle listing price updates for instant price matching
+        await handleListingPriceUpdate(wsManager, message);
       } catch (error) {
         console.error('Error handling message:', error);
       }
@@ -10620,5 +10667,192 @@ export interface AddressBalancesResponse {
   extensions: {
     debugInfo: DebugInfo;
   };
+}
+
+// Listing WebSocket handlers
+async function handleStartListing(data: { _id: string }, ws: WebSocket) {
+  try {
+    const listing = await Listing.findById(data._id);
+
+    console.log({ listing });
+
+    if (!listing) {
+      ws.send(JSON.stringify({
+        type: 'error',
+        message: 'Listing not found'
+      }));
+      return;
+    }
+
+    // Update listing to running
+    listing.running = true;
+    await listing.save();
+
+    // Schedule the listing
+    await scheduleListing(listing);
+
+    // Subscribe to WebSocket events if instant price matching is enabled
+    console.log(`\n🔍 Checking WebSocket subscription conditions:`);
+    console.log(`📋 listing.instantPriceMatching: ${listing.instantPriceMatching}`);
+    console.log(`🌐 wsManager exists: ${!!wsManager}`);
+    console.log(`📡 wsManager connected: ${wsManager?.isConnected?.() || 'N/A'}`);
+    console.log(`🆔 clientId: ${clientId}`);
+
+    if (listing.instantPriceMatching && wsManager) {
+      const joinMessage = {
+        event: 'join_listings',
+        clientId: clientId,
+        slug: listing.contract.slug,
+        contractAddress: listing.contract.contractAddress
+      };
+
+      console.log(`\n🔗 Sending WebSocket subscription for instant price matching:`);
+      console.log(`📡 Event: ${joinMessage.event}`);
+      console.log(`🆔 Client ID: ${joinMessage.clientId}`);
+      console.log(`🏷️  Collection: ${joinMessage.slug}`);
+      console.log(`📄 Contract: ${joinMessage.contractAddress}`);
+      console.log(`📤 Message:`, JSON.stringify(joinMessage, null, 2));
+
+      // Send join_listings event directly for listing subscriptions
+      wsManager.sendMessage(joinMessage);
+      console.log(`✅ WebSocket message sent successfully`);
+    } else {
+      console.log(`❌ WebSocket subscription NOT sent - conditions not met`);
+      if (!listing.instantPriceMatching) {
+        console.log(`   - Instant price matching is disabled`);
+      }
+      if (!wsManager) {
+        console.log(`   - WebSocket manager is not available`);
+      }
+    }
+
+    ws.send(JSON.stringify({
+      type: 'listing-started',
+      listingId: data._id,
+      message: 'Listing started successfully'
+    }));
+
+    console.log(GREEN + `Started listing ${data._id}` + RESET);
+  } catch (error) {
+    console.error('Error starting listing:', error);
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: 'Failed to start listing',
+      error: error instanceof Error ? error.message : String(error)
+    }));
+  }
+}
+
+async function handleStopListing(data: { listingId: string }, ws: WebSocket) {
+  try {
+    const listing = await Listing.findById(data.listingId);
+    if (!listing) {
+      ws.send(JSON.stringify({
+        type: 'error',
+        message: 'Listing not found'
+      }));
+      return;
+    }
+
+    // Update listing to not running
+    listing.running = false;
+    await listing.save();
+
+    // Cancel the scheduled job
+    await cancelListingJob(data.listingId);
+
+    // Unsubscribe from WebSocket events
+    if (wsManager && listing.contract.slug && listing.contract.contractAddress) {
+      // Send leave_listings event directly for listing unsubscriptions
+      wsManager.sendMessage({
+        event: 'leave_listings',
+        clientId: clientId,
+        slug: listing.contract.slug,
+        contractAddress: listing.contract.contractAddress
+      });
+    }
+
+    ws.send(JSON.stringify({
+      type: 'listing-stopped',
+      listingId: data.listingId,
+      message: 'Listing stopped successfully'
+    }));
+
+    console.log(YELLOW + `Stopped listing ${data.listingId}` + RESET);
+  } catch (error) {
+    console.error('Error stopping listing:', error);
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: 'Failed to stop listing',
+      error: error instanceof Error ? error.message : String(error)
+    }));
+  }
+}
+
+async function handleUpdateListing(data: { listingId: string, updates: any }, ws: WebSocket) {
+  try {
+    const listing = await Listing.findById(data.listingId);
+    if (!listing) {
+      ws.send(JSON.stringify({
+        type: 'error',
+        message: 'Listing not found'
+      }));
+      return;
+    }
+
+    // Update listing fields
+    Object.assign(listing, data.updates);
+    await listing.save();
+
+    // If running, reschedule with new parameters
+    if (listing.running) {
+      await scheduleListing(listing);
+    }
+
+    // Handle instant price matching subscription changes
+    if (data.updates.instantPriceMatching !== undefined && wsManager) {
+      if (data.updates.instantPriceMatching && listing.running) {
+        const joinMessage = {
+          event: 'join_listings',
+          clientId: clientId,
+          slug: listing.contract.slug,
+          contractAddress: listing.contract.contractAddress
+        };
+
+        console.log(`\n🔗 Enabling instant price matching - sending WebSocket subscription:`);
+        console.log(`📡 Event: ${joinMessage.event}`);
+        console.log(`🆔 Client ID: ${joinMessage.clientId}`);
+        console.log(`🏷️  Collection: ${joinMessage.slug}`);
+        console.log(`📄 Contract: ${joinMessage.contractAddress}`);
+        console.log(`📤 Message:`, JSON.stringify(joinMessage, null, 2));
+
+        // Subscribe to listing events
+        wsManager.sendMessage(joinMessage);
+      } else {
+        // Unsubscribe from listing events
+        wsManager.sendMessage({
+          event: 'leave_listings',
+          clientId: clientId,
+          slug: listing.contract.slug,
+          contractAddress: listing.contract.contractAddress
+        });
+      }
+    }
+
+    ws.send(JSON.stringify({
+      type: 'listing-updated',
+      listingId: data.listingId,
+      message: 'Listing updated successfully'
+    }));
+
+    console.log(GREEN + `Updated listing ${data.listingId}` + RESET);
+  } catch (error) {
+    console.error('Error updating listing:', error);
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: 'Failed to update listing',
+      error: error instanceof Error ? error.message : String(error)
+    }));
+  }
 }
 

@@ -81,7 +81,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
 export async function getOpenseaFloor(collectionSlug: string) {
   const CACHE_TTL = 30; // 30 seconds cache
   const cacheKey = `opensea:floor:${collectionSlug}`;
-  const lockKey = `floor:${collectionSlug}`;
+  const lockKey = `floor:opensea:${collectionSlug}`;
 
   // Try to get from cache first
   try {
@@ -151,6 +151,114 @@ export async function getOpenseaFloor(collectionSlug: string) {
   }
 
   return result;
+}
+
+export async function getBlurFloor(collectionSlug: string): Promise<number> {
+  const CACHE_TTL = 30; // 30 seconds cache
+  const cacheKey = `blur:floor:${collectionSlug}`;
+  const lockKey = `floor:blur:${collectionSlug}`;
+
+  // Try to get from cache first
+  try {
+    const cachedFloor = redis ? await redis.get(cacheKey) : null;
+    if (cachedFloor) {
+      return JSON.parse(cachedFloor);
+    }
+  } catch (error) {
+    console.error('Error reading Blur floor from cache:', error);
+  }
+
+  // If not in cache, try to acquire lock and fetch
+  const result = await lockManager.withLock(lockKey, async () => {
+    // Double check cache after acquiring lock
+    const cachedFloor = redis ? await redis.get(cacheKey) : null;
+    if (cachedFloor) {
+      return JSON.parse(cachedFloor);
+    }
+
+    try {
+      // Import Blur functions dynamically to avoid circular dependency
+      const { fetchBlurCollectionStats } = await import('../marketplace/blur/bid');
+      const stats = await fetchBlurCollectionStats(collectionSlug);
+      
+      const floor_price = stats?.floorPrice?.amount ? 
+        parseFloat(stats.floorPrice.amount) : 0;
+      
+      // Cache the result
+      if (redis) {
+        await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+      }
+      return floor_price;
+    } catch (error) {
+      console.error('Error fetching Blur floor price:', error);
+      return 0;
+    }
+  });
+
+  return result || 0;
+}
+
+export async function getMagicEdenFloor(collectionSlug: string): Promise<number> {
+  const CACHE_TTL = 30; // 30 seconds cache
+  const cacheKey = `magiceden:floor:${collectionSlug}`;
+  const lockKey = `floor:magiceden:${collectionSlug}`;
+
+  // Try to get from cache first
+  try {
+    const cachedFloor = redis ? await redis.get(cacheKey) : null;
+    if (cachedFloor) {
+      return JSON.parse(cachedFloor);
+    }
+  } catch (error) {
+    console.error('Error reading Magic Eden floor from cache:', error);
+  }
+
+  // If not in cache, try to acquire lock and fetch
+  const result = await lockManager.withLock(lockKey, async () => {
+    // Double check cache after acquiring lock
+    const cachedFloor = redis ? await redis.get(cacheKey) : null;
+    if (cachedFloor) {
+      return JSON.parse(cachedFloor);
+    }
+
+    try {
+      // Import Magic Eden functions dynamically to avoid circular dependency
+      const { fetchMagicEdenCollectionStats } = await import('../marketplace/magiceden');
+      const stats = await fetchMagicEdenCollectionStats(collectionSlug);
+      
+      const floor_price = stats?.floorPrice?.amount ? 
+        Number(stats.floorPrice.amount) / 1e18 : 0;
+      
+      // Cache the result
+      if (redis) {
+        await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+      }
+      return floor_price;
+    } catch (error) {
+      console.error('Error fetching Magic Eden floor price:', error);
+      return 0;
+    }
+  });
+
+  return result || 0;
+}
+
+export async function getAllFloorPrices(collectionSlug: string): Promise<{
+  opensea: number;
+  blur: number;
+  magiceden: number;
+}> {
+  const [opensea, blur, magiceden] = await Promise.allSettled([
+    getOpenseaFloor(collectionSlug),
+    getBlurFloor(collectionSlug),
+    getMagicEdenFloor(collectionSlug)
+  ]);
+
+  return {
+    opensea: opensea.status === 'fulfilled' ? opensea.value : 0,
+    blur: blur.status === 'fulfilled' ? blur.value : 0,
+    magiceden: magiceden.status === 'fulfilled' ? magiceden.value : 0,
+  };
 }
 
 export async function getOpenseaCollectionStats(collectionSlug: string) {
@@ -729,4 +837,144 @@ interface Listing {
 interface ListingsResponse {
   listings: Listing[];
   next: string;
+}
+
+/**
+ * Get Blur floor price for a collection
+ */
+export async function getBlurFloor(collectionSlug: string): Promise<number> {
+  const CACHE_TTL = 30; // 30 seconds cache
+  const cacheKey = `blur:floor:${collectionSlug}`;
+  const lockKey = `floor:blur:${collectionSlug}`;
+
+  // Try to get from cache first
+  try {
+    const cachedFloor = redis ? await redis.get(cacheKey) : null;
+    if (cachedFloor) {
+      return JSON.parse(cachedFloor);
+    }
+  } catch (error) {
+    await logger.logDatabaseError('Error reading Blur floor price from cache', {
+      databaseOperation: DatabaseOperation.READ,
+      collection_name: 'redis_cache',
+      collection: collectionSlug,
+      cacheKey,
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  const result = await lockManager.withLock(lockKey, async () => {
+    try {
+      // Import dynamically to avoid circular dependencies
+      const { fetchBlurCollectionStats } = await import('../marketplace/blur/bid');
+      const stats = await fetchBlurCollectionStats(collectionSlug);
+      const floorPrice = stats?.floorPrice || 0;
+
+      // Cache the result
+      if (redis && floorPrice > 0) {
+        await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(floorPrice));
+      }
+
+      return floorPrice;
+    } catch (error) {
+      await logger.logBlurBidError('Error fetching Blur floor price', {
+        collection: collectionSlug,
+        operation: 'get_floor_price',
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+      return 0;
+    }
+  });
+
+  return result || 0;
+}
+
+/**
+ * Get Magic Eden floor price for a collection
+ */
+export async function getMagicEdenFloor(collectionSlug: string): Promise<number> {
+  const CACHE_TTL = 30; // 30 seconds cache
+  const cacheKey = `magiceden:floor:${collectionSlug}`;
+  const lockKey = `floor:magiceden:${collectionSlug}`;
+
+  // Try to get from cache first
+  try {
+    const cachedFloor = redis ? await redis.get(cacheKey) : null;
+    if (cachedFloor) {
+      return JSON.parse(cachedFloor);
+    }
+  } catch (error) {
+    await logger.logDatabaseError('Error reading Magic Eden floor price from cache', {
+      databaseOperation: DatabaseOperation.READ,
+      collection_name: 'redis_cache',
+      collection: collectionSlug,
+      cacheKey,
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  const result = await lockManager.withLock(lockKey, async () => {
+    try {
+      // Import dynamically to avoid circular dependencies
+      const { fetchMagicEdenCollectionStats } = await import('../marketplace/magiceden');
+      const stats = await fetchMagicEdenCollectionStats(collectionSlug);
+      const floorPrice = stats?.floorPriceEth || 0;
+
+      // Cache the result
+      if (redis && floorPrice > 0) {
+        await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(floorPrice));
+      }
+
+      return floorPrice;
+    } catch (error) {
+      await logger.logMagicEdenCollectionError('Error fetching Magic Eden floor price', {
+        collection: collectionSlug,
+        operation: 'get_floor_price',
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+      return 0;
+    }
+  });
+
+  return result || 0;
+}
+
+/**
+ * Get floor prices from all marketplaces
+ */
+export async function getAllFloorPrices(collectionSlug: string): Promise<{
+  opensea: number;
+  blur: number;
+  magiceden: number;
+}> {
+  try {
+    // Fetch all floor prices concurrently
+    const [opensea, blur, magiceden] = await Promise.all([
+      getOpenseaFloor(collectionSlug).catch(() => 0),
+      getBlurFloor(collectionSlug).catch(() => 0),
+      getMagicEdenFloor(collectionSlug).catch(() => 0)
+    ]);
+
+    return {
+      opensea,
+      blur,
+      magiceden
+    };
+  } catch (error) {
+    await logger.logGeneralError('Error fetching all floor prices', {
+      collection: collectionSlug,
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
+    
+    return {
+      opensea: 0,
+      blur: 0,
+      magiceden: 0
+    };
+  }
 }
