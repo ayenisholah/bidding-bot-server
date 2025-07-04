@@ -36,8 +36,9 @@ import User from "./models/user.model";
 import axios from "axios";
 import { decryptPrivateKey, setPassword, getPassword, decryptPassword } from "./utils/crypto";
 import { fetchWalletNFTs } from "./utils/nft";
-import { logger, ErrorCategory, DatabaseOperation, QueueOperation } from "./utils/logger";
+import { logger, DatabaseOperation, QueueOperation } from "./utils/logger";
 import WebSocketManager from "./utils/websocket-manager";
+import Listing from "./models/listing.model";
 const prisma = new PrismaClient()
 
 const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
@@ -591,6 +592,14 @@ async function resumeQueueAndWorkers() {
 
 async function startServer() {
   try {
+    // Development mode notification
+    if (process.env.NODE_ENV === 'development') {
+      console.log(GREEN + '🚀 Running in DEVELOPMENT mode' + RESET);
+      if (process.env.PASSWORD) {
+        console.log(GREEN + '✅ Development password will be auto-set from environment' + RESET);
+      }
+    }
+
     // Wait for Redis to be ready
     console.log('Waiting for Redis connection...');
     while (!redisClient.isReady()) {
@@ -745,7 +754,13 @@ async function startServer() {
 
     // Check if password is set on startup
     if (!getPassword()) {
-      await pauseQueueAndWorkers();
+      // In development, set password from env if available
+      if (process.env.NODE_ENV === 'development' && process.env.PASSWORD) {
+        console.log(GREEN + 'Development mode: Setting password from environment' + RESET);
+        setPassword(process.env.PASSWORD);
+      } else {
+        await pauseQueueAndWorkers();
+      }
     }
 
   } catch (error) {
@@ -3408,7 +3423,7 @@ async function connectWebSocket(): Promise<void> {
 
 async function handleCounterBid(message: any) {
   try {
- 
+
     const { contractAddress, slug } = getMarketplaceDetails(message);
     if (!contractAddress && !slug) return
 
@@ -8693,6 +8708,183 @@ app.post('/api/wallet/nfts', async (req, res) => {
   }
 });
 
+// NFT metadata endpoint
+app.get('/api/collection/:contractAddress/:tokenId/:slug/:walletAddress', async (req, res) => {
+  try {
+    const { contractAddress, tokenId, slug, walletAddress } = req.params;
+
+    // Validate parameters
+    if (!contractAddress || !tokenId || !slug || !walletAddress) {
+      return res.status(400).json({
+        success: false,
+        error: 'wallet address, slug, contract address and token ID are required'
+      });
+    }
+
+    const collectionDetails = await getCollectionDetails(slug)
+    const enforceCreatorFee = collectionDetails?.enforceCreatorFee
+    const fees = collectionDetails.fees
+
+    // Extract creator fees
+    const creatorFees: { [walletAddress: string]: number } = {};
+    if (enforceCreatorFee && fees && Array.isArray(fees)) {
+      // OpenSea marketplace fee address
+      const OPENSEA_FEE_ADDRESS = '0x0000a26b00c1f0df003000390027140000faa719';
+
+      // Find creator fee (any address that's not OpenSea's)
+      const creatorFee = fees.find(fee =>
+        fee.recipient.toLowerCase() !== OPENSEA_FEE_ADDRESS.toLowerCase()
+      );
+
+      if (creatorFee && creatorFee.recipient) {
+        creatorFees[creatorFee.recipient.toLowerCase()] = creatorFee.fee;
+      }
+    }
+
+    // Marketplace addresses
+    const marketplaceAddresses = {
+      opensea: '0x1E0049783F008A0085193E00003D00cd54003c71',
+      magiceden: '0x9A1D00bEd7CD04BCDA516d721A596eb22Aac6834',
+      blur: '0x2f18f339620a63e43f0839eeb18d7de1e1be4dfb'
+    };
+
+    // Create contract instance
+    const approveAbi = [
+      {
+        inputs: [
+          { internalType: 'address', name: 'account', type: 'address' },
+          { internalType: 'address', name: 'operator', type: 'address' }
+        ],
+        name: 'isApprovedForAll',
+        outputs: [{ internalType: 'bool', name: '', type: 'bool' }],
+        stateMutability: 'view',
+        type: 'function'
+      },
+      {
+        inputs: [
+          { internalType: 'address', name: 'operator', type: 'address' },
+          { internalType: 'bool', name: 'approved', type: 'bool' }
+        ],
+        name: 'setApprovalForAll',
+        outputs: [],
+        stateMutability: 'nonpayable',
+        type: 'function'
+      }
+    ];
+
+    // Set up provider with retry
+    const provider = await withRetry(async () => {
+      const p = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
+      // Test the connection
+      await p.getNetwork();
+      return p;
+    });
+
+    const nftContract = new Contract(contractAddress, approveAbi, provider);
+    const contractInterface = new ethers.Interface(approveAbi);
+
+    // Function to check approval for a marketplace
+    const checkMarketplaceApproval = async (marketplaceName: string, marketplaceAddress: string) => {
+      try {
+        // Check if approved
+        const isApproved = await nftContract.isApprovedForAll(walletAddress, marketplaceAddress);
+
+        let gasEstimate = null;
+
+        if (!isApproved) {
+          // Estimate gas for approval
+          try {
+            const encodedData = contractInterface.encodeFunctionData('setApprovalForAll', [
+              marketplaceAddress,
+              true
+            ]);
+
+            // Estimate gas using provider.estimateGas
+            const gasLimit = await provider.estimateGas({
+              to: contractAddress,
+              from: walletAddress,
+              data: encodedData
+            });
+
+            // Get current gas price
+            const feeData = await provider.getFeeData();
+            const gasPrice = feeData.gasPrice || BigInt(20000000000); // 20 gwei fallback
+
+            // Calculate total cost in wei
+            const totalCostWei = gasLimit * gasPrice;
+
+            // Convert to ether
+            gasEstimate = ethers.formatEther(totalCostWei);
+          } catch (gasError: any) {
+            console.error(`Gas estimation error for ${marketplaceName}:`, gasError);
+            gasEstimate = null;
+          }
+        }
+
+        return {
+          approved: isApproved,
+          approvalFeeEstimate: gasEstimate,
+          contractAddress: marketplaceAddress
+        };
+      } catch (error: any) {
+        console.error(`Approval check error for ${marketplaceName}:`, error);
+        return {
+          approved: false,
+          approvalFeeEstimate: null,
+          error: error?.message || 'Failed to check approval'
+        };
+      }
+    };
+
+    // Check all marketplaces in parallel
+    const [openseaApproval, magicedenApproval, blurApproval] = await Promise.all([
+      checkMarketplaceApproval('opensea', marketplaceAddresses.opensea),
+      checkMarketplaceApproval('magiceden', marketplaceAddresses.magiceden),
+      checkMarketplaceApproval('blur', marketplaceAddresses.blur)
+    ]);
+
+    res.status(200).json({
+      enforceCreatorFee,
+      creatorFees: { "0x9A1D00bEd7CD04BCDA516d721A596eb22Aac6834": 5 },
+      marketplaceApprovals: {
+        opensea: openseaApproval,
+        magiceden: magicedenApproval,
+        blur: blurApproval
+      }
+    });
+  } catch (error: any) {
+    console.error('Failed to fetch NFT metadata:', error);
+    await logger.logApiError('Failed to fetch NFT metadata', {
+      endpoint: `/api/collection/${req.params.contractAddress}/${req.params.tokenId}/${req.params.slug}`,
+      method: 'GET',
+      error: error,
+      errorMessage: error.message,
+      statusCode: error.response?.status || 500
+    });
+
+    // Handle specific error cases
+    if (error.message === 'Invalid contract address') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid contract address format'
+      });
+    }
+
+    if (error.response?.status === 404) {
+      return res.status(404).json({
+        success: false,
+        error: 'NFT not found'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch NFT metadata',
+      message: error.message
+    });
+  }
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   const healthStatus = {
@@ -9271,6 +9463,22 @@ function checkBlurTraits(incomingBids: any, traits: any) {
 
 const approvalLocks = new Map<string, Promise<boolean>>();
 
+// Retry wrapper function
+const RETRY_DELAY = 1000; // 1 second
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+async function withRetry<T>(fn: () => Promise<T>, retries = MAX_RETRIES): Promise<T> {
+  try {
+    return await fn();
+  } catch (error: any) {
+    if (retries > 0) {
+      console.log(`Retrying operation, ${retries} attempts remaining...`);
+      await delay(RETRY_DELAY);
+      return withRetry(fn, retries - 1);
+    }
+    throw error;
+  }
+}
+
 /**
  * Approves a marketplace contract to spend WETH on behalf of a wallet
  * @param marketplace The marketplace contract address to approve (e.g. Seaport, MagicEden)
@@ -9278,25 +9486,9 @@ const approvalLocks = new Map<string, Promise<boolean>>();
  * @returns Promise<boolean> Whether the approval was successful
  */
 async function approveMarketplace(marketplace: string, privateKey: string, currency = WETH): Promise<boolean> {
-  const MAX_RETRIES = 3;
-  const RETRY_DELAY = 1000; // 1 second
 
   // Helper function to delay execution
-  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-  // Retry wrapper function
-  async function withRetry<T>(fn: () => Promise<T>, retries = MAX_RETRIES): Promise<T> {
-    try {
-      return await fn();
-    } catch (error: any) {
-      if (retries > 0) {
-        console.log(`Retrying operation, ${retries} attempts remaining...`);
-        await delay(RETRY_DELAY);
-        return withRetry(fn, retries - 1);
-      }
-      throw error;
-    }
-  }
 
   try {
     // Set up provider and wallet with retry

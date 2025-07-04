@@ -7,10 +7,11 @@ import { API_KEY, redis } from "..";
 import { CollectionItemsListQuery } from "../queries";
 import { BASE_URL } from "../constants";
 import { logger, DatabaseOperation } from "../utils/logger";
+import { ICollectionDetails } from "../types/collection.types";
 
 config()
 
-const collectionCache: { [key: string]: any } = {};
+const collectionCache: { [key: string]: ICollectionDetails } = {};
 const MAX_CACHE_ITEMS = 1000;
 
 const lockManager = new DistributedLockManager({
@@ -18,7 +19,7 @@ const lockManager = new DistributedLockManager({
   defaultTTLSeconds: 36000
 });
 
-export async function getCollectionDetails(slug: string, contractAddress: string) {
+export async function getCollectionDetails(slug: string, contractAddress?: string) {
 
   if (collectionCache[slug]) {
     return collectionCache[slug];
@@ -54,11 +55,9 @@ export async function getCollectionDetails(slug: string, contractAddress: string
     }
 
     const result = {
-      address: collection.editors[0],
-      primary_asset_contracts_address: contractAddress,
+      ...collection,
       creator_fees: creator_fees,
-      enforceCreatorFee: enforceCreatorFee,
-      ...collection
+      enforceCreatorFee: enforceCreatorFee
     };
 
     collectionCache[slug] = result;

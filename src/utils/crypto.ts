@@ -8,7 +8,7 @@ const ALGORITHM = 'aes-256-gcm';
 const DETERMINISTIC_ALGORITHM = "aes-256-ecb";
 
 // Import PASSWORD from index.ts
-let PASSWORD: string | undefined = process.env.PASSWORD
+let PASSWORD: string | undefined = process.env.NODE_ENV === 'development' && process.env.PASSWORD ? process.env.PASSWORD : undefined
 
 export function setPassword(password: string) {
   PASSWORD = password;

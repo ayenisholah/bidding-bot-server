@@ -1,5 +1,6 @@
 import { config } from "dotenv";
 import { IFee, IListing } from "../types/listing.types";
+import { ICollectionDetails } from "../types/collection.types";
 import { NETWORK } from "../constants";
 import Wallet from "../models/wallet.model";
 import { decryptPrivateKey } from "../utils/crypto";
@@ -21,7 +22,7 @@ export async function createListing(data: IListing) {
     const wallet = await Wallet.findById(data.walletId.toString());
     const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
     const web3Wallet = new Web3Wallet(private_key, provider)
-    const collectionData = await getCollectionDetails(data.contract.slug, data.contract.contractAddress);
+    const collectionData: ICollectionDetails | null = await getCollectionDetails(data.contract.slug, data.contract.contractAddress);
     const creatorFees = collectionData?.creator_fees as IFee
     const enforceCreatorFee = collectionData?.enforceCreatorFee as boolean
     const walletAddress = data.wallet
