@@ -36,7 +36,7 @@ export async function createListing(data: IListing) {
     // Get Blur access token first if needed
     const needsBlurToken = selectedMarketplaces.some(m => m.toLowerCase() === 'blur');
     const blurAccessToken = needsBlurToken ? await getAccessToken(private_key) : null;
-    
+
     if (needsBlurToken && !blurAccessToken) {
       throw new Error('Failed to get Blur access token');
     }
@@ -99,29 +99,29 @@ function calculateListingPrice(data: IListing, marketplace: 'opensea' | 'blur' |
   // If DYNAMIC_PRICING is set, handle it elsewhere (not implemented here)
   if (data.pricingStrategy === 'DYNAMIC_PRICING') {
     // For now, return the general listing price as fallback
-    return Number(data.listingPrice) || 0;
+    return +data.basePrice + +data.minimumProfit || 0;
   }
 
   // FIXED_PRICING strategy
   if (data.pricingStrategy === 'FIXED_PRICING') {
     if (data.listingPriceType === 'GENERAL_LISTING_PRICE') {
       // Use the general listing price for all marketplaces
-      return Number(data.listingPrice) || 0;
+      return Number(data.basePrice) || 0;
     } else if (data.listingPriceType === 'MARKETPLACE_LISTING_PRICE') {
       // Use marketplace-specific prices
       switch (marketplace) {
         case 'opensea':
-          return Number(data.openseaListingPrice) || Number(data.listingPrice) || 0;
+          return Number(data.openseaListingPrice) || Number(data.basePrice) || 0;
         case 'blur':
-          return Number(data.blurListingPrice) || Number(data.listingPrice) || 0;
+          return Number(data.blurListingPrice) || Number(data.basePrice) || 0;
         case 'magiceden':
-          return Number(data.magicEdenListingPrice) || Number(data.listingPrice) || 0;
+          return Number(data.magicEdenListingPrice) || Number(data.basePrice) || 0;
         default:
-          return Number(data.listingPrice) || 0;
+          return Number(data.basePrice) || 0;
       }
     }
   }
 
   // Default fallback
-  return Number(data.listingPrice) || 0;
+  return Number(data.basePrice) || 0;
 }

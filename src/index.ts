@@ -8668,7 +8668,7 @@ app.post('/api/update-app', async (req, res) => {
   }
 });
 
-app.post('/api/wallet/nfts', async (req, res) => {
+app.get('/api/wallet/nfts', async (req, res) => {
   try {
 
     // Get all wallet addresses from the database
@@ -8845,7 +8845,7 @@ app.get('/api/collection/:contractAddress/:tokenId/:slug/:walletAddress', async 
 
     res.status(200).json({
       enforceCreatorFee,
-      creatorFees: { "0x9A1D00bEd7CD04BCDA516d721A596eb22Aac6834": 5 },
+      creatorFees,
       marketplaceApprovals: {
         opensea: openseaApproval,
         magiceden: magicedenApproval,

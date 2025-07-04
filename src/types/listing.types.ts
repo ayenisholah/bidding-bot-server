@@ -46,12 +46,13 @@ export interface IListingBase {
   selectedMarketplaces: string[];
   running: boolean;
   instantPriceMatching: boolean;
-  listingPrice: string;
+  basePrice: string;
   underCutMargin: string;
   openseaListingPrice: string;
   blurListingPrice: string;
   magicEdenListingPrice: string;
   minListingPrice: string;
+  minimumProfit: string;
   loopInterval: {
     value: number;
     unit: string;
