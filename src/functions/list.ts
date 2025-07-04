@@ -10,6 +10,9 @@ import { logger, ErrorCategory } from "../utils/logger";
 import { getAccessToken } from "../marketplace/blur";
 import { updateListingExpiration } from "./relistExpired";
 import Listing from "../models/listing.model";
+import { listOnOpensea } from "../marketplace/opensea/list";
+import { listOnBlur } from "../marketplace/blur/list";
+import { listOnMagicEden } from "../marketplace/magiceden/list";
 
 config()
 
@@ -18,14 +21,36 @@ const provider = new AlchemyProvider(NETWORK, ALCHEMY_API_KEY)
 
 export async function createListing(data: IListing) {
   try {
-    console.log('\n=== INCOMING LISTING DATA ===');
-    console.log(JSON.stringify(data, null, 2));
-    console.log('=== END LISTING DATA ===\n');
-
     // Only process if listing is running
     if (!data.running) {
       await logger.logInfo(ErrorCategory.GENERAL, `Skipping listing for token ${data.tokenId} - listing is not running`);
       return;
+    }
+    
+    console.log('\n=== INCOMING LISTING DATA ===');
+    console.log(JSON.stringify(data, null, 2));
+    console.log('=== END LISTING DATA ===\n');
+
+    // Clean up expired marketplace listings
+    const now = new Date();
+    const marketplaces: Array<'opensea' | 'blur' | 'magiceden'> = ['opensea', 'blur', 'magiceden'];
+    
+    for (const marketplace of marketplaces) {
+      const expiration = data.listingExpiration?.[marketplace];
+      if (expiration && new Date(expiration) <= now) {
+        // Expired - remove from final listing price
+        if (data.finalListingPrice?.[marketplace] !== undefined) {
+          console.log(`Removing expired ${marketplace} listing price for token ${data.tokenId}`);
+          delete data.finalListingPrice[marketplace];
+          
+          // Also update in database
+          if (data._id) {
+            await Listing.findByIdAndUpdate(data._id, {
+              $unset: { [`finalListingPrice.${marketplace}`]: 1 }
+            });
+          }
+        }
+      }
     }
 
     const wallet = await Wallet.findById(data.walletId.toString());
@@ -75,16 +100,83 @@ export async function createListing(data: IListing) {
     if (needsBlurToken && !blurAccessToken) {
       throw new Error('Failed to get Blur access token');
     }
+    // if we at the floor return return
+    // else  adjust price
 
     // Create listing promises for all marketplaces
     const listingPromises = selectedMarketplaces.map(async (marketplace) => {
       const marketplaceLower = marketplace.toLowerCase() as 'opensea' | 'blur' | 'magiceden';
-      const calculatedPrice = calculateListingPrice(data, marketplaceLower);
-      const listingPrice = parseFloat(calculatedPrice.toFixed(4));
+
+      // Check if this is an instant price match listing
+      let listingPrice: number;
+      if (data.instantPriceOverride !== undefined) {
+        listingPrice = data.instantPriceOverride;
+        console.log(`Using instant price override: ${listingPrice} ETH for ${marketplace}`);
+
+        // Enforce minimum listing price
+        const minPrice = parseFloat(data.minListingPrice) || 0;
+        if (listingPrice < minPrice) {
+          console.log(`Instant price ${listingPrice} is below minimum ${minPrice}, adjusting to minimum`);
+          listingPrice = minPrice;
+        }
+
+        // Enforce minimum profit
+        if (data.buyPrice && data.minimumProfit) {
+          const minProfit = parseFloat(data.minimumProfit) || 0;
+          const minPriceForProfit = data.buyPrice + minProfit;
+
+          if (listingPrice < minPriceForProfit) {
+            console.log(`Instant price ${listingPrice} would result in insufficient profit, adjusting to ${minPriceForProfit} for minimum profit ${minProfit}`);
+            listingPrice = minPriceForProfit;
+          }
+        }
+
+        // Round to 4 decimal places after adjustments
+        listingPrice = parseFloat(listingPrice.toFixed(4));
+
+        if (listingPrice !== data.instantPriceOverride) {
+          await logger.logInfo(ErrorCategory.GENERAL,
+            `Adjusted instant price from ${data.instantPriceOverride} to ${listingPrice} ETH on ${marketplace} due to constraints`
+          );
+        }
+
+        // Check if we already have an active listing at this price
+        if (data.finalListingPrice && data.listingExpiration) {
+          const currentPrice = data.finalListingPrice[marketplaceLower];
+          const expiration = data.listingExpiration[marketplaceLower];
+
+          if (currentPrice && Math.abs(currentPrice - listingPrice) < 0.0001) { // Compare with small tolerance
+            if (expiration) {
+              const expirationTime = new Date(expiration).getTime();
+              const now = Date.now();
+              const timeRemaining = expirationTime - now;
+
+              if (timeRemaining > 60 * 1000) { // More than 1 minute remaining
+                const minutes = Math.floor(timeRemaining / 60000);
+                const seconds = Math.floor((timeRemaining % 60000) / 1000);
+                console.log(`Already have active listing at ${currentPrice} ETH on ${marketplace} with ${minutes}m ${seconds}s remaining, skipping`);
+                await logger.logInfo(ErrorCategory.GENERAL,
+                  `Skipping ${marketplace} listing - already listed at same price with sufficient time remaining`
+                );
+                return;
+              } else {
+                const seconds = Math.floor(timeRemaining / 1000);
+                console.log(`Existing listing at ${currentPrice} ETH expires in ${seconds}s, proceeding with relist`);
+              }
+            }
+          }
+        }
+      } else {
+        const calculatedPrice = calculateListingPrice(data, marketplaceLower);
+        listingPrice = parseFloat(calculatedPrice.toFixed(4));
+      }
 
       console.log(`\n=== ${marketplace.toUpperCase()} LISTING ===`);
-      console.log('Calculated Price (raw):', calculatedPrice);
-      console.log('Listing Price (rounded):', listingPrice);
+      if (data.instantPriceOverride !== undefined) {
+        console.log('Instant Price Override:', listingPrice);
+      } else {
+        console.log('Calculated Price:', listingPrice);
+      }
 
       // Additional validation
       if (listingPrice <= 0) {
@@ -97,23 +189,24 @@ export async function createListing(data: IListing) {
         return;
       }
 
+
       try {
         let result;
         switch (marketplaceLower) {
           case 'opensea':
             console.log(`Calling listOnOpensea with price: ${listingPrice} ETH`);
             console.log('Parameters:', { contractAddress, tokenId, listingPrice, enforceCreatorFee, durationInSeconds, creatorFees });
-            // result = await listOnOpensea(contractAddress, tokenId, listingPrice, web3Wallet, enforceCreatorFee, durationInSeconds, creatorFees);
+            result = await listOnOpensea(contractAddress, tokenId, listingPrice, web3Wallet, enforceCreatorFee, durationInSeconds, creatorFees);
             break;
           case 'blur':
             console.log(`Calling listOnBlur with price: ${listingPrice} ETH (as string: "${listingPrice.toString()}")`);
             console.log('Parameters:', { contractAddress, tokenId, price: listingPrice.toString(), durationInSeconds, totalCreatorFee });
-            // result = await listOnBlur(contractAddress, tokenId, listingPrice.toString(), web3Wallet, blurAccessToken!, durationInSeconds, totalCreatorFee);
+            result = await listOnBlur(contractAddress, tokenId, listingPrice.toString(), web3Wallet, blurAccessToken!, durationInSeconds, totalCreatorFee);
             break;
           case 'magiceden':
             console.log(`Calling listOnMagicEden with price: ${listingPrice} ETH`);
             console.log('Parameters:', { walletAddress, contractAddress, tokenId, listingPrice, durationInSeconds });
-            // result = await listOnMagicEden(walletAddress, contractAddress, tokenId, listingPrice, durationInSeconds, web3Wallet);
+            result = await listOnMagicEden(walletAddress, contractAddress, tokenId, listingPrice, durationInSeconds, web3Wallet);
             break;
           default:
             console.warn(`Unknown marketplace: ${marketplace}`);
@@ -121,8 +214,8 @@ export async function createListing(data: IListing) {
         }
 
         // Update listing expiration if successful
-        // if (result && data._id) { @TODO
-        if (data._id) {
+        if (result && data._id) { //@TODO
+          // if (data._id) {
           const expirationDate = new Date(Date.now() + durationInSeconds * 1000);
           await updateListingExpiration(data._id.toString(), marketplaceLower as 'opensea' | 'blur' | 'magiceden', expirationDate);
 
@@ -138,7 +231,15 @@ export async function createListing(data: IListing) {
     });
 
     // Execute all listings concurrently
-    await Promise.allSettled(listingPromises);
+    const results = await Promise.allSettled(listingPromises);
+    
+    // Log results for debugging
+    results.forEach((result, index) => {
+      const marketplace = selectedMarketplaces[index];
+      if (result.status === 'rejected') {
+        console.error(`${marketplace} listing failed:`, result.reason);
+      }
+    });
 
   } catch (error) {
     await logger.logMarketplaceError('Error creating listing', {

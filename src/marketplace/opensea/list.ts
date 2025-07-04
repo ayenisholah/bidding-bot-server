@@ -327,6 +327,22 @@ export const listOnOpensea = async (
       errorMessage: JSON.stringify(listings.errors)
     });
     console.log('Error: ', JSON.stringify(listings.errors));
+    
+    // Check if the error is because user no longer owns the NFT
+    const errorMessage = JSON.stringify(listings.errors).toLowerCase();
+    if (errorMessage.includes('not owned') || errorMessage.includes('ownership') || errorMessage.includes('not the owner')) {
+      console.log(`User no longer owns NFT ${nftAddress}/${tokenId}, deleting listing...`);
+      
+      try {
+        await Listing.findOneAndDelete({
+          "contract.contractAddress": nftAddress,
+          tokenId: tokenId
+        });
+        console.log(`Deleted listing for ${nftAddress}/${tokenId} as user no longer owns it`);
+      } catch (deleteError) {
+        console.error('Error deleting listing:', deleteError);
+      }
+    }
   } else {
     console.log('NFT listed successfully on opensea');
 
@@ -338,14 +354,21 @@ export const listOnOpensea = async (
           "contract.contractAddress": nftAddress,
           tokenId: tokenId
         },
-        {
-          $set: {
-            "finalListingPrice.opensea": roundedPrice,
-            "listingExpiration.opensea": expirationTime,
-            "lastListedAt.opensea": new Date(),
-            listed: true
+        [
+          {
+            $set: {
+              "finalListingPrice.opensea": roundedPrice,
+              "listingExpiration.opensea": expirationTime,
+              lastListedAt: {
+                $mergeObjects: [
+                  { $cond: [{ $eq: [{ $type: "$lastListedAt" }, "object"] }, "$lastListedAt", {}] },
+                  { opensea: new Date() }
+                ]
+              },
+              listed: true
+            }
           }
-        },
+        ],
         { new: true }
       );
 

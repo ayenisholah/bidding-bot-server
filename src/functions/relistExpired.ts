@@ -51,14 +51,21 @@ async function relistOnExpiredMarketplaces(listing: IListing): Promise<void> {
       marketplaceSubCategory: MarketplaceSubCategory.LISTING,
     });
     
+    // Fetch fresh listing data from database
+    const freshListing = await Listing.findById(listing._id);
+    if (!freshListing) {
+      console.error(`Listing ${listing._id} not found when fetching fresh data for relisting`);
+      return;
+    }
+    
     // Create a temporary listing object with only expired marketplaces
     const relistData = {
-      ...listing.toObject(),
+      ...freshListing.toObject(),
       selectedMarketplaces: expiredMarketplaces,
-    };
+    } as unknown as IListing;
     
     // Relist only on expired marketplaces
-    await createListing(relistData as IListing);
+    await createListing(relistData);
     
   } catch (error) {
     await logger.logMarketplaceError('Failed to relist expired listing', {
@@ -156,7 +163,7 @@ export async function updateListingExpiration(
  * Initialize periodic expiration checking
  * Runs every 5 minutes by default
  */
-export function initializeExpirationMonitor(intervalMinutes: number = 5): NodeJS.Timer {
+export function initializeExpirationMonitor(intervalMinutes: number = 5): NodeJS.Timeout {
   console.log(`Starting expiration monitor (checking every ${intervalMinutes} minutes)`);
   
   // Run immediately on startup
@@ -173,7 +180,7 @@ export function initializeExpirationMonitor(intervalMinutes: number = 5): NodeJS
 /**
  * Stop the expiration monitor
  */
-export function stopExpirationMonitor(interval: NodeJS.Timer): void {
+export function stopExpirationMonitor(interval: NodeJS.Timeout): void {
   clearInterval(interval);
   console.log('Expiration monitor stopped');
 }

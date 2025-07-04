@@ -125,18 +125,31 @@ async function processListingUpdate(
     const shouldAdjust = await shouldAdjustPrice(listing, marketplaceLower, price);
 
     if (shouldAdjust) {
+      // Calculate the new undercut price
+      const undercutMargin = parseFloat(listing.underCutMargin) || 0.0001;
+      const newPrice = price - undercutMargin;
+
       await logger.logInfo(ErrorCategory.GENERAL,
-        `Instant price match triggered for token ${tokenId} on ${marketplace}. Competitor price: ${price} ETH`
+        `Instant price match triggered for token ${tokenId} on ${marketplace}. Competitor price: ${price} ETH, New price: ${newPrice} ETH`
       );
 
       // Cancel current listing job
       await cancelListingJob(listing._id.toString());
 
+      // Fetch fresh listing data from database
+      const freshListing = await Listing.findById(listing._id);
+      if (!freshListing) {
+        console.error(`Listing ${listing._id} not found when fetching fresh data`);
+        continue;
+      }
+
       // Immediately relist with adjusted price
       const adjustedListing = {
-        ...listing.toObject(),
+        ...freshListing.toObject(),
         // Only relist on the marketplace where we were undercut
         selectedMarketplaces: [marketplace.toUpperCase()],
+        // Use instant price override to bypass calculateListingPrice
+        instantPriceOverride: newPrice,
       } as IListing;
 
       await createListing(adjustedListing);
@@ -153,6 +166,7 @@ async function processListingUpdate(
             tokenId,
             marketplace,
             competitorPrice: price,
+            newPrice: newPrice,
             action: 'price_adjusted',
           }
         });

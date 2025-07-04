@@ -41,6 +41,7 @@ import WebSocketManager from "./utils/websocket-manager";
 import Listing from "./models/listing.model";
 import { initializeListingScheduler, shutdownListingScheduler, scheduleListing, cancelListingJob } from "./functions/listingScheduler";
 import { initializeExpirationMonitor, stopExpirationMonitor } from "./functions/relistExpired";
+import { initializeExpiredPriceCleanup, stopExpiredPriceCleanup } from "./functions/cleanupExpiredPrices";
 import { handleListingPriceUpdate } from "./functions/priceMonitor";
 const prisma = new PrismaClient()
 
@@ -131,7 +132,8 @@ function cleanupSeenItems(map: Map<string, number>): void {
 
 // Set up periodic cleanup
 let cleanupIntervalId: NodeJS.Timeout | null = null;
-let expirationMonitorInterval: NodeJS.Timer | null = null;
+let expirationMonitorInterval: NodeJS.Timeout | null = null;
+let expiredPriceCleanupInterval: NodeJS.Timeout | null = null;
 
 const SERVER_IP = process.env.SERVER_IP as string
 const USERNAME = process.env.USERNAME as string
@@ -752,6 +754,10 @@ async function startServer() {
     expirationMonitorInterval = initializeExpirationMonitor();
     console.log('⏰ Expiration monitor initialized');
 
+    // Initialize expired price cleanup
+    expiredPriceCleanupInterval = initializeExpiredPriceCleanup();
+    console.log('🧹 Expired price cleanup initialized');
+
     // Start periodic cleanup of seen items
     cleanupIntervalId = setInterval(() => {
       cleanupSeenItems(seenOrderHashes);
@@ -800,6 +806,11 @@ process.on('SIGINT', async () => {
     console.log('Expiration monitor stopped');
   }
 
+  if (expiredPriceCleanupInterval) {
+    stopExpiredPriceCleanup(expiredPriceCleanupInterval);
+    console.log('Expired price cleanup stopped');
+  }
+
   // Disconnect WebSocket
   if (wsManager) {
     wsManager.disconnect();
@@ -828,6 +839,11 @@ process.on('SIGTERM', async () => {
   if (expirationMonitorInterval) {
     stopExpirationMonitor(expirationMonitorInterval);
     console.log('Expiration monitor stopped');
+  }
+
+  if (expiredPriceCleanupInterval) {
+    stopExpiredPriceCleanup(expiredPriceCleanupInterval);
+    console.log('Expired price cleanup stopped');
   }
 
   // Disconnect WebSocket
@@ -10673,9 +10689,6 @@ export interface AddressBalancesResponse {
 async function handleStartListing(data: { _id: string }, ws: WebSocket) {
   try {
     const listing = await Listing.findById(data._id);
-
-    console.log({ listing });
-
     if (!listing) {
       ws.send(JSON.stringify({
         type: 'error',
@@ -10743,9 +10756,9 @@ async function handleStartListing(data: { _id: string }, ws: WebSocket) {
   }
 }
 
-async function handleStopListing(data: { listingId: string }, ws: WebSocket) {
+async function handleStopListing(data: { _id: string }, ws: WebSocket) {
   try {
-    const listing = await Listing.findById(data.listingId);
+    const listing = await Listing.findById(data._id);
     if (!listing) {
       ws.send(JSON.stringify({
         type: 'error',
@@ -10759,7 +10772,7 @@ async function handleStopListing(data: { listingId: string }, ws: WebSocket) {
     await listing.save();
 
     // Cancel the scheduled job
-    await cancelListingJob(data.listingId);
+    await cancelListingJob(data._id);
 
     // Unsubscribe from WebSocket events
     if (wsManager && listing.contract.slug && listing.contract.contractAddress) {
@@ -10774,11 +10787,11 @@ async function handleStopListing(data: { listingId: string }, ws: WebSocket) {
 
     ws.send(JSON.stringify({
       type: 'listing-stopped',
-      listingId: data.listingId,
+      listingId: data._id,
       message: 'Listing stopped successfully'
     }));
 
-    console.log(YELLOW + `Stopped listing ${data.listingId}` + RESET);
+    console.log(YELLOW + `Stopped listing ${data._id}` + RESET);
   } catch (error) {
     console.error('Error stopping listing:', error);
     ws.send(JSON.stringify({
@@ -10789,9 +10802,9 @@ async function handleStopListing(data: { listingId: string }, ws: WebSocket) {
   }
 }
 
-async function handleUpdateListing(data: { listingId: string, updates: any }, ws: WebSocket) {
+async function handleUpdateListing(data: { _id: string, updates: any }, ws: WebSocket) {
   try {
-    const listing = await Listing.findById(data.listingId);
+    const listing = await Listing.findById(data._id);
     if (!listing) {
       ws.send(JSON.stringify({
         type: 'error',
@@ -10841,11 +10854,11 @@ async function handleUpdateListing(data: { listingId: string, updates: any }, ws
 
     ws.send(JSON.stringify({
       type: 'listing-updated',
-      listingId: data.listingId,
+      listingId: data._id,
       message: 'Listing updated successfully'
     }));
 
-    console.log(GREEN + `Updated listing ${data.listingId}` + RESET);
+    console.log(GREEN + `Updated listing ${data._id}` + RESET);
   } catch (error) {
     console.error('Error updating listing:', error);
     ws.send(JSON.stringify({

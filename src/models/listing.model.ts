@@ -3,6 +3,8 @@ import { IListingBase } from "../types/listing.types";
 
 export interface IListing extends IListingBase, Document {
   _id: mongoose.Types.ObjectId;
+  cleanupExpiredListings(): boolean;
+  checkAndCleanExpiredListings(): Promise<boolean>;
 }
 
 const ListingSchema: Schema = new Schema(
@@ -78,6 +80,41 @@ const ListingSchema: Schema = new Schema(
   },
   { timestamps: true }
 );
+
+// Method to clean up expired marketplace listings
+ListingSchema.methods.cleanupExpiredListings = function() {
+  const now = new Date();
+  const marketplaces: Array<'opensea' | 'blur' | 'magiceden'> = ['opensea', 'blur', 'magiceden'];
+  let hasChanges = false;
+  
+  for (const marketplace of marketplaces) {
+    const expiration = this.listingExpiration?.[marketplace];
+    if (expiration && new Date(expiration) <= now) {
+      // Expired - remove the final listing price
+      if (this.finalListingPrice?.[marketplace] !== undefined) {
+        delete this.finalListingPrice[marketplace];
+        hasChanges = true;
+      }
+    }
+  }
+  
+  return hasChanges;
+};
+
+// Pre-save hook to clean up expired listings before saving
+ListingSchema.pre('save', function(this: IListing, next) {
+  this.cleanupExpiredListings();
+  next();
+});
+
+// Instance method to manually clean up expired listings
+ListingSchema.methods.checkAndCleanExpiredListings = async function() {
+  const hasChanges = this.cleanupExpiredListings();
+  if (hasChanges) {
+    await this.save();
+  }
+  return hasChanges;
+};
 
 const Listing = mongoose.model<IListing>("Listing", ListingSchema);
 export default Listing;

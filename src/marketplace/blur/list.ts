@@ -96,6 +96,23 @@ export async function listOnBlur(
 
     if (data?.errors) {
       console.error('Blur format errors:', JSON.stringify(data.errors, null, 2));
+      
+      // Check if the error is because user no longer owns the NFT
+      const errorMessage = data.errors?.message || '';
+      if (errorMessage.includes('You need to own this NFT')) {
+        console.log(`User no longer owns NFT ${nftAddress}/${tokenId}, deleting listing...`);
+        
+        try {
+          await Listing.findOneAndDelete({
+            "contract.contractAddress": nftAddress,
+            tokenId: tokenId
+          });
+          console.log(`Deleted listing for ${nftAddress}/${tokenId} as user no longer owns it`);
+        } catch (deleteError) {
+          console.error('Error deleting listing:', deleteError);
+        }
+      }
+      
       return;
     }
 
@@ -172,6 +189,22 @@ export async function listOnBlur(
 
       if (listings.errors) {
         console.error('Blur submit errors:', JSON.stringify(listings.errors, null, 2));
+        
+        // Check if the error is because user no longer owns the NFT
+        const errorMessage = listings.errors?.message || '';
+        if (errorMessage.includes('You need to own this NFT')) {
+          console.log(`User no longer owns NFT ${nftAddress}/${tokenId}, deleting listing...`);
+          
+          try {
+            await Listing.findOneAndDelete({
+              "contract.contractAddress": nftAddress,
+              tokenId: tokenId
+            });
+            console.log(`Deleted listing for ${nftAddress}/${tokenId} as user no longer owns it`);
+          } catch (deleteError) {
+            console.error('Error deleting listing:', deleteError);
+          }
+        }
       } else {
         console.log('NFT listed successfully on blur');
 
@@ -186,14 +219,21 @@ export async function listOnBlur(
               "contract.contractAddress": nftAddress,
               tokenId: tokenId
             },
-            {
-              $set: {
-                "finalListingPrice.blur": priceInEth,
-                "listingExpiration.blur": expirationTime,
-                "lastListedAt.blur": new Date(),
-                listed: true
+            [
+              {
+                $set: {
+                  "finalListingPrice.blur": priceInEth,
+                  "listingExpiration.blur": expirationTime,
+                  lastListedAt: {
+                    $mergeObjects: [
+                      { $cond: [{ $eq: [{ $type: "$lastListedAt" }, "object"] }, "$lastListedAt", {}] },
+                      { blur: new Date() }
+                    ]
+                  },
+                  listed: true
+                }
               }
-            },
+            ],
             { new: true }
           );
 

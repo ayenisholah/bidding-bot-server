@@ -108,7 +108,18 @@ export async function cancelListingJob(listingId: string): Promise<void> {
   try {
     const queue = await getListingQueue();
     const jobId = activeJobs.get(listingId);
-    if (!jobId) return;
+    if (!jobId) {
+      // Also try to remove any repeatable jobs for this listing
+      const repeatableJobs = await queue.getRepeatableJobs();
+      for (const job of repeatableJobs) {
+        // Check if this is a listing job by examining the key pattern
+        if (job.name === 'process-listing' && job.key.includes(listingId)) {
+          await queue.removeRepeatableByKey(job.key);
+          await logger.logInfo(ErrorCategory.QUEUE, `Removed repeatable job for listing ${listingId}`);
+        }
+      }
+      return;
+    }
 
     const job = await queue.getJob(jobId);
     if (job) {
@@ -116,6 +127,16 @@ export async function cancelListingJob(listingId: string): Promise<void> {
       activeJobs.delete(listingId);
 
       await logger.logInfo(ErrorCategory.QUEUE, `Cancelled listing job for ${listingId}`);
+    }
+    
+    // Also remove any repeatable jobs
+    const repeatableJobs = await queue.getRepeatableJobs();
+    for (const repeatJob of repeatableJobs) {
+      // Check if this is a listing job by examining the key pattern
+      if (repeatJob.name === 'process-listing' && repeatJob.key.includes(listingId)) {
+        await queue.removeRepeatableByKey(repeatJob.key);
+        await logger.logInfo(ErrorCategory.QUEUE, `Removed repeatable job for listing ${listingId}`);
+      }
     }
   } catch (error) {
     await logger.logQueueError('Failed to cancel listing job', {
@@ -146,17 +167,26 @@ async function initializeWorker() {
         const { listingId } = job.data;
 
         try {
+          // Update progress to prevent stalling
+          await job.updateProgress(10);
+          
           await logger.logQueueJobStarted(job.name, {
             jobId: job.id,
             listingId,
             queueName: LISTING_QUEUE_NAME,
           });
 
+          // Update progress
+          await job.updateProgress(20);
+
           // Fetch latest listing data
           const listing = await Listing.findById(listingId);
 
           if (!listing) {
-            throw new Error(`Listing ${listingId} not found`);
+            await logger.logInfo(ErrorCategory.QUEUE, `Listing ${listingId} not found, canceling job`);
+            // Cancel the repeating job since the listing no longer exists
+            await cancelListingJob(listingId);
+            return; // Return successfully so the job doesn't retry
           }
 
           if (!listing.running) {
@@ -166,8 +196,14 @@ async function initializeWorker() {
             return;
           }
 
+          // Update progress before long operation
+          await job.updateProgress(50);
+
           // Process the listing
           await createListing(listing);
+
+          // Update progress
+          await job.updateProgress(80);
 
           // Update last processed time
           await Listing.findByIdAndUpdate(listingId, {
@@ -175,6 +211,9 @@ async function initializeWorker() {
               lastProcessedAt: new Date(),
             },
           });
+
+          // Update progress to completion
+          await job.updateProgress(100);
 
           await logger.logQueueJobCompleted(job.name, {
             jobId: job.id,
@@ -198,6 +237,10 @@ async function initializeWorker() {
         connection,
         concurrency: WORKER_CONCURRENCY,
         prefix: '{listing}',
+        // Increase stall interval to 5 minutes for long-running jobs
+        stalledInterval: 300000, // 5 minutes
+        // Maximum time a job can be active before considered stalled
+        maxStalledCount: 1,
       }
     );
 

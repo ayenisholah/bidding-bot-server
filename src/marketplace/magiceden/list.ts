@@ -120,8 +120,15 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
       signData.value
     );
 
-    const { seller, ...restOfSignData } = signData.value;
+    const { seller, marketplace, ...restOfSignData } = signData.value;
 
+    // Override marketplace address to Magic Eden's expected value
+    const correctMarketplace = "0xca9337244b5f04cb946391bc8b8a980e988f9a6a";
+    
+    if (marketplace && marketplace !== correctMarketplace) {
+      console.log(`Overriding marketplace address from ${marketplace} to ${correctMarketplace}`);
+    }
+    
     const order = {
       items: [
         {
@@ -131,6 +138,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
               kind: "sale-approval",
               sellerOrBuyer: seller,
               ...restOfSignData,
+              marketplace: correctMarketplace, // Use the correct marketplace address
               r: "0x0000000000000000000000000000000000000000000000000000000000000000",
               s: "0x0000000000000000000000000000000000000000000000000000000000000000",
               v: 0,
@@ -160,14 +168,21 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
           "contract.contractAddress": contract, 
           tokenId: tokenId 
         },
-        {
-          $set: {
-            "finalListingPrice.magiceden": roundedPrice,
-            "listingExpiration.magiceden": expirationTime,
-            "lastListedAt.magiceden": new Date(),
-            listed: true
+        [
+          {
+            $set: {
+              "finalListingPrice.magiceden": roundedPrice,
+              "listingExpiration.magiceden": expirationTime,
+              lastListedAt: {
+                $mergeObjects: [
+                  { $cond: [{ $eq: [{ $type: "$lastListedAt" }, "object"] }, "$lastListedAt", {}] },
+                  { magiceden: new Date() }
+                ]
+              },
+              listed: true
+            }
           }
-        },
+        ],
         { new: true }
       );
       
@@ -211,6 +226,23 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
       console.error('Error message:', error.message);
       console.error('Error stack:', error.stack);
     }
+    
+    // Check if the error is because user no longer owns the NFT
+    const errorMessage = JSON.stringify(error?.response?.data || error?.message || '').toLowerCase();
+    if (errorMessage.includes('not owned') || errorMessage.includes('ownership') || errorMessage.includes('not the owner') || errorMessage.includes('unauthorized')) {
+      console.log(`User no longer owns NFT ${contract}/${tokenId}, deleting listing...`);
+      
+      try {
+        await Listing.findOneAndDelete({
+          "contract.contractAddress": contract,
+          tokenId: tokenId
+        });
+        console.log(`Deleted listing for ${contract}/${tokenId} as user no longer owns it`);
+      } catch (deleteError) {
+        console.error('Error deleting listing:', deleteError);
+      }
+    }
+    
     return null;
   }
 }
