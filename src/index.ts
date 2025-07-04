@@ -39,7 +39,7 @@ import { fetchWalletNFTs } from "./utils/nft";
 import { logger, DatabaseOperation, QueueOperation } from "./utils/logger";
 import WebSocketManager from "./utils/websocket-manager";
 import Listing from "./models/listing.model";
-import { initializeListingScheduler, shutdownListingScheduler, scheduleListing, cancelListingJob } from "./functions/listingScheduler";
+import { initializeListingScheduler, shutdownListingScheduler, scheduleListing, cancelListingJob, processListingJob } from "./functions/listingScheduler";
 import { initializeExpirationMonitor, stopExpirationMonitor } from "./functions/relistExpired";
 import { initializeExpiredPriceCleanup, stopExpiredPriceCleanup } from "./functions/cleanupExpiredPrices";
 import { handleListingPriceUpdate } from "./functions/priceMonitor";
@@ -1565,6 +1565,8 @@ async function processJob(job: Job) {
           return await blurCollectionCounterBid(job.data);
         case BLUR_TRAIT_BID_COUNTERBID:
           return await blurTraitCounterBid(job.data);
+        case 'process-listing':
+          return await processListingJob(job);
         default:
           return null;
       }

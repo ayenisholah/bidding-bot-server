@@ -26,15 +26,10 @@ export async function createListing(data: IListing) {
       await logger.logInfo(ErrorCategory.GENERAL, `Skipping listing for token ${data.tokenId} - listing is not running`);
       return;
     }
-    
-    console.log('\n=== INCOMING LISTING DATA ===');
-    console.log(JSON.stringify(data, null, 2));
-    console.log('=== END LISTING DATA ===\n');
 
     // Fetch fresh data if we have an _id
     let freshData = data;
     if (data._id && typeof data._id === 'object') {
-      console.log('Fetching fresh listing data from database...');
       const freshListing = await Listing.findById(data._id);
       if (freshListing) {
         // Use the complete fresh listing data and merge with any passed data
@@ -44,15 +39,13 @@ export async function createListing(data: IListing) {
           finalListingPrice: freshListing.finalListingPrice || data.finalListingPrice,
           listingExpiration: freshListing.listingExpiration || data.listingExpiration,
         };
-        console.log('Fresh finalListingPrice:', freshData.finalListingPrice);
-        console.log('Fresh listingExpiration:', freshData.listingExpiration);
       }
     }
-    
+
     // Clean up expired marketplace listings
     const now = new Date();
     const marketplaces: Array<'opensea' | 'blur' | 'magiceden'> = ['opensea', 'blur', 'magiceden'];
-    
+
     for (const marketplace of marketplaces) {
       const expiration = freshData.listingExpiration?.[marketplace];
       if (expiration && new Date(expiration) <= now) {
@@ -60,7 +53,7 @@ export async function createListing(data: IListing) {
         if (freshData.finalListingPrice?.[marketplace] !== undefined) {
           console.log(`Removing expired ${marketplace} listing price for token ${freshData.tokenId}`);
           delete freshData.finalListingPrice[marketplace];
-          
+
           // Also update in database
           if (freshData._id) {
             await Listing.findByIdAndUpdate(freshData._id, {
@@ -76,7 +69,7 @@ export async function createListing(data: IListing) {
     if (!walletId) {
       throw new Error('No walletId found in listing data');
     }
-    
+
     const wallet = await Wallet.findById(walletId.toString());
     const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
     const web3Wallet = new Web3Wallet(private_key, provider)
@@ -156,7 +149,7 @@ export async function createListing(data: IListing) {
         }
 
         // Round to 4 decimal places after adjustments
-        listingPrice = parseFloat(listingPrice.toFixed(4));
+        listingPrice = parseFloat(listingPrice.toFixed(6));
 
         if (listingPrice !== freshData.instantPriceOverride) {
           await logger.logInfo(ErrorCategory.GENERAL,
@@ -164,22 +157,9 @@ export async function createListing(data: IListing) {
           );
         }
 
-        // Check if we already have an active listing at this price
-        console.log(`\n=== CHECKING EXISTING LISTING FOR ${marketplace} ===`);
-        console.log('freshData type:', typeof freshData);
-        console.log('freshData._id:', freshData._id);
-        console.log('freshData.finalListingPrice:', freshData.finalListingPrice);
-        console.log('freshData.listingExpiration:', freshData.listingExpiration);
-        console.log('Full freshData object:', JSON.stringify(freshData, null, 2));
-        
         if (freshData.finalListingPrice && freshData.listingExpiration) {
           const currentPrice = freshData.finalListingPrice[marketplaceLower];
           const expiration = freshData.listingExpiration[marketplaceLower];
-          
-          console.log(`Current price for ${marketplaceLower}:`, currentPrice);
-          console.log(`Expiration for ${marketplaceLower}:`, expiration);
-          console.log(`New listing price:`, listingPrice);
-          console.log(`Price difference:`, Math.abs((currentPrice || 0) - listingPrice));
 
           if (currentPrice && Math.abs(currentPrice - listingPrice) < 0.0001) { // Compare with small tolerance
             console.log('Prices match within tolerance');
@@ -187,7 +167,7 @@ export async function createListing(data: IListing) {
               const expirationTime = new Date(expiration).getTime();
               const now = Date.now();
               const timeRemaining = expirationTime - now;
-              
+
               console.log('Expiration time:', new Date(expiration));
               console.log('Current time:', new Date(now));
               console.log('Time remaining (ms):', timeRemaining);
@@ -216,7 +196,7 @@ export async function createListing(data: IListing) {
         }
       } else {
         const calculatedPrice = calculateListingPrice(freshData, marketplaceLower);
-        listingPrice = parseFloat(calculatedPrice.toFixed(4));
+        listingPrice = parseFloat(calculatedPrice.toFixed(6));
       }
 
       console.log(`\n=== ${marketplace.toUpperCase()} LISTING ===`);
@@ -280,7 +260,7 @@ export async function createListing(data: IListing) {
 
     // Execute all listings concurrently
     const results = await Promise.allSettled(listingPromises);
-    
+
     // Log results for debugging
     results.forEach((result, index) => {
       const marketplace = selectedMarketplaces[index];
@@ -330,6 +310,7 @@ function calculateListingPrice(data: IListing, marketplace: 'opensea' | 'blur' |
   // If DYNAMIC_PRICING is set, handle it elsewhere (not implemented here)
   if (data.pricingStrategy === 'DYNAMIC_PRICING') {
     // For now, return the general listing price as fallback
+    if (+data.minimumProfit <= 0) return +data.basePrice
     const dynamicPrice = +data.basePrice + +data.minimumProfit || 0;
     console.log('Dynamic pricing calculation:', `${data.basePrice} + ${data.minimumProfit} = ${dynamicPrice}`);
     return dynamicPrice;

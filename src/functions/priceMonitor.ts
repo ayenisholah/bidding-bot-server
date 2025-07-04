@@ -2,7 +2,6 @@ import { IListing } from "../types/listing.types";
 import Listing from "../models/listing.model";
 import { getAllFloorPrices } from "./collection";
 import { logger, ErrorCategory } from "../utils/logger";
-import { cancelListingJob, scheduleListing } from "./listingScheduler";
 import { createListing } from "./list";
 import WebSocketManager from "../utils/websocket-manager";
 
@@ -20,6 +19,10 @@ const processedMessageIds = new Set<string>();
 setInterval(() => {
   processedMessageIds.clear();
 }, 5 * 60 * 1000);
+
+// Store last adjustment time for each listing to prevent rapid adjustments
+const lastAdjustmentTime: Map<string, number> = new Map();
+// const ADJUSTMENT_COOLDOWN = 30000; // 30 seconds cooldown between adjustments
 
 const colors = {
   opensea: '\x1b[36m',    // Cyan
@@ -105,7 +108,10 @@ async function processListingUpdate(
 
   for (const listing of activeListings) {
     // Skip if this is our own listing
-    if (seller && seller === listing.wallet.toLowerCase()) continue;
+    // if (seller && seller === listing.wallet.toLowerCase()) {
+    //   console.log(`Skipping our own listing from ${seller}`);
+    //   continue;
+    // }
 
     // Get the key for price tracking
     const priceKey = `${contractAddress}-${tokenId}`;
@@ -124,7 +130,23 @@ async function processListingUpdate(
     // Check if we need to adjust our price
     const shouldAdjust = await shouldAdjustPrice(listing, marketplaceLower, price);
 
+    console.log({ shouldAdjust });
+
+
     if (shouldAdjust) {
+      // Check cooldown to prevent rapid adjustments
+      const adjustmentKey = `${listing._id}-${marketplaceLower}`;
+      const lastAdjusted = lastAdjustmentTime.get(adjustmentKey) || 0;
+      const now = Date.now();
+
+      // if (now - lastAdjusted < ADJUSTMENT_COOLDOWN) {
+      //   console.log(`Skipping adjustment for ${tokenId} on ${marketplace} - cooldown active (${Math.round((ADJUSTMENT_COOLDOWN - (now - lastAdjusted)) / 1000)}s remaining)`);
+      //   continue;
+      // }
+
+      // Update last adjustment time
+      lastAdjustmentTime.set(adjustmentKey, now);
+
       // Calculate the new undercut price
       const undercutMargin = parseFloat(listing.underCutMargin) || 0.0001;
       const newPrice = price - undercutMargin;
@@ -132,9 +154,6 @@ async function processListingUpdate(
       await logger.logInfo(ErrorCategory.GENERAL,
         `Instant price match triggered for token ${tokenId} on ${marketplace}. Competitor price: ${price} ETH, New price: ${newPrice} ETH`
       );
-
-      // Cancel current listing job
-      await cancelListingJob(listing._id.toString());
 
       // Fetch fresh listing data from database
       const freshListing = await Listing.findById(listing._id);
@@ -153,9 +172,6 @@ async function processListingUpdate(
       } as IListing;
 
       await createListing(adjustedListing);
-
-      // Reschedule the regular listing job
-      await scheduleListing(listing);
 
       // Send WebSocket notification
       if (wsManager) {
@@ -190,8 +206,8 @@ async function shouldAdjustPrice(
     // If we don't have a price listed, don't adjust
     if (!ourPrice) return false;
 
-    // Check if competitor is undercutting us
-    if (competitorPrice >= ourPrice) return false;
+    // Check if competitor is undercutting us (or matching our price)
+    if (competitorPrice > ourPrice) return false;
 
     // Get undercut margin (default to 0.0001 ETH if not specified)
     const undercutMargin = parseFloat(listing.underCutMargin) || 0.0001;
@@ -212,7 +228,7 @@ async function shouldAdjustPrice(
       const minimumProfit = parseFloat(listing.minimumProfit) || 0;
       const profit = newPrice - listing.buyPrice;
 
-      if (profit < minimumProfit) {
+      if (profit < minimumProfit && minimumProfit > 0) {
         await logger.logInfo(ErrorCategory.GENERAL,
           `Cannot undercut competitor as profit ${profit} would be below minimum ${minimumProfit}`
         );

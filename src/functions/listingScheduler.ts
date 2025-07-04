@@ -1,52 +1,22 @@
-import { Queue, Worker, Job, QueueEvents } from 'bullmq';
-import { createBullMQConnection } from '../utils/redis';
+import { Queue, Job } from 'bullmq';
 import Listing, { IListing } from '../models/listing.model';
 import { createListing } from './list';
 import { logger, ErrorCategory } from '../utils/logger';
 
-// Use hash tags to ensure all keys for this queue go to the same Redis slot
-const LISTING_QUEUE_NAME = 'listing-scheduler';
-const WORKER_CONCURRENCY = 5;
+// Use the main queue from index.ts
+let mainQueue: Queue | null = null;
 
-// Queue configuration
-let connection: any;
-let listingQueue: Queue | null = null;
-let queueEvents: QueueEvents | null = null;
-
-// Initialize queue instances asynchronously
-async function initializeQueue() {
-  if (!connection) {
-    connection = await createBullMQConnection();
-
-    const queueOptions = {
-      connection,
-      prefix: '{listing}',
-      defaultJobOptions: {
-        attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 5000,
-        },
-        removeOnComplete: true,
-        removeOnFail: true,
-      },
-    };
-
-    listingQueue = new Queue(LISTING_QUEUE_NAME, queueOptions);
-    queueEvents = new QueueEvents(LISTING_QUEUE_NAME, { connection, prefix: '{listing}' });
+// Export a function to get the main queue
+export async function getMainQueue(): Promise<Queue> {
+  if (!mainQueue) {
+    // Import the queue from index.ts dynamically to avoid circular dependency
+    const { queue } = await import('../index');
+    mainQueue = queue;
   }
-  return { listingQueue, queueEvents };
-}
-
-// Export a function to get the queue
-export async function getListingQueue(): Promise<Queue> {
-  if (!listingQueue) {
-    await initializeQueue();
+  if (!mainQueue) {
+    throw new Error('Main queue not initialized');
   }
-  if (!listingQueue) {
-    throw new Error('Failed to initialize listing queue');
-  }
-  return listingQueue;
+  return mainQueue;
 }
 
 // Track active jobs for each listing
@@ -57,7 +27,7 @@ const activeJobs = new Map<string, string>();
  */
 export async function scheduleListing(listing: IListing): Promise<void> {
   try {
-    const queue = await getListingQueue();
+    const queue = await getMainQueue();
     const listingId = listing._id.toString();
     const jobId = `listing-${listingId}`;
 
@@ -72,12 +42,25 @@ export async function scheduleListing(listing: IListing): Promise<void> {
     // Calculate delay in milliseconds
     const delayMs = convertToSeconds(listing.loopInterval.value, listing.loopInterval.unit) * 1000;
 
-    // Add job to queue
+    // Execute immediately first, then set up repeating job
+    await queue.add(
+      'process-listing',
+      { listingId },
+      {
+        jobId: `${jobId}-immediate`,
+        removeOnComplete: true,
+        removeOnFail: true
+      }
+    );
+
+    // Then add the repeating job for future executions
     const job = await queue.add(
       'process-listing',
       { listingId },
       {
         jobId,
+        removeOnComplete: true,
+        removeOnFail: true,
         repeat: {
           every: delayMs,
         },
@@ -88,7 +71,7 @@ export async function scheduleListing(listing: IListing): Promise<void> {
 
     await logger.logQueueJobAdded(jobId, {
       taskId: listingId,
-      queueName: LISTING_QUEUE_NAME,
+      queueName: 'BIDDING_BOT', // Use main queue name
       delay: delayMs,
     });
   } catch (error) {
@@ -105,27 +88,29 @@ export async function scheduleListing(listing: IListing): Promise<void> {
  */
 export async function cancelListingJob(listingId: string): Promise<void> {
   try {
-    const queue = await getListingQueue();
-    
+    const queue = await getMainQueue();
+
     // Always remove any repeatable jobs for this listing
-    const repeatableJobs = await queue.getRepeatableJobs(0, -1, true);
+    const jobSchedulers = await queue.getJobSchedulers(0, -1, true);
     let removedRepeatable = false;
-    
-    for (const repeatJob of repeatableJobs) {
+
+    for (const scheduler of jobSchedulers) {
       // Check if this is a listing job by examining the data
-      if (repeatJob.name === 'process-listing') {
+      if (scheduler.name === 'process-listing') {
         // Parse the job key to check if it's for this listing
         // The key format includes the listingId in the pattern
-        if (repeatJob.key.includes(listingId) || 
-            (repeatJob.id && repeatJob.id.includes(listingId))) {
-          // Use removeRepeatableByKey which is simpler and still works
-          await queue.removeRepeatableByKey(repeatJob.key);
-          await logger.logInfo(ErrorCategory.QUEUE, `Removed repeatable job for listing ${listingId}`);
-          removedRepeatable = true;
+        if (scheduler.key.includes(listingId) ||
+          (scheduler.id && scheduler.id.includes(listingId))) {
+          // Use the new removeJobScheduler method
+          if (scheduler.id) {
+            await queue.removeJobScheduler(scheduler.id);
+            await logger.logInfo(ErrorCategory.QUEUE, `Removed repeatable job for listing ${listingId}`);
+            removedRepeatable = true;
+          }
         }
       }
     }
-    
+
     // Also check if we have a jobId in our map
     const jobId = activeJobs.get(listingId);
     if (jobId && !jobId.startsWith('repeat:')) {
@@ -136,10 +121,18 @@ export async function cancelListingJob(listingId: string): Promise<void> {
         await logger.logInfo(ErrorCategory.QUEUE, `Removed job ${jobId} for listing ${listingId}`);
       }
     }
-    
+
+    // Also try to remove immediate job if it exists
+    const immediateJobId = `listing-${listingId}-immediate`;
+    const immediateJob = await queue.getJob(immediateJobId);
+    if (immediateJob) {
+      await immediateJob.remove();
+      await logger.logInfo(ErrorCategory.QUEUE, `Removed immediate job ${immediateJobId} for listing ${listingId}`);
+    }
+
     // Clean up the active jobs map
     activeJobs.delete(listingId);
-    
+
     if (!removedRepeatable && !jobId) {
       await logger.logInfo(ErrorCategory.QUEUE, `No jobs found to cancel for listing ${listingId}`);
     }
@@ -160,149 +153,97 @@ export async function updateListingSchedule(listing: IListing): Promise<void> {
 }
 
 /**
- * Initialize worker after connection is established
+ * Process a listing job - to be called from the main worker in index.ts
  */
-let listingWorker: Worker | null = null;
+export async function processListingJob(job: Job): Promise<void> {
+  const { listingId } = job.data;
 
-async function initializeWorker() {
-  if (!listingWorker && connection) {
-    listingWorker = new Worker(
-      LISTING_QUEUE_NAME,
-      async (job: Job) => {
-        const { listingId } = job.data;
+  try {
+    // Update progress to prevent stalling
+    await job.updateProgress(10);
 
-        try {
-          // Update progress to prevent stalling
-          await job.updateProgress(10);
-          
-          await logger.logQueueJobStarted(job.name, {
-            jobId: job.id,
-            listingId,
-            queueName: LISTING_QUEUE_NAME,
-          });
+    await logger.logQueueJobStarted(job.name, {
+      jobId: job.id,
+      listingId,
+      queueName: 'BIDDING_BOT',
+    });
 
-          // Update progress
-          await job.updateProgress(20);
+    // Update progress
+    await job.updateProgress(20);
 
-          // Fetch latest listing data
-          const listing = await Listing.findById(listingId);
+    // Fetch latest listing data
+    const listing = await Listing.findById(listingId);
 
-          if (!listing) {
-            await logger.logInfo(ErrorCategory.QUEUE, `Listing ${listingId} not found, canceling job`);
-            // Cancel the repeating job since the listing no longer exists
-            await cancelListingJob(listingId);
-            return; // Return successfully so the job doesn't retry
-          }
+    if (!listing) {
+      await logger.logInfo(ErrorCategory.QUEUE, `Listing ${listingId} not found, canceling job`);
+      // Cancel the repeating job since the listing no longer exists
+      await cancelListingJob(listingId);
+      return; // Return successfully so the job doesn't retry
+    }
 
-          if (!listing.running) {
-            await logger.logInfo(ErrorCategory.QUEUE, `Listing ${listingId} is not running, skipping`);
-            // Cancel the repeating job
-            await cancelListingJob(listingId);
-            return;
-          }
+    if (!listing.running) {
+      await logger.logInfo(ErrorCategory.QUEUE, `Listing ${listingId} is not running, skipping`);
+      // Cancel the repeating job
+      await cancelListingJob(listingId);
+      return;
+    }
 
-          // Update progress before long operation
-          await job.updateProgress(50);
+    // Update progress before long operation
+    await job.updateProgress(50);
 
-          // Process the listing
-          await createListing(listing);
+    // Process the listing
+    await createListing(listing);
 
-          // Update progress
-          await job.updateProgress(80);
+    // Update progress
+    await job.updateProgress(80);
 
-          // Update last processed time
-          await Listing.findByIdAndUpdate(listingId, {
-            $set: {
-              lastProcessedAt: new Date(),
-            },
-          });
-
-          // Update progress to completion
-          await job.updateProgress(100);
-
-          await logger.logQueueJobCompleted(job.name, {
-            jobId: job.id,
-            listingId,
-            queueName: LISTING_QUEUE_NAME,
-          });
-
-        } catch (error) {
-          await logger.logQueueJobFailed(job.name, {
-            jobId: job.id,
-            listingId,
-            queueName: LISTING_QUEUE_NAME,
-            error: error as Error,
-            errorMessage: error instanceof Error ? error.message : String(error),
-          });
-
-          throw error;
-        }
+    // Update last processed time
+    await Listing.findByIdAndUpdate(listingId, {
+      $set: {
+        lastProcessedAt: new Date(),
       },
-      {
-        connection,
-        concurrency: WORKER_CONCURRENCY,
-        prefix: '{listing}',
-        stalledInterval: 300000, // 5 minutes
-        maxStalledCount: 1,
-      }
-    );
-
-    // Worker event handlers
-    listingWorker.on('completed', (job) => {
-      console.log(`Listing job ${job.id} completed successfully`);
     });
 
-    listingWorker.on('failed', (job, err) => {
-      console.error(`Listing job ${job?.id} failed:`, err);
+    // Update progress to completion
+    await job.updateProgress(100);
+
+    await logger.logQueueJobCompleted(job.name, {
+      jobId: job.id,
+      listingId,
+      queueName: 'BIDDING_BOT',
     });
+
+  } catch (error) {
+    await logger.logQueueJobFailed(job.name, {
+      jobId: job.id,
+      listingId,
+      queueName: 'BIDDING_BOT',
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+
+    throw error;
   }
-
-  return listingWorker;
-}
-
-// Initialize queue event handlers
-async function initializeQueueEvents() {
-  const { queueEvents: events } = await initializeQueue();
-
-  if (!events) {
-    throw new Error('Failed to initialize queue events');
-  }
-
-  events.on('waiting', ({ jobId }) => {
-    console.log(`Listing job ${jobId} is waiting`);
-  });
-
-  events.on('active', ({ jobId }) => {
-    console.log(`Listing job ${jobId} is active`);
-  });
-
-  events.on('completed', ({ jobId }) => {
-    console.log(`Listing job ${jobId} completed`);
-  });
-
-  events.on('failed', ({ jobId, failedReason }) => {
-    console.error(`Listing job ${jobId} failed: ${failedReason}`);
-  });
 }
 
 /**
  * Initialize listing scheduler
- * - Loads all active listings and schedules them
+ * - Loads all active listings and schedules them on the main queue
  */
 export async function initializeListingScheduler(): Promise<void> {
   try {
     console.log('Initializing listing scheduler...');
 
-    // Initialize queue first
-    await initializeQueue();
+    // Get the main queue
+    const queue = await getMainQueue();
 
-    // Initialize worker and queue events
-    await initializeWorker();
-    await initializeQueueEvents();
-
-    // Clean up old jobs
-    const queue = await getListingQueue();
-    await queue.drain();
+    // Clean up old listing jobs
+    const jobSchedulers = await queue.getJobSchedulers(0, -1, true);
+    for (const scheduler of jobSchedulers) {
+      if (scheduler.name === 'process-listing' && scheduler.id) {
+        await queue.removeJobScheduler(scheduler.id);
+      }
+    }
 
     // Find all active listings
     const activeListings = await Listing.find({ running: true });
@@ -330,25 +271,18 @@ export async function shutdownListingScheduler(): Promise<void> {
   try {
     console.log('Shutting down listing scheduler...');
 
-    if (listingWorker) {
-      await listingWorker.close();
-      listingWorker = null;
+    // Cancel all active listing jobs
+    const queue = await getMainQueue();
+    const jobSchedulers = await queue.getJobSchedulers(0, -1, true);
+
+    for (const scheduler of jobSchedulers) {
+      if (scheduler.name === 'process-listing' && scheduler.id) {
+        await queue.removeJobScheduler(scheduler.id);
+      }
     }
 
-    if (queueEvents) {
-      await queueEvents.close();
-      queueEvents = null;
-    }
-
-    if (listingQueue) {
-      await listingQueue.close();
-      listingQueue = null;
-    }
-
-    if (connection) {
-      // Don't close the connection as it might be shared
-      connection = null;
-    }
+    // Clear active jobs map
+    activeJobs.clear();
 
     console.log('Listing scheduler shut down successfully');
   } catch (error) {
