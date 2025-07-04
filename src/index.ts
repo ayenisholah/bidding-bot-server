@@ -1485,10 +1485,6 @@ wss.on('connection', async (ws) => {
         case 'create-listing':
           await handleStartListing(message.data, ws)
           break
-        // case 'start-listing':
-        //   await handleStartListing(message.data, ws)
-        //   break
-
         case 'stop-listing':
           await handleStopListing(message.data, ws)
           break
@@ -10689,6 +10685,7 @@ export interface AddressBalancesResponse {
 async function handleStartListing(data: { _id: string }, ws: WebSocket) {
   try {
     const listing = await Listing.findById(data._id);
+
     if (!listing) {
       ws.send(JSON.stringify({
         type: 'error',
@@ -10756,9 +10753,9 @@ async function handleStartListing(data: { _id: string }, ws: WebSocket) {
   }
 }
 
-async function handleStopListing(data: { _id: string }, ws: WebSocket) {
+async function handleStopListing(data: { listingId: string }, ws: WebSocket) {
   try {
-    const listing = await Listing.findById(data._id);
+    const listing = await Listing.findById(data.listingId);
     if (!listing) {
       ws.send(JSON.stringify({
         type: 'error',
@@ -10772,7 +10769,7 @@ async function handleStopListing(data: { _id: string }, ws: WebSocket) {
     await listing.save();
 
     // Cancel the scheduled job
-    await cancelListingJob(data._id);
+    await cancelListingJob(data.listingId);
 
     // Unsubscribe from WebSocket events
     if (wsManager && listing.contract.slug && listing.contract.contractAddress) {
@@ -10787,11 +10784,11 @@ async function handleStopListing(data: { _id: string }, ws: WebSocket) {
 
     ws.send(JSON.stringify({
       type: 'listing-stopped',
-      listingId: data._id,
+      listingId: data.listingId,
       message: 'Listing stopped successfully'
     }));
 
-    console.log(YELLOW + `Stopped listing ${data._id}` + RESET);
+    console.log(YELLOW + `Stopped listing ${data.listingId}` + RESET);
   } catch (error) {
     console.error('Error stopping listing:', error);
     ws.send(JSON.stringify({

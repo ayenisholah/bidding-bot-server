@@ -78,7 +78,6 @@ export async function scheduleListing(listing: IListing): Promise<void> {
       { listingId },
       {
         jobId,
-        delay: delayMs,
         repeat: {
           every: delayMs,
         },
@@ -107,36 +106,42 @@ export async function scheduleListing(listing: IListing): Promise<void> {
 export async function cancelListingJob(listingId: string): Promise<void> {
   try {
     const queue = await getListingQueue();
-    const jobId = activeJobs.get(listingId);
-    if (!jobId) {
-      // Also try to remove any repeatable jobs for this listing
-      const repeatableJobs = await queue.getRepeatableJobs();
-      for (const job of repeatableJobs) {
-        // Check if this is a listing job by examining the key pattern
-        if (job.name === 'process-listing' && job.key.includes(listingId)) {
-          await queue.removeRepeatableByKey(job.key);
+    
+    // Always remove any repeatable jobs for this listing
+    const repeatableJobs = await queue.getRepeatableJobs(0, -1, true);
+    let removedRepeatable = false;
+    
+    for (const repeatJob of repeatableJobs) {
+      // Check if this is a listing job by examining the data
+      if (repeatJob.name === 'process-listing') {
+        // Parse the job key to check if it's for this listing
+        // The key format includes the listingId in the pattern
+        if (repeatJob.key.includes(listingId) || 
+            (repeatJob.id && repeatJob.id.includes(listingId))) {
+          // Use removeRepeatableByKey which is simpler and still works
+          await queue.removeRepeatableByKey(repeatJob.key);
           await logger.logInfo(ErrorCategory.QUEUE, `Removed repeatable job for listing ${listingId}`);
+          removedRepeatable = true;
         }
       }
-      return;
-    }
-
-    const job = await queue.getJob(jobId);
-    if (job) {
-      await job.remove();
-      activeJobs.delete(listingId);
-
-      await logger.logInfo(ErrorCategory.QUEUE, `Cancelled listing job for ${listingId}`);
     }
     
-    // Also remove any repeatable jobs
-    const repeatableJobs = await queue.getRepeatableJobs();
-    for (const repeatJob of repeatableJobs) {
-      // Check if this is a listing job by examining the key pattern
-      if (repeatJob.name === 'process-listing' && repeatJob.key.includes(listingId)) {
-        await queue.removeRepeatableByKey(repeatJob.key);
-        await logger.logInfo(ErrorCategory.QUEUE, `Removed repeatable job for listing ${listingId}`);
+    // Also check if we have a jobId in our map
+    const jobId = activeJobs.get(listingId);
+    if (jobId && !jobId.startsWith('repeat:')) {
+      // Only try to remove non-repeatable jobs
+      const job = await queue.getJob(jobId);
+      if (job) {
+        await job.remove();
+        await logger.logInfo(ErrorCategory.QUEUE, `Removed job ${jobId} for listing ${listingId}`);
       }
+    }
+    
+    // Clean up the active jobs map
+    activeJobs.delete(listingId);
+    
+    if (!removedRepeatable && !jobId) {
+      await logger.logInfo(ErrorCategory.QUEUE, `No jobs found to cancel for listing ${listingId}`);
     }
   } catch (error) {
     await logger.logQueueError('Failed to cancel listing job', {
@@ -237,9 +242,7 @@ async function initializeWorker() {
         connection,
         concurrency: WORKER_CONCURRENCY,
         prefix: '{listing}',
-        // Increase stall interval to 5 minutes for long-running jobs
         stalledInterval: 300000, // 5 minutes
-        // Maximum time a job can be active before considered stalled
         maxStalledCount: 1,
       }
     );
