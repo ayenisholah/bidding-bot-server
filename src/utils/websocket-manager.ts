@@ -88,6 +88,12 @@ class WebSocketManager extends EventEmitter {
       ...config
     };
     
+    logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket Manager initialized', {
+      clientId: this.config.clientId,
+      url: this.config.url,
+      heartbeatInterval: this.config.heartbeatInterval
+    });
+    
     // Load persistent listing subscriptions on initialization
     this.loadPersistentSubscriptions();
   }
@@ -364,7 +370,8 @@ class WebSocketManager extends EventEmitter {
               subscriptionId,
               slug: subInfo.slug,
               eventName,
-              subscriptionType
+              subscriptionType,
+              clientId: this.config.clientId
             });
 
             this.sendMessage(message);
@@ -666,9 +673,14 @@ class WebSocketManager extends EventEmitter {
   }
 
   private sendPing(): void {
-    this.sendMessage({
+    const pingMessage = {
       event: 'ping',
       clientId: this.config.clientId
+    };
+    this.sendMessage(pingMessage);
+    logger.logDebug(ErrorCategory.WEBSOCKET, 'Ping sent', { 
+      clientId: this.config.clientId,
+      timestamp: Date.now()
     });
   }
 

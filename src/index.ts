@@ -283,7 +283,14 @@ const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 const OPENSEA_PROTOCOL_ADDRESS = "0x0000000000000068F116a894984e2DB1123eB395"
 const HEALTH_CHECK_INTERVAL = 5000;
 let enabledMarketplaces: string[] = []
-const clientId = randomUUID()
+// Use deterministic client ID based on API_KEY or a fallback
+const generateDeterministicClientId = (): string => {
+  const baseKey = process.env.API_KEY || process.env.CLIENT_ID || 'bidding-bot-default';
+  // Create a hash of the key to ensure consistent length and format
+  return crypto.createHash('sha256').update(baseKey).digest('hex').substring(0, 16);
+};
+
+const clientId = generateDeterministicClientId();
 
 const app = express();
 const port = process.env.PORT || 3003;
@@ -3392,6 +3399,9 @@ function startConnectionMonitoring() {
 
 async function connectWebSocket(): Promise<void> {
   if (!wsManager) {
+    console.log(GREEN + `Using deterministic client ID: ${clientId}` + RESET);
+    console.log(GREEN + `Based on: ${process.env.API_KEY ? 'API_KEY' : process.env.CLIENT_ID ? 'CLIENT_ID' : 'default'}` + RESET);
+    
     wsManager = new WebSocketManager({
       url: MARKETPLACE_WS_URL,
       clientId: clientId,
