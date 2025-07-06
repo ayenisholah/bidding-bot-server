@@ -71,6 +71,10 @@ class WebSocketManager extends EventEmitter {
   private messageTimestamps: number[] = [];
   private lastMessageReceived = 0;
   private connectionStaleThreshold = 300000; // 5 minutes without any messages
+  
+  // State persistence for listings (per CLIENT_CONNECTION_GUIDE.md)
+  private persistentListingSubscriptions: Map<string, SubscriptionInfo> = new Map();
+  private subscriptionStateFile = '.listing-subscriptions.json';
 
   constructor(config: WebSocketManagerConfig) {
     super();
@@ -78,11 +82,14 @@ class WebSocketManager extends EventEmitter {
       maxRetries: 0, // 0 means infinite retries
       reconnectBaseDelay: 1000,
       reconnectMaxDelay: 60000,
-      heartbeatInterval: 30000, // CLIENT_PROTOCOL.md specifies 30 seconds
+      heartbeatInterval: 25000, // Send ping every 25 seconds (before 30s timeout)
       connectionTimeout: 10000,
       messageQueueLimit: 1000,
       ...config
     };
+    
+    // Load persistent listing subscriptions on initialization
+    this.loadPersistentSubscriptions();
   }
 
   async connect(): Promise<void> {
@@ -193,6 +200,7 @@ class WebSocketManager extends EventEmitter {
 
   private startHeartbeat(): void {
     this.clearInterval('heartbeat');
+    this.clearTimeout('pongTimeout');
 
     this.setInterval('heartbeat', () => {
       const now = Date.now();
@@ -227,6 +235,18 @@ class WebSocketManager extends EventEmitter {
         event: 'ping',
         clientId: this.config.clientId
       });
+      
+      // Set pong timeout (per CLIENT_CONNECTION_GUIDE.md recommendation)
+      this.clearTimeout('pongTimeout');
+      this.setTimeout('pongTimeout', () => {
+        this.missedPongs++;
+        logger.logWarning(ErrorCategory.WEBSOCKET, `Pong timeout - missed ${this.missedPongs}/3 pongs`);
+        
+        if (this.missedPongs >= 3) {
+          logger.logError(ErrorCategory.WEBSOCKET, 'Max missed pongs reached, forcing reconnection');
+          this.ws?.close();
+        }
+      }, 5000); // 5 second pong timeout
 
     }, this.config.heartbeatInterval);
   }
@@ -282,14 +302,26 @@ class WebSocketManager extends EventEmitter {
 
   private async syncSubscriptions(): Promise<void> {
     try {
-      // Skip sync if no active subscriptions
-      if (this.activeSubscriptions.size === 0) {
-        logger.logInfo(ErrorCategory.WEBSOCKET, 'No active subscriptions to sync');
+      // Merge active subscriptions with persistent listing subscriptions
+      const allSubscriptions = new Map(this.activeSubscriptions);
+      
+      // Add persistent listing subscriptions
+      for (const [key, value] of this.persistentListingSubscriptions) {
+        if (!allSubscriptions.has(key)) {
+          allSubscriptions.set(key, value);
+        }
+      }
+      
+      // Skip sync if no subscriptions
+      if (allSubscriptions.size === 0) {
+        logger.logInfo(ErrorCategory.WEBSOCKET, 'No subscriptions to sync');
         return;
       }
 
       logger.logInfo(ErrorCategory.WEBSOCKET, 'Syncing subscriptions', {
-        localSubscriptions: this.activeSubscriptions.size
+        activeSubscriptions: this.activeSubscriptions.size,
+        persistentListings: this.persistentListingSubscriptions.size,
+        totalSubscriptions: allSubscriptions.size
       });
 
       // Simply resubscribe to all collections
@@ -298,7 +330,7 @@ class WebSocketManager extends EventEmitter {
       const subscribedListings = new Set<string>();
       const failedSubscriptions: string[] = [];
 
-      for (const [, subInfo] of this.activeSubscriptions) {
+      for (const [, subInfo] of allSubscriptions) {
         const subscriptionType = subInfo.subscriptionType || 'bidding';
         const isListing = subscriptionType === 'listing';
         const trackingSet = isListing ? subscribedListings : subscribedSlugs;
@@ -445,6 +477,9 @@ class WebSocketManager extends EventEmitter {
     this.missedPongs = 0;
     const latency = this.lastPongReceived - timestamp;
     this.recordLatency(latency);
+    
+    // Clear pong timeout when we receive a pong
+    this.clearTimeout('pongTimeout');
 
     logger.logDebug(ErrorCategory.WEBSOCKET, 'Pong received', { latency });
   }
@@ -481,8 +516,9 @@ class WebSocketManager extends EventEmitter {
       connectionDuration: this.metrics.connectionDuration
     });
 
-    // Clear intervals
+    // Clear intervals and timeouts
     this.clearAllIntervals();
+    this.clearAllTimeouts();
 
     // Reset message tracking
     this.lastMessageReceived = 0;
@@ -534,18 +570,32 @@ class WebSocketManager extends EventEmitter {
       return;
     }
 
-    // Simple delay in multiples of 2 seconds, cap at 60 seconds
-    const delay = Math.min((this.retryCount + 1) * 2000, 60000); // 2s, 4s, 6s... max 60s
+    // Exponential backoff with jitter (per CLIENT_CONNECTION_GUIDE.md)
+    const baseDelay = this.config.reconnectBaseDelay || 1000;
+    const maxDelay = this.config.reconnectMaxDelay || 60000;
+    const jitterRange = 0.3; // 30% jitter
+    
+    // Calculate exponential delay
+    const exponentialDelay = Math.min(
+      baseDelay * Math.pow(2, this.retryCount),
+      maxDelay
+    );
+    
+    // Add jitter to prevent thundering herd
+    const jitter = exponentialDelay * jitterRange * (Math.random() - 0.5);
+    const delay = Math.round(exponentialDelay + jitter);
 
     logger.logInfo(ErrorCategory.WEBSOCKET, 'Scheduling reconnection', {
       attempt: this.retryCount + 1,
       maxRetries: this.config.maxRetries || 'unlimited',
-      delayMs: delay
+      delayMs: delay,
+      baseDelay: exponentialDelay,
+      jitter: Math.round(jitter)
     });
 
     this.retryCount++;
 
-    setTimeout(() => {
+    this.setTimeout('reconnect', () => {
       logger.logInfo(ErrorCategory.WEBSOCKET, 'Executing scheduled reconnection');
       this.connect().catch(error => {
         logger.logWebSocketError('Reconnection failed', error as Error);
@@ -637,13 +687,21 @@ class WebSocketManager extends EventEmitter {
       this.sendMessage(message);
 
       // Store subscription locally
-      this.activeSubscriptions.set(subscriptionId, {
+      const subscriptionInfo: SubscriptionInfo = {
         slug,
         contractAddress,
         marketplace,
         subscribedAt: Date.now(),
         subscriptionType
-      });
+      };
+      
+      this.activeSubscriptions.set(subscriptionId, subscriptionInfo);
+
+      // Persist listing subscriptions (per CLIENT_CONNECTION_GUIDE.md)
+      if (subscriptionType === 'listing') {
+        this.persistentListingSubscriptions.set(subscriptionId, subscriptionInfo);
+        this.savePersistentSubscriptions();
+      }
 
       this.metrics.subscriptionCount = this.activeSubscriptions.size;
 
@@ -651,7 +709,8 @@ class WebSocketManager extends EventEmitter {
         slug,
         marketplace,
         subscriptionId,
-        subscriptionType
+        subscriptionType,
+        persisted: subscriptionType === 'listing'
       });
 
       this.emit('subscribed', { slug, marketplace, subscriptionType });
@@ -677,12 +736,33 @@ class WebSocketManager extends EventEmitter {
 
       // Update local state
       if (marketplace) {
-        this.activeSubscriptions.delete(`${slug}:${marketplace}`);
+        // Remove specific marketplace subscription
+        const biddingKey = `${slug}:${marketplace}:bidding`;
+        const listingKey = `${slug}:${marketplace}:listing`;
+        
+        this.activeSubscriptions.delete(biddingKey);
+        this.activeSubscriptions.delete(listingKey);
+        
+        // Remove from persistent storage if it's a listing
+        if (this.persistentListingSubscriptions.has(listingKey)) {
+          this.persistentListingSubscriptions.delete(listingKey);
+          this.savePersistentSubscriptions();
+        }
       } else {
         // Remove all marketplaces for this collection
-        ['OPENSEA', 'MAGICEDEN', 'BLUR'].forEach(m =>
-          this.activeSubscriptions.delete(`${slug}:${m}`)
-        );
+        ['OPENSEA', 'MAGICEDEN', 'BLUR'].forEach(m => {
+          const biddingKey = `${slug}:${m}:bidding`;
+          const listingKey = `${slug}:${m}:listing`;
+          
+          this.activeSubscriptions.delete(biddingKey);
+          this.activeSubscriptions.delete(listingKey);
+          
+          // Remove from persistent storage
+          if (this.persistentListingSubscriptions.has(listingKey)) {
+            this.persistentListingSubscriptions.delete(listingKey);
+          }
+        });
+        this.savePersistentSubscriptions();
       }
 
       this.metrics.subscriptionCount = this.activeSubscriptions.size;
@@ -762,6 +842,29 @@ class WebSocketManager extends EventEmitter {
     this.intervals.forEach(interval => clearInterval(interval));
     this.intervals.clear();
   }
+  
+  // Timeout management (per CLIENT_CONNECTION_GUIDE.md)
+  private timeouts: Map<string, NodeJS.Timeout> = new Map();
+  
+  private setTimeout(name: string, callback: () => void, delay: number): NodeJS.Timeout {
+    this.clearTimeout(name);
+    const timeout = setTimeout(callback, delay) as NodeJS.Timeout;
+    this.timeouts.set(name, timeout);
+    return timeout;
+  }
+  
+  private clearTimeout(name: string): void {
+    const timeout = this.timeouts.get(name);
+    if (timeout) {
+      clearTimeout(timeout);
+      this.timeouts.delete(name);
+    }
+  }
+  
+  private clearAllTimeouts(): void {
+    this.timeouts.forEach(timeout => clearTimeout(timeout));
+    this.timeouts.clear();
+  }
 
   // Metrics helpers
   private recordLatency(latency: number): void {
@@ -818,10 +921,43 @@ class WebSocketManager extends EventEmitter {
     this.isReconnecting = false;
 
     this.clearAllIntervals();
+    this.clearAllTimeouts();
+    
     if (this.ws) {
       this.ws.removeAllListeners();
       this.ws.close(1000, 'Client disconnect'); // Normal closure
       this.ws = null;
+    }
+  }
+
+  // Persistent subscription management methods (per CLIENT_CONNECTION_GUIDE.md)
+  private loadPersistentSubscriptions(): void {
+    try {
+      const fs = require('fs');
+      if (fs.existsSync(this.subscriptionStateFile)) {
+        const data = fs.readFileSync(this.subscriptionStateFile, 'utf8');
+        const subscriptions = JSON.parse(data);
+        this.persistentListingSubscriptions = new Map(subscriptions);
+        logger.logInfo(ErrorCategory.WEBSOCKET, 'Loaded persistent listing subscriptions', {
+          count: this.persistentListingSubscriptions.size
+        });
+      }
+    } catch (error) {
+      logger.logWarning(ErrorCategory.WEBSOCKET, 'Failed to load persistent subscriptions', {
+        error: error instanceof Error ? error : new Error('Unknown error')
+      });
+    }
+  }
+
+  private savePersistentSubscriptions(): void {
+    try {
+      const fs = require('fs');
+      const subscriptions = Array.from(this.persistentListingSubscriptions.entries());
+      fs.writeFileSync(this.subscriptionStateFile, JSON.stringify(subscriptions, null, 2));
+    } catch (error) {
+      logger.logWarning(ErrorCategory.WEBSOCKET, 'Failed to save persistent subscriptions', {
+        error: error instanceof Error ? error : new Error('Unknown error')
+      });
     }
   }
 }
