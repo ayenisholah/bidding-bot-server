@@ -156,25 +156,38 @@ export async function updateListingSchedule(listing: IListing): Promise<void> {
  * Process a listing job - to be called from the main worker in index.ts
  */
 export async function processListingJob(job: Job): Promise<void> {
+  console.log('\n=== PROCESS LISTING JOB STARTED ===');
   const { listingId } = job.data;
+  console.log('Job ID:', job.id);
+  console.log('Listing ID:', listingId);
 
   try {
+    console.log('Step 1: Updating progress to 10...');
     // Update progress to prevent stalling
     await job.updateProgress(10);
 
+    console.log('Step 2: Logging job start...');
     await logger.logQueueJobStarted(job.name, {
       jobId: job.id,
       listingId,
       queueName: 'BIDDING_BOT',
     });
 
+    console.log('Step 3: Updating progress to 20...');
     // Update progress
     await job.updateProgress(20);
 
+    console.log('Step 4: Fetching listing from database...');
     // Fetch latest listing data
     const listing = await Listing.findById(listingId);
+    console.log('Fetched listing:', listing ? 'Found' : 'Not found');
+    if (listing) {
+      console.log('Listing running status:', listing.running);
+      console.log('Listing selectedMarketplaces:', listing.selectedMarketplaces);
+    }
 
     if (!listing) {
+      console.log('!!! LISTING NOT FOUND - RETURNING EARLY !!!');
       await logger.logInfo(ErrorCategory.QUEUE, `Listing ${listingId} not found, canceling job`);
       // Cancel the repeating job since the listing no longer exists
       await cancelListingJob(listingId);
@@ -182,17 +195,70 @@ export async function processListingJob(job: Job): Promise<void> {
     }
 
     if (!listing.running) {
+      console.log('!!! LISTING NOT RUNNING - RETURNING EARLY !!!');
       await logger.logInfo(ErrorCategory.QUEUE, `Listing ${listingId} is not running, skipping`);
       // Cancel the repeating job
       await cancelListingJob(listingId);
       return;
     }
+    
+    console.log('Step 5: Listing is valid and running, continuing...');
+    console.log('About to check instant price matching...');
+    
+    // Check if instant price matching is currently active
+    const now = new Date();
+    console.log('Step 6: Checking instant price matching...');
+    console.log('instantPriceMatchingActiveUntil:', listing.instantPriceMatchingActiveUntil);
+    console.log('Current time:', now);
+    
+    if (listing.instantPriceMatchingActiveUntil && listing.instantPriceMatchingActiveUntil > now) {
+      console.log('!!! INSTANT PRICE MATCHING ACTIVE - RETURNING EARLY !!!');
+      await logger.logInfo(ErrorCategory.QUEUE, 
+        `Listing ${listingId} has active instant price matching until ${listing.instantPriceMatchingActiveUntil.toISOString()}, skipping scheduled update`
+      );
+      // return; // Skip processing but don't cancel the job
+    }
 
+    // Clean up expired instant price matching session
+    console.log('Checking for expired instant price matching...');
+    if (listing.instantPriceMatchingActiveUntil && listing.instantPriceMatchingActiveUntil <= now) {
+      console.log('Cleaning up expired instant price matching session');
+      await Listing.findByIdAndUpdate(listingId, {
+        $unset: {
+          instantPriceOverride: 1,
+          instantPriceMatchingActiveUntil: 1,
+        },
+      });
+      await logger.logInfo(ErrorCategory.QUEUE, 
+        `Cleaned up expired instant price matching session for listing ${listingId}`
+      );
+    }
+
+    console.log('About to update progress to 50...');
     // Update progress before long operation
     await job.updateProgress(50);
+    console.log('Progress updated to 50');
 
-    // Process the listing
-    await createListing(listing);
+    // Fetch fresh listing data again after cleanup to ensure we have the latest state
+    const freshListing = await Listing.findById(listingId);
+    if (!freshListing) {
+      await logger.logInfo(ErrorCategory.QUEUE, `Listing ${listingId} not found after cleanup, skipping`);
+      return;
+    }
+
+    // Process the listing - pass all fresh data including instantPriceOverride if available
+    const listingData = {
+      ...freshListing.toObject(),
+    };
+    console.log('\n=== ABOUT TO CALL CREATE LISTING ===');
+    console.log('Listing ID:', listingId);
+    console.log('Running:', freshListing.running);
+    console.log('Selected Marketplaces:', freshListing.selectedMarketplaces);
+    console.log('Listing data keys:', Object.keys(listingData));
+    
+    console.log('\n=== CALLING CREATE LISTING FROM SCHEDULER ===');
+    await createListing(listingData);
+    console.log('=== CREATE LISTING RETURNED ===');
 
     // Update progress
     await job.updateProgress(80);
@@ -214,6 +280,11 @@ export async function processListingJob(job: Job): Promise<void> {
     });
 
   } catch (error) {
+    console.error('!!! ERROR IN PROCESS LISTING JOB !!!');
+    console.error('Error type:', error?.constructor?.name);
+    console.error('Error message:', error instanceof Error ? error.message : String(error));
+    console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+    
     await logger.logQueueJobFailed(job.name, {
       jobId: job.id,
       listingId,

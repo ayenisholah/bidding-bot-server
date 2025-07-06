@@ -182,6 +182,7 @@ let redis: any = null;
 export { lockManager };
 export { redis };
 export { queue };
+export { subscribeToListingEvents };
 
 let netEnabled = true;
 
@@ -639,10 +640,13 @@ async function startServer() {
     workers = new Worker(
       QUEUE_NAME,
       async (job) => {
+        console.log(`\n>>> WORKER RECEIVED JOB: ${job.name} (ID: ${job.id})`);
         try {
           await processJob(job);
+          console.log(`>>> WORKER COMPLETED JOB: ${job.name} (ID: ${job.id})`);
           return
         } catch (error) {
+          console.error(`>>> WORKER JOB FAILED: ${job.name} (ID: ${job.id})`, error);
           if (job.token) {
             await job.moveToFailed(new Error("Job failed"), job.token);
           } else {
@@ -1516,6 +1520,7 @@ wss.on('connection', async (ws) => {
 
 
 async function processJob(job: Job) {
+  console.log(`\n>>> PROCESS JOB CALLED: ${job.name} (ID: ${job.id})`);
   const startTime = Date.now();
   try {
     // Original processing logic
@@ -1566,7 +1571,22 @@ async function processJob(job: Job) {
         case BLUR_TRAIT_BID_COUNTERBID:
           return await blurTraitCounterBid(job.data);
         case 'process-listing':
-          return await processListingJob(job);
+          console.log('>>> WORKER: Processing listing job:', job.id, job.data);
+          try {
+            console.log('>>> About to call processListingJob...');
+            const result = await processListingJob(job);
+            console.log('>>> processListingJob returned:', result);
+            console.log('>>> processListingJob completed successfully');
+            return result;
+          } catch (error) {
+            console.error('>>> processListingJob failed with error:', error);
+            console.error('>>> Error details:', {
+              name: error?.constructor?.name,
+              message: error instanceof Error ? error.message : String(error),
+              stack: error instanceof Error ? error.stack : 'No stack'
+            });
+            throw error;
+          }
         default:
           return null;
       }
@@ -3403,6 +3423,9 @@ async function connectWebSocket(): Promise<void> {
 
       // Subscribe to collections after connection
       subscribeToCollections(currentTasks as unknown as ITask[]);
+
+      // Subscribe to listing events for instant price matching
+      subscribeToListingCollections();
     });
 
     wsManager.on('disconnected', (event: { code: number; reason: string }) => {
@@ -9449,6 +9472,70 @@ function subscribeToCollections(tasks: ITask[]) {
   }
 }
 
+async function subscribeToListingEvents(contractAddress: string, slug?: string) {
+  try {
+    if (!wsManager?.isConnected()) {
+      console.log(YELLOW + `WebSocket not connected, skipping listing subscription` + RESET);
+      return;
+    }
+
+    // Get collection info from tasks if slug not provided
+    if (!slug) {
+      const task = currentTasks.find(t =>
+        t.contract.contractAddress?.toLowerCase() === contractAddress.toLowerCase()
+      );
+      slug = task?.contract.slug || contractAddress; // Use contractAddress as fallback
+    }
+
+    // Subscribe to listing events
+    wsManager.sendMessage({
+      event: 'join_listings',
+      clientId: clientId,
+      slug: slug,
+      contractAddress: contractAddress
+    });
+
+    console.log(CYAN + `SUBSCRIBED TO LISTING EVENTS: ${slug} (${contractAddress})` + RESET);
+  } catch (error) {
+    console.error(RED + `Error subscribing to listing events for ${contractAddress}:` + RESET, error);
+  }
+}
+
+async function subscribeToListingCollections() {
+  try {
+    if (!wsManager?.isConnected()) {
+      console.log(YELLOW + `WebSocket not connected, skipping listing subscription` + RESET);
+      return;
+    }
+
+    // Find all active listings with instant price matching enabled
+    const activeListings = await Listing.find({
+      instantPriceMatching: true,
+      isActive: true
+    }).distinct('contractAddress') as string[];
+
+    console.log(BLUE + `Found ${activeListings.length} collections with instant price matching enabled` + RESET);
+
+    // Subscribe to listing events for each unique collection
+    const subscribedListings = new Set<string>();
+
+    for (const contractAddress of activeListings) {
+      if (subscribedListings.has(contractAddress)) {
+        continue;
+      }
+
+      try {
+        await subscribeToListingEvents(contractAddress);
+        subscribedListings.add(contractAddress);
+      } catch (error) {
+        console.error(RED + `Error subscribing to listing events for ${contractAddress}:` + RESET, error);
+      }
+    }
+  } catch (error) {
+    console.error(RED + 'Error subscribing to listing collections' + RESET, error);
+  }
+}
+
 
 async function unsubscribeFromCollection(task: ITask, marketplace?: string) {
   try {
@@ -10711,23 +10798,17 @@ async function handleStartListing(data: { _id: string }, ws: WebSocket) {
     console.log(`🆔 clientId: ${clientId}`);
 
     if (listing.instantPriceMatching && wsManager) {
-      const joinMessage = {
-        event: 'join_listings',
-        clientId: clientId,
-        slug: listing.contract.slug,
-        contractAddress: listing.contract.contractAddress
-      };
+      console.log(`\n🔗 Subscribing to listings WebSocket for instant price matching:`);
+      console.log(`🏷️  Collection: ${listing.contract.slug}`);
+      console.log(`📄 Contract: ${listing.contract.contractAddress}`);
 
-      console.log(`\n🔗 Sending WebSocket subscription for instant price matching:`);
-      console.log(`📡 Event: ${joinMessage.event}`);
-      console.log(`🆔 Client ID: ${joinMessage.clientId}`);
-      console.log(`🏷️  Collection: ${joinMessage.slug}`);
-      console.log(`📄 Contract: ${joinMessage.contractAddress}`);
-      console.log(`📤 Message:`, JSON.stringify(joinMessage, null, 2));
-
-      // Send join_listings event directly for listing subscriptions
-      wsManager.sendMessage(joinMessage);
-      console.log(`✅ WebSocket message sent successfully`);
+      try {
+        // Use proper subscription management with listing type
+        await wsManager.subscribe(listing.contract.slug, listing.contract.contractAddress, 'ALL', 'listing');
+        console.log(`✅ WebSocket subscription successful`);
+      } catch (error) {
+        console.error(`❌ WebSocket subscription failed:`, error);
+      }
     } else {
       console.log(`❌ WebSocket subscription NOT sent - conditions not met`);
       if (!listing.instantPriceMatching) {
@@ -10775,13 +10856,13 @@ async function handleStopListing(data: { listingId: string }, ws: WebSocket) {
 
     // Unsubscribe from WebSocket events
     if (wsManager && listing.contract.slug && listing.contract.contractAddress) {
-      // Send leave_listings event directly for listing unsubscriptions
-      wsManager.sendMessage({
-        event: 'leave_listings',
-        clientId: clientId,
-        slug: listing.contract.slug,
-        contractAddress: listing.contract.contractAddress
-      });
+      try {
+        // Use proper subscription management for unsubscription
+        await wsManager.unsubscribe(listing.contract.slug, listing.contract.contractAddress, 'ALL');
+        console.log(`✅ WebSocket unsubscription successful for cancelled listing`);
+      } catch (error) {
+        console.error(`❌ WebSocket unsubscription failed for cancelled listing:`, error);
+      }
     }
 
     ws.send(JSON.stringify({
@@ -10790,7 +10871,7 @@ async function handleStopListing(data: { listingId: string }, ws: WebSocket) {
       message: 'Listing stopped successfully'
     }));
 
-    console.log(YELLOW + `Stopped listing ${data.listingId}` + RESET);
+    console.log(RED + `Stopped listing ${listing.contract.slug} #${listing.tokenId}` + RESET);
   } catch (error) {
     console.error('Error stopping listing:', error);
     ws.send(JSON.stringify({
@@ -10824,30 +10905,28 @@ async function handleUpdateListing(data: { _id: string, updates: any }, ws: WebS
     // Handle instant price matching subscription changes
     if (data.updates.instantPriceMatching !== undefined && wsManager) {
       if (data.updates.instantPriceMatching && listing.running) {
-        const joinMessage = {
-          event: 'join_listings',
-          clientId: clientId,
-          slug: listing.contract.slug,
-          contractAddress: listing.contract.contractAddress
-        };
+        console.log(`\n🔗 Enabling instant price matching - subscribing to listings WebSocket:`);
+        console.log(`🏷️  Collection: ${listing.contract.slug}`);
+        console.log(`📄 Contract: ${listing.contract.contractAddress}`);
 
-        console.log(`\n🔗 Enabling instant price matching - sending WebSocket subscription:`);
-        console.log(`📡 Event: ${joinMessage.event}`);
-        console.log(`🆔 Client ID: ${joinMessage.clientId}`);
-        console.log(`🏷️  Collection: ${joinMessage.slug}`);
-        console.log(`📄 Contract: ${joinMessage.contractAddress}`);
-        console.log(`📤 Message:`, JSON.stringify(joinMessage, null, 2));
-
-        // Subscribe to listing events
-        wsManager.sendMessage(joinMessage);
+        try {
+          // Subscribe to listing events using proper subscription management
+          await wsManager.subscribe(listing.contract.slug, listing.contract.contractAddress, 'ALL', 'listing');
+          console.log(`✅ WebSocket subscription successful`);
+        } catch (error) {
+          console.error(`❌ WebSocket subscription failed:`, error);
+        }
       } else {
-        // Unsubscribe from listing events
-        wsManager.sendMessage({
-          event: 'leave_listings',
-          clientId: clientId,
-          slug: listing.contract.slug,
-          contractAddress: listing.contract.contractAddress
-        });
+        console.log(`\n🔗 Disabling instant price matching - unsubscribing from listings WebSocket:`);
+        console.log(`🏷️  Collection: ${listing.contract.slug}`);
+
+        try {
+          // Unsubscribe from listing events
+          await wsManager.unsubscribe(listing.contract.slug, listing.contract.contractAddress, 'ALL');
+          console.log(`✅ WebSocket unsubscription successful`);
+        } catch (error) {
+          console.error(`❌ WebSocket unsubscription failed:`, error);
+        }
       }
     }
 

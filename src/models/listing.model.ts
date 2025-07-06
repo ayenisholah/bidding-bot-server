@@ -77,6 +77,8 @@ const ListingSchema: Schema = new Schema(
       value: { type: Schema.Types.Mixed },
     },
     listed: { type: Boolean, default: false },
+    instantPriceOverride: { type: Number }, // Price override for instant price matching
+    instantPriceMatchingActiveUntil: { type: Date }, // When instant price matching session expires
   },
   { timestamps: true }
 );
@@ -96,6 +98,13 @@ ListingSchema.methods.cleanupExpiredListings = function() {
         hasChanges = true;
       }
     }
+  }
+  
+  // Also clean up expired instant price matching sessions
+  if (this.instantPriceMatchingActiveUntil && new Date(this.instantPriceMatchingActiveUntil) <= now) {
+    this.instantPriceOverride = undefined;
+    this.instantPriceMatchingActiveUntil = undefined;
+    hasChanges = true;
   }
   
   return hasChanges;

@@ -89,6 +89,7 @@ export interface IListingBase {
   createdAt?: Date;
   updatedAt?: Date;
   instantPriceOverride?: number; // Used for instant price matching to bypass calculateListingPrice
+  instantPriceMatchingActiveUntil?: Date; // When instant price matching session expires
 }
 
 // For use with Mongoose Document

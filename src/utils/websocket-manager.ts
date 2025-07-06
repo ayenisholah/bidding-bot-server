@@ -34,6 +34,7 @@ export interface SubscriptionInfo {
   contractAddress: string;
   marketplace: string;
   subscribedAt: number;
+  subscriptionType?: 'bidding' | 'listing'; // Track subscription type
 }
 
 class WebSocketManager extends EventEmitter {
@@ -68,6 +69,8 @@ class WebSocketManager extends EventEmitter {
   private missedPongs = 0;
   private latencies: number[] = [];
   private messageTimestamps: number[] = [];
+  private lastMessageReceived = 0;
+  private connectionStaleThreshold = 300000; // 5 minutes without any messages
 
   constructor(config: WebSocketManagerConfig) {
     super();
@@ -157,6 +160,10 @@ class WebSocketManager extends EventEmitter {
     this.metrics.totalConnections++;
     this.metrics.connectionQuality = 'good';
 
+    // Initialize message tracking
+    this.lastMessageReceived = Date.now();
+    this.missedPongs = 0;
+
     logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket connected', {
       connectionId,
       url: this.config.url
@@ -167,6 +174,9 @@ class WebSocketManager extends EventEmitter {
 
     // Start heartbeat
     this.startHeartbeat();
+
+    // Start health monitoring
+    this.startHealthMonitoring();
 
     // Process queued messages
     this.processMessageQueue();
@@ -199,6 +209,17 @@ class WebSocketManager extends EventEmitter {
         }
       }
 
+      // Check for stale connection (no messages received for extended period)
+      if (this.lastMessageReceived > 0 && (now - this.lastMessageReceived) > this.connectionStaleThreshold) {
+        logger.logWarning(ErrorCategory.WEBSOCKET, 'Connection appears stale (no messages received), reconnecting...', {
+          lastMessageReceived: this.lastMessageReceived,
+          staleDuration: now - this.lastMessageReceived,
+          threshold: this.connectionStaleThreshold
+        });
+        this.ws?.close();
+        return;
+      }
+
       // Send ping - server only needs event and clientId
       this.lastPingSent = now;
 
@@ -208,6 +229,55 @@ class WebSocketManager extends EventEmitter {
       });
 
     }, this.config.heartbeatInterval);
+  }
+
+  private startHealthMonitoring(): void {
+    this.clearInterval('healthMonitor');
+
+    this.setInterval('healthMonitor', () => {
+      if (!this.isConnected()) {
+        logger.logWarning(ErrorCategory.WEBSOCKET, 'Health monitor detected disconnection');
+        return;
+      }
+
+      // Check for various health indicators
+      const now = Date.now();
+      const timeSinceLastMessage = this.lastMessageReceived ? now - this.lastMessageReceived : 0;
+      const timeSinceLastPong = this.lastPongReceived ? now - this.lastPongReceived : 0;
+
+      // Log health status periodically
+      if (timeSinceLastMessage > 60000 || timeSinceLastPong > 60000) { // 1 minute
+        logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket health status', {
+          connectionQuality: this.metrics.connectionQuality,
+          timeSinceLastMessage,
+          timeSinceLastPong,
+          missedPongs: this.missedPongs,
+          activeSubscriptions: this.activeSubscriptions.size,
+          messageRate: this.metrics.messageRate,
+          averageLatency: this.metrics.averageLatency
+        });
+      }
+
+      // Force reconnection if connection appears severely degraded
+      if (timeSinceLastMessage > 600000) { // 10 minutes
+        logger.logWarning(ErrorCategory.WEBSOCKET, 'Forcing reconnection due to severely stale connection', {
+          timeSinceLastMessage,
+          threshold: 600000
+        });
+        this.ws?.close();
+      }
+
+      // Periodic subscription verification (every 5 minutes)
+      if (this.activeSubscriptions.size > 0 && timeSinceLastMessage > 300000) { // 5 minutes
+        logger.logInfo(ErrorCategory.WEBSOCKET, 'Performing periodic subscription verification');
+        this.verifySubscriptions().catch(error => {
+          logger.logWarning(ErrorCategory.WEBSOCKET, 'Periodic subscription verification failed', {
+            error: error instanceof Error ? error : new Error('Unknown error')
+          });
+        });
+      }
+
+    }, 60000); // Check every minute
   }
 
   private async syncSubscriptions(): Promise<void> {
@@ -225,28 +295,54 @@ class WebSocketManager extends EventEmitter {
       // Simply resubscribe to all collections
       // Server subscribes to ALL marketplaces when you subscribe once
       const subscribedSlugs = new Set<string>();
+      const subscribedListings = new Set<string>();
+      const failedSubscriptions: string[] = [];
 
       for (const [, subInfo] of this.activeSubscriptions) {
-        // Only subscribe once per collection (server handles all marketplaces)
-        if (!subscribedSlugs.has(subInfo.slug)) {
-          const message = {
-            event: 'join_the_party',
-            clientId: this.config.clientId,
-            slug: subInfo.slug,
-            contractAddress: subInfo.contractAddress
-          };
+        const subscriptionType = subInfo.subscriptionType || 'bidding';
+        const isListing = subscriptionType === 'listing';
+        const trackingSet = isListing ? subscribedListings : subscribedSlugs;
 
-          this.sendMessage(message);
-          subscribedSlugs.add(subInfo.slug);
+        // Only subscribe once per collection per type
+        if (!trackingSet.has(subInfo.slug)) {
+          try {
+            const eventName = isListing ? 'join_listings' : 'join_the_party';
+            const message = {
+              event: eventName,
+              clientId: this.config.clientId,
+              slug: subInfo.slug,
+              contractAddress: subInfo.contractAddress
+            };
 
-          // Small delay between subscriptions
-          await new Promise(resolve => setTimeout(resolve, 100));
+            this.sendMessage(message);
+            trackingSet.add(subInfo.slug);
+
+            // Small delay between subscriptions
+            await new Promise(resolve => setTimeout(resolve, 100));
+          } catch (error) {
+            failedSubscriptions.push(subInfo.slug);
+            logger.logWarning(ErrorCategory.WEBSOCKET, 'Failed to resubscribe to collection', {
+              slug: subInfo.slug,
+              subscriptionType,
+              error: error instanceof Error ? error : new Error('Unknown error')
+            });
+          }
         }
       }
 
       logger.logInfo(ErrorCategory.WEBSOCKET, 'Subscription sync complete', {
-        collections: subscribedSlugs.size
+        biddingCollections: subscribedSlugs.size,
+        listingCollections: subscribedListings.size,
+        failed: failedSubscriptions.length,
+        failedCollections: failedSubscriptions
       });
+
+      // Retry failed subscriptions after a delay
+      if (failedSubscriptions.length > 0) {
+        setTimeout(() => {
+          this.retryFailedSubscriptions(failedSubscriptions);
+        }, 5000);
+      }
 
     } catch (error) {
       logger.logWebSocketError('Failed to sync subscriptions', error instanceof Error ? error : new Error(String(error)));
@@ -257,11 +353,50 @@ class WebSocketManager extends EventEmitter {
     }
   }
 
+  private async retryFailedSubscriptions(failedSlugs: string[]): Promise<void> {
+    if (!this.isConnected()) {
+      logger.logWarning(ErrorCategory.WEBSOCKET, 'Cannot retry subscriptions - not connected');
+      return;
+    }
+
+    logger.logInfo(ErrorCategory.WEBSOCKET, 'Retrying failed subscriptions', {
+      count: failedSlugs.length
+    });
+
+    for (const slug of failedSlugs) {
+      try {
+        // Find the subscription info
+        const subInfo = Array.from(this.activeSubscriptions.values()).find(info => info.slug === slug);
+        if (subInfo) {
+          const subscriptionType = subInfo.subscriptionType || 'bidding';
+          const eventName = subscriptionType === 'listing' ? 'join_listings' : 'join_the_party';
+          const message = {
+            event: eventName,
+            clientId: this.config.clientId,
+            slug: subInfo.slug,
+            contractAddress: subInfo.contractAddress
+          };
+
+          this.sendMessage(message);
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+      } catch (error) {
+        logger.logWarning(ErrorCategory.WEBSOCKET, 'Retry subscription failed', {
+          slug,
+          error: error instanceof Error ? error : new Error('Unknown error')
+        });
+      }
+    }
+  }
+
   private handleMessage(data: WebSocket.Data): void {
     try {
       const message = JSON.parse(data.toString());
       this.metrics.totalMessages++;
       this.recordMessage();
+
+      // Update last message received timestamp
+      this.lastMessageReceived = Date.now();
 
       // Handle pong messages
       if (message.type === 'pong') {
@@ -349,6 +484,12 @@ class WebSocketManager extends EventEmitter {
     // Clear intervals
     this.clearAllIntervals();
 
+    // Reset message tracking
+    this.lastMessageReceived = 0;
+    this.lastPingSent = 0;
+    this.lastPongReceived = 0;
+    this.missedPongs = 0;
+
     // Clean up WebSocket instance
     if (this.ws) {
       this.ws.removeAllListeners();
@@ -374,9 +515,9 @@ class WebSocketManager extends EventEmitter {
     this.emit('error', error);
 
     // If we get ECONNREFUSED or similar errors, the connection is dead
-    if (error.message?.includes('ECONNREFUSED') || 
-        error.message?.includes('ETIMEDOUT') ||
-        error.message?.includes('ENETUNREACH')) {
+    if (error.message?.includes('ECONNREFUSED') ||
+      error.message?.includes('ETIMEDOUT') ||
+      error.message?.includes('ENETUNREACH')) {
       logger.logWarning(ErrorCategory.WEBSOCKET, 'Connection error detected, will reconnect on close event');
       // The close event will handle reconnection
     }
@@ -473,8 +614,8 @@ class WebSocketManager extends EventEmitter {
     }
   }
 
-  async subscribe(slug: string, contractAddress: string, marketplace: string): Promise<void> {
-    const subscriptionId = `${slug}:${marketplace}`;
+  async subscribe(slug: string, contractAddress: string, marketplace: string, subscriptionType: 'bidding' | 'listing' = 'bidding'): Promise<void> {
+    const subscriptionId = `${slug}:${marketplace}:${subscriptionType}`;
 
     // Check if already subscribed
     if (this.activeSubscriptions.has(subscriptionId)) {
@@ -482,9 +623,10 @@ class WebSocketManager extends EventEmitter {
       return;
     }
 
-    // Server expects this exact format - no marketplace or topic fields
+    // Choose appropriate event based on subscription type
+    const eventName = subscriptionType === 'listing' ? 'join_listings' : 'join_the_party';
     const message = {
-      event: 'join_the_party',
+      event: eventName,
       clientId: this.config.clientId,
       slug: slug,
       contractAddress: contractAddress
@@ -499,7 +641,8 @@ class WebSocketManager extends EventEmitter {
         slug,
         contractAddress,
         marketplace,
-        subscribedAt: Date.now()
+        subscribedAt: Date.now(),
+        subscriptionType
       });
 
       this.metrics.subscriptionCount = this.activeSubscriptions.size;
@@ -507,10 +650,11 @@ class WebSocketManager extends EventEmitter {
       logger.logInfo(ErrorCategory.WEBSOCKET, 'Subscribed to collection', {
         slug,
         marketplace,
-        subscriptionId
+        subscriptionId,
+        subscriptionType
       });
 
-      this.emit('subscribed', { slug, marketplace });
+      this.emit('subscribed', { slug, marketplace, subscriptionType });
 
     } catch (error) {
       logger.logWebSocketError('Failed to subscribe', error as Error);
@@ -562,6 +706,40 @@ class WebSocketManager extends EventEmitter {
       event: 'get_subscriptions',
       clientId: this.config.clientId
     });
+  }
+
+  // Add subscription verification method
+  async verifySubscriptions(): Promise<void> {
+    if (!this.isConnected()) {
+      logger.logWarning(ErrorCategory.WEBSOCKET, 'Cannot verify subscriptions - not connected');
+      return;
+    }
+
+    logger.logInfo(ErrorCategory.WEBSOCKET, 'Verifying subscriptions', {
+      localSubscriptions: this.activeSubscriptions.size
+    });
+
+    // Request server to confirm our subscriptions
+    this.requestSubscriptions();
+
+    // Wait a bit and then check if we're receiving messages
+    setTimeout(() => {
+      if (this.activeSubscriptions.size > 0) {
+        const timeSinceLastMessage = this.lastMessageReceived ? Date.now() - this.lastMessageReceived : 0;
+        if (timeSinceLastMessage > 120000) { // 2 minutes
+          logger.logWarning(ErrorCategory.WEBSOCKET, 'Subscription verification failed - no recent messages', {
+            timeSinceLastMessage,
+            activeSubscriptions: this.activeSubscriptions.size
+          });
+          // Force resubscription
+          this.syncSubscriptions().catch(error => {
+            logger.logWarning(ErrorCategory.WEBSOCKET, 'Forced resubscription failed', {
+              error: error instanceof Error ? error : new Error('Unknown error')
+            });
+          });
+        }
+      }
+    }, 30000); // Check after 30 seconds
   }
 
   // Interval management

@@ -20,6 +20,11 @@ const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY
 const provider = new AlchemyProvider(NETWORK, ALCHEMY_API_KEY)
 
 export async function createListing(data: IListing) {
+  console.log('\n=== CREATE LISTING CALLED ===');
+  console.log('Token ID:', data.tokenId);
+  console.log('Running:', data.running);
+  console.log('Selected Marketplaces:', data.selectedMarketplaces);
+
   try {
     // Only process if listing is running
     if (!data.running) {
@@ -138,7 +143,7 @@ export async function createListing(data: IListing) {
         }
 
         // Enforce minimum profit
-        if (freshData.buyPrice && freshData.minimumProfit) {
+        if (freshData.buyPrice && +freshData.minimumProfit > 0) {
           const minProfit = parseFloat(freshData.minimumProfit) || 0;
           const minPriceForProfit = freshData.buyPrice + minProfit;
 
@@ -180,7 +185,7 @@ export async function createListing(data: IListing) {
                 await logger.logInfo(ErrorCategory.GENERAL,
                   `Skipping ${marketplace} listing - already listed at same price with sufficient time remaining`
                 );
-                return;
+                // return;
               } else {
                 const seconds = Math.floor(timeRemaining / 1000);
                 console.log(`Existing listing at ${currentPrice} ETH expires in ${seconds}s, proceeding with relist`);

@@ -21,8 +21,7 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 // Store last adjustment time for each listing to prevent rapid adjustments
-const lastAdjustmentTime: Map<string, number> = new Map();
-// const ADJUSTMENT_COOLDOWN = 30000; // 30 seconds cooldown between adjustments
+const lastAdjustmentTime = new Map<string, number>();
 
 const colors = {
   opensea: '\x1b[36m',    // Cyan
@@ -96,7 +95,7 @@ async function processListingUpdate(
     seller?: string;
   }
 ): Promise<void> {
-  const { contractAddress, tokenId, marketplace, price, seller } = data;
+  const { contractAddress, tokenId, marketplace, price, seller: _seller } = data;
 
   // Find all active listings for this token with instant price matching enabled
   const activeListings = await Listing.find({
@@ -130,29 +129,27 @@ async function processListingUpdate(
     // Check if we need to adjust our price
     const shouldAdjust = await shouldAdjustPrice(listing, marketplaceLower, price);
 
-    console.log({ shouldAdjust });
-
 
     if (shouldAdjust) {
-      // Check cooldown to prevent rapid adjustments
-      const adjustmentKey = `${listing._id}-${marketplaceLower}`;
-      const lastAdjusted = lastAdjustmentTime.get(adjustmentKey) || 0;
-      const now = Date.now();
-
-      // if (now - lastAdjusted < ADJUSTMENT_COOLDOWN) {
-      //   console.log(`Skipping adjustment for ${tokenId} on ${marketplace} - cooldown active (${Math.round((ADJUSTMENT_COOLDOWN - (now - lastAdjusted)) / 1000)}s remaining)`);
-      //   continue;
-      // }
-
-      // Update last adjustment time
-      lastAdjustmentTime.set(adjustmentKey, now);
-
       // Calculate the new undercut price
       const undercutMargin = parseFloat(listing.underCutMargin) || 0.0001;
       const newPrice = price - undercutMargin;
 
       await logger.logInfo(ErrorCategory.GENERAL,
         `Instant price match triggered for token ${tokenId} on ${marketplace}. Competitor price: ${price} ETH, New price: ${newPrice} ETH`
+      );
+
+      // Set instant price matching session - expires in 10 minutes
+      const instantPriceMatchingActiveUntil = new Date(Date.now() + 10 * 60 * 1000);
+
+      // Update the listing in the database with the override and expiration
+      await Listing.findByIdAndUpdate(listing._id, {
+        instantPriceOverride: newPrice,
+        instantPriceMatchingActiveUntil: instantPriceMatchingActiveUntil,
+      });
+
+      await logger.logInfo(ErrorCategory.GENERAL,
+        `Started instant price matching session for listing ${listing._id} until ${instantPriceMatchingActiveUntil.toISOString()}`
       );
 
       // Fetch fresh listing data from database
@@ -165,8 +162,6 @@ async function processListingUpdate(
       // Immediately relist with adjusted price
       const adjustedListing = {
         ...freshListing.toObject(),
-        // Only relist on the marketplace where we were undercut
-        selectedMarketplaces: [marketplace.toUpperCase()],
         // Use instant price override to bypass calculateListingPrice
         instantPriceOverride: newPrice,
       } as IListing;
@@ -212,13 +207,13 @@ async function shouldAdjustPrice(
     // Get undercut margin (default to 0.0001 ETH if not specified)
     const undercutMargin = parseFloat(listing.underCutMargin) || 0.0001;
 
-    // Check minimum listing price
+    // Check minimum listing price - always enforce this constraint
     const minPrice = parseFloat(listing.minListingPrice) || 0;
     const newPrice = competitorPrice - undercutMargin;
 
     if (newPrice < minPrice) {
       await logger.logInfo(ErrorCategory.GENERAL,
-        `Cannot undercut competitor price ${competitorPrice} as it would go below minimum ${minPrice}`
+        `Cannot undercut competitor price ${competitorPrice} ETH as it would go below minimum listing price ${minPrice} ETH`
       );
       return false;
     }
@@ -265,4 +260,19 @@ export async function getFloorPrices(collectionSlug: string): Promise<{
 export function clearListingPriceCache(contractAddress: string, tokenId: string): void {
   const priceKey = `${contractAddress.toLowerCase()}-${tokenId}`;
   currentListingPrices.delete(priceKey);
+}
+
+/**
+ * Extend instant price matching session for a listing
+ */
+export async function extendInstantPriceMatchingSession(listingId: string, durationMinutes: number = 10): Promise<void> {
+  const newExpiration = new Date(Date.now() + durationMinutes * 60 * 1000);
+
+  await Listing.findByIdAndUpdate(listingId, {
+    instantPriceMatchingActiveUntil: newExpiration,
+  });
+
+  await logger.logInfo(ErrorCategory.GENERAL,
+    `Extended instant price matching session for listing ${listingId} until ${newExpiration.toISOString()}`
+  );
 }
