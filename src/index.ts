@@ -3418,6 +3418,9 @@ async function connectWebSocket(): Promise<void> {
 
       // Subscribe to collections after connection
       subscribeToCollections(currentTasks as unknown as ITask[]);
+      
+      // Re-subscribe to listing collections for instant price matching
+      resubscribeToListingCollections();
     });
 
     wsManager.on('disconnected', (event: { code: number; reason: string }) => {
@@ -9525,6 +9528,55 @@ async function subscribeToListingCollections() {
     }
   } catch (error) {
     console.error(RED + 'Error subscribing to listing collections' + RESET, error);
+  }
+}
+
+async function resubscribeToListingCollections() {
+  try {
+    console.log(CYAN + `Re-subscribing to listing collections after WebSocket reconnection...` + RESET);
+    
+    if (!wsManager?.isConnected()) {
+      console.log(YELLOW + `WebSocket not connected, delaying listing re-subscription` + RESET);
+      // Retry after a short delay
+      setTimeout(() => {
+        resubscribeToListingCollections();
+      }, 2000);
+      return;
+    }
+
+    // Find all active listings with instant price matching enabled
+    const activeListings = await Listing.find({
+      instantPriceMatching: true,
+      running: true
+    });
+
+    console.log(BLUE + `Found ${activeListings.length} active listings with instant price matching` + RESET);
+
+    // Subscribe using the WebSocket manager's subscribe method with proper type
+    for (const listing of activeListings) {
+      try {
+        const contractAddress = listing.contract.contractAddress;
+        const contractSlug = listing.contract.slug;
+        
+        // Subscribe to all marketplaces for this listing
+        for (const marketplace of listing.selectedMarketplaces) {
+          await wsManager.subscribe(
+            contractSlug,
+            contractAddress,
+            marketplace.toLowerCase(),
+            'listing' // Ensure subscription type is 'listing'
+          );
+        }
+        
+        console.log(GREEN + `Re-subscribed to listing events for ${contractSlug} (${contractAddress})` + RESET);
+      } catch (error) {
+        console.error(RED + `Error re-subscribing to listing ${listing._id}:` + RESET, error);
+      }
+    }
+    
+    console.log(GREEN + `Listing re-subscription complete` + RESET);
+  } catch (error) {
+    console.error(RED + 'Error in resubscribeToListingCollections:' + RESET, error);
   }
 }
 

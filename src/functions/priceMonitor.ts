@@ -17,8 +17,19 @@ const processedMessageIds = new Set<string>();
 
 // Clean up old message IDs every 5 minutes to prevent memory leak
 setInterval(() => {
+  const previousSize = processedMessageIds.size;
   processedMessageIds.clear();
+  if (previousSize > 0) {
+    console.log(`[Price Monitor] Cleared ${previousSize} processed message IDs`);
+  }
 }, 5 * 60 * 1000);
+
+// Log statistics every minute for debugging
+setInterval(() => {
+  if (currentListingPrices.size > 0) {
+    console.log(`[Price Monitor Stats] Active price tracking: ${currentListingPrices.size} listings, Processed messages: ${processedMessageIds.size}`);
+  }
+}, 60 * 1000);
 
 // Store last adjustment time for each listing to prevent rapid adjustments
 const lastAdjustmentTime = new Map<string, number>();
@@ -37,7 +48,10 @@ const colors = {
  */
 export async function handleListingPriceUpdate(wsManager: WebSocketManager | null, message: any): Promise<void> {
   try {
-    // Color codes for marketplaces
+    // Log all messages for debugging (can be removed later)
+    if (message.eventType || message.subscriptionType) {
+      console.log(`[Price Monitor Debug] Received message - Type: ${message.eventType}, Subscription: ${message.subscriptionType}`);
+    }
 
     // Check if this is a listing event - handle new format
     if (message.eventType === 'ORDER_CREATED' && message.subscriptionType === 'listings') {      // New format - direct properties
