@@ -1,4 +1,4 @@
-The issue is that when a listing starts, it should:
-1. Schedule the listing jobs
-2. Subscribe to WebSocket if instantPriceMatching is enabled
+when the server restarts, it should:
+1. Subscribe to WebSocket if instantPriceMatching is enabled
+2. Schedule the listing jobs
 3. Immediately call createListing to list the NFT

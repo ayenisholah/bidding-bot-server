@@ -750,8 +750,12 @@ async function startServer() {
     startConnectionMonitoring();
     console.log('🔗 WebSocket connection monitoring initialized');
 
-    // Initialize listing scheduler
-    await initializeListingScheduler();
+    // Connect WebSocket before initializing listing scheduler
+    await connectWebSocket();
+    console.log('🌐 WebSocket connected');
+
+    // Initialize listing scheduler with WebSocket manager
+    await initializeListingScheduler(wsManager);
     console.log('📋 Listing scheduler initialized');
 
     // Initialize expiration monitor
@@ -871,15 +875,6 @@ startServer()
         errorMessage: error instanceof Error ? error.message : String(error)
       });
       console.error('Failed to run scheduled loop:', error);
-    })
-
-    connectWebSocket().catch(async error => {
-      await logger.logWebSocketError('Failed to connect to WebSocket', {
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        operation: 'initial_connection'
-      });
-      console.error('Failed to connect to WebSocket:', error);
     })
   })
   .catch(async error => {
@@ -3423,9 +3418,6 @@ async function connectWebSocket(): Promise<void> {
 
       // Subscribe to collections after connection
       subscribeToCollections(currentTasks as unknown as ITask[]);
-
-      // Subscribe to listing events for instant price matching
-      subscribeToListingCollections();
     });
 
     wsManager.on('disconnected', (event: { code: number; reason: string }) => {
@@ -9511,7 +9503,7 @@ async function subscribeToListingCollections() {
     // Find all active listings with instant price matching enabled
     const activeListings = await Listing.find({
       instantPriceMatching: true,
-      isActive: true
+      running: true
     }).distinct('contractAddress') as string[];
 
     console.log(BLUE + `Found ${activeListings.length} collections with instant price matching enabled` + RESET);

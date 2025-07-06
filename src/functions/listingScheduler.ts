@@ -2,6 +2,7 @@ import { Queue, Job } from 'bullmq';
 import Listing, { IListing } from '../models/listing.model';
 import { createListing } from './list';
 import { logger, ErrorCategory } from '../utils/logger';
+import WebSocketManager from '../utils/websocket-manager';
 
 // Use the main queue from index.ts
 let mainQueue: Queue | null = null;
@@ -201,19 +202,19 @@ export async function processListingJob(job: Job): Promise<void> {
       await cancelListingJob(listingId);
       return;
     }
-    
+
     console.log('Step 5: Listing is valid and running, continuing...');
     console.log('About to check instant price matching...');
-    
+
     // Check if instant price matching is currently active
     const now = new Date();
     console.log('Step 6: Checking instant price matching...');
     console.log('instantPriceMatchingActiveUntil:', listing.instantPriceMatchingActiveUntil);
     console.log('Current time:', now);
-    
+
     if (listing.instantPriceMatchingActiveUntil && listing.instantPriceMatchingActiveUntil > now) {
       console.log('!!! INSTANT PRICE MATCHING ACTIVE - RETURNING EARLY !!!');
-      await logger.logInfo(ErrorCategory.QUEUE, 
+      await logger.logInfo(ErrorCategory.QUEUE,
         `Listing ${listingId} has active instant price matching until ${listing.instantPriceMatchingActiveUntil.toISOString()}, skipping scheduled update`
       );
       // return; // Skip processing but don't cancel the job
@@ -229,7 +230,7 @@ export async function processListingJob(job: Job): Promise<void> {
           instantPriceMatchingActiveUntil: 1,
         },
       });
-      await logger.logInfo(ErrorCategory.QUEUE, 
+      await logger.logInfo(ErrorCategory.QUEUE,
         `Cleaned up expired instant price matching session for listing ${listingId}`
       );
     }
@@ -255,7 +256,7 @@ export async function processListingJob(job: Job): Promise<void> {
     console.log('Running:', freshListing.running);
     console.log('Selected Marketplaces:', freshListing.selectedMarketplaces);
     console.log('Listing data keys:', Object.keys(listingData));
-    
+
     console.log('\n=== CALLING CREATE LISTING FROM SCHEDULER ===');
     await createListing(listingData);
     console.log('=== CREATE LISTING RETURNED ===');
@@ -284,7 +285,7 @@ export async function processListingJob(job: Job): Promise<void> {
     console.error('Error type:', error?.constructor?.name);
     console.error('Error message:', error instanceof Error ? error.message : String(error));
     console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
-    
+
     await logger.logQueueJobFailed(job.name, {
       jobId: job.id,
       listingId,
@@ -300,8 +301,10 @@ export async function processListingJob(job: Job): Promise<void> {
 /**
  * Initialize listing scheduler
  * - Loads all active listings and schedules them on the main queue
+ * - Subscribes to WebSocket for instant price matching
+ * - Immediately processes listings on startup
  */
-export async function initializeListingScheduler(): Promise<void> {
+export async function initializeListingScheduler(wsManager?: WebSocketManager): Promise<void> {
   try {
     console.log('Initializing listing scheduler...');
 
@@ -321,9 +324,64 @@ export async function initializeListingScheduler(): Promise<void> {
 
     console.log(`Found ${activeListings.length} active listings to schedule`);
 
-    // Schedule each active listing
+    // Process each active listing
     for (const listing of activeListings) {
+      const listingId = listing._id.toString();
+      
+      // 1. Subscribe to WebSocket if instant price matching is enabled
+      if (listing.instantPriceMatching && wsManager) {
+        try {
+          const contractAddress = listing.contract.contractAddress;
+          const contractSlug = listing.contract.slug;
+          
+          console.log(`Subscribing to WebSocket for instant price matching: ${contractSlug} (${contractAddress})`);
+          
+          // Subscribe to all marketplaces for this listing
+          for (const marketplace of listing.selectedMarketplaces) {
+            await wsManager.subscribe(
+              contractSlug,
+              contractAddress,
+              marketplace.toLowerCase(),
+              'listing' // subscription type
+            );
+          }
+          
+          await logger.logInfo(ErrorCategory.QUEUE, 
+            `Subscribed to WebSocket for listing ${listingId} with instant price matching`
+          );
+        } catch (error) {
+          await logger.logWebSocketError('Failed to subscribe listing to WebSocket', {
+            listingId,
+            error: error as Error,
+            errorMessage: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+      
+      // 2. Schedule the listing jobs
       await scheduleListing(listing);
+      
+      // 3. Immediately call createListing to list the NFT
+      try {
+        console.log(`\n=== INITIAL LISTING ON STARTUP ===`);
+        console.log(`Listing ID: ${listingId}`);
+        console.log(`Token ID: ${listing.tokenId}`);
+        console.log(`Running: ${listing.running}`);
+        console.log(`Instant Price Matching: ${listing.instantPriceMatching}`);
+        
+        const listingData = listing.toObject();
+        await createListing(listingData);
+        
+        await logger.logInfo(ErrorCategory.QUEUE, 
+          `Processed initial listing for ${listingId} on startup`
+        );
+      } catch (error) {
+        await logger.logGeneralError('Failed to process initial listing on startup', {
+          listingId,
+          error: error as Error,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
+      }
     }
 
     console.log('Listing scheduler initialized successfully');
