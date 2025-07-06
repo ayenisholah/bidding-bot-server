@@ -218,11 +218,16 @@ class WebSocketManager extends EventEmitter {
       }
 
       // Check for stale connection (no messages received for extended period)
-      if (this.lastMessageReceived > 0 && (now - this.lastMessageReceived) > this.connectionStaleThreshold) {
+      // Only check if we have active subscriptions that should be sending messages
+      if (this.lastMessageReceived > 0 && 
+          (this.activeSubscriptions.size > 0 || this.persistentListingSubscriptions.size > 0) &&
+          (now - this.lastMessageReceived) > this.connectionStaleThreshold) {
         logger.logWarning(ErrorCategory.WEBSOCKET, 'Connection appears stale (no messages received), reconnecting...', {
           lastMessageReceived: this.lastMessageReceived,
           staleDuration: now - this.lastMessageReceived,
-          threshold: this.connectionStaleThreshold
+          threshold: this.connectionStaleThreshold,
+          activeSubscriptions: this.activeSubscriptions.size,
+          persistentListingSubscriptions: this.persistentListingSubscriptions.size
         });
         this.ws?.close();
         return;
@@ -273,9 +278,20 @@ class WebSocketManager extends EventEmitter {
           timeSinceLastPong,
           missedPongs: this.missedPongs,
           activeSubscriptions: this.activeSubscriptions.size,
+          persistentListingSubscriptions: this.persistentListingSubscriptions.size,
           messageRate: this.metrics.messageRate,
-          averageLatency: this.metrics.averageLatency
+          averageLatency: this.metrics.averageLatency,
+          lastMessageReceived: new Date(this.lastMessageReceived).toISOString()
         });
+        
+        // Log subscription details for debugging
+        if (this.persistentListingSubscriptions.size > 0) {
+          const listingSubs = Array.from(this.persistentListingSubscriptions.entries())
+            .map(([key, info]) => `${info.slug}:${info.marketplace}`);
+          logger.logInfo(ErrorCategory.WEBSOCKET, 'Active listing subscriptions', {
+            subscriptions: listingSubs
+          });
+        }
       }
 
       // Force reconnection if connection appears severely degraded
@@ -302,26 +318,23 @@ class WebSocketManager extends EventEmitter {
 
   private async syncSubscriptions(): Promise<void> {
     try {
-      // Merge active subscriptions with persistent listing subscriptions
-      const allSubscriptions = new Map(this.activeSubscriptions);
+      // Clear active subscriptions to ensure clean state
+      this.activeSubscriptions.clear();
       
-      // Add persistent listing subscriptions
+      // Restore persistent listing subscriptions to active subscriptions
       for (const [key, value] of this.persistentListingSubscriptions) {
-        if (!allSubscriptions.has(key)) {
-          allSubscriptions.set(key, value);
-        }
+        this.activeSubscriptions.set(key, value);
       }
       
       // Skip sync if no subscriptions
-      if (allSubscriptions.size === 0) {
+      if (this.activeSubscriptions.size === 0 && this.persistentListingSubscriptions.size === 0) {
         logger.logInfo(ErrorCategory.WEBSOCKET, 'No subscriptions to sync');
         return;
       }
 
-      logger.logInfo(ErrorCategory.WEBSOCKET, 'Syncing subscriptions', {
+      logger.logInfo(ErrorCategory.WEBSOCKET, 'Syncing subscriptions after reconnection', {
         activeSubscriptions: this.activeSubscriptions.size,
-        persistentListings: this.persistentListingSubscriptions.size,
-        totalSubscriptions: allSubscriptions.size
+        persistentListings: this.persistentListingSubscriptions.size
       });
 
       // Simply resubscribe to all collections
@@ -330,7 +343,8 @@ class WebSocketManager extends EventEmitter {
       const subscribedListings = new Set<string>();
       const failedSubscriptions: string[] = [];
 
-      for (const [, subInfo] of allSubscriptions) {
+      // Use activeSubscriptions which now includes persistent listings
+      for (const [subscriptionId, subInfo] of this.activeSubscriptions) {
         const subscriptionType = subInfo.subscriptionType || 'bidding';
         const isListing = subscriptionType === 'listing';
         const trackingSet = isListing ? subscribedListings : subscribedSlugs;
@@ -345,6 +359,13 @@ class WebSocketManager extends EventEmitter {
               slug: subInfo.slug,
               contractAddress: subInfo.contractAddress
             };
+
+            logger.logDebug(ErrorCategory.WEBSOCKET, 'Resubscribing to collection', {
+              subscriptionId,
+              slug: subInfo.slug,
+              eventName,
+              subscriptionType
+            });
 
             this.sendMessage(message);
             trackingSet.add(subInfo.slug);
@@ -366,8 +387,12 @@ class WebSocketManager extends EventEmitter {
         biddingCollections: subscribedSlugs.size,
         listingCollections: subscribedListings.size,
         failed: failedSubscriptions.length,
-        failedCollections: failedSubscriptions
+        failedCollections: failedSubscriptions,
+        totalActiveAfterSync: this.activeSubscriptions.size
       });
+
+      // Update metrics
+      this.metrics.subscriptionCount = this.activeSubscriptions.size;
 
       // Retry failed subscriptions after a delay
       if (failedSubscriptions.length > 0) {
@@ -397,8 +422,12 @@ class WebSocketManager extends EventEmitter {
 
     for (const slug of failedSlugs) {
       try {
-        // Find the subscription info
-        const subInfo = Array.from(this.activeSubscriptions.values()).find(info => info.slug === slug);
+        // Find the subscription info from both active and persistent subscriptions
+        let subInfo = Array.from(this.activeSubscriptions.values()).find(info => info.slug === slug);
+        if (!subInfo) {
+          subInfo = Array.from(this.persistentListingSubscriptions.values()).find(info => info.slug === slug);
+        }
+        
         if (subInfo) {
           const subscriptionType = subInfo.subscriptionType || 'bidding';
           const eventName = subscriptionType === 'listing' ? 'join_listings' : 'join_the_party';
@@ -409,8 +438,18 @@ class WebSocketManager extends EventEmitter {
             contractAddress: subInfo.contractAddress
           };
 
+          logger.logDebug(ErrorCategory.WEBSOCKET, 'Retrying subscription', {
+            slug,
+            eventName,
+            subscriptionType
+          });
+
           this.sendMessage(message);
           await new Promise(resolve => setTimeout(resolve, 200));
+        } else {
+          logger.logWarning(ErrorCategory.WEBSOCKET, 'Failed to find subscription info for retry', {
+            slug
+          });
         }
       } catch (error) {
         logger.logWarning(ErrorCategory.WEBSOCKET, 'Retry subscription failed', {
@@ -461,7 +500,8 @@ class WebSocketManager extends EventEmitter {
         return;
       }
 
-      // Emit message for external handling (marketplace events)
+      // Always emit message for external handling (marketplace events)
+      // This ensures all messages reach handleListingPriceUpdate
       this.emit('message', message);
 
     } catch (error) {
@@ -469,6 +509,14 @@ class WebSocketManager extends EventEmitter {
         operation: 'websocket_message_parse',
         error: error instanceof Error ? error : new Error(String(error))
       });
+      
+      // Still emit the raw message even if parsing fails
+      // This helps prevent message loss
+      try {
+        this.emit('message', { raw: data.toString(), parseError: true });
+      } catch (emitError) {
+        logger.logError(ErrorCategory.WEBSOCKET, 'Failed to emit raw message after parse error');
+      }
     }
   }
 
@@ -669,7 +717,11 @@ class WebSocketManager extends EventEmitter {
 
     // Check if already subscribed
     if (this.activeSubscriptions.has(subscriptionId)) {
-      logger.logInfo(ErrorCategory.WEBSOCKET, 'Already subscribed', { subscriptionId });
+      logger.logInfo(ErrorCategory.WEBSOCKET, 'Already subscribed', { 
+        subscriptionId,
+        totalActive: this.activeSubscriptions.size,
+        totalPersistent: this.persistentListingSubscriptions.size
+      });
       return;
     }
 
@@ -710,7 +762,11 @@ class WebSocketManager extends EventEmitter {
         marketplace,
         subscriptionId,
         subscriptionType,
-        persisted: subscriptionType === 'listing'
+        persisted: subscriptionType === 'listing',
+        totalActive: this.activeSubscriptions.size,
+        totalPersistent: this.persistentListingSubscriptions.size,
+        eventName,
+        contractAddress
       });
 
       this.emit('subscribed', { slug, marketplace, subscriptionType });

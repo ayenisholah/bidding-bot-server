@@ -3443,6 +3443,11 @@ async function connectWebSocket(): Promise<void> {
 
     wsManager.on('message', async (message: any) => {
       try {
+        // Debug: Log all messages
+        if (message.eventType || message.subscriptionType) {
+          console.log(`[WebSocket Debug] Received message - Type: ${message.eventType}, Subscription: ${message.subscriptionType}, Event: ${message.event}`);
+        }
+        
         if (message.type === 'pong') {
           console.log('Pong received from server.');
           return;
