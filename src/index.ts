@@ -166,6 +166,9 @@ const COLLECTION_BID_PRIORITY = {
   BLUR: 5
 };
 
+// PROCESS_LISTING should have the highest priority
+const LISTING_PRIORITY = 10;
+
 type JobState = 'completed' | 'failed' | 'delayed' | 'active' | 'waiting' | 'waiting-children' | 'unknown' | 'prioritized' | 'paused';
 
 const lockManager = new DistributedLockManager({
@@ -183,6 +186,7 @@ export { lockManager };
 export { redis };
 export { queue };
 export { subscribeToListingEvents };
+export { LISTING_PRIORITY };
 
 let netEnabled = true;
 
@@ -1743,7 +1747,7 @@ async function processJob(job: Job) {
           return await blurCollectionCounterBid(job.data);
         case BLUR_TRAIT_BID_COUNTERBID:
           return await blurTraitCounterBid(job.data);
-        case PROCESS_LISTING':
+        case PROCESS_LISTING:
           return await processListingJob(job);
         default:
           return null;

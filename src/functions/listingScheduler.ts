@@ -6,13 +6,15 @@ import WebSocketManager from '../utils/websocket-manager';
 
 // Use the main queue from index.ts
 let mainQueue: Queue | null = null;
+let listingPriority: number | null = null;
 
 // Export a function to get the main queue
 export async function getMainQueue(): Promise<Queue> {
   if (!mainQueue) {
     // Import the queue from index.ts dynamically to avoid circular dependency
-    const { queue } = await import('../index');
+    const { queue, LISTING_PRIORITY } = await import('../index');
     mainQueue = queue;
+    listingPriority = LISTING_PRIORITY;
   }
   if (!mainQueue) {
     throw new Error('Main queue not initialized');
@@ -50,7 +52,8 @@ export async function scheduleListing(listing: IListing): Promise<void> {
       {
         jobId: `${jobId}-immediate`,
         removeOnComplete: true,
-        removeOnFail: true
+        removeOnFail: true,
+        priority: listingPriority || 10 // Use highest priority
       }
     );
 
@@ -65,6 +68,7 @@ export async function scheduleListing(listing: IListing): Promise<void> {
         repeat: {
           every: delayMs,
         },
+        priority: listingPriority || 10 // Use highest priority
       }
     );
 
