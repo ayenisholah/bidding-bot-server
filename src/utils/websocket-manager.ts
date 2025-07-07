@@ -71,7 +71,7 @@ class WebSocketManager extends EventEmitter {
   private messageTimestamps: number[] = [];
   private lastMessageReceived = 0;
   private connectionStaleThreshold = 300000; // 5 minutes without any messages
-  
+
   // State persistence for listings (per CLIENT_CONNECTION_GUIDE.md)
   private persistentListingSubscriptions: Map<string, SubscriptionInfo> = new Map();
   private subscriptionStateFile = '.listing-subscriptions.json';
@@ -87,13 +87,13 @@ class WebSocketManager extends EventEmitter {
       messageQueueLimit: 1000,
       ...config
     };
-    
+
     logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket Manager initialized', {
       clientId: this.config.clientId,
       url: this.config.url,
       heartbeatInterval: this.config.heartbeatInterval
     });
-    
+
     // Load persistent listing subscriptions on initialization
     this.loadPersistentSubscriptions();
   }
@@ -225,9 +225,9 @@ class WebSocketManager extends EventEmitter {
 
       // Check for stale connection (no messages received for extended period)
       // Only check if we have active subscriptions that should be sending messages
-      if (this.lastMessageReceived > 0 && 
-          (this.activeSubscriptions.size > 0 || this.persistentListingSubscriptions.size > 0) &&
-          (now - this.lastMessageReceived) > this.connectionStaleThreshold) {
+      if (this.lastMessageReceived > 0 &&
+        (this.activeSubscriptions.size > 0 || this.persistentListingSubscriptions.size > 0) &&
+        (now - this.lastMessageReceived) > this.connectionStaleThreshold) {
         logger.logWarning(ErrorCategory.WEBSOCKET, 'Connection appears stale (no messages received), reconnecting...', {
           lastMessageReceived: this.lastMessageReceived,
           staleDuration: now - this.lastMessageReceived,
@@ -246,15 +246,15 @@ class WebSocketManager extends EventEmitter {
         event: 'ping',
         clientId: this.config.clientId
       });
-      
+
       // Set pong timeout (per CLIENT_CONNECTION_GUIDE.md recommendation)
       this.clearTimeout('pongTimeout');
       this.setTimeout('pongTimeout', () => {
         this.missedPongs++;
         logger.logWarning(ErrorCategory.WEBSOCKET, `Pong timeout - missed ${this.missedPongs}/3 pongs`);
-        
+
         if (this.missedPongs >= 3) {
-          logger.logError(ErrorCategory.WEBSOCKET, 'Max missed pongs reached, forcing reconnection');
+          logger.logWebSocketError('Max missed pongs reached, forcing reconnection');
           this.ws?.close();
         }
       }, 5000); // 5 second pong timeout
@@ -289,11 +289,11 @@ class WebSocketManager extends EventEmitter {
           averageLatency: this.metrics.averageLatency,
           lastMessageReceived: new Date(this.lastMessageReceived).toISOString()
         });
-        
+
         // Log subscription details for debugging
         if (this.persistentListingSubscriptions.size > 0) {
           const listingSubs = Array.from(this.persistentListingSubscriptions.entries())
-            .map(([key, info]) => `${info.slug}:${info.marketplace}`);
+            .map(([, info]) => `${info.slug}:${info.marketplace}`);
           logger.logInfo(ErrorCategory.WEBSOCKET, 'Active listing subscriptions', {
             subscriptions: listingSubs
           });
@@ -326,12 +326,12 @@ class WebSocketManager extends EventEmitter {
     try {
       // Clear active subscriptions to ensure clean state
       this.activeSubscriptions.clear();
-      
+
       // Restore persistent listing subscriptions to active subscriptions
       for (const [key, value] of this.persistentListingSubscriptions) {
         this.activeSubscriptions.set(key, value);
       }
-      
+
       // Skip sync if no subscriptions
       if (this.activeSubscriptions.size === 0 && this.persistentListingSubscriptions.size === 0) {
         logger.logInfo(ErrorCategory.WEBSOCKET, 'No subscriptions to sync');
@@ -434,7 +434,7 @@ class WebSocketManager extends EventEmitter {
         if (!subInfo) {
           subInfo = Array.from(this.persistentListingSubscriptions.values()).find(info => info.slug === slug);
         }
-        
+
         if (subInfo) {
           const subscriptionType = subInfo.subscriptionType || 'bidding';
           const eventName = subscriptionType === 'listing' ? 'join_listings' : 'join_the_party';
@@ -516,13 +516,14 @@ class WebSocketManager extends EventEmitter {
         operation: 'websocket_message_parse',
         error: error instanceof Error ? error : new Error(String(error))
       });
-      
+
       // Still emit the raw message even if parsing fails
       // This helps prevent message loss
       try {
         this.emit('message', { raw: data.toString(), parseError: true });
       } catch (emitError) {
-        logger.logError(ErrorCategory.WEBSOCKET, 'Failed to emit raw message after parse error');
+        console.log(emitError);
+        logger.logWebSocketError('Failed to emit raw message after parse error');
       }
     }
   }
@@ -530,14 +531,32 @@ class WebSocketManager extends EventEmitter {
   private handlePong(timestamp: number): void {
     this.lastPongReceived = Date.now();
     this.missedPongs = 0;
+
+    const maxFutureTolerance = 5000; // 5 seconds ahead max
+
+    // Validate timestamp with future tolerance
+    if (
+      typeof timestamp !== 'number' ||
+      timestamp <= 0 ||
+      timestamp > this.lastPongReceived + maxFutureTolerance
+    ) {
+      logger.logWarning(ErrorCategory.WEBSOCKET, 'Invalid pong timestamp received', {
+        timestamp,
+        now: this.lastPongReceived
+      });
+      return;
+    }
+
     const latency = this.lastPongReceived - timestamp;
     this.recordLatency(latency);
-    
+
     // Clear pong timeout when we receive a pong
     this.clearTimeout('pongTimeout');
 
     logger.logDebug(ErrorCategory.WEBSOCKET, 'Pong received', { latency });
   }
+
+
 
   private handleServerStatus(status: any): void {
     logger.logInfo(ErrorCategory.WEBSOCKET, 'Server status update', status);
@@ -629,13 +648,13 @@ class WebSocketManager extends EventEmitter {
     const baseDelay = this.config.reconnectBaseDelay || 1000;
     const maxDelay = this.config.reconnectMaxDelay || 60000;
     const jitterRange = 0.3; // 30% jitter
-    
+
     // Calculate exponential delay
     const exponentialDelay = Math.min(
       baseDelay * Math.pow(2, this.retryCount),
       maxDelay
     );
-    
+
     // Add jitter to prevent thundering herd
     const jitter = exponentialDelay * jitterRange * (Math.random() - 0.5);
     const delay = Math.round(exponentialDelay + jitter);
@@ -673,16 +692,22 @@ class WebSocketManager extends EventEmitter {
   }
 
   private sendPing(): void {
+    this.lastPingSent = Date.now();
+
     const pingMessage = {
       event: 'ping',
-      clientId: this.config.clientId
-    };
-    this.sendMessage(pingMessage);
-    logger.logDebug(ErrorCategory.WEBSOCKET, 'Ping sent', { 
       clientId: this.config.clientId,
-      timestamp: Date.now()
+      timestamp: this.lastPingSent // ✅ added timestamp
+    };
+
+    this.sendMessage(pingMessage);
+
+    logger.logDebug(ErrorCategory.WEBSOCKET, 'Ping sent', {
+      clientId: this.config.clientId,
+      timestamp: this.lastPingSent
     });
   }
+
 
   async sendMessageWithResponse(message: any, timeoutMs = 5000): Promise<any> {
     return new Promise((resolve, reject) => {
@@ -729,7 +754,7 @@ class WebSocketManager extends EventEmitter {
 
     // Check if already subscribed
     if (this.activeSubscriptions.has(subscriptionId)) {
-      logger.logInfo(ErrorCategory.WEBSOCKET, 'Already subscribed', { 
+      logger.logInfo(ErrorCategory.WEBSOCKET, 'Already subscribed', {
         subscriptionId,
         totalActive: this.activeSubscriptions.size,
         totalPersistent: this.persistentListingSubscriptions.size
@@ -758,7 +783,7 @@ class WebSocketManager extends EventEmitter {
         subscribedAt: Date.now(),
         subscriptionType
       };
-      
+
       this.activeSubscriptions.set(subscriptionId, subscriptionInfo);
 
       // Persist listing subscriptions (per CLIENT_CONNECTION_GUIDE.md)
@@ -807,10 +832,10 @@ class WebSocketManager extends EventEmitter {
         // Remove specific marketplace subscription
         const biddingKey = `${slug}:${marketplace}:bidding`;
         const listingKey = `${slug}:${marketplace}:listing`;
-        
+
         this.activeSubscriptions.delete(biddingKey);
         this.activeSubscriptions.delete(listingKey);
-        
+
         // Remove from persistent storage if it's a listing
         if (this.persistentListingSubscriptions.has(listingKey)) {
           this.persistentListingSubscriptions.delete(listingKey);
@@ -821,10 +846,10 @@ class WebSocketManager extends EventEmitter {
         ['OPENSEA', 'MAGICEDEN', 'BLUR'].forEach(m => {
           const biddingKey = `${slug}:${m}:bidding`;
           const listingKey = `${slug}:${m}:listing`;
-          
+
           this.activeSubscriptions.delete(biddingKey);
           this.activeSubscriptions.delete(listingKey);
-          
+
           // Remove from persistent storage
           if (this.persistentListingSubscriptions.has(listingKey)) {
             this.persistentListingSubscriptions.delete(listingKey);
@@ -910,17 +935,17 @@ class WebSocketManager extends EventEmitter {
     this.intervals.forEach(interval => clearInterval(interval));
     this.intervals.clear();
   }
-  
+
   // Timeout management (per CLIENT_CONNECTION_GUIDE.md)
   private timeouts: Map<string, NodeJS.Timeout> = new Map();
-  
+
   private setTimeout(name: string, callback: () => void, delay: number): NodeJS.Timeout {
     this.clearTimeout(name);
     const timeout = setTimeout(callback, delay) as NodeJS.Timeout;
     this.timeouts.set(name, timeout);
     return timeout;
   }
-  
+
   private clearTimeout(name: string): void {
     const timeout = this.timeouts.get(name);
     if (timeout) {
@@ -928,7 +953,7 @@ class WebSocketManager extends EventEmitter {
       this.timeouts.delete(name);
     }
   }
-  
+
   private clearAllTimeouts(): void {
     this.timeouts.forEach(timeout => clearTimeout(timeout));
     this.timeouts.clear();
@@ -990,7 +1015,7 @@ class WebSocketManager extends EventEmitter {
 
     this.clearAllIntervals();
     this.clearAllTimeouts();
-    
+
     if (this.ws) {
       this.ws.removeAllListeners();
       this.ws.close(1000, 'Client disconnect'); // Normal closure

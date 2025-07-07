@@ -45,7 +45,7 @@ export async function scheduleListing(listing: IListing): Promise<void> {
 
     // Execute immediately first, then set up repeating job
     await queue.add(
-      'process-listing',
+      'PROCESS_LISTING',
       { listingId },
       {
         jobId: `${jobId}-immediate`,
@@ -56,7 +56,7 @@ export async function scheduleListing(listing: IListing): Promise<void> {
 
     // Then add the repeating job for future executions
     const job = await queue.add(
-      'process-listing',
+      'PROCESS_LISTING',
       { listingId },
       {
         jobId,
@@ -97,7 +97,7 @@ export async function cancelListingJob(listingId: string): Promise<void> {
 
     for (const scheduler of jobSchedulers) {
       // Check if this is a listing job by examining the data
-      if (scheduler.name === 'process-listing') {
+      if (scheduler.name === 'PROCESS_LISTING') {
         // Parse the job key to check if it's for this listing
         // The key format includes the listingId in the pattern
         if (scheduler.key.includes(listingId) ||
@@ -156,7 +156,7 @@ export async function updateListingSchedule(listing: IListing): Promise<void> {
 /**
  * Process a listing job - to be called from the main worker in index.ts
  */
-export async function processListingJob(job: Job): Promise<void> {
+export async function processListingJob(job: Job): Promise<boolean> {
   console.log('\n=== PROCESS LISTING JOB STARTED ===');
   const { listingId } = job.data;
   console.log('Job ID:', job.id);
@@ -192,7 +192,7 @@ export async function processListingJob(job: Job): Promise<void> {
       await logger.logInfo(ErrorCategory.QUEUE, `Listing ${listingId} not found, canceling job`);
       // Cancel the repeating job since the listing no longer exists
       await cancelListingJob(listingId);
-      return; // Return successfully so the job doesn't retry
+      return false // Return successfully so the job doesn't retry
     }
 
     if (!listing.running) {
@@ -200,40 +200,11 @@ export async function processListingJob(job: Job): Promise<void> {
       await logger.logInfo(ErrorCategory.QUEUE, `Listing ${listingId} is not running, skipping`);
       // Cancel the repeating job
       await cancelListingJob(listingId);
-      return;
+      return false;
     }
 
     console.log('Step 5: Listing is valid and running, continuing...');
     console.log('About to check instant price matching...');
-
-    // Check if instant price matching is currently active
-    const now = new Date();
-    console.log('Step 6: Checking instant price matching...');
-    console.log('instantPriceMatchingActiveUntil:', listing.instantPriceMatchingActiveUntil);
-    console.log('Current time:', now);
-
-    if (listing.instantPriceMatchingActiveUntil && listing.instantPriceMatchingActiveUntil > now) {
-      console.log('!!! INSTANT PRICE MATCHING ACTIVE - RETURNING EARLY !!!');
-      await logger.logInfo(ErrorCategory.QUEUE,
-        `Listing ${listingId} has active instant price matching until ${listing.instantPriceMatchingActiveUntil.toISOString()}, skipping scheduled update`
-      );
-      // return; // Skip processing but don't cancel the job
-    }
-
-    // Clean up expired instant price matching session
-    console.log('Checking for expired instant price matching...');
-    if (listing.instantPriceMatchingActiveUntil && listing.instantPriceMatchingActiveUntil <= now) {
-      console.log('Cleaning up expired instant price matching session');
-      await Listing.findByIdAndUpdate(listingId, {
-        $unset: {
-          instantPriceOverride: 1,
-          instantPriceMatchingActiveUntil: 1,
-        },
-      });
-      await logger.logInfo(ErrorCategory.QUEUE,
-        `Cleaned up expired instant price matching session for listing ${listingId}`
-      );
-    }
 
     console.log('About to update progress to 50...');
     // Update progress before long operation
@@ -244,7 +215,7 @@ export async function processListingJob(job: Job): Promise<void> {
     const freshListing = await Listing.findById(listingId);
     if (!freshListing) {
       await logger.logInfo(ErrorCategory.QUEUE, `Listing ${listingId} not found after cleanup, skipping`);
-      return;
+      return false;
     }
 
     // Process the listing - pass all fresh data including instantPriceOverride if available
@@ -280,6 +251,8 @@ export async function processListingJob(job: Job): Promise<void> {
       queueName: 'BIDDING_BOT',
     });
 
+    return true
+
   } catch (error) {
     console.error('!!! ERROR IN PROCESS LISTING JOB !!!');
     console.error('Error type:', error?.constructor?.name);
@@ -314,7 +287,7 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
     // Clean up old listing jobs
     const jobSchedulers = await queue.getJobSchedulers(0, -1, true);
     for (const scheduler of jobSchedulers) {
-      if (scheduler.name === 'process-listing' && scheduler.id) {
+      if (scheduler.name === 'PROCESS_LISTING' && scheduler.id) {
         await queue.removeJobScheduler(scheduler.id);
       }
     }
@@ -327,15 +300,15 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
     // Process each active listing
     for (const listing of activeListings) {
       const listingId = listing._id.toString();
-      
+
       // 1. Subscribe to WebSocket if instant price matching is enabled
       if (listing.instantPriceMatching && wsManager) {
         try {
           const contractAddress = listing.contract.contractAddress;
           const contractSlug = listing.contract.slug;
-          
+
           console.log(`Subscribing to WebSocket for instant price matching: ${contractSlug} (${contractAddress})`);
-          
+
           // Subscribe to all marketplaces for this listing
           for (const marketplace of listing.selectedMarketplaces) {
             await wsManager.subscribe(
@@ -345,8 +318,8 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
               'listing' // subscription type
             );
           }
-          
-          await logger.logInfo(ErrorCategory.QUEUE, 
+
+          await logger.logInfo(ErrorCategory.QUEUE,
             `Subscribed to WebSocket for listing ${listingId} with instant price matching`
           );
         } catch (error) {
@@ -357,10 +330,10 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
           });
         }
       }
-      
+
       // 2. Schedule the listing jobs
       await scheduleListing(listing);
-      
+
       // 3. Immediately call createListing to list the NFT
       try {
         console.log(`\n=== INITIAL LISTING ON STARTUP ===`);
@@ -368,11 +341,11 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
         console.log(`Token ID: ${listing.tokenId}`);
         console.log(`Running: ${listing.running}`);
         console.log(`Instant Price Matching: ${listing.instantPriceMatching}`);
-        
+
         const listingData = listing.toObject();
         await createListing(listingData);
-        
-        await logger.logInfo(ErrorCategory.QUEUE, 
+
+        await logger.logInfo(ErrorCategory.QUEUE,
           `Processed initial listing for ${listingId} on startup`
         );
       } catch (error) {
@@ -405,7 +378,7 @@ export async function shutdownListingScheduler(): Promise<void> {
     const jobSchedulers = await queue.getJobSchedulers(0, -1, true);
 
     for (const scheduler of jobSchedulers) {
-      if (scheduler.name === 'process-listing' && scheduler.id) {
+      if (scheduler.name === 'PROCESS_LISTING' && scheduler.id) {
         await queue.removeJobScheduler(scheduler.id);
       }
     }

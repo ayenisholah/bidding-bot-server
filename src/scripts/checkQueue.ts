@@ -42,10 +42,10 @@ async function checkQueue() {
       console.log(`    Failed reason:`, job.failedReason);
     });
 
-    // Check for process-listing jobs specifically
+    // Check for PROCESS_LISTING jobs specifically
     const allJobs = await queue.getJobs(['waiting', 'active', 'completed', 'failed']);
-    const listingJobs = allJobs.filter(job => job.name === 'process-listing');
-    console.log('\nTotal process-listing jobs:', listingJobs.length);
+    const listingJobs = allJobs.filter(job => job.name === 'PROCESS_LISTING');
+    console.log('\nTotal PROCESS_LISTING jobs:', listingJobs.length);
     listingJobs.forEach(job => {
       console.log(`  - State: ${job.getState()}`, `ID: ${job.id}`, `Data:`, job.data);
     });

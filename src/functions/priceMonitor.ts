@@ -31,9 +31,6 @@ setInterval(() => {
   }
 }, 60 * 1000);
 
-// Store last adjustment time for each listing to prevent rapid adjustments
-const lastAdjustmentTime = new Map<string, number>();
-
 const colors = {
   opensea: '\x1b[36m',    // Cyan
   blur: '\x1b[35m',       // Magenta
@@ -48,11 +45,6 @@ const colors = {
  */
 export async function handleListingPriceUpdate(wsManager: WebSocketManager | null, message: any): Promise<void> {
   try {
-    // Log all messages for debugging (can be removed later)
-    if (message.eventType || message.subscriptionType) {
-      console.log(`[Price Monitor Debug] Received message - Type: ${message.eventType}, Subscription: ${message.subscriptionType}`);
-    }
-
     // Check if this is a listing event - handle new format
     if (message.eventType === 'ORDER_CREATED' && message.subscriptionType === 'listings') {      // New format - direct properties
       const contractAddress = message.contractAddress?.toLowerCase();

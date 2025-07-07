@@ -47,6 +47,9 @@ export async function createListing(data: IListing) {
       }
     }
 
+    // check if we're at the floor
+    // if we're at the floor with greater than 1 minute  
+
     // Clean up expired marketplace listings
     const now = new Date();
     const marketplaces: Array<'opensea' | 'blur' | 'magiceden'> = ['opensea', 'blur', 'magiceden'];
