@@ -310,17 +310,33 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
           console.log(`Subscribing to WebSocket for instant price matching: ${contractSlug} (${contractAddress})`);
 
           // Subscribe to all marketplaces for this listing
+          const subscriptionResults = [];
           for (const marketplace of listing.selectedMarketplaces) {
-            await wsManager.subscribe(
-              contractSlug,
-              contractAddress,
-              marketplace.toLowerCase(),
-              'listing' // subscription type
-            );
+            try {
+              await wsManager.subscribe(
+                contractSlug,
+                contractAddress,
+                marketplace.toLowerCase(),
+                'listing' // subscription type
+              );
+              subscriptionResults.push(`${marketplace}: success`);
+              console.log(`✅ Successfully subscribed to ${marketplace} for listing events`);
+            } catch (error) {
+              subscriptionResults.push(`${marketplace}: failed`);
+              console.error(`❌ Failed to subscribe to ${marketplace}:`, error);
+            }
           }
 
           await logger.logInfo(ErrorCategory.QUEUE,
-            `Subscribed to WebSocket for listing ${listingId} with instant price matching`
+            `Subscribed to WebSocket for listing ${listingId} with instant price matching`,
+            {
+              contractSlug,
+              contractAddress,
+              tokenId: listing.tokenId,
+              marketplaces: listing.selectedMarketplaces,
+              subscriptionResults,
+              instantPriceMatchingActive: listing.instantPriceMatching
+            }
           );
         } catch (error) {
           await logger.logWebSocketError('Failed to subscribe listing to WebSocket', {
@@ -389,6 +405,52 @@ export async function shutdownListingScheduler(): Promise<void> {
     console.log('Listing scheduler shut down successfully');
   } catch (error) {
     console.error('Error shutting down listing scheduler:', error);
+  }
+}
+
+/**
+ * Get listing subscription diagnostics
+ */
+export async function getListingSubscriptionDiagnostics(wsManager?: WebSocketManager): Promise<{
+  activeListings: number;
+  instantPriceMatchingListings: number;
+  subscriptionStats: any;
+  connectionStatus: boolean;
+}> {
+  try {
+    // Get all active listings with instant price matching
+    const instantPriceMatchingListings = await Listing.find({
+      running: true,
+      instantPriceMatching: true
+    }).select('tokenId contract selectedMarketplaces');
+    
+    // Get WebSocket subscription stats
+    const subscriptionStats = wsManager ? wsManager.getListingSubscriptionStats() : null;
+    const connectionStatus = wsManager ? wsManager.isConnected() : false;
+    
+    // Log diagnostics
+    await logger.logInfo(ErrorCategory.WEBSOCKET, 'Listing subscription diagnostics', {
+      activeListings: instantPriceMatchingListings.length,
+      subscriptionStats,
+      connectionStatus,
+      listings: instantPriceMatchingListings.map(l => ({
+        tokenId: l.tokenId,
+        contract: l.contract,
+        marketplaces: l.selectedMarketplaces
+      }))
+    });
+    
+    return {
+      activeListings: instantPriceMatchingListings.length,
+      instantPriceMatchingListings: instantPriceMatchingListings.length,
+      subscriptionStats,
+      connectionStatus
+    };
+  } catch (error) {
+    await logger.logWebSocketError('Failed to get listing subscription diagnostics', {
+      error: error as Error
+    });
+    throw error;
   }
 }
 

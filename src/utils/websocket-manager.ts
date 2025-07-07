@@ -318,6 +318,15 @@ class WebSocketManager extends EventEmitter {
           });
         });
       }
+      
+      // Add specific listing subscription health check every 2 minutes
+      if (this.persistentListingSubscriptions.size > 0 && timeSinceLastMessage > 120000) { // 2 minutes
+        this.verifyListingSubscriptions().catch(error => {
+          logger.logWarning(ErrorCategory.WEBSOCKET, 'Listing subscription verification failed', {
+            error: error instanceof Error ? error : new Error('Unknown error')
+          });
+        });
+      }
 
     }, 60000); // Check every minute
   }
@@ -510,6 +519,18 @@ class WebSocketManager extends EventEmitter {
       // Always emit message for external handling (marketplace events)
       // This ensures all messages reach handleListingPriceUpdate
       this.emit('message', message);
+      
+      // Add detailed logging for debugging message flow
+      if (message.eventType || message.type) {
+        logger.logDebug(ErrorCategory.WEBSOCKET, 'Emitted message to listeners', {
+          messageType: message.eventType || message.type,
+          marketplace: message.marketplace,
+          subscriptionType: message.subscriptionType,
+          hasListeners: this.listenerCount('message'),
+          contractAddress: message.contractAddress,
+          tokenId: message.tokenId
+        });
+      }
 
     } catch (error) {
       logger.logGeneralError('Failed to parse WebSocket message', {
@@ -1052,6 +1073,58 @@ class WebSocketManager extends EventEmitter {
         error: error instanceof Error ? error : new Error('Unknown error')
       });
     }
+  }
+
+  /**
+   * Verify and log listing subscriptions for debugging
+   * This helps identify if listing subscriptions are properly maintained
+   */
+  async verifyListingSubscriptions(): Promise<void> {
+    const listingSubs = Array.from(this.activeSubscriptions.entries())
+      .filter(([, info]) => info.subscriptionType === 'listing');
+    
+    const persistentListingSubs = Array.from(this.persistentListingSubscriptions.entries());
+    
+    logger.logInfo(ErrorCategory.WEBSOCKET, 'Listing subscription verification', {
+      activeListingSubscriptions: listingSubs.length,
+      persistentListingSubscriptions: persistentListingSubs.length,
+      subscriptions: listingSubs.map(([key, info]) => ({
+        key,
+        slug: info.slug,
+        marketplace: info.marketplace,
+        subscribedAt: new Date(info.subscribedAt).toISOString()
+      })),
+      connectionState: this.isConnected() ? 'connected' : 'disconnected',
+      lastMessageReceived: this.lastMessageReceived ? new Date(this.lastMessageReceived).toISOString() : 'never',
+      messagesSinceConnect: this.metrics.totalMessages
+    });
+    
+    // Check if we're receiving messages for these subscriptions
+    if (listingSubs.length > 0 && this.lastMessageReceived) {
+      const timeSinceLastMessage = Date.now() - this.lastMessageReceived;
+      if (timeSinceLastMessage > 120000) { // 2 minutes
+        logger.logWarning(ErrorCategory.WEBSOCKET, 'Listing subscriptions may be stale', {
+          timeSinceLastMessage,
+          activeListingSubscriptions: listingSubs.length
+        });
+      }
+    }
+  }
+
+  /**
+   * Get listing subscription statistics
+   */
+  getListingSubscriptionStats(): { active: number; persistent: number; slugs: string[] } {
+    const listingSubs = Array.from(this.activeSubscriptions.entries())
+      .filter(([, info]) => info.subscriptionType === 'listing');
+    
+    const slugs = Array.from(new Set(listingSubs.map(([, info]) => info.slug)));
+    
+    return {
+      active: listingSubs.length,
+      persistent: this.persistentListingSubscriptions.size,
+      slugs
+    };
   }
 }
 

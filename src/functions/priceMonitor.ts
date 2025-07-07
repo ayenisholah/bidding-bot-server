@@ -3,6 +3,7 @@ import Listing from "../models/listing.model";
 import { getAllFloorPrices } from "./collection";
 import { logger, ErrorCategory } from "../utils/logger";
 import { createListing } from "./list";
+import { broadcastInstantPriceMatch } from "../index";
 import WebSocketManager from "../utils/websocket-manager";
 
 // Store current best prices for listings we're monitoring
@@ -40,13 +41,25 @@ const colors = {
 };
 /**
  * Monitor WebSocket events for instant price matching
- * @param wsManager - The WebSocket manager instance
+ * @param wsManager - The WebSocket manager instance (not used anymore, kept for compatibility)
  * @param message - The incoming WebSocket message
  */
-export async function handleListingPriceUpdate(wsManager: WebSocketManager | null, message: any): Promise<void> {
+export async function handleListingPriceUpdate(wsManager: any, message: any): Promise<void> {
   try {
+    // Debug logging for all incoming messages
+    if (process.env.DEBUG_PRICE_MONITOR === 'true') {
+      console.log('[Price Monitor Debug] Received message:', {
+        eventType: message.eventType,
+        subscriptionType: message.subscriptionType,
+        marketplace: message.marketplace,
+        contractAddress: message.contractAddress,
+        tokenId: message.tokenId
+      });
+    }
+
     // Check if this is a listing event - handle new format
-    if (message.eventType === 'ORDER_CREATED' && message.subscriptionType === 'listings') {      // New format - direct properties
+    // Accept both 'listings' and 'both' subscription types (when a client subscribes to both bidding and listing events)
+    if (message.eventType === 'ORDER_CREATED' && (message.subscriptionType === 'listings' || message.subscriptionType === 'both')) {      // New format - direct properties
       const contractAddress = message.contractAddress?.toLowerCase();
       const id = message.id;
       const tokenId = message.tokenId;
@@ -174,20 +187,24 @@ async function processListingUpdate(
 
       await createListing(adjustedListing);
 
-      // Send WebSocket notification
-      if (wsManager) {
-        wsManager.sendMessage({
-          type: 'instantPriceMatch',
-          data: {
-            listingId: listing._id.toString(),
-            tokenId,
-            marketplace,
-            competitorPrice: price,
-            newPrice: newPrice,
-            action: 'price_adjusted',
-          }
-        });
-      }
+      // Send WebSocket notification to connected clients through internal server
+      broadcastInstantPriceMatch({
+        listingId: listing._id.toString(),
+        tokenId,
+        marketplace,
+        competitorPrice: price,
+        newPrice: newPrice,
+        action: 'price_adjusted'
+      });
+
+      logger.logInfo(ErrorCategory.WEBSOCKET, 'Instant price match broadcasted', {
+        listingId: listing._id.toString(),
+        tokenId,
+        marketplace,
+        competitorPrice: price,
+        newPrice: newPrice,
+        action: 'price_adjusted'
+      });
     }
   }
 }

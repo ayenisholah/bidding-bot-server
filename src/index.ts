@@ -45,7 +45,7 @@ import { initializeExpiredPriceCleanup, stopExpiredPriceCleanup } from "./functi
 import { handleListingPriceUpdate } from "./functions/priceMonitor";
 const prisma = new PrismaClient()
 
-const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
+const MARKETPLACE_WS_URL = "ws://localhost:8080";
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
@@ -1428,6 +1428,27 @@ function broadcastBidRates() {
   });
 }
 
+// Broadcast instant price match notification to all connected clients
+export function broadcastInstantPriceMatch(data: {
+  listingId: string;
+  tokenId: string;
+  marketplace: string;
+  competitorPrice: number;
+  newPrice: number;
+  action: string;
+}) {
+  const message = JSON.stringify({
+    type: 'instantPriceMatch',
+    data
+  });
+
+  clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  });
+}
+
 // Update the WebSocket connection handler to send initial state
 wss.on('connection', async (ws) => {
   clients.add(ws);
@@ -1571,9 +1592,9 @@ async function processJob(job: Job) {
         case BLUR_TRAIT_BID_COUNTERBID:
           return await blurTraitCounterBid(job.data);
         case 'PROCESS_LISTING':
-          console.log(GOLD + '>>> WORKER: Processing listing job:', job.id, job.data);
+          console.log(GOLD + '>>> WORKER: Processing listing job:', job.id, job.data + RESET);
           try {
-            console.log('>>> About to call processListingJob...');
+            console.log(GOLD + '>>> About to call processListingJob...'.toUpperCase() + RESET);
             const result = await processListingJob(job);
             console.log('>>> processListingJob returned:', result);
             console.log('>>> processListingJob completed successfully');

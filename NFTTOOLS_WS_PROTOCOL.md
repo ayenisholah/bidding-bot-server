@@ -81,6 +81,13 @@ ws.on("message", (data) => {
 - Persistent client ID across reconnections
 - Automatic reconnection with exponential backoff
 
+### Server Features
+
+- **Automatic cleanup**: Orphaned subscriptions removed every minute
+- **Error tracking**: Processing statistics stored in Redis
+- **Connection monitoring**: Stale connections detected after 5 minutes
+- **Enhanced health endpoint**: Detailed metrics for monitoring
+
 ### Connection Lifecycle
 
 1. **Connect** → Send initial ping → Register client
@@ -936,3 +943,123 @@ For issues or questions:
 - Verify your client implementation matches this protocol
 - Test with the provided example client
 - Monitor the health endpoint: `GET http://localhost:8080/health`
+
+## Enhanced Server Monitoring
+
+The server now includes advanced monitoring capabilities to ensure reliability and observability:
+
+### Health Endpoint Response
+
+The `/health` endpoint provides comprehensive monitoring data:
+
+```json
+{
+	"status": "ok",
+	"timestamp": "2024-01-15T10:30:00.000Z",
+	"connectedClients": 5,
+	"marketplaces": [
+		{
+			"name": "OPENSEA",
+			"connections": [
+				{ "index": 0, "connected": true },
+				{ "index": 1, "connected": true },
+				{ "index": 2, "connected": true }
+			]
+		},
+		{
+			"name": "MAGICEDEN",
+			"connections": [
+				{ "index": 0, "connected": true },
+				{ "index": 1, "connected": true },
+				{ "index": 2, "connected": true }
+			]
+		},
+		{
+			"name": "BLUR",
+			"connections": [
+				{ "index": 0, "connected": true },
+				{ "index": 1, "connected": true },
+				{ "index": 2, "connected": false }
+			]
+		}
+	],
+	"activeClientIds": ["client-123", "client-456", "client-789"],
+	"processingStats": {
+		"OPENSEA": {
+			"processed": 1500,
+			"errors": 3,
+			"errorRate": "0.20%"
+		},
+		"MAGICEDEN": {
+			"processed": 1200,
+			"errors": 1,
+			"errorRate": "0.08%"
+		},
+		"BLUR": {
+			"processed": 2000,
+			"errors": 5,
+			"errorRate": "0.25%"
+		}
+	},
+	"connectionHealth": {
+		"OPENSEA": {
+			"messages": 1500,
+			"errors": 3,
+			"lastMessage": 1705318200000,
+			"timeSinceLastMessage": 5000,
+			"status": "HEALTHY"
+		},
+		"MAGICEDEN": {
+			"messages": 1200,
+			"errors": 1,
+			"lastMessage": 1705318195000,
+			"timeSinceLastMessage": 10000,
+			"status": "HEALTHY"
+		},
+		"BLUR": {
+			"messages": 2000,
+			"errors": 5,
+			"lastMessage": 1705317900000,
+			"timeSinceLastMessage": 305000,
+			"status": "STALE"
+		}
+	}
+}
+```
+
+### Monitoring Features
+
+1. **Subscription Health Checks** (every minute):
+
+   - Automatically detects and removes orphaned subscriptions
+   - Logs subscription statistics: active clients, total bid/listing subscriptions
+   - Cleans up data for disconnected clients without proper cleanup
+
+2. **Enhanced Error Tracking**:
+
+   - Message processing counts stored in Redis (key: `websocket:stats`)
+   - Error counts with detailed logging (error message, data preview, timestamp)
+   - Real-time error rate calculation per marketplace
+   - Metrics persist across server restarts
+
+3. **Connection Quality Monitoring** (every 5 minutes):
+   - Tracks message flow from each marketplace
+   - Detects stale connections (no messages for > 5 minutes)
+   - Reports connection health status: HEALTHY or STALE
+   - Helps identify marketplace connectivity issues
+
+### Using the Monitoring Data
+
+- **processingStats**: Monitor error rates to detect issues with specific marketplaces
+- **connectionHealth**: Check if marketplaces are actively sending data
+- **activeClientIds**: Verify your client is properly registered
+- **status**: Quick health check - "STALE" indicates potential connection issues
+
+### Redis Keys for Monitoring
+
+The server stores metrics in Redis:
+
+- `websocket:stats` - Hash containing processing counts (`OPENSEA:processed`, `OPENSEA:errors`, etc.)
+- `client:*` - Client registration and last ping times
+- `subscriptions:*` - Bid/offer subscriptions per client
+- `listing_subscriptions:*` - Listing subscriptions per client
