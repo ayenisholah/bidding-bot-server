@@ -296,40 +296,79 @@ export const listOnOpensea = async (
   listingPayload.signature = sigObj;
   const openseaRapidEndpoint = `${BASE_URL}/opensea/api/v1/`
 
-  const listings = await limiter
-    .schedule(() =>
-      axiosInstance.request({
-        method: 'POST',
-        url: `${openseaRapidEndpoint.replace(
-          'v1',
-          'v2'
-        )}orders/ethereum/seaport/listings`,
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY
-        },
-        data: JSON.stringify(listingPayload)
-      })
-    )
-    .then((res) => res.data)
-    .catch((err) => {
-      return { errors: err?.response?.data ?? err };
-    });
+  // Retry logic for timeout errors
+  let retryCount = 0;
+  const maxRetries = 3;
+  let listings: any;
+  
+  while (retryCount < maxRetries) {
+    try {
+      listings = await limiter
+        .schedule(() =>
+          axiosInstance.request({
+            method: 'POST',
+            url: `${openseaRapidEndpoint.replace(
+              'v1',
+              'v2'
+            )}orders/ethereum/seaport/listings`,
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': API_KEY
+            },
+            data: JSON.stringify(listingPayload),
+            // Increase timeout to 120 seconds for OpenSea listings
+            timeout: 120000
+          })
+        )
+        .then((res) => res.data);
+      
+      // If successful, break out of retry loop
+      break;
+    } catch (err: any) {
+      retryCount++;
+      
+      // Check if it's a timeout error
+      if (err.code === 'ECONNABORTED' && retryCount < maxRetries) {
+        console.log(`OpenSea listing timeout (attempt ${retryCount}/${maxRetries}), retrying in ${retryCount * 5} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, retryCount * 5000));
+        continue;
+      }
+      
+      // For other errors or final retry, return error object
+      listings = { errors: err?.response?.data ?? err };
+      break;
+    }
+  }
 
   if (listings.errors) {
-    await logger.logOpenseaListingError('Failed to list NFT on OpenSea', {
-      contractAddress: nftAddress,
-      tokenId: tokenId,
-      price: roundedPrice,
-      walletAddress: wallet.address,
-      operation: 'submit_listing',
-      error: listings.errors,
-      errorMessage: JSON.stringify(listings.errors)
-    });
-    console.log('Error: ', JSON.stringify(listings.errors));
+    const errorString = JSON.stringify(listings.errors);
+    const isTimeout = errorString.includes('ECONNABORTED') || errorString.includes('timeout');
+    
+    // Log with appropriate error category
+    await logger.logOpenseaListingError(
+      isTimeout ? 'OpenSea listing timeout - API response too slow' : 'Failed to list NFT on OpenSea', 
+      {
+        contractAddress: nftAddress,
+        tokenId: tokenId,
+        price: roundedPrice,
+        walletAddress: wallet.address,
+        operation: 'submit_listing',
+        error: listings.errors,
+        errorMessage: errorString,
+        isTimeout: isTimeout,
+        retryCount: retryCount
+      }
+    );
+    
+    if (isTimeout) {
+      console.log(`⚠️  OpenSea listing timeout after ${retryCount} attempts for ${nftAddress}/${tokenId}`);
+      console.log('This is likely due to OpenSea API being slow or under heavy load');
+    } else {
+      console.log('Error: ', errorString);
+    }
     
     // Check if the error is because user no longer owns the NFT
-    const errorMessage = JSON.stringify(listings.errors).toLowerCase();
+    const errorMessage = errorString.toLowerCase();
     if (errorMessage.includes('not owned') || errorMessage.includes('ownership') || errorMessage.includes('not the owner')) {
       console.log(`User no longer owns NFT ${nftAddress}/${tokenId}, deleting listing...`);
       

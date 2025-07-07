@@ -45,7 +45,7 @@ import { initializeExpiredPriceCleanup, stopExpiredPriceCleanup } from "./functi
 import { handleListingPriceUpdate } from "./functions/priceMonitor";
 const prisma = new PrismaClient()
 
-const MARKETPLACE_WS_URL = "ws://localhost:8080";
+const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io/";
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
@@ -482,6 +482,128 @@ function getActiveTaskWithIdByIndex(index: number): { id: string, task: ITask } 
   return undefined;
 }
 
+// Clear queue and restart all jobs on server start
+async function clearQueueAndRestartJobs() {
+  try {
+    console.log(YELLOW + '\n=== Clearing Queue and Restarting All Jobs ===' + RESET);
+
+    // Clear all existing jobs from the queue
+    await queue.obliterate({ force: true });
+    console.log('✅ Queue cleared successfully');
+
+    // Clear any stored job states
+    parentJobs.clear();
+    // Reset completedTasks to empty object
+    Object.keys(completedTasks).forEach(key => delete completedTasks[key]);
+    Object.keys(taskStatus).forEach(key => delete taskStatus[key]);
+
+    console.log('✅ Job states cleared');
+
+    // Process all active tasks (this will recreate bidding jobs)
+    await processAllActiveTasks();
+
+    // Note: Listing jobs will be recreated by initializeListingScheduler
+    console.log(GREEN + '✅ All jobs restarted successfully' + RESET);
+  } catch (error) {
+    console.error(RED + 'Failed to clear queue and restart jobs:' + RESET, error);
+    throw error;
+  }
+}
+
+// Process all active tasks on startup
+async function processAllActiveTasks() {
+  try {
+    const runningTasks = await Task.find({ running: true });
+    console.log(`Processing ${runningTasks.length} active tasks...`);
+
+    for (const task of runningTasks) {
+      const formattedTask = {
+        ...task.toObject(),
+        _id: task._id.toString(),
+        user: task.user.toString()
+      } as ITask;
+
+      // Add to activeTasks map
+      activeTasks.set(formattedTask._id, formattedTask);
+
+      // Create bidding jobs for the task
+      await processNewTask(formattedTask);
+    }
+
+    console.log(`✅ Processed ${runningTasks.length} active tasks`);
+  } catch (error) {
+    console.error('Error processing active tasks:', error);
+    throw error;
+  }
+}
+
+// Network connectivity monitoring
+let isConnected = true;
+let lastConnectivityCheck = Date.now();
+let connectivityCheckInterval: NodeJS.Timeout | null = null;
+
+async function checkInternetConnectivity(): Promise<boolean> {
+  try {
+    // Try to ping a reliable endpoint
+    const response = await axios.get('https://api.etherscan.io/api?module=proxy&action=eth_blockNumber', {
+      timeout: 5000,
+      validateStatus: () => true
+    });
+    return response.status === 200;
+  } catch (error) {
+    return false;
+  }
+}
+
+async function handleConnectivityRestored() {
+  console.log(GREEN + '\n🌐 Internet connectivity restored!' + RESET);
+
+  // Clear and restart all jobs
+  await clearQueueAndRestartJobs();
+
+  // Reconnect WebSocket
+  if (wsManager) {
+    console.log('Reconnecting WebSocket...');
+    await connectWebSocket();
+  }
+
+  // Reinitialize listing scheduler
+  if (wsManager) {
+    await initializeListingScheduler(wsManager);
+    console.log('📋 Listing scheduler reinitialized');
+  }
+}
+
+function startConnectivityMonitoring() {
+  // Check connectivity every 30 seconds
+  connectivityCheckInterval = setInterval(async () => {
+    const currentlyConnected = await checkInternetConnectivity();
+
+    if (!isConnected && currentlyConnected) {
+      // Connection restored
+      isConnected = true;
+      lastConnectivityCheck = Date.now();
+      await handleConnectivityRestored();
+    } else if (isConnected && !currentlyConnected) {
+      // Connection lost
+      isConnected = false;
+      console.error(RED + '\n⚠️  Internet connectivity lost!' + RESET);
+    }
+
+    lastConnectivityCheck = Date.now();
+  }, 30000); // Check every 30 seconds
+
+  console.log('🔌 Internet connectivity monitoring started');
+}
+
+function stopConnectivityMonitoring() {
+  if (connectivityCheckInterval) {
+    clearInterval(connectivityCheckInterval);
+    connectivityCheckInterval = null;
+    console.log('Internet connectivity monitoring stopped');
+  }
+}
+
 // Modify fetchCurrentTasks to populate activeTasks
 async function fetchCurrentTasks() {
   try {
@@ -634,12 +756,20 @@ async function startServer() {
       defaultJobOptions: {
         removeOnComplete: true,
         removeOnFail: true,
-        attempts: 0
+        attempts: 0,
+        // Increase lock duration to 5 minutes (300000ms) to prevent lock renewal errors
+        lockDuration: 300000,
+        // Set stalled interval to 6 minutes to allow more time before marking as stalled
+        stalledInterval: 360000
       }
     };
 
     queue = new Queue(QUEUE_NAME, QUEUE_OPTIONS);
     queueEvents = new QueueEvents(QUEUE_NAME, QUEUE_OPTIONS);
+
+    // Increase max listeners to prevent memory leak warnings
+    queue.setMaxListeners(100);
+    queueEvents.setMaxListeners(100);
 
     // Set up queue event handlers now that queueEvents is initialized
     setupQueueEventHandlers();
@@ -663,7 +793,16 @@ async function startServer() {
       {
         connection: await createBullMQConnection(),
         prefix: '{bull}',
-        concurrency: Number(RATE_LIMIT),
+        // Reduce concurrency to match rate limit to prevent overload
+        concurrency: Math.min(Number(RATE_LIMIT) || 50, 50),
+        // Lock duration for worker should match queue setting
+        lockDuration: 300000,
+        // Lock renewal interval - renew lock every 2 minutes (half of lockDuration)
+        lockRenewTime: 120000,
+        // Max stalled check count before giving up
+        maxStalledCount: 3,
+        // Stalled interval should match queue setting
+        stalledInterval: 360000
       }
     );
 
@@ -683,6 +822,9 @@ async function startServer() {
       heartbeatFrequencyMS: 5000 // Add heartbeat to detect connection issues earlier
     });
     console.log('Connected to MongoDB successfully');
+
+    // Clear queue and restart all jobs on server start - AFTER MongoDB is connected
+    await clearQueueAndRestartJobs();
 
     try {
       const lastRuntime = redis ? await redis.get(LAST_RUNTIME_KEY) : null;
@@ -779,10 +921,15 @@ async function startServer() {
 
     console.log(`Started periodic cleanup for seen items (every ${CLEANUP_INTERVAL / 1000 / 60} minutes)`);
 
+    // Start internet connectivity monitoring
+    startConnectivityMonitoring();
+
     // Note: Listing scheduler is already initialized above at line 749
     // The expiration monitor is also initialized at line 753
 
     await fetchCurrentTasks()
+
+    // Note: processAllActiveTasks() is already called in clearQueueAndRestartJobs()
 
     // Check if password is set on startup
     if (!getPassword()) {
@@ -808,6 +955,9 @@ process.on('SIGINT', async () => {
     clearInterval(cleanupIntervalId);
     console.log('Stopped periodic cleanup');
   }
+
+  // Stop connectivity monitoring
+  stopConnectivityMonitoring();
 
   // Shutdown listing scheduler
   await shutdownListingScheduler();
@@ -843,6 +993,9 @@ process.on('SIGTERM', async () => {
     clearInterval(cleanupIntervalId);
     console.log('Stopped periodic cleanup');
   }
+
+  // Stop connectivity monitoring
+  stopConnectivityMonitoring();
 
   // Shutdown listing scheduler
   await shutdownListingScheduler();
@@ -1541,7 +1694,6 @@ wss.on('connection', async (ws) => {
 
 
 async function processJob(job: Job) {
-  console.log(`\n>>> PROCESS JOB CALLED: ${job.name} (ID: ${job.id})`);
   const startTime = Date.now();
   try {
     // Original processing logic
@@ -1591,23 +1743,8 @@ async function processJob(job: Job) {
           return await blurCollectionCounterBid(job.data);
         case BLUR_TRAIT_BID_COUNTERBID:
           return await blurTraitCounterBid(job.data);
-        case 'PROCESS_LISTING':
-          console.log(GOLD + '>>> WORKER: Processing listing job:', job.id, job.data + RESET);
-          try {
-            console.log(GOLD + '>>> About to call processListingJob...'.toUpperCase() + RESET);
-            const result = await processListingJob(job);
-            console.log('>>> processListingJob returned:', result);
-            console.log('>>> processListingJob completed successfully');
-            return result;
-          } catch (error) {
-            console.error('>>> processListingJob failed with error:', error);
-            console.error('>>> Error details:', {
-              name: error?.constructor?.name,
-              message: error instanceof Error ? error.message : String(error),
-              stack: error instanceof Error ? error.stack : 'No stack'
-            });
-            throw error;
-          }
+        case PROCESS_LISTING':
+          return await processListingJob(job);
         default:
           return null;
       }

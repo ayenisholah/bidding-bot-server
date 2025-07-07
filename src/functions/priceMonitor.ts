@@ -158,8 +158,9 @@ async function processListingUpdate(
         `Instant price match triggered for token ${tokenId} on ${marketplace}. Competitor price: ${price} ETH, New price: ${newPrice} ETH`
       );
 
-      // Set instant price matching session - expires in 10 minutes
-      const instantPriceMatchingActiveUntil = new Date(Date.now() + 10 * 60 * 1000);
+      // Set instant price matching session - expires based on listing duration
+      const durationInSeconds = convertToSeconds(listing.listDuration.value, listing.listDuration.unit);
+      const instantPriceMatchingActiveUntil = new Date(Date.now() + durationInSeconds * 1000);
 
       // Update the listing in the database with the override and expiration
       await Listing.findByIdAndUpdate(listing._id, {
@@ -168,7 +169,7 @@ async function processListingUpdate(
       });
 
       await logger.logInfo(ErrorCategory.GENERAL,
-        `Started instant price matching session for listing ${listing._id} until ${instantPriceMatchingActiveUntil.toISOString()}`
+        `Started instant price matching session for listing ${listing._id} for ${durationInSeconds} seconds (until ${instantPriceMatchingActiveUntil.toISOString()})`
       );
 
       // Fetch fresh listing data from database
@@ -185,7 +186,17 @@ async function processListingUpdate(
         instantPriceOverride: newPrice,
       } as IListing;
 
-      await createListing(adjustedListing);
+      try {
+        await createListing(adjustedListing);
+      } catch (listingError) {
+        console.error(`Failed to create instant price match listing for ${tokenId}:`, listingError);
+        
+        // If listing fails due to timeout, we should still keep the price override active
+        // so it can be retried later by the listing scheduler
+        await logger.logInfo(ErrorCategory.GENERAL,
+          `Instant price match listing failed for ${tokenId}, but price override remains active for retry`
+        );
+      }
 
       // Send WebSocket notification to connected clients through internal server
       broadcastInstantPriceMatch({
@@ -283,6 +294,22 @@ export async function getFloorPrices(collectionSlug: string): Promise<{
 export function clearListingPriceCache(contractAddress: string, tokenId: string): void {
   const priceKey = `${contractAddress.toLowerCase()}-${tokenId}`;
   currentListingPrices.delete(priceKey);
+}
+
+/**
+ * Convert duration to seconds based on unit
+ */
+function convertToSeconds(value: number, unit: string): number {
+  switch (unit.toLowerCase()) {
+    case 'minutes':
+      return value * 60;
+    case 'hours':
+      return value * 60 * 60;
+    case 'days':
+      return value * 60 * 60 * 24;
+    default:
+      return 900; // Default to 15 minutes if unit is not recognized
+  }
 }
 
 /**

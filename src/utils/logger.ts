@@ -48,7 +48,7 @@ async function flushLogs() {
           'Authorization': `Bearer ${AXIOM_TOKEN}`,
           'Content-Type': 'application/json'
         },
-        timeout: 10000
+        timeout: 30000 // Increased from 10s to 30s to prevent timeout errors
       }
     );
   } catch (error) {
