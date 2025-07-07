@@ -426,11 +426,11 @@ export async function getListingSubscriptionDiagnostics(wsManager?: WebSocketMan
       running: true,
       instantPriceMatching: true
     }).select('tokenId contract selectedMarketplaces');
-    
+
     // Get WebSocket subscription stats
     const subscriptionStats = wsManager ? wsManager.getListingSubscriptionStats() : null;
     const connectionStatus = wsManager ? wsManager.isConnected() : false;
-    
+
     // Log diagnostics
     await logger.logInfo(ErrorCategory.WEBSOCKET, 'Listing subscription diagnostics', {
       activeListings: instantPriceMatchingListings.length,
@@ -442,7 +442,7 @@ export async function getListingSubscriptionDiagnostics(wsManager?: WebSocketMan
         marketplaces: l.selectedMarketplaces
       }))
     });
-    
+
     return {
       activeListings: instantPriceMatchingListings.length,
       instantPriceMatchingListings: instantPriceMatchingListings.length,

@@ -789,6 +789,10 @@ async function startServer() {
         connection: await createBullMQConnection(),
         prefix: '{bull}',
         concurrency: Number(RATE_LIMIT),
+        lockDuration: 300000, // 5 minutes lock duration (increased from default 30s)
+        lockRenewTime: 60000, // Renew lock every minute (well before 5 min expiry)
+        stalledInterval: 300000, // Check for stalled jobs every 5 minutes
+        maxStalledCount: 2, // Retry stalled jobs up to 2 times
       }
     );
 
@@ -1685,7 +1689,23 @@ wss.on('connection', async (ws) => {
 
 async function processJob(job: Job) {
   const startTime = Date.now();
+  let progressInterval: NodeJS.Timeout | undefined;
+  
   try {
+    // Update job progress periodically to prevent lock expiry
+    progressInterval = setInterval(async () => {
+      try {
+        if (job.progress && typeof job.progress === 'number') {
+          // Increment progress to show job is still active
+          await job.updateProgress(Math.min(job.progress + 1, 99));
+        } else {
+          await job.updateProgress(10); // Initial progress
+        }
+      } catch (err) {
+        console.error('Failed to update job progress:', err);
+      }
+    }, 30000); // Update every 30 seconds
+    
     // Original processing logic
     const result = await (async () => {
       switch (job.name) {
@@ -1740,8 +1760,18 @@ async function processJob(job: Job) {
       }
     })();
 
+    // Clear progress interval
+    clearInterval(progressInterval);
+    
+    // Set final progress
+    await job.updateProgress(100);
+    
     return result;
   } catch (error) {
+    // Clear progress interval on error
+    if (progressInterval) {
+      clearInterval(progressInterval);
+    }
     console.error(`Job ${job.name} failed after ${Date.now() - startTime}ms:`, error);
     throw error;
   }
