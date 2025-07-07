@@ -4,7 +4,6 @@ import { getAllFloorPrices } from "./collection";
 import { logger, ErrorCategory } from "../utils/logger";
 import { createListing } from "./list";
 import { broadcastInstantPriceMatch } from "../index";
-import WebSocketManager from "../utils/websocket-manager";
 
 // Store current best prices for listings we're monitoring
 const currentListingPrices: Map<string, {
@@ -44,7 +43,7 @@ const colors = {
  * @param wsManager - The WebSocket manager instance (not used anymore, kept for compatibility)
  * @param message - The incoming WebSocket message
  */
-export async function handleListingPriceUpdate(wsManager: any, message: any): Promise<void> {
+export async function handleListingPriceUpdate(message: any): Promise<void> {
   try {
     // Debug logging for all incoming messages
     if (process.env.DEBUG_PRICE_MONITOR === 'true') {
@@ -85,7 +84,7 @@ export async function handleListingPriceUpdate(wsManager: any, message: any): Pr
         processedMessageIds.add(id);
       }
 
-      await processListingUpdate(wsManager, {
+      await processListingUpdate({
         contractAddress,
         tokenId,
         marketplace,
@@ -105,7 +104,6 @@ export async function handleListingPriceUpdate(wsManager: any, message: any): Pr
  * Process listing update regardless of message format
  */
 async function processListingUpdate(
-  wsManager: WebSocketManager | null,
   data: {
     contractAddress: string;
     tokenId: string;
@@ -190,7 +188,7 @@ async function processListingUpdate(
         await createListing(adjustedListing);
       } catch (listingError) {
         console.error(`Failed to create instant price match listing for ${tokenId}:`, listingError);
-        
+
         // If listing fails due to timeout, we should still keep the price override active
         // so it can be retried later by the listing scheduler
         await logger.logInfo(ErrorCategory.GENERAL,

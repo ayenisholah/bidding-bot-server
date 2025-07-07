@@ -70,7 +70,7 @@ class WebSocketManager extends EventEmitter {
   private latencies: number[] = [];
   private messageTimestamps: number[] = [];
   private lastMessageReceived = 0;
-  private connectionStaleThreshold = 300000; // 5 minutes without any messages
+  private connectionStaleThreshold = 180000; // 3 minutes without any messages - more aggressive than server's 5 min threshold
 
   // State persistence for listings (per CLIENT_CONNECTION_GUIDE.md)
   private persistentListingSubscriptions: Map<string, SubscriptionInfo> = new Map();
@@ -167,7 +167,7 @@ class WebSocketManager extends EventEmitter {
 
   private onConnectionEstablished(): void {
     // Initialize connection metrics
-    const connectionId = `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const connectionId = `conn_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
     this.metrics.connectionStartTime = Date.now();
     this.metrics.currentConnectionId = connectionId;
     this.metrics.totalConnections++;
@@ -235,7 +235,8 @@ class WebSocketManager extends EventEmitter {
           activeSubscriptions: this.activeSubscriptions.size,
           persistentListingSubscriptions: this.persistentListingSubscriptions.size
         });
-        this.ws?.close();
+        // Force clean disconnection to ensure server cleans up state
+        this.ws?.close(1001, 'Stale connection detected');
         return;
       }
 
@@ -333,6 +334,12 @@ class WebSocketManager extends EventEmitter {
 
   private async syncSubscriptions(): Promise<void> {
     try {
+      // First, request current subscriptions from server to verify state
+      this.requestSubscriptions();
+      
+      // Wait a bit for server response
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
       // Clear active subscriptions to ensure clean state
       this.activeSubscriptions.clear();
 
@@ -780,7 +787,17 @@ class WebSocketManager extends EventEmitter {
         totalActive: this.activeSubscriptions.size,
         totalPersistent: this.persistentListingSubscriptions.size
       });
-      return;
+      // Force resubscribe if we haven't received messages recently
+      const now = Date.now();
+      if (this.lastMessageReceived > 0 && (now - this.lastMessageReceived) > 60000) {
+        logger.logWarning(ErrorCategory.WEBSOCKET, 'Forcing resubscription due to no recent messages', {
+          subscriptionId,
+          timeSinceLastMessage: now - this.lastMessageReceived
+        });
+        // Continue with subscription
+      } else {
+        return;
+      }
     }
 
     // Choose appropriate event based on subscription type
@@ -836,17 +853,25 @@ class WebSocketManager extends EventEmitter {
   }
 
   async unsubscribe(slug: string, contractAddress: string, marketplace?: string): Promise<void> {
-    // Server expects this exact format
-    const message = {
+    // Handle both bidding and listing unsubscriptions
+    const unsubscribeBidding = {
       event: 'leave_the_party',
+      clientId: this.config.clientId,
+      slug: slug,
+      contractAddress: contractAddress
+    };
+    
+    const unsubscribeListing = {
+      event: 'leave_listings',
       clientId: this.config.clientId,
       slug: slug,
       contractAddress: contractAddress
     };
 
     try {
-      // Send message without waiting for response
-      this.sendMessage(message);
+      // Send both unsubscribe messages to ensure clean state
+      this.sendMessage(unsubscribeBidding);
+      this.sendMessage(unsubscribeListing);
 
       // Update local state
       if (marketplace) {
@@ -1125,6 +1150,45 @@ class WebSocketManager extends EventEmitter {
       persistent: this.persistentListingSubscriptions.size,
       slugs
     };
+  }
+
+  /**
+   * Force unsubscribe from all subscriptions before reconnecting
+   * This ensures clean state on both client and server
+   */
+  async forceUnsubscribeAll(): Promise<void> {
+    logger.logInfo(ErrorCategory.WEBSOCKET, 'Force unsubscribing from all collections', {
+      activeSubscriptions: this.activeSubscriptions.size
+    });
+
+    const uniqueSlugs = new Set<string>();
+    for (const [, info] of this.activeSubscriptions) {
+      uniqueSlugs.add(info.slug);
+    }
+
+    // Send unsubscribe for each unique slug
+    for (const slug of uniqueSlugs) {
+      const sub = Array.from(this.activeSubscriptions.values()).find(s => s.slug === slug);
+      if (sub) {
+        // Unsubscribe from both bidding and listing events
+        this.sendMessage({
+          event: 'leave_the_party',
+          clientId: this.config.clientId,
+          slug: sub.slug,
+          contractAddress: sub.contractAddress
+        });
+        
+        this.sendMessage({
+          event: 'leave_listings',
+          clientId: this.config.clientId,
+          slug: sub.slug,
+          contractAddress: sub.contractAddress
+        });
+      }
+    }
+
+    // Clear local state
+    this.activeSubscriptions.clear();
   }
 }
 

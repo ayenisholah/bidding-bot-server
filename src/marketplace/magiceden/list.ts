@@ -4,8 +4,29 @@ import { approveNFT } from "../../functions/approve";
 import { axiosInstance, limiter } from "../../init";
 import Listing from "../../models/listing.model";
 import { logger } from "../../utils/logger";
+import Bottleneck from "bottleneck";
 
 const API_KEY = process.env.API_KEY;
+
+// Create a separate rate limiter for Magic Eden
+// Magic Eden has a strict limit: 20 requests per 60 seconds
+const magicEdenLimiter = new Bottleneck({
+  minTime: 3000,        // 3 seconds between requests (20 req/60s = 1 req/3s)
+  maxConcurrent: 1,     // Only 1 concurrent request at a time
+  reservoir: 20,        // Maximum 20 requests
+  reservoirRefreshAmount: 20,
+  reservoirRefreshInterval: 60 * 1000, // Refill every 60 seconds
+});
+
+// Log when we're rate limited
+magicEdenLimiter.on('depleted', () => {
+  console.log('[Magic Eden] Rate limiter depleted - requests will be queued');
+});
+
+// Log queuing information
+magicEdenLimiter.on('queued', (info) => {
+  console.log(`[Magic Eden] Request queued. Position in queue: ${info.options.id || 'unknown'}`);
+});
 
 
 /**
@@ -86,7 +107,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
       ],
     };
     
-    const listResponse = await limiter.schedule(() =>
+    const listResponse = await magicEdenLimiter.schedule(() =>
       axiosInstance.post(
         listEndpoint,
         listPayload,
@@ -150,7 +171,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
       source: "magiceden.io",
     };
 
-    const finalListingResponse = await limiter.schedule(() =>
+    const finalListingResponse = await magicEdenLimiter.schedule(() =>
       axiosInstance.post(
         `${signEndpoint}?signature=${encodeURIComponent(signature)}`,
         order,

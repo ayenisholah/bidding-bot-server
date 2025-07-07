@@ -1,6 +1,10 @@
 /* eslint-disable */
 import express from "express";
 import { config } from "dotenv";
+import { EventEmitter } from 'events';
+
+// Increase max listeners to prevent warnings when making many concurrent HTTP requests
+EventEmitter.defaultMaxListeners = 50;
 
 config()
 
@@ -13,7 +17,7 @@ import helmet from "helmet";
 import stringify from 'json-stable-stringify';
 import WebSocket, { Server as WebSocketServer } from 'ws';
 import http from 'http';
-import { axiosInstance, initialize, limiter } from "./init";
+import { axiosInstance, initialize, limiter, cleanup as cleanupHttpAgents } from "./init";
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrder, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
@@ -166,9 +170,6 @@ const COLLECTION_BID_PRIORITY = {
   BLUR: 5
 };
 
-// PROCESS_LISTING should have the highest priority
-const LISTING_PRIORITY = 10;
-
 type JobState = 'completed' | 'failed' | 'delayed' | 'active' | 'waiting' | 'waiting-children' | 'unknown' | 'prioritized' | 'paused';
 
 const lockManager = new DistributedLockManager({
@@ -186,7 +187,6 @@ export { lockManager };
 export { redis };
 export { queue };
 export { subscribeToListingEvents };
-export { LISTING_PRIORITY };
 
 let netEnabled = true;
 
@@ -760,20 +760,12 @@ async function startServer() {
       defaultJobOptions: {
         removeOnComplete: true,
         removeOnFail: true,
-        attempts: 0,
-        // Increase lock duration to 5 minutes (300000ms) to prevent lock renewal errors
-        lockDuration: 300000,
-        // Set stalled interval to 6 minutes to allow more time before marking as stalled
-        stalledInterval: 360000
+        attempts: 0
       }
     };
 
     queue = new Queue(QUEUE_NAME, QUEUE_OPTIONS);
     queueEvents = new QueueEvents(QUEUE_NAME, QUEUE_OPTIONS);
-
-    // Increase max listeners to prevent memory leak warnings
-    queue.setMaxListeners(100);
-    queueEvents.setMaxListeners(100);
 
     // Set up queue event handlers now that queueEvents is initialized
     setupQueueEventHandlers();
@@ -797,16 +789,7 @@ async function startServer() {
       {
         connection: await createBullMQConnection(),
         prefix: '{bull}',
-        // Reduce concurrency to match rate limit to prevent overload
-        concurrency: Math.min(Number(RATE_LIMIT) || 50, 50),
-        // Lock duration for worker should match queue setting
-        lockDuration: 300000,
-        // Lock renewal interval - renew lock every 2 minutes (half of lockDuration)
-        lockRenewTime: 120000,
-        // Max stalled check count before giving up
-        maxStalledCount: 3,
-        // Stalled interval should match queue setting
-        stalledInterval: 360000
+        concurrency: Number(RATE_LIMIT),
       }
     );
 
@@ -987,6 +970,9 @@ process.on('SIGINT', async () => {
   // Final cleanup before exit
   seenOrderHashes.clear();
   seenBids.clear();
+  
+  // Cleanup HTTP agents to close all connections
+  cleanupHttpAgents();
 
   process.exit(0);
 });
@@ -1025,6 +1011,9 @@ process.on('SIGTERM', async () => {
   // Final cleanup before exit
   seenOrderHashes.clear();
   seenBids.clear();
+  
+  // Cleanup HTTP agents to close all connections
+  cleanupHttpAgents();
 
   process.exit(0);
 });
@@ -3630,10 +3619,8 @@ async function connectWebSocket(): Promise<void> {
           return;
         }
 
-        // Handle counter bid messages
-        await handleCounterBid(message);
-        // Handle listing price updates for instant price matching
-        await handleListingPriceUpdate(wsManager, message);
+        // Handle all marketplace messages in a unified function
+        await handleMarketplaceMessage(message);
       } catch (error) {
         console.error('Error handling message:', error);
       }
@@ -3671,6 +3658,26 @@ async function connectWebSocket(): Promise<void> {
   }
 }
 
+
+/**
+ * Unified handler for all marketplace messages
+ * Handles both counterbid messages and listing price updates
+ */
+async function handleMarketplaceMessage(message: any) {
+  try {
+    // First check if this is a listing price update
+    if (message.eventType === 'ORDER_CREATED') {
+      // Handle listing price update for instant price matching
+      await handleListingPriceUpdate(message);
+      return;
+    }
+
+    // Otherwise, handle as a counterbid message
+    await handleCounterBid(message);
+  } catch (error) {
+    console.error("Error in handleMarketplaceMessage:", error);
+  }
+}
 
 async function handleCounterBid(message: any) {
   try {
