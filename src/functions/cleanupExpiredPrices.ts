@@ -61,7 +61,7 @@ export async function cleanupExpiredPrices(): Promise<void> {
     
   } catch (error) {
     console.error('Error cleaning up expired prices:', error);
-    await logger.logError('Failed to clean up expired prices', {
+    await logger.logGeneralError('Failed to clean up expired prices', {
       error: error as Error,
       errorMessage: error instanceof Error ? error.message : String(error)
     });

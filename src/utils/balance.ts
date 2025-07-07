@@ -1,4 +1,4 @@
-import {  formatEther, JsonRpcProvider, Contract } from "ethers";
+import {  formatEther, AlchemyProvider, Contract } from "ethers";
 import { DistributedLockManager } from "./lock";
 import redisClient from "./redis";
 import { RED, RESET } from "..";
@@ -49,55 +49,14 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
         }
 
         try {
-          // List of RPC providers to try
-          const rpcUrls = [
-            'https://ethereum.publicnode.com',
-            'https://eth.llamarpc.com',
-            'https://rpc.ankr.com/eth',
-            'https://cloudflare-eth.com'
-          ];
-          
-          let provider: JsonRpcProvider | null = null;
-          let providerError: any = null;
-          
-          // Try each RPC provider until one works
-          for (const rpcUrl of rpcUrls) {
-            try {
-              provider = new JsonRpcProvider(rpcUrl, undefined, {
-                staticNetwork: true,
-                batchMaxCount: 1
-              });
-              
-              // Set a timeout for network detection
-              const networkDetectionTimeout = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Network detection timeout')), 5000)
-              );
-              
-              // Wait for the provider to be ready with timeout
-              await Promise.race([
-                provider._detectNetwork(),
-                networkDetectionTimeout
-              ]);
-              
-              // Verify connection
-              await provider.getBlockNumber();
-              break;
-            } catch (err) {
-              providerError = err;
-              console.warn(`Failed to connect to ${rpcUrl}, trying next...`);
-            }
+          // Use Alchemy provider with API key
+          const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY;
+          if (!ALCHEMY_API_KEY) {
+            throw new Error('ALCHEMY_API_KEY environment variable is not set');
           }
           
-          if (!provider) {
-            await logger.logNetworkError('all_rpc_providers', `All RPC providers failed. Last error: ${providerError?.message}`, {
-              walletAddress,
-              tokenAddress,
-              lastError: providerError,
-              errorMessage: providerError?.message,
-              operation: 'fetch_erc20_balance'
-            });
-            throw new Error(`All RPC providers failed. Last error: ${providerError?.message}`);
-          }
+          const { AlchemyProvider } = await import('ethers');
+          const provider = new AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 
           const tokenContract = new Contract(
             tokenAddress,

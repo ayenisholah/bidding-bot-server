@@ -3,6 +3,7 @@ import Listing, { IListing } from '../models/listing.model';
 import { createListing } from './list';
 import { logger, ErrorCategory } from '../utils/logger';
 import WebSocketManager from '../utils/websocket-manager';
+import { queue } from '..';
 
 // Use the main queue from index.ts
 let mainQueue: Queue | null = null;
@@ -12,9 +13,7 @@ let listingPriority: number | null = null;
 export async function getMainQueue(): Promise<Queue> {
   if (!mainQueue) {
     // Import the queue from index.ts dynamically to avoid circular dependency
-    const { queue, LISTING_PRIORITY } = await import('../index');
     mainQueue = queue;
-    listingPriority = LISTING_PRIORITY;
   }
   if (!mainQueue) {
     throw new Error('Main queue not initialized');

@@ -17,7 +17,7 @@ import helmet from "helmet";
 import stringify from 'json-stable-stringify';
 import WebSocket, { Server as WebSocketServer } from 'ws';
 import http from 'http';
-import { axiosInstance, initialize, limiter, cleanup as cleanupHttpAgents } from "./init";
+import { axiosInstance, initialize, limiter } from "./init";
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrder, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
@@ -187,7 +187,6 @@ export { lockManager };
 export { redis };
 export { queue };
 export { subscribeToListingEvents };
-
 let netEnabled = true;
 
 class RateLimiter {
@@ -970,9 +969,7 @@ process.on('SIGINT', async () => {
   // Final cleanup before exit
   seenOrderHashes.clear();
   seenBids.clear();
-  
-  // Cleanup HTTP agents to close all connections
-  cleanupHttpAgents();
+
 
   process.exit(0);
 });
@@ -1011,9 +1008,9 @@ process.on('SIGTERM', async () => {
   // Final cleanup before exit
   seenOrderHashes.clear();
   seenBids.clear();
-  
+
   // Cleanup HTTP agents to close all connections
-  cleanupHttpAgents();
+  // cleanupHttpAgents();
 
   process.exit(0);
 });
