@@ -735,9 +735,6 @@ async function startServer() {
     // Development mode notification
     if (process.env.NODE_ENV === 'development') {
       console.log(GREEN + '🚀 Running in DEVELOPMENT mode' + RESET);
-      if (process.env.PASSWORD) {
-        console.log(GREEN + '✅ Development password will be auto-set from environment' + RESET);
-      }
     }
 
     // Wait for Redis to be ready
@@ -921,15 +918,13 @@ async function startServer() {
 
     // Note: processAllActiveTasks() is already called in clearQueueAndRestartJobs()
 
-    // Check if password is set on startup
+    // Check if password is set on startup - ALWAYS pause until password is provided
     if (!getPassword()) {
-      // In development, set password from env if available
-      if (process.env.NODE_ENV === 'development' && process.env.PASSWORD) {
-        console.log(GREEN + 'Development mode: Setting password from environment' + RESET);
-        setPassword(process.env.PASSWORD);
-      } else {
-        await pauseQueueAndWorkers();
-      }
+      console.log(YELLOW + '⚠️  No password set - all operations are paused' + RESET);
+      console.log(YELLOW + 'Please set password via POST /api/auth/password to start operations' + RESET);
+      await pauseQueueAndWorkers();
+    } else {
+      console.log(GREEN + 'Password already set - queue and workers are active' + RESET);
     }
 
   } catch (error) {
@@ -8813,11 +8808,13 @@ app.post('/api/auth/password', async (req, res) => {
     }
     const wasPasswordSet = !!getPassword();
 
-    // Store password in memory
+    // Store password in memory only
     setPassword(password);
+    
     // If this is the first time setting password, resume queue and workers
     if (!wasPasswordSet) {
       await resumeQueueAndWorkers();
+      console.log(GREEN + '✅ Password set - bidding operations have started' + RESET);
     }
 
     res.status(200).json({ success: true, message: 'Password stored successfully' });
