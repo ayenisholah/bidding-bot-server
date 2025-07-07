@@ -918,12 +918,16 @@ async function startServer() {
 
     // Note: processAllActiveTasks() is already called in clearQueueAndRestartJobs()
 
-    // Check if password is set on startup - ALWAYS pause until password is provided
+    // Check if password is set on startup
     if (!getPassword()) {
       console.log(YELLOW + '⚠️  No password set - all operations are paused' + RESET);
       console.log(YELLOW + 'Please set password via POST /api/auth/password to start operations' + RESET);
       await pauseQueueAndWorkers();
     } else {
+      // Password was set (either from dev environment or previously via API)
+      if (process.env.NODE_ENV === 'development' && process.env.PASSWORD) {
+        console.log(GREEN + '✅ Development mode: Password loaded from environment' + RESET);
+      }
       console.log(GREEN + 'Password already set - queue and workers are active' + RESET);
     }
 

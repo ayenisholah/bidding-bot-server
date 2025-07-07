@@ -7,8 +7,8 @@ config()
 const ALGORITHM = 'aes-256-gcm';
 const DETERMINISTIC_ALGORITHM = "aes-256-ecb";
 
-// Password stored only in memory - no defaults from environment
-let PASSWORD: string | undefined = undefined
+// In development mode, allow password from environment variable
+let PASSWORD: string | undefined = process.env.NODE_ENV === 'development' ? process.env.PASSWORD : undefined
 
 export function setPassword(password: string) {
   PASSWORD = password;
