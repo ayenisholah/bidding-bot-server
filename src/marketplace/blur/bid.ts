@@ -1,6 +1,6 @@
 import { ethers, Wallet, formatUnits } from "ethers";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, API_KEY, blurRateLimitInfo, currentTasks, decrementBidCount, errorStats, logBidError, pQueue, redis, RESET, trackBidRate } from "../..";
+import { activeTasks, API_KEY, blurRateLimitInfo, currentTasks, decrementBidCount, pQueue, redis, RESET, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { DistributedLockManager } from "../../utils/lock";
 import { PrismaClient } from '@prisma/client'
@@ -68,17 +68,6 @@ export async function bidOnBlur(
   let offerPriceEth: string = (Number(offer_price) / 1e18).toString()
 
   if (Number(offerPriceEth) > bethBalance) {
-    const message = `Offer price: ${offerPriceEth} BETH is greater than available BETH balance: ${bethBalance} BETH. SKIPPING ...`
-    if (!errorStats[taskId]) {
-      errorStats[taskId] = {
-        opensea: 0,
-        magiceden: 0,
-        blur: 0
-      }
-    }
-    errorStats[taskId].blur++
-    await logBidError(taskId, "INSUFFICIENT_BALANCE", message, "error", "blur");
-
     // Better Stack granular logging
     await logger.logBlurBalanceError("Insufficient BETH balance for bid", {
       taskId,
@@ -92,7 +81,7 @@ export async function bidOnBlur(
       operation: "place_bid"
     });
 
-    return;
+    throw new Error(`Insufficient BETH balance: required ${offerPriceEth} BETH, available ${bethBalance} BETH for wallet ${wallet_address} on collection ${slug}`)
   }
 
   const offerPrice = BigInt(offer_price.toString());
@@ -101,18 +90,7 @@ export async function bidOnBlur(
   offerPriceEth = (Math.floor(Number(formatUnits(offerPrice.toString(), 18)) * 100) / 100).toFixed(2);
 
   if (Number(offerPriceEth) === 0) {
-    const message = `Offer price is less than the minimum Blur offer price. SKIPPING ...`.toUpperCase()
-
-    if (!errorStats[taskId]) {
-      errorStats[taskId] = {
-        opensea: 0,
-        magiceden: 0,
-        blur: 0
-      }
-    }
-    errorStats[taskId].blur++
-    await logBidError(taskId, "INVALID BID PRICE", message, "error", "blur");
-    return
+    throw new Error(`Offer price ${offerPriceEth} BETH is below minimum Blur offer price (0.01 BETH) for collection ${slug}`)
   }
 
   const wallet = new Wallet(private_key, provider);
@@ -262,7 +240,9 @@ async function formatBidOnBlur(
       console.log(`Request for task ${taskId} was cancelled`);
       return null;
     }
-    throw error
+    const errorMessage = `Failed to format Blur bid for collection ${buildPayload.contractAddress}: ${error.response?.data?.message || error.message || error}`;
+    console.error(errorMessage, error);
+    throw new Error(errorMessage)
   } finally {
     const controllers = activeRequests.get(taskId) || [];
     const index = controllers.indexOf(controller);
@@ -385,7 +365,9 @@ async function submitBidToBlur(
       console.log(`Request for task ${taskId} was cancelled`);
       return;
     }
-    throw error
+    const errorMessage = `Failed to submit Blur bid for collection ${slug} at price ${formatUnits(offer_price.toString(), 18)} BETH: ${error.response?.data?.message || error.message || error}`;
+    console.error(errorMessage, error);
+    throw new Error(errorMessage)
   } finally {
     const controllers = activeRequests.get(taskId) || [];
     const index = controllers.indexOf(controller);
@@ -418,7 +400,8 @@ export async function cancelBlurBid(data: BlurCancelPayload) {
     console.log(JSON.stringify(cancelResponse));
   } catch (error: any) {
     if (error.response?.data?.message?.message !== 'No bids found') {
-      console.log("cancelBlurBid: ", error?.response?.data || error?.response || error?.code);
+      const errorDetails = error?.response?.data || error?.response || error?.code || error.message;
+      console.error(`Failed to cancel Blur bid for task ${data.taskId}: ${JSON.stringify(errorDetails)}`);
     }
 
     // console.log(error.response.data || error.message);
@@ -512,8 +495,8 @@ export async function fetchBlurCollectionStats(slug: string) {
         return JSON.parse(cachedStats);
       }
     }
-  } catch (error) {
-    console.error('Error reading from cache:', error);
+  } catch (error: any) {
+    console.error(`Error reading from Redis cache for Blur stats (${slug}): ${error.message || error}`);
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -570,8 +553,9 @@ export async function fetchBlurTraitFloor(slug: string, trait: { type: string; v
     );
     const amount = data?.tokens[0]?.price?.amount;
     return amount !== undefined ? Number(amount) : undefined
-  } catch (error) {
-    console.log(error);
+  } catch (error: any) {
+    console.error(`Failed to fetch Blur trait floor for ${slug} with trait ${trait.type}:${trait.value}: ${error.message || error}`);
+    throw error;
   }
 }
 
