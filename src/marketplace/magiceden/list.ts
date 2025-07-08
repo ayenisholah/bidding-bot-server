@@ -1,7 +1,7 @@
 import { Wallet } from "ethers";
 import { BASE_URL } from "../../constants";
 import { approveNFT } from "../../functions/approve";
-import { axiosInstance, limiter } from "../../init";
+import { axiosInstance } from "../../init";
 import Listing from "../../models/listing.model";
 import { logger } from "../../utils/logger";
 import Bottleneck from "bottleneck";
@@ -17,17 +17,6 @@ const magicEdenLimiter = new Bottleneck({
   reservoirRefreshAmount: 20,
   reservoirRefreshInterval: 60 * 1000, // Refill every 60 seconds
 });
-
-// Log when we're rate limited
-magicEdenLimiter.on('depleted', () => {
-  console.log('[Magic Eden] Rate limiter depleted - requests will be queued');
-});
-
-// Log queuing information
-magicEdenLimiter.on('queued', (info) => {
-  console.log(`[Magic Eden] Request queued. Position in queue: ${info.options.id || 'unknown'}`);
-});
-
 
 /**
  * Lists an NFT on Magic Eden marketplace

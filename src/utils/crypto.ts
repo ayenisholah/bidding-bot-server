@@ -8,7 +8,7 @@ const ALGORITHM = 'aes-256-gcm';
 const DETERMINISTIC_ALGORITHM = "aes-256-ecb";
 
 // In development mode, allow password from environment variable
-let PASSWORD: string | undefined = process.env.NODE_ENV === 'development' ? process.env.PASSWORD : undefined
+let PASSWORD: string | undefined = undefined
 
 export function setPassword(password: string) {
   PASSWORD = password;

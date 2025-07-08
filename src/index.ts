@@ -1683,26 +1683,8 @@ wss.on('connection', async (ws) => {
 
 
 async function processJob(job: Job) {
-  const startTime = Date.now();
-  let progressInterval: NodeJS.Timeout | undefined;
-
   try {
-    // Update job progress periodically to prevent lock expiry
-    progressInterval = setInterval(async () => {
-      try {
-        if (job.progress && typeof job.progress === 'number') {
-          // Increment progress to show job is still active
-          await job.updateProgress(Math.min(job.progress + 1, 99));
-        } else {
-          await job.updateProgress(10); // Initial progress
-        }
-      } catch (err) {
-        console.error('Failed to update job progress:', err);
-      }
-    }, 30000); // Update every 30 seconds
-
-    // Original processing logic
-    const result = await (async () => {
+     const result = await (async () => {
       switch (job.name) {
         case OPENSEA_COLLECTION_BID:
           return await processOpenseaCollectionBid(job.data);
@@ -1754,20 +1736,8 @@ async function processJob(job: Job) {
           return null;
       }
     })();
-
-    // Clear progress interval
-    clearInterval(progressInterval);
-
-    // Set final progress
-    await job.updateProgress(100);
-
     return result;
   } catch (error) {
-    // Clear progress interval on error
-    if (progressInterval) {
-      clearInterval(progressInterval);
-    }
-    console.error(`Job ${job.name} failed after ${Date.now() - startTime}ms:`, error);
     throw error;
   }
 }
