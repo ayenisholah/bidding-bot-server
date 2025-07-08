@@ -735,6 +735,8 @@ async function startServer() {
     // Development mode notification
     if (process.env.NODE_ENV === 'development') {
       console.log(GREEN + '🚀 Running in DEVELOPMENT mode' + RESET);
+      // Make processAllActiveListings available globally in dev mode
+      (global as any).processAllActiveListings = processAllActiveListings;
     }
 
     // Wait for Redis to be ready
@@ -923,12 +925,6 @@ async function startServer() {
       console.log(YELLOW + '⚠️  No password set - all operations are paused' + RESET);
       console.log(YELLOW + 'Please set password via POST /api/auth/password to start operations' + RESET);
       await pauseQueueAndWorkers();
-    } else {
-      // Password was set (either from dev environment or previously via API)
-      if (process.env.NODE_ENV === 'development' && process.env.PASSWORD) {
-        console.log(GREEN + '✅ Development mode: Password loaded from environment' + RESET);
-      }
-      console.log(GREEN + 'Password already set - queue and workers are active' + RESET);
     }
 
   } catch (error) {
@@ -1689,7 +1685,7 @@ wss.on('connection', async (ws) => {
 async function processJob(job: Job) {
   const startTime = Date.now();
   let progressInterval: NodeJS.Timeout | undefined;
-  
+
   try {
     // Update job progress periodically to prevent lock expiry
     progressInterval = setInterval(async () => {
@@ -1704,45 +1700,45 @@ async function processJob(job: Job) {
         console.error('Failed to update job progress:', err);
       }
     }, 30000); // Update every 30 seconds
-    
+
     // Original processing logic
     const result = await (async () => {
       switch (job.name) {
-        case 'OPENSEA_COLLECTION_BID':
+        case OPENSEA_COLLECTION_BID:
           return await processOpenseaCollectionBid(job.data);
-        case 'MAGICEDEN_COLLECTION_BID':
+        case MAGICEDEN_COLLECTION_BID:
           return await processMagicedenCollectionBid(job.data);
-        case 'OPENSEA_COLLECTION_BID_COUNTERBID':
+        case OPENSEA_COLLECTION_BID_COUNTERBID:
           return await openseaCollectionCounterBid(job.data);
-        case 'MAGICEDEN_COLLECTION_BID_COUNTERBID':
+        case MAGICEDEN_COLLECTION_BID_COUNTERBID:
           return await magicedenCollectionCounterBid(job.data);
-        case 'OPENSEA_TOKEN_BID_COUNTERBID':
+        case OPENSEA_TOKEN_BID_COUNTERBID:
           return await openseaTokenCounterBid(job.data);
-        case 'OPENSEA_TRAIT_BID_COUNTERBID':
+        case OPENSEA_TRAIT_BID_COUNTERBID:
           return await openseaTraitCounterBid(job.data);
-        case 'MAGICEDEN_TOKEN_BID_COUNTERBID':
+        case MAGICEDEN_TOKEN_BID_COUNTERBID:
           return await magicedenTokenCounterBid(job.data);
-        case 'MAGICEDEN_TRAIT_BID_COUNTERBID':
+        case MAGICEDEN_TRAIT_BID_COUNTERBID:
           return await magicedenTraitCounterBid(job.data);
-        case 'OPENSEA_SCHEDULE':
+        case OPENSEA_SCHEDULE:
           return await processOpenseaScheduledBid(job.data);
-        case 'OPENSEA_TRAIT_BID':
+        case OPENSEA_TRAIT_BID:
           return await processOpenseaTraitBid(job.data);
-        case 'OPENSEA_TOKEN_BID':
+        case OPENSEA_TOKEN_BID:
           return await processOpenseaTokenBid(job.data);
-        case 'BLUR_SCHEDULE':
+        case BLUR_SCHEDULE:
           return await processBlurScheduledBid(job.data);
-        case 'MAGICEDEN_SCHEDULE':
+        case MAGICEDEN_SCHEDULE:
           return await processMagicedenScheduledBid(job.data);
-        case 'MAGICEDEN_TRAIT_BID':
+        case MAGICEDEN_TRAIT_BID:
           return await processMagicedenTraitBid(job.data);
-        case 'MAGICEDEN_TOKEN_BID':
+        case MAGICEDEN_TOKEN_BID:
           return await processMagicedenTokenBid(job.data);
-        case 'CANCEL_OPENSEA_BID':
+        case CANCEL_OPENSEA_BID:
           return await bulkCancelOpenseaBid(job.data);
-        case 'CANCEL_MAGICEDEN_BID':
+        case CANCEL_MAGICEDEN_BID:
           return await bulkCancelMagicedenBid(job.data);
-        case 'CANCEL_BLUR_BID':
+        case CANCEL_BLUR_BID:
           return await bulkCancelBlurBid(job.data);
         case BLUR_COLLECTION_BID:
           return await processBlurCollectionBid(job.data);
@@ -1761,10 +1757,10 @@ async function processJob(job: Job) {
 
     // Clear progress interval
     clearInterval(progressInterval);
-    
+
     // Set final progress
     await job.updateProgress(100);
-    
+
     return result;
   } catch (error) {
     // Clear progress interval on error
@@ -8814,7 +8810,7 @@ app.post('/api/auth/password', async (req, res) => {
 
     // Store password in memory only
     setPassword(password);
-    
+
     // If this is the first time setting password, resume queue and workers
     if (!wasPasswordSet) {
       await resumeQueueAndWorkers();
@@ -9703,41 +9699,6 @@ async function subscribeToListingEvents(contractAddress: string, slug?: string) 
   }
 }
 
-async function subscribeToListingCollections() {
-  try {
-    if (!wsManager?.isConnected()) {
-      console.log(YELLOW + `WebSocket not connected, skipping listing subscription` + RESET);
-      return;
-    }
-
-    // Find all active listings with instant price matching enabled
-    const activeListings = await Listing.find({
-      instantPriceMatching: true,
-      running: true
-    }).distinct('contractAddress') as string[];
-
-    console.log(BLUE + `Found ${activeListings.length} collections with instant price matching enabled` + RESET);
-
-    // Subscribe to listing events for each unique collection
-    const subscribedListings = new Set<string>();
-
-    for (const contractAddress of activeListings) {
-      if (subscribedListings.has(contractAddress)) {
-        continue;
-      }
-
-      try {
-        await subscribeToListingEvents(contractAddress);
-        subscribedListings.add(contractAddress);
-      } catch (error) {
-        console.error(RED + `Error subscribing to listing events for ${contractAddress}:` + RESET, error);
-      }
-    }
-  } catch (error) {
-    console.error(RED + 'Error subscribing to listing collections' + RESET, error);
-  }
-}
-
 async function resubscribeToListingCollections() {
   try {
     console.log(CYAN + `Re-subscribing to listing collections after WebSocket reconnection...` + RESET);
@@ -9782,11 +9743,59 @@ async function resubscribeToListingCollections() {
     }
 
     console.log(GREEN + `Listing re-subscription complete` + RESET);
+
+    // Check if any listings have been outbid while disconnected
+    console.log(YELLOW + `Checking if any listings were outbid during disconnection...` + RESET);
+    await processAllActiveListings();
   } catch (error) {
     console.error(RED + 'Error in resubscribeToListingCollections:' + RESET, error);
   }
 }
 
+async function processAllActiveListings() {
+  try {
+    console.log(CYAN + `Processing all active listings...` + RESET);
+
+    // Find all active listings
+    const activeListings = await Listing.find({
+      running: true
+    });
+
+    console.log(BLUE + `Found ${activeListings.length} active listings to process` + RESET);
+
+    // Process each listing
+    for (const listing of activeListings) {
+      try {
+        const listingId = listing._id.toString();
+        console.log(YELLOW + `Processing listing: ${listing.contract?.slug || 'Unknown'} (${listingId})` + RESET);
+
+        // Add job to queue
+        await queue.add(
+          PROCESS_LISTING,
+          { listingId },
+          {
+            jobId: `manual-${listingId}-${Date.now()}`,
+            removeOnComplete: true,
+            removeOnFail: false,
+            attempts: 3,
+            backoff: {
+              type: 'exponential',
+              delay: 5000
+            }
+          }
+        );
+
+        console.log(GREEN + `Added listing ${listing.contract?.slug || 'Unknown'} to processing queue` + RESET);
+      } catch (error) {
+        console.error(RED + `Error processing listing ${listing._id}:` + RESET, error);
+      }
+    }
+
+    console.log(GREEN + `All active listings have been queued for processing` + RESET);
+  } catch (error) {
+    console.error(RED + 'Error in processAllActiveListings:' + RESET, error);
+  }
+}
 
 async function unsubscribeFromCollection(task: ITask, marketplace?: string) {
   try {
