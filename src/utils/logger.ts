@@ -285,8 +285,11 @@ export class AxiomLogger {
     // Add to local metrics
     this.addToMetrics(level, category, formattedMessage, context);
 
-    // Send to Axiom if available
-    if (AXIOM_TOKEN) {
+    // Categories to exclude from Axiom
+    const excludedCategories = [ErrorCategory.QUEUE, ErrorCategory.DATABASE, ErrorCategory.SECURITY, ErrorCategory.AUTH];
+
+    // Send to Axiom if available and category is not excluded
+    if (AXIOM_TOKEN && !excludedCategories.includes(category)) {
       try {
         const logData = {
           _time: new Date().toISOString(),
