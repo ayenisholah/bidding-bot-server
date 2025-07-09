@@ -7,7 +7,6 @@ import { queue } from '..';
 
 // Use the main queue from index.ts
 let mainQueue: Queue | null = null;
-let listingPriority: number | null = null;
 
 // Export a function to get the main queue
 export async function getMainQueue(): Promise<Queue> {
@@ -51,8 +50,12 @@ export async function scheduleListing(listing: IListing): Promise<void> {
       {
         jobId: `${jobId}-immediate`,
         removeOnComplete: true,
-        removeOnFail: true,
-        priority: listingPriority || 10 // Use highest priority
+        removeOnFail: false, // Keep failed jobs for debugging
+        attempts: 3, // Retry failed jobs 3 times
+        backoff: {
+          type: 'exponential',
+          delay: 2000, // Start with 2 second delay
+        },
       }
     );
 
@@ -63,11 +66,15 @@ export async function scheduleListing(listing: IListing): Promise<void> {
       {
         jobId,
         removeOnComplete: true,
-        removeOnFail: true,
+        removeOnFail: false, // Keep failed jobs for debugging
+        attempts: 3, // Retry failed jobs 3 times
+        backoff: {
+          type: 'exponential',
+          delay: 2000, // Start with 2 second delay
+        },
         repeat: {
           every: delayMs,
         },
-        priority: listingPriority || 10 // Use highest priority
       }
     );
 

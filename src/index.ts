@@ -757,8 +757,12 @@ async function startServer() {
       connection: queueConnection,
       defaultJobOptions: {
         removeOnComplete: true,
-        removeOnFail: true,
-        attempts: 0
+        removeOnFail: false, // Keep failed jobs for debugging
+        attempts: 3, // Retry failed jobs 3 times
+        backoff: {
+          type: 'exponential',
+          delay: 2000, // Start with 2 second delay
+        }
       }
     };
 
@@ -776,12 +780,12 @@ async function startServer() {
           await processJob(job);
           return
         } catch (error) {
-          if (job.token) {
-            await job.moveToFailed(new Error("Job failed"), job.token);
-          } else {
-            await job.remove()
-          }
-          throw new UnrecoverableError('Unrecoverable');
+          // Log the error for debugging
+          console.error(`Job ${job.id} failed:`, error);
+          
+          // Let BullMQ handle retries based on job configuration
+          // Don't throw UnrecoverableError - let it retry
+          throw error;
         }
       },
       {
@@ -1297,245 +1301,43 @@ function setupQueueEventHandlers() {
 
   });
 
-  queueEvents.on('failed', async ({ jobId }) => {
-    if (jobId.includes('CANCEL_OPENSEA_BID') || jobId.includes('CANCEL_MAGICEDEN_BID') || jobId.includes('CANCEL_BLUR_BID')) {
-      const taskId = jobId.split('-')[1];
-      if (!taskStatus[taskId]) {
-        taskStatus[taskId] = {
-          status: 'CANCELLING',
-          cancellationPercentage: 0,
-          runningPercentage: 0,
-          waitingTime: 0,
-          nextLoopTime: new Date(),
-          processingPercentage: 0
-        }
-      }
-      taskStatus[taskId].status = 'CANCELLING'
-
-      const task = activeTasks.get(taskId);
-      if (!task) return;
-
-      const marketplace = jobId.includes('CANCEL_OPENSEA_BID') ? 'OPENSEA' : jobId.includes('CANCEL_MAGICEDEN_BID') ? 'MAGICEDEN' : 'BLUR';
-      const parentJobId = `${taskId}-CANCEL_${marketplace}_BID`;
-      const parentJob = parentJobs.get(parentJobId);
-
-      if (!parentJob) return;
-
-      parentJob.failedJobs++;
-
-      // Calculate marketplace-specific cancellation percentage
-
-      // If task is not running, calculate combined cancellation percentage with weighting
-      if (!task?.running) {
-        // Get all parent jobs for this task (both OpenSea and MagicEden)
-        const openSeaParentJobId = `${taskId}-CANCEL_OPENSEA_BID`;
-        const magicEdenParentJobId = `${taskId}-CANCEL_MAGICEDEN_BID`;
-        const blurParentJobId = `${taskId}-CANCEL_BLUR_BID`;
-
-        const openSeaParentJob = parentJobs.get(openSeaParentJobId);
-        const magicEdenParentJob = parentJobs.get(magicEdenParentJobId);
-        const blurParentJob = parentJobs.get(blurParentJobId);
-
-        // Apply a weight of 1000 to MagicEden jobs
-        const magicEdenWeight = 500;
-
-        // Calculate weighted totals across both marketplaces
-        const openSeaTotalJobs = openSeaParentJob?.totalJobs || 0;
-        const openSeaCompletedJobs = openSeaParentJob?.completedJobs || 0;
-        const openSeaFailedJobs = openSeaParentJob?.failedJobs || 0;
-
-        const blurTotalJobs = blurParentJob?.totalJobs || 0;
-        const blurCompletedJobs = blurParentJob?.completedJobs || 0;
-        const blurFailedJobs = blurParentJob?.failedJobs || 0;
-
-        const magicEdenFailedJobs = (magicEdenParentJob?.failedJobs || 0) * magicEdenWeight;
-        const magicEdenTotalJobs = (magicEdenParentJob?.totalJobs || 0) * magicEdenWeight;
-        const magicEdenCompletedJobs = (magicEdenParentJob?.totalJobs || 0) < 1 ? (magicEdenParentJob?.totalJobs || 0) * magicEdenWeight : (magicEdenParentJob?.completedJobs || 0) * magicEdenWeight;
-
-        const totalJobs = openSeaTotalJobs + magicEdenTotalJobs + blurTotalJobs;
-        const completedJobs = openSeaCompletedJobs + magicEdenCompletedJobs + blurCompletedJobs;
-        const failedJobs = openSeaFailedJobs + magicEdenFailedJobs + blurFailedJobs;
-
-        const combinedCancellationPercentage = totalJobs > 0 ?
-          ((completedJobs + failedJobs) / totalJobs) * 100 : 0;
-
-        taskStatus[taskId].cancellationPercentage = Math.min(combinedCancellationPercentage, 100);
-
-        if (totalJobs < completedJobs + failedJobs || combinedCancellationPercentage > 99) {
-          const orders = await prisma.order.findMany({
-            where: {
-              taskId: taskId,
-            }
-          });
-
-          if (orders.length > 0) {
-            const wallet = await Wallet.findById(task.walletId);
-            const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
-            await cancelAllRelatedBids(task, private_key);
-            return
-          }
-          taskStatus[taskId].status = 'STOPPED'
-          delete taskStatus[taskId].nextLoopTime
-          taskStatus[taskId].waitingTime = 0
-        }
+  // Handle failed jobs
+  queueEvents.on('failed', async ({ jobId, failedReason }) => {
+    const job = await queue.getJob(jobId);
+    if (job) {
+      const attemptsMade = job.attemptsMade || 0;
+      const maxAttempts = job.opts.attempts || 3;
+      
+      if (attemptsMade < maxAttempts) {
+        console.log(`${YELLOW}Job ${jobId} failed (attempt ${attemptsMade}/${maxAttempts}): ${failedReason}${RESET}`);
+        console.log(`${YELLOW}Job will be retried with exponential backoff${RESET}`);
       } else {
-        let marketplaceCancellationPercentage;
-        if (marketplace.toLowerCase() === 'magiceden') {
-          if (parentJob.totalJobs < 1) {
-            marketplaceCancellationPercentage = 100;
-          } else {
-            const weightedCompletedJobs = parentJob.completedJobs * 500;
-            const weightedTotalJobs = parentJob.totalJobs * 500;
-            const weightedFailedJobs = parentJob.failedJobs * 500
-            marketplaceCancellationPercentage = weightedTotalJobs > 0 ?
-              ((weightedCompletedJobs + weightedFailedJobs) / weightedTotalJobs) * 100 : 0;
-          }
-        } else {
-          marketplaceCancellationPercentage = parentJob.totalJobs > 0 ?
-            ((parentJob.completedJobs + parentJob.failedJobs) / parentJob.totalJobs) * 100 : 0;
+        console.error(`${RED}Job ${jobId} failed after ${attemptsMade} attempts: ${failedReason}${RESET}`);
+        
+        // Log job details for debugging
+        if (job.data?._id) {
+          await logBidError(
+            job.data._id,
+            `JOB_FAILED_${job.name}`,
+            `Job ${jobId} failed after ${attemptsMade} attempts: ${failedReason}`,
+            'error',
+            job.data.marketplace || 'unknown'
+          );
         }
-
-        // If task is running, just update with the marketplace-specific percentage
-        taskStatus[taskId].cancellationPercentage = marketplaceCancellationPercentage;
-        if (parentJob.totalJobs < parentJob.completedJobs + parentJob.failedJobs || marketplaceCancellationPercentage > 99) {
-          const orders = await prisma.order.findMany({
-            where: {
-              taskId: taskId,
-              marketplace: marketplace.toLowerCase()
-            }
-          });
-
-          if (orders.length > 0) {
-            const wallet = await Wallet.findById(task.walletId);
-            const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
-            await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
-            return
-          }
-          taskStatus[taskId].cancellationPercentage = 100
-          if (taskStatus[taskId].nextLoopTime && taskStatus[taskId].waitingTime > 0) {
-            taskStatus[taskId].status = 'SCHEDULED'
-          }
+      }
+      
+      // Update parent job failed count if this is the final attempt
+      if (attemptsMade >= maxAttempts && jobId.split('-').length >= 3) {
+        const taskId = jobId.split('-')[0];
+        const marketplace = jobId.split('-')[1].toLowerCase();
+        const parentId = `${taskId}-${marketplace}`.toLowerCase();
+        const parentJob = parentJobs.get(parentId);
+        
+        if (parentJob) {
+          parentJob.failedJobs++;
         }
       }
     }
-
-    if (jobId.split('-').length < 3) return;
-
-    const taskId = jobId.split('-')[0];
-    const task = activeTasks.get(taskId);
-
-    if (!task || !task.running) return;
-
-    const marketplace = jobId.split('-')[1].toLowerCase();
-    const parentId = `${taskId}-${marketplace}`.toLowerCase();
-
-    const { currencySymbol } = await calculateBidPrice(task, 0, "magiceden")
-
-    const parentJob = parentJobs.get(parentId);
-    if (!parentJob) return;
-
-    taskStatus[taskId].status = 'RUNNING'
-    parentJob.failedJobs++;
-
-    // Calculate total jobs across all selected and enabled marketplaces for this task
-    let totalJobs = 0;
-    let completedJobs = 0;
-    let failedJobs = 0;
-    const selectedMarketplaces = task.selectedMarketplaces.map(m => m.toLowerCase());
-    const enabledAndSelectedMarketplaces = selectedMarketplaces.filter(m =>
-      enabledMarketplaces.map(em => em.toLowerCase()).includes(m)
-    );
-
-    for (const marketplace of enabledAndSelectedMarketplaces) {
-      const marketplaceParentId = `${taskId}-${marketplace}`.toLowerCase();
-      const marketplaceParentJob = parentJobs.get(marketplaceParentId);
-      if (marketplaceParentJob) {
-        totalJobs += marketplaceParentJob.totalJobs;
-        completedJobs += marketplaceParentJob.completedJobs;
-        failedJobs += marketplaceParentJob.failedJobs;
-      }
-    }
-    const runningPercentage = ((completedJobs + failedJobs) / totalJobs) * 100
-    taskStatus[taskId].runningPercentage = Math.min(runningPercentage, 100) // 100 is the max value since it represents 100%
-
-    if (parentJob.completedJobs + parentJob.failedJobs === parentJob.totalJobs) {
-      if (!completedTasks[taskId]) {
-        completedTasks[taskId] = {
-          opensea: false,
-          magiceden: false,
-          blur: false
-        }
-      }
-      completedTasks[taskId][marketplace as 'opensea' | 'magiceden' | 'blur'] = true
-      console.log(GREEN + `Task ${taskId} completed for ${marketplace}` + RESET);
-      const availableMarketplaces = enabledAndSelectedMarketplaces.map(m => m.toLowerCase())
-
-      // Check if all available marketplaces have completed
-      if (availableMarketplaces && availableMarketplaces.length > 0) {
-        const allMarketsComplete = availableMarketplaces.every(m =>
-          completedTasks[taskId]?.[m as 'opensea' | 'magiceden' | 'blur']
-        );
-
-        if (allMarketsComplete && runningPercentage > 99) {
-          console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
-
-          const wallet = await Wallet.findById(task.walletId)
-          const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
-          if (traitsToRemove[taskId]?.length > 0) {
-            await cancelRemovedTraitBids(traitsToRemove[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
-          }
-
-          if (removedTokens[taskId]?.opensea?.length > 0 || removedTokens[taskId]?.magiceden?.length > 0) {
-            await cancelRemovedTokenBids(removedTokens[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
-          }
-
-          taskStatus[taskId].status = 'COMPLETED';
-          delete traitsToRemove[taskId];
-          delete removedTokens[taskId];
-          await new Promise(resolve => setTimeout(resolve, 1000));
-
-          if (task && task.running) {
-            const loopInterval = getExpiry(task.loopInterval) + 1;
-            const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
-            const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
-
-            console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
-            taskStatus[taskId].status = 'SCHEDULED';
-            taskStatus[taskId].waitingTime = secondsUntilNextLoop;
-            taskStatus[taskId].nextLoopTime = nextLoopTime;
-
-            const countdownTimer = setInterval(() => {
-              const remainingSeconds = taskStatus[taskId].nextLoopTime ? Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000)) : 0
-              taskStatus[taskId].waitingTime = remainingSeconds;
-
-              if (remainingSeconds <= 0) {
-                clearInterval(countdownTimer);
-              }
-            }, 1000);
-
-            // Clear any existing timeout for this task
-            const existingTimeout = taskTimeouts.get(taskId);
-            if (existingTimeout) {
-              clearTimeout(existingTimeout);
-            }
-
-            const timeoutId = setTimeout(async () => {
-              // When we restart, update the status
-              const currentTask = activeTasks.get(taskId);
-              if (currentTask?.running) {
-                await startTask(currentTask, true);
-              } else if (currentTask) {
-                await stopTask(currentTask, false);
-              }
-            }, loopInterval * 1000);
-
-            taskTimeouts.set(taskId, timeoutId);
-          }
-          return;
-        }
-      }
-    }
-
   });
 }
 
@@ -2398,8 +2200,12 @@ async function processBulkCancellations(jobs: Job[]) {
                   opts: {
                     ...job?.opts,
                     removeOnComplete: true,
-                    removeOnFail: true,
-                    attempts: 0,
+                    removeOnFail: false, // Keep failed jobs for debugging
+                    attempts: 3, // Retry failed jobs 3 times
+                    backoff: {
+                      type: 'exponential',
+                      delay: 2000, // Start with 2 second delay
+                    },
                   },
                 }))
             );
@@ -2557,8 +2363,12 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
                     ...(job.jobKey ? { jobId: job.jobKey } : {}),
                     ...job?.opts,
                     removeOnComplete: true,
-                    removeOnFail: true,
-                    attempts: 0,
+                    removeOnFail: false, // Keep failed jobs for debugging
+                    attempts: 3, // Retry failed jobs 3 times
+                    backoff: {
+                      type: 'exponential',
+                      delay: 2000, // Start with 2 second delay
+                    },
                   },
                 })),
               ]
@@ -2609,8 +2419,12 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
                 queue.add(job.name, job.data, {
                   ...(job.jobKey ? { jobId: job.jobKey } : {}),
                   removeOnComplete: true,
-                  removeOnFail: true,
-                  attempts: 0,
+                  removeOnFail: false, // Keep failed jobs for debugging
+                  attempts: 3, // Retry failed jobs 3 times
+                  backoff: {
+                    type: 'exponential',
+                    delay: 2000, // Start with 2 second delay
+                  },
                 });
               }
             }
