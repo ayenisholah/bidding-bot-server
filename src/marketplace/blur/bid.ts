@@ -8,6 +8,7 @@ import axios from "axios";
 import { BASE_URL } from "../../constants";
 import { fetchERC20Balance } from "../../utils/balance";
 import { convertBigNumbers } from "../../utils/bigNumberConverter";
+import { logger, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
 
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
 
@@ -33,12 +34,20 @@ function addActiveRequest(taskId: string, controller: AbortController) {
   activeRequests.get(taskId)?.push(controller);
 }
 
-export function cancelBlurRequest(taskId: string): boolean {
+export async function cancelBlurRequest(taskId: string): Promise<boolean> {
   const controllers = activeRequests.get(taskId);
   if (controllers && controllers.length > 0) {
     controllers.forEach(controller => controller.abort());
     activeRequests.delete(taskId);
     console.log(`Aborted ${controllers.length} Blur requests for task ${taskId}`);
+    
+    await logger.logInfo(ErrorCategory.MARKETPLACE, 'Blur requests cancelled', {
+      marketplace: 'blur',
+      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
+      taskId,
+      cancelledRequests: controllers.length
+    });
+    
     return true;
   }
   console.log(`No active Blur requests found for task ${taskId}`);
@@ -68,7 +77,17 @@ export async function bidOnBlur(
   let offerPriceEth: string = (Number(offer_price) / 1e18).toString()
 
   if (Number(offerPriceEth) > bethBalance) {
-    throw new Error(`Insufficient BETH balance: required ${offerPriceEth} BETH, available ${bethBalance} BETH for wallet ${wallet_address} on collection ${slug}`)
+    const error = new Error(`Insufficient BETH balance: required ${offerPriceEth} BETH, available ${bethBalance} BETH for wallet ${wallet_address} on collection ${slug}`);
+    await logger.logBlurBalanceError('Insufficient BETH balance for bid', {
+      taskId,
+      walletAddress: wallet_address,
+      collection: slug,
+      bidAmount: Number(offerPriceEth),
+      availableBalance: bethBalance,
+      requiredBalance: Number(offerPriceEth),
+      error
+    });
+    throw error;
   }
 
   const offerPrice = BigInt(offer_price.toString());
@@ -77,7 +96,16 @@ export async function bidOnBlur(
   offerPriceEth = (Math.floor(Number(formatUnits(offerPrice.toString(), 18)) * 100) / 100).toFixed(2);
 
   if (Number(offerPriceEth) === 0) {
-    throw new Error(`Offer price ${offerPriceEth} BETH is below minimum Blur offer price (0.01 BETH) for collection ${slug}`)
+    const error = new Error(`Offer price ${offerPriceEth} BETH is below minimum Blur offer price (0.01 BETH) for collection ${slug}`);
+    await logger.logBlurBidError('Bid price below minimum', {
+      taskId,
+      walletAddress: wallet_address,
+      collection: slug,
+      bidAmount: Number(offerPriceEth),
+      minimumBid: 0.01,
+      error
+    });
+    throw error;
   }
 
   const wallet = new Wallet(private_key, provider);
@@ -102,7 +130,14 @@ export async function bidOnBlur(
   let build: any;
 
   if (!accessToken) {
-    throw new Error('Access token is undefined');
+    const error = new Error('Access token is undefined');
+    await logger.logBlurBidError('Failed to get Blur access token', {
+      taskId,
+      walletAddress: wallet_address,
+      collection: slug,
+      error
+    });
+    throw error;
   }
   build = await formatBidOnBlur(taskId, BLUR_API_URL, accessToken, wallet_address, buildPayload);
 

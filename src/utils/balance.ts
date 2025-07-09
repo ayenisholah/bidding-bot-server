@@ -1,4 +1,4 @@
-import {  formatEther, AlchemyProvider, Contract } from "ethers";
+import { formatEther, Contract } from "ethers";
 import { DistributedLockManager } from "./lock";
 import redisClient from "./redis";
 import { RED, RESET } from "..";
@@ -54,7 +54,7 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
           if (!ALCHEMY_API_KEY) {
             throw new Error('ALCHEMY_API_KEY environment variable is not set');
           }
-          
+
           const { AlchemyProvider } = await import('ethers');
           const provider = new AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 
@@ -70,7 +70,7 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
             try {
               const balance = await tokenContract.balanceOf(walletAddress);
               const formattedBalance = Number(formatEther(balance));
-              
+
               // Store in both fresh and stale cache
               try {
                 const redis = getRedis();
@@ -85,12 +85,12 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
               return formattedBalance;
             } catch (error: any) {
               lastError = error;
-              
+
               // Check if it's a network error
               if (error.code === 'NETWORK_ERROR' || error.message?.includes('could not detect network')) {
                 console.warn(`Network error for ${walletAddress}/${tokenAddress}, attempt ${attempt + 1}/${maxRetries + 1}`);
               }
-              
+
               if (attempt < maxRetries) {
                 const backoffTime = Math.pow(2, attempt) * 1000;
                 await new Promise(resolve => setTimeout(resolve, backoffTime));
@@ -117,7 +117,7 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
   } catch (error: any) {
     // If we get a network error or lock error, try to use stale cache
     console.warn(`Failed to fetch fresh balance for ${walletAddress}/${tokenAddress}, checking stale cache...`, error.message || error);
-    
+
     let staleBalance = null;
     try {
       const redis = getRedis();
@@ -131,7 +131,7 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
       console.log(`Using stale cached balance for ${walletAddress}/${tokenAddress}: ${staleBalance}`);
       return Number(staleBalance);
     }
-    
+
     // If no stale cache available, log error and return 0
     await logger.logWarning(ErrorCategory.BLOCKCHAIN, `No cached balance available for ${walletAddress}/${tokenAddress}`, {
       walletAddress,

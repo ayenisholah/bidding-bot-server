@@ -9,7 +9,7 @@ import { USDC, WETH } from "../../utils/currencies";
 import { BASE_URL } from "../../constants";
 import { fetchERC20Balance } from "../../utils/balance";
 import { convertBigNumbers } from "../../utils/bigNumberConverter";
-import { logger, DatabaseOperation } from "../../utils/logger";
+import { logger, DatabaseOperation, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
 
 const prisma = new PrismaClient()
 
@@ -57,7 +57,16 @@ export async function bidOnMagiceden(
 ) {
 
   const task = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase() && task.selectedMarketplaces.includes("MagicEden"))
-  if (!task) return
+  if (!task) {
+    await logger.logInfo(ErrorCategory.MARKETPLACE, 'MagicEden bid skipped - task not found', {
+      taskId,
+      marketplace: 'magiceden',
+      marketplaceSubCategory: MarketplaceSubCategory.BIDDING,
+      collection: slug,
+      reason: 'task_not_found'
+    });
+    return
+  }
 
   const duration = bidExpiry / 60 || 15; // minutes
   const currentTime = new Date().getTime();
@@ -85,9 +94,18 @@ export async function bidOnMagiceden(
   const currencySymbol = currency.toLowerCase() === USDC.toLowerCase() ? "USDC" : "WETH"
 
   if (offerPriceEth > wethBalance) {
-    const identifier = trait ? `${trait.attributeKey}:${trait.attributeValue}` : tokenId ? tokenId : 'collection';
-    const message = `[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEth} ${currencySymbol} is greater than available ${currencySymbol} balance: ${wethBalance} ${currencySymbol}. SKIPPING  MAGICEDEN...`
-    throw new Error(message)
+    const error = new Error(`Insufficient ${currencySymbol} balance: required ${offerPriceEth} ${currencySymbol}, available ${wethBalance} ${currencySymbol} for wallet ${maker} on collection ${slug}`);
+    await logger.logMagicEdenBidError('Insufficient balance for bid', {
+      taskId,
+      walletAddress: maker,
+      collection: slug,
+      bidAmount: offerPriceEth,
+      currency: currencySymbol,
+      availableBalance: wethBalance,
+      requiredBalance: offerPriceEth,
+      error
+    });
+    throw error;
   }
 
   const order = await createBidData(taskId, slug, maker, collection, quantity, Math.round(Number(weiPrice)).toString(), expiration.toString(), currency, trait, tokenId);
@@ -348,6 +366,21 @@ async function sendSignedOrderData(taskId: string, offerPrice: string | number, 
         }
       })
       trackBidRate("magiceden", taskId)
+      
+      // Log successful bid
+      await logger.logBidPlaced('magiceden', Number(offerPrice) / Math.pow(10, decimal), identifier.toString(), {
+        taskId,
+        walletAddress: data?.items?.[0]?.order?.data?.sellerOrBuyer || data?.maker,
+        collection: slug,
+        orderHash: payload,
+        currency: currencySymbol,
+        tokenId: tokenId?.toString(),
+        traitType: trait?.attributeKey,
+        traitValue: trait?.attributeValue,
+        expirationTime: expiry,
+        bidType: tokenId ? 'token' : trait ? 'trait' : 'collection'
+      });
+      
       console.log(MAGENTA, successMessage, RESET);
       if (!task) return
       return offerResponse;

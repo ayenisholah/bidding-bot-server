@@ -41,7 +41,7 @@ import axios from "axios";
 import { decryptPrivateKey, setPassword, getPassword, decryptPassword } from "./utils/crypto";
 import { fetchWalletNFTs } from "./utils/nft";
 import { fetchERC20Balance } from "./utils/balance";
-import { logger, DatabaseOperation, QueueOperation } from "./utils/logger";
+import { logger, DatabaseOperation, QueueOperation, ErrorCategory, MarketplaceSubCategory } from "./utils/logger";
 import WebSocketManager from "./utils/websocket-manager";
 import Listing from "./models/listing.model";
 import { initializeListingScheduler, shutdownListingScheduler, scheduleListing, cancelListingJob, processListingJob } from "./functions/listingScheduler";
@@ -521,8 +521,30 @@ async function processAllActiveTasks() {
       return;
     }
 
+    const startTime = Date.now();
     const runningTasks = await Task.find({ running: true });
+    const queryTime = Date.now() - startTime;
+
     console.log(`[processAllActiveTasks] Processing ${runningTasks.length} active tasks...`);
+
+    // Log database query
+    await logger.logDatabaseQuery(DatabaseOperation.READ, 'Fetched running tasks', {
+      collection_name: 'tasks',
+      query: { running: true },
+      executionTime: queryTime,
+      affectedRows: runningTasks.length
+    });
+
+    // Log slow query if needed
+    if (queryTime > 1000) {
+      await logger.logDatabaseSlowQuery(DatabaseOperation.READ, 'Slow query detected for running tasks', {
+        collection_name: 'tasks',
+        query: { running: true },
+        executionTime: queryTime,
+        affectedRows: runningTasks.length,
+        threshold: 1000
+      });
+    }
 
     hasProcessedActiveTasks = true;
 
@@ -710,6 +732,13 @@ async function pauseQueueAndWorkers() {
       await workers.pause();
     }
     console.log(YELLOW + 'Queue and workers paused. Waiting for password...' + RESET);
+    console.log(YELLOW + 'Note: All jobs have been removed from the queue for security.' + RESET);
+
+    await logger.logInfo(ErrorCategory.QUEUE, 'Queue and workers paused due to missing password', {
+      queueOperation: QueueOperation.PAUSE_QUEUE,
+      queuePaused: true,
+      workersPaused: !!workers
+    });
   } catch (error) {
     await logger.logQueueError('Error pausing queue and workers', {
       queueOperation: QueueOperation.PAUSE_QUEUE,
@@ -782,12 +811,41 @@ async function startServer() {
     workers = new Worker(
       QUEUE_NAME,
       async (job) => {
+        const startTime = Date.now();
         try {
+          await logger.logQueueJobStarted(job.name, {
+            jobId: job.id,
+            taskId: job.data.taskId,
+            marketplace: job.data.marketplace,
+            jobAttempts: job.attemptsMade,
+            queueName: QUEUE_NAME
+          });
+
           await processJob(job);
+
+          await logger.logQueueJobCompleted(job.name, {
+            jobId: job.id,
+            taskId: job.data.taskId,
+            marketplace: job.data.marketplace,
+            duration: Date.now() - startTime,
+            queueName: QUEUE_NAME
+          });
+
           return { success: true };
         } catch (error) {
           // Log the error for debugging
           console.error(`Job ${job.id} failed:`, error);
+
+          await logger.logQueueJobFailed(job.name, {
+            jobId: job.id,
+            taskId: job.data.taskId,
+            marketplace: job.data.marketplace,
+            error: error as Error,
+            errorMessage: error instanceof Error ? error.message : String(error),
+            jobAttempts: job.attemptsMade,
+            duration: Date.now() - startTime,
+            queueName: QUEUE_NAME
+          });
 
           // Let BullMQ handle retries based on job configuration
           // Don't throw UnrecoverableError - let it retry
@@ -811,16 +869,31 @@ async function startServer() {
     }
 
     console.log('Connecting to MongoDB...');
-    await mongoose.connect(mongoUri, {
-      serverSelectionTimeoutMS: 30000, // Increased from 15000
-      connectTimeoutMS: 30000, // Increased from 15000
-      socketTimeoutMS: 45000, // Increased from 30000
-      maxPoolSize: 10,
-      retryWrites: true,
-      family: 4, // Use IPv4, skip trying IPv6
-      heartbeatFrequencyMS: 5000 // Add heartbeat to detect connection issues earlier
-    });
-    console.log('Connected to MongoDB successfully');
+    try {
+      await mongoose.connect(mongoUri, {
+        serverSelectionTimeoutMS: 30000, // Increased from 15000
+        connectTimeoutMS: 30000, // Increased from 15000
+        socketTimeoutMS: 45000, // Increased from 30000
+        maxPoolSize: 10,
+        retryWrites: true,
+        family: 4, // Use IPv4, skip trying IPv6
+        heartbeatFrequencyMS: 5000 // Add heartbeat to detect connection issues earlier
+      });
+      console.log('Connected to MongoDB successfully');
+      await logger.logInfo(ErrorCategory.DATABASE, 'MongoDB connection established', {
+        databaseOperation: DatabaseOperation.CONNECTION,
+        environment: process.env.NODE_ENV,
+        mongoUri: mongoUri.replace(/\/\/[^:]+:[^@]+@/, '//***:***@'), // Hide credentials
+        maxPoolSize: 10
+      });
+    } catch (error) {
+      await logger.logDatabaseConnectionError('Failed to connect to MongoDB', {
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        mongoUri: mongoUri.replace(/\/\/[^:]+:[^@]+@/, '//***:***@')
+      });
+      throw error;
+    }
 
     // Clear queue and restart all jobs on server start - AFTER MongoDB is connected
     await clearQueueAndRestartJobs();
@@ -865,52 +938,104 @@ async function startServer() {
       if (redis) {
         await redis.set(LAST_RUNTIME_KEY, Date.now().toString());
       }
+
+      // Monitor memory usage
+      const memoryUsage = process.memoryUsage();
+      const heapPercentage = (memoryUsage.heapUsed / memoryUsage.heapTotal) * 100;
+
+      if (heapPercentage > 90) {
+        await logger.logMemoryWarning('High memory usage detected', memoryUsage, {
+          heapPercentage,
+          threshold: '90%',
+          availableMemory: os.freemem(),
+          totalMemory: os.totalmem(),
+          uptime: process.uptime()
+        });
+      }
+
+      // Log memory metrics periodically for monitoring
+      if (Date.now() % 300000 < 60000) { // Every 5 minutes
+        await logger.logDebug(ErrorCategory.PERFORMANCE, 'Memory usage metrics', {
+          memoryUsage,
+          heapPercentage,
+          availableMemory: os.freemem(),
+          totalMemory: os.totalmem(),
+          uptime: process.uptime(),
+          activeTasksCount: activeTasks.size,
+          queueMetrics: await queue.getJobCounts()
+        });
+      }
     }, 60000);
 
-    server.listen(port, () => {
+    server.listen(port, async () => {
       console.log(`Magic happening on http://localhost:${port}`);
       console.log(`WebSocket server is running on ws://localhost:${port}`);
+      await logger.logInfo(ErrorCategory.GENERAL, 'Server started successfully', {
+        port: port,
+        environment: process.env.NODE_ENV,
+        nodeVersion: process.version,
+        platform: os.platform(),
+        memory: process.memoryUsage(),
+        cpuCount: os.cpus().length,
+        rateLimit: RATE_LIMIT
+      });
     });
 
-    // Prevent server crashes from unhandled WebSocket errors
-    process.on('unhandledRejection', (reason, promise) => {
-      console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-      logger.logGeneralError('Unhandled Promise Rejection', {
-        operation: 'process_unhandled_rejection',
-        error: reason instanceof Error ? reason : new Error(String(reason))
-      });
-      // Don't exit the process - let the server continue running
-    });
-
-    process.on('uncaughtException', (error) => {
-      console.error('Uncaught Exception:', error);
-      logger.logGeneralError('Uncaught Exception', {
-        operation: 'process_uncaught_exception',
-        error: error
-      });
-      // Don't exit the process - let the server continue running
-    });
 
     // Initialize WebSocket connection monitoring
     await loadConnectionMetrics();
     startConnectionMonitoring();
     console.log('🔗 WebSocket connection monitoring initialized');
+    await logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket connection monitoring initialized', {
+      monitoringInterval: 60000
+    });
 
     // Connect WebSocket before initializing listing scheduler
-    await connectWebSocket();
-    console.log('🌐 WebSocket connected');
+    try {
+      await connectWebSocket();
+      console.log('🌐 WebSocket connected');
+      await logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket connected to marketplace proxy', {
+        url: MARKETPLACE_WS_URL
+      });
+    } catch (error) {
+      await logger.logWebSocketError('Failed to connect to marketplace WebSocket', {
+        error: error as Error,
+        url: MARKETPLACE_WS_URL,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+      console.error('WebSocket connection failed:', error);
+    }
 
     // Initialize listing scheduler with WebSocket manager
-    await initializeListingScheduler(wsManager);
-    console.log('📋 Listing scheduler initialized');
+    try {
+      await initializeListingScheduler(wsManager);
+      console.log('📋 Listing scheduler initialized');
+      await logger.logInfo(ErrorCategory.GENERAL, 'Listing scheduler initialized', {
+        schedulerType: 'listing_scheduler',
+        hasWebSocketManager: !!wsManager
+      });
+    } catch (error) {
+      await logger.logGeneralError('Failed to initialize listing scheduler', {
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+    }
 
     // Initialize expiration monitor
     expirationMonitorInterval = initializeExpirationMonitor();
     console.log('⏰ Expiration monitor initialized');
+    await logger.logInfo(ErrorCategory.GENERAL, 'Expiration monitor initialized', {
+      schedulerType: 'expiration_monitor',
+      checkInterval: 5 * 60 * 1000 // 5 minutes
+    });
 
     // Initialize expired price cleanup
     expiredPriceCleanupInterval = initializeExpiredPriceCleanup();
     console.log('🧹 Expired price cleanup initialized');
+    await logger.logInfo(ErrorCategory.GENERAL, 'Expired price cleanup initialized', {
+      schedulerType: 'price_cleanup',
+      cleanupInterval: 30 * 60 * 1000 // 30 minutes
+    });
 
     // Start periodic cleanup of seen items
     cleanupIntervalId = setInterval(() => {
@@ -934,6 +1059,23 @@ async function startServer() {
     if (!getPassword()) {
       console.log(YELLOW + '⚠️  No password set - all operations are paused' + RESET);
       console.log(YELLOW + 'Please set password via POST /api/auth/password to start operations' + RESET);
+
+      // Set all tasks to not running
+      try {
+        const result = await Task.updateMany({ running: true }, { running: false });
+        await Listing.updateMany({ running: true }, { running: false });
+        if (result.modifiedCount > 0) {
+          console.log(YELLOW + `✓ Set ${result.modifiedCount} task(s) to not running` + RESET);
+        }
+      } catch (error) {
+        console.error(RED + 'Failed to update tasks:' + RESET, error);
+        await logger.logDatabaseError('Failed to update tasks when no password set', {
+          databaseOperation: DatabaseOperation.UPDATE,
+          collection_name: 'tasks',
+          error: error as Error,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
+      }
       await pauseQueueAndWorkers();
     }
 
@@ -1628,6 +1770,17 @@ async function processImportedTasks(tasks: ITask[]) {
     if (jobs.length > 0) {
       await queue.addBulk(jobs)
       console.log(`Successfully added ${jobs.length} jobs to the queue.`);
+
+      // Log each job added
+      for (const job of jobs) {
+        await logger.logQueueJobAdded(job.name, {
+          jobName: job.name,
+          taskId: job.data._id,
+          taskName: (job.data as any).name || job.data.contract?.slug,
+          marketplace: job.name.replace('_SCHEDULE', '').toLowerCase(),
+          queueName: QUEUE_NAME
+        });
+      }
     }
 
     // Always ensure WebSocket connection for all tasks
@@ -1685,6 +1838,17 @@ async function processNewTask(task: ITask) {
     if (jobs.length > 0) {
       await queue.addBulk(jobs)
       console.log(`Successfully added ${jobs.length} jobs to the queue.`);
+
+      // Log each job added
+      for (const job of jobs) {
+        await logger.logQueueJobAdded(job.name, {
+          jobName: job.name,
+          taskId: job.data._id,
+          taskName: (job.data as any).name || job.data.contract?.slug,
+          marketplace: job.name.replace('_SCHEDULE', '').toLowerCase(),
+          queueName: QUEUE_NAME
+        });
+      }
     }
 
     // Always connect to WebSocket and subscribe all tasks
@@ -3477,8 +3641,15 @@ async function connectWebSocket(): Promise<void> {
     });
 
     // Set up event handlers
-    wsManager.on('connected', (connectionId) => {
+    wsManager.on('connected', async (connectionId) => {
       console.log(GOLD + `CONNECTED TO MARKETPLACE EVENTS WEBSOCKET (ID: ${connectionId}) at ${new Date().toISOString()}` + RESET);
+
+      await logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket connected to marketplace', {
+        connectionId,
+        url: MARKETPLACE_WS_URL,
+        clientId,
+        reconnectAttempts: retryCount
+      });
 
       // Update connection metrics
       connectionMetrics.connectionStartTime = Date.now();
@@ -3497,7 +3668,7 @@ async function connectWebSocket(): Promise<void> {
       resubscribeToListingCollections();
     });
 
-    wsManager.on('disconnected', (event: { code: number; reason: string }) => {
+    wsManager.on('disconnected', async (event: { code: number; reason: string }) => {
       // Calculate connection duration
       if (connectionMetrics.connectionStartTime) {
         connectionMetrics.connectionEndTime = Date.now();
@@ -3507,8 +3678,21 @@ async function connectWebSocket(): Promise<void> {
         updateConnectionStats(connectionMetrics.connectionDuration, getCloseReason(event.code));
 
         console.log(YELLOW + `WebSocket disconnected after ${formatDuration(connectionMetrics.connectionDuration)} (Code: ${event.code}) - cleared subscription cache` + RESET);
+
+        await logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket disconnected', {
+          connectionId: connectionMetrics.currentConnectionId || undefined,
+          connectionDuration: connectionMetrics.connectionDuration,
+          disconnectCode: event.code,
+          disconnectReason: event.reason || getCloseReason(event.code),
+          totalDisconnections: connectionMetrics.totalDisconnections
+        });
       } else {
         console.log(YELLOW + "WebSocket closed - cleared subscription cache" + RESET);
+
+        await logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket closed unexpectedly', {
+          disconnectCode: event.code,
+          disconnectReason: event.reason
+        });
       }
 
       // Clear subscription cache on disconnect
@@ -3538,13 +3722,19 @@ async function connectWebSocket(): Promise<void> {
         await handleMarketplaceMessage(message);
       } catch (error) {
         console.error('Error handling message:', error);
+        await logger.logWebSocketError('Error handling WebSocket message', {
+          error: error as Error,
+          messageType: message?.type,
+          marketplace: message?.data?.marketplace,
+          connectionId: connectionMetrics.currentConnectionId || undefined
+        });
       }
     });
 
-    wsManager.on('error', (error: Error) => {
-      logger.logWebSocketError("WebSocket connection error", {
+    wsManager.on('error', async (error: Error) => {
+      await logger.logWebSocketError("WebSocket connection error", {
         error: error,
-        connectionId: connectionMetrics.currentConnectionId || 'unknown',
+        connectionId: connectionMetrics.currentConnectionId || undefined,
         retryCount: retryCount,
         connectionDuration: connectionMetrics.connectionStartTime ? Date.now() - connectionMetrics.connectionStartTime : 0
       });
@@ -3555,9 +3745,9 @@ async function connectWebSocket(): Promise<void> {
       // Update any UI or metrics as needed
     });
 
-    wsManager.on('max_retries_exceeded', () => {
-      logger.logWebSocketError("WebSocket max reconnection attempts exceeded", {
-        connectionId: connectionMetrics.currentConnectionId || 'unknown',
+    wsManager.on('max_retries_exceeded', async () => {
+      await logger.logWebSocketError("WebSocket max reconnection attempts exceeded", {
+        connectionId: connectionMetrics.currentConnectionId || undefined,
         retryCount: MAX_RETRIES,
         maxRetries: MAX_RETRIES
       });
@@ -5973,27 +6163,6 @@ async function processBlurCollectionBid(data: { task: ITask }) {
       colletionOffer = BigInt(Math.round(minBidPriceEth * 1e18));
     }
 
-    // Check BETH balance before attempting to bid
-    const finalOfferEth = Number(colletionOffer) / 1e18;
-    const bethBalance = await fetchERC20Balance(task.wallet, "0x0000000000A39bb272e79075ade125fd351887Ac");
-    
-    if (finalOfferEth > bethBalance) {
-      if (!skipStats[task._id]) {
-        skipStats[task._id] = {
-          opensea: 0,
-          magiceden: 0,
-          blur: 0
-        }
-      }
-      skipStats[task._id]['blur']++;
-      const message = `⚠️  Insufficient BETH balance: required ${finalOfferEth.toFixed(2)} BETH, available ${bethBalance.toFixed(2)} BETH for wallet ${task.wallet} on collection ${task.contract.slug}. Skipping bid...`;
-      await logBidError(task._id, "INSUFFICIENT BETH BALANCE", message, "warning", "blur");
-      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(YELLOW + message + RESET);
-      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      return;
-    }
-
     await bidOnBlur(task._id, bidCount, task.wallet, privateKey, task.contract.contractAddress, colletionOffer, task.contract.slug, expiry);
   } catch (error: any) {
     console.error('Blur collection bid error:', error instanceof Error ? error.message : String(error));
@@ -6891,26 +7060,6 @@ async function processBlurTraitBid(data: {
       traitOffer = BigInt(Math.round(minBidPriceEth * 1e18));
     }
 
-    // Check BETH balance before attempting to bid
-    const finalOfferEth = Number(traitOffer) / 1e18;
-    const bethBalance = await fetchERC20Balance(address, "0x0000000000A39bb272e79075ade125fd351887Ac");
-    
-    if (finalOfferEth > bethBalance) {
-      if (!skipStats[_id]) {
-        skipStats[_id] = {
-          opensea: 0,
-          magiceden: 0,
-          blur: 0
-        }
-      }
-      skipStats[_id]['blur']++;
-      const message = `⚠️  Insufficient BETH balance: required ${finalOfferEth.toFixed(2)} BETH, available ${bethBalance.toFixed(2)} BETH for wallet ${address} on trait ${trait} in collection ${slug}. Skipping bid...`;
-      await logBidError(_id, "INSUFFICIENT BETH BALANCE", message, "warning", "blur");
-      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(YELLOW + message + RESET);
-      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      return;
-    }
 
     await bidOnBlur(_id, bidCount, address, privateKey, contractAddress, traitOffer, slug, expiry, trait);
   } catch (error: any) {
@@ -8280,8 +8429,15 @@ app.get("/api/task/:taskId", async (req, res) => {
 });
 
 app.post('/api/task/cancel/:taskId', async (req, res) => {
+  const startTime = Date.now();
   try {
     const { taskId } = req.params;
+
+    await logger.logInfo(ErrorCategory.API, 'Task cancellation initiated', {
+      endpoint: '/api/task/cancel/:taskId',
+      method: 'POST',
+      taskId
+    });
     const task = activeTasks.get(taskId)
     if (!task) {
       return res.status(404).json({ error: 'Task not found' });
@@ -8325,11 +8481,24 @@ app.post('/api/task/cancel/:taskId', async (req, res) => {
     }
 
     res.status(200).json({ message: 'Task cancelled' });
+
+    await logger.logInfo(ErrorCategory.API, 'Task cancelled successfully', {
+      endpoint: '/api/task/cancel/:taskId',
+      method: 'POST',
+      taskId,
+      responseTime: Date.now() - startTime,
+      cancelledOrders: {
+        opensea: openseaOrders.length,
+        magiceden: magicedenOrders.length,
+        blur: blurOrders.length
+      }
+    });
   } catch (error: any) {
     await logger.logApiError('Failed to cancel task', {
       endpoint: '/api/task/cancel/:taskId',
       method: 'POST',
-      taskId: req.params?.taskId,
+      taskId: req.params.taskId,
+      responseTime: Date.now() - startTime,
       error: error,
       errorMessage: error?.message || 'Failed to update task',
       statusCode: 500
@@ -8757,6 +8926,41 @@ app.post('/api/auth/password', async (req, res) => {
     if (!wasPasswordSet) {
       await resumeQueueAndWorkers();
       console.log(GREEN + '✅ Password set - bidding operations have started' + RESET);
+
+      // Recreate jobs for all running tasks
+      try {
+        console.log(GREEN + 'Recreating jobs for running tasks...' + RESET);
+        const runningTasks = await Task.find({ running: true });
+
+        if (runningTasks.length > 0) {
+          for (const task of runningTasks) {
+            const formattedTask = {
+              ...task.toObject(),
+              _id: task._id.toString(),
+              user: task.user.toString()
+            } as ITask;
+
+            // Add to activeTasks map
+            activeTasks.set(formattedTask._id, formattedTask);
+
+            // Create bidding jobs for the task
+            await processNewTask(formattedTask);
+          }
+
+          console.log(GREEN + `✅ Created jobs for ${runningTasks.length} running task(s)` + RESET);
+
+          await logger.logInfo(ErrorCategory.GENERAL, 'Jobs recreated after password set', {
+            recreatedTasks: runningTasks.length,
+            taskIds: runningTasks.map(t => t._id.toString())
+          });
+        }
+      } catch (error) {
+        console.error(RED + 'Failed to recreate jobs for running tasks:' + RESET, error);
+        await logger.logGeneralError('Failed to recreate jobs after password set', {
+          error: error as Error,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
+      }
     }
 
     res.status(200).json({ success: true, message: 'Password stored successfully' });

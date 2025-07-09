@@ -10,7 +10,7 @@ import { MagicedenCollectionResponse, MagicEdenTraitOfferResponse } from "../mag
 import { CollectionItemsListQuery } from "../../queries";
 import { CollectionItemsQueryVariables, CollectionItemsResponse } from "../../functions";
 import { fetchERC20Balance } from "../../utils/balance";
-import { logger } from "../../utils/logger";
+import { logger, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
 
 const prisma = new PrismaClient()
 
@@ -201,7 +201,15 @@ export async function bidOnOpensea(
   const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
   const currencySymbol = currency.toLowerCase() === USDC.toLowerCase() ? "USDC" : "WETH"
   const task = activeTasks.get(taskId)
-  if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return
+  if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
+    await logger.logInfo(ErrorCategory.MARKETPLACE, 'OpenSea bid skipped - task not active', {
+      taskId,
+      marketplace: 'opensea',
+      marketplaceSubCategory: MarketplaceSubCategory.BIDDING,
+      reason: !task ? 'task_not_found' : !task.running ? 'task_not_running' : 'marketplace_not_selected'
+    });
+    return
+  }
 
   const wethBalance = await fetchERC20Balance(wallet_address, currency);
   const offerPriceEth = Number(offer_price) / Math.pow(10, decimal);
@@ -222,8 +230,18 @@ export async function bidOnOpensea(
   const offerPriceEthFinal = Number(roundedWei) / Math.pow(10, decimal);
 
   if (offerPriceEthFinal > wethBalance) {
-    const identifier = opensea_traits ? opensea_traits : asset?.tokenId ? asset?.tokenId : slug;  
-    throw new Error(`[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEthFinal} ${currencySymbol} is greater than available ${currencySymbol} balance: ${wethBalance} ${currencySymbol}.`);
+    const error = new Error(`Insufficient ${currencySymbol} balance: required ${offerPriceEthFinal} ${currencySymbol}, available ${wethBalance} ${currencySymbol} for wallet ${wallet_address} on collection ${slug}`);
+    await logger.logOpenseaBidError('Insufficient balance for bid', {
+      taskId,
+      walletAddress: wallet_address,
+      collection: slug,
+      bidAmount: offerPriceEthFinal,
+      currency: currencySymbol,
+      availableBalance: wethBalance,
+      requiredBalance: offerPriceEthFinal,
+      error
+    });
+    throw error;
   }
 
   const wallet = new Wallet(private_key, provider);
@@ -278,6 +296,19 @@ export async function bidOnOpensea(
 
     const itemResponse = await postItemOffer(taskId, offer, itemSignature)
     const itemOrderHash = itemResponse?.order?.order_hash
+    
+    if (itemOrderHash) {
+      await logger.logBidPlaced('opensea', offerPriceEthFinal, asset.tokenId.toString(), {
+        taskId,
+        walletAddress: wallet_address,
+        contractAddress: asset.contractAddress,
+        collection: slug,
+        orderHash: itemOrderHash,
+        currency: currencySymbol,
+        gasFee: 0, // OpenSea uses gasless transactions
+        expirationTime: expiry
+      });
+    }
     const sanitizedExpiry = expiry > 900 ? expiry : 900
     if (offerPrice && itemOrderHash && sanitizedExpiry && slug && taskId && asset.tokenId) {
       await prisma.order.create({
@@ -424,8 +455,9 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
   const task = activeTasks.get(taskId)
   if (!task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) return
 
-  const { data: offer } = await
-    limiter.schedule(() => axiosInstance.request<OpenseaOffer>({
+  let offer: OpenseaOffer;
+  try {
+    const response = await limiter.schedule(() => axiosInstance.request<OpenseaOffer>({
       method: 'POST',
       url: `${BASE_URL}/opensea/api/v2/offers`,
       headers: {
@@ -438,6 +470,19 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
       data: JSON.stringify(payload),
       "axios-retry": { retries: 0 }
     }))
+    offer = response.data;
+  } catch (error) {
+    await logger.logOpenseaBidError('Failed to submit OpenSea offer', {
+      taskId,
+      collection: payload.criteria.collection.slug,
+      bidAmount: Number(offerPrice) / Math.pow(10, decimal),
+      currency: currencySymbol,
+      error: error as Error,
+      errorCode: (error as any)?.response?.status,
+      errorMessage: (error as any)?.response?.data || (error as Error)?.message || String(error)
+    });
+    throw error;
+  }
 
   const order_hash = offer.order_hash
   const identifier: string = offer?.criteria?.trait?.type
@@ -462,6 +507,20 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
     })
   }
   trackBidRate('opensea', taskId);
+  
+  // Log successful bid
+  await logger.logBidPlaced('opensea', Number(offerPrice) / Math.pow(10, decimal), identifier, {
+    taskId,
+    walletAddress: payload.protocol_data.parameters.offerer,
+    collection: slug,
+    orderHash: order_hash,
+    currency: currencySymbol,
+    traitType: offer?.criteria?.trait?.type,
+    traitValue: offer?.criteria?.trait?.value,
+    expirationTime: sanitizedExpiry,
+    bidType: opensea_traits ? 'trait' : 'collection'
+  });
+  
   const successMessage = opensea_traits ?
     `🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()}  TRAIT: ${opensea_traits} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
     : `🎉 COLLECTION OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
