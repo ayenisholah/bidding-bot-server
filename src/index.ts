@@ -153,21 +153,21 @@ const allowedOrigins = [
 const SEAPORT = '0x1e0049783f008a0085193e00003d00cd54003c71';
 
 const TOKEN_BID_PRIORITY = {
-  OPENSEA: 5,
-  MAGICEDEN: 5,
-  BLUR: 5
+  OPENSEA: 2,
+  MAGICEDEN: 2,
+  BLUR: 2
 };
 
 const TRAIT_BID_PRIORITY = {
-  OPENSEA: 5,
-  MAGICEDEN: 5,
-  BLUR: 5
+  OPENSEA: 2,
+  MAGICEDEN: 2,
+  BLUR: 2
 };
 
 const COLLECTION_BID_PRIORITY = {
-  OPENSEA: 5,
-  MAGICEDEN: 5,
-  BLUR: 5
+  OPENSEA: 2,
+  MAGICEDEN: 2,
+  BLUR: 2
 };
 
 type JobState = 'completed' | 'failed' | 'delayed' | 'active' | 'waiting' | 'waiting-children' | 'unknown' | 'prioritized' | 'paused';
