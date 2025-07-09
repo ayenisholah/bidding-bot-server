@@ -50,7 +50,7 @@ import { initializeExpiredPriceCleanup, stopExpiredPriceCleanup } from "./functi
 import { handleListingPriceUpdate } from "./functions/priceMonitor";
 const prisma = new PrismaClient()
 
-const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io/";
+const MARKETPLACE_WS_URL = "ws://localhost:8080";
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
@@ -500,19 +500,16 @@ async function clearQueueAndRestartJobs() {
     // Reset completedTasks to empty object
     Object.keys(completedTasks).forEach(key => delete completedTasks[key]);
     Object.keys(taskStatus).forEach(key => delete taskStatus[key]);
-    
+
     // Clear all countdown timers
     taskCountdownTimers.forEach((timer) => clearInterval(timer));
     taskCountdownTimers.clear();
-    
+
     // Clear all task timeouts
     taskTimeouts.forEach((timeout) => clearTimeout(timeout));
     taskTimeouts.clear();
 
     console.log('✅ Job states cleared');
-
-    // Process all active tasks (this will recreate bidding jobs)
-    await processAllActiveTasks();
 
     // Note: Listing jobs will be recreated by initializeListingScheduler
     console.log(GREEN + '✅ All jobs restarted successfully' + RESET);
@@ -521,69 +518,9 @@ async function clearQueueAndRestartJobs() {
   }
 }
 
-// Process all active tasks on startup
-async function processAllActiveTasks() {
-  try {
-    // Check if we've already processed tasks to prevent duplicates
-    if (hasProcessedActiveTasks) {
-      console.log(YELLOW + '[processAllActiveTasks] Tasks already processed, skipping to prevent duplicates' + RESET);
-      return;
-    }
-
-    const startTime = Date.now();
-    const runningTasks = await Task.find({ running: true });
-    const queryTime = Date.now() - startTime;
-
-    console.log(`[processAllActiveTasks] Processing ${runningTasks.length} active tasks...`);
-
-    // Log database query
-    await logger.logDatabaseQuery(DatabaseOperation.READ, 'Fetched running tasks', {
-      collection_name: 'tasks',
-      query: { running: true },
-      executionTime: queryTime,
-      affectedRows: runningTasks.length
-    });
-
-    // Log slow query if needed
-    if (queryTime > 1000) {
-      await logger.logDatabaseSlowQuery(DatabaseOperation.READ, 'Slow query detected for running tasks', {
-        collection_name: 'tasks',
-        query: { running: true },
-        executionTime: queryTime,
-        affectedRows: runningTasks.length,
-        threshold: 1000
-      });
-    }
-
-    hasProcessedActiveTasks = true;
-
-    for (const task of runningTasks) {
-      const formattedTask = {
-        ...task.toObject(),
-        _id: task._id.toString(),
-        user: task.user.toString()
-      } as ITask;
-
-      // Add to activeTasks map
-      activeTasks.set(formattedTask._id, formattedTask);
-
-      // Create bidding jobs for the task
-      console.log(`[processAllActiveTasks] Processing task ${formattedTask._id} - ${formattedTask.contract.slug}`);
-      await processNewTask(formattedTask);
-    }
-
-    console.log(`✅ Processed ${runningTasks.length} active tasks`);
-  } catch (error) {
-    hasProcessedActiveTasks = false; // Reset flag on error
-    throw error;
-  }
-}
-
 // Network connectivity monitoring
 let isConnected = true;
 let lastConnectivityCheck = Date.now();
-let hasProcessedActiveTasks = false;
-let connectivityCheckInterval: NodeJS.Timeout | null = null;
 
 async function checkInternetConnectivity(): Promise<boolean> {
   try {
@@ -617,6 +554,9 @@ async function handleConnectivityRestored() {
   }
 }
 
+
+
+let connectivityCheckInterval: NodeJS.Timeout |null;
 function startConnectivityMonitoring() {
   // Check connectivity every 30 seconds
   connectivityCheckInterval = setInterval(async () => {
@@ -1045,7 +985,6 @@ async function startServer() {
 
     await fetchCurrentTasks()
 
-    // Note: processAllActiveTasks() is already called in clearQueueAndRestartJobs()
 
     // Check if password is set on startup
     if (!getPassword()) {
@@ -1279,7 +1218,7 @@ function setupQueueEventHandlers() {
           taskStatus[taskId].status = 'STOPPED'
           delete taskStatus[taskId].nextLoopTime
           taskStatus[taskId].waitingTime = 0
-          
+
           // Clear countdown timer when task is stopped
           const countdownTimer = taskCountdownTimers.get(taskId);
           if (countdownTimer) {
@@ -1433,7 +1372,7 @@ function setupQueueEventHandlers() {
                 taskCountdownTimers.delete(taskId);
                 return;
               }
-              
+
               const remainingSeconds = Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000));
               taskStatus[taskId].waitingTime = remainingSeconds;
 
@@ -2907,7 +2846,7 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
       markTaskAsAborted(taskId);
       const updatedTask = { ...task, running: false };
       activeTasks.set(taskId, updatedTask);
-      
+
       // Clear any countdown timer for this task
       const countdownTimer = taskCountdownTimers.get(taskId);
       if (countdownTimer) {
@@ -3000,7 +2939,7 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
     if (!task?.selectedMarketplaces.length || !task.running) {
       delete taskStatus[taskId].nextLoopTime
       taskStatus[taskId].waitingTime = 0
-      
+
       // Clear countdown timer
       const countdownTimer = taskCountdownTimers.get(taskId);
       if (countdownTimer) {
@@ -3022,7 +2961,7 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
       delete taskStatus[taskId].nextLoopTime
       taskStatus[taskId].waitingTime = 0
       taskStatus[taskId].status = 'STOPPED'
-      
+
       // Clear countdown timer
       const countdownTimer = taskCountdownTimers.get(taskId);
       if (countdownTimer) {
@@ -5302,7 +5241,6 @@ function hashBid(data: any): string {
 }
 
 function calculateOutbidMargin(currentPrice: number, currency = WETH): number {
-
   if (currency === USDC) return 0.1
   if (currentPrice < 0.1) {
     return 0.0001;
@@ -8962,41 +8900,6 @@ app.post('/api/auth/password', async (req, res) => {
     if (!wasPasswordSet) {
       await resumeQueueAndWorkers();
       console.log(GREEN + '✅ Password set - bidding operations have started' + RESET);
-
-      // Recreate jobs for all running tasks
-      try {
-        console.log(GREEN + 'Recreating jobs for running tasks...' + RESET);
-        const runningTasks = await Task.find({ running: true });
-
-        if (runningTasks.length > 0) {
-          for (const task of runningTasks) {
-            const formattedTask = {
-              ...task.toObject(),
-              _id: task._id.toString(),
-              user: task.user.toString()
-            } as ITask;
-
-            // Add to activeTasks map
-            activeTasks.set(formattedTask._id, formattedTask);
-
-            // Create bidding jobs for the task
-            await processNewTask(formattedTask);
-          }
-
-          console.log(GREEN + `✅ Created jobs for ${runningTasks.length} running task(s)` + RESET);
-
-          await logger.logInfo(ErrorCategory.GENERAL, 'Jobs recreated after password set', {
-            recreatedTasks: runningTasks.length,
-            taskIds: runningTasks.map(t => t._id.toString())
-          });
-        }
-      } catch (error) {
-        console.error(RED + 'Failed to recreate jobs for running tasks:' + RESET, error);
-        await logger.logGeneralError('Failed to recreate jobs after password set', {
-          error: error as Error,
-          errorMessage: error instanceof Error ? error.message : String(error)
-        });
-      }
     }
 
     res.status(200).json({ success: true, message: 'Password stored successfully' });

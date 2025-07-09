@@ -316,13 +316,13 @@ All marketplace events include a `marketplace` field indicating the source.
 
 ### Normalized Listing Events
 
-When subscribed to listings using `join_listings`, all marketplaces deliver listing events in a normalized format with `eventType: "ORDER_CREATED"`:
+When subscribed to listings using `join_listings`, all marketplaces deliver listing events in a normalized format with `eventType: "LISTING_CREATED"`:
 
 ```json
 {
 	"id": "unique_order_id",
 	"marketplace": "OPENSEA|MAGICEDEN|BLUR",
-	"eventType": "ORDER_CREATED",
+	"eventType": "LISTING_CREATED",
 	"fromAddress": "0x...",
 	"priceUnit": "ETH",
 	"createdAt": "2024-01-15T10:30:00.000Z",
@@ -397,7 +397,7 @@ When subscribed to listings, OpenSea listing events are delivered in a normalize
 {
 	"id": "order_hash_123",
 	"marketplace": "OPENSEA",
-	"eventType": "ORDER_CREATED",
+	"eventType": "LISTING_CREATED",
 	"fromAddress": "0x...",
 	"priceUnit": "ETH",
 	"createdAt": "2024-01-15T10:30:00.000Z",
@@ -436,7 +436,7 @@ When subscribed to listings, MagicEden ask events are delivered in a normalized 
 {
 	"id": "ask_id_456",
 	"marketplace": "MAGICEDEN",
-	"eventType": "ORDER_CREATED",
+	"eventType": "LISTING_CREATED",
 	"fromAddress": "0x...",
 	"priceUnit": "ETH",
 	"createdAt": "2024-01-15T10:30:00.000Z",
@@ -466,15 +466,15 @@ Blur events come in array format:
 }
 ```
 
-#### Listing Events (ORDER_CREATED)
+#### Listing Events (LISTING_CREATED)
 
-When subscribed to listings, Blur ORDER_CREATED events are delivered in a normalized format as individual events:
+When subscribed to listings, Blur LISTING_CREATED events are delivered in a normalized format as individual events:
 
 ```json
 {
 	"id": "924756826",
 	"marketplace": "BLUR",
-	"eventType": "ORDER_CREATED",
+	"eventType": "LISTING_CREATED",
 	"fromAddress": "0x5bc136f64226648b41d3964c2cdd63193663225e",
 	"priceUnit": "ETH",
 	"createdAt": "2025-07-02T12:07:39.452Z",

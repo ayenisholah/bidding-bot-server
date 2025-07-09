@@ -648,7 +648,7 @@ class ProductionMarketplaceClient extends EventEmitter {
 
 		// Handle listing-specific events
 		if (
-			message.eventType === "ORDER_CREATED" &&
+			message.eventType === "LISTING_CREATED" &&
 			message.subscriptionType?.includes("listings")
 		) {
 			this.handleListingEvent(message);

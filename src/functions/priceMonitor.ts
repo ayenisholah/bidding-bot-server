@@ -46,7 +46,7 @@ const colors = {
 export async function handleListingPriceUpdate(message: any): Promise<void> {
   try {
     // Accept both 'listings' and 'both' subscription types (when a client subscribes to both bidding and listing events)
-    if (message.eventType === 'ORDER_CREATED' && (message.subscriptionType === 'listings' || message.subscriptionType === 'both')) {      // New format - direct properties
+    if (message.eventType === 'LISTING_CREATED') {      // New format - direct properties
       const contractAddress = message.contractAddress?.toLowerCase();
       const id = message.id;
       const tokenId = message.tokenId;

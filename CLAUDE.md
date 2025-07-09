@@ -94,3 +94,4 @@ npm test  # Runs test.ts with nodemon
 
 ## Claude Code Settings
 - NEVER include Claude Code attribution or co-author lines in git commit messages
+- NEVER commit changes without explicit user authorization - always ask for permission before running git commit
