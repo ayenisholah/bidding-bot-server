@@ -45,18 +45,6 @@ const colors = {
  */
 export async function handleListingPriceUpdate(message: any): Promise<void> {
   try {
-    // Debug logging for all incoming messages
-    if (process.env.DEBUG_PRICE_MONITOR === 'true') {
-      console.log('[Price Monitor Debug] Received message:', {
-        eventType: message.eventType,
-        subscriptionType: message.subscriptionType,
-        marketplace: message.marketplace,
-        contractAddress: message.contractAddress,
-        tokenId: message.tokenId
-      });
-    }
-
-    // Check if this is a listing event - handle new format
     // Accept both 'listings' and 'both' subscription types (when a client subscribes to both bidding and listing events)
     if (message.eventType === 'ORDER_CREATED' && (message.subscriptionType === 'listings' || message.subscriptionType === 'both')) {      // New format - direct properties
       const contractAddress = message.contractAddress?.toLowerCase();

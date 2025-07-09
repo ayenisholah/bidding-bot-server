@@ -222,22 +222,7 @@ export async function bidOnOpensea(
   const offerPriceEthFinal = Number(roundedWei) / Math.pow(10, decimal);
 
   if (offerPriceEthFinal > wethBalance) {
-    const identifier = opensea_traits ? opensea_traits : asset?.tokenId ? asset?.tokenId : slug;
-    const errorMessage = `Offer price exceeds available balance`;
-    
-    await logger.logOpenseaBidError(errorMessage, {
-      taskId: taskId,
-      collectionSlug: slug,
-      tokenId: asset?.tokenId?.toString(),
-      traitType: opensea_traits,
-      bidAmount: offerPriceEthFinal,
-      currency: currencySymbol,
-      currentBalance: wethBalance,
-      requiredBalance: offerPriceEthFinal,
-      walletAddress: wallet_address,
-      errorCode: 'INSUFFICIENT_BALANCE'
-    });
-    
+    const identifier = opensea_traits ? opensea_traits : asset?.tokenId ? asset?.tokenId : slug;  
     throw new Error(`[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEthFinal} ${currencySymbol} is greater than available ${currencySymbol} balance: ${wethBalance} ${currencySymbol}.`);
   }
 

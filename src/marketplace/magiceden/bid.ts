@@ -87,18 +87,6 @@ export async function bidOnMagiceden(
   if (offerPriceEth > wethBalance) {
     const identifier = trait ? `${trait.attributeKey}:${trait.attributeValue}` : tokenId ? tokenId : 'collection';
     const message = `[${slug.toUpperCase()}${identifier ? ` - ${identifier}` : ''}] Offer price: ${offerPriceEth} ${currencySymbol} is greater than available ${currencySymbol} balance: ${wethBalance} ${currencySymbol}. SKIPPING  MAGICEDEN...`
-    await logger.logMagicEdenBidError(message, {
-      taskId,
-      collection: slug,
-      tokenId: tokenId?.toString(),
-      traitType: trait?.attributeKey,
-      traitValue: trait?.attributeValue,
-      bidAmount: offerPriceEth,
-      currency: currencySymbol,
-      currentBalance: wethBalance,
-      walletAddress: maker,
-      errorCode: 'INSUFFICIENT_BALANCE'
-    });
     throw new Error(message)
   }
 

@@ -8,7 +8,7 @@ import axios from "axios";
 import { BASE_URL } from "../../constants";
 import { fetchERC20Balance } from "../../utils/balance";
 import { convertBigNumbers } from "../../utils/bigNumberConverter";
-import { logger } from "../../utils/logger";
+
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
 
 const prisma = new PrismaClient()
@@ -68,19 +68,6 @@ export async function bidOnBlur(
   let offerPriceEth: string = (Number(offer_price) / 1e18).toString()
 
   if (Number(offerPriceEth) > bethBalance) {
-    // Better Stack granular logging
-    await logger.logBlurBalanceError("Insufficient BETH balance for bid", {
-      taskId,
-      collectionSlug: slug,
-      contractAddress,
-      bidAmount: Number(offerPriceEth),
-      currency: "BETH",
-      requiredBalance: Number(offerPriceEth),
-      currentBalance: bethBalance,
-      walletAddress: wallet_address,
-      operation: "place_bid"
-    });
-
     throw new Error(`Insufficient BETH balance: required ${offerPriceEth} BETH, available ${bethBalance} BETH for wallet ${wallet_address} on collection ${slug}`)
   }
 

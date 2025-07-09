@@ -1205,9 +1205,16 @@ function setupQueueEventHandlers() {
     let completedJobs = 0;
     let failedJobs = 0;
     const selectedMarketplaces = task.selectedMarketplaces.map(m => m.toLowerCase());
-    const enabledAndSelectedMarketplaces = selectedMarketplaces.filter(m =>
-      enabledMarketplaces.map(em => em.toLowerCase()).includes(m)
-    );
+    // If no enabled marketplaces, use all selected marketplaces
+    const enabledAndSelectedMarketplaces = enabledMarketplaces.length > 0
+      ? selectedMarketplaces.filter(m => enabledMarketplaces.map(em => em.toLowerCase()).includes(m))
+      : selectedMarketplaces;
+
+    console.log(`[DEBUG] Job completed - Task: ${taskId}, Marketplace: ${marketplace}, ParentId: ${parentId}`);
+    console.log(`[DEBUG] ParentJob ${parentId}: completed=${parentJob.completedJobs}/${parentJob.totalJobs}, failed=${parentJob.failedJobs}`);
+    console.log(`[DEBUG] Selected marketplaces: ${selectedMarketplaces.join(', ')}`);
+    console.log(`[DEBUG] Enabled marketplaces: ${enabledMarketplaces.join(', ')}`);
+    console.log(`[DEBUG] Enabled AND Selected: ${enabledAndSelectedMarketplaces.join(', ')}`);
 
     for (const marketplace of enabledAndSelectedMarketplaces) {
       const marketplaceParentId = `${taskId}-${marketplace}`.toLowerCase();
@@ -1216,9 +1223,15 @@ function setupQueueEventHandlers() {
         totalJobs += marketplaceParentJob.totalJobs;
         completedJobs += marketplaceParentJob.completedJobs;
         failedJobs += marketplaceParentJob.failedJobs;
+        console.log(`[DEBUG] ${marketplace}: total=${marketplaceParentJob.totalJobs}, completed=${marketplaceParentJob.completedJobs}, failed=${marketplaceParentJob.failedJobs}`);
+      } else {
+        console.log(`[DEBUG] No parent job found for ${marketplace} (${marketplaceParentId})`);
       }
     }
-    const runningPercentage = ((completedJobs + failedJobs) / totalJobs) * 100
+
+    console.log(`[DEBUG] Task ${taskId} totals - Jobs: ${totalJobs}, Completed: ${completedJobs}, Failed: ${failedJobs}`);
+    const runningPercentage = totalJobs > 0 ? ((completedJobs + failedJobs) / totalJobs) * 100 : 0;
+    console.log(`[DEBUG] Task ${taskId} running percentage: ${runningPercentage.toFixed(2)}%`);
     taskStatus[taskId].runningPercentage = Math.min(runningPercentage, 100) // 100 is the max value since it represents 100%
 
 
@@ -1232,15 +1245,27 @@ function setupQueueEventHandlers() {
       }
       completedTasks[taskId][marketplace as 'opensea' | 'magiceden' | 'blur'] = true
       console.log(GREEN + `Task ${taskId} completed for ${marketplace}` + RESET);
-      const availableMarketplaces = enabledAndSelectedMarketplaces.map(m => m.toLowerCase())
+      console.log(`[DEBUG] CompletedTasks[${taskId}]:`, JSON.stringify(completedTasks[taskId]));
+      const availableMarketplaces = enabledMarketplaces.length > 0
+        ? enabledAndSelectedMarketplaces.map(m => m.toLowerCase())
+        : selectedMarketplaces;
 
       // Check if all available marketplaces have completed
       if (availableMarketplaces && availableMarketplaces.length > 0) {
-        const allMarketsComplete = availableMarketplaces.every(m =>
-          completedTasks[taskId]?.[m as 'opensea' | 'magiceden' | 'blur']
-        );
+        console.log(`[DEBUG] Checking completion for available marketplaces: ${availableMarketplaces.join(', ')}`);
+        const allMarketsComplete = availableMarketplaces.every(m => {
+          const isComplete = completedTasks[taskId]?.[m as 'opensea' | 'magiceden' | 'blur'] || false;
+          console.log(`[DEBUG] ${m} completed: ${isComplete}`);
+          return isComplete;
+        });
 
-        if (allMarketsComplete && runningPercentage > 99) {
+        console.log(`[DEBUG] Task ${taskId} Status Summary:`);
+        console.log(`[DEBUG] - All markets complete: ${allMarketsComplete}`);
+        console.log(`[DEBUG] - Running percentage: ${runningPercentage.toFixed(2)}%`);
+        console.log(`[DEBUG] - Total jobs: ${totalJobs}, Completed: ${completedJobs}, Failed: ${failedJobs}`);
+        console.log(`[DEBUG] - Will transition to COMPLETED: ${allMarketsComplete && runningPercentage >= 99}`);
+
+        if (allMarketsComplete && runningPercentage >= 99) {
           console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
           const wallet = await Wallet.findById(task.walletId)
           const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
@@ -1264,8 +1289,13 @@ function setupQueueEventHandlers() {
 
             console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
             taskStatus[taskId].status = 'SCHEDULED';
+            taskStatus[taskId].runningPercentage = 0; // Reset for next run
             taskStatus[taskId].waitingTime = secondsUntilNextLoop;
             taskStatus[taskId].nextLoopTime = nextLoopTime;
+
+            // Reset completedTasks for this task
+            delete completedTasks[taskId];
+            console.log(`[DEBUG] Reset completedTasks for ${taskId}`);
 
             const countdownTimer = setInterval(() => {
               const remainingSeconds = taskStatus[taskId].nextLoopTime ? Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000)) : 0
@@ -1286,6 +1316,7 @@ function setupQueueEventHandlers() {
               // When we restart, update the status
               const currentTask = activeTasks.get(taskId);
               if (currentTask?.running) {
+                console.log(`[DEBUG] Restarting task ${taskId} after loop interval`);
                 await startTask(currentTask, true);
               } else if (currentTask) {
                 await stopTask(currentTask, false);
@@ -1335,6 +1366,7 @@ function setupQueueEventHandlers() {
 
         if (parentJob) {
           parentJob.failedJobs++;
+          console.log(`[DEBUG] Failed job for ${parentId}: failed=${parentJob.failedJobs}, completed=${parentJob.completedJobs}, total=${parentJob.totalJobs}`);
         }
       }
     }
@@ -2039,9 +2071,14 @@ async function updateTaskData(task: ITask) {
           opts: { priority: TRAIT_BID_PRIORITY.MAGICEDEN } as JobsOptions
         })) as Job[] : [] as Job[]
 
+      console.log(`[DEBUG] Creating Blur traits from ${addedTraits.length} added traits`);
+      console.log(`[DEBUG] Added traits: ${addedTraits.slice(0, 3).map(t => `${t.type}:${t.value}`).join(', ')}${addedTraits.length > 3 ? '...' : ''}`);
+
       const blurTraits = addedTraits.map((trait) => ({
         [trait.type]: trait.value
       }));
+
+      console.log(`[DEBUG] Blur traits created: ${blurTraits.length}`);
 
       const blurTraitJobs = (currentTask && currentTask.running && currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") && enabledMarketplaces.map((m) => m.toLowerCase()).includes('blur')) ? blurTraits.map((trait) => ({
         name: BLUR_TRAIT_BID,
@@ -2058,6 +2095,8 @@ async function updateTaskData(task: ITask) {
         },
         opts: { priority: TRAIT_BID_PRIORITY.BLUR } as JobsOptions
       })) as Job[] : [] as Job[]
+
+      console.log(`[DEBUG] Jobs to process - OpenSea: ${openseaTraitJobs.length}, MagicEden: ${magicedenTraitJobs.length}, Blur: ${blurTraitJobs.length}`);
 
       await Promise.all([
         processBulkJobs(openseaTraitJobs, true),
@@ -2248,6 +2287,12 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
     jobName: firstJob.name
   })
 
+  console.log(`[DEBUG] processBulkJobs - Created parent job: ${bulkJobId}`);
+  console.log(`[DEBUG] Total jobs for ${marketplace}: ${jobs.length}`);
+  console.log(`[DEBUG] Task ${taskId} running: ${task?.running}`);
+  console.log(`[DEBUG] Parent job initialized: total=${jobs.length}, completed=0, failed=0`);
+  console.log(`[DEBUG] Job names in this batch: ${jobs.slice(0, 5).map(j => j.name).join(', ')}${jobs.length > 5 ? '...' : ''}`);
+
   const tracker: BulkJobTracker = {
     taskId: firstJob.data._id,
     jobName: firstJob.name,
@@ -2347,10 +2392,17 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
           console.log(YELLOW + `No active jobs in chunk ${chunkIndex + 1}, skipping...` + RESET);
           continue;
         }
-        if (task && task.running) taskStatus[taskId].status = 'QUEUEING'
+        if (task && task.running) {
+          taskStatus[taskId].status = 'QUEUEING'
+          console.log(`[DEBUG] Task ${taskId} - Processing chunk ${chunkIndex + 1}/${chunks.length}, status: QUEUEING`);
+        }
         let retries = 3;
         const blurJobs = filteredJobs.filter((job): job is NonNullable<typeof job> => job !== null).filter(job => BLUR_JOBS.includes(job.name));
         const nonBlurJobs = filteredJobs.filter((job): job is NonNullable<typeof job> => job !== null).filter(job => !BLUR_JOBS.includes(job.name));
+
+        console.log(`[DEBUG] Chunk ${chunkIndex + 1}: Total filtered jobs: ${filteredJobs.length}`);
+        console.log(`[DEBUG] Blur jobs: ${blurJobs.length}, Non-Blur jobs: ${nonBlurJobs.length}`);
+        console.log(`[DEBUG] Blur job types: ${blurJobs.map(j => j.name).join(', ')}`);
         while (retries > 0) {
           try {
             await rateLimiter.acquire();
@@ -2375,12 +2427,29 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
             );
             // Group blur jobs by wallet address
             const blurJobsByWallet = new Map<string, typeof blurJobs>();
+            const uniqueBlurJobs = new Set<string>();
+
             for (const job of blurJobs) {
               const wallet = job.data.address;
+              // Create a unique identifier for this job
+              const jobIdentifier = `${job.name}-${job.data._id}-${job.data.trait}`;
+
+              if (uniqueBlurJobs.has(jobIdentifier)) {
+                console.log(`[DEBUG] Skipping duplicate Blur job: ${jobIdentifier}`);
+                continue;
+              }
+              uniqueBlurJobs.add(jobIdentifier);
+
               if (!blurJobsByWallet.has(wallet)) {
                 blurJobsByWallet.set(wallet, []);
               }
               blurJobsByWallet.get(wallet)?.push(job);
+            }
+
+            console.log(`[DEBUG] Blur jobs after deduplication: ${uniqueBlurJobs.size} unique jobs`);
+            console.log(`[DEBUG] Blur jobs grouped by wallet:`);
+            for (const [wallet, jobs] of blurJobsByWallet.entries()) {
+              console.log(`[DEBUG] Wallet ${wallet}: ${jobs.length} jobs`);
             }
             for (const [wallet, walletJobs] of blurJobsByWallet.entries()) {
               const waitTime = 10 * 1000;
@@ -2416,7 +2485,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
                   await new Promise(resolve => setTimeout(resolve, delayBetweenJobs));
                 }
                 blurRateLimitInfo[wallet].remaining = Math.max(0, blurRateLimitInfo[wallet].remaining - 1);
-                queue.add(job.name, job.data, {
+                const jobOptions = {
                   ...(job.jobKey ? { jobId: job.jobKey } : {}),
                   removeOnComplete: true,
                   removeOnFail: false, // Keep failed jobs for debugging
@@ -2425,11 +2494,32 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
                     type: 'exponential',
                     delay: 2000, // Start with 2 second delay
                   },
-                });
+                };
+
+                // Log job being added
+                console.log(`[DEBUG] Adding Blur job: ${job.name}, taskId: ${job.data._id}, jobKey: ${job.jobKey || 'none'}, trait: ${job.data.trait}`);
+
+                try {
+                  await queue.add(job.name, job.data, jobOptions);
+                } catch (error) {
+                  if ((error as any)?.message?.includes('Missing lock for job')) {
+                    console.log(`[DEBUG] Job already exists with key: ${job.jobKey}`);
+                  } else {
+                    throw error;
+                  }
+                }
               }
             }
-            totalAdded += (addedJobs.length + blurJobs.length);
-            tracker.completedJobs = totalAdded;
+            // Count actual Blur jobs added
+            let blurJobsAdded = 0;
+            for (const [wallet, jobs] of blurJobsByWallet.entries()) {
+              blurJobsAdded += jobs.length;
+            }
+
+            totalAdded += (addedJobs.length + blurJobsAdded);
+            tracker.processedJobs = totalAdded;
+            tracker.percentComplete = Math.round((totalAdded / tracker.totalJobs) * 100);
+            console.log(`[DEBUG] Jobs added - Non-Blur: ${addedJobs.length}, Blur: ${blurJobsAdded}, Total: ${totalAdded}/${tracker.totalJobs}`);
             break;
           } catch (error) {
             retries--;
@@ -2451,6 +2541,9 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
     tracker.status = 'completed';
     tracker.processedJobs = tracker.totalJobs;
     bulkJobTrackers.set(bulkJobId, tracker);
+
+    console.log(`[DEBUG] processBulkJobs completed for ${bulkJobId}`);
+    console.log(`[DEBUG] Total added: ${totalAdded}, Failed: ${totalFailed}`);
   } catch (error) {
     tracker.status = 'failed';
     bulkJobTrackers.set(bulkJobId, tracker);
@@ -2530,6 +2623,8 @@ function generateJobKey(job: any): string {
 
 
 async function startTask(task: ITask, start: boolean, marketplace?: string) {
+  console.log(`[DEBUG] startTask called for ${task._id}, start: ${start}, marketplace: ${marketplace || 'all'}`);
+
   if (!API_KEY) {
     console.log(RED + 'API_KEY is not set' + RESET);
     await queue.pause();
@@ -2557,6 +2652,14 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       processingPercentage: 0,
       nextLoopTime: new Date()
     };
+
+    // Initialize completedTasks for this task
+    completedTasks[task._id] = {
+      opensea: false,
+      magiceden: false,
+      blur: false
+    };
+    console.log(`[DEBUG] Initialized taskStatus and completedTasks for ${task._id}`);
   }
 
   await BidLogs.deleteMany({ taskId: task._id });
@@ -3096,6 +3199,16 @@ async function updateStatus(task: ITask) {
           processingPercentage: 0
         }
       }
+
+      // Initialize completedTasks for this task when creating from socket
+      if (!completedTasks[taskId]) {
+        completedTasks[taskId] = {
+          opensea: false,
+          magiceden: false,
+          blur: false
+        };
+      }
+      console.log(`[DEBUG] Socket: Initialized taskStatus and completedTasks for ${taskId}`);
       taskStatus[taskId].status = 'STARTED'
       await startTask(task, true);
     } else {
@@ -5210,6 +5323,15 @@ async function processOpenseaScheduledBid(task: ITask) {
       console.log(RED + `Trait bidding is not available for ${currentTask.contract.slug} on OpenSea.`.toUpperCase() + RESET);
       warningBids[currentTask._id].opensea = true;
       warningMessage[currentTask._id].opensea = `Trait bidding is not available for ${currentTask.contract.slug}`;
+      // mark opensea as completed
+      if (!completedTasks[currentTask._id]) {
+        completedTasks[currentTask._id] = {
+          blur: false,
+          magiceden: false,
+          opensea: false
+        }
+      }
+      completedTasks[currentTask._id].opensea = true;
       await logBidError(currentTask._id, "TRAIT BIDDING NOT AVAILABLE", `Trait bidding is not available for ${currentTask.contract.slug} on OpenSea.`, "warning", "opensea");
       return;
     }

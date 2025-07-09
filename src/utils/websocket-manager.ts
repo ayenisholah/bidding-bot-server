@@ -522,22 +522,7 @@ class WebSocketManager extends EventEmitter {
         this.emit('server_shutdown', message);
         return;
       }
-
-      // Always emit message for external handling (marketplace events)
-      // This ensures all messages reach handleListingPriceUpdate
       this.emit('message', message);
-      
-      // Add detailed logging for debugging message flow
-      if (message.eventType || message.type) {
-        logger.logDebug(ErrorCategory.WEBSOCKET, 'Emitted message to listeners', {
-          messageType: message.eventType || message.type,
-          marketplace: message.marketplace,
-          subscriptionType: message.subscriptionType,
-          hasListeners: this.listenerCount('message'),
-          contractAddress: message.contractAddress,
-          tokenId: message.tokenId
-        });
-      }
 
     } catch (error) {
       logger.logGeneralError('Failed to parse WebSocket message', {
