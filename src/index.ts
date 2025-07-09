@@ -10,7 +10,7 @@ config()
 
 import bodyParser from "body-parser";
 import { clearTimeout } from 'timers';
-import crypto, { randomUUID } from 'crypto';
+import crypto from 'crypto';
 import os from "os"
 import cors from "cors";
 import helmet from "helmet";
@@ -21,10 +21,10 @@ import { axiosInstance, initialize, limiter } from "./init";
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrder, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
-import { CollectionItemsQueryVariables, createListing, fetchOpenSeaCollectionItems, fetchOpenseaTraits, getCollectionDetails, getOpenseaFloor } from "./functions";
+import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, fetchOpenseaTraits, getCollectionDetails, getOpenseaFloor } from "./functions";
 import mongoose from 'mongoose';
 import Task, { ITask, SelectedTraits } from "./models/task.model";
-import { Queue, Worker, Job, JobType, UnrecoverableError, JobsOptions, QueueEvents, QueueOptions } from "bullmq";
+import { Queue, Worker, Job, JobType, JobsOptions, QueueEvents, QueueOptions } from "bullmq";
 import Wallet from "./models/wallet.model";
 import redisClient, { createBullMQConnection } from "./utils/redis";
 import { BASE_URL, ERC20_MIN_ABI } from "./constants";
@@ -36,12 +36,10 @@ import PQueue from "p-queue";
 import { PrismaClient, Order as PrismaOrder } from '@prisma/client'
 import Bottleneck from "bottleneck";
 import { USDC, WETH } from "./utils/currencies";
-import User from "./models/user.model";
 import axios from "axios";
 import { decryptPrivateKey, setPassword, getPassword, decryptPassword } from "./utils/crypto";
 import { fetchWalletNFTs } from "./utils/nft";
-import { fetchERC20Balance } from "./utils/balance";
-import { logger, DatabaseOperation, QueueOperation, ErrorCategory, MarketplaceSubCategory } from "./utils/logger";
+import { logger, DatabaseOperation, QueueOperation, ErrorCategory } from "./utils/logger";
 import WebSocketManager from "./utils/websocket-manager";
 import Listing from "./models/listing.model";
 import { initializeListingScheduler, shutdownListingScheduler, scheduleListing, cancelListingJob, processListingJob } from "./functions/listingScheduler";
@@ -491,9 +489,15 @@ async function clearQueueAndRestartJobs() {
   try {
     console.log(YELLOW + '\n=== Clearing Queue and Restarting All Jobs ===' + RESET);
 
+    // Pause the queue before obliterating
+    await queue.pause();
+    await new Promise(resolve => setTimeout(resolve, 1000));
     // Clear all existing jobs from the queue
     await queue.obliterate({ force: true });
     console.log('✅ Queue cleared successfully');
+
+    // Resume the queue after clearing
+    await queue.resume();
 
     // Clear any stored job states
     parentJobs.clear();
@@ -556,7 +560,7 @@ async function handleConnectivityRestored() {
 
 
 
-let connectivityCheckInterval: NodeJS.Timeout |null;
+let connectivityCheckInterval: NodeJS.Timeout | null;
 function startConnectivityMonitoring() {
   // Check connectivity every 30 seconds
   connectivityCheckInterval = setInterval(async () => {
@@ -3746,7 +3750,7 @@ async function connectWebSocket(): Promise<void> {
 async function handleMarketplaceMessage(message: any) {
   try {
     // First check if this is a listing price update
-    if (message.eventType === 'ORDER_CREATED') {
+    if (message.eventType === 'LISTING_CREATED') {
       // Handle listing price update for instant price matching
       await handleListingPriceUpdate(message);
       return;
@@ -4966,7 +4970,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         const offers = orders?.map((order: PrismaOrder) => order?.offerPrice)
         const currentBidPrice = !offers?.length ? 0 : Math.max(...offers?.map((offer) => Number(offer)))
         const currentBidPriceEth = currentBidPrice / 1e18
-        console.log(JSON.stringify(data));
         if (incomingPrice <= currentBidPriceEth) return
 
         let offerPrice: any = Number((blurOutbidMargin + Number(incomingPrice))?.toFixed(2))
