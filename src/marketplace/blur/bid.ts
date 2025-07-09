@@ -40,14 +40,14 @@ export async function cancelBlurRequest(taskId: string): Promise<boolean> {
     controllers.forEach(controller => controller.abort());
     activeRequests.delete(taskId);
     console.log(`Aborted ${controllers.length} Blur requests for task ${taskId}`);
-    
+
     await logger.logInfo(ErrorCategory.MARKETPLACE, 'Blur requests cancelled', {
       marketplace: 'blur',
       marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
       taskId,
       cancelledRequests: controllers.length
     });
-    
+
     return true;
   }
   console.log(`No active Blur requests found for task ${taskId}`);
