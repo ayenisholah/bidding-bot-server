@@ -228,6 +228,7 @@ const blurLimiter = new Bottleneck({
 let workers: Worker;
 
 const taskTimeouts = new Map<string, NodeJS.Timeout>();
+const taskCountdownTimers = new Map<string, NodeJS.Timeout>();
 
 // Add a Map to track task locks
 const taskLocks = new Map<string, TaskLock>();
@@ -499,6 +500,14 @@ async function clearQueueAndRestartJobs() {
     // Reset completedTasks to empty object
     Object.keys(completedTasks).forEach(key => delete completedTasks[key]);
     Object.keys(taskStatus).forEach(key => delete taskStatus[key]);
+    
+    // Clear all countdown timers
+    taskCountdownTimers.forEach((timer) => clearInterval(timer));
+    taskCountdownTimers.clear();
+    
+    // Clear all task timeouts
+    taskTimeouts.forEach((timeout) => clearTimeout(timeout));
+    taskTimeouts.clear();
 
     console.log('✅ Job states cleared');
 
@@ -1270,6 +1279,13 @@ function setupQueueEventHandlers() {
           taskStatus[taskId].status = 'STOPPED'
           delete taskStatus[taskId].nextLoopTime
           taskStatus[taskId].waitingTime = 0
+          
+          // Clear countdown timer when task is stopped
+          const countdownTimer = taskCountdownTimers.get(taskId);
+          if (countdownTimer) {
+            clearInterval(countdownTimer);
+            taskCountdownTimers.delete(taskId);
+          }
         }
       } else {
         let marketplaceCancellationPercentage;
@@ -1405,14 +1421,30 @@ function setupQueueEventHandlers() {
             taskStatus[taskId].waitingTime = secondsUntilNextLoop;
             taskStatus[taskId].nextLoopTime = nextLoopTime;
 
+            // Clear any existing countdown timer for this task
+            const existingCountdown = taskCountdownTimers.get(taskId);
+            if (existingCountdown) {
+              clearInterval(existingCountdown);
+            }
+
             const countdownTimer = setInterval(() => {
-              const remainingSeconds = taskStatus[taskId].nextLoopTime ? Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000)) : 0
+              if (!taskStatus[taskId] || !taskStatus[taskId].nextLoopTime) {
+                clearInterval(countdownTimer);
+                taskCountdownTimers.delete(taskId);
+                return;
+              }
+              
+              const remainingSeconds = Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000));
               taskStatus[taskId].waitingTime = remainingSeconds;
 
               if (remainingSeconds <= 0) {
                 clearInterval(countdownTimer);
+                taskCountdownTimers.delete(taskId);
               }
             }, 1000);
+
+            // Store the countdown timer
+            taskCountdownTimers.set(taskId, countdownTimer);
 
             // Clear any existing timeout for this task
             const existingTimeout = taskTimeouts.get(taskId);
@@ -2875,6 +2907,13 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
       markTaskAsAborted(taskId);
       const updatedTask = { ...task, running: false };
       activeTasks.set(taskId, updatedTask);
+      
+      // Clear any countdown timer for this task
+      const countdownTimer = taskCountdownTimers.get(taskId);
+      if (countdownTimer) {
+        clearInterval(countdownTimer);
+        taskCountdownTimers.delete(taskId);
+      }
     }
 
     skipStats[taskId] = {
@@ -2961,6 +3000,13 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
     if (!task?.selectedMarketplaces.length || !task.running) {
       delete taskStatus[taskId].nextLoopTime
       taskStatus[taskId].waitingTime = 0
+      
+      // Clear countdown timer
+      const countdownTimer = taskCountdownTimers.get(taskId);
+      if (countdownTimer) {
+        clearInterval(countdownTimer);
+        taskCountdownTimers.delete(taskId);
+      }
     }
 
     // get all the task, if no task, change state to stopped
@@ -2976,6 +3022,13 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
       delete taskStatus[taskId].nextLoopTime
       taskStatus[taskId].waitingTime = 0
       taskStatus[taskId].status = 'STOPPED'
+      
+      // Clear countdown timer
+      const countdownTimer = taskCountdownTimers.get(taskId);
+      if (countdownTimer) {
+        clearInterval(countdownTimer);
+        taskCountdownTimers.delete(taskId);
+      }
     }
 
     await cancelAllRelatedBids(task, WALLET_PRIVATE_KEY, marketplace);
