@@ -181,13 +181,6 @@ export async function processListingJob(job: Job): Promise<boolean> {
     // Update progress to prevent stalling
     await job.updateProgress(10);
 
-    console.log('Step 2: Logging job start...');
-    await logger.logQueueJobStarted(job.name, {
-      jobId: job.id,
-      listingId,
-      queueName: 'BIDDING_BOT',
-    });
-
     console.log('Step 3: Updating progress to 20...');
     // Update progress
     await job.updateProgress(20);
@@ -258,12 +251,6 @@ export async function processListingJob(job: Job): Promise<boolean> {
 
     // Update progress to completion
     await job.updateProgress(100);
-
-    await logger.logQueueJobCompleted(job.name, {
-      jobId: job.id,
-      listingId,
-      queueName: 'BIDDING_BOT',
-    });
 
     return true
 

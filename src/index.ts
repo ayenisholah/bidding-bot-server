@@ -813,24 +813,7 @@ async function startServer() {
       async (job) => {
         const startTime = Date.now();
         try {
-          await logger.logQueueJobStarted(job.name, {
-            jobId: job.id,
-            taskId: job.data.taskId,
-            marketplace: job.data.marketplace,
-            jobAttempts: job.attemptsMade,
-            queueName: QUEUE_NAME
-          });
-
           await processJob(job);
-
-          await logger.logQueueJobCompleted(job.name, {
-            jobId: job.id,
-            taskId: job.data.taskId,
-            marketplace: job.data.marketplace,
-            duration: Date.now() - startTime,
-            queueName: QUEUE_NAME
-          });
-
           return { success: true };
         } catch (error) {
           // Log the error for debugging

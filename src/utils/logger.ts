@@ -507,23 +507,6 @@ export class AxiomLogger {
       jobName
     });
   }
-
-  async logQueueJobStarted(jobName: string, context: LogContext = {}) {
-    await this.sendLog(LogLevel.INFO, ErrorCategory.QUEUE, `Job started: ${jobName}`, {
-      ...context,
-      queueOperation: QueueOperation.PROCESS_JOB,
-      jobName
-    });
-  }
-
-  async logQueueJobCompleted(jobName: string, context: LogContext = {}) {
-    await this.sendLog(LogLevel.INFO, ErrorCategory.QUEUE, `Job completed: ${jobName}`, {
-      ...context,
-      queueOperation: QueueOperation.COMPLETE_JOB,
-      jobName
-    });
-  }
-
   async logQueueJobFailed(jobName: string, context: LogContext = {}) {
     await this.sendLog(LogLevel.ERROR, ErrorCategory.QUEUE, `Job failed: ${jobName}`, {
       ...context,
