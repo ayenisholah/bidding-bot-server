@@ -516,22 +516,29 @@ async function buildOffer(taskId: string, buildPayload: any) {
 }
 
 export async function cancelOrder(orderHash: string, protocolAddress: string, privateKey: string, taskId: string) {
-  if (!orderHash || !protocolAddress || !privateKey) return
+  try {
+    if (!orderHash || !protocolAddress || !privateKey) return
 
-  const offererSignature = await signCancelOrder(taskId, orderHash, protocolAddress, privateKey);
-  if (!offererSignature) return;
-  const url = `${BASE_URL}/opensea/api/v2/orders/chain/ethereum/protocol/${protocolAddress}/${orderHash}/cancel`;
-  const headers = {
-    'content-type': 'application/json',
-    'x-api-key': API_KEY
-  };
+    const offererSignature = await signCancelOrder(taskId, orderHash, protocolAddress, privateKey);
+    if (!offererSignature) return;
+    const url = `${BASE_URL}/opensea/api/v2/orders/chain/ethereum/protocol/${protocolAddress}/${orderHash}/cancel`;
+    const headers = {
+      'content-type': 'application/json',
+      'x-api-key': API_KEY
+    };
 
-  const body = { offerer_signature: offererSignature };
+    const body = { offerer_signature: offererSignature };
 
-  const response = await limiter.schedule(() => axiosInstance.post(url, body, { headers }))
-  console.log(JSON.stringify({ cancelled: true }));
-  decrementBidCount('opensea', taskId)
-  return response.data;
+    const response = await limiter.schedule(() => axiosInstance.post(url, body, { headers }))
+    console.log(JSON.stringify({ cancelled: true }));
+    decrementBidCount('opensea', taskId)
+    return response.data;
+  } catch (error) {
+    if (error) {
+      console.error(`Failed to cancel OpenSea order: ${error}`);
+    }
+    throw error;
+  }
 }
 
 async function signCancelOrder(taskId: string, orderHash: string, protocolAddress: string, privateKey: string) {

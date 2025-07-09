@@ -157,7 +157,6 @@ export async function fetchWalletNFTs(wallets: { address: string, walletId: stri
           error: error as Error,
           errorMessage: error instanceof Error ? error.message : String(error)
         });
-        console.log(error);
       }
     } catch (error) {
       await logger.logGeneralError(`Error fetching NFTs for wallet ${wallet.address}`, {

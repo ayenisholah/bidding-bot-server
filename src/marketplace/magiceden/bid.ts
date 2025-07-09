@@ -574,7 +574,9 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
         }
       }
     ))
-    console.log(JSON.stringify(cancelResponse));
+    if (cancelResponse) {
+      console.log(JSON.stringify(cancelResponse));
+    }
     console.log(`Successfully cancelled ${orderIds.length} MagicEden bids for task: ${taskId}`.toUpperCase());
     orderIds.forEach(() => {
       decrementBidCount('magiceden', taskId);
@@ -733,7 +735,9 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
     const floor = data?.tokens[0]?.market?.floorAsk?.price?.amount?.native
     return floor
   } catch (error) {
-    console.log(error);
+    if (error) {
+      console.error('MagicEden trait floor error:', error instanceof Error ? error.message : String(error));
+    }
   }
 }
 

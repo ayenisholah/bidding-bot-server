@@ -384,14 +384,14 @@ export async function cancelBlurBid(data: BlurCancelPayload) {
       }
     }))
     decrementBidCount('blur', taskId);
-    console.log(JSON.stringify(cancelResponse));
+    if (cancelResponse) {
+      console.log(JSON.stringify(cancelResponse));
+    }
   } catch (error: any) {
     if (error.response?.data?.message?.message !== 'No bids found') {
       const errorDetails = error?.response?.data || error?.response || error?.code || error.message;
       console.error(`Failed to cancel Blur bid for task ${data.taskId}: ${JSON.stringify(errorDetails)}`);
     }
-
-    // console.log(error.response.data || error.message);
   }
 }
 

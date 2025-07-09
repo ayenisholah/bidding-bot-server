@@ -160,7 +160,6 @@ export const listOnOpensea = async (
       error: error as Error,
       errorMessage: error instanceof Error ? error.message : String(error)
     });
-    console.log(error);
   }
 
   const listingPayload: any = {
