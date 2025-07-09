@@ -3,7 +3,7 @@ import Listing, { IListing } from '../models/listing.model';
 import { createListing } from './list';
 import { logger, ErrorCategory } from '../utils/logger';
 import WebSocketManager from '../utils/websocket-manager';
-import { queue } from '..';
+import { PROCESS_LISTING, queue } from '..';
 
 // Use the main queue from index.ts
 let mainQueue: Queue | null = null;
@@ -45,13 +45,15 @@ export async function scheduleListing(listing: IListing): Promise<void> {
 
     // Execute immediately first, then set up repeating job
     await queue.add(
-      'PROCESS_LISTING',
+      PROCESS_LISTING,
       { listingId },
       {
         jobId: `${jobId}-immediate`,
         removeOnComplete: true,
         removeOnFail: false, // Keep failed jobs for debugging
         attempts: 3, // Retry failed jobs 3 times
+        priority: 2,
+
         backoff: {
           type: 'exponential',
           delay: 2000, // Start with 2 second delay
@@ -61,13 +63,15 @@ export async function scheduleListing(listing: IListing): Promise<void> {
 
     // Then add the repeating job for future executions
     const job = await queue.add(
-      'PROCESS_LISTING',
+      PROCESS_LISTING,
       { listingId },
       {
         jobId,
         removeOnComplete: true,
         removeOnFail: false, // Keep failed jobs for debugging
         attempts: 3, // Retry failed jobs 3 times
+        priority: 2,
+
         backoff: {
           type: 'exponential',
           delay: 2000, // Start with 2 second delay
@@ -107,7 +111,7 @@ export async function cancelListingJob(listingId: string): Promise<void> {
 
     for (const scheduler of jobSchedulers) {
       // Check if this is a listing job by examining the data
-      if (scheduler.name === 'PROCESS_LISTING') {
+      if (scheduler.name === PROCESS_LISTING) {
         // Parse the job key to check if it's for this listing
         // The key format includes the listingId in the pattern
         if (scheduler.key.includes(listingId) ||
@@ -297,7 +301,7 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
     // Clean up old listing jobs
     const jobSchedulers = await queue.getJobSchedulers(0, -1, true);
     for (const scheduler of jobSchedulers) {
-      if (scheduler.name === 'PROCESS_LISTING' && scheduler.id) {
+      if (scheduler.name === PROCESS_LISTING && scheduler.id) {
         await queue.removeJobScheduler(scheduler.id);
       }
     }
@@ -404,7 +408,7 @@ export async function shutdownListingScheduler(): Promise<void> {
     const jobSchedulers = await queue.getJobSchedulers(0, -1, true);
 
     for (const scheduler of jobSchedulers) {
-      if (scheduler.name === 'PROCESS_LISTING' && scheduler.id) {
+      if (scheduler.name === PROCESS_LISTING && scheduler.id) {
         await queue.removeJobScheduler(scheduler.id);
       }
     }

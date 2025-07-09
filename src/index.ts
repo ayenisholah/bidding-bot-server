@@ -782,7 +782,7 @@ async function startServer() {
         } catch (error) {
           // Log the error for debugging
           console.error(`Job ${job.id} failed:`, error);
-          
+
           // Let BullMQ handle retries based on job configuration
           // Don't throw UnrecoverableError - let it retry
           throw error;
@@ -1307,13 +1307,13 @@ function setupQueueEventHandlers() {
     if (job) {
       const attemptsMade = job.attemptsMade || 0;
       const maxAttempts = job.opts.attempts || 3;
-      
+
       if (attemptsMade < maxAttempts) {
         console.log(`${YELLOW}Job ${jobId} failed (attempt ${attemptsMade}/${maxAttempts}): ${failedReason}${RESET}`);
         console.log(`${YELLOW}Job will be retried with exponential backoff${RESET}`);
       } else {
         console.error(`${RED}Job ${jobId} failed after ${attemptsMade} attempts: ${failedReason}${RESET}`);
-        
+
         // Log job details for debugging
         if (job.data?._id) {
           await logBidError(
@@ -1325,14 +1325,14 @@ function setupQueueEventHandlers() {
           );
         }
       }
-      
+
       // Update parent job failed count if this is the final attempt
       if (attemptsMade >= maxAttempts && jobId.split('-').length >= 3) {
         const taskId = jobId.split('-')[0];
         const marketplace = jobId.split('-')[1].toLowerCase();
         const parentId = `${taskId}-${marketplace}`.toLowerCase();
         const parentJob = parentJobs.get(parentId);
-        
+
         if (parentJob) {
           parentJob.failedJobs++;
         }
@@ -1486,7 +1486,7 @@ wss.on('connection', async (ws) => {
 
 async function processJob(job: Job) {
   try {
-     const result = await (async () => {
+    const result = await (async () => {
       switch (job.name) {
         case OPENSEA_COLLECTION_BID:
           return await processOpenseaCollectionBid(job.data);
@@ -9562,6 +9562,7 @@ async function processAllActiveListings() {
             removeOnComplete: true,
             removeOnFail: false,
             attempts: 3,
+            priority: 2,
             backoff: {
               type: 'exponential',
               delay: 5000
