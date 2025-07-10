@@ -4,6 +4,7 @@ import { getAllFloorPrices } from "./collection";
 import { logger, ErrorCategory } from "../utils/logger";
 import { createListing } from "./list";
 import { broadcastInstantPriceMatch } from "../index";
+import Wallet from "../models/wallet.model";
 
 // Store current best prices for listings we're monitoring
 const currentListingPrices: Map<string, {
@@ -59,6 +60,12 @@ export async function handleListingPriceUpdate(message: any): Promise<void> {
       if (id && processedMessageIds.has(id)) {
         return;
       }
+
+      // check if we own the wallet address
+
+      const ownWallet = await Wallet.findOne({ 
+        address: new RegExp(`^${seller}$`, 'i') 
+      })
 
       // Only log messages that match the expected format
       console.log(`\n${marketplaceColor}[${marketplace?.toUpperCase()}]${colors.reset} ${contractAddress} #${tokenId} - ${price} ETH from ${seller} at ${message.createdAt}`);
