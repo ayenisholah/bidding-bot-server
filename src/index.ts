@@ -12,6 +12,8 @@ import bodyParser from "body-parser";
 import { clearTimeout } from 'timers';
 import crypto from 'crypto';
 import os from "os"
+import fs from "fs";
+import path from "path";
 import cors from "cors";
 import helmet from "helmet";
 import stringify from 'json-stable-stringify';
@@ -31,6 +33,10 @@ import { BASE_URL, ERC20_MIN_ABI } from "./constants";
 import { Contract, ethers, Wallet as Web3Wallet, parseEther, MaxUint256 } from "ethers";
 import { DistributedLockManager } from "./utils/lock";
 import net from 'net'
+import dns from 'dns'
+
+// Set DNS options to prevent internal assertion errors
+dns.setDefaultResultOrder('ipv4first')
 import BidLogs from "./models/logs.model";
 import PQueue from "p-queue";
 import { PrismaClient, Order as PrismaOrder } from '@prisma/client'
@@ -48,7 +54,53 @@ import { initializeExpiredPriceCleanup, stopExpiredPriceCleanup } from "./functi
 import { handleListingPriceUpdate } from "./functions/priceMonitor";
 const prisma = new PrismaClient()
 
-const MARKETPLACE_WS_URL = "ws://localhost:8080";
+// Network connectivity monitoring
+let isConnected = true;
+
+// Global error handlers to prevent server crashes
+process.on('uncaughtException', (error) => {
+  console.error('UNCAUGHT EXCEPTION:', error);
+  logger.logGeneralError('Uncaught exception', {
+    error: error as Error,
+    errorMessage: error.message,
+    stack: error.stack,
+    operation: 'uncaught_exception'
+  }).catch(console.error);
+  
+  // Handle Node.js internal assertion errors
+  if (error.code === 'ERR_INTERNAL_ASSERTION') {
+    console.log('Node.js internal assertion error caught - likely network connectivity issue');
+    // Set connectivity status to false
+    isConnected = false;
+    return;
+  }
+  
+  // Don't exit the process for WebSocket errors
+  if (error.message?.includes('WebSocket') || error.message?.includes('ECONNREFUSED') || error.message?.includes('ECONNABORTED')) {
+    console.log('WebSocket error caught, continuing operation...');
+    return;
+  }
+  // For other critical errors, exit after logging
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('UNHANDLED REJECTION at:', promise, 'reason:', reason);
+  logger.logGeneralError('Unhandled rejection', {
+    reason: reason as any,
+    operation: 'unhandled_rejection'
+  }).catch(console.error);
+  // Don't exit for WebSocket rejections
+  if (reason && typeof reason === 'object' && 'message' in reason) {
+    const message = (reason as any).message;
+    if (message?.includes('WebSocket') || message?.includes('ECONNREFUSED') || message?.includes('ECONNABORTED')) {
+      console.log('WebSocket rejection caught, continuing operation...');
+      return;
+    }
+  }
+});
+
+const MARKETPLACE_WS_URL = `ws://localhost:8080?apiKey=${process.env.API_KEY}`;
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
@@ -503,8 +555,6 @@ async function clearQueueAndRestartJobs() {
     parentJobs.clear();
     // Reset completedTasks to empty object
     Object.keys(completedTasks).forEach(key => delete completedTasks[key]);
-    Object.keys(taskStatus).forEach(key => delete taskStatus[key]);
-
     // Clear all countdown timers
     taskCountdownTimers.forEach((timer) => clearInterval(timer));
     taskCountdownTimers.clear();
@@ -522,8 +572,7 @@ async function clearQueueAndRestartJobs() {
   }
 }
 
-// Network connectivity monitoring
-let isConnected = true;
+// Additional connectivity monitoring variables
 let lastConnectivityCheck = Date.now();
 
 async function checkInternetConnectivity(): Promise<boolean> {
@@ -531,10 +580,27 @@ async function checkInternetConnectivity(): Promise<boolean> {
     // Try to ping a reliable endpoint
     const response = await axios.get('https://api.etherscan.io/api?module=proxy&action=eth_blockNumber', {
       timeout: 5000,
-      validateStatus: () => true
+      validateStatus: () => true,
+      // Add specific network error handling
+      httpAgent: new http.Agent({ 
+        keepAlive: false,
+        timeout: 5000
+      }),
+      // Prevent Node.js internal errors on network failure
+      maxRedirects: 0,
+      socketPath: null,
+      proxy: false
     });
     return response.status === 200;
-  } catch (error) {
+  } catch (error: any) {
+    // Handle specific network errors gracefully
+    if (error.code === 'ECONNREFUSED' || 
+        error.code === 'ENOTFOUND' || 
+        error.code === 'ETIMEDOUT' ||
+        error.code === 'ENETUNREACH' ||
+        error.code === 'ERR_INTERNAL_ASSERTION') {
+      console.log('Network connectivity check failed:', error.code);
+    }
     return false;
   }
 }
@@ -3754,6 +3820,30 @@ async function handleMarketplaceMessage(message: any) {
       // Handle listing price update for instant price matching
       await handleListingPriceUpdate(message);
       return;
+    } else if (message.eventType === 'ITEM_SOLD') {
+      console.log(GOLD + JSON.stringify(message) + RESET);
+      
+      // Write ITEM_SOLD messages to file
+      try {
+        const logsDir = path.join(__dirname, '../logs');
+        if (!fs.existsSync(logsDir)) {
+          fs.mkdirSync(logsDir, { recursive: true });
+        }
+        
+        const timestamp = new Date().toISOString();
+        const filename = `item_sold_${new Date().toISOString().split('T')[0]}.jsonl`;
+        const filepath = path.join(logsDir, filename);
+        
+        const logEntry = {
+          timestamp,
+          eventType: message.eventType,
+          data: message
+        };
+        
+        fs.appendFileSync(filepath, JSON.stringify(logEntry) + '\n');
+      } catch (error) {
+        console.error('Failed to write ITEM_SOLD to file:', error);
+      }
     }
 
     // Otherwise, handle as a counterbid message
@@ -5748,10 +5838,11 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
 
     // Check if offer exceeds floor price (only for WETH)
     if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
+      const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA.Stopping bid...`.toUpperCase();
 
       warningBids[task._id] = { opensea: true, magiceden: true, blur: true };
+      warningMessage[task._id] = { opensea: message, magiceden: message, blur: message }
 
-      const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA.Stopping bid...`.toUpperCase();
       await logBidError(task._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "opensea");
       console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(YELLOW + message + RESET);
@@ -10138,22 +10229,6 @@ export async function logBidError(taskId: string, title: string, message: string
     console.error(RED + `Error logging bid error: ${error}` + RESET);
   }
 }
-
-
-interface BidLevel {
-  contractAddress: string;
-  updates: Update[];
-}
-
-interface Update {
-  criteriaType: string;
-  criteriaValue: Record<string, unknown>;
-  price: string;
-  executableSize: number;
-  bidderCount: number;
-  singleBidder: string | null;
-}
-
 interface BidStat {
   criteriaType: string;
   criteriaValue: { [key: string]: string };
