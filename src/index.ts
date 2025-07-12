@@ -1320,7 +1320,12 @@ function setupQueueEventHandlers() {
     const parentJob = parentJobs.get(parentId);
     if (!parentJob) return;
 
-    taskStatus[taskId].status = 'RUNNING'
+    console.log(`[TaskStatus] ${taskId}: Job ${jobId} completed - transitioning to RUNNING`);
+    if (taskStatus[taskId]) {
+      taskStatus[taskId].status = 'RUNNING'
+    } else {
+      console.warn(`[TaskStatus] ${taskId}: Cannot update status to RUNNING - taskStatus not initialized`);
+    }
     parentJob.completedJobs++;
 
     // Calculate total jobs across all selected and enabled marketplaces for this task
@@ -1345,7 +1350,11 @@ function setupQueueEventHandlers() {
     }
 
     const runningPercentage = totalJobs > 0 ? ((completedJobs + failedJobs) / totalJobs) * 100 : 0;
-    taskStatus[taskId].runningPercentage = Math.min(runningPercentage, 100) // 100 is the max value since it represents 100%
+    if (taskStatus[taskId]) {
+      taskStatus[taskId].runningPercentage = Math.min(runningPercentage, 100) // 100 is the max value since it represents 100%
+    } else {
+      console.warn(`[TaskStatus] ${taskId}: Cannot update runningPercentage - taskStatus not initialized`);
+    }
 
 
     if (parentJob.completedJobs + parentJob.failedJobs === parentJob.totalJobs) {
@@ -1381,6 +1390,7 @@ function setupQueueEventHandlers() {
             await cancelRemovedTokenBids(removedTokens[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
           }
 
+          console.log(`[TaskStatus] ${taskId}: All marketplaces completed (${availableMarketplaces.join(', ')}) - transitioning to COMPLETED`);
           taskStatus[taskId].status = 'COMPLETED';
           delete traitsToRemove[taskId];
           delete removedTokens[taskId];
@@ -1395,6 +1405,7 @@ function setupQueueEventHandlers() {
 
             // Only update taskStatus if it exists (it should have been created by startTask)
             if (taskStatus[taskId]) {
+              console.log(`[TaskStatus] ${taskId}: Scheduling next loop in ${loopInterval}s - transitioning COMPLETED → SCHEDULED`);
               taskStatus[taskId].status = 'SCHEDULED';
               taskStatus[taskId].runningPercentage = 0; // Reset for next run
               taskStatus[taskId].waitingTime = secondsUntilNextLoop;
@@ -2556,7 +2567,21 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
           continue;
         }
         if (task && task.running) {
-          taskStatus[taskId].status = 'QUEUEING'
+          console.log(`[TaskStatus] ${taskId}: Preparing to queue ${activeJobs.length} jobs for ${marketplace} - transitioning to QUEUEING`);
+          if (taskStatus[taskId]) {
+            taskStatus[taskId].status = 'QUEUEING'
+          } else {
+            console.warn(`[TaskStatus] ${taskId}: Cannot update status to QUEUEING - taskStatus not initialized`);
+            // Initialize it here to prevent further issues
+            taskStatus[taskId] = {
+              status: 'QUEUEING',
+              runningPercentage: 0,
+              waitingTime: 0,
+              cancellationPercentage: 0,
+              processingPercentage: 0,
+              nextLoopTime: new Date()
+            };
+          }
         }
         let retries = 3;
         const blurJobs = filteredJobs.filter((job): job is NonNullable<typeof job> => job !== null).filter(job => BLUR_JOBS.includes(job.name));
@@ -2776,6 +2801,19 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     console.log(RED + 'API_KEY is not set' + RESET);
     await queue.pause();
     return;
+  }
+
+  // Initialize taskStatus immediately to prevent race conditions
+  if (!taskStatus[task._id]) {
+    console.log(`[TaskStatus] ${task._id}: Initializing in startTask - STARTED`);
+    taskStatus[task._id] = {
+      status: 'STARTED',
+      runningPercentage: 0,
+      waitingTime: 0,
+      cancellationPercentage: 0,
+      processingPercentage: 0,
+      nextLoopTime: new Date()
+    };
   }
 
   // Check if task is already running to prevent duplicate starts
@@ -5386,6 +5424,7 @@ async function processOpenseaScheduledBid(task: ITask) {
     if (!currentTask || !currentTask.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return;
 
     if (!taskStatus[currentTask._id]) {
+      console.log(`[TaskStatus] ${currentTask._id}: Initializing for OpenSea - STARTED`);
       taskStatus[currentTask._id] = {
         status: 'STARTED',
         runningPercentage: 0,
@@ -5672,7 +5711,10 @@ async function processOpenseaScheduledBid(task: ITask) {
         { priority: COLLECTION_BID_PRIORITY.OPENSEA, jobId } as JobsOptions
       );
 
-      if (currentTask && currentTask.running) taskStatus[currentTask._id].status = 'QUEUED'
+      if (currentTask && currentTask.running) {
+        console.log(`[TaskStatus] ${currentTask._id}: Jobs successfully queued - transitioning to QUEUED`);
+        taskStatus[currentTask._id].status = 'QUEUED'
+      }
     }
   } catch (error) {
     console.error(RED + `Error processing OpenSea scheduled bid for task: ${task._id}` + RESET, error);
@@ -5990,8 +6032,9 @@ async function processBlurScheduledBid(task: ITask) {
     warningBids[currentTask._id].blur = false;
     const contractAddress = currentTask.contract.contractAddress
     if (!taskStatus[currentTask._id]) {
+      console.log(`[TaskStatus] ${currentTask._id}: Initializing for Blur - STARTED`);
       taskStatus[currentTask._id] = {
-        status: 'SCHEDULED',
+        status: 'STARTED',
         runningPercentage: 0,
         waitingTime: 0,
         cancellationPercentage: 0,
@@ -5999,7 +6042,7 @@ async function processBlurScheduledBid(task: ITask) {
         nextLoopTime: new Date()
       }
     }
-    taskStatus[currentTask._id].status = 'SCHEDULED'
+    taskStatus[currentTask._id].status = 'STARTED'
 
     const newTask = { ...currentTask, traits: {} } as ITask
 
@@ -6043,7 +6086,10 @@ async function processBlurScheduledBid(task: ITask) {
         { priority: COLLECTION_BID_PRIORITY.BLUR, jobId } as JobsOptions
       );
 
-      if (currentTask && currentTask.running) taskStatus[currentTask._id].status = 'QUEUED'
+      if (currentTask && currentTask.running) {
+        console.log(`[TaskStatus] ${currentTask._id}: Jobs successfully queued - transitioning to QUEUED`);
+        taskStatus[currentTask._id].status = 'QUEUED'
+      }
     }
   } catch (error) {
     console.error(RED + `Error processing Blur scheduled bid for task: ${task._id}` + RESET, error);
@@ -7140,6 +7186,7 @@ async function processMagicedenScheduledBid(task: ITask) {
     if (!currentTask || !currentTask?.running || !currentTask?.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("magiceden")) return
 
     if (!taskStatus[currentTask._id]) {
+      console.log(`[TaskStatus] ${currentTask._id}: Initializing for Magic Eden - STARTED`);
       taskStatus[currentTask._id] = {
         status: 'STARTED',
         runningPercentage: 0,
@@ -7394,7 +7441,10 @@ async function processMagicedenScheduledBid(task: ITask) {
         { task: newTask },
         { priority: COLLECTION_BID_PRIORITY.MAGICEDEN, jobId } as JobsOptions
       );
-      if (currentTask && currentTask.running) taskStatus[currentTask._id].status = 'QUEUED'
+      if (currentTask && currentTask.running) {
+        console.log(`[TaskStatus] ${currentTask._id}: Jobs successfully queued - transitioning to QUEUED`);
+        taskStatus[currentTask._id].status = 'QUEUED'
+      }
     }
   } catch (error) {
     console.error(RED + `Error processing MagicEden scheduled bid for task: ${task._id}` + RESET, error);

@@ -145,7 +145,7 @@ class WebSocketManager extends EventEmitter {
             } catch (error) {
               // Ignore close errors during connection phase
               logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing WebSocket during timeout', {
-                error: error instanceof Error ? error.message : String(error)
+                error: error instanceof Error ? error : new Error(String(error))
               });
             }
           }
