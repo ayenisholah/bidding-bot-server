@@ -60,6 +60,9 @@ export async function listOnBlur(
     const durationMs = durationInSeconds * 1000;
     const expirationTime = new Date(Date.now() + durationMs).toISOString();
 
+    console.log({ expirationTime });
+
+
     const options = {
       method: 'POST',
       url: `${BASE_URL}/blur/v1/orders/format`,
@@ -96,12 +99,12 @@ export async function listOnBlur(
 
     if (data?.errors) {
       console.error('Blur format errors:', JSON.stringify(data.errors, null, 2));
-      
+
       // Check if the error is because user no longer owns the NFT
       const errorMessage = data.errors?.message || '';
       if (errorMessage.includes('You need to own this NFT')) {
         console.log(`User no longer owns NFT ${nftAddress}/${tokenId}, deleting listing...`);
-        
+
         try {
           await Listing.findOneAndDelete({
             "contract.contractAddress": nftAddress,
@@ -112,7 +115,7 @@ export async function listOnBlur(
           console.error('Error deleting listing:', deleteError);
         }
       }
-      
+
       return;
     }
 
@@ -189,12 +192,12 @@ export async function listOnBlur(
 
       if (listings.errors) {
         console.error('Blur submit errors:', JSON.stringify(listings.errors, null, 2));
-        
+
         // Check if the error is because user no longer owns the NFT
         const errorMessage = listings.errors?.message || '';
         if (errorMessage.includes('You need to own this NFT')) {
           console.log(`User no longer owns NFT ${nftAddress}/${tokenId}, deleting listing...`);
-          
+
           try {
             await Listing.findOneAndDelete({
               "contract.contractAddress": nftAddress,

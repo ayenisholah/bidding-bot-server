@@ -204,11 +204,27 @@ export const listOnOpensea = async (
   const offerPrice = parseEther(roundedPrice.toString());
 
   // Payload data
-  listingPayload.parameters.startTime = BigInt(
-    Math.floor(Date.now() / 1000)
-  ).toString();
+  // Debug logging for duration
+  console.log(`[OPENSEA] Duration parameters: value=${durationInSeconds} seconds`);
+  
+  const currentTime = Math.floor(Date.now() / 1000);
+  const endTime = Math.floor(Date.now() / 1000 + durationInSeconds);
+  
+  console.log(`[OPENSEA] Start time: ${currentTime} (${new Date(currentTime * 1000).toISOString()})`);
+  console.log(`[OPENSEA] End time: ${endTime} (${new Date(endTime * 1000).toISOString()})`);
+  console.log(`[OPENSEA] Difference: ${endTime - currentTime} seconds`);
+  
+  // Ensure minimum duration of 15 minutes (900 seconds) as per OpenSea requirements
+  const minDuration = 900; // 15 minutes in seconds
+  const actualDuration = durationInSeconds < minDuration ? minDuration : durationInSeconds;
+  
+  if (durationInSeconds < minDuration) {
+    console.log(`[OPENSEA] WARNING: Duration ${durationInSeconds}s is less than minimum ${minDuration}s (15 minutes), using minimum`);
+  }
+  
+  listingPayload.parameters.startTime = BigInt(currentTime).toString();
   listingPayload.parameters.endTime = BigInt(
-    Math.floor(Date.now() / 1000 + durationInSeconds)
+    currentTime + actualDuration
   ).toString();
   const itemType = 2;
   listingPayload.parameters.offerer = wallet.address;

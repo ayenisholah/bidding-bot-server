@@ -299,7 +299,7 @@ function convertToSeconds(value: number, unit: string): number {
     case 'days':
       return value * 60 * 60 * 24;
     default:
-      return 900; // assume already in seconds
+      return 900; // default to 15 minutes (900 seconds) if unit is not recognized
   }
 }
 

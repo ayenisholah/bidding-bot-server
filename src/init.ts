@@ -36,42 +36,7 @@ const retryConfig: IAxiosRetryConfig = {
 };
 
 async function initialize(rateLimit: number) {
-  axiosInstance = axios.create({ 
-    timeout: 60000,
-    // Prevent Node.js internal errors
-    maxRedirects: 5,
-    validateStatus: (status) => status < 500,
-    // Better error handling for network issues
-    transitional: {
-      silentJSONParsing: true,
-      forcedJSONParsing: true,
-      clarifyTimeoutError: true
-    }
-  });
-
-  // Add request interceptor to handle network errors
-  axiosInstance.interceptors.request.use(
-    (config) => config,
-    (error) => {
-      if (error.code === 'ERR_INTERNAL_ASSERTION') {
-        console.error('Node.js internal assertion error in axios request');
-        return Promise.reject(new Error('Network connectivity issue'));
-      }
-      return Promise.reject(error);
-    }
-  );
-
-  // Add response interceptor for better error handling
-  axiosInstance.interceptors.response.use(
-    (response) => response,
-    (error) => {
-      if (error.code === 'ERR_INTERNAL_ASSERTION') {
-        console.error('Node.js internal assertion error in axios response');
-        return Promise.reject(new Error('Network connectivity issue'));
-      }
-      return Promise.reject(error);
-    }
-  );
+  axiosInstance = axios.create({ timeout: 60000 });
 
   limiter = new Bottleneck({
     minTime: 1000 / rateLimit,

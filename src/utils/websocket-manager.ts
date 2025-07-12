@@ -138,7 +138,17 @@ class WebSocketManager extends EventEmitter {
         this.isReconnecting = false;
         if (this.ws) {
           this.ws.removeAllListeners();
-          this.ws.close();
+          // Only close if the WebSocket is not already closing/closed
+          if (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN) {
+            try {
+              this.ws.close();
+            } catch (error) {
+              // Ignore close errors during connection phase
+              logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing WebSocket during timeout', {
+                error: error instanceof Error ? error.message : String(error)
+              });
+            }
+          }
         }
         this.attemptReconnect();
       }, this.config.connectionTimeout);
@@ -157,6 +167,13 @@ class WebSocketManager extends EventEmitter {
       this.ws.on('message', this.handleMessage.bind(this));
       this.ws.on('close', this.handleClose.bind(this));
       this.ws.on('error', this.handleError.bind(this));
+
+      // Handle any errors during connection phase
+      this.ws.once('error', (error) => {
+        clearTimeout(connectionTimeout);
+        logger.logWebSocketError('WebSocket connection error', error);
+        // The error handler and close handler will take care of reconnection
+      });
 
     } catch (error) {
       logger.logWebSocketError('Connection attempt failed', error as Error);

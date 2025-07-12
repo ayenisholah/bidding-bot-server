@@ -63,10 +63,11 @@ export async function handleListingPriceUpdate(message: any): Promise<void> {
 
       // check if we own the wallet address
 
-      const ownWallet = await Wallet.findOne({ 
-        address: new RegExp(`^${seller}$`, 'i') 
+      const ownWallet = await Wallet.findOne({
+        address: new RegExp(`^${seller}$`, 'i')
       })
 
+      if (!ownWallet) return
       // Only log messages that match the expected format
       console.log(`\n${marketplaceColor}[${marketplace?.toUpperCase()}]${colors.reset} ${contractAddress} #${tokenId} - ${price} ETH from ${seller} at ${message.createdAt}`);
 
