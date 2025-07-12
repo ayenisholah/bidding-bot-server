@@ -6,6 +6,7 @@ import { config } from "dotenv";
 import { BASE_URL, domain, minABI, NETWORK } from "../../constants";
 import Listing from "../../models/listing.model";
 import { logger } from "../../utils/logger";
+import { convertDurationForOpenSea } from "../../utils/duration";
 
 config()
 
@@ -119,7 +120,7 @@ const provider = new AlchemyProvider(NETWORK, ALCHEMY_API_KEY)
  * @param price - The listing price in ETH (e.g., 1.5 for 1.5 ETH)
  * @param wallet - The wallet instance used for signing the listing transaction
  * @param enforceCreatorFee - Whether to enforce creator royalties on the listing
- * @param durationInSeconds - The listing duration in seconds from now
+ * @param listDuration - Duration object containing value and unit
  * @param creatorFees - Object containing creator fee addresses and their respective fee percentages (in basis points)
  * @returns Promise<void> - Resolves when the listing is successfully created or throws an error
  * 
@@ -131,7 +132,7 @@ const provider = new AlchemyProvider(NETWORK, ALCHEMY_API_KEY)
  *   1.5, // 1.5 ETH
  *   wallet,
  *   true,
- *   86400, // 24 hours
+ *   { value: 24, unit: "hours" },
  *   { "0x123...": 250 } // 2.5% creator fee
  * );
  * ```
@@ -142,7 +143,7 @@ export const listOnOpensea = async (
   price: number,
   wallet: Wallet,
   enforceCreatorFee: boolean,
-  durationInSeconds: number,
+  listDuration: { value: number; unit: string },
   creatorFees: IFee | undefined,
 ) => {
 
@@ -204,8 +205,9 @@ export const listOnOpensea = async (
   const offerPrice = parseEther(roundedPrice.toString());
 
   // Payload data
-  // Debug logging for duration
-  console.log(`[OPENSEA] Duration parameters: value=${durationInSeconds} seconds`);
+  // Convert duration to seconds using OpenSea-specific converter
+  const durationInSeconds = convertDurationForOpenSea(listDuration);
+  console.log(`[OPENSEA] Duration: ${listDuration.value} ${listDuration.unit} = ${durationInSeconds} seconds`);
   
   const currentTime = Math.floor(Date.now() / 1000);
   const endTime = Math.floor(Date.now() / 1000 + durationInSeconds);
@@ -214,17 +216,9 @@ export const listOnOpensea = async (
   console.log(`[OPENSEA] End time: ${endTime} (${new Date(endTime * 1000).toISOString()})`);
   console.log(`[OPENSEA] Difference: ${endTime - currentTime} seconds`);
   
-  // Ensure minimum duration of 15 minutes (900 seconds) as per OpenSea requirements
-  const minDuration = 900; // 15 minutes in seconds
-  const actualDuration = durationInSeconds < minDuration ? minDuration : durationInSeconds;
-  
-  if (durationInSeconds < minDuration) {
-    console.log(`[OPENSEA] WARNING: Duration ${durationInSeconds}s is less than minimum ${minDuration}s (15 minutes), using minimum`);
-  }
-  
   listingPayload.parameters.startTime = BigInt(currentTime).toString();
   listingPayload.parameters.endTime = BigInt(
-    currentTime + actualDuration
+    currentTime + durationInSeconds
   ).toString();
   const itemType = 2;
   listingPayload.parameters.offerer = wallet.address;

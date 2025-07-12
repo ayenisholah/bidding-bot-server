@@ -5,6 +5,7 @@ import { axiosInstance } from "../../init";
 import Listing from "../../models/listing.model";
 import { logger } from "../../utils/logger";
 import Bottleneck from "bottleneck";
+import { convertDurationForMagicEden } from "../../utils/duration";
 
 const API_KEY = process.env.API_KEY;
 
@@ -25,7 +26,7 @@ const magicEdenLimiter = new Bottleneck({
  * @param contract - The contract address of the NFT collection
  * @param tokenId - The token ID of the NFT to list
  * @param listingPrice - The listing price in ETH (e.g., 1.5 for 1.5 ETH)
- * @param durationInSeconds - The listing duration in seconds from now
+ * @param listDuration - Duration object containing value and unit
  * @param wallet - The wallet instance used for signing the listing transaction
  * @returns Promise<any|null> - Returns the listing response data on success, null on failure
  * 
@@ -36,7 +37,7 @@ const magicEdenLimiter = new Bottleneck({
  *   "0x524cab2ec69124574082676e6f654a18df49a048",
  *   "1234",
  *   1.5, // 1.5 ETH
- *   86400, // 24 hours
+ *   { value: 24, unit: "hours" },
  *   wallet
  * );
  * ```
@@ -53,7 +54,7 @@ const magicEdenLimiter = new Bottleneck({
  * The function uses Magic Eden's Payment Processor V2 orderbook system
  * and handles automated royalties through their platform.
  */
-export async function listOnMagicEden(walletAddress: string, contract: string, tokenId: string, listingPrice: number, durationInSeconds: number, wallet: Wallet) {
+export async function listOnMagicEden(walletAddress: string, contract: string, tokenId: string, listingPrice: number, listDuration: { value: number; unit: string }, wallet: Wallet) {
   const listEndpoint =
     `${BASE_URL}/magiceden/v3/rtp/ethereum/execute/list/v5`;
   const signEndpoint =
@@ -63,6 +64,10 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
   };
   const roundedPrice = Math.round(listingPrice * 10000) / 10000;
   const weiPrice = (roundedPrice * 1e18).toString()
+
+  // Convert duration to seconds using Magic Eden-specific converter
+  const durationInSeconds = convertDurationForMagicEden(listDuration);
+  console.log(`[MAGICEDEN] Duration: ${listDuration.value} ${listDuration.unit} = ${durationInSeconds} seconds`);
 
   const expirationTime = (
     Math.floor(Date.now() / 1000) + durationInSeconds
@@ -95,7 +100,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
         },
       ],
     };
-    
+
     const listResponse = await magicEdenLimiter.schedule(() =>
       axiosInstance.post(
         listEndpoint,
@@ -107,7 +112,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
     const signStep = listResponse.data.steps.find(
       (step: any) => step.id === "order-signature"
     );
-    
+
     if (!signStep) {
       await logger.logMagicEdenListingError('No order-signature step found in response', {
         walletAddress,
@@ -121,7 +126,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
       console.error('Available steps:', listResponse.data.steps);
       throw new Error('No order-signature step found');
     }
-    
+
     const signData = signStep.items[0].data.sign;
 
     const signature = await wallet.signTypedData(
@@ -134,11 +139,11 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
 
     // Override marketplace address to Magic Eden's expected value
     const correctMarketplace = "0xca9337244b5f04cb946391bc8b8a980e988f9a6a";
-    
+
     if (marketplace && marketplace !== correctMarketplace) {
       console.log(`Overriding marketplace address from ${marketplace} to ${correctMarketplace}`);
     }
-    
+
     const order = {
       items: [
         {
@@ -167,16 +172,16 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
         { headers }
       )
     );
-    
+
     console.log("NFT listed successfully on Magic Eden");
-    
+
     // Update finalListingPrice.magiceden and expiration in the database
     try {
       const expirationTime = new Date(Date.now() + durationInSeconds * 1000);
       const updatedListing = await Listing.findOneAndUpdate(
-        { 
-          "contract.contractAddress": contract, 
-          tokenId: tokenId 
+        {
+          "contract.contractAddress": contract,
+          tokenId: tokenId
         },
         [
           {
@@ -195,7 +200,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
         ],
         { new: true }
       );
-      
+
       if (updatedListing) {
         console.log(`Updated listing ${contract} #${tokenId} with magiceden price: ${roundedPrice} ETH, expires at: ${expirationTime.toISOString()}`);
       }
@@ -210,7 +215,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
       });
       console.error('Error updating listing in database:', updateError);
     }
-    
+
     return finalListingResponse.data;
   } catch (error: any) {
     await logger.logMagicEdenListingError('Magic Eden listing failed', {
@@ -236,12 +241,12 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
       console.error('Error message:', error.message);
       console.error('Error stack:', error.stack);
     }
-    
+
     // Check if the error is because user no longer owns the NFT
     const errorMessage = JSON.stringify(error?.response?.data || error?.message || '').toLowerCase();
     if (errorMessage.includes('not owned') || errorMessage.includes('ownership') || errorMessage.includes('not the owner') || errorMessage.includes('unauthorized')) {
       console.log(`User no longer owns NFT ${contract}/${tokenId}, deleting listing...`);
-      
+
       try {
         await Listing.findOneAndDelete({
           "contract.contractAddress": contract,
@@ -252,7 +257,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
         console.error('Error deleting listing:', deleteError);
       }
     }
-    
+
     return null;
   }
 }

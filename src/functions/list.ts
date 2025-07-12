@@ -232,17 +232,17 @@ export async function createListing(data: IListing) {
           case 'opensea':
             console.log(`Calling listOnOpensea with price: ${listingPrice} ETH`);
             console.log('Parameters:', { contractAddress, tokenId, listingPrice, enforceCreatorFee, durationInSeconds, creatorFees });
-            result = await listOnOpensea(contractAddress, tokenId, listingPrice, web3Wallet, enforceCreatorFee, durationInSeconds, creatorFees);
+            result = await listOnOpensea(contractAddress, tokenId, listingPrice, web3Wallet, enforceCreatorFee, freshData.listDuration, creatorFees);
             break;
           case 'blur':
             console.log(`Calling listOnBlur with price: ${listingPrice} ETH (as string: "${listingPrice.toString()}")`);
             console.log('Parameters:', { contractAddress, tokenId, price: listingPrice.toString(), durationInSeconds, totalCreatorFee });
-            result = await listOnBlur(contractAddress, tokenId, listingPrice.toString(), web3Wallet, blurAccessToken!, durationInSeconds, totalCreatorFee);
+            result = await listOnBlur(contractAddress, tokenId, listingPrice.toString(), web3Wallet, blurAccessToken!, freshData.listDuration, totalCreatorFee);
             break;
           case 'magiceden':
             console.log(`Calling listOnMagicEden with price: ${listingPrice} ETH`);
             console.log('Parameters:', { walletAddress, contractAddress, tokenId, listingPrice, durationInSeconds });
-            result = await listOnMagicEden(walletAddress, contractAddress, tokenId, listingPrice, durationInSeconds, web3Wallet);
+            result = await listOnMagicEden(walletAddress, contractAddress, tokenId, listingPrice, freshData.listDuration, web3Wallet);
             break;
           default:
             console.warn(`Unknown marketplace: ${marketplace}`);

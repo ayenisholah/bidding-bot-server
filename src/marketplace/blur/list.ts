@@ -4,6 +4,7 @@ import { BASE_URL } from "../../constants";
 import { axiosInstance, limiter } from "../../init";
 import { Wallet } from "ethers";
 import Listing from "../../models/listing.model";
+import { convertDurationForBlur } from "../../utils/duration";
 
 config()
 const API_KEY = process.env.API_KEY;
@@ -16,7 +17,7 @@ const API_KEY = process.env.API_KEY;
  * @param price - The listing price as a string in ETH (e.g., "1.5" for 1.5 ETH)
  * @param wallet - The wallet instance used for signing the listing transaction
  * @param authToken - Blur authentication token for API access
- * @param durationInSeconds - The listing duration in seconds from now
+ * @param listDuration - Duration object containing value and unit
  * @param feeRate - Creator fee rate as a decimal (e.g., 0.025 for 2.5% creator fee)
  * @returns Promise<void> - Resolves when the listing is successfully created or throws an error
  * 
@@ -28,7 +29,7 @@ const API_KEY = process.env.API_KEY;
  *   "1.5", // 1.5 ETH as string
  *   wallet,
  *   "blur_auth_token_xyz",
- *   86400, // 24 hours
+ *   { value: 24, unit: "hours" },
  *   0.025 // 2.5% creator fee
  * );
  * ```
@@ -47,7 +48,7 @@ export async function listOnBlur(
   price: string,
   wallet: Wallet,
   authToken: string,
-  durationInSeconds: number,
+  listDuration: { value: number; unit: string },
   feeRate: number) {
 
   try {
@@ -57,11 +58,39 @@ export async function listOnBlur(
       '0x2f18f339620a63e43f0839eeb18d7de1e1be4dfb'
     );
 
-    const durationMs = durationInSeconds * 1000;
-    const expirationTime = new Date(Date.now() + durationMs).toISOString();
+    // Convert duration to seconds using Blur-specific converter
+    const durationInSeconds = convertDurationForBlur(listDuration);
+    console.log(`[BLUR] Duration: ${listDuration.value} ${listDuration.unit} = ${durationInSeconds} seconds`);
+    
+    // Add buffer time to account for processing delays and API latency
+    const bufferSeconds = 120; // 120 second buffer to ensure we meet Blur's requirements
+    const finalDuration = durationInSeconds + bufferSeconds;
+    
+    // Calculate expiration time right before sending to ensure freshness
+    const durationMs = finalDuration * 1000;
+    const nowTimestamp = Date.now();
+    const expirationTimestamp = nowTimestamp + durationMs;
+    const expirationTime = new Date(expirationTimestamp).toISOString();
 
-    console.log({ expirationTime });
+    console.log('=== Blur Expiration Time Calculation ===');
+    console.log('Now:', new Date(nowTimestamp).toISOString());
+    console.log('Duration requested (seconds):', durationInSeconds);
+    console.log('Buffer added (seconds):', bufferSeconds);
+    console.log('Final duration (seconds):', finalDuration);
+    console.log('Final duration (minutes):', finalDuration / 60);
+    console.log('Expiration time:', expirationTime);
+    console.log('Time until expiration (minutes):', (expirationTimestamp - nowTimestamp) / (1000 * 60));
 
+
+    // Recalculate expiration time just before sending to minimize delay
+    const requestNowTimestamp = Date.now();
+    const requestExpirationTimestamp = requestNowTimestamp + durationMs;
+    const requestExpirationTime = new Date(requestExpirationTimestamp).toISOString();
+    
+    console.log('Request time calculation:');
+    console.log('- Request sent at:', new Date(requestNowTimestamp).toISOString());
+    console.log('- Time since initial calculation (ms):', requestNowTimestamp - nowTimestamp);
+    console.log('- Updated expiration time:', requestExpirationTime);
 
     const options = {
       method: 'POST',
@@ -83,7 +112,7 @@ export async function listOnBlur(
             tokenId: tokenId,
             feeRate: feeRate,
             contractAddress: nftAddress,
-            expirationTime: expirationTime
+            expirationTime: requestExpirationTime
           }
         ]
       }
@@ -99,10 +128,23 @@ export async function listOnBlur(
 
     if (data?.errors) {
       console.error('Blur format errors:', JSON.stringify(data.errors, null, 2));
+      
+      // Log timing information when expiration error occurs
+      const errorMessage = JSON.stringify(data.errors);
+      if (errorMessage.includes('expiration') || errorMessage.includes('future')) {
+        const nowCheck = Date.now();
+        const expirationCheck = new Date(requestExpirationTime).getTime();
+        console.error('=== Blur Expiration Error Debug ===');
+        console.error('Error received at:', new Date(nowCheck).toISOString());
+        console.error('Expiration time sent:', requestExpirationTime);
+        console.error('Time difference (minutes):', (expirationCheck - nowCheck) / (1000 * 60));
+        console.error('Request-to-error delay (ms):', nowCheck - requestNowTimestamp);
+        console.error('Full error:', data.errors);
+      }
 
       // Check if the error is because user no longer owns the NFT
-      const errorMessage = data.errors?.message || '';
-      if (errorMessage.includes('You need to own this NFT')) {
+      const errorMsg = data.errors?.message || '';
+      if (errorMsg.includes('You need to own this NFT')) {
         console.log(`User no longer owns NFT ${nftAddress}/${tokenId}, deleting listing...`);
 
         try {
@@ -215,7 +257,8 @@ export async function listOnBlur(
         try {
           // Convert price string to number for database storage
           const priceInEth = parseFloat(price);
-          const expirationTime = new Date(Date.now() + durationInSeconds * 1000);
+          // Use the same expiration timestamp that was sent to Blur
+          const dbExpirationTime = new Date(requestExpirationTimestamp);
 
           const updatedListing = await Listing.findOneAndUpdate(
             {
@@ -226,7 +269,7 @@ export async function listOnBlur(
               {
                 $set: {
                   "finalListingPrice.blur": priceInEth,
-                  "listingExpiration.blur": expirationTime,
+                  "listingExpiration.blur": dbExpirationTime,
                   lastListedAt: {
                     $mergeObjects: [
                       { $cond: [{ $eq: [{ $type: "$lastListedAt" }, "object"] }, "$lastListedAt", {}] },
@@ -241,7 +284,7 @@ export async function listOnBlur(
           );
 
           if (updatedListing) {
-            console.log(`Updated listing ${nftAddress} #${tokenId} with blur price: ${priceInEth} ETH, expires at: ${expirationTime.toISOString()}`);
+            console.log(`Updated listing ${nftAddress} #${tokenId} with blur price: ${priceInEth} ETH, expires at: ${dbExpirationTime.toISOString()}`);
           }
         } catch (updateError) {
           console.error('Error updating listing in database:', updateError);
