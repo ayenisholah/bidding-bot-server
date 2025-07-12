@@ -1,4 +1,127 @@
-when the server restarts, it should:
-1. Subscribe to WebSocket if instantPriceMatching is enabled
-2. Schedule the listing jobs
-3. Immediately call createListing to list the NFT
+look at const balances: BidCounts = {}
+look at this event:
+} else if (message.eventType === 'ITEM_SOLD') {
+  // Create unique identifier for the event
+  const eventId = message.id || `${message.tokenId}-${message.transactionHash}-${message.createdAt}`;
+
+  // Check if we've already seen this event
+  if (recentItemSoldEvents.has(eventId)) {
+    console.log(YELLOW + `Skipping duplicate ITEM_SOLD event: ${eventId}` + RESET);
+    return;
+  }
+
+  // Add to seen events
+  recentItemSoldEvents.add(eventId);
+
+  console.log(GOLD + JSON.stringify(message) + RESET);
+}
+
+look at file @item_sold_2025_07_11
+if toAddress is in Wallets @wallets.model.ts
+
+update balances
+
+async function stopOption(
+  task: ITask,
+  marketplace: 'opensea' | 'magiceden' | 'blur',
+  floorPrice: number,
+  counterBid: boolean,
+  traitFloor?: number,
+  trait?: string
+): Promise<boolean> {
+  // Initialize warning tracking if not exists
+  if (!warningBids[task._id]) {
+    warningBids[task._id] = {
+      opensea: false,
+      magiceden: false,
+      blur: false
+    };
+  }
+
+  if (!warningMessage[task._id]) {
+    warningMessage[task._id] = {
+      opensea: '',
+      magiceden: '',
+      blur: ''
+    };
+  }
+
+  if (!skipStats[task._id]) {
+    skipStats[task._id] = {
+      opensea: 0,
+      magiceden: 0,
+      blur: 0
+    };
+  }
+
+  try {
+    // Early return if stop options aren't enabled
+    if (!task?.stopOptions?.triggerStopOptions) return false;
+
+    // Return false if minFloorPrice or maxFloorPrice is 0 or undefined
+    const minFloorPrice = Number(task?.stopOptions?.minFloorPrice);
+    const maxFloorPrice = Number(task?.stopOptions?.maxFloorPrice);
+
+    const traitFloorMin = task?.stopOptions?.traitPrices && trait && trait in task?.stopOptions?.traitPrices ? Number(task?.stopOptions?.traitPrices[trait].min) : 0
+    const traitFloorMax = task?.stopOptions?.traitPrices && trait && trait in task?.stopOptions?.traitPrices ? Number(task?.stopOptions?.traitPrices[trait].max) : 0
+
+
+    if (trait && traitFloor && traitFloor > 0 && (traitFloorMin > 0 || traitFloorMax > 0)) {
+      if ((traitFloorMin > 0 && traitFloor < traitFloorMin) || (traitFloorMax > 0 && traitFloor > traitFloorMax)) {
+        const message = `❌ Trait Floor price ${traitFloor} ETH for ${task.contract.slug} [${trait}] is outside the allowed range (${traitFloorMin} ETH - ${traitFloorMax} ETH). Skipping...`.toUpperCase()
+        console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        console.log(RED + message + RESET);
+        console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+
+        await logBidError(task._id, "TRAIT FLOOR OUT OF RANGE", message, 'skipped', marketplace)
+
+        if (!counterBid) {
+          skipStats[task._id][marketplace]++
+        }
+        return true
+      }
+    } else {
+      // Check if floor price is outside allowed range
+      if ((minFloorPrice > 0 && floorPrice < minFloorPrice) || (maxFloorPrice > 0 && floorPrice > maxFloorPrice)) {
+        console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        console.log(RED + `❌ Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${minFloorPrice} ETH - ${maxFloorPrice} ETH). Skipping...`.toUpperCase() + RESET);
+        console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+
+        warningBids[task._id][marketplace] = true;
+        warningMessage[task._id][marketplace] = `Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${minFloorPrice} ETH - ${maxFloorPrice} ETH).`;
+        return true;
+      }
+    }
+
+    // Check max purchase limit
+    const maxPurchase = task?.stopOptions?.maxPurchase;
+    const currentBalance = balances[task._id]?.[marketplace];
+
+    if (maxPurchase && maxPurchase > 0 && currentBalance !== undefined && currentBalance >= maxPurchase) {
+      // Set warning flags and message
+      warningBids[task._id][marketplace] = true;
+      warningMessage[task._id][marketplace] =
+        `Maximum purchase amount (${maxPurchase}) for ${task.contract.slug} has been reached. ` +
+        `Current balance: ${currentBalance} items.`;
+
+      // Log the warning
+      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      console.log(YELLOW + `⚠️ Purchase limit reached for ${task.contract.slug} on ${marketplace}. Current balance: ${currentBalance}/${maxPurchase}` + RESET);
+      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      return true;
+    }
+
+    // Clear warnings if all checks pass
+    warningBids[task._id][marketplace] = false;
+    warningMessage[task._id][marketplace] = '';
+    return false;
+
+  } catch (error) {
+    console.error(`Error in stopOption for ${task?.contract?.slug || 'unknown'} on ${marketplace}:`, error);
+    // In case of error, don't stop the task to avoid blocking
+    return false;
+  }
+}
+
+
+you can change const balances: BidCounts = {} as you see fit

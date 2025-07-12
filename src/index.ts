@@ -27,7 +27,7 @@ import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, fetchOpense
 import mongoose from 'mongoose';
 import Task, { ITask, SelectedTraits } from "./models/task.model";
 import { Queue, Worker, Job, JobType, JobsOptions, QueueEvents, QueueOptions } from "bullmq";
-import Wallet from "./models/wallet.model";
+import Wallet, { IWallet } from "./models/wallet.model";
 import redisClient, { createBullMQConnection } from "./utils/redis";
 import { BASE_URL, ERC20_MIN_ABI } from "./constants";
 import { Contract, ethers, Wallet as Web3Wallet, parseEther, MaxUint256 } from "ethers";
@@ -60,7 +60,9 @@ const currentTraits: CurrentTraits = {}
 const taskStatus: TaskStatus = {};
 const bestOffers: BidCounts = {};
 const floorPrices: BidCounts = {};
-const balances: BidCounts = {}
+// Tracks the number of items purchased per wallet per contract per marketplace
+// Structure: { walletAddress: { contractAddress: { opensea: count, magiceden: count, blur: count } } }
+const balances: WalletBalances = {}
 export const warningBids: WarningBids = {};
 export const warningMessage: WarningMessage = {};
 export const errorStats: BidCounts = {};
@@ -2754,7 +2756,7 @@ function createJobKey(job: Job) {
     default:
       uniqueKey = 'collection';
   }
-  const baseKey = `${job?.data?._id}` || Math.floor(Math.random() * Number.MAX_SAFE_INTEGER).toString()
+  const baseKey = `${job?.data?._id}`
   const key = `${baseKey}-${uniqueKey}-${job?.data?.contract?.slug || job?.data?.slug}`
   return key
 }
@@ -2794,15 +2796,6 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       opensea: 0,
       magiceden: 0,
       blur: 0
-    };
-
-    taskStatus[task._id] = {
-      status: 'STARTED',
-      runningPercentage: 0,
-      waitingTime: 0,
-      cancellationPercentage: 0,
-      processingPercentage: 0,
-      nextLoopTime: new Date()
     };
 
     // Initialize completedTasks for this task
@@ -3810,33 +3803,77 @@ async function handleMarketplaceMessage(message: any) {
 
       console.log(GOLD + JSON.stringify(message) + RESET);
 
-      // Write ITEM_SOLD messages to file
-      try {
-        const logsDir = path.join(__dirname, '../logs');
-        if (!fs.existsSync(logsDir)) {
-          fs.mkdirSync(logsDir, { recursive: true });
-        }
-
-        const timestamp = new Date().toISOString();
-        const filename = `item_sold_${new Date().toISOString().split('T')[0]}.jsonl`;
-        const filepath = path.join(logsDir, filename);
-
-        const logEntry = {
-          timestamp,
-          eventType: message.eventType,
-          data: message
-        };
-
-        fs.appendFileSync(filepath, JSON.stringify(logEntry) + '\n');
-      } catch (error) {
-        console.error('Failed to write ITEM_SOLD to file:', error);
-      }
+      // Update balances if the buyer is one of our wallets
+      await updateBalancesForItemSold(message);
     }
 
     // Otherwise, handle as a counterbid message
     await handleCounterBid(message);
   } catch (error) {
     console.error("Error in handleMarketplaceMessage:", error);
+  }
+}
+
+
+// Helper function to get balance for a specific wallet, contract, and marketplace
+function getWalletContractBalance(walletAddress: string, contractAddress: string, marketplace: 'opensea' | 'magiceden' | 'blur'): number {
+  const walletKey = walletAddress.toLowerCase();
+  const contractKey = contractAddress.toLowerCase();
+
+  return balances[walletKey]?.[contractKey]?.[marketplace] || 0;
+}
+
+async function updateBalancesForItemSold(message: any) {
+  try {
+    // Extract data from the ITEM_SOLD event
+    const data = message.data || message;
+    const toAddress = data.toAddress?.toLowerCase();
+    const contractAddress = data.contractAddress?.toLowerCase();
+    const marketplace = data.marketplace?.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
+
+    if (!toAddress || !contractAddress || !marketplace) {
+      console.log(YELLOW + `Missing required fields in ITEM_SOLD event` + RESET);
+      return;
+    }
+
+    // Check if the toAddress belongs to one of our wallets (case-insensitive)
+    const wallet: IWallet | null = await Wallet.findOne({
+      address: { $regex: new RegExp(`^${toAddress}$`, 'i') }
+    });
+
+    if (!wallet) {
+      // Not one of our wallets, ignore
+      return;
+    }
+
+    const walletAddressKey = wallet.address.toLowerCase();
+
+    console.log(GREEN + `💰 Item purchased by our wallet: ${wallet.address}` + RESET);
+    console.log(GREEN + `   Contract: ${contractAddress}, Token: ${data.tokenId}, Marketplace: ${marketplace}` + RESET);
+
+    // Initialize wallet balance structure if not exists
+    if (!balances[walletAddressKey]) {
+      balances[walletAddressKey] = {};
+    }
+
+    // Initialize contract balance structure if not exists
+    if (!balances[walletAddressKey][contractAddress]) {
+      balances[walletAddressKey][contractAddress] = {
+        opensea: 0,
+        magiceden: 0,
+        blur: 0
+      };
+    }
+
+    // Increment the balance for the specific marketplace
+    balances[walletAddressKey][contractAddress][marketplace] =
+      (balances[walletAddressKey][contractAddress][marketplace] || 0) + 1;
+
+    console.log(CYAN + `📊 Updated balance for wallet ${wallet.address}:` + RESET);
+    console.log(CYAN + `   Contract: ${contractAddress}` + RESET);
+    console.log(CYAN + `   ${marketplace}: ${balances[walletAddressKey][contractAddress][marketplace]} items` + RESET);
+  } catch (error) {
+    console.error("Error updating balances for ITEM_SOLD:", error);
   }
 }
 
@@ -3872,21 +3909,7 @@ async function handleCounterBid(message: any) {
       return (hasCounterbid && contractMatches) || hasValidStopOptions;
     });
 
-    for (const task of relevantTasks) {
-      if (message && message?.event && message.event === "item_transferred") {
-        const toAccount = message?.payload?.payload?.to_account.toLowerCase() === task.wallet.toLowerCase()
-        if (toAccount) {
-          if (!balances[task._id]) {
-            balances[task._id] = {
-              opensea: 0,
-              magiceden: 0,
-              blur: 0
-            }
-          }
-          balances[task._id].opensea++
-        }
-      }
-    }
+    // Item transfer events are now handled by updateBalancesForItemSold function
 
     if (!relevantTasks.length) return;
 
@@ -9662,7 +9685,11 @@ async function stopOption(
 
     // Check max purchase limit
     const maxPurchase = task?.stopOptions?.maxPurchase;
-    const currentBalance = balances[task._id]?.[marketplace];
+
+    // Get the current balance using the new structure
+    const walletAddress = task.wallet.toLowerCase();
+    const contractAddress = task.contract.contractAddress.toLowerCase();
+    const currentBalance = getWalletContractBalance(walletAddress, contractAddress, marketplace);
 
     if (maxPurchase && maxPurchase > 0 && currentBalance !== undefined && currentBalance >= maxPurchase) {
       // Set warning flags and message
@@ -10355,6 +10382,16 @@ interface BidCounts {
     opensea: number;
     magiceden: number;
     blur: number;
+  };
+}
+
+interface WalletBalances {
+  [walletAddress: string]: {
+    [contractAddress: string]: {
+      opensea: number;
+      magiceden: number;
+      blur: number;
+    };
   };
 }
 
