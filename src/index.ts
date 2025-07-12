@@ -615,21 +615,21 @@ async function fetchCurrentTasks() {
 
     // Clear and populate activeTasks Map
     activeTasks.clear();
-    
+
     // Clean up orphaned taskStatus entries (only if task no longer exists in database)
     const validTaskIds = new Set(formattedTasks.map(task => task._id));
     Object.keys(taskStatus).forEach(taskId => {
       if (!validTaskIds.has(taskId)) {
         console.log(`⚠️ Cleaning up orphaned taskStatus for task: ${taskId}`);
         delete taskStatus[taskId];
-        
+
         // Also clean up any associated timers
         const countdownTimer = taskCountdownTimers.get(taskId);
         if (countdownTimer) {
           clearInterval(countdownTimer);
           taskCountdownTimers.delete(taskId);
         }
-        
+
         const taskTimeout = taskTimeouts.get(taskId);
         if (taskTimeout) {
           clearTimeout(taskTimeout);
@@ -1275,7 +1275,7 @@ function setupQueueEventHandlers() {
         if (taskStatus[taskId]) {
           taskStatus[taskId].cancellationPercentage = marketplaceCancellationPercentage;
         }
-        
+
         if (parentJob.totalJobs < parentJob.completedJobs + parentJob.failedJobs || marketplaceCancellationPercentage > 99) {
           const orders = await prisma.order.findMany({
             where: {
@@ -1290,7 +1290,7 @@ function setupQueueEventHandlers() {
             await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
             return
           }
-          
+
           // Only update status if taskStatus exists (it should have been created by startTask)
           if (taskStatus[taskId]) {
             taskStatus[taskId].cancellationPercentage = 100;
@@ -1390,7 +1390,7 @@ function setupQueueEventHandlers() {
             const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
             console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
-            
+
             // Only update taskStatus if it exists (it should have been created by startTask)
             if (taskStatus[taskId]) {
               taskStatus[taskId].status = 'SCHEDULED';
@@ -3034,17 +3034,17 @@ async function deleteTask(task: ITask) {
     }
     const taskId = task._id.toString();
     activeTasks.delete(task._id);
-    
+
     // Clean up taskStatus
     delete taskStatus[taskId];
-    
+
     // Clear countdown timer
     const countdownTimer = taskCountdownTimers.get(taskId);
     if (countdownTimer) {
       clearInterval(countdownTimer);
       taskCountdownTimers.delete(taskId);
     }
-    
+
     // Clear task timeout
     const taskTimeout = taskTimeouts.get(taskId);
     if (taskTimeout) {
@@ -3396,7 +3396,7 @@ async function updateStatus(task: ITask) {
           blur: false
         };
       }
-      
+
       // startTask will properly initialize taskStatus
       await startTask(task, true);
     } else {
@@ -3798,16 +3798,16 @@ async function handleMarketplaceMessage(message: any) {
     } else if (message.eventType === 'ITEM_SOLD') {
       // Create unique identifier for the event
       const eventId = message.id || `${message.tokenId}-${message.transactionHash}-${message.createdAt}`;
-      
+
       // Check if we've already seen this event
       if (recentItemSoldEvents.has(eventId)) {
         console.log(YELLOW + `Skipping duplicate ITEM_SOLD event: ${eventId}` + RESET);
         return;
       }
-      
+
       // Add to seen events
       recentItemSoldEvents.add(eventId);
-      
+
       console.log(GOLD + JSON.stringify(message) + RESET);
 
       // Write ITEM_SOLD messages to file
