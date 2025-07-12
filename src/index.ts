@@ -33,10 +33,6 @@ import { BASE_URL, ERC20_MIN_ABI } from "./constants";
 import { Contract, ethers, Wallet as Web3Wallet, parseEther, MaxUint256 } from "ethers";
 import { DistributedLockManager } from "./utils/lock";
 import net from 'net'
-import dns from 'dns'
-
-// Set DNS options to prevent internal assertion errors
-dns.setDefaultResultOrder('ipv4first')
 import BidLogs from "./models/logs.model";
 import PQueue from "p-queue";
 import { PrismaClient, Order as PrismaOrder } from '@prisma/client'
@@ -54,53 +50,7 @@ import { initializeExpiredPriceCleanup, stopExpiredPriceCleanup } from "./functi
 import { handleListingPriceUpdate } from "./functions/priceMonitor";
 const prisma = new PrismaClient()
 
-// Network connectivity monitoring
-let isConnected = true;
-
-// Global error handlers to prevent server crashes
-process.on('uncaughtException', (error) => {
-  console.error('UNCAUGHT EXCEPTION:', error);
-  logger.logGeneralError('Uncaught exception', {
-    error: error as Error,
-    errorMessage: error.message,
-    stack: error.stack,
-    operation: 'uncaught_exception'
-  }).catch(console.error);
-  
-  // Handle Node.js internal assertion errors
-  if (error.code === 'ERR_INTERNAL_ASSERTION') {
-    console.log('Node.js internal assertion error caught - likely network connectivity issue');
-    // Set connectivity status to false
-    isConnected = false;
-    return;
-  }
-  
-  // Don't exit the process for WebSocket errors
-  if (error.message?.includes('WebSocket') || error.message?.includes('ECONNREFUSED') || error.message?.includes('ECONNABORTED')) {
-    console.log('WebSocket error caught, continuing operation...');
-    return;
-  }
-  // For other critical errors, exit after logging
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('UNHANDLED REJECTION at:', promise, 'reason:', reason);
-  logger.logGeneralError('Unhandled rejection', {
-    reason: reason as any,
-    operation: 'unhandled_rejection'
-  }).catch(console.error);
-  // Don't exit for WebSocket rejections
-  if (reason && typeof reason === 'object' && 'message' in reason) {
-    const message = (reason as any).message;
-    if (message?.includes('WebSocket') || message?.includes('ECONNREFUSED') || message?.includes('ECONNABORTED')) {
-      console.log('WebSocket rejection caught, continuing operation...');
-      return;
-    }
-  }
-});
-
-const MARKETPLACE_WS_URL = `ws://localhost:8080?apiKey=${process.env.API_KEY}`;
+const MARKETPLACE_WS_URL = "ws://localhost:8080";
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
@@ -555,6 +505,7 @@ async function clearQueueAndRestartJobs() {
     parentJobs.clear();
     // Reset completedTasks to empty object
     Object.keys(completedTasks).forEach(key => delete completedTasks[key]);
+    // DO NOT clear taskStatus - it should persist across queue restarts
     // Clear all countdown timers
     taskCountdownTimers.forEach((timer) => clearInterval(timer));
     taskCountdownTimers.clear();
@@ -572,7 +523,8 @@ async function clearQueueAndRestartJobs() {
   }
 }
 
-// Additional connectivity monitoring variables
+// Network connectivity monitoring
+let isConnected = true;
 let lastConnectivityCheck = Date.now();
 
 async function checkInternetConnectivity(): Promise<boolean> {
@@ -580,27 +532,10 @@ async function checkInternetConnectivity(): Promise<boolean> {
     // Try to ping a reliable endpoint
     const response = await axios.get('https://api.etherscan.io/api?module=proxy&action=eth_blockNumber', {
       timeout: 5000,
-      validateStatus: () => true,
-      // Add specific network error handling
-      httpAgent: new http.Agent({ 
-        keepAlive: false,
-        timeout: 5000
-      }),
-      // Prevent Node.js internal errors on network failure
-      maxRedirects: 0,
-      socketPath: null,
-      proxy: false
+      validateStatus: () => true
     });
     return response.status === 200;
-  } catch (error: any) {
-    // Handle specific network errors gracefully
-    if (error.code === 'ECONNREFUSED' || 
-        error.code === 'ENOTFOUND' || 
-        error.code === 'ETIMEDOUT' ||
-        error.code === 'ENETUNREACH' ||
-        error.code === 'ERR_INTERNAL_ASSERTION') {
-      console.log('Network connectivity check failed:', error.code);
-    }
+  } catch (error) {
     return false;
   }
 }
@@ -627,6 +562,13 @@ async function handleConnectivityRestored() {
 
 
 let connectivityCheckInterval: NodeJS.Timeout | null;
+
+// Track recently seen ITEM_SOLD events to prevent duplicates
+const recentItemSoldEvents = new Set<string>();
+// Clean up old events every 5 minutes
+setInterval(() => {
+  recentItemSoldEvents.clear();
+}, 5 * 60 * 1000);
 function startConnectivityMonitoring() {
   // Check connectivity every 30 seconds
   connectivityCheckInterval = setInterval(async () => {
@@ -673,6 +615,28 @@ async function fetchCurrentTasks() {
 
     // Clear and populate activeTasks Map
     activeTasks.clear();
+    
+    // Clean up orphaned taskStatus entries (only if task no longer exists in database)
+    const validTaskIds = new Set(formattedTasks.map(task => task._id));
+    Object.keys(taskStatus).forEach(taskId => {
+      if (!validTaskIds.has(taskId)) {
+        console.log(`⚠️ Cleaning up orphaned taskStatus for task: ${taskId}`);
+        delete taskStatus[taskId];
+        
+        // Also clean up any associated timers
+        const countdownTimer = taskCountdownTimers.get(taskId);
+        if (countdownTimer) {
+          clearInterval(countdownTimer);
+          taskCountdownTimers.delete(taskId);
+        }
+        
+        const taskTimeout = taskTimeouts.get(taskId);
+        if (taskTimeout) {
+          clearTimeout(taskTimeout);
+          taskTimeouts.delete(taskId);
+        }
+      }
+    });
 
     formattedTasks.forEach(task => {
       activeTasks.set(task._id, task);
@@ -1211,17 +1175,9 @@ function setupQueueEventHandlers() {
   queueEvents.on('completed', async ({ jobId }) => {
     if (jobId.includes('CANCEL_OPENSEA_BID') || jobId.includes('CANCEL_MAGICEDEN_BID') || jobId.includes('CANCEL_BLUR_BID')) {
       const taskId = jobId.split('-')[1];
-      if (!taskStatus[taskId]) {
-        taskStatus[taskId] = {
-          status: 'CANCELLING',
-          cancellationPercentage: 0,
-          runningPercentage: 0,
-          waitingTime: 0,
-          nextLoopTime: new Date(),
-          processingPercentage: 0
-        }
+      if (taskStatus[taskId]) {
+        taskStatus[taskId].status = 'CANCELLING';
       }
-      taskStatus[taskId].status = 'CANCELLING'
 
       const task = activeTasks.get(taskId);
       if (!task) return;
@@ -1285,9 +1241,11 @@ function setupQueueEventHandlers() {
             await cancelAllRelatedBids(task, private_key);
             return
           }
-          taskStatus[taskId].status = 'STOPPED'
-          delete taskStatus[taskId].nextLoopTime
-          taskStatus[taskId].waitingTime = 0
+          if (taskStatus[taskId]) {
+            taskStatus[taskId].status = 'STOPPED'
+            delete taskStatus[taskId].nextLoopTime
+            taskStatus[taskId].waitingTime = 0
+          }
 
           // Clear countdown timer when task is stopped
           const countdownTimer = taskCountdownTimers.get(taskId);
@@ -1314,7 +1272,10 @@ function setupQueueEventHandlers() {
         }
 
         // If task is running, just update with the marketplace-specific percentage
-        taskStatus[taskId].cancellationPercentage = marketplaceCancellationPercentage;
+        if (taskStatus[taskId]) {
+          taskStatus[taskId].cancellationPercentage = marketplaceCancellationPercentage;
+        }
+        
         if (parentJob.totalJobs < parentJob.completedJobs + parentJob.failedJobs || marketplaceCancellationPercentage > 99) {
           const orders = await prisma.order.findMany({
             where: {
@@ -1329,9 +1290,13 @@ function setupQueueEventHandlers() {
             await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
             return
           }
-          taskStatus[taskId].cancellationPercentage = 100
-          if (taskStatus[taskId].nextLoopTime && taskStatus[taskId].waitingTime > 0) {
-            taskStatus[taskId].status = 'SCHEDULED'
+          
+          // Only update status if taskStatus exists (it should have been created by startTask)
+          if (taskStatus[taskId]) {
+            taskStatus[taskId].cancellationPercentage = 100;
+            if (taskStatus[taskId].nextLoopTime && taskStatus[taskId].waitingTime > 0) {
+              taskStatus[taskId].status = 'SCHEDULED';
+            }
           }
         }
       }
@@ -1425,10 +1390,17 @@ function setupQueueEventHandlers() {
             const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
             console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
-            taskStatus[taskId].status = 'SCHEDULED';
-            taskStatus[taskId].runningPercentage = 0; // Reset for next run
-            taskStatus[taskId].waitingTime = secondsUntilNextLoop;
-            taskStatus[taskId].nextLoopTime = nextLoopTime;
+            
+            // Only update taskStatus if it exists (it should have been created by startTask)
+            if (taskStatus[taskId]) {
+              taskStatus[taskId].status = 'SCHEDULED';
+              taskStatus[taskId].runningPercentage = 0; // Reset for next run
+              taskStatus[taskId].waitingTime = secondsUntilNextLoop;
+              taskStatus[taskId].nextLoopTime = nextLoopTime;
+            } else {
+              console.warn(YELLOW + `Warning: taskStatus not found for task ${taskId} when scheduling next loop` + RESET);
+              return;
+            }
 
             // Clear any existing countdown timer for this task
             const existingCountdown = taskCountdownTimers.get(taskId);
@@ -1437,7 +1409,8 @@ function setupQueueEventHandlers() {
             }
 
             const countdownTimer = setInterval(() => {
-              if (!taskStatus[taskId] || !taskStatus[taskId].nextLoopTime) {
+              // Check if task still exists and has valid status
+              if (!taskStatus[taskId] || !taskStatus[taskId].nextLoopTime || !activeTasks.has(taskId)) {
                 clearInterval(countdownTimer);
                 taskCountdownTimers.delete(taskId);
                 return;
@@ -2939,13 +2912,10 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
 
 
     if (!marketplace) {
-      taskStatus[taskId] = {
-        status: 'CANCELLING',
-        cancellationPercentage: 0,
-        runningPercentage: 0,
-        waitingTime: 0,
-        nextLoopTime: new Date(),
-        processingPercentage: 0
+      // Only update taskStatus if it exists
+      if (taskStatus[taskId]) {
+        taskStatus[taskId].status = 'CANCELLING';
+        taskStatus[taskId].cancellationPercentage = 0;
       }
 
       warningBids[taskId] = {
@@ -3007,8 +2977,10 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
     await removePendingAndWaitingBids(task, marketplace)
 
     if (!task?.selectedMarketplaces.length || !task.running) {
-      delete taskStatus[taskId].nextLoopTime
-      taskStatus[taskId].waitingTime = 0
+      if (taskStatus[taskId]) {
+        delete taskStatus[taskId].nextLoopTime
+        taskStatus[taskId].waitingTime = 0
+      }
 
       // Clear countdown timer
       const countdownTimer = taskCountdownTimers.get(taskId);
@@ -3028,9 +3000,11 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
     })
 
     if (!orders.length) {
-      delete taskStatus[taskId].nextLoopTime
-      taskStatus[taskId].waitingTime = 0
-      taskStatus[taskId].status = 'STOPPED'
+      if (taskStatus[taskId]) {
+        delete taskStatus[taskId].nextLoopTime
+        taskStatus[taskId].waitingTime = 0
+        taskStatus[taskId].status = 'STOPPED'
+      }
 
       // Clear countdown timer
       const countdownTimer = taskCountdownTimers.get(taskId);
@@ -3058,7 +3032,25 @@ async function deleteTask(task: ITask) {
     if (taskIndex !== -1) {
       currentTasks.splice(taskIndex, 1);
     }
+    const taskId = task._id.toString();
     activeTasks.delete(task._id);
+    
+    // Clean up taskStatus
+    delete taskStatus[taskId];
+    
+    // Clear countdown timer
+    const countdownTimer = taskCountdownTimers.get(taskId);
+    if (countdownTimer) {
+      clearInterval(countdownTimer);
+      taskCountdownTimers.delete(taskId);
+    }
+    
+    // Clear task timeout
+    const taskTimeout = taskTimeouts.get(taskId);
+    if (taskTimeout) {
+      clearTimeout(taskTimeout);
+      taskTimeouts.delete(taskId);
+    }
   } catch (error) {
     console.error(RED + `Error deleting task: ` + RESET, error);
   }
@@ -3395,16 +3387,6 @@ async function updateStatus(task: ITask) {
       // Update activeTasks Map
       const updatedTask = { ...task, running: true };
       activeTasks.set(taskId, updatedTask);
-      if (!taskStatus[taskId]) {
-        taskStatus[taskId] = {
-          status: 'STARTED',
-          cancellationPercentage: 0,
-          runningPercentage: 0,
-          waitingTime: 0,
-          nextLoopTime: new Date(),
-          processingPercentage: 0
-        }
-      }
 
       // Initialize completedTasks for this task when creating from socket
       if (!completedTasks[taskId]) {
@@ -3414,23 +3396,16 @@ async function updateStatus(task: ITask) {
           blur: false
         };
       }
-      taskStatus[taskId].status = 'STARTED'
+      
+      // startTask will properly initialize taskStatus
       await startTask(task, true);
     } else {
       // Update activeTasks Map
       const updatedTask = { ...task, running: false };
       activeTasks.set(taskId, updatedTask);
-      if (!taskStatus[taskId]) {
-        taskStatus[taskId] = {
-          status: 'CANCELLING',
-          cancellationPercentage: 0,
-          runningPercentage: 0,
-          waitingTime: 0,
-          nextLoopTime: new Date(),
-          processingPercentage: 0
-        }
+      if (taskStatus[taskId]) {
+        taskStatus[taskId].status = 'CANCELLING';
       }
-      taskStatus[taskId].status = 'CANCELLING'
       await stopTask(task, false);
     }
   } catch (error) {
@@ -3821,25 +3796,37 @@ async function handleMarketplaceMessage(message: any) {
       await handleListingPriceUpdate(message);
       return;
     } else if (message.eventType === 'ITEM_SOLD') {
-      console.log(GOLD + JSON.stringify(message) + RESET);
+      // Create unique identifier for the event
+      const eventId = message.id || `${message.tokenId}-${message.transactionHash}-${message.createdAt}`;
       
+      // Check if we've already seen this event
+      if (recentItemSoldEvents.has(eventId)) {
+        console.log(YELLOW + `Skipping duplicate ITEM_SOLD event: ${eventId}` + RESET);
+        return;
+      }
+      
+      // Add to seen events
+      recentItemSoldEvents.add(eventId);
+      
+      console.log(GOLD + JSON.stringify(message) + RESET);
+
       // Write ITEM_SOLD messages to file
       try {
         const logsDir = path.join(__dirname, '../logs');
         if (!fs.existsSync(logsDir)) {
           fs.mkdirSync(logsDir, { recursive: true });
         }
-        
+
         const timestamp = new Date().toISOString();
         const filename = `item_sold_${new Date().toISOString().split('T')[0]}.jsonl`;
         const filepath = path.join(logsDir, filename);
-        
+
         const logEntry = {
           timestamp,
           eventType: message.eventType,
           data: message
         };
-        
+
         fs.appendFileSync(filepath, JSON.stringify(logEntry) + '\n');
       } catch (error) {
         console.error('Failed to write ITEM_SOLD to file:', error);
@@ -6096,16 +6083,11 @@ async function processBlurCollectionBid(data: { task: ITask }) {
     // Check if offer exceeds floor price (only for WETH)
     const offerEth = Number(colletionOffer) / 1e18;
     if (offerEth > floor_price) {
-      if (!warningBids[task._id]) {
-        warningBids[task._id] = {
-          opensea: false,
-          magiceden: false,
-          blur: false
-        };
-      }
-      warningBids[task._id] = { opensea: true, magiceden: true, blur: true };
 
       const message = `⚠️ Offer price ${offerEth} WETH for ${task.contract.slug} collection bid exceeds floor price ${floor_price} WETH FOR BLUR.Stopping bid...`.toUpperCase();
+      warningBids[task._id] = { opensea: true, magiceden: true, blur: true };
+      warningMessage[task._id] = { opensea: message, magiceden: message, blur: message }
+
       await logBidError(task._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "blur");
       console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(YELLOW + message + RESET);
@@ -6672,16 +6654,11 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
 
   // Check if offer exceeds floor price (only for WETH)
   if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
-    if (!warningBids[taskId]) {
-      warningBids[taskId] = {
-        opensea: false,
-        magiceden: false,
-        blur: false
-      };
-    }
-    warningBids[taskId] = { opensea: true, magiceden: true, blur: true };
-
     const message = `⚠️ Counter bid offer price ${offerEth} ${currencySymbol} for ${slug} collection exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA.Stopping bid...`.toUpperCase();
+
+    warningBids[taskId] = { opensea: true, magiceden: true, blur: true };
+    warningMessage[taskId] = { opensea: message, magiceden: message, blur: message }
+
     await logBidError(taskId, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "opensea");
     console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
     console.log(YELLOW + message + RESET);
@@ -6722,16 +6699,11 @@ async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) 
 
     // Check if offer exceeds floor price (only for WETH)
     if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
-      if (!warningBids[_id]) {
-        warningBids[_id] = {
-          opensea: false,
-          magiceden: false,
-          blur: false
-        };
-      }
-      warningBids[_id] = { opensea: true, magiceden: true, blur: true };
-
       const message = `⚠️ Counter bid offer price ${offerEth} ${currencySymbol} for ${slug} collection exceeds floor price ${floor_price} ${currencySymbol} FOR MAGICEDEN.Stopping bid...`.toUpperCase();
+
+      warningBids[_id] = { opensea: true, magiceden: true, blur: true };
+      warningMessage[_id] = { opensea: message, magiceden: message, blur: message }
+
       await logBidError(_id, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "magiceden");
       console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(YELLOW + message + RESET);
@@ -6791,16 +6763,11 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
   const offerEth = Number(offerPrice) / 1e18;
 
   if (offerEth > floor_price) {
-    if (!warningBids[taskId]) {
-      warningBids[taskId] = {
-        opensea: false,
-        magiceden: false,
-        blur: false
-      };
-    }
-    warningBids[taskId] = { opensea: true, magiceden: true, blur: true };
-
     const message = `⚠️ Counter bid offer price ${offerEth} WETH for ${slug} collection exceeds floor price ${floor_price} WETH FOR BLUR.Stopping bid...`.toUpperCase();
+
+    warningBids[taskId] = { opensea: true, magiceden: true, blur: true };
+    warningMessage[taskId] = { opensea: message, magiceden: message, blur: message }
+
     await logBidError(taskId, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "blur");
     console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
     console.log(YELLOW + message + RESET);
@@ -7519,16 +7486,11 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     const offerEth = Number(colletionOffer) / Math.pow(10, decimal);
 
     if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
-      if (!warningBids[task._id]) {
-        warningBids[task._id] = {
-          opensea: false,
-          magiceden: false,
-          blur: false
-        };
-      }
-      warningBids[task._id] = { opensea: true, magiceden: true, blur: true };
-
       const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR MAGICEDEN.Stopping bid...`.toUpperCase();
+
+      warningBids[task._id] = { opensea: true, magiceden: true, blur: true };
+      warningMessage[task._id] = { opensea: message, magiceden: message, blur: message }
+
       await logBidError(task._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "magiceden");
       console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(YELLOW + message + RESET);
