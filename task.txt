@@ -1,127 +1,1064 @@
-look at const balances: BidCounts = {}
-look at this event:
-} else if (message.eventType === 'ITEM_SOLD') {
-  // Create unique identifier for the event
-  const eventId = message.id || `${message.tokenId}-${message.transactionHash}-${message.createdAt}`;
-
-  // Check if we've already seen this event
-  if (recentItemSoldEvents.has(eventId)) {
-    console.log(YELLOW + `Skipping duplicate ITEM_SOLD event: ${eventId}` + RESET);
-    return;
-  }
-
-  // Add to seen events
-  recentItemSoldEvents.add(eventId);
-
-  console.log(GOLD + JSON.stringify(message) + RESET);
+marketplaceSubCategory: 'balance'
 }
-
-look at file @item_sold_2025_07_11
-if toAddress is in Wallets @wallets.model.ts
-
-update balances
-
-async function stopOption(
-  task: ITask,
-  marketplace: 'opensea' | 'magiceden' | 'blur',
-  floorPrice: number,
-  counterBid: boolean,
-  traitFloor?: number,
-  trait?: string
-): Promise<boolean> {
-  // Initialize warning tracking if not exists
-  if (!warningBids[task._id]) {
-    warningBids[task._id] = {
-      opensea: false,
-      magiceden: false,
-      blur: false
-    };
-  }
-
-  if (!warningMessage[task._id]) {
-    warningMessage[task._id] = {
-      opensea: '',
-      magiceden: '',
-      blur: ''
-    };
-  }
-
-  if (!skipStats[task._id]) {
-    skipStats[task._id] = {
-      opensea: 0,
-      magiceden: 0,
-      blur: 0
-    };
-  }
-
-  try {
-    // Early return if stop options aren't enabled
-    if (!task?.stopOptions?.triggerStopOptions) return false;
-
-    // Return false if minFloorPrice or maxFloorPrice is 0 or undefined
-    const minFloorPrice = Number(task?.stopOptions?.minFloorPrice);
-    const maxFloorPrice = Number(task?.stopOptions?.maxFloorPrice);
-
-    const traitFloorMin = task?.stopOptions?.traitPrices && trait && trait in task?.stopOptions?.traitPrices ? Number(task?.stopOptions?.traitPrices[trait].min) : 0
-    const traitFloorMax = task?.stopOptions?.traitPrices && trait && trait in task?.stopOptions?.traitPrices ? Number(task?.stopOptions?.traitPrices[trait].max) : 0
-
-
-    if (trait && traitFloor && traitFloor > 0 && (traitFloorMin > 0 || traitFloorMax > 0)) {
-      if ((traitFloorMin > 0 && traitFloor < traitFloorMin) || (traitFloorMax > 0 && traitFloor > traitFloorMax)) {
-        const message = `❌ Trait Floor price ${traitFloor} ETH for ${task.contract.slug} [${trait}] is outside the allowed range (${traitFloorMin} ETH - ${traitFloorMax} ETH). Skipping...`.toUpperCase()
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-        console.log(RED + message + RESET);
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-
-        await logBidError(task._id, "TRAIT FLOOR OUT OF RANGE", message, 'skipped', marketplace)
-
-        if (!counterBid) {
-          skipStats[task._id][marketplace]++
-        }
-        return true
-      }
-    } else {
-      // Check if floor price is outside allowed range
-      if ((minFloorPrice > 0 && floorPrice < minFloorPrice) || (maxFloorPrice > 0 && floorPrice > maxFloorPrice)) {
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-        console.log(RED + `❌ Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${minFloorPrice} ETH - ${maxFloorPrice} ETH). Skipping...`.toUpperCase() + RESET);
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-
-        warningBids[task._id][marketplace] = true;
-        warningMessage[task._id][marketplace] = `Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${minFloorPrice} ETH - ${maxFloorPrice} ETH).`;
-        return true;
-      }
-    }
-
-    // Check max purchase limit
-    const maxPurchase = task?.stopOptions?.maxPurchase;
-    const currentBalance = balances[task._id]?.[marketplace];
-
-    if (maxPurchase && maxPurchase > 0 && currentBalance !== undefined && currentBalance >= maxPurchase) {
-      // Set warning flags and message
-      warningBids[task._id][marketplace] = true;
-      warningMessage[task._id][marketplace] =
-        `Maximum purchase amount (${maxPurchase}) for ${task.contract.slug} has been reached. ` +
-        `Current balance: ${currentBalance} items.`;
-
-      // Log the warning
-      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(YELLOW + `⚠️ Purchase limit reached for ${task.contract.slug} on ${marketplace}. Current balance: ${currentBalance}/${maxPurchase}` + RESET);
-      console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      return true;
-    }
-
-    // Clear warnings if all checks pass
-    warningBids[task._id][marketplace] = false;
-    warningMessage[task._id][marketplace] = '';
-    return false;
-
-  } catch (error) {
-    console.error(`Error in stopOption for ${task?.contract?.slug || 'unknown'} on ${marketplace}:`, error);
-    // In case of error, don't stop the task to avoid blocking
-    return false;
-  }
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BALANCE_Error {
+  taskId: '686ce24312dd0face8f9cf4d',
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  collection: 'boredapeyachtclub',
+  bidAmount: 11.21,
+  availableBalance: 0,
+  requiredBalance: 11.21,
+  error: Error: Insufficient BETH balance: required 11.21 BETH, available 0 BETH for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 on collection boredapeyachtclub
+      at bidOnBlur (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/blur/bid.ts:80:19)
+      at processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async blurCollectionCounterBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:6861:5)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1729:11
+      at async processJob (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1666:20)
+      at async Worker.processFn (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:813:11)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:880:26
+      at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1245:16),
+  marketplace: 'blur',
+  marketplaceSubCategory: 'balance'
 }
+---------------------------------------------------------------------------------
+INCOMING COLLECTION OFFER FOR BOREDAPEYACHTCLUB FOR 11.2 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING COLLECTION OFFER FOR BOREDAPEYACHTCLUB FOR 11.2 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR AZUKI: {"OFFHAND":"GOLDEN FISHING ROD"} FOR 2.66 BETH ON BLUR
+---------------------------------------------------------------------------------
+Current Limiter Stats: { RECEIVED: 371, QUEUED: 0, RUNNING: 1, EXECUTING: 13, DONE: 16191 }
+Average RPS: 4.80 Executing: 385.00 True RPS: 100.00
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR MUTANT-APE-YACHT-CLUB: {"HAT":"M2 KING'S CROWN"} FOR 1.85 BETH ON BLUR
+---------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------------
+COUNTERBIDDING INCOMING BLUR OFFER OF 2.66 BETH FOR AZUKI {"TYPE":"OFFHAND","VALUE":"GOLDEN FISHING ROD"} FOR 2.67 BETH ON BLUR
+-------------------------------------------------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR AZUKI: {"OFFHAND":"GOLDEN GUITAR"} FOR 3.23 BETH ON BLUR
+---------------------------------------------------------------------------------
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BALANCE_Error {
+  taskId: '686ce73912dd0face8f9cff2',
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  collection: 'azuki',
+  bidAmount: 2.67,
+  availableBalance: 0,
+  requiredBalance: 2.67,
+  error: Error: Insufficient BETH balance: required 2.67 BETH, available 0 BETH for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 on collection azuki
+      at bidOnBlur (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/blur/bid.ts:80:19)
+      at processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async blurTraitCounterBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:6874:5)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1732:11
+      at async processJob (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1666:20)
+      at async Worker.processFn (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:813:11)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:880:26
+      at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1245:16),
+  marketplace: 'blur',
+  marketplaceSubCategory: 'balance'
+}
+-------------------------------------------------------------------------------------------------------------------------
+COUNTERBIDDING INCOMING BLUR COLLECTION OFFER OF 11.2 BETH FOR BOREDAPEYACHTCLUB FOR 11.21 BETH ON BLUR
+-------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------------
+COUNTERBIDDING INCOMING BLUR COLLECTION OFFER OF 11.2 BETH FOR BOREDAPEYACHTCLUB FOR 11.21 BETH ON BLUR
+-------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------------
+COUNTERBIDDING INCOMING BLUR OFFER OF 3.23 BETH FOR AZUKI {"TYPE":"OFFHAND","VALUE":"GOLDEN GUITAR"} FOR 3.24 BETH ON BLUR
+-------------------------------------------------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR AZUKI: {"CLOTHING":"FROG KIGURUMI"} FOR 2.48 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR AZUKI: {"OFFHAND":"FIREBALL"} FOR 2.49 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR PUDGYPENGUINS: {"HEAD":"FISH ORANGE"} FOR 12.55 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR PUDGYPENGUINS: {"HEAD":"FISH ORANGE"} FOR 12.55 BETH ON BLUR
+---------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------------
+COUNTERBIDDING INCOMING BLUR OFFER OF 2.48 BETH FOR AZUKI {"TYPE":"CLOTHING","VALUE":"FROG KIGURUMI"} FOR 2.49 BETH ON BLUR
+-------------------------------------------------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR AZUKI: {"OFFHAND":"GOLDEN FAN"} FOR 2.88 BETH ON BLUR
+---------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------------
+COUNTERBIDDING INCOMING BLUR OFFER OF 2.49 BETH FOR AZUKI {"TYPE":"OFFHAND","VALUE":"FIREBALL"} FOR 2.5 BETH ON BLUR
+-------------------------------------------------------------------------------------------------------------------------
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BALANCE_Error {
+  taskId: '686ce24312dd0face8f9cf4d',
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  collection: 'boredapeyachtclub',
+  bidAmount: 11.21,
+  availableBalance: 0,
+  requiredBalance: 11.21,
+  error: Error: Insufficient BETH balance: required 11.21 BETH, available 0 BETH for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 on collection boredapeyachtclub
+      at bidOnBlur (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/blur/bid.ts:80:19)
+      at processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async blurCollectionCounterBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:6861:5)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1729:11
+      at async processJob (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1666:20)
+      at async Worker.processFn (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:813:11)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:880:26
+      at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1245:16),
+  marketplace: 'blur',
+  marketplaceSubCategory: 'balance'
+}
+---------------------------------------------------------------------------------
+INCOMING COLLECTION OFFER FOR MUTANT-APE-YACHT-CLUB FOR 1.78 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR MUTANT-APE-YACHT-CLUB: {"EYES":"M2 LASER EYES"} FOR 1.85 BETH ON BLUR
+---------------------------------------------------------------------------------
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BALANCE_Error {
+  taskId: '686ce73912dd0face8f9cff2',
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  collection: 'azuki',
+  bidAmount: 3.24,
+  availableBalance: 0,
+  requiredBalance: 3.24,
+  error: Error: Insufficient BETH balance: required 3.24 BETH, available 0 BETH for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 on collection azuki
+      at bidOnBlur (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/blur/bid.ts:80:19)
+      at processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async blurTraitCounterBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:6874:5)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1732:11
+      at async processJob (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1666:20)
+      at async Worker.processFn (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:813:11)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:880:26
+      at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1245:16),
+  marketplace: 'blur',
+  marketplaceSubCategory: 'balance'
+}
+Current Limiter Stats: { RECEIVED: 380, QUEUED: 0, RUNNING: 1, EXECUTING: 5, DONE: 16205 }
+Average RPS: 5.70 Executing: 386.00 True RPS: 100.00
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BALANCE_Error {
+  taskId: '686ce42c12dd0face8f9cfa5',
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  collection: 'boredapeyachtclub',
+  bidAmount: 11.21,
+  availableBalance: 0,
+  requiredBalance: 11.21,
+  error: Error: Insufficient BETH balance: required 11.21 BETH, available 0 BETH for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 on collection boredapeyachtclub
+      at bidOnBlur (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/blur/bid.ts:80:19)
+      at processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async blurCollectionCounterBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:6861:5)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1729:11
+      at async processJob (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1666:20)
+      at async Worker.processFn (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:813:11)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:880:26
+      at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1245:16),
+  marketplace: 'blur',
+  marketplaceSubCategory: 'balance'
+}
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BALANCE_Error {
+  taskId: '686ce73912dd0face8f9cff2',
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  collection: 'azuki',
+  bidAmount: 2.49,
+  availableBalance: 0,
+  requiredBalance: 2.49,
+  error: Error: Insufficient BETH balance: required 2.49 BETH, available 0 BETH for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 on collection azuki
+      at bidOnBlur (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/blur/bid.ts:80:19)
+      at processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async blurTraitCounterBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:6874:5)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1732:11
+      at async processJob (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1666:20)
+      at async Worker.processFn (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:813:11)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:880:26
+      at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1245:16),
+  marketplace: 'blur',
+  marketplaceSubCategory: 'balance'
+}
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BALANCE_Error {
+  taskId: '686ce73912dd0face8f9cff2',
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  collection: 'azuki',
+  bidAmount: 2.5,
+  availableBalance: 0,
+  requiredBalance: 2.5,
+  error: Error: Insufficient BETH balance: required 2.5 BETH, available 0 BETH for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 on collection azuki
+      at bidOnBlur (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/blur/bid.ts:80:19)
+      at processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async blurTraitCounterBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:6874:5)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1732:11
+      at async processJob (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1666:20)
+      at async Worker.processFn (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:813:11)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:880:26
+      at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1245:16),
+  marketplace: 'blur',
+  marketplaceSubCategory: 'balance'
+}
+-------------------------------------------------------------------------------------------------------------------------
+COUNTERBIDDING INCOMING BLUR OFFER OF 2.88 BETH FOR AZUKI {"TYPE":"OFFHAND","VALUE":"GOLDEN FAN"} FOR 2.89 BETH ON BLUR
+-------------------------------------------------------------------------------------------------------------------------
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BALANCE_Error {
+  taskId: '686ce73912dd0face8f9cff2',
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  collection: 'azuki',
+  bidAmount: 2.89,
+  availableBalance: 0,
+  requiredBalance: 2.89,
+  error: Error: Insufficient BETH balance: required 2.89 BETH, available 0 BETH for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 on collection azuki
+      at bidOnBlur (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/blur/bid.ts:80:19)
+      at processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async blurTraitCounterBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:6874:5)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1732:11
+      at async processJob (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1666:20)
+      at async Worker.processFn (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:813:11)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:880:26
+      at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1245:16),
+  marketplace: 'blur',
+  marketplaceSubCategory: 'balance'
+}
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR GOBLINTOWNWTF: {"1 OF 1":"IS GOBLIN? IS ORC? IS KEVVIN!"} FOR 0.34 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR MUTANT-APE-YACHT-CLUB: {"MOUTH":"M2 JOVIAL"} FOR 1.79 BETH ON BLUR
+---------------------------------------------------------------------------------
+NFT listed successfully on opensea
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:34.851Z
+NFT listed successfully on opensea
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.037 ETH, expires at: 2025-07-13T11:49:34.870Z
+NFT listed successfully on opensea
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR PUDGYPENGUINS: {"HEAD":"EGG"} FOR 12.52 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING COLLECTION OFFER FOR BOREDAPEYACHTCLUB FOR 11.2 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING COLLECTION OFFER FOR BOREDAPEYACHTCLUB FOR 11.2 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR AZUKI: {"OFFHAND":"GOLDEN SHURIKEN"} FOR 2.78 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR PUDGYPENGUINS: {"HEAD":"EGG"} FOR 12.52 BETH ON BLUR
+---------------------------------------------------------------------------------
 
+[MAGICEDEN] 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 - 0.0363 ETH from 0x1b8afd0de8a9368ce635be8b9572c65d8f590b21 at 2025-07-13T11:34:31.703Z
+Current Limiter Stats: { RECEIVED: 374, QUEUED: 1, RUNNING: 0, EXECUTING: 13, DONE: 16211 }
+Average RPS: 5.50 Executing: 388.00 True RPS: 100.00
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:34.985Z
+[INFO] 0x_SERVER_GENERAL_INSTANT {}
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on blur
+NFT listed successfully on blur
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+[INFO] 0x_SERVER_GENERAL_STARTED {}
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0368 ETH, expires at: 2025-07-13T11:49:36.273Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0364 ETH, expires at: 2025-07-13T11:49:36.274Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0364 ETH, expires at: 2025-07-13T11:49:36.276Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.037 ETH, expires at: 2025-07-13T11:49:36.280Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:36.281Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with blur price: 0.0377 ETH, expires at: 2025-07-13T11:50:09.639Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with blur price: 0.0376 ETH, expires at: 2025-07-13T11:50:09.640Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0374 ETH, expires at: 2025-07-13T11:49:36.287Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0374 ETH, expires at: 2025-07-13T11:49:36.294Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:36.298Z
 
-you can change const balances: BidCounts = {} as you see fit
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:270MB
+heapTotal:207MB
+heapUsed:175MB
+external:43MB
+
+📋 Queue Status:
+active: 2
+completed: 0
+delayed: 1
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 3
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0382 ETH, expires at: 2025-07-13T11:49:36.301Z
+
+=== CREATE LISTING CALLED ===
+Token ID: 4427
+Running: true
+Selected Marketplaces: [ 'opensea', 'blur', 'magiceden' ]
+-------------------------------------------------------------------------------------------------------------------------
+COUNTERBIDDING INCOMING BLUR COLLECTION OFFER OF 11.2 BETH FOR BOREDAPEYACHTCLUB FOR 11.21 BETH ON BLUR
+-------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------------
+COUNTERBIDDING INCOMING BLUR COLLECTION OFFER OF 11.2 BETH FOR BOREDAPEYACHTCLUB FOR 11.21 BETH ON BLUR
+-------------------------------------------------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR MUTANT-APE-YACHT-CLUB: {"EYES":"M2 BLUE BEAMS"} FOR 2.65 BETH ON BLUR
+---------------------------------------------------------------------------------
+
+=== LISTING PARAMETERS DEBUG ===
+Contract Address: 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30
+Token ID: 4427
+Wallet Address: 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+Selected Marketplaces: [ 'opensea', 'blur', 'magiceden' ]
+
+Pricing Configuration:
+- Pricing Strategy: DYNAMIC_PRICING
+- Listing Price Type: GENERAL_LISTING_PRICE
+- Base Price: 0.0394
+- OpenSea Price: 
+- Blur Price: 
+- Magic Eden Price: 
+- Min Listing Price: 0.01
+- Minimum Profit: 0
+- Buy Price: 0.0394
+
+Duration Settings:
+- List Duration: { value: 15, unit: 'minutes' }
+- Duration in Seconds: 900
+
+Creator Fees:
+- Enforce Creator Fee: false
+- Creator Fees: { '0x44b3d1ea9732cae53164d9d17c5b25c3644aa76d': 500 }
+- Total Creator Fee: 0
+
+Instant Price Matching:
+- Enabled: true
+- Undercut Margin: 0.0001
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BALANCE_Error {
+  taskId: '686ce42c12dd0face8f9cfa5',
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  collection: 'boredapeyachtclub',
+  bidAmount: 11.21,
+  availableBalance: 0,
+  requiredBalance: 11.21,
+  error: Error: Insufficient BETH balance: required 11.21 BETH, available 0 BETH for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 on collection boredapeyachtclub
+      at bidOnBlur (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/blur/bid.ts:80:19)
+      at processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async blurCollectionCounterBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:6861:5)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1729:11
+      at async processJob (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1666:20)
+      at async Worker.processFn (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:813:11)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:880:26
+      at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1245:16),
+  marketplace: 'blur',
+  marketplaceSubCategory: 'balance'
+}
+Using instant price override: 0.036199999999999996 ETH for opensea
+[INFO] 0x_SERVER_GENERAL_ADJUSTED {}
+Using instant price override: 0.036199999999999996 ETH for blur
+[INFO] 0x_SERVER_GENERAL_ADJUSTED {}
+Using instant price override: 0.036199999999999996 ETH for magiceden
+[INFO] 0x_SERVER_GENERAL_ADJUSTED {}
+Prices do not match or no current price
+
+=== OPENSEA LISTING ===
+Instant Price Override: 0.0362
+Calling listOnOpensea with price: 0.0362 ETH
+Parameters: {
+  contractAddress: '0x48c7f48622a2c31fc72b326332cf1e2357c8ef30',
+  tokenId: '4427',
+  listingPrice: 0.0362,
+  enforceCreatorFee: false,
+  durationInSeconds: 900,
+  creatorFees: { '0x44b3d1ea9732cae53164d9d17c5b25c3644aa76d': 500 }
+}
+Prices do not match or no current price
+
+=== BLUR LISTING ===
+Instant Price Override: 0.0362
+Calling listOnBlur with price: 0.0362 ETH (as string: "0.0362")
+Parameters: {
+  contractAddress: '0x48c7f48622a2c31fc72b326332cf1e2357c8ef30',
+  tokenId: '4427',
+  price: '0.0362',
+  durationInSeconds: 900,
+  totalCreatorFee: 0
+}
+Prices do not match or no current price
+
+=== MAGICEDEN LISTING ===
+Instant Price Override: 0.0362
+Calling listOnMagicEden with price: 0.0362 ETH
+Parameters: {
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  contractAddress: '0x48c7f48622a2c31fc72b326332cf1e2357c8ef30',
+  tokenId: '4427',
+  listingPrice: 0.0362,
+  durationInSeconds: 900
+}
+[MAGICEDEN] Duration: 15 minutes = 900 seconds
+NFT approval found in cache for 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30
+NFT approval found in cache for 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30
+[OPENSEA] Duration: 15 minutes = 900 seconds
+[OPENSEA] Start time: 1752406476 (2025-07-13T11:34:36.000Z)
+[OPENSEA] End time: 1752407376 (2025-07-13T11:49:36.000Z)
+[OPENSEA] Difference: 900 seconds
+[BLUR] Duration: 15 minutes = 900 seconds
+=== Blur Expiration Time Calculation ===
+Now: 2025-07-13T11:34:36.735Z
+Duration requested (seconds): 900
+Buffer added (seconds): 120
+Final duration (seconds): 1020
+Final duration (minutes): 17
+Expiration time: 2025-07-13T11:51:36.735Z
+Time until expiration (minutes): 17
+Request time calculation:
+- Request sent at: 2025-07-13T11:34:36.736Z
+- Time since initial calculation (ms): 1
+- Updated expiration time: 2025-07-13T11:51:36.736Z
+NFT approval found in cache for 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BALANCE_Error {
+  taskId: '686ce24312dd0face8f9cf4d',
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  collection: 'boredapeyachtclub',
+  bidAmount: 11.21,
+  availableBalance: 0,
+  requiredBalance: 11.21,
+  error: Error: Insufficient BETH balance: required 11.21 BETH, available 0 BETH for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 on collection boredapeyachtclub
+      at bidOnBlur (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/blur/bid.ts:80:19)
+      at processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async blurCollectionCounterBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:6861:5)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1729:11
+      at async processJob (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1666:20)
+      at async Worker.processFn (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:813:11)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:880:26
+      at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1245:16),
+  marketplace: 'blur',
+  marketplaceSubCategory: 'balance'
+}
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR PUDGYPENGUINS: {"FACE":"SCOUTER"} FOR 12.63 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR AZUKI: {"NECK":"GOLDEN HEADPHONES"} FOR 2.1 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR PUDGYPENGUINS: {"FACE":"SCOUTER"} FOR 12.63 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR MUTANT-APE-YACHT-CLUB: {"CLOTHES":"M2 SERVICE"} FOR 1.79 BETH ON BLUR
+---------------------------------------------------------------------------------
+Current Limiter Stats: { RECEIVED: 369, QUEUED: 1, RUNNING: 0, EXECUTING: 11, DONE: 16223 }
+Average RPS: 5.80 Executing: 381.00 True RPS: 100.00
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR PUDGYPENGUINS: {"FACE":"SCOUTER"} FOR 12.64 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR AZUKI: {"CLOTHING":"RED PANDA KIGURUMI"} FOR 2.1 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR PUDGYPENGUINS: {"FACE":"SCOUTER"} FOR 12.64 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR MUTANT-APE-YACHT-CLUB: {"FUR":"M1 TRIPPY"} FOR 1.84 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR PUDGYPENGUINS: {"BODY":"KIMONO ABSTRACT"} FOR 12.59 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR PUDGYPENGUINS: {"BODY":"KIMONO ABSTRACT"} FOR 12.59 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR AZUKI: {"OFFHAND":"GOLDEN ZANBATO"} FOR 3.81 BETH ON BLUR
+---------------------------------------------------------------------------------
+Current Limiter Stats: { RECEIVED: 369, QUEUED: 0, RUNNING: 1, EXECUTING: 19, DONE: 16223 }
+Average RPS: 6.11 Executing: 389.00 True RPS: 100.00
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR MUTANT-APE-YACHT-CLUB: {"EYES":"M2 BLUE BEAMS"} FOR 2.66 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR PUDGYPENGUINS: {"HEAD":"CROWN"} FOR 14.96 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR PUDGYPENGUINS: {"HEAD":"CROWN"} FOR 14.96 BETH ON BLUR
+---------------------------------------------------------------------------------
+
+[MAGICEDEN] 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 - 0.037 ETH from 0x1b8afd0de8a9368ce635be8b9572c65d8f590b21 at 2025-07-13T11:34:35.905Z
+
+[MAGICEDEN] 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 - 0.0363 ETH from 0x1b8afd0de8a9368ce635be8b9572c65d8f590b21 at 2025-07-13T11:34:35.900Z
+[INFO] 0x_SERVER_GENERAL_INSTANT {}
+[INFO] 0x_SERVER_GENERAL_INSTANT {}
+[INFO] 0x_SERVER_GENERAL_STARTED {}
+[INFO] 0x_SERVER_GENERAL_STARTED {}
+
+=== CREATE LISTING CALLED ===
+Token ID: 4427
+Running: true
+Selected Marketplaces: [ 'opensea', 'blur', 'magiceden' ]
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR MUTANT-APE-YACHT-CLUB: {"CLOTHES":"M2 SERVICE"} FOR 1.79 BETH ON BLUR
+---------------------------------------------------------------------------------
+
+=== CREATE LISTING CALLED ===
+Token ID: 4427
+Running: true
+Selected Marketplaces: [ 'opensea', 'blur', 'magiceden' ]
+
+=== LISTING PARAMETERS DEBUG ===
+Contract Address: 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30
+Token ID: 4427
+Wallet Address: 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+Selected Marketplaces: [ 'opensea', 'blur', 'magiceden' ]
+
+Pricing Configuration:
+- Pricing Strategy: DYNAMIC_PRICING
+- Listing Price Type: GENERAL_LISTING_PRICE
+- Base Price: 0.0394
+- OpenSea Price: 
+- Blur Price: 
+- Magic Eden Price: 
+- Min Listing Price: 0.01
+- Minimum Profit: 0
+- Buy Price: 0.0394
+
+Duration Settings:
+- List Duration: { value: 15, unit: 'minutes' }
+- Duration in Seconds: 900
+
+Creator Fees:
+- Enforce Creator Fee: false
+- Creator Fees: { '0x44b3d1ea9732cae53164d9d17c5b25c3644aa76d': 500 }
+- Total Creator Fee: 0
+
+Instant Price Matching:
+- Enabled: true
+- Undercut Margin: 0.0001
+
+=== LISTING PARAMETERS DEBUG ===
+Contract Address: 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30
+Token ID: 4427
+Wallet Address: 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+Selected Marketplaces: [ 'opensea', 'blur', 'magiceden' ]
+
+Pricing Configuration:
+- Pricing Strategy: DYNAMIC_PRICING
+- Listing Price Type: GENERAL_LISTING_PRICE
+- Base Price: 0.0394
+- OpenSea Price: 
+- Blur Price: 
+- Magic Eden Price: 
+- Min Listing Price: 0.01
+- Minimum Profit: 0
+- Buy Price: 0.0394
+
+Duration Settings:
+- List Duration: { value: 15, unit: 'minutes' }
+- Duration in Seconds: 900
+
+Creator Fees:
+- Enforce Creator Fee: false
+- Creator Fees: { '0x44b3d1ea9732cae53164d9d17c5b25c3644aa76d': 500 }
+- Total Creator Fee: 0
+
+Instant Price Matching:
+- Enabled: true
+- Undercut Margin: 0.0001
+Using instant price override: 0.036899999999999995 ETH for opensea
+[INFO] 0x_SERVER_GENERAL_ADJUSTED {}
+Using instant price override: 0.036899999999999995 ETH for blur
+[INFO] 0x_SERVER_GENERAL_ADJUSTED {}
+Using instant price override: 0.036899999999999995 ETH for magiceden
+[INFO] 0x_SERVER_GENERAL_ADJUSTED {}
+Prices do not match or no current price
+
+=== OPENSEA LISTING ===
+Instant Price Override: 0.0369
+Calling listOnOpensea with price: 0.0369 ETH
+Parameters: {
+  contractAddress: '0x48c7f48622a2c31fc72b326332cf1e2357c8ef30',
+  tokenId: '4427',
+  listingPrice: 0.0369,
+  enforceCreatorFee: false,
+  durationInSeconds: 900,
+  creatorFees: { '0x44b3d1ea9732cae53164d9d17c5b25c3644aa76d': 500 }
+}
+Prices do not match or no current price
+
+=== BLUR LISTING ===
+Instant Price Override: 0.0369
+Calling listOnBlur with price: 0.0369 ETH (as string: "0.0369")
+Parameters: {
+  contractAddress: '0x48c7f48622a2c31fc72b326332cf1e2357c8ef30',
+  tokenId: '4427',
+  price: '0.0369',
+  durationInSeconds: 900,
+  totalCreatorFee: 0
+}
+Prices do not match or no current price
+
+=== MAGICEDEN LISTING ===
+Instant Price Override: 0.0369
+Calling listOnMagicEden with price: 0.0369 ETH
+Parameters: {
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  contractAddress: '0x48c7f48622a2c31fc72b326332cf1e2357c8ef30',
+  tokenId: '4427',
+  listingPrice: 0.0369,
+  durationInSeconds: 900
+}
+[MAGICEDEN] Duration: 15 minutes = 900 seconds
+Using instant price override: 0.036199999999999996 ETH for opensea
+[INFO] 0x_SERVER_GENERAL_ADJUSTED {}
+Using instant price override: 0.036199999999999996 ETH for blur
+[INFO] 0x_SERVER_GENERAL_ADJUSTED {}
+Using instant price override: 0.036199999999999996 ETH for magiceden
+[INFO] 0x_SERVER_GENERAL_ADJUSTED {}
+Prices do not match or no current price
+
+=== OPENSEA LISTING ===
+Instant Price Override: 0.0362
+Calling listOnOpensea with price: 0.0362 ETH
+Parameters: {
+  contractAddress: '0x48c7f48622a2c31fc72b326332cf1e2357c8ef30',
+  tokenId: '4427',
+  listingPrice: 0.0362,
+  enforceCreatorFee: false,
+  durationInSeconds: 900,
+  creatorFees: { '0x44b3d1ea9732cae53164d9d17c5b25c3644aa76d': 500 }
+}
+Prices do not match or no current price
+
+=== BLUR LISTING ===
+Instant Price Override: 0.0362
+Calling listOnBlur with price: 0.0362 ETH (as string: "0.0362")
+Parameters: {
+  contractAddress: '0x48c7f48622a2c31fc72b326332cf1e2357c8ef30',
+  tokenId: '4427',
+  price: '0.0362',
+  durationInSeconds: 900,
+  totalCreatorFee: 0
+}
+Prices do not match or no current price
+
+=== MAGICEDEN LISTING ===
+Instant Price Override: 0.0362
+Calling listOnMagicEden with price: 0.0362 ETH
+Parameters: {
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  contractAddress: '0x48c7f48622a2c31fc72b326332cf1e2357c8ef30',
+  tokenId: '4427',
+  listingPrice: 0.0362,
+  durationInSeconds: 900
+}
+[MAGICEDEN] Duration: 15 minutes = 900 seconds
+NFT approval found in cache for 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30
+NFT approval found in cache for 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30
+NFT approval found in cache for 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30
+NFT approval found in cache for 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30
+[OPENSEA] Duration: 15 minutes = 900 seconds
+[OPENSEA] Start time: 1752406479 (2025-07-13T11:34:39.000Z)
+[OPENSEA] End time: 1752407379 (2025-07-13T11:49:39.000Z)
+[OPENSEA] Difference: 900 seconds
+[BLUR] Duration: 15 minutes = 900 seconds
+=== Blur Expiration Time Calculation ===
+Now: 2025-07-13T11:34:39.192Z
+Duration requested (seconds): 900
+Buffer added (seconds): 120
+Final duration (seconds): 1020
+Final duration (minutes): 17
+Expiration time: 2025-07-13T11:51:39.192Z
+Time until expiration (minutes): 17
+Request time calculation:
+- Request sent at: 2025-07-13T11:34:39.192Z
+- Time since initial calculation (ms): 0
+- Updated expiration time: 2025-07-13T11:51:39.192Z
+[BLUR] Duration: 15 minutes = 900 seconds
+=== Blur Expiration Time Calculation ===
+Now: 2025-07-13T11:34:39.196Z
+Duration requested (seconds): 900
+Buffer added (seconds): 120
+Final duration (seconds): 1020
+Final duration (minutes): 17
+Expiration time: 2025-07-13T11:51:39.196Z
+Time until expiration (minutes): 17
+Request time calculation:
+- Request sent at: 2025-07-13T11:34:39.196Z
+- Time since initial calculation (ms): 0
+- Updated expiration time: 2025-07-13T11:51:39.196Z
+NFT approval found in cache for 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30
+NFT approval found in cache for 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30
+[OPENSEA] Duration: 15 minutes = 900 seconds
+[OPENSEA] Start time: 1752406479 (2025-07-13T11:34:39.000Z)
+[OPENSEA] End time: 1752407379 (2025-07-13T11:49:39.000Z)
+[OPENSEA] Difference: 900 seconds
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR AZUKI: {"OFFHAND":"GOLDEN ZANBATO"} FOR 1.8 BETH ON BLUR
+---------------------------------------------------------------------------------
+Current Limiter Stats: { RECEIVED: 363, QUEUED: 1, RUNNING: 0, EXECUTING: 34, DONE: 16223 }
+Average RPS: 6.63 Executing: 398.00 True RPS: 100.00
+NFT listed successfully on opensea
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0365 ETH, expires at: 2025-07-13T11:49:39.935Z
+NFT listed successfully on opensea
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0371 ETH, expires at: 2025-07-13T11:49:40.036Z
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR AZUKI: {"OFFHAND":"GOLDEN ZANBATO"} FOR 1.81 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING COLLECTION OFFER FOR BOREDAPEYACHTCLUB FOR 11.2 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING COLLECTION OFFER FOR BOREDAPEYACHTCLUB FOR 11.2 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR MUTANT-APE-YACHT-CLUB: {"MOUTH":"M2 BORED KAZOO"} FOR 1.79 BETH ON BLUR
+---------------------------------------------------------------------------------
+Current Limiter Stats: { RECEIVED: 301, QUEUED: 1, RUNNING: 0, EXECUTING: 96, DONE: 16225 }
+Average RPS: 6.75 Executing: 398.00 True RPS: 100.00
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0362 ETH, expires at: 2025-07-13T11:49:40.516Z
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR PUDGYPENGUINS: {"HEAD":"NONE"} FOR 12.72 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR AZUKI: {"OFFHAND":"SKATEBOARD"} FOR 1.8 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING COLLECTION OFFER FOR MUTANT-APE-YACHT-CLUB FOR 1.78 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR PUDGYPENGUINS: {"HEAD":"NONE"} FOR 12.72 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR MUTANT-APE-YACHT-CLUB: {"MOUTH":"M2 BORED PIPE"} FOR 1.79 BETH ON BLUR
+---------------------------------------------------------------------------------
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:41.124Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0386 ETH, expires at: 2025-07-13T11:49:41.124Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0371 ETH, expires at: 2025-07-13T11:49:40.631Z
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:41.200Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0362 ETH, expires at: 2025-07-13T11:49:41.199Z
+-------------------------------------------------------------------------------------------------------------------------
+COUNTERBIDDING INCOMING BLUR COLLECTION OFFER OF 11.2 BETH FOR BOREDAPEYACHTCLUB FOR 11.21 BETH ON BLUR
+-------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------------
+COUNTERBIDDING INCOMING BLUR COLLECTION OFFER OF 11.2 BETH FOR BOREDAPEYACHTCLUB FOR 11.21 BETH ON BLUR
+-------------------------------------------------------------------------------------------------------------------------
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0374 ETH, expires at: 2025-07-13T11:49:41.198Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0369 ETH, expires at: 2025-07-13T11:49:41.125Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0369 ETH, expires at: 2025-07-13T11:49:41.126Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:41.208Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:41.209Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:41.209Z
+NFT listed successfully on opensea
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0385 ETH, expires at: 2025-07-13T11:49:41.212Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:41.250Z
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR MUTANT-APE-YACHT-CLUB: {"HAT":"M2 POLICE MOTORCYCLE HELMET"} FOR 0 BETH ON BLUR
+---------------------------------------------------------------------------------
+Current Limiter Stats: { RECEIVED: 307, QUEUED: 0, RUNNING: 1, EXECUTING: 83, DONE: 16242 }
+Average RPS: 8.63 Executing: 391.00 True RPS: 100.00
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:276MB
+heapTotal:213MB
+heapUsed:177MB
+external:43MB
+
+📋 Queue Status:
+active: 3
+completed: 0
+delayed: 1
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 1
+waiting-children: 0
+Total Jobs: 5
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BALANCE_Error {
+  taskId: '686ce24312dd0face8f9cf4d',
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  collection: 'boredapeyachtclub',
+  bidAmount: 11.21,
+  availableBalance: 0,
+  requiredBalance: 11.21,
+  error: Error: Insufficient BETH balance: required 11.21 BETH, available 0 BETH for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 on collection boredapeyachtclub
+      at bidOnBlur (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/blur/bid.ts:80:19)
+      at processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async blurCollectionCounterBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:6861:5)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1729:11
+      at async processJob (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1666:20)
+      at async Worker.processFn (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:813:11)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:880:26
+      at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1245:16),
+  marketplace: 'blur',
+  marketplaceSubCategory: 'balance'
+}
+NFT listed successfully on opensea
+NFT listed successfully on blur
+NFT listed successfully on opensea
+NFT listed successfully on blur
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BALANCE_Error {
+  taskId: '686ce42c12dd0face8f9cfa5',
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  collection: 'boredapeyachtclub',
+  bidAmount: 11.21,
+  availableBalance: 0,
+  requiredBalance: 11.21,
+  error: Error: Insufficient BETH balance: required 11.21 BETH, available 0 BETH for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 on collection boredapeyachtclub
+      at bidOnBlur (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/blur/bid.ts:80:19)
+      at processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async blurCollectionCounterBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:6861:5)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1729:11
+      at async processJob (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1666:20)
+      at async Worker.processFn (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:813:11)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:880:26
+      at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1245:16),
+  marketplace: 'blur',
+  marketplaceSubCategory: 'balance'
+}
+---------------------------------------------------------------------------------
+INCOMING COLLECTION OFFER FOR BOREDAPEYACHTCLUB FOR 11.2 BETH ON BLUR
+---------------------------------------------------------------------------------
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with blur price: 0.039 ETH, expires at: 2025-07-13T11:50:11.035Z
+---------------------------------------------------------------------------------
+INCOMING COLLECTION OFFER FOR BOREDAPEYACHTCLUB FOR 11.2 BETH ON BLUR
+---------------------------------------------------------------------------------
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0369 ETH, expires at: 2025-07-13T11:49:41.627Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:41.611Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with blur price: 0.0364 ETH, expires at: 2025-07-13T11:50:09.641Z
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on blur
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on blur
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with blur price: 0.0364 ETH, expires at: 2025-07-13T11:50:12.131Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0362 ETH, expires at: 2025-07-13T11:49:41.877Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:41.876Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:41.874Z
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on blur
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on blur
+NFT listed successfully on blur
+NFT listed successfully on blur
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on blur
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0365 ETH, expires at: 2025-07-13T11:49:42.127Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with blur price: 0.0367 ETH, expires at: 2025-07-13T11:50:12.022Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.037 ETH, expires at: 2025-07-13T11:49:42.088Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0375 ETH, expires at: 2025-07-13T11:49:42.077Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0362 ETH, expires at: 2025-07-13T11:49:41.878Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0372 ETH, expires at: 2025-07-13T11:49:41.879Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with blur price: 0.037 ETH, expires at: 2025-07-13T11:50:12.129Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0366 ETH, expires at: 2025-07-13T11:49:41.880Z
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on blur
+NFT listed successfully on blur
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on blur
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on blur
+NFT listed successfully on opensea
+NFT listed successfully on blur
+Current Limiter Stats: { RECEIVED: 337, QUEUED: 1, RUNNING: 0, EXECUTING: 8, DONE: 16322 }
+Average RPS: 18.38 Executing: 346.00 True RPS: 100.00
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0372 ETH, expires at: 2025-07-13T11:49:42.218Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.037 ETH, expires at: 2025-07-13T11:49:42.264Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:42.268Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0374 ETH, expires at: 2025-07-13T11:49:42.308Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with blur price: 0.0387 ETH, expires at: 2025-07-13T11:50:12.306Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with blur price: 0.0364 ETH, expires at: 2025-07-13T11:50:12.126Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with blur price: 0.038 ETH, expires at: 2025-07-13T11:50:12.325Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0364 ETH, expires at: 2025-07-13T11:49:42.343Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0373 ETH, expires at: 2025-07-13T11:49:42.446Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0364 ETH, expires at: 2025-07-13T11:49:42.447Z
+-------------------------------------------------------------------------------------------------------------------------
+Skipping counterbid since incoming bid boredapeyachtclub:collection 11.2 BETH is less than or equal to existing bid 11.21 BETH domain: blur
+-------------------------------------------------------------------------------------------------------------------------
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with blur price: 0.037 ETH, expires at: 2025-07-13T11:50:09.931Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.037 ETH, expires at: 2025-07-13T11:49:42.642Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0364 ETH, expires at: 2025-07-13T11:49:42.648Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0364 ETH, expires at: 2025-07-13T11:49:42.650Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with blur price: 0.0364 ETH, expires at: 2025-07-13T11:50:10.373Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with blur price: 0.037 ETH, expires at: 2025-07-13T11:50:13.237Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:42.700Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0371 ETH, expires at: 2025-07-13T11:49:42.725Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0371 ETH, expires at: 2025-07-13T11:49:42.744Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0368 ETH, expires at: 2025-07-13T11:49:42.745Z
+-------------------------------------------------------------------------------------------------------------------------
+COUNTERBIDDING INCOMING BLUR COLLECTION OFFER OF 11.2 BETH FOR BOREDAPEYACHTCLUB FOR 11.21 BETH ON BLUR
+-------------------------------------------------------------------------------------------------------------------------
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with blur price: 0.0365 ETH, expires at: 2025-07-13T11:50:14.206Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0373 ETH, expires at: 2025-07-13T11:49:42.763Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0375 ETH, expires at: 2025-07-13T11:49:42.780Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with blur price: 0.0364 ETH, expires at: 2025-07-13T11:50:09.641Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0367 ETH, expires at: 2025-07-13T11:49:42.799Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with blur price: 0.0374 ETH, expires at: 2025-07-13T11:50:10.367Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0369 ETH, expires at: 2025-07-13T11:49:42.883Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.037 ETH, expires at: 2025-07-13T11:49:42.886Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:42.888Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0364 ETH, expires at: 2025-07-13T11:49:42.888Z
+-------------------------------------------------------------------------------------------------------------------------
+COUNTERBIDDING INCOMING MAGICEDEN OFFER OF 11.2001 WETH FOR BOREDAPEYACHTCLUB FOR 11.21 WETH
+-------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------------
+COUNTERBIDDING INCOMING MAGICEDEN OFFER OF 11.2001 WETH FOR BOREDAPEYACHTCLUB FOR 11.21 WETH
+-------------------------------------------------------------------------------------------------------------------------
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0376 ETH, expires at: 2025-07-13T11:49:42.887Z
+---------------------------------------------------------------------------------
+INCOMING COLLECTION OFFER FOR BOREDAPEYACHTCLUB FOR 11.2 BETH ON BLUR
+---------------------------------------------------------------------------------
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BALANCE_Error {
+  taskId: '686ce24312dd0face8f9cf4d',
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  collection: 'boredapeyachtclub',
+  bidAmount: 11.21,
+  availableBalance: 0,
+  requiredBalance: 11.21,
+  error: Error: Insufficient BETH balance: required 11.21 BETH, available 0 BETH for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 on collection boredapeyachtclub
+      at bidOnBlur (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/blur/bid.ts:80:19)
+      at processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async blurCollectionCounterBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:6861:5)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1729:11
+      at async processJob (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1666:20)
+      at async Worker.processFn (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:813:11)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:880:26
+      at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1245:16),
+  marketplace: 'blur',
+  marketplaceSubCategory: 'balance'
+}
+-------------------------------------------------------------------------------------------------------------------------
+COUNTERBIDDING INCOMING BLUR COLLECTION OFFER OF 11.2 BETH FOR BOREDAPEYACHTCLUB FOR 11.21 BETH ON BLUR
+-------------------------------------------------------------------------------------------------------------------------
+NFT listed successfully on opensea
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0369 ETH, expires at: 2025-07-13T11:49:43.318Z
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BALANCE_Error {
+  taskId: '686ce24312dd0face8f9cf4d',
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  collection: 'boredapeyachtclub',
+  bidAmount: 11.21,
+  availableBalance: 0,
+  requiredBalance: 11.21,
+  error: Error: Insufficient BETH balance: required 11.21 BETH, available 0 BETH for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 on collection boredapeyachtclub
+      at bidOnBlur (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/blur/bid.ts:80:19)
+      at processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async blurCollectionCounterBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:6861:5)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1729:11
+      at async processJob (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1666:20)
+      at async Worker.processFn (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:813:11)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:880:26
+      at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1245:16),
+  marketplace: 'blur',
+  marketplaceSubCategory: 'balance'
+}
+NFT listed successfully on opensea
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0369 ETH, expires at: 2025-07-13T11:49:43.346Z
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR PUDGYPENGUINS: {"SKIN":"GOLD"} FOR 14.2 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR AZUKI: {"OFFHAND":"SKATEBOARD"} FOR 1.81 BETH ON BLUR
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR PUDGYPENGUINS: {"SKIN":"GOLD"} FOR 14.2 BETH ON BLUR
+---------------------------------------------------------------------------------
+NFT listed successfully on opensea
+NFT listed successfully on Magic Eden
+NFT listed successfully on opensea
+NFT listed successfully on opensea
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:43.636Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with magiceden price: 0.0391 ETH, expires at: 2025-07-13T11:49:43.638Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0363 ETH, expires at: 2025-07-13T11:49:43.643Z
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0365 ETH, expires at: 2025-07-13T11:49:43.642Z
+NFT listed successfully on opensea
+---------------------------------------------------------------------------------
+INCOMING TRAIT OFFER FOR MUTANT-APE-YACHT-CLUB: {"EYES":"M2 SUNGLASSES"} FOR 1.79 BETH ON BLUR
+---------------------------------------------------------------------------------
+[INFO] 0x_SERVER_MARKETPLACE_MAGICEDEN_LISTING_UPDATED {
+  listingId: '6868eb3d35d9cb6109867bad',
+  marketplace: 'magiceden',
+  expirationDate: 2025-07-13T11:49:43.725Z,
+  marketplaceSubCategory: 'listing'
+}
+[ERROR] 0x_SERVER_MARKETPLACE_MAGICEDEN_BIDDING_Error {
+  taskId: '686ce24312dd0face8f9cf4d',
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  collection: 'boredapeyachtclub',
+  bidAmount: 11.21,
+  currency: 'WETH',
+  availableBalance: 0,
+  requiredBalance: 11.21,
+  error: Error: Insufficient WETH balance: required 11.21 WETH, available 0 WETH for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 on collection boredapeyachtclub
+      at bidOnMagiceden (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/magiceden/bid.ts:97:19)
+      at processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async magicedenCollectionCounterBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:6796:5)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1678:11
+      at async processJob (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1666:20)
+      at async Worker.processFn (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:813:11)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:880:26
+      at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1245:16),
+  marketplace: 'magiceden',
+  marketplaceSubCategory: 'bidding'
+}
+[ERROR] 0x_SERVER_MARKETPLACE_MAGICEDEN_BIDDING_Error {
+  taskId: '686ce42c12dd0face8f9cfa5',
+  walletAddress: '0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21',
+  collection: 'boredapeyachtclub',
+  bidAmount: 11.21,
+  currency: 'WETH',
+  availableBalance: 0,
+  requiredBalance: 11.21,
+  error: Error: Insufficient WETH balance: required 11.21 WETH, available 0 WETH for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 on collection boredapeyachtclub
+      at bidOnMagiceden (/Users/titan/projects/nfttools/bidding-bot/server/src/marketplace/magiceden/bid.ts:97:19)
+      at processTicksAndRejections (node:internal/process/task_queues:95:5)
+      at async magicedenCollectionCounterBid (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:6796:5)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1678:11
+      at async processJob (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1666:20)
+      at async Worker.processFn (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:813:11)
+      at async /Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:880:26
+      at async Worker.retryIfFailed (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/bullmq/src/classes/worker.ts:1245:16),
+  marketplace: 'magiceden',
+  marketplaceSubCategory: 'bidding'
+}
+Current Limiter Stats: { RECEIVED: 327, QUEUED: 1, RUNNING: 0, EXECUTING: 10, DONE: 16335 }
+Average RPS: 19.50 Executing: 338.00 True RPS: 100.00
+[INFO] 0x_SERVER_WEBSOCKET_MAGICEDEN_INSTANT {
+  listingId: '6868eb3d35d9cb6109867bad',
+  tokenId: '4427',
+  marketplace: 'magiceden',
+  competitorPrice: 0.0392,
+  newPrice: 0.039099999999999996,
+  action: 'price_adjusted'
+}
+Updated listing 0x48c7f48622a2c31fc72b326332cf1e2357c8ef30 #4427 with opensea price: 0.0375 ETH, expires at: 2025-07-13T11:49:43.778Z

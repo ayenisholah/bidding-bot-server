@@ -243,6 +243,66 @@ function unlockTask(taskId: string): void {
   }
 }
 
+// Verify task state consistency across different tracking objects
+function verifyTaskState(taskId: string): boolean {
+  const hasTaskStatus = !!taskStatus[taskId];
+  const hasActiveTask = activeTasks.has(taskId);
+  
+  if (hasActiveTask && !hasTaskStatus) {
+    console.error(`[StateCheck] Task ${taskId} is active but has no status`);
+    // Initialize taskStatus to fix inconsistency
+    taskStatus[taskId] = {
+      status: 'STARTED',
+      runningPercentage: 0,
+      waitingTime: 0,
+      cancellationPercentage: 0,
+      processingPercentage: 0,
+      nextLoopTime: new Date()
+    };
+    return false;
+  }
+  
+  if (!hasActiveTask && hasTaskStatus && taskStatus[taskId].status === 'RUNNING') {
+    console.warn(`[StateCheck] Task ${taskId} has RUNNING status but is not in activeTasks`);
+    return false;
+  }
+  
+  return true;
+}
+
+// Mutex/locking pattern for taskStatus updates
+const taskStatusLocks = new Map<string, boolean>();
+
+async function safeUpdateTaskStatus(taskId: string, updates: Partial<typeof taskStatus[string]>): Promise<void> {
+  // Wait for any existing lock to be released
+  while (taskStatusLocks.get(taskId)) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  
+  // Acquire lock
+  taskStatusLocks.set(taskId, true);
+  
+  try {
+    // Initialize taskStatus if it doesn't exist
+    if (!taskStatus[taskId]) {
+      taskStatus[taskId] = {
+        status: 'STARTED',
+        runningPercentage: 0,
+        waitingTime: 0,
+        cancellationPercentage: 0,
+        processingPercentage: 0,
+        nextLoopTime: new Date()
+      };
+    }
+    
+    // Apply updates
+    Object.assign(taskStatus[taskId], updates);
+  } finally {
+    // Always release lock
+    taskStatusLocks.delete(taskId);
+  }
+}
+
 // Queue and QueueEvents will be initialized in startServer
 let queue: Queue;
 let queueEvents: QueueEvents;
@@ -495,7 +555,7 @@ async function clearQueueAndRestartJobs() {
 
     // Pause the queue before obliterating
     await queue.pause();
-    
+
     // Wait for queue to fully pause and check status
     let retries = 10;
     while (retries > 0) {
@@ -504,10 +564,10 @@ async function clearQueueAndRestartJobs() {
       await new Promise(resolve => setTimeout(resolve, 500));
       retries--;
     }
-    
+
     // Additional safety wait
     await new Promise(resolve => setTimeout(resolve, 1000));
-    
+
     // Clear all existing jobs from the queue
     await queue.obliterate({ force: true });
     console.log('✅ Queue cleared successfully');
@@ -875,6 +935,23 @@ async function startServer() {
       throw error;
     }
 
+    // Set all tasks to not running
+    try {
+      const result = await Task.updateMany({ running: true }, { running: false });
+      await Listing.updateMany({ running: true }, { running: false });
+      if (result.modifiedCount > 0) {
+        console.log(YELLOW + `✓ Set ${result.modifiedCount} task(s) to not running` + RESET);
+      }
+    } catch (error) {
+      console.error(RED + 'Failed to update tasks:' + RESET, error);
+      await logger.logDatabaseError('Failed to update tasks when no password set', {
+        databaseOperation: DatabaseOperation.UPDATE,
+        collection_name: 'tasks',
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+    }
+
     // Clear queue and restart all jobs on server start - AFTER MongoDB is connected
     await clearQueueAndRestartJobs();
 
@@ -1039,22 +1116,6 @@ async function startServer() {
       console.log(YELLOW + '⚠️  No password set - all operations are paused' + RESET);
       console.log(YELLOW + 'Please set password via POST /api/auth/password to start operations' + RESET);
 
-      // Set all tasks to not running
-      try {
-        const result = await Task.updateMany({ running: true }, { running: false });
-        await Listing.updateMany({ running: true }, { running: false });
-        if (result.modifiedCount > 0) {
-          console.log(YELLOW + `✓ Set ${result.modifiedCount} task(s) to not running` + RESET);
-        }
-      } catch (error) {
-        console.error(RED + 'Failed to update tasks:' + RESET, error);
-        await logger.logDatabaseError('Failed to update tasks when no password set', {
-          databaseOperation: DatabaseOperation.UPDATE,
-          collection_name: 'tasks',
-          error: error as Error,
-          errorMessage: error instanceof Error ? error.message : String(error)
-        });
-      }
       await pauseQueueAndWorkers();
     }
 
@@ -1332,6 +1393,9 @@ function setupQueueEventHandlers() {
     const parentJob = parentJobs.get(parentId);
     if (!parentJob) return;
 
+    // Verify state consistency before updating
+    verifyTaskState(taskId);
+    
     console.log(`[TaskStatus] ${taskId}: Job ${jobId} completed - transitioning to RUNNING`);
     if (taskStatus[taskId]) {
       taskStatus[taskId].status = 'RUNNING'
@@ -1390,7 +1454,7 @@ function setupQueueEventHandlers() {
           return isComplete;
         });
 
-        if (allMarketsComplete && runningPercentage >= 99) {
+        if (allMarketsComplete && runningPercentage >= 100) {
           console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
           const wallet = await Wallet.findById(task.walletId)
           const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
@@ -1403,7 +1467,20 @@ function setupQueueEventHandlers() {
           }
 
           console.log(`[TaskStatus] ${taskId}: All marketplaces completed (${availableMarketplaces.join(', ')}) - transitioning to COMPLETED`);
-          taskStatus[taskId].status = 'COMPLETED';
+          if (taskStatus[taskId]) {
+            taskStatus[taskId].status = 'COMPLETED';
+          } else {
+            console.error(`[TaskStatus] ${taskId}: Cannot transition to COMPLETED - taskStatus not initialized`);
+            // Initialize it to prevent further issues
+            taskStatus[taskId] = {
+              status: 'COMPLETED',
+              runningPercentage: 100,
+              waitingTime: 0,
+              cancellationPercentage: 0,
+              processingPercentage: 0,
+              nextLoopTime: new Date()
+            };
+          }
           delete traitsToRemove[taskId];
           delete removedTokens[taskId];
           await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1435,14 +1512,15 @@ function setupQueueEventHandlers() {
 
             const countdownTimer = setInterval(() => {
               // Check if task still exists and has valid status
-              if (!taskStatus[taskId] || !taskStatus[taskId].nextLoopTime || !activeTasks.has(taskId)) {
+              const status = taskStatus[taskId];
+              if (!status || !status.nextLoopTime || !activeTasks.has(taskId)) {
                 clearInterval(countdownTimer);
                 taskCountdownTimers.delete(taskId);
                 return;
               }
 
-              const remainingSeconds = Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000));
-              taskStatus[taskId].waitingTime = remainingSeconds;
+              const remainingSeconds = Math.max(0, Math.floor((status.nextLoopTime.getTime() - Date.now()) / 1000));
+              status.waitingTime = remainingSeconds;
 
               if (remainingSeconds <= 0) {
                 clearInterval(countdownTimer);
@@ -2468,6 +2546,20 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
   const marketplace = firstJob.name.split('_')[0] || 'UNKNOWN';
   const bulkJobId = `${firstJob.data._id}-${marketplace}`.toLowerCase();
   const task = activeTasks.get(taskId);
+  
+  // Initialize taskStatus immediately to prevent race conditions
+  if (!taskStatus[taskId]) {
+    console.log(`[TaskStatus] ${taskId}: Initializing in processBulkJobs - QUEUEING`);
+    taskStatus[taskId] = {
+      status: 'QUEUEING',
+      runningPercentage: 0,
+      waitingTime: 0,
+      cancellationPercentage: 0,
+      processingPercentage: 0,
+      nextLoopTime: new Date()
+    };
+  }
+  
   parentJobs.set(bulkJobId, {
     parentId: bulkJobId,
     totalJobs: jobs.length,
@@ -2584,15 +2676,6 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
             taskStatus[taskId].status = 'QUEUEING'
           } else {
             console.warn(`[TaskStatus] ${taskId}: Cannot update status to QUEUEING - taskStatus not initialized`);
-            // Initialize it here to prevent further issues
-            taskStatus[taskId] = {
-              status: 'QUEUEING',
-              runningPercentage: 0,
-              waitingTime: 0,
-              cancellationPercentage: 0,
-              processingPercentage: 0,
-              nextLoopTime: new Date()
-            };
           }
         }
         let retries = 3;
@@ -8647,42 +8730,44 @@ app.post('/api/floor', async (req, res) => {
         };
       }
 
+      // OpenSea
       try {
-        try {
-          const openseaFloorPrice = await getOpenseaFloor(slug);
-          floorPrices[taskId]['opensea'] = openseaFloorPrice;
-          const [topOffer] = (await fetchOpenseaOffers('COLLECTION', slug, contractAddress, {}) as unknown) as OpenseaOfferData[]
-          const topOfferAmount = Number(topOffer?.eth)
-          bestOffers[taskId]['opensea'] = topOfferAmount
+        const openseaFloorPrice = await getOpenseaFloor(slug);
+        floorPrices[taskId]['opensea'] = openseaFloorPrice;
+        const [topOffer] = (await fetchOpenseaOffers('COLLECTION', slug, contractAddress, {}) as unknown) as OpenseaOfferData[]
+        const topOfferAmount = Number(topOffer?.eth) || 0
+        bestOffers[taskId]['opensea'] = topOfferAmount
+      } catch (error: any) {
+        console.warn(`Failed to fetch OpenSea data for ${slug}: ${error?.message || error}`);
+        floorPrices[taskId]['opensea'] = 0;
+        bestOffers[taskId]['opensea'] = 0;
+      }
 
-        } catch (error) {
-          throw error
-        }
+      // Blur
+      try {
+        const blurFloorPrice = await fetchBlurCollectionStats(slug);
+        floorPrices[taskId]['blur'] = blurFloorPrice;
+        const bestOffer = await fetchBlurBid(contractAddress, "COLLECTION", {})
+        const bestOfferAmount = bestOffer?.priceLevels?.[0]?.price ? Number(bestOffer.priceLevels[0].price) : 0
+        bestOffers[taskId]['blur'] = bestOfferAmount
+      } catch (error: any) {
+        console.warn(`Failed to fetch Blur data for ${slug}: ${error?.message || error}`);
+        floorPrices[taskId]['blur'] = 0;
+        bestOffers[taskId]['blur'] = 0;
+      }
 
-        try {
-          const blurFloorPrice = await fetchBlurCollectionStats(slug);
-          floorPrices[taskId]['blur'] = blurFloorPrice;
-          const bestOffer = await fetchBlurBid(contractAddress, "COLLECTION", {})
-          const bestOfferAmount = bestOffer?.priceLevels?.[0]?.price ? Number(bestOffer.priceLevels[0].price) : 0
-          bestOffers[taskId]['blur'] = bestOfferAmount
+      // Magic Eden
+      try {
+        const magicEdenFloorPrice = await fetchMagicEdenCollectionStats(contractAddress);
+        floorPrices[taskId]['magiceden'] = magicEdenFloorPrice;
 
-        } catch (error) {
-          throw error
-        }
-
-        try {
-          const magicEdenFloorPrice = await fetchMagicEdenCollectionStats(contractAddress);
-          floorPrices[taskId]['magiceden'] = magicEdenFloorPrice;
-
-          const [bestOffer] = await fetchMagicEdenOffer("COLLECTION", contractAddress, "{}") as unknown as OpenseaOfferData[]
-          const bestOfferAmount = Number(bestOffer.eth)
-          bestOffers[taskId]['magiceden'] = bestOfferAmount;
-
-        } catch (error) {
-          throw error
-        }
-      } catch (error) {
-        throw error
+        const [bestOffer] = await fetchMagicEdenOffer("COLLECTION", contractAddress, "{}") as unknown as OpenseaOfferData[]
+        const bestOfferAmount = Number(bestOffer?.eth) || 0
+        bestOffers[taskId]['magiceden'] = bestOfferAmount;
+      } catch (error: any) {
+        console.warn(`Failed to fetch Magic Eden data for ${contractAddress}: ${error?.message || error}`);
+        floorPrices[taskId]['magiceden'] = 0;
+        bestOffers[taskId]['magiceden'] = 0;
       }
     }));
     res.status(200).json({ floorPrices, bestOffers });
@@ -10004,9 +10089,9 @@ async function processAllActiveListings() {
           PROCESS_LISTING,
           { listingId },
           {
-            jobId: `manual-${listingId}-${Date.now()}`,
+            jobId: listingId,
             removeOnComplete: true,
-            removeOnFail: false,
+            removeOnFail: true,
             attempts: 3,
             priority: 2,
             backoff: {

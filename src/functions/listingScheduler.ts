@@ -48,9 +48,9 @@ export async function scheduleListing(listing: IListing): Promise<void> {
       PROCESS_LISTING,
       { listingId },
       {
-        jobId: `${jobId}-immediate`,
+        jobId: listingId,
         removeOnComplete: true,
-        removeOnFail: false, // Keep failed jobs for debugging
+        removeOnFail: true, // Keep failed jobs for debugging
         attempts: 3, // Retry failed jobs 3 times
         priority: 2,
 
@@ -66,9 +66,9 @@ export async function scheduleListing(listing: IListing): Promise<void> {
       PROCESS_LISTING,
       { listingId },
       {
-        jobId,
+        jobId: listingId,
         removeOnComplete: true,
-        removeOnFail: false, // Keep failed jobs for debugging
+        removeOnFail: true, // Keep failed jobs for debugging
         attempts: 3, // Retry failed jobs 3 times
         priority: 2,
 

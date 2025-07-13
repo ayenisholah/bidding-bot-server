@@ -530,21 +530,27 @@ export async function fetchBlurCollectionStats(slug: string) {
         return JSON.parse(cachedStats);
       }
     }
-    const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens`;
-    const { data } = await limiter.schedule(() => axiosInstance.get<BlurTokensResponse>(url, {
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': API_KEY,
+    
+    try {
+      const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens`;
+      const { data } = await limiter.schedule(() => axiosInstance.get<BlurTokensResponse>(url, {
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY,
+        }
+      }));
+
+      const listings = data?.tokens?.sort((a, b) => Number(a?.price?.amount) - Number(b?.price?.amount));
+      const floor_price = Number(listings[0]?.price?.amount) || 0;
+
+      if (redis) {
+        await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
       }
-    }));
-
-    const listings = data?.tokens?.sort((a, b) => Number(a?.price?.amount) - Number(b?.price?.amount));
-    const floor_price = Number(listings[0]?.price?.amount) || 0;
-
-    if (redis) {
-      await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+      return floor_price || 0;
+    } catch (error: any) {
+      console.warn(`Failed to fetch Blur collection stats for ${slug}: ${error.response?.data?.message || error.message}`);
+      return 0;
     }
-    return floor_price || 0;
 
   });
 
