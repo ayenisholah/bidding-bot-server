@@ -495,7 +495,19 @@ async function clearQueueAndRestartJobs() {
 
     // Pause the queue before obliterating
     await queue.pause();
+    
+    // Wait for queue to fully pause and check status
+    let retries = 10;
+    while (retries > 0) {
+      const isPaused = await queue.isPaused();
+      if (isPaused) break;
+      await new Promise(resolve => setTimeout(resolve, 500));
+      retries--;
+    }
+    
+    // Additional safety wait
     await new Promise(resolve => setTimeout(resolve, 1000));
+    
     // Clear all existing jobs from the queue
     await queue.obliterate({ force: true });
     console.log('✅ Queue cleared successfully');
