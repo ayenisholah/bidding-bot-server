@@ -2,9 +2,9 @@ import { IListing } from "../types/listing.types";
 import Listing from "../models/listing.model";
 import { getAllFloorPrices } from "./collection";
 import { logger, ErrorCategory } from "../utils/logger";
-import { createListing } from "./list";
-import { broadcastInstantPriceMatch } from "../index";
+import { broadcastInstantPriceMatch, PROCESS_LISTING_UPDATE, queue } from "../index";
 import Wallet from "../models/wallet.model";
+import { Job } from "bullmq";
 
 // Store current best prices for listings we're monitoring
 const currentListingPrices: Map<string, {
@@ -152,64 +152,64 @@ async function processListingUpdate(
         `Instant price match triggered for token ${tokenId} on ${marketplace}. Competitor price: ${price} ETH, New price: ${newPrice} ETH`
       );
 
-      // Set instant price matching session - expires based on listing duration
-      const durationInSeconds = convertToSeconds(listing.listDuration.value, listing.listDuration.unit);
-      const instantPriceMatchingActiveUntil = new Date(Date.now() + durationInSeconds * 1000);
-
-      // Update the listing in the database with the override and expiration
-      await Listing.findByIdAndUpdate(listing._id, {
-        instantPriceOverride: newPrice,
-        instantPriceMatchingActiveUntil: instantPriceMatchingActiveUntil,
-      });
-
-      await logger.logInfo(ErrorCategory.GENERAL,
-        `Started instant price matching session for listing ${listing._id} for ${durationInSeconds} seconds (until ${instantPriceMatchingActiveUntil.toISOString()})`
-      );
-
-      // Fetch fresh listing data from database
-      const freshListing = await Listing.findById(listing._id);
-      if (!freshListing) {
-        console.error(`Listing ${listing._id} not found when fetching fresh data`);
-        continue;
-      }
-
-      // Immediately relist with adjusted price
-      const adjustedListing = {
-        ...freshListing.toObject(),
-        // Use instant price override to bypass calculateListingPrice
-        instantPriceOverride: newPrice,
-      } as IListing;
+      // Create a unique job ID based on listing ID and marketplace
+      const jobId = `listing-update-${listing._id}-${marketplace}`;
 
       try {
-        await createListing(adjustedListing);
-      } catch (listingError) {
-        console.error(`Failed to create instant price match listing for ${tokenId}:`, listingError);
+        // Check if a job already exists for this listing/marketplace combination
+        const existingJob = await queue.getJob(jobId);
+        
+        if (existingJob) {
+          // Get the existing job's price
+          const existingPrice = existingJob.data.newPrice;
+          
+          // If the new price is lower, update the job
+          if (newPrice < existingPrice) {
+            await existingJob.remove();
+            await logger.logInfo(ErrorCategory.GENERAL,
+              `Removed existing job with higher price ${existingPrice} ETH, will add new job with price ${newPrice} ETH`
+            );
+          } else {
+            // Skip adding this job as the existing one has a better price
+            await logger.logInfo(ErrorCategory.GENERAL,
+              `Skipping price update - existing job has better price ${existingPrice} ETH vs new price ${newPrice} ETH`
+            );
+            continue;
+          }
+        }
 
-        // If listing fails due to timeout, we should still keep the price override active
-        // so it can be retried later by the listing scheduler
+        // Add the job to the queue
+        await queue.add(
+          PROCESS_LISTING_UPDATE,
+          {
+            listingId: listing._id.toString(),
+            newPrice,
+            competitorPrice: price,
+            marketplace
+          },
+          {
+            jobId,
+            removeOnComplete: true,
+            removeOnFail: true,
+            attempts: 3,
+            priority: 1, // Higher priority than regular listings
+            backoff: {
+              type: 'exponential',
+              delay: 2000
+            }
+          }
+        );
+
         await logger.logInfo(ErrorCategory.GENERAL,
-          `Instant price match listing failed for ${tokenId}, but price override remains active for retry`
+          `Enqueued instant price match job for listing ${listing._id} with price ${newPrice} ETH`
+        );
+
+      } catch (error) {
+        console.error(`Failed to enqueue instant price match job for ${tokenId}:`, error);
+        await logger.logInfo(ErrorCategory.GENERAL,
+          `Failed to enqueue instant price match job for ${tokenId}`
         );
       }
-
-      // Send WebSocket notification to connected clients through internal server
-      broadcastInstantPriceMatch({
-        listingId: listing._id.toString(),
-        tokenId,
-        marketplace,
-        competitorPrice: price,
-        newPrice: newPrice,
-        action: 'price_adjusted'
-      });
-
-      logger.logInfo(ErrorCategory.WEBSOCKET, 'Instant price match broadcasted', {
-        listingId: listing._id.toString(),
-        tokenId,
-        marketplace,
-        competitorPrice: price,
-        newPrice: newPrice,
-        action: 'price_adjusted'
-      });
     }
   }
 }

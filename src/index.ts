@@ -48,6 +48,8 @@ import { initializeListingScheduler, shutdownListingScheduler, scheduleListing, 
 import { initializeExpirationMonitor, stopExpirationMonitor } from "./functions/relistExpired";
 import { initializeExpiredPriceCleanup, stopExpiredPriceCleanup } from "./functions/cleanupExpiredPrices";
 import { handleListingPriceUpdate } from "./functions/priceMonitor";
+import { createListing } from "./functions/list";
+import { IListing } from "./types/listing.types";
 const prisma = new PrismaClient()
 
 const MARKETPLACE_WS_URL = "ws://localhost:8080";
@@ -339,6 +341,7 @@ export const BLUR_TRAIT_BID = "BLUR_TRAIT_BID"
 export const BLUR_COLLECTION_BID_COUNTERBID = "BLUR_COLLECTION_BID_COUNTERBID"
 export const BLUR_TRAIT_BID_COUNTERBID = "BLUR_TRAIT_BID_COUNTERBID"
 export const PROCESS_LISTING = "PROCESS_LISTING"
+export const PROCESS_LISTING_UPDATE = "PROCESS_LISTING_UPDATE"
 export const MAGICEDEN_COLLECTION_BID_COUNTERBID = "MAGICEDEN_COLLECTION_BID_COUNTERBID"
 export const MAGICEDEN_TOKEN_BID_COUNTERBID = "MAGICEDEN_TOKEN_BID_COUNTERBID"
 export const MAGICEDEN_TRAIT_BID_COUNTERBID = "MAGICEDEN_TRAIT_BID_COUNTERBID"
@@ -1810,6 +1813,8 @@ async function processJob(job: Job) {
           return { completed: true };
         case PROCESS_LISTING:
           return await processListingJob(job);
+        case PROCESS_LISTING_UPDATE:
+          return await processListingUpdateJob(job);
         default:
           return { completed: false, error: 'Unknown job type' };
       }
@@ -1825,6 +1830,61 @@ interface TaskLock {
   lockUntil: number;
   loopCount: number;
   lastReleaseTime?: number;
+}
+
+/**
+ * Process listing update job - handles instant price matching updates
+ */
+async function processListingUpdateJob(job: Job): Promise<boolean> {
+  const { listingId, newPrice, competitorPrice, marketplace } = job.data;
+  
+  try {
+    // Fetch the listing
+    const listing = await Listing.findById(listingId);
+    if (!listing || !listing.running) {
+      return false;
+    }
+
+    // Update listing with instant price override
+    const durationInSeconds = listing.listDuration.unit.toLowerCase() === 'minutes' ? listing.listDuration.value * 60 :
+                             listing.listDuration.unit.toLowerCase() === 'hours' ? listing.listDuration.value * 60 * 60 :
+                             listing.listDuration.unit.toLowerCase() === 'days' ? listing.listDuration.value * 60 * 60 * 24 : 900;
+    const instantPriceMatchingActiveUntil = new Date(Date.now() + durationInSeconds * 1000);
+
+    await Listing.findByIdAndUpdate(listingId, {
+      instantPriceOverride: newPrice,
+      instantPriceMatchingActiveUntil: instantPriceMatchingActiveUntil,
+    });
+
+    // Fetch fresh listing data
+    const freshListing = await Listing.findById(listingId);
+    if (!freshListing) {
+      return false;
+    }
+
+    // Create listing with adjusted price
+    const adjustedListing = {
+      ...freshListing.toObject(),
+      instantPriceOverride: newPrice,
+    } as IListing;
+
+    await createListing(adjustedListing);
+
+    // Broadcast instant price match notification
+    broadcastInstantPriceMatch({
+      listingId: listingId.toString(),
+      tokenId: listing.tokenId,
+      marketplace,
+      competitorPrice,
+      newPrice,
+      action: 'price_adjusted'
+    });
+
+    return true;
+  } catch (error) {
+    console.error(`Failed to process listing update for ${listingId}:`, error);
+    throw error;
+  }
 }
 
 async function runScheduledLoop() {
@@ -10089,7 +10149,7 @@ async function processAllActiveListings() {
           PROCESS_LISTING,
           { listingId },
           {
-            jobId: listingId,
+            jobId: `listing-manual-${listingId}`,
             removeOnComplete: true,
             removeOnFail: true,
             attempts: 3,

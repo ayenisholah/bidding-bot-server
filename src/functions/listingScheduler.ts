@@ -43,41 +43,23 @@ export async function scheduleListing(listing: IListing): Promise<void> {
     // Calculate delay in milliseconds
     const delayMs = convertToSeconds(listing.loopInterval.value, listing.loopInterval.unit) * 1000;
 
-    // Execute immediately first, then set up repeating job
-    await queue.add(
-      PROCESS_LISTING,
-      { listingId },
-      {
-        jobId: listingId,
-        removeOnComplete: true,
-        removeOnFail: true, // Keep failed jobs for debugging
-        attempts: 3, // Retry failed jobs 3 times
-        priority: 2,
-
-        backoff: {
-          type: 'exponential',
-          delay: 2000, // Start with 2 second delay
-        },
-      }
-    );
-
-    // Then add the repeating job for future executions
+    // Add a single repeating job with immediate execution
     const job = await queue.add(
       PROCESS_LISTING,
       { listingId },
       {
-        jobId: listingId,
+        jobId: `listing-${listingId}`,
         removeOnComplete: true,
-        removeOnFail: true, // Keep failed jobs for debugging
-        attempts: 3, // Retry failed jobs 3 times
+        removeOnFail: true,
+        attempts: 3,
         priority: 2,
-
         backoff: {
           type: 'exponential',
-          delay: 2000, // Start with 2 second delay
+          delay: 2000,
         },
         repeat: {
           every: delayMs,
+          immediately: true, // Execute immediately on first add
         },
       }
     );
