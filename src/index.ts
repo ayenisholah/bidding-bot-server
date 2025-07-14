@@ -4035,8 +4035,10 @@ async function updateBalancesForItemSold(message: any) {
     const toAddress = data.toAddress?.toLowerCase();
     const contractAddress = data.contractAddress?.toLowerCase();
     const marketplace = data.marketplace?.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
+    const tokenId = data.tokenId?.toString();
+    const price = data.price; // Purchase price
 
-    if (!toAddress || !contractAddress || !marketplace) {
+    if (!toAddress || !contractAddress || !marketplace || !tokenId) {
       console.log(YELLOW + `Missing required fields in ITEM_SOLD event` + RESET);
       return;
     }
@@ -4054,7 +4056,7 @@ async function updateBalancesForItemSold(message: any) {
     const walletAddressKey = wallet.address.toLowerCase();
 
     console.log(GREEN + `💰 Item purchased by our wallet: ${wallet.address}` + RESET);
-    console.log(GREEN + `   Contract: ${contractAddress}, Token: ${data.tokenId}, Marketplace: ${marketplace}` + RESET);
+    console.log(GREEN + `   Contract: ${contractAddress}, Token: ${tokenId}, Marketplace: ${marketplace}` + RESET);
 
     // Initialize wallet balance structure if not exists
     if (!balances[walletAddressKey]) {
@@ -4077,8 +4079,153 @@ async function updateBalancesForItemSold(message: any) {
     console.log(CYAN + `📊 Updated balance for wallet ${wallet.address}:` + RESET);
     console.log(CYAN + `   Contract: ${contractAddress}` + RESET);
     console.log(CYAN + `   ${marketplace}: ${balances[walletAddressKey][contractAddress][marketplace]} items` + RESET);
+
+    // Check for auto-listing tasks
+    await triggerAutoListingForPurchase(wallet, contractAddress, tokenId, price, marketplace, data);
+
   } catch (error) {
     console.error("Error updating balances for ITEM_SOLD:", error);
+  }
+}
+
+/**
+ * Triggers auto-listing for purchased items if auto-listing is enabled on associated tasks
+ */
+async function triggerAutoListingForPurchase(
+  wallet: IWallet, 
+  contractAddress: string, 
+  tokenId: string, 
+  price: number, 
+  marketplace: string, 
+  data: any
+): Promise<void> {
+  try {
+    // Find tasks with auto-listing enabled for this contract and wallet
+    const autoListingTasks = await Task.find({
+      $or: [
+        { wallet: wallet.address },
+        { walletId: wallet._id }
+      ],
+      'contract.contractAddress': { $regex: new RegExp(`^${contractAddress}$`, 'i') },
+      autoList: true,
+      running: true,
+      listingConfig: { $exists: true, $ne: null }
+    });
+
+    if (autoListingTasks.length === 0) {
+      console.log(`No auto-listing tasks found for contract ${contractAddress} and wallet ${wallet.address}`);
+      return;
+    }
+
+    console.log(GREEN + `🚀 Found ${autoListingTasks.length} auto-listing task(s) for purchased item` + RESET);
+
+    // Process each auto-listing task
+    for (const task of autoListingTasks) {
+      const listingConfig = task.listingConfig!;
+      
+      console.log(GREEN + `Creating auto-listing for token ${tokenId} based on task ${task._id}` + RESET);
+
+      // Create listing data based on task configuration
+      const listingData: Partial<IListing> = {
+        user: task.user,
+        tokenId: tokenId,
+        contract: {
+          slug: task.contract.slug,
+          contractAddress: task.contract.contractAddress
+        },
+        wallet: wallet.address,
+        walletId: wallet._id.toString(),
+        selectedMarketplaces: listingConfig.selectedMarketplaces,
+        running: true,
+        instantPriceMatching: listingConfig.instantPriceMatching,
+        basePrice: listingConfig.basePrice,
+        underCutMargin: listingConfig.underCutMargin,
+        openseaListingPrice: listingConfig.openseaListingPrice,
+        blurListingPrice: listingConfig.blurListingPrice,
+        magicEdenListingPrice: listingConfig.magicEdenListingPrice,
+        minListingPrice: listingConfig.minListingPrice,
+        minimumProfit: listingConfig.minimumProfit,
+        loopInterval: listingConfig.loopInterval,
+        listDuration: listingConfig.listDuration,
+        listingPriceType: listingConfig.listingPriceType,
+        pricingStrategy: listingConfig.pricingStrategy,
+        buyPrice: price, // Set buy price from purchase
+        dynamicPricingBasis: listingConfig.dynamicPricingBasis,
+        selectedTrait: listingConfig.selectedTrait,
+        listed: false
+      };
+
+      // Handle dynamic pricing based on purchase price
+      if (listingConfig.pricingStrategy === 'DYNAMIC_PRICING' && listingConfig.dynamicPricingBasis === 'BUY_PRICE') {
+        const minimumProfit = parseFloat(listingConfig.minimumProfit) || 0;
+        const calculatedPrice = price + minimumProfit;
+        listingData.basePrice = calculatedPrice.toString();
+        console.log(`Using dynamic pricing based on buy price: ${price} + ${minimumProfit} = ${calculatedPrice}`);
+      }
+
+      try {
+        // Check if listing already exists for this token
+        const existingListing = await Listing.findOne({
+          'contract.contractAddress': { $regex: new RegExp(`^${contractAddress}$`, 'i') },
+          tokenId: tokenId,
+          $or: [
+            { wallet: wallet.address },
+            { walletId: wallet._id }
+          ]
+        });
+
+        if (existingListing) {
+          console.log(YELLOW + `Listing already exists for token ${tokenId}, skipping auto-listing` + RESET);
+          continue;
+        }
+
+        // Create new listing
+        const newListing = new Listing(listingData);
+        await newListing.save();
+
+        console.log(GREEN + `✅ Created auto-listing ${newListing._id} for token ${tokenId}` + RESET);
+
+        // Schedule the listing for immediate processing
+        await scheduleListing(newListing);
+
+        await logger.logInfo(ErrorCategory.GENERAL, 
+          `Auto-listing triggered for purchased item`, 
+          {
+            taskId: task._id.toString(),
+            listingId: newListing._id.toString(),
+            contractAddress,
+            tokenId,
+            purchasePrice: price,
+            purchaseMarketplace: marketplace,
+            wallet: wallet.address
+          }
+        );
+
+      } catch (listingError) {
+        console.error(RED + `Failed to create auto-listing for token ${tokenId}:` + RESET, listingError);
+        await logger.logError(ErrorCategory.GENERAL, 
+          'Auto-listing creation failed', 
+          {
+            taskId: task._id.toString(),
+            contractAddress,
+            tokenId,
+            error: listingError instanceof Error ? listingError : new Error(String(listingError))
+          }
+        );
+      }
+    }
+
+  } catch (error) {
+    console.error("Error in triggerAutoListingForPurchase:", error);
+    await logger.logError(ErrorCategory.GENERAL, 
+      'Auto-listing trigger failed', 
+      {
+        contractAddress,
+        tokenId,
+        wallet: wallet.address,
+        error: error instanceof Error ? error : new Error(String(error))
+      }
+    );
   }
 }
 

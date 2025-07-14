@@ -95,6 +95,37 @@ export interface ITask {
   blurValid: boolean;
   openseaValid: boolean;
   traitsOperator: { value: string; label: string };
+  autoList?: boolean;
+  listingConfig?: {
+    selectedMarketplaces: string[];
+    pricingStrategy: "FIXED_PRICING" | "DYNAMIC_PRICING";
+    listingPriceType: "GENERAL_LISTING_PRICE" | "MARKETPLACE_LISTING_PRICE";
+    basePrice: string;
+    openseaListingPrice: string;
+    blurListingPrice: string;
+    magicEdenListingPrice: string;
+    minListingPrice: string;
+    minimumProfit: string;
+    underCutMargin: string;
+    dynamicPricingBasis?:
+    | "HIGHEST_TRAIT_FLOOR"
+    | "SPECIFIC_TRAIT"
+    | "COLLECTION_FLOOR"
+    | "BUY_PRICE";
+    selectedTrait?: {
+      trait_type: string;
+      value: string | number;
+    };
+    listDuration: {
+      value: number;
+      unit: string;
+    };
+    loopInterval: {
+      value: number;
+      unit: string;
+    };
+    instantPriceMatching: boolean;
+  };
 }
 
 const TaskSchema: Schema = new Schema(
@@ -104,8 +135,9 @@ const TaskSchema: Schema = new Schema(
       slug: { type: String, required: true },
       contractAddress: { type: String, required: true },
     },
-    wallet: { type: String, required: true },
-    walletId: { type: mongoose.Schema.Types.ObjectId, ref: 'Wallet', required: true },
+    wallet: { type: String },
+    // New field for wallet reference - will migrate to this
+    walletId: { type: mongoose.Schema.Types.ObjectId, ref: "Wallet" },
     selectedMarketplaces: { type: [String], required: true },
     running: { type: Boolean, default: false },
     tags: [{ name: String, color: String }],
@@ -116,7 +148,8 @@ const TaskSchema: Schema = new Schema(
       categories: { type: Schema.Types.Mixed },
       counts: {
         type: Schema.Types.Mixed,
-        required: true,
+        required: false,
+        default: {},
       },
     },
     outbidOptions: {
@@ -172,7 +205,7 @@ const TaskSchema: Schema = new Schema(
 
     },
     loopInterval: {
-      value: { type: Number, required: false, default: 15 },
+      value: { type: Number, required: false, default: 1 },
       unit: { type: String, required: false, default: "minutes" }
     },
     tokenIds: { type: [Schema.Types.Mixed], required: false },
@@ -193,6 +226,47 @@ const TaskSchema: Schema = new Schema(
     traitsOperator: {
       value: { type: String, default: "or" },
       label: { type: String, default: "OR" }
+    },
+    autoList: { type: Boolean, default: false },
+    listingConfig: {
+      selectedMarketplaces: { type: [String] },
+      pricingStrategy: {
+        type: String,
+        enum: ["FIXED_PRICING", "DYNAMIC_PRICING"],
+      },
+      listingPriceType: {
+        type: String,
+        enum: ["GENERAL_LISTING_PRICE", "MARKETPLACE_LISTING_PRICE"],
+      },
+      basePrice: { type: String },
+      openseaListingPrice: { type: String },
+      blurListingPrice: { type: String },
+      magicEdenListingPrice: { type: String },
+      minListingPrice: { type: String },
+      minimumProfit: { type: String },
+      underCutMargin: { type: String },
+      dynamicPricingBasis: {
+        type: String,
+        enum: [
+          "HIGHEST_TRAIT_FLOOR",
+          "SPECIFIC_TRAIT",
+          "COLLECTION_FLOOR",
+          "BUY_PRICE",
+        ],
+      },
+      selectedTrait: {
+        trait_type: { type: String },
+        value: { type: Schema.Types.Mixed },
+      },
+      listDuration: {
+        value: { type: Number },
+        unit: { type: String },
+      },
+      loopInterval: {
+        value: { type: Number },
+        unit: { type: String },
+      },
+      instantPriceMatching: { type: Boolean, default: false },
     }
   },
   { timestamps: true }
