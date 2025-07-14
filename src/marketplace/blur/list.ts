@@ -276,7 +276,18 @@ export async function listOnBlur(
                       { blur: new Date() }
                     ]
                   },
-                  listed: true
+                  listed: true,
+                  // Extend instant price matching if it's active
+                  instantPriceMatchingActiveUntil: {
+                    $cond: [
+                      { $and: [
+                        { $ne: ["$instantPriceOverride", null] },
+                        { $gt: ["$instantPriceMatchingActiveUntil", new Date()] }
+                      ]},
+                      dbExpirationTime,
+                      "$instantPriceMatchingActiveUntil"
+                    ]
+                  }
                 }
               }
             ],
@@ -285,6 +296,9 @@ export async function listOnBlur(
 
           if (updatedListing) {
             console.log(`Updated listing ${nftAddress} #${tokenId} with blur price: ${priceInEth} ETH, expires at: ${dbExpirationTime.toISOString()}`);
+            if (updatedListing.instantPriceOverride && updatedListing.instantPriceMatchingActiveUntil) {
+              console.log(`Extended instant price matching until: ${updatedListing.instantPriceMatchingActiveUntil.toISOString()}`);
+            }
           }
         } catch (updateError) {
           console.error('Error updating listing in database:', updateError);

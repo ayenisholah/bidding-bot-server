@@ -413,7 +413,18 @@ export const listOnOpensea = async (
                   { opensea: new Date() }
                 ]
               },
-              listed: true
+              listed: true,
+              // Extend instant price matching if it's active
+              instantPriceMatchingActiveUntil: {
+                $cond: [
+                  { $and: [
+                    { $ne: ["$instantPriceOverride", null] },
+                    { $gt: ["$instantPriceMatchingActiveUntil", new Date()] }
+                  ]},
+                  expirationTime,
+                  "$instantPriceMatchingActiveUntil"
+                ]
+              }
             }
           }
         ],
@@ -422,6 +433,9 @@ export const listOnOpensea = async (
 
       if (updatedListing) {
         console.log(`Updated listing ${nftAddress} #${tokenId} with opensea price: ${roundedPrice} ETH, expires at: ${expirationTime.toISOString()}`);
+        if (updatedListing.instantPriceOverride && updatedListing.instantPriceMatchingActiveUntil) {
+          console.log(`Extended instant price matching until: ${updatedListing.instantPriceMatchingActiveUntil.toISOString()}`);
+        }
       } else {
         console.log(`No listing found for ${nftAddress} #${tokenId}`);
       }

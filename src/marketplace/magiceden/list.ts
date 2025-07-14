@@ -194,7 +194,18 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
                   { magiceden: new Date() }
                 ]
               },
-              listed: true
+              listed: true,
+              // Extend instant price matching if it's active
+              instantPriceMatchingActiveUntil: {
+                $cond: [
+                  { $and: [
+                    { $ne: ["$instantPriceOverride", null] },
+                    { $gt: ["$instantPriceMatchingActiveUntil", new Date()] }
+                  ]},
+                  expirationTime,
+                  "$instantPriceMatchingActiveUntil"
+                ]
+              }
             }
           }
         ],
@@ -203,6 +214,9 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
 
       if (updatedListing) {
         console.log(`Updated listing ${contract} #${tokenId} with magiceden price: ${roundedPrice} ETH, expires at: ${expirationTime.toISOString()}`);
+        if (updatedListing.instantPriceOverride && updatedListing.instantPriceMatchingActiveUntil) {
+          console.log(`Extended instant price matching until: ${updatedListing.instantPriceMatchingActiveUntil.toISOString()}`);
+        }
       }
     } catch (updateError) {
       await logger.logMagicEdenListingError('Error updating listing in database', {
