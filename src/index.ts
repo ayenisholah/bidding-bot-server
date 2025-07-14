@@ -9811,6 +9811,22 @@ async function calculateBidPrice(task: ITask, floorPrice: number, marketplaceNam
     minBidPriceEth = bidPrice.min || task.bidPrice.min || 0;
   }
 
+  // Apply hard cap if enabled
+  if (bidPrice.hardCapEnabled && bidPrice.hardCap !== null && bidPrice.hardCap !== undefined && bidPrice.hardCap > 0) {
+    // If hard cap is enabled, use the minimum of calculated max price and hard cap
+    const hardCapValue = bidPrice.hardCap;
+    maxBidPriceEth = Math.min(maxBidPriceEth, hardCapValue);
+    
+    // Log if hard cap is limiting the max bid
+    const calculatedMax = bidPrice.maxType === "percentage" 
+      ? (floorPrice * (bidPrice.max || task.bidPrice.max || 0) / 100)
+      : (bidPrice.max || task.bidPrice.max || 0);
+      
+    if (maxBidPriceEth === hardCapValue && hardCapValue < calculatedMax) {
+      console.log(`Hard cap of ${hardCapValue} ETH is limiting max bid for ${task.contract.slug} on ${marketplaceName}`);
+    }
+  }
+
   // Validate min/max bid prices
   if (maxBidPriceEth > 0 && minBidPriceEth > maxBidPriceEth) {
     await logBidError(task._id, "INVALID BID PRICE CONFIGURATION", `Minimum bid price (${minBidPriceEth} ETH) cannot be greater than maximum bid price (${maxBidPriceEth} ETH)`, "skipped", marketplaceName);

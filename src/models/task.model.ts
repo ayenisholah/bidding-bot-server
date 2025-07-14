@@ -40,6 +40,8 @@ export interface ITask {
     max: number | null;
     minType: "percentage" | "eth" | "usdc";
     maxType: "percentage" | "eth" | "usdc";
+    hardCapEnabled?: boolean;
+    hardCap?: number | null;
   };
 
   openseaBidPrice: {
@@ -47,6 +49,8 @@ export interface ITask {
     max: number | null;
     minType: "percentage" | "eth" | "usdc";
     maxType: "percentage" | "eth" | "usdc";
+    hardCapEnabled?: boolean;
+    hardCap?: number | null;
   };
 
   blurBidPrice: {
@@ -54,6 +58,8 @@ export interface ITask {
     max: number | null;
     minType: "percentage" | "eth" | "usdc";
     maxType: "percentage" | "eth" | "usdc";
+    hardCapEnabled?: boolean;
+    hardCap?: number | null;
   };
 
   magicEdenBidPrice: {
@@ -61,6 +67,8 @@ export interface ITask {
     max: number | null;
     minType: "percentage" | "eth" | "usdc";
     maxType: "percentage" | "eth" | "usdc";
+    hardCapEnabled?: boolean;
+    hardCap?: number | null;
   };
 
   stopOptions: {
@@ -124,24 +132,32 @@ const TaskSchema: Schema = new Schema(
       max: { type: Number, required: false, default: null },
       minType: { type: String, enum: ["percentage", "eth", "usdc"], required: true },
       maxType: { type: String, enum: ["percentage", "eth", "usdc"], required: true },
+      hardCapEnabled: { type: Boolean, default: false },
+      hardCap: { type: Number, default: null },
     },
     openseaBidPrice: {
       min: { type: Number, required: true },
       max: { type: Number, required: false, default: null },
       minType: { type: String, enum: ["percentage", "eth", "usdc"], required: true },
       maxType: { type: String, enum: ["percentage", "eth", "usdc"], required: true },
+      hardCapEnabled: { type: Boolean, default: false },
+      hardCap: { type: Number, default: null },
     },
     blurBidPrice: {
       min: { type: Number, required: true },
       max: { type: Number, required: false, default: null },
       minType: { type: String, enum: ["percentage", "eth", "usdc"], required: true },
       maxType: { type: String, enum: ["percentage", "eth", "usdc"], required: true },
+      hardCapEnabled: { type: Boolean, default: false },
+      hardCap: { type: Number, default: null },
     },
     magicEdenBidPrice: {
       min: { type: Number, required: true },
       max: { type: Number, required: false, default: null },
       minType: { type: String, enum: ["percentage", "eth", "usdc"], required: true },
       maxType: { type: String, enum: ["percentage", "eth", "usdc"], required: true },
+      hardCapEnabled: { type: Boolean, default: false },
+      hardCap: { type: Number, default: null },
     },
     stopOptions: {
       minFloorPrice: { type: Number, required: true },
