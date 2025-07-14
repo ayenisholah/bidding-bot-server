@@ -353,6 +353,16 @@ export const listOnOpensea = async (
     const errorString = JSON.stringify(listings.errors);
     const isTimeout = errorString.includes('ECONNABORTED') || errorString.includes('timeout');
     
+    // Format the error message for better readability
+    let formattedError = "OpenSea listing failed";
+    if (isTimeout) {
+      formattedError = `OpenSea: Request timeout after ${retryCount} attempts`;
+    } else if (listings.errors?.message) {
+      formattedError = `OpenSea: ${listings.errors.message}`;
+    } else if (errorString.toLowerCase().includes('not owned') || errorString.toLowerCase().includes('ownership')) {
+      formattedError = "OpenSea: User no longer owns this NFT";
+    }
+    
     // Log with appropriate error category
     await logger.logOpenseaListingError(
       isTimeout ? 'OpenSea listing timeout - API response too slow' : 'Failed to list NFT on OpenSea', 
@@ -369,11 +379,13 @@ export const listOnOpensea = async (
       }
     );
     
+    // Display graceful error message
+    console.error(`❌ ${formattedError}`);
+    console.error(`   Contract: ${nftAddress}`);
+    console.error(`   Token ID: ${tokenId}`);
+    console.error(`   Price: ${roundedPrice} ETH`);
     if (isTimeout) {
-      console.log(`⚠️  OpenSea listing timeout after ${retryCount} attempts for ${nftAddress}/${tokenId}`);
-      console.log('This is likely due to OpenSea API being slow or under heavy load');
-    } else {
-      console.log('Error: ', errorString);
+      console.error(`   Note: OpenSea API is slow or under heavy load`);
     }
     
     // Check if the error is because user no longer owns the NFT

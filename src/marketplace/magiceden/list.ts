@@ -232,28 +232,45 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
 
     return finalListingResponse.data;
   } catch (error: any) {
-    await logger.logMagicEdenListingError('Magic Eden listing failed', {
+    // Extract the specific error details
+    const errorData = error?.response?.data;
+    const errorStatus = error?.response?.status;
+    
+    // Format the error message for better readability
+    let formattedError = "Magic Eden listing failed";
+    if (errorData?.results?.[0]?.message) {
+      const result = errorData.results[0];
+      if (result.message === 'invalid-signature') {
+        formattedError = `Magic Eden: Invalid signature for order ${result.orderId || 'unknown'}`;
+      } else {
+        formattedError = `Magic Eden: ${result.message}`;
+      }
+    } else if (errorData?.message) {
+      formattedError = `Magic Eden: ${errorData.message}`;
+    }
+
+    await logger.logMagicEdenListingError(formattedError, {
       walletAddress,
       contractAddress: contract,
       tokenId,
       price: roundedPrice,
       operation: 'submit_listing',
       error: error,
-      errorCode: error?.response?.status,
-      errorMessage: error?.response?.data || error?.message || String(error),
-      responseData: error?.response?.data
+      errorCode: errorStatus,
+      errorMessage: errorData || error?.message || String(error),
+      responseData: errorData
     });
-    console.error("=== Magic Eden Listing Failed ===");
-    console.error("Error details:", error?.response?.data || error?.response || error);
-    if (error?.response?.data) {
-      console.error('Response data:', JSON.stringify(error.response.data, null, 2));
-    }
-    if (error?.response?.status) {
-      console.error('Response status:', error.response.status);
-    }
-    if (error instanceof Error) {
-      console.error('Error message:', error.message);
-      console.error('Error stack:', error.stack);
+    
+    // Display graceful error message
+    console.error(`❌ ${formattedError}`);
+    if (errorData?.results?.[0]) {
+      const result = errorData.results[0];
+      console.error(`   Contract: ${contract}`);
+      console.error(`   Token ID: ${tokenId}`);
+      console.error(`   Price: ${roundedPrice} ETH`);
+      if (result.orderId) {
+        console.error(`   Order ID: ${result.orderId}`);
+      }
     }
 
     // Check if the error is because user no longer owns the NFT

@@ -127,24 +127,33 @@ export async function listOnBlur(
       });
 
     if (data?.errors) {
-      console.error('Blur format errors:', JSON.stringify(data.errors, null, 2));
+      // Format the error message for better readability
+      let formattedError = "Blur listing failed";
+      const errorMsg = data.errors?.message || JSON.stringify(data.errors);
       
-      // Log timing information when expiration error occurs
-      const errorMessage = JSON.stringify(data.errors);
-      if (errorMessage.includes('expiration') || errorMessage.includes('future')) {
+      if (errorMsg.includes('expiration') || errorMsg.includes('future')) {
+        formattedError = "Blur: Invalid expiration time (too far in the future)";
         const nowCheck = Date.now();
         const expirationCheck = new Date(requestExpirationTime).getTime();
-        console.error('=== Blur Expiration Error Debug ===');
-        console.error('Error received at:', new Date(nowCheck).toISOString());
-        console.error('Expiration time sent:', requestExpirationTime);
-        console.error('Time difference (minutes):', (expirationCheck - nowCheck) / (1000 * 60));
-        console.error('Request-to-error delay (ms):', nowCheck - requestNowTimestamp);
-        console.error('Full error:', data.errors);
+        console.error(`❌ ${formattedError}`);
+        console.error(`   Contract: ${nftAddress}`);
+        console.error(`   Token ID: ${tokenId}`);
+        console.error(`   Time until expiration: ${Math.round((expirationCheck - nowCheck) / (1000 * 60))} minutes`);
+      } else if (errorMsg.includes('You need to own this NFT')) {
+        formattedError = "Blur: User no longer owns this NFT";
+        console.error(`❌ ${formattedError}`);
+        console.error(`   Contract: ${nftAddress}`);
+        console.error(`   Token ID: ${tokenId}`);
+      } else {
+        console.error(`❌ ${formattedError}: ${errorMsg}`);
+        console.error(`   Contract: ${nftAddress}`);
+        console.error(`   Token ID: ${tokenId}`);
+        console.error(`   Price: ${price} ETH`);
       }
 
       // Check if the error is because user no longer owns the NFT
-      const errorMsg = data.errors?.message || '';
-      if (errorMsg.includes('You need to own this NFT')) {
+      const errorMessage = data.errors?.message || '';
+      if (errorMessage.includes('You need to own this NFT')) {
         console.log(`User no longer owns NFT ${nftAddress}/${tokenId}, deleting listing...`);
 
         try {
@@ -233,7 +242,11 @@ export async function listOnBlur(
         });
 
       if (listings.errors) {
-        console.error('Blur submit errors:', JSON.stringify(listings.errors, null, 2));
+        // Display graceful error for submit errors
+        const submitErrorMsg = listings.errors?.message || JSON.stringify(listings.errors);
+        console.error(`❌ Blur submit failed: ${submitErrorMsg}`);
+        console.error(`   Contract: ${nftAddress}`);
+        console.error(`   Token ID: ${tokenId}`);
 
         // Check if the error is because user no longer owns the NFT
         const errorMessage = listings.errors?.message || '';
@@ -309,11 +322,9 @@ export async function listOnBlur(
       throw signError;
     }
   } catch (error) {
-    console.error('=== Blur Listing Failed ===');
-    console.error('Error details:', error);
-    if (error instanceof Error) {
-      console.error('Error message:', error.message);
-      console.error('Error stack:', error.stack);
-    }
+    // General error handling for unexpected errors
+    console.error(`❌ Blur listing error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    console.error(`   Contract: ${nftAddress}`);
+    console.error(`   Token ID: ${tokenId}`);
   }
 }
