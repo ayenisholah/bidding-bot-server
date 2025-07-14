@@ -237,11 +237,7 @@ export async function processListingJob(job: Job): Promise<boolean> {
     return true
 
   } catch (error) {
-    console.error('!!! ERROR IN PROCESS LISTING JOB !!!');
-    console.error('Error type:', error?.constructor?.name);
-    console.error('Error message:', error instanceof Error ? error.message : String(error));
-    console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
-
+    // Log to database for tracking
     await logger.logQueueJobFailed(job.name, {
       jobId: job.id,
       listingId,
@@ -249,6 +245,12 @@ export async function processListingJob(job: Job): Promise<boolean> {
       error: error as Error,
       errorMessage: error instanceof Error ? error.message : String(error),
     });
+
+    // Only show brief error message - detailed errors are already logged by marketplace functions
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    if (!errorMsg.includes('Magic Eden') && !errorMsg.includes('Blur') && !errorMsg.includes('OpenSea')) {
+      console.error(`❌ Process listing job failed: ${errorMsg}`);
+    }
 
     throw error;
   }

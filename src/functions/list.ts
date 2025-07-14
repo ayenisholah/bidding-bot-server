@@ -261,7 +261,8 @@ export async function createListing(data: IListing) {
           });
         }
       } catch (error) {
-        console.error(`Failed to list on ${marketplace}:`, error);
+        // Error is already handled gracefully in the marketplace-specific functions
+        // Just throw it to be caught by Promise.allSettled
         throw error;
       }
     });
@@ -269,24 +270,22 @@ export async function createListing(data: IListing) {
     // Execute all listings concurrently
     const results = await Promise.allSettled(listingPromises);
 
-    // Log results for debugging
-    results.forEach((result, index) => {
-      const marketplace = selectedMarketplaces[index];
-      if (result.status === 'rejected') {
-        console.error(`${marketplace} listing failed:`, result.reason);
-      }
-    });
+    // Results are already logged gracefully in marketplace-specific functions
+    // No need for additional error logging here
 
   } catch (error) {
-    await logger.logMarketplaceError('Error creating listing', {
-      contractAddress: data.contract.contractAddress,
-      tokenId: data.tokenId,
-      selectedMarketplaces: data.selectedMarketplaces,
-      operation: 'create_listing',
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
-    console.log(error);
+    // Only log unexpected errors that weren't handled by marketplace-specific functions
+    if (!error || (error instanceof Error && !error.message.includes('Magic Eden') && !error.message.includes('Blur') && !error.message.includes('OpenSea'))) {
+      await logger.logMarketplaceError('Error creating listing', {
+        contractAddress: data.contract.contractAddress,
+        tokenId: data.tokenId,
+        selectedMarketplaces: data.selectedMarketplaces,
+        operation: 'create_listing',
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+      console.error(`❌ Unexpected listing error for ${data.tokenId}`);
+    }
   }
 }
 
