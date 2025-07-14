@@ -125,7 +125,13 @@ class WebSocketManager extends EventEmitter {
       if (this.ws) {
         this.ws.removeAllListeners();
         if (this.ws.readyState !== WebSocket.CLOSED && this.ws.readyState !== WebSocket.CLOSING) {
-          this.ws.close();
+          try {
+            this.ws.close();
+          } catch (error) {
+            logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing WebSocket during cleanup', {
+              error: error instanceof Error ? error : new Error(String(error))
+            });
+          }
         }
         this.ws = null;
       }
@@ -134,23 +140,38 @@ class WebSocketManager extends EventEmitter {
 
       // Connection timeout
       const connectionTimeout = setTimeout(() => {
-        logger.logWarning(ErrorCategory.WEBSOCKET, 'Connection timeout, closing and retrying');
-        this.isReconnecting = false;
-        if (this.ws) {
-          this.ws.removeAllListeners();
-          // Only close if the WebSocket is not already closing/closed
-          if (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN) {
-            try {
-              this.ws.close();
-            } catch (error) {
-              // Ignore close errors during connection phase
-              logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing WebSocket during timeout', {
-                error: error instanceof Error ? error : new Error(String(error))
-              });
+        try {
+          logger.logWarning(ErrorCategory.WEBSOCKET, 'Connection timeout, closing and retrying');
+          this.isReconnecting = false;
+          if (this.ws) {
+            this.ws.removeAllListeners();
+            // Only close if the WebSocket is not already closing/closed
+            if (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN) {
+              try {
+                this.ws.close();
+              } catch (error) {
+                // Ignore close errors during connection phase
+                logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing WebSocket during timeout', {
+                  error: error instanceof Error ? error : new Error(String(error))
+                });
+              }
             }
           }
+          this.attemptReconnect();
+        } catch (error) {
+          // Prevent timeout callback from crashing the server
+          logger.logError(ErrorCategory.WEBSOCKET, 'Error in WebSocket connection timeout callback', {
+            error: error instanceof Error ? error : new Error(String(error))
+          });
+          // Still attempt to reconnect even if there was an error
+          try {
+            this.attemptReconnect();
+          } catch (reconnectError) {
+            logger.logError(ErrorCategory.WEBSOCKET, 'Error attempting reconnect after timeout error', {
+              error: reconnectError instanceof Error ? reconnectError : new Error(String(reconnectError))
+            });
+          }
         }
-        this.attemptReconnect();
       }, this.config.connectionTimeout);
 
       this.ws.once('open', () => {
@@ -235,7 +256,13 @@ class WebSocketManager extends EventEmitter {
           logger.logWarning(ErrorCategory.WEBSOCKET, 'Connection appears dead, reconnecting...', {
             missedPongs: this.missedPongs
           });
-          this.ws?.close();
+          try {
+            this.ws?.close();
+          } catch (error) {
+            logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing dead connection', {
+              error: error instanceof Error ? error : new Error(String(error))
+            });
+          }
           return;
         }
       }
@@ -253,7 +280,13 @@ class WebSocketManager extends EventEmitter {
           persistentListingSubscriptions: this.persistentListingSubscriptions.size
         });
         // Force clean disconnection to ensure server cleans up state
-        this.ws?.close(1001, 'Stale connection detected');
+        try {
+          this.ws?.close(1001, 'Stale connection detected');
+        } catch (error) {
+          logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing stale connection', {
+            error: error instanceof Error ? error : new Error(String(error))
+          });
+        }
         return;
       }
 
@@ -273,7 +306,13 @@ class WebSocketManager extends EventEmitter {
 
         if (this.missedPongs >= 3) {
           logger.logWebSocketError('Max missed pongs reached, forcing reconnection');
-          this.ws?.close();
+          try {
+            this.ws?.close();
+          } catch (error) {
+            logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing WebSocket after missed pongs', {
+              error: error instanceof Error ? error : new Error(String(error))
+            });
+          }
         }
       }, 5000); // 5 second pong timeout
 
@@ -324,7 +363,13 @@ class WebSocketManager extends EventEmitter {
           timeSinceLastMessage,
           threshold: 600000
         });
-        this.ws?.close();
+        try {
+          this.ws?.close();
+        } catch (error) {
+          logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing severely stale connection', {
+            error: error instanceof Error ? error : new Error(String(error))
+          });
+        }
       }
 
       // Periodic subscription verification (every 5 minutes)
@@ -1066,7 +1111,14 @@ class WebSocketManager extends EventEmitter {
 
     if (this.ws) {
       this.ws.removeAllListeners();
-      this.ws.close(1000, 'Client disconnect'); // Normal closure
+      try {
+        this.ws.close(1000, 'Client disconnect'); // Normal closure
+      } catch (error) {
+        // Ignore close errors during disconnect
+        logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing WebSocket during disconnect', {
+          error: error instanceof Error ? error : new Error(String(error))
+        });
+      }
       this.ws = null;
     }
   }
