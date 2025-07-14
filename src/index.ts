@@ -52,7 +52,7 @@ import { createListing } from "./functions/list";
 import { IListing } from "./types/listing.types";
 const prisma = new PrismaClient()
 
-const MARKETPLACE_WS_URL = "ws://localhost:8080";
+const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
@@ -1869,6 +1869,18 @@ async function processListingUpdateJob(job: Job): Promise<boolean> {
     } as IListing;
 
     await createListing(adjustedListing);
+
+    // Ensure the listing has a scheduled job for continuous listing
+    // This is important because instant price matching relies on the regular
+    // scheduled job to continue listing with the override price
+    if (freshListing.running && freshListing.loopInterval) {
+      try {
+        await scheduleListing(freshListing);
+        console.log(`Ensured listing ${listingId} has scheduled job for continuous listing`);
+      } catch (scheduleError) {
+        console.error(`Failed to ensure scheduled job for listing ${listingId}:`, scheduleError);
+      }
+    }
 
     // Broadcast instant price match notification
     broadcastInstantPriceMatch({
