@@ -2,9 +2,7 @@ import { IListing } from "../types/listing.types";
 import Listing from "../models/listing.model";
 import { getAllFloorPrices } from "./collection";
 import { logger, ErrorCategory } from "../utils/logger";
-import { broadcastInstantPriceMatch, PROCESS_LISTING_UPDATE, queue } from "../index";
-import Wallet from "../models/wallet.model";
-import { Job } from "bullmq";
+import { PROCESS_LISTING_UPDATE, queue } from "../index";
 
 // Store current best prices for listings we're monitoring
 const currentListingPrices: Map<string, {
@@ -61,15 +59,9 @@ export async function handleListingPriceUpdate(message: any): Promise<void> {
         return;
       }
 
-      // check if we own the wallet address
-
-      const ownWallet = await Wallet.findOne({
-        address: new RegExp(`^${seller}$`, 'i')
-      })
-
-      if (!ownWallet) return
-      // Only log messages that match the expected format
-      console.log(`\n${marketplaceColor}[${marketplace?.toUpperCase()}]${colors.reset} ${contractAddress} #${tokenId} - ${price} ETH from ${seller} at ${message.createdAt}`);
+      console.log(marketplaceColor + `--------------------------------------------------------------------------------------------------` + colors.reset);
+      console.log(marketplaceColor + `incoming ${marketplace} listing for ${contractAddress} #${tokenId} - ${price} ETH from ${seller} at ${message.createdAt}`.toUpperCase() + colors.reset);
+      console.log(marketplaceColor + `--------------------------------------------------------------------------------------------------` + colors.reset);
 
       if (!contractAddress || !tokenId || !price || !marketplace) {
         return;
@@ -158,17 +150,34 @@ async function processListingUpdate(
       try {
         // Check if a job already exists for this listing/marketplace combination
         const existingJob = await queue.getJob(jobId);
-        
+
         if (existingJob) {
           // Get the existing job's price
           const existingPrice = existingJob.data.newPrice;
-          
+
           // If the new price is lower, update the job
           if (newPrice < existingPrice) {
-            await existingJob.remove();
-            await logger.logInfo(ErrorCategory.GENERAL,
-              `Removed existing job with higher price ${existingPrice} ETH, will add new job with price ${newPrice} ETH`
-            );
+            try {
+              // Check if job is locked/being processed
+              const jobState = await existingJob.getState();
+              if (jobState === 'active') {
+                await logger.logInfo(ErrorCategory.GENERAL,
+                  `Cannot update job - currently being processed. State: ${jobState}`
+                );
+                continue;
+              }
+              
+              await existingJob.remove();
+              await logger.logInfo(ErrorCategory.GENERAL,
+                `Removed existing job with higher price ${existingPrice} ETH, will add new job with price ${newPrice} ETH`
+              );
+            } catch (removeError) {
+              // If we can't remove the job (e.g., it's locked), skip this update
+              await logger.logInfo(ErrorCategory.GENERAL,
+                `Could not remove existing job (likely locked/processing): ${removeError}. Skipping update.`
+              );
+              continue;
+            }
           } else {
             // Skip adding this job as the existing one has a better price
             await logger.logInfo(ErrorCategory.GENERAL,
@@ -290,21 +299,6 @@ export function clearListingPriceCache(contractAddress: string, tokenId: string)
   currentListingPrices.delete(priceKey);
 }
 
-/**
- * Convert duration to seconds based on unit
- */
-function convertToSeconds(value: number, unit: string): number {
-  switch (unit.toLowerCase()) {
-    case 'minutes':
-      return value * 60;
-    case 'hours':
-      return value * 60 * 60;
-    case 'days':
-      return value * 60 * 60 * 24;
-    default:
-      return 900; // Default to 15 minutes if unit is not recognized
-  }
-}
 
 /**
  * Extend instant price matching session for a listing
