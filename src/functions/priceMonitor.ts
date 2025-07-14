@@ -97,10 +97,10 @@ async function processListingUpdate(
     tokenId: string;
     marketplace: string;
     price: number;
-    seller?: string;
+    seller: string;
   }
 ): Promise<void> {
-  const { contractAddress, tokenId, marketplace, price, seller: _seller } = data;
+  const { contractAddress, tokenId, marketplace, price, seller } = data;
 
   // Find all active listings for this token with instant price matching enabled
   const activeListings = await Listing.find({
@@ -112,10 +112,10 @@ async function processListingUpdate(
 
   for (const listing of activeListings) {
     // Skip if this is our own listing
-    // if (seller && seller === listing.wallet.toLowerCase()) {
-    //   console.log(`Skipping our own listing from ${seller}`);
-    //   continue;
-    // }
+    if (seller && seller === listing.wallet.toLowerCase()) {
+      console.log(`Skipping our own listing from ${seller}`);
+      continue;
+    }
 
     // Get the key for price tracking
     const priceKey = `${contractAddress}-${tokenId}`;
@@ -166,7 +166,7 @@ async function processListingUpdate(
                 );
                 continue;
               }
-              
+
               await existingJob.remove();
               await logger.logInfo(ErrorCategory.GENERAL,
                 `Removed existing job with higher price ${existingPrice} ETH, will add new job with price ${newPrice} ETH`

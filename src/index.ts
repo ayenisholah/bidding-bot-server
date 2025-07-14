@@ -6811,16 +6811,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     }
 
     const bidCount = getIncrementedBidCount(OPENSEA, slug, _id)
-    if (orders.length > 0) {
-      const cancelData = orders.map((order, index) => {
-        return {
-          name: CANCEL_OPENSEA_BID,
-          data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order.id }
-        }
-      })
-      await queue.addBulk(cancelData)
-    }
-
+    
     const offerEth = Number(tokenOffer) / Math.pow(10, decimal);
 
     if (outbidOptions.outbid && offerEth > maxBidPriceEth) {
@@ -6845,6 +6836,17 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       return;
     } else if (offerEth < minBidPriceEth) {
       tokenOffer = BigInt(Math.round(minBidPriceEth * Math.pow(10, decimal)));
+    }
+    
+    // Cancel existing orders only when we're actually proceeding with the bid
+    if (orders.length > 0) {
+      const cancelData = orders.map((order, index) => {
+        return {
+          name: CANCEL_OPENSEA_BID,
+          data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order.id }
+        }
+      })
+      await queue.addBulk(cancelData)
     }
 
     await bidOnOpensea(
@@ -7925,14 +7927,8 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     const offerEth = Number(tokenOffer) / Math.pow(10, decimal);
     const bidCount = getIncrementedBidCount(MAGICEDEN, slug, _id)
 
-    if (orders.length > 0) {
-      const orderKeys = orders.map((order: PrismaOrder) => order.id)
-      const extractedOrderIds = await extractMagicedenOrderHash(orders)
-      await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: _id });
-    }
-
     if (outbidOptions.outbid && offerEth > maxBidPriceEth) {
-      if (currentTask.outbidOptions.outbid) {
+      if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
         if (orders.length > 0) {
           const orderKeys = orders.map((order: PrismaOrder) => order.id)
           const extractedOrderIds = await extractMagicedenOrderHash(orders)
@@ -7949,6 +7945,13 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       return;
     } else if (offerEth < minBidPriceEth) {
       tokenOffer = minBidPriceEth * Math.pow(10, decimal);
+    }
+    
+    // Cancel existing orders only when we're actually proceeding with the bid
+    if (orders.length > 0) {
+      const orderKeys = orders.map((order: PrismaOrder) => order.id)
+      const extractedOrderIds = await extractMagicedenOrderHash(orders)
+      await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: _id });
     }
 
     await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, tokenOffer.toString(), privateKey, slug, expiration, currency, undefined, tokenId)
