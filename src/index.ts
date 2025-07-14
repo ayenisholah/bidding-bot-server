@@ -247,7 +247,7 @@ function unlockTask(taskId: string): void {
 function verifyTaskState(taskId: string): boolean {
   const hasTaskStatus = !!taskStatus[taskId];
   const hasActiveTask = activeTasks.has(taskId);
-  
+
   if (hasActiveTask && !hasTaskStatus) {
     console.error(`[StateCheck] Task ${taskId} is active but has no status`);
     // Initialize taskStatus to fix inconsistency
@@ -261,12 +261,12 @@ function verifyTaskState(taskId: string): boolean {
     };
     return false;
   }
-  
+
   if (!hasActiveTask && hasTaskStatus && taskStatus[taskId].status === 'RUNNING') {
     console.warn(`[StateCheck] Task ${taskId} has RUNNING status but is not in activeTasks`);
     return false;
   }
-  
+
   return true;
 }
 
@@ -278,10 +278,10 @@ async function safeUpdateTaskStatus(taskId: string, updates: Partial<typeof task
   while (taskStatusLocks.get(taskId)) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
-  
+
   // Acquire lock
   taskStatusLocks.set(taskId, true);
-  
+
   try {
     // Initialize taskStatus if it doesn't exist
     if (!taskStatus[taskId]) {
@@ -294,7 +294,7 @@ async function safeUpdateTaskStatus(taskId: string, updates: Partial<typeof task
         nextLoopTime: new Date()
       };
     }
-    
+
     // Apply updates
     Object.assign(taskStatus[taskId], updates);
   } finally {
@@ -1395,7 +1395,7 @@ function setupQueueEventHandlers() {
 
     // Verify state consistency before updating
     verifyTaskState(taskId);
-    
+
     console.log(`[TaskStatus] ${taskId}: Job ${jobId} completed - transitioning to RUNNING`);
     if (taskStatus[taskId]) {
       taskStatus[taskId].status = 'RUNNING'
@@ -2546,7 +2546,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
   const marketplace = firstJob.name.split('_')[0] || 'UNKNOWN';
   const bulkJobId = `${firstJob.data._id}-${marketplace}`.toLowerCase();
   const task = activeTasks.get(taskId);
-  
+
   // Initialize taskStatus immediately to prevent race conditions
   if (!taskStatus[taskId]) {
     console.log(`[TaskStatus] ${taskId}: Initializing in processBulkJobs - QUEUEING`);
@@ -2559,7 +2559,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
       nextLoopTime: new Date()
     };
   }
-  
+
   parentJobs.set(bulkJobId, {
     parentId: bulkJobId,
     totalJobs: jobs.length,
