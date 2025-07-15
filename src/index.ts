@@ -52,7 +52,7 @@ import { createListing } from "./functions/list";
 import { IListing } from "./types/listing.types";
 const prisma = new PrismaClient()
 
-const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
+const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io/";
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
@@ -1398,12 +1398,8 @@ function setupQueueEventHandlers() {
 
     // Verify state consistency before updating
     verifyTaskState(taskId);
-
-    console.log(`[TaskStatus] ${taskId}: Job ${jobId} completed - transitioning to RUNNING`);
     if (taskStatus[taskId]) {
       taskStatus[taskId].status = 'RUNNING'
-    } else {
-      console.warn(`[TaskStatus] ${taskId}: Cannot update status to RUNNING - taskStatus not initialized`);
     }
     parentJob.completedJobs++;
 
@@ -1431,8 +1427,6 @@ function setupQueueEventHandlers() {
     const runningPercentage = totalJobs > 0 ? ((completedJobs + failedJobs) / totalJobs) * 100 : 0;
     if (taskStatus[taskId]) {
       taskStatus[taskId].runningPercentage = Math.min(runningPercentage, 100) // 100 is the max value since it represents 100%
-    } else {
-      console.warn(`[TaskStatus] ${taskId}: Cannot update runningPercentage - taskStatus not initialized`);
     }
 
 
@@ -1468,12 +1462,9 @@ function setupQueueEventHandlers() {
           if (removedTokens[taskId]?.opensea?.length > 0 || removedTokens[taskId]?.magiceden?.length > 0) {
             await cancelRemovedTokenBids(removedTokens[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
           }
-
-          console.log(`[TaskStatus] ${taskId}: All marketplaces completed (${availableMarketplaces.join(', ')}) - transitioning to COMPLETED`);
           if (taskStatus[taskId]) {
             taskStatus[taskId].status = 'COMPLETED';
           } else {
-            console.error(`[TaskStatus] ${taskId}: Cannot transition to COMPLETED - taskStatus not initialized`);
             // Initialize it to prevent further issues
             taskStatus[taskId] = {
               status: 'COMPLETED',
@@ -1497,7 +1488,6 @@ function setupQueueEventHandlers() {
 
             // Only update taskStatus if it exists (it should have been created by startTask)
             if (taskStatus[taskId]) {
-              console.log(`[TaskStatus] ${taskId}: Scheduling next loop in ${loopInterval}s - transitioning COMPLETED → SCHEDULED`);
               taskStatus[taskId].status = 'SCHEDULED';
               taskStatus[taskId].runningPercentage = 0; // Reset for next run
               taskStatus[taskId].waitingTime = secondsUntilNextLoop;
@@ -1837,7 +1827,7 @@ interface TaskLock {
  */
 async function processListingUpdateJob(job: Job): Promise<boolean> {
   const { listingId, newPrice, competitorPrice, marketplace } = job.data;
-  
+
   try {
     // Fetch the listing
     const listing = await Listing.findById(listingId);
@@ -1847,8 +1837,8 @@ async function processListingUpdateJob(job: Job): Promise<boolean> {
 
     // Update listing with instant price override
     const durationInSeconds = listing.listDuration.unit.toLowerCase() === 'minutes' ? listing.listDuration.value * 60 :
-                             listing.listDuration.unit.toLowerCase() === 'hours' ? listing.listDuration.value * 60 * 60 :
-                             listing.listDuration.unit.toLowerCase() === 'days' ? listing.listDuration.value * 60 * 60 * 24 : 900;
+      listing.listDuration.unit.toLowerCase() === 'hours' ? listing.listDuration.value * 60 * 60 :
+        listing.listDuration.unit.toLowerCase() === 'days' ? listing.listDuration.value * 60 * 60 * 24 : 900;
     const instantPriceMatchingActiveUntil = new Date(Date.now() + durationInSeconds * 1000);
 
     await Listing.findByIdAndUpdate(listingId, {
@@ -1984,23 +1974,9 @@ async function processImportedTasks(tasks: ITask[]) {
 
 async function processNewTask(task: ITask) {
   try {
-    console.log(BLUE + `\n === Processing New Task === ` + RESET);
-    console.log(`Collection: ${task.contract.slug}`);
-    console.log(`Task ID: ${task._id}`);
-
-    // Check if task is already being processed
-    const existingStatus = taskStatus[task._id];
-    if (existingStatus && (existingStatus.status === 'RUNNING' || existingStatus.status === 'QUEUEING')) {
-      console.log(YELLOW + `Task ${task._id} is already ${existingStatus.status}, skipping duplicate processing` + RESET);
-      return;
-    }
-
     // Add to activeTasks Map
-    activeTasks.set(task._id, task);
-
+    activeTasks.set(task._id, task)
     currentTasks.push(task);
-
-    console.log(GREEN + `Added task to currentTasks(Total: ${currentTasks.length})` + RESET);
     const jobs = [
       ...(task.selectedMarketplaces.map(m => m.toLowerCase()).includes("opensea") ? [{ name: OPENSEA_SCHEDULE, data: task }] : []),
       ...(task.selectedMarketplaces.map(m => m.toLowerCase()).includes("blur") ? [{ name: BLUR_SCHEDULE, data: task }] : []),
@@ -2619,19 +2595,6 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
   const bulkJobId = `${firstJob.data._id}-${marketplace}`.toLowerCase();
   const task = activeTasks.get(taskId);
 
-  // Initialize taskStatus immediately to prevent race conditions
-  if (!taskStatus[taskId]) {
-    console.log(`[TaskStatus] ${taskId}: Initializing in processBulkJobs - QUEUEING`);
-    taskStatus[taskId] = {
-      status: 'QUEUEING',
-      runningPercentage: 0,
-      waitingTime: 0,
-      cancellationPercentage: 0,
-      processingPercentage: 0,
-      nextLoopTime: new Date()
-    };
-  }
-
   parentJobs.set(bulkJobId, {
     parentId: bulkJobId,
     totalJobs: jobs.length,
@@ -2743,11 +2706,8 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
           continue;
         }
         if (task && task.running) {
-          console.log(`[TaskStatus] ${taskId}: Preparing to queue ${activeJobs.length} jobs for ${marketplace} - transitioning to QUEUEING`);
           if (taskStatus[taskId]) {
             taskStatus[taskId].status = 'QUEUEING'
-          } else {
-            console.warn(`[TaskStatus] ${taskId}: Cannot update status to QUEUEING - taskStatus not initialized`);
           }
         }
         let retries = 3;
@@ -2972,7 +2932,6 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
 
   // Initialize taskStatus immediately to prevent race conditions
   if (!taskStatus[task._id]) {
-    console.log(`[TaskStatus] ${task._id}: Initializing in startTask - STARTED`);
     taskStatus[task._id] = {
       status: 'STARTED',
       runningPercentage: 0,
@@ -2981,13 +2940,6 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       processingPercentage: 0,
       nextLoopTime: new Date()
     };
-  }
-
-  // Check if task is already running to prevent duplicate starts
-  const currentStatus = taskStatus[task._id];
-  if (currentStatus && (currentStatus.status === 'RUNNING' || currentStatus.status === 'QUEUEING')) {
-    console.log(YELLOW + `Task ${task._id} is already ${currentStatus.status}, skipping duplicate start` + RESET);
-    return;
   }
 
   if (!marketplace) {
@@ -3575,13 +3527,6 @@ async function updateStatus(task: ITask) {
     const start = !running;
 
     if (start) {
-      // Check if task is already running
-      const currentStatus = taskStatus[taskId];
-      if (currentStatus && (currentStatus.status === 'RUNNING' || currentStatus.status === 'QUEUEING')) {
-        console.log(YELLOW + `Task ${taskId} is already ${currentStatus.status}, skipping status update` + RESET);
-        return;
-      }
-
       // Update activeTasks Map
       const updatedTask = { ...task, running: true };
       activeTasks.set(taskId, updatedTask);
@@ -3988,32 +3933,19 @@ async function connectWebSocket(): Promise<void> {
  */
 async function handleMarketplaceMessage(message: any) {
   try {
-    // First check if this is a listing price update
     if (message.eventType === 'LISTING_CREATED') {
       // Handle listing price update for instant price matching
       await handleListingPriceUpdate(message);
       return;
-    } else if (message.eventType === 'ITEM_SOLD') {
-      // Create unique identifier for the event
-      const eventId = message.id || `${message.tokenId}-${message.transactionHash}-${message.createdAt}`;
-
-      // Check if we've already seen this event
-      if (recentItemSoldEvents.has(eventId)) {
-        console.log(YELLOW + `Skipping duplicate ITEM_SOLD event: ${eventId}` + RESET);
-        return;
-      }
-
-      // Add to seen events
-      recentItemSoldEvents.add(eventId);
-
-      console.log(GOLD + JSON.stringify(message) + RESET);
-
-      // Update balances if the buyer is one of our wallets
-      await updateBalancesForItemSold(message);
     }
 
+    if (message.eventType === 'ITEM_SOLD') {
+      console.log(GOLD + JSON.stringify(message) + RESET);
+      await updateBalancesForItemSold(message);
+      return
+    }
     // Otherwise, handle as a counterbid message
-    await handleCounterBid(message);
+    handleCounterBid(message)
   } catch (error) {
     console.error("Error in handleMarketplaceMessage:", error);
   }
@@ -4041,6 +3973,35 @@ async function updateBalancesForItemSold(message: any) {
     if (!toAddress || !contractAddress || !marketplace || !tokenId) {
       console.log(YELLOW + `Missing required fields in ITEM_SOLD event` + RESET);
       return;
+    }
+
+    const testWallet = await Wallet.findOne({}) as IWallet
+    await triggerAutoListingForPurchase(testWallet, contractAddress, tokenId, price, marketplace);
+
+    // Write ITEM_SOLD data to file
+    const soldItemData = {
+      timestamp: new Date().toISOString(),
+      toAddress,
+      contractAddress,
+      marketplace,
+      tokenId,
+      price,
+      messageData: data
+    };
+
+    const dataDir = path.join(__dirname, '../data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+
+    const fileName = `item-sold-${new Date().toISOString().split('T')[0]}.jsonl`;
+    const filePath = path.join(dataDir, fileName);
+
+    try {
+      fs.appendFileSync(filePath, JSON.stringify(soldItemData) + '\n');
+      console.log(CYAN + `📝 Wrote ITEM_SOLD data to file: ${filePath}` + RESET);
+    } catch (fileError) {
+      console.error(RED + `Failed to write ITEM_SOLD data to file:` + RESET, fileError);
     }
 
     // Check if the toAddress belongs to one of our wallets (case-insensitive)
@@ -4081,7 +4042,6 @@ async function updateBalancesForItemSold(message: any) {
     console.log(CYAN + `   ${marketplace}: ${balances[walletAddressKey][contractAddress][marketplace]} items` + RESET);
 
     // Check for auto-listing tasks
-    await triggerAutoListingForPurchase(wallet, contractAddress, tokenId, price, marketplace, data);
 
   } catch (error) {
     console.error("Error updating balances for ITEM_SOLD:", error);
@@ -4092,20 +4052,19 @@ async function updateBalancesForItemSold(message: any) {
  * Triggers auto-listing for purchased items if auto-listing is enabled on associated tasks
  */
 async function triggerAutoListingForPurchase(
-  wallet: IWallet, 
-  contractAddress: string, 
-  tokenId: string, 
-  price: number, 
-  marketplace: string, 
-  data: any
+  wallet: IWallet,
+  contractAddress: string,
+  tokenId: string,
+  price: number,
+  marketplace: string
 ): Promise<void> {
   try {
     // Find tasks with auto-listing enabled for this contract and wallet
     const autoListingTasks = await Task.find({
-      $or: [
-        { wallet: wallet.address },
-        { walletId: wallet._id }
-      ],
+      // $or: [
+      //   { wallet: wallet.address },
+      //   { walletId: wallet._id }
+      // ],
       'contract.contractAddress': { $regex: new RegExp(`^${contractAddress}$`, 'i') },
       autoList: true,
       running: true,
@@ -4122,7 +4081,7 @@ async function triggerAutoListingForPurchase(
     // Process each auto-listing task
     for (const task of autoListingTasks) {
       const listingConfig = task.listingConfig!;
-      
+
       console.log(GREEN + `Creating auto-listing for token ${tokenId} based on task ${task._id}` + RESET);
 
       // Create listing data based on task configuration
@@ -4188,8 +4147,8 @@ async function triggerAutoListingForPurchase(
         // Schedule the listing for immediate processing
         await scheduleListing(newListing);
 
-        await logger.logInfo(ErrorCategory.GENERAL, 
-          `Auto-listing triggered for purchased item`, 
+        await logger.logInfo(ErrorCategory.GENERAL,
+          `Auto-listing triggered for purchased item`,
           {
             taskId: task._id.toString(),
             listingId: newListing._id.toString(),
@@ -4203,29 +4162,23 @@ async function triggerAutoListingForPurchase(
 
       } catch (listingError) {
         console.error(RED + `Failed to create auto-listing for token ${tokenId}:` + RESET, listingError);
-        await logger.logError(ErrorCategory.GENERAL, 
-          'Auto-listing creation failed', 
-          {
-            taskId: task._id.toString(),
-            contractAddress,
-            tokenId,
-            error: listingError instanceof Error ? listingError : new Error(String(listingError))
-          }
-        );
+        await logger.logGeneralError('Auto-listing creation failed', {
+          taskId: task._id.toString(),
+          contractAddress,
+          tokenId,
+          error: listingError instanceof Error ? listingError : new Error(String(listingError))
+        });
       }
     }
 
   } catch (error) {
     console.error("Error in triggerAutoListingForPurchase:", error);
-    await logger.logError(ErrorCategory.GENERAL, 
-      'Auto-listing trigger failed', 
-      {
-        contractAddress,
-        tokenId,
-        wallet: wallet.address,
-        error: error instanceof Error ? error : new Error(String(error))
-      }
-    );
+    await logger.logGeneralError('Auto-listing trigger failed', {
+      contractAddress,
+      tokenId,
+      wallet: wallet.address,
+      error: error instanceof Error ? error : new Error(String(error))
+    });
   }
 }
 
@@ -5443,16 +5396,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
           expiry
         }
 
-        if (orders.length > 0) {
-          const cancelData = orders.map((order, index) => {
-            const payload = JSON.parse(order.orderHash)
-            return {
-              name: CANCEL_BLUR_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order.id }
-            }
-          })
-          await queue.addBulk(cancelData)
-        }
 
         if (job) {
           if (incomingPrice <= Number(job?.data?.offerPrice) / 1e18) {
@@ -5590,21 +5533,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         expiry
       }
 
-      if (orders.length > 0) {
-        const cancelData = orders.map((order) => {
-          const payload = JSON.parse(order.orderHash)
-          return {
-            name: CANCEL_BLUR_BID,
-            data: {
-              privateKey: WALLET_PRIVATE_KEY,
-              payload,
-              taskId: task._id,
-              orderKey: order.id
-            }
-          }
-        })
-        await queue.addBulk(cancelData);
-      }
 
       if (job) {
         if (+incomingPrice <= +job?.data?.offerPrice) {
@@ -5738,7 +5666,6 @@ async function processOpenseaScheduledBid(task: ITask) {
     if (!currentTask || !currentTask.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return;
 
     if (!taskStatus[currentTask._id]) {
-      console.log(`[TaskStatus] ${currentTask._id}: Initializing for OpenSea - STARTED`);
       taskStatus[currentTask._id] = {
         status: 'STARTED',
         runningPercentage: 0,
@@ -6026,7 +5953,6 @@ async function processOpenseaScheduledBid(task: ITask) {
       );
 
       if (currentTask && currentTask.running) {
-        console.log(`[TaskStatus] ${currentTask._id}: Jobs successfully queued - transitioning to QUEUED`);
         taskStatus[currentTask._id].status = 'QUEUED'
       }
     }
@@ -6346,7 +6272,6 @@ async function processBlurScheduledBid(task: ITask) {
     warningBids[currentTask._id].blur = false;
     const contractAddress = currentTask.contract.contractAddress
     if (!taskStatus[currentTask._id]) {
-      console.log(`[TaskStatus] ${currentTask._id}: Initializing for Blur - STARTED`);
       taskStatus[currentTask._id] = {
         status: 'STARTED',
         runningPercentage: 0,
@@ -6401,7 +6326,6 @@ async function processBlurScheduledBid(task: ITask) {
       );
 
       if (currentTask && currentTask.running) {
-        console.log(`[TaskStatus] ${currentTask._id}: Jobs successfully queued - transitioning to QUEUED`);
         taskStatus[currentTask._id].status = 'QUEUED'
       }
     }
@@ -6958,7 +6882,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     }
 
     const bidCount = getIncrementedBidCount(OPENSEA, slug, _id)
-    
+
     const offerEth = Number(tokenOffer) / Math.pow(10, decimal);
 
     if (outbidOptions.outbid && offerEth > maxBidPriceEth) {
@@ -6984,7 +6908,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     } else if (offerEth < minBidPriceEth) {
       tokenOffer = BigInt(Math.round(minBidPriceEth * Math.pow(10, decimal)));
     }
-    
+
     // Cancel existing orders only when we're actually proceeding with the bid
     if (orders.length > 0) {
       const cancelData = orders.map((order, index) => {
@@ -7502,7 +7426,6 @@ async function processMagicedenScheduledBid(task: ITask) {
     if (!currentTask || !currentTask?.running || !currentTask?.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("magiceden")) return
 
     if (!taskStatus[currentTask._id]) {
-      console.log(`[TaskStatus] ${currentTask._id}: Initializing for Magic Eden - STARTED`);
       taskStatus[currentTask._id] = {
         status: 'STARTED',
         runningPercentage: 0,
@@ -7758,7 +7681,6 @@ async function processMagicedenScheduledBid(task: ITask) {
         { priority: COLLECTION_BID_PRIORITY.MAGICEDEN, jobId } as JobsOptions
       );
       if (currentTask && currentTask.running) {
-        console.log(`[TaskStatus] ${currentTask._id}: Jobs successfully queued - transitioning to QUEUED`);
         taskStatus[currentTask._id].status = 'QUEUED'
       }
     }
@@ -8093,7 +8015,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     } else if (offerEth < minBidPriceEth) {
       tokenOffer = minBidPriceEth * Math.pow(10, decimal);
     }
-    
+
     // Cancel existing orders only when we're actually proceeding with the bid
     if (orders.length > 0) {
       const orderKeys = orders.map((order: PrismaOrder) => order.id)
@@ -9963,12 +9885,12 @@ async function calculateBidPrice(task: ITask, floorPrice: number, marketplaceNam
     // If hard cap is enabled, use the minimum of calculated max price and hard cap
     const hardCapValue = bidPrice.hardCap;
     maxBidPriceEth = Math.min(maxBidPriceEth, hardCapValue);
-    
+
     // Log if hard cap is limiting the max bid
-    const calculatedMax = bidPrice.maxType === "percentage" 
+    const calculatedMax = bidPrice.maxType === "percentage"
       ? (floorPrice * (bidPrice.max || task.bidPrice.max || 0) / 100)
       : (bidPrice.max || task.bidPrice.max || 0);
-      
+
     if (maxBidPriceEth === hardCapValue && hardCapValue < calculatedMax) {
       console.log(`Hard cap of ${hardCapValue} ETH is limiting max bid for ${task.contract.slug} on ${marketplaceName}`);
     }

@@ -160,14 +160,14 @@ class WebSocketManager extends EventEmitter {
           this.attemptReconnect();
         } catch (error) {
           // Prevent timeout callback from crashing the server
-          logger.logError(ErrorCategory.WEBSOCKET, 'Error in WebSocket connection timeout callback', {
+          logger.logWebSocketError('Error in WebSocket connection timeout callback', {
             error: error instanceof Error ? error : new Error(String(error))
           });
           // Still attempt to reconnect even if there was an error
           try {
             this.attemptReconnect();
           } catch (reconnectError) {
-            logger.logError(ErrorCategory.WEBSOCKET, 'Error attempting reconnect after timeout error', {
+            logger.logWebSocketError('Error attempting reconnect after timeout error', {
               error: reconnectError instanceof Error ? reconnectError : new Error(String(reconnectError))
             });
           }

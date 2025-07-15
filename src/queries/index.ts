@@ -9,6 +9,7 @@ export const CollectionItemsListQuery = `
       ) {
         items {
           id
+          tokenId
           name
           imageUrl
           bestListing {

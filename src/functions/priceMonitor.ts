@@ -31,9 +31,9 @@ setInterval(() => {
 }, 60 * 1000);
 
 const colors = {
-  opensea: '\x1b[36m',    // Cyan
-  blur: '\x1b[35m',       // Magenta
-  magiceden: '\x1b[33m',  // Yellow
+  opensea: '\x1b[34m',    // Cyan
+  blur: '\x1b[33m',       // Magenta
+  magiceden: '\x1b[35m',  // Yellow
   unknown: '\x1b[31m',    // Red
   reset: '\x1b[0m'        // Reset
 };
@@ -59,9 +59,7 @@ export async function handleListingPriceUpdate(message: any): Promise<void> {
         return;
       }
 
-      console.log(marketplaceColor + `--------------------------------------------------------------------------------------------------` + colors.reset);
       console.log(marketplaceColor + `incoming ${marketplace} listing for ${contractAddress} #${tokenId} - ${price} ETH from ${seller} at ${message.createdAt}`.toUpperCase() + colors.reset);
-      console.log(marketplaceColor + `--------------------------------------------------------------------------------------------------` + colors.reset);
 
       if (!contractAddress || !tokenId || !price || !marketplace) {
         return;

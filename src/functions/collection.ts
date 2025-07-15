@@ -180,10 +180,10 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
       // Import Blur functions dynamically to avoid circular dependency
       const { fetchBlurCollectionStats } = await import('../marketplace/blur/bid');
       const stats = await fetchBlurCollectionStats(collectionSlug);
-      
-      const floor_price = stats?.floorPrice?.amount ? 
+
+      const floor_price = stats?.floorPrice?.amount ?
         parseFloat(stats.floorPrice.amount) : 0;
-      
+
       // Cache the result
       if (redis) {
         await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
@@ -225,10 +225,10 @@ export async function getMagicEdenFloor(collectionSlug: string): Promise<number>
       // Import Magic Eden functions dynamically to avoid circular dependency
       const { fetchMagicEdenCollectionStats } = await import('../marketplace/magiceden');
       const stats = await fetchMagicEdenCollectionStats(collectionSlug);
-      
-      const floor_price = stats?.floorPrice?.amount ? 
+
+      const floor_price = stats?.floorPrice?.amount ?
         Number(stats.floorPrice.amount) / 1e18 : 0;
-      
+
       // Cache the result
       if (redis) {
         await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
@@ -357,14 +357,11 @@ export async function fetchOpenSeaCollectionItems(
       },
     }));
 
+    console.log(JSON.stringify(data));
+
+
     // Extract token IDs from the current page
-    const tokenIds = data.data.collectionItems.items.map((item) => {
-      const match = item.name.match(/#(\d+)$/);
-      if (match && match[1]) {
-        return parseInt(match[1], 10);
-      }
-      return parseInt(item.name.replace(/\D/g, '')) || 0;
-    });
+    const tokenIds = data.data.collectionItems.items.map((item) => +item.tokenId);
     // Add current page's token IDs to our accumulated list
     const updatedTokenIds = [...allTokenIds, ...tokenIds];
     // Get the next cursor
@@ -725,6 +722,7 @@ interface CollectionItem {
   id: string;
   name: string;
   imageUrl: string;
+  tokenId: string;
   bestListing: BestListing | null;
   lastSale: LastSale | null;
   rarity: Rarity;
