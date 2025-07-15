@@ -46,7 +46,6 @@ import WebSocketManager from "./utils/websocket-manager";
 import Listing from "./models/listing.model";
 import { initializeListingScheduler, shutdownListingScheduler, scheduleListing, cancelListingJob, processListingJob } from "./functions/listingScheduler";
 import { initializeExpirationMonitor, stopExpirationMonitor } from "./functions/relistExpired";
-import { initializeExpiredPriceCleanup, stopExpiredPriceCleanup } from "./functions/cleanupExpiredPrices";
 import { handleListingPriceUpdate } from "./functions/priceMonitor";
 import { createListing } from "./functions/list";
 import { IListing } from "./types/listing.types";
@@ -142,7 +141,6 @@ function cleanupSeenItems(map: Map<string, number>): void {
 // Set up periodic cleanup
 let cleanupIntervalId: NodeJS.Timeout | null = null;
 let expirationMonitorInterval: NodeJS.Timeout | null = null;
-let expiredPriceCleanupInterval: NodeJS.Timeout | null = null;
 
 const SERVER_IP = process.env.SERVER_IP as string
 const USERNAME = process.env.USERNAME as string
@@ -899,10 +897,10 @@ async function startServer() {
         connection: await createBullMQConnection(),
         prefix: '{bull}',
         concurrency: Number(RATE_LIMIT),
-        lockDuration: 300000, // 5 minutes lock duration (increased from default 30s)
-        lockRenewTime: 60000, // Renew lock every minute (well before 5 min expiry)
-        stalledInterval: 300000, // Check for stalled jobs every 5 minutes
-        maxStalledCount: 2, // Retry stalled jobs up to 2 times
+        lockDuration: 900000, // 15 minutes lock duration (increased to handle rate-limited jobs)
+        lockRenewTime: 60000, // Renew lock every minute (well before expiry)
+        stalledInterval: 600000, // Check for stalled jobs every 10 minutes
+        maxStalledCount: 3, // Retry stalled jobs up to 3 times
       }
     );
 
@@ -1089,13 +1087,6 @@ async function startServer() {
       checkInterval: 5 * 60 * 1000 // 5 minutes
     });
 
-    // Initialize expired price cleanup
-    expiredPriceCleanupInterval = initializeExpiredPriceCleanup();
-    console.log('🧹 Expired price cleanup initialized');
-    await logger.logInfo(ErrorCategory.GENERAL, 'Expired price cleanup initialized', {
-      schedulerType: 'price_cleanup',
-      cleanupInterval: 30 * 60 * 1000 // 30 minutes
-    });
 
     // Start periodic cleanup of seen items
     cleanupIntervalId = setInterval(() => {
@@ -1149,10 +1140,6 @@ process.on('SIGINT', async () => {
     console.log('Expiration monitor stopped');
   }
 
-  if (expiredPriceCleanupInterval) {
-    stopExpiredPriceCleanup(expiredPriceCleanupInterval);
-    console.log('Expired price cleanup stopped');
-  }
 
   // Disconnect WebSocket
   if (wsManager) {
@@ -1188,10 +1175,6 @@ process.on('SIGTERM', async () => {
     console.log('Expiration monitor stopped');
   }
 
-  if (expiredPriceCleanupInterval) {
-    stopExpiredPriceCleanup(expiredPriceCleanupInterval);
-    console.log('Expired price cleanup stopped');
-  }
 
   // Disconnect WebSocket
   if (wsManager) {
