@@ -56,6 +56,7 @@ const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io/";
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
 const bidStats: BidCounts = {};
+const ownBidCounts: { [marketplace: string]: number } = {};
 const currentTokenIds: BottomListings = {};
 const currentTraits: CurrentTraits = {}
 const taskStatus: TaskStatus = {};
@@ -1597,9 +1598,10 @@ setInterval(broadcastBidRates, BROADCAST_INTERVAL);
 
 function broadcastBidRates() {
   bidRates = getAllBidRates();
+  
   const message = JSON.stringify({
     type: 'bidRatesUpdate',
-    data: { bidRates, bidCounts: bidStats, skipCounts: skipStats, errorCounts: errorStats, floorPrices, bestOffers, warningBids, warningMessage, rps, taskStatus }
+    data: { bidRates, bidCounts: bidStats, skipCounts: skipStats, errorCounts: errorStats, floorPrices, bestOffers, warningBids, warningMessage, rps, taskStatus, ownBidCounts }
   });
 
   clients.forEach(client => {
@@ -4283,7 +4285,10 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.toLowerCase())?.encryptedPrivateKey as string) as string;
     const maker = data?.data?.maker?.toLowerCase()
 
-    if (walletAddresses.includes(maker)) return
+    if (walletAddresses.includes(maker)) {
+      incrementOwnBidCounter('magiceden', task._id);
+      return
+    }
 
     const { currencyType, currency, decimal, currencySymbol } = await calculateBidPrice(currentTask, 0, "magiceden")
     const usdcBid = currencySymbol.toLowerCase() === "usdc"
@@ -4787,7 +4792,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     if (hasSeenItem(seenOrderHashes, taskSpecificHash)) return;
     addSeenItem(seenOrderHashes, taskSpecificHash)
 
-    if (walletAddresses.includes(maker)) return
+    if (walletAddresses.includes(maker)) {
+      incrementOwnBidCounter('opensea', task._id);
+      return
+    }
 
     const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal);
     const collectionDetails = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
@@ -10691,6 +10699,56 @@ export function trackBidRate(marketplace: 'opensea' | 'magiceden' | 'blur', task
 
   return { globalBidRates, bidStats };
 }
+
+/**
+ * Increments memory-based counter for our own bids when we detect we're the maker
+ */
+export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', taskId: string) {
+  try {
+    // Update local ownBidCounts object for immediate broadcast
+    if (!ownBidCounts[marketplace]) {
+      ownBidCounts[marketplace] = 0;
+    }
+    ownBidCounts[marketplace]++;
+    
+    console.log(`🔄 Own bid detected - ${marketplace.toUpperCase()}: ${ownBidCounts[marketplace]} total bids for task ${taskId}`);
+    return ownBidCounts[marketplace];
+  } catch (error) {
+    console.error('Failed to increment own bid counter:', error);
+  }
+  return 0;
+}
+
+/**
+ * Gets Redis-based counter for our own bids
+ */
+export async function getOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', taskId: string) {
+  try {
+    if (redis) {
+      const key = `{own_bid_count}:${marketplace}:${taskId}`;
+      const count = await redis.get(key);
+      return parseInt(count || '0');
+    }
+  } catch (error) {
+    console.error('Failed to get own bid counter:', error);
+  }
+  return 0;
+}
+
+/**
+ * Resets memory-based counter for our own bids
+ */
+export function resetOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', taskId: string) {
+  try {
+    // Reset the marketplace counter to 0
+    ownBidCounts[marketplace] = 0;
+    
+    console.log(`🔄 Reset own bid counter for ${marketplace.toUpperCase()} task ${taskId}`);
+  } catch (error) {
+    console.error('Failed to reset own bid counter:', error);
+  }
+}
+
 
 
 // Add this interface near other interfaces
