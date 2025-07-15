@@ -86,7 +86,7 @@ const seenBids = new Map<string, number>(); // Map<bidHash, timestamp>
 // Configuration for cleanup
 const SEEN_ITEMS_TTL = 30 * 60 * 1000; // 30 minutes TTL
 const SEEN_ITEMS_MAX_SIZE = 10000; // Maximum items to keep
-const CLEANUP_INTERVAL = 5 * 60 * 1000; // Run cleanup every 5 minutes
+const CLEANUP_INTERVAL = 30 * 60 * 1000; // Run cleanup every 30 minutes for better deduplication
 
 // Helper functions for seen items management
 function addSeenItem(map: Map<string, number>, key: string): void {
@@ -640,10 +640,12 @@ let connectivityCheckInterval: NodeJS.Timeout | null;
 
 // Track recently seen ITEM_SOLD events to prevent duplicates
 const recentItemSoldEvents = new Set<string>();
-// Clean up old events every 5 minutes
+// Clean up old events every 30 minutes to prevent memory growth
+// This is long enough to catch duplicates but not so long as to cause memory issues
 setInterval(() => {
+  console.log(CYAN + `Clearing ${recentItemSoldEvents.size} cached ITEM_SOLD events` + RESET);
   recentItemSoldEvents.clear();
-}, 5 * 60 * 1000);
+}, 30 * 60 * 1000);
 function startConnectivityMonitoring() {
   // Check connectivity every 30 seconds
   connectivityCheckInterval = setInterval(async () => {
@@ -1092,6 +1094,10 @@ async function startServer() {
     cleanupIntervalId = setInterval(() => {
       cleanupSeenItems(seenOrderHashes);
       cleanupSeenItems(seenBids);
+      
+      // Also clear ITEM_SOLD events to prevent memory growth
+      console.log(`Clearing ${recentItemSoldEvents.size} cached ITEM_SOLD events`);
+      recentItemSoldEvents.clear();
     }, CLEANUP_INTERVAL);
 
     console.log(`Started periodic cleanup for seen items (every ${CLEANUP_INTERVAL / 1000 / 60} minutes)`);
@@ -3957,6 +3963,21 @@ async function updateBalancesForItemSold(message: any) {
       console.log(YELLOW + `Missing required fields in ITEM_SOLD event` + RESET);
       return;
     }
+
+    // Create a unique key for deduplication including transaction hash if available
+    const txHash = data.transactionHash || '';
+    const eventKey = txHash ? 
+      `${contractAddress}:${tokenId}:${txHash}` : 
+      `${contractAddress}:${tokenId}:${marketplace}:${toAddress}:${price}:${data.createdAt || Date.now()}`;
+    
+    // Check if we've already processed this event
+    if (recentItemSoldEvents.has(eventKey)) {
+      console.log(YELLOW + `⚠️  Duplicate ITEM_SOLD event ignored for token ${tokenId}` + RESET);
+      return;
+    }
+    
+    // Add to the set to prevent future duplicates
+    recentItemSoldEvents.add(eventKey);
 
     const testWallet = await Wallet.findOne({}) as IWallet
     await triggerAutoListingForPurchase(testWallet, contractAddress, tokenId, price, marketplace);
@@ -9942,8 +9963,14 @@ async function stopOption(
     const minFloorPrice = Number(task?.stopOptions?.minFloorPrice);
     const maxFloorPrice = Number(task?.stopOptions?.maxFloorPrice);
 
-    const traitFloorMin = task?.stopOptions?.traitPrices && trait && trait in task?.stopOptions?.traitPrices ? Number(task?.stopOptions?.traitPrices[trait].min) : 0
-    const traitFloorMax = task?.stopOptions?.traitPrices && trait && trait in task?.stopOptions?.traitPrices ? Number(task?.stopOptions?.traitPrices[trait].max) : 0
+    // Check for trait prices with marketplace prefix first, then fall back to old format
+    const marketplaceTraitKey = `${marketplace}:${trait}`;
+    const hasMarketplaceKey = task?.stopOptions?.traitPrices && marketplaceTraitKey in task?.stopOptions?.traitPrices;
+    const hasOldKey = task?.stopOptions?.traitPrices && trait && trait in task?.stopOptions?.traitPrices;
+    
+    const traitPriceKey = hasMarketplaceKey ? marketplaceTraitKey : (hasOldKey ? trait : null);
+    const traitFloorMin = traitPriceKey && task?.stopOptions?.traitPrices ? Number(task?.stopOptions?.traitPrices[traitPriceKey].min) : 0;
+    const traitFloorMax = traitPriceKey && task?.stopOptions?.traitPrices ? Number(task?.stopOptions?.traitPrices[traitPriceKey].max) : 0;
 
 
     if (trait && traitFloor && traitFloor > 0 && (traitFloorMin > 0 || traitFloorMax > 0)) {
