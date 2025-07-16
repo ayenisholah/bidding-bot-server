@@ -76,6 +76,11 @@ const QUEUE_NAME = 'BIDDING_BOT';
 export const WORKER_COUNT = 1
 
 // BullMQ configuration will use the connection from redis.ts
+// Note: Worker concurrency is set to RATE_LIMIT (default: 100)
+// If you see many waiting jobs, consider:
+// 1. Increasing RATE_LIMIT in .env (be careful not to overload APIs)
+// 2. Adding more workers by increasing WORKER_COUNT
+// 3. Optimizing job processing time
 
 let traitsToRemove: { [key: string]: string[] } = {}
 let removedTokens: { [key: string]: { opensea: string[]; magiceden: string[] } } = {}
@@ -488,6 +493,20 @@ async function monitorHealth() {
     const totalMemory = os.totalmem();
     const memoryUsagePercent = (used.heapUsed / totalMemory) * 100;
 
+    // Check if queue is paused
+    const isPaused = await queue.isPaused();
+    
+    // Auto-recovery: If queue is paused but we have waiting jobs and conditions are good
+    if (isPaused && counts.waiting > 0 && memoryUsagePercent < 70 && counts.active < DRAIN_THRESHOLD) {
+      console.log(YELLOW + '⚡ Queue is paused with waiting jobs - attempting auto-recovery...' + RESET);
+      try {
+        await queue.resume();
+        console.log(GREEN + '✅ Queue auto-recovery successful' + RESET);
+      } catch (err) {
+        console.error(RED + '❌ Queue auto-recovery failed:' + RESET, err);
+      }
+    }
+
     if (memoryUsagePercent > 75) {
       console.log(RED + `⚠️  HIGH MEMORY USAGE (${memoryUsagePercent.toFixed(2)}%) - INITIATING CLEANUP... ⚠️` + RESET);
       await queue.pause();
@@ -503,7 +522,8 @@ async function monitorHealth() {
       setTimeout(async () => {
         await queue.resume();
       }, 2500);
-    } else {
+    } else if (!isPaused || (isPaused && memoryUsagePercent < 70)) {
+      // Only resume if not already resumed or if memory is OK
       await queue.resume();
     }
 
@@ -517,6 +537,13 @@ async function monitorHealth() {
     });
 
     console.log(BLUE + '\n📋 Queue Status:' + RESET);
+    // Show paused status prominently
+    if (isPaused) {
+      console.log(RED + '⏸️  QUEUE IS PAUSED' + RESET);
+    } else {
+      console.log(GREEN + '▶️  QUEUE IS RUNNING' + RESET);
+    }
+    
     Object.entries(counts).forEach(([key, value]) => {
       const color = value > RATE_LIMIT * 2 ? RED : value > RATE_LIMIT ? YELLOW : GREEN;
       console.log(`${key}: ${color}${value}${RESET}`);
@@ -591,6 +618,14 @@ async function clearQueueAndRestartJobs() {
     taskTimeouts.clear();
 
     console.log('✅ Job states cleared');
+
+    // Fetch all tasks from database
+    await fetchCurrentTasks();
+    console.log('✅ Tasks loaded from database');
+
+    // Start all running tasks
+    await runScheduledLoop();
+    console.log('✅ Running tasks started');
 
     // Note: Listing jobs will be recreated by initializeListingScheduler
     console.log(GREEN + '✅ All jobs restarted successfully' + RESET);
@@ -853,8 +888,8 @@ async function startServer() {
       connection: queueConnection,
       defaultJobOptions: {
         removeOnComplete: true,
-        removeOnFail: false, // Keep failed jobs for debugging
-        attempts: 3, // Retry failed jobs 3 times
+        removeOnFail: true, // Keep failed jobs for debugging
+        attempts: 3, // Retry failed jobs up to 3 times
         backoff: {
           type: 'exponential',
           delay: 2000, // Start with 2 second delay
@@ -900,10 +935,6 @@ async function startServer() {
         connection: await createBullMQConnection(),
         prefix: '{bull}',
         concurrency: Number(RATE_LIMIT),
-        lockDuration: 900000, // 15 minutes lock duration (increased to handle rate-limited jobs)
-        lockRenewTime: 60000, // Renew lock every minute (well before expiry)
-        stalledInterval: 600000, // Check for stalled jobs every 10 minutes
-        maxStalledCount: 3, // Retry stalled jobs up to 3 times
       }
     );
 
@@ -1095,7 +1126,7 @@ async function startServer() {
     cleanupIntervalId = setInterval(() => {
       cleanupSeenItems(seenOrderHashes);
       cleanupSeenItems(seenBids);
-      
+
       // Also clear ITEM_SOLD events to prevent memory growth
       console.log(`Clearing ${recentItemSoldEvents.size} cached ITEM_SOLD events`);
       recentItemSoldEvents.clear();
@@ -1598,7 +1629,7 @@ setInterval(broadcastBidRates, BROADCAST_INTERVAL);
 
 function broadcastBidRates() {
   bidRates = getAllBidRates();
-  
+
   const message = JSON.stringify({
     type: 'bidRatesUpdate',
     data: { bidRates, bidCounts: bidStats, skipCounts: skipStats, errorCounts: errorStats, floorPrices, bestOffers, warningBids, warningMessage, rps, taskStatus, ownBidCounts }
@@ -1884,15 +1915,17 @@ async function runScheduledLoop() {
 
 
   if (!API_KEY) {
-    console.log(RED + 'API_KEY is not set' + RESET);
-    await queue.pause()
+    console.log(RED + 'API_KEY is not set - queue operations disabled' + RESET);
+    console.log(YELLOW + 'Please set API_KEY environment variable and restart' + RESET);
+    // Don't pause queue, just skip task creation
     return
   }
 
 
   if (!RATE_LIMIT) {
-    console.log(RED + 'RATE_LIMIT is not set' + RESET);
-    await queue.pause()
+    console.log(RED + 'RATE_LIMIT is not set - queue operations disabled' + RESET);
+    console.log(YELLOW + 'Please set RATE_LIMIT environment variable and restart' + RESET);
+    // Don't pause queue, just skip task creation
     return
   }
 
@@ -2717,12 +2750,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
                     ...(job.jobKey ? { jobId: job.jobKey } : {}),
                     ...job?.opts,
                     removeOnComplete: true,
-                    removeOnFail: false, // Keep failed jobs for debugging
-                    attempts: 3, // Retry failed jobs 3 times
-                    backoff: {
-                      type: 'exponential',
-                      delay: 2000, // Start with 2 second delay
-                    },
+                    removeOnFail: true, // Keep failed jobs for debugging
                   },
                 })),
               ]
@@ -2784,12 +2812,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
                 const jobOptions = {
                   ...(job.jobKey ? { jobId: job.jobKey } : {}),
                   removeOnComplete: true,
-                  removeOnFail: false, // Keep failed jobs for debugging
-                  attempts: 3, // Retry failed jobs 3 times
-                  backoff: {
-                    type: 'exponential',
-                    delay: 2000, // Start with 2 second delay
-                  },
+                  removeOnFail: true, // Keep failed jobs for debugging
                 };
 
                 // Log job being added
@@ -2916,8 +2939,8 @@ function generateJobKey(job: any): string {
 async function startTask(task: ITask, start: boolean, marketplace?: string) {
 
   if (!API_KEY) {
-    console.log(RED + 'API_KEY is not set' + RESET);
-    await queue.pause();
+    console.log(RED + 'API_KEY is not set - cannot start task' + RESET);
+    console.log(YELLOW + 'Please set API_KEY environment variable and restart' + RESET);
     return;
   }
 
@@ -2958,8 +2981,8 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
 
   const RATE_LIMIT = process.env.RATE_LIMIT;
   if (!RATE_LIMIT) {
-    console.log(RED + 'RATE_LIMIT is not set' + RESET);
-    await queue.pause();
+    console.log(RED + 'RATE_LIMIT is not set - cannot start task' + RESET);
+    console.log(YELLOW + 'Please set RATE_LIMIT environment variable and restart' + RESET);
     return;
   }
 
@@ -3968,16 +3991,16 @@ async function updateBalancesForItemSold(message: any) {
 
     // Create a unique key for deduplication including transaction hash if available
     const txHash = data.transactionHash || '';
-    const eventKey = txHash ? 
-      `${contractAddress}:${tokenId}:${txHash}` : 
+    const eventKey = txHash ?
+      `${contractAddress}:${tokenId}:${txHash}` :
       `${contractAddress}:${tokenId}:${marketplace}:${toAddress}:${price}:${data.createdAt || Date.now()}`;
-    
+
     // Check if we've already processed this event
     if (recentItemSoldEvents.has(eventKey)) {
       console.log(YELLOW + `⚠️  Duplicate ITEM_SOLD event ignored for token ${tokenId}` + RESET);
       return;
     }
-    
+
     // Add to the set to prevent future duplicates
     recentItemSoldEvents.add(eventKey);
 
@@ -9975,7 +9998,7 @@ async function stopOption(
     const marketplaceTraitKey = `${marketplace}:${trait}`;
     const hasMarketplaceKey = task?.stopOptions?.traitPrices && marketplaceTraitKey in task?.stopOptions?.traitPrices;
     const hasOldKey = task?.stopOptions?.traitPrices && trait && trait in task?.stopOptions?.traitPrices;
-    
+
     const traitPriceKey = hasMarketplaceKey ? marketplaceTraitKey : (hasOldKey ? trait : null);
     const traitFloorMin = traitPriceKey && task?.stopOptions?.traitPrices ? Number(task?.stopOptions?.traitPrices[traitPriceKey].min) : 0;
     const traitFloorMax = traitPriceKey && task?.stopOptions?.traitPrices ? Number(task?.stopOptions?.traitPrices[traitPriceKey].max) : 0;
@@ -10710,7 +10733,7 @@ export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
       ownBidCounts[marketplace] = 0;
     }
     ownBidCounts[marketplace]++;
-    
+
     console.log(`🔄 Own bid detected - ${marketplace.toUpperCase()}: ${ownBidCounts[marketplace]} total bids for task ${taskId}`);
     return ownBidCounts[marketplace];
   } catch (error) {
@@ -10742,7 +10765,7 @@ export function resetOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur'
   try {
     // Reset the marketplace counter to 0
     ownBidCounts[marketplace] = 0;
-    
+
     console.log(`🔄 Reset own bid counter for ${marketplace.toUpperCase()} task ${taskId}`);
   } catch (error) {
     console.error('Failed to reset own bid counter:', error);
@@ -11048,6 +11071,16 @@ async function watchNetworkState() {
     if (netEnabled) {
       // Network restored
       console.log('Network restored, resuming operations...');
+      
+      // Resume the queue first
+      try {
+        await queue.resume();
+        console.log(GREEN + 'Queue resumed after network restoration' + RESET);
+      } catch (err) {
+        console.error('Failed to resume queue:', err);
+      }
+      
+      // Then restart the scheduled loop
       runScheduledLoop().catch(err => {
         console.error('Failed to restart scheduled loop:', err);
       });
