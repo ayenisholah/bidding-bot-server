@@ -1454,16 +1454,74 @@ interface Media {
 }
 
 
-export function cancelMagicedenRequest(taskId: string): boolean {
-  const controllers = activeRequests.get(taskId);
-  if (controllers && controllers.length > 0) {
-    controllers.forEach(controller => controller.abort());
-    activeRequests.delete(taskId);
-    console.log(`Aborted ${controllers.length} MagicEden requests for task ${taskId}`);
-    return true;
+export async function cancelMagicedenRequest(taskId: string): Promise<{ success: boolean; cancelledCount: number; error?: string }> {
+  // Input validation
+  if (!taskId || typeof taskId !== 'string') {
+    await logger.logWarning(ErrorCategory.MARKETPLACE, 'Invalid taskId provided to cancelMagicedenRequest', { 
+      taskId,
+      marketplace: 'magiceden',
+      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION
+    });
+    return { success: false, cancelledCount: 0, error: 'Invalid taskId' };
   }
-  console.log(`No active MagicEden requests found for task ${taskId}`);
-  return false;
+
+  const controllers = activeRequests.get(taskId);
+  if (!controllers || controllers.length === 0) {
+    await logger.logDebug(ErrorCategory.MARKETPLACE, 'No active MagicEden requests found for task', { 
+      taskId,
+      marketplace: 'magiceden',
+      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION
+    });
+    return { success: false, cancelledCount: 0 };
+  }
+
+  try {
+    let cancelledCount = 0;
+    
+    // Cancel all controllers with timeout protection
+    await Promise.all(controllers.map(async (controller) => {
+      try {
+        const timeoutPromise = new Promise<void>((_, reject) => {
+          setTimeout(() => reject(new Error('Abort timeout')), 5000);
+        });
+        
+        const abortPromise = new Promise<void>((resolve) => {
+          controller.abort();
+          resolve();
+        });
+        
+        await Promise.race([abortPromise, timeoutPromise]);
+        cancelledCount++;
+      } catch (error) {
+        await logger.logWarning(ErrorCategory.MARKETPLACE, 'Failed to abort MagicEden request controller', {
+          taskId,
+          marketplace: 'magiceden',
+          marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }));
+    
+    activeRequests.delete(taskId);
+    
+    await logger.logInfo(ErrorCategory.MARKETPLACE, 'MagicEden requests cancelled', {
+      marketplace: 'magiceden',
+      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
+      taskId,
+      cancelledRequests: cancelledCount,
+      totalRequests: controllers.length
+    });
+    
+    return { success: true, cancelledCount };
+  } catch (error) {
+    await logger.logMarketplaceError('Failed to cancel MagicEden requests', {
+      taskId,
+      marketplace: 'magiceden',
+      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
+    return { success: false, cancelledCount: 0, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 function addActiveRequest(taskId: string, controller: AbortController) {

@@ -34,24 +34,74 @@ function addActiveRequest(taskId: string, controller: AbortController) {
   activeRequests.get(taskId)?.push(controller);
 }
 
-export async function cancelBlurRequest(taskId: string): Promise<boolean> {
-  const controllers = activeRequests.get(taskId);
-  if (controllers && controllers.length > 0) {
-    controllers.forEach(controller => controller.abort());
-    activeRequests.delete(taskId);
-    console.log(`Aborted ${controllers.length} Blur requests for task ${taskId}`);
+export async function cancelBlurRequest(taskId: string): Promise<{ success: boolean; cancelledCount: number; error?: string }> {
+  // Input validation
+  if (!taskId || typeof taskId !== 'string') {
+    await logger.logWarning(ErrorCategory.MARKETPLACE, 'Invalid taskId provided to cancelBlurRequest', { 
+      taskId,
+      marketplace: 'blur',
+      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION
+    });
+    return { success: false, cancelledCount: 0, error: 'Invalid taskId' };
+  }
 
+  const controllers = activeRequests.get(taskId);
+  if (!controllers || controllers.length === 0) {
+    await logger.logDebug(ErrorCategory.MARKETPLACE, 'No active Blur requests found for task', { 
+      taskId,
+      marketplace: 'blur',
+      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION
+    });
+    return { success: false, cancelledCount: 0 };
+  }
+
+  try {
+    let cancelledCount = 0;
+    
+    // Cancel all controllers with timeout protection
+    await Promise.all(controllers.map(async (controller) => {
+      try {
+        const timeoutPromise = new Promise<void>((_, reject) => {
+          setTimeout(() => reject(new Error('Abort timeout')), 5000);
+        });
+        
+        const abortPromise = new Promise<void>((resolve) => {
+          controller.abort();
+          resolve();
+        });
+        
+        await Promise.race([abortPromise, timeoutPromise]);
+        cancelledCount++;
+      } catch (error) {
+        await logger.logWarning(ErrorCategory.MARKETPLACE, 'Failed to abort Blur request controller', {
+          taskId,
+          marketplace: 'blur',
+          marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }));
+    
+    activeRequests.delete(taskId);
+    
     await logger.logInfo(ErrorCategory.MARKETPLACE, 'Blur requests cancelled', {
       marketplace: 'blur',
       marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
       taskId,
-      cancelledRequests: controllers.length
+      cancelledRequests: cancelledCount,
+      totalRequests: controllers.length
     });
-
-    return true;
+    
+    return { success: true, cancelledCount };
+  } catch (error) {
+    await logger.logMarketplaceError('Failed to cancel Blur requests', {
+      taskId,
+      marketplace: 'blur',
+      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
+    return { success: false, cancelledCount: 0, error: error instanceof Error ? error.message : String(error) };
   }
-  console.log(`No active Blur requests found for task ${taskId}`);
-  return false;
 }
 
 /**

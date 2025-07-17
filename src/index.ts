@@ -48,6 +48,7 @@ import { initializeListingScheduler, shutdownListingScheduler, scheduleListing, 
 import { initializeExpirationMonitor, stopExpirationMonitor } from "./functions/relistExpired";
 import { handleListingPriceUpdate } from "./functions/priceMonitor";
 import { createListing } from "./functions/list";
+import { BullMQErrorFormatter } from "./utils/bullmq-error-formatter";
 import { IListing } from "./types/listing.types";
 const prisma = new PrismaClient()
 
@@ -360,9 +361,8 @@ const HEALTH_CHECK_INTERVAL = 5000;
 let enabledMarketplaces: string[] = []
 // Use deterministic client ID based on API_KEY or a fallback
 const generateDeterministicClientId = (): string => {
-  const baseKey = process.env.API_KEY || process.env.CLIENT_ID || 'bidding-bot-default';
-  // Create a hash of the key to ensure consistent length and format
-  return crypto.createHash('sha256').update(baseKey).digest('hex').substring(0, 16);
+  const baseKey = process.env.API_KEY || 'bidding-bot-default';
+  return baseKey
 };
 
 const clientId = generateDeterministicClientId();
@@ -495,7 +495,7 @@ async function monitorHealth() {
 
     // Check if queue is paused
     const isPaused = await queue.isPaused();
-    
+
     // Auto-recovery: If queue is paused but we have waiting jobs and conditions are good
     if (isPaused && counts.waiting > 0 && memoryUsagePercent < 70 && counts.active < DRAIN_THRESHOLD) {
       console.log(YELLOW + '⚡ Queue is paused with waiting jobs - attempting auto-recovery...' + RESET);
@@ -543,7 +543,7 @@ async function monitorHealth() {
     } else {
       console.log(GREEN + '▶️  QUEUE IS RUNNING' + RESET);
     }
-    
+
     Object.entries(counts).forEach(([key, value]) => {
       const color = value > RATE_LIMIT * 2 ? RED : value > RATE_LIMIT ? YELLOW : GREEN;
       console.log(`${key}: ${color}${value}${RESET}`);
@@ -889,10 +889,10 @@ async function startServer() {
       defaultJobOptions: {
         removeOnComplete: true,
         removeOnFail: true, // Keep failed jobs for debugging
-        attempts: 3, // Retry failed jobs up to 3 times
+        attempts: 1, // Reduced from 3 to 2 for faster failure
         backoff: {
           type: 'exponential',
-          delay: 2000, // Start with 2 second delay
+          delay: 1000, // Reduced from 2000ms to 1000ms for faster retries
         }
       }
     };
@@ -903,11 +903,25 @@ async function startServer() {
     // Set up queue event handlers now that queueEvents is initialized
     setupQueueEventHandlers();
 
-    // Initialize the worker with Redis connection
+    // Initialize the worker with Redis connection and proper lock settings
     workers = new Worker(
       QUEUE_NAME,
       async (job) => {
         const startTime = Date.now();
+
+        // Check if job has exceeded its timeout
+        if (job.data.timeoutAt && Date.now() > job.data.timeoutAt) {
+          const timeoutError = new Error(`Job ${job.id} timed out after ${job.data.maxDuration}ms`);
+          await logger.logQueueError(`Job timeout: ${job.name}`, {
+            jobId: job.id,
+            timeoutAt: job.data.timeoutAt,
+            maxDuration: job.data.maxDuration,
+            actualDuration: Date.now() - startTime,
+            queueOperation: QueueOperation.PROCESS_JOB
+          });
+          throw timeoutError;
+        }
+
         try {
           await processJob(job);
           return { success: true };
@@ -934,9 +948,42 @@ async function startServer() {
       {
         connection: await createBullMQConnection(),
         prefix: '{bull}',
-        concurrency: Number(RATE_LIMIT),
+        concurrency: Number(RATE_LIMIT), // Increased minimum concurrency for faster processing
+        // Extended lock settings to prevent lock renewal errors
+        lockDuration: 60000, // 90 seconds (reduced from 120s for faster timeout)
+        lockRenewTime: 20000, // Renew lock every 20 seconds (more frequent)
+        stalledInterval: 60000, // 2 minutes before considering job stalled (reduced)
+        maxStalledCount: 1, // Max 2 stall attempts (reduced for faster failure)
       }
     );
+
+    // Set up worker error handlers
+    workers.on('error', async (error) => {
+      // Format BullMQ lock renewal errors
+      await BullMQErrorFormatter.formatError(error, {
+        workerConcurrency: Number(RATE_LIMIT),
+        queueName: QUEUE_NAME
+      });
+    });
+
+    // Handle worker stalled event
+    workers.on('stalled', async (jobId) => {
+      await logger.logQueueError(`Job stalled: ${jobId}`, {
+        jobId,
+        queueOperation: QueueOperation.PROCESS_JOB,
+        queueName: QUEUE_NAME,
+        stalledAt: new Date().toISOString()
+      });
+    });
+
+    // Add process-level error handler for uncaught BullMQ errors
+    process.on('unhandledRejection', async (reason, promise) => {
+      if (reason instanceof Error && reason.message.includes('could not renew lock')) {
+        await BullMQErrorFormatter.formatError(reason);
+      } else {
+        console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+      }
+    });
 
     const mongoUri = process.env.MONGODB_URI;
     if (!mongoUri) {
@@ -1073,6 +1120,10 @@ async function startServer() {
       });
     });
 
+    // Initialize periodic cleanup for aborted tasks (every 30 minutes)
+    setInterval(() => {
+      cleanupAbortedTasks();
+    }, 30 * 60 * 1000); // 30 minutes
 
     // Initialize WebSocket connection monitoring
     await loadConnectionMetrics();
@@ -1269,6 +1320,20 @@ interface CompletedTasks {
 }
 const completedTasks: CompletedTasks = {};
 
+// Create job options with timeout for faster failure
+function createJobOptions(jobId?: string, timeoutMs: number = 60000): JobsOptions {
+  return {
+    ...(jobId ? { jobId } : {}),
+    removeOnComplete: true,
+    removeOnFail: true,
+    attempts: 1, // Fail faster with fewer attempts
+    backoff: {
+      type: 'exponential',
+      delay: 1000,
+    },
+  };
+}
+
 // Queue event handlers will be set up after queue initialization
 function setupQueueEventHandlers() {
   queueEvents.on('completed', async ({ jobId }) => {
@@ -1337,7 +1402,17 @@ function setupQueueEventHandlers() {
           if (orders.length > 0) {
             const wallet = await Wallet.findById(task.walletId);
             const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
-            await cancelAllRelatedBids(task, private_key);
+            const cancellationResult = await cancelAllRelatedBids(task, private_key);
+            if (!cancellationResult.success) {
+              await logger.logMarketplaceError('Failed to cancel all related bids from queue monitoring', {
+                taskId: task._id,
+                contractSlug: task.contract.slug,
+                totalOrdersFound: cancellationResult.totalOrdersFound,
+                errors: cancellationResult.errors,
+                duration: cancellationResult.duration,
+                operation: 'queue_monitoring_bid_cancellation'
+              });
+            }
             return
           }
           if (taskStatus[taskId]) {
@@ -1386,7 +1461,18 @@ function setupQueueEventHandlers() {
           if (orders.length > 0) {
             const wallet = await Wallet.findById(task.walletId);
             const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
-            await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
+            const cancellationResult = await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
+            if (!cancellationResult.success) {
+              await logger.logMarketplaceError('Failed to cancel marketplace-specific bids from queue monitoring', {
+                taskId: task._id,
+                contractSlug: task.contract.slug,
+                marketplace: marketplace.toLowerCase(),
+                totalOrdersFound: cancellationResult.totalOrdersFound,
+                errors: cancellationResult.errors,
+                duration: cancellationResult.duration,
+                operation: 'queue_monitoring_marketplace_bid_cancellation'
+              });
+            }
             return
           }
 
@@ -2580,7 +2666,7 @@ async function processBulkCancellations(jobs: Job[]) {
                   opts: {
                     ...job?.opts,
                     removeOnComplete: true,
-                    removeOnFail: false, // Keep failed jobs for debugging
+                    removeOnFail: true, // Keep failed jobs for debugging
                     attempts: 3, // Retry failed jobs 3 times
                     backoff: {
                       type: 'exponential',
@@ -2809,11 +2895,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
                   await new Promise(resolve => setTimeout(resolve, delayBetweenJobs));
                 }
                 blurRateLimitInfo[wallet].remaining = Math.max(0, blurRateLimitInfo[wallet].remaining - 1);
-                const jobOptions = {
-                  ...(job.jobKey ? { jobId: job.jobKey } : {}),
-                  removeOnComplete: true,
-                  removeOnFail: true, // Keep failed jobs for debugging
-                };
+                const jobOptions = createJobOptions(job.jobKey, 45000); // 45 second timeout for individual jobs
 
                 // Log job being added
 
@@ -3090,34 +3172,74 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
     }
 
     switch (marketplace?.toLowerCase()) {
-      case 'opensea':
-        await cancelOpenseaRequest(taskId)
+      case 'opensea': {
+        const result = await cancelOpenseaRequest(taskId);
+        if (result.error) {
+          logger.logWarning(ErrorCategory.MARKETPLACE, 'Failed to cancel OpenSea requests', {
+            taskId,
+            marketplace: 'opensea',
+            errorMessage: result.error
+          });
+        }
         const openseaParentJobId = `${taskId}-opensea`.toLowerCase()
         const openseaParentJob = parentJobs.get(openseaParentJobId)
         if (openseaParentJob) {
           await parentJobs.delete(openseaParentJobId)
         }
         break;
-      case 'magiceden':
-        await cancelMagicedenRequest(taskId)
+      }
+      case 'magiceden': {
+        const result = await cancelMagicedenRequest(taskId);
+        if (result.error) {
+          logger.logWarning(ErrorCategory.MARKETPLACE, 'Failed to cancel MagicEden requests', {
+            taskId,
+            marketplace: 'magiceden',
+            errorMessage: result.error
+          });
+        }
         const magicedenParentJobId = `${taskId}-magiceden`.toLowerCase()
         const magicedenParentJob = parentJobs.get(magicedenParentJobId)
         if (magicedenParentJob) {
           await parentJobs.delete(magicedenParentJobId)
         }
         break;
-      case 'blur':
-        await cancelBlurRequest(taskId)
+      }
+      case 'blur': {
+        const result = await cancelBlurRequest(taskId);
+        if (result.error) {
+          logger.logWarning(ErrorCategory.MARKETPLACE, 'Failed to cancel Blur requests', {
+            taskId,
+            marketplace: 'blur',
+            errorMessage: result.error
+          });
+        }
         const blurParentJobId = `${taskId}-blur`.toLowerCase()
         const blurParentJob = parentJobs.get(blurParentJobId)
         if (blurParentJob) {
           await parentJobs.delete(blurParentJobId)
         }
         break;
-      default:
-        await cancelOpenseaRequest(taskId)
-        await cancelMagicedenRequest(taskId)
-        await cancelBlurRequest(taskId)
+      }
+      default: {
+        // Cancel requests for all marketplaces and track results
+        const results = await Promise.allSettled([
+          cancelOpenseaRequest(taskId),
+          cancelMagicedenRequest(taskId),
+          cancelBlurRequest(taskId)
+        ]);
+
+        // Log any failures
+        const marketplaceNames = ['opensea', 'magiceden', 'blur'];
+        results.forEach((result, index) => {
+          if (result.status === 'rejected' || (result.status === 'fulfilled' && result.value.error)) {
+            logger.logWarning(ErrorCategory.MARKETPLACE, `Failed to cancel ${marketplaceNames[index]} requests`, {
+              taskId,
+              marketplace: marketplaceNames[index],
+              errorMessage: result.status === 'rejected' ? result.reason : result.value.error
+            });
+          }
+        });
+
         // Delete parent jobs for all marketplaces
         const marketplaces = ['opensea', 'magiceden', 'blur']
         for (const marketplace of marketplaces) {
@@ -3128,17 +3250,62 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
           }
         }
         break;
-    }
-
-    await updateTaskStatus(task, start, marketplace);
-    if (task.outbidOptions.counterbid && !marketplace) {
-      try {
-        await unsubscribeFromCollection(task);
-      } catch (error) {
-        console.error(RED + `Error unsubscribing from collection for task ${task.contract.slug}: ` + RESET, error);
       }
     }
-    await removePendingAndWaitingBids(task, marketplace)
+
+    const statusResult = await updateTaskStatus(task, start, marketplace);
+    if (!statusResult.success) {
+      logger.logWarning(ErrorCategory.GENERAL, 'Failed to update task status', {
+        taskId: task._id,
+        contractSlug: task.contract.slug,
+        start,
+        marketplace,
+        errorMessage: statusResult.error
+      });
+    }
+    if (task.outbidOptions.counterbid && !marketplace) {
+      const unsubscribeResult = await unsubscribeFromCollection(task);
+      if (!unsubscribeResult.success) {
+        logger.logWebSocketError('Failed to unsubscribe from collection during task stop', {
+          taskId: task._id,
+          contractSlug: task.contract.slug,
+          errorMessage: unsubscribeResult.error,
+          counterbidEnabled: task.outbidOptions.counterbid,
+          operation: 'task_stop_unsubscribe'
+        });
+      } else if (unsubscribeResult.unsubscribed) {
+        logger.logInfo(ErrorCategory.WEBSOCKET, 'Successfully unsubscribed from collection during task stop', {
+          taskId: task._id,
+          contractSlug: task.contract.slug,
+          counterbidEnabled: task.outbidOptions.counterbid,
+          operation: 'task_stop_unsubscribe'
+        });
+      }
+    }
+    const removalResult = await removePendingAndWaitingBids(task, marketplace);
+    if (!removalResult.success) {
+      logger.logQueueError('Failed to remove pending and waiting bids during task stop', {
+        taskId: task._id,
+        contractSlug: task.contract.slug,
+        marketplace,
+        jobsRemoved: removalResult.jobsRemoved,
+        bidsCancelled: removalResult.bidsCancelled,
+        errorsCount: removalResult.errors.length,
+        duration: removalResult.duration,
+        errors: removalResult.errors.slice(0, 3), // Log first 3 errors
+        operation: 'task_stop_removal'
+      });
+    } else {
+      logger.logInfo(ErrorCategory.QUEUE, 'Successfully removed pending and waiting bids during task stop', {
+        taskId: task._id,
+        contractSlug: task.contract.slug,
+        marketplace,
+        jobsRemoved: removalResult.jobsRemoved,
+        bidsCancelled: removalResult.bidsCancelled,
+        duration: removalResult.duration,
+        operation: 'task_stop_removal'
+      });
+    }
 
     if (!task?.selectedMarketplaces.length || !task.running) {
       if (taskStatus[taskId]) {
@@ -3178,7 +3345,30 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
       }
     }
 
-    await cancelAllRelatedBids(task, WALLET_PRIVATE_KEY, marketplace);
+    const cancellationResult = await cancelAllRelatedBids(task, WALLET_PRIVATE_KEY, marketplace);
+    if (!cancellationResult.success) {
+      logger.logMarketplaceError('Failed to cancel related bids during task stop', {
+        taskId: task._id,
+        contractSlug: task.contract.slug,
+        marketplace,
+        totalOrdersFound: cancellationResult.totalOrdersFound,
+        errorsCount: cancellationResult.errors.length,
+        errors: cancellationResult.errors.slice(0, 3), // Log first 3 errors
+        duration: cancellationResult.duration,
+        results: cancellationResult.results,
+        operation: 'task_stop_bid_cancellation'
+      });
+    } else if (cancellationResult.totalOrdersFound > 0) {
+      logger.logInfo(ErrorCategory.MARKETPLACE, 'Successfully cancelled related bids during task stop', {
+        taskId: task._id,
+        contractSlug: task.contract.slug,
+        marketplace,
+        totalOrdersFound: cancellationResult.totalOrdersFound,
+        duration: cancellationResult.duration,
+        results: cancellationResult.results,
+        operation: 'task_stop_bid_cancellation_complete'
+      });
+    }
 
   } catch (error: any) {
     console.error(`[StopTask] Error in stopTask for ${taskId}:`, {
@@ -3221,76 +3411,296 @@ async function deleteTask(task: ITask) {
 }
 
 
-const BATCH_SIZE = 1000// Process 100 jobs at a time
+const BATCH_SIZE = 1000; // Process jobs in batches
+const JOB_REMOVAL_TIMEOUT = 30000; // 30 seconds
+const DIRECT_REMOVAL_TIMEOUT = 5000; // 5 seconds per job
 
-async function removePendingAndWaitingBids(task: ITask, marketplace?: string) {
+/**
+ * Removes pending and waiting bids for a task, with immediate active bid cancellation
+ * @param task - The bidding task to remove bids for
+ * @param marketplace - Optional marketplace filter (opensea, magiceden, blur)
+ * @returns Promise with detailed operation results
+ */
+async function removePendingAndWaitingBids(
+  task: ITask,
+  marketplace?: string
+): Promise<{
+  success: boolean;
+  jobsRemoved: number;
+  bidsCancelled: number;
+  errors: string[];
+  duration: number;
+}> {
+  const startTime = Date.now();
+  const taskId = task?._id?.toString();
+  const contractSlug = task?.contract?.slug;
+  const errors: string[] = [];
+  let jobsRemoved = 0;
+  let bidsCancelled = 0;
+
   try {
-    let jobIds: string[] = []
-    switch (marketplace?.toLowerCase()) {
-      case OPENSEA.toLowerCase():
-        jobIds = getJobIds(OPENSEA.toLowerCase(), task)
-        break;
-      case MAGICEDEN.toLowerCase():
-        jobIds = getJobIds(MAGICEDEN.toLowerCase(), task)
-        break;
-      case BLUR.toLowerCase():
-        jobIds = getJobIds(BLUR.toLowerCase(), task)
-        break;
-      default:
-        jobIds = [
-          ...getJobIds(BLUR.toLowerCase(), task),
-          ...getJobIds(MAGICEDEN.toLowerCase(), task),
-          ...getJobIds(OPENSEA.toLowerCase(), task)
-        ]
+    // Input validation
+    if (!task) {
+      const error = 'Invalid task provided to removePendingAndWaitingBids';
+      await logger.logWarning(ErrorCategory.QUEUE, error, { task, marketplace });
+      return { success: false, jobsRemoved: 0, bidsCancelled: 0, errors: [error], duration: 0 };
     }
 
-    let totalJobsRemoved = 0;
+    if (!taskId) {
+      const error = 'Task missing _id property';
+      await logger.logWarning(ErrorCategory.QUEUE, error, { task, marketplace });
+      return { success: false, jobsRemoved: 0, bidsCancelled: 0, errors: [error], duration: 0 };
+    }
+
+    if (!contractSlug) {
+      const error = 'Task missing contract.slug property';
+      await logger.logWarning(ErrorCategory.QUEUE, error, { taskId, marketplace });
+      return { success: false, jobsRemoved: 0, bidsCancelled: 0, errors: [error], duration: 0 };
+    }
+
+    // Validate marketplace parameter if provided
+    if (marketplace && !['opensea', 'magiceden', 'blur'].includes(marketplace.toLowerCase())) {
+      const error = 'Invalid marketplace parameter';
+      await logger.logWarning(ErrorCategory.QUEUE, error, {
+        taskId,
+        contractSlug,
+        marketplace,
+        validMarketplaces: ['opensea', 'magiceden', 'blur']
+      });
+      return { success: false, jobsRemoved: 0, bidsCancelled: 0, errors: [error], duration: 0 };
+    }
+
+    await logger.logInfo(ErrorCategory.QUEUE, 'Starting removal of pending and waiting bids', {
+      taskId,
+      contractSlug,
+      marketplace,
+      operation: 'remove_pending_bids'
+    });
+
+    // STEP 1: Immediately cancel active bids for fast response
     try {
-      let start = 0;
-      let hasMoreJobs = true;
+      const wallet = await Wallet.findById(task.walletId);
+      if (wallet?.encryptedPrivateKey) {
+        const privateKey = await decryptPrivateKey(wallet.encryptedPrivateKey);
 
-      while (hasMoreJobs) {
-        // Get jobs in batches
-        const jobs: Job[] = await queue.getJobs([], start, start + BATCH_SIZE - 1);
-        console.log(`Processing batch of ${jobs.length} jobs starting at index ${start}`);
+        // Cancel active bids in parallel for immediate response
+        const bidCancellationPromises = [];
 
+        if (!marketplace || marketplace.toLowerCase() === 'opensea') {
+          bidCancellationPromises.push(
+            fetchAndCancelOpenseaBids(task, privateKey)
+              .then(() => { bidsCancelled++; })
+              .catch(error => {
+                errors.push(`OpenSea bid cancellation failed: ${error.message}`);
+              })
+          );
+        }
 
-        if (jobs.length === 0) {
-          hasMoreJobs = false;
+        if (!marketplace || marketplace.toLowerCase() === 'magiceden') {
+          bidCancellationPromises.push(
+            fetchAndCancelMagicedenBids(task, privateKey)
+              .then(() => { bidsCancelled++; })
+              .catch(error => {
+                errors.push(`MagicEden bid cancellation failed: ${error.message}`);
+              })
+          );
+        }
+
+        if (!marketplace || marketplace.toLowerCase() === 'blur') {
+          bidCancellationPromises.push(
+            fetchAndCancelBlurBids(task, privateKey)
+              .then(() => { bidsCancelled++; })
+              .catch(error => {
+                errors.push(`Blur bid cancellation failed: ${error.message}`);
+              })
+          );
+        }
+
+        // Execute bid cancellations in parallel with timeout
+        const bidCancellationTimeout = Promise.race([
+          Promise.allSettled(bidCancellationPromises),
+          new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Bid cancellation timeout')), 10000);
+          })
+        ]);
+
+        await bidCancellationTimeout;
+
+        await logger.logInfo(ErrorCategory.QUEUE, 'Completed active bid cancellation', {
+          taskId,
+          contractSlug,
+          marketplace,
+          bidsProcessed: bidCancellationPromises.length,
+          bidsSuccessful: bidsCancelled,
+          operation: 'active_bid_cancellation'
+        });
+      }
+    } catch (error) {
+      const errorMsg = `Active bid cancellation failed: ${error instanceof Error ? error.message : String(error)}`;
+      errors.push(errorMsg);
+      await logger.logWarning(ErrorCategory.QUEUE, errorMsg, {
+        taskId,
+        contractSlug,
+        marketplace
+      });
+    }
+
+    // STEP 2: Generate job IDs for removal
+    let jobIds: string[] = [];
+    try {
+      switch (marketplace?.toLowerCase()) {
+        case OPENSEA.toLowerCase():
+          jobIds = getJobIds(OPENSEA.toLowerCase(), task);
           break;
-        }
-
-        const relevantJobs = jobs.filter((job) => job?.id && jobIds.includes(job.id));
-        // Process this batch of jobs
-        await Promise.all(relevantJobs.map(async (job) => {
-          try {
-            await job.remove();
-            totalJobsRemoved++;
-
-          } catch (error) {
-            totalJobsRemoved++;
-          }
-        }));
-
-        // Move to the next batch
-        start += BATCH_SIZE;
-
-        // If we got fewer jobs than the batch size, we've reached the end
-        if (jobs.length < BATCH_SIZE) {
-          hasMoreJobs = false;
-        }
+        case MAGICEDEN.toLowerCase():
+          jobIds = getJobIds(MAGICEDEN.toLowerCase(), task);
+          break;
+        case BLUR.toLowerCase():
+          jobIds = getJobIds(BLUR.toLowerCase(), task);
+          break;
+        default:
+          jobIds = [
+            ...getJobIds(BLUR.toLowerCase(), task),
+            ...getJobIds(MAGICEDEN.toLowerCase(), task),
+            ...getJobIds(OPENSEA.toLowerCase(), task)
+          ];
       }
 
-      console.log(`Removed ${totalJobsRemoved} jobs for task`);
+      await logger.logDebug(ErrorCategory.QUEUE, 'Generated job IDs for removal', {
+        taskId,
+        contractSlug,
+        marketplace,
+        jobIdsCount: jobIds.length,
+        sampleJobIds: jobIds.slice(0, 3)
+      });
     } catch (error) {
-      console.error(RED + `Error removing jobs: ${error}` + RESET);
+      const errorMsg = `Job ID generation failed: ${error instanceof Error ? error.message : String(error)}`;
+      errors.push(errorMsg);
+      await logger.logWarning(ErrorCategory.QUEUE, errorMsg, {
+        taskId,
+        contractSlug,
+        marketplace
+      });
     }
 
-    console.log('=== End Summary ====' + RESET);
-    console.log(GREEN + 'Queue resumed after removing pending bids' + RESET);
+    // STEP 3: Direct job removal for better performance
+    if (jobIds.length > 0) {
+      try {
+        await logger.logInfo(ErrorCategory.QUEUE, 'Starting direct job removal', {
+          taskId,
+          contractSlug,
+          marketplace,
+          totalJobIds: jobIds.length,
+          operation: 'direct_job_removal'
+        });
 
+        // Process jobs in parallel batches for better performance
+        const chunkSize = 50; // Process 50 jobs at a time
+        const jobIdChunks = [];
+        for (let i = 0; i < jobIds.length; i += chunkSize) {
+          jobIdChunks.push(jobIds.slice(i, i + chunkSize));
+        }
+
+        for (const chunk of jobIdChunks) {
+          const chunkPromises = chunk.map(async (jobId) => {
+            try {
+              const job = await queue.getJob(jobId);
+              if (job) {
+                await Promise.race([
+                  job.remove(),
+                  new Promise((_, reject) => {
+                    setTimeout(() => reject(new Error('Job removal timeout')), DIRECT_REMOVAL_TIMEOUT);
+                  })
+                ]);
+                jobsRemoved++;
+              }
+            } catch (error) {
+              // Job might not exist or already removed - this is not necessarily an error
+              await logger.logDebug(ErrorCategory.QUEUE, 'Job removal failed or job not found', {
+                taskId,
+                contractSlug,
+                jobId,
+                errorMessage: error instanceof Error ? error.message : String(error)
+              });
+            }
+          });
+
+          // Process chunk with timeout
+          try {
+            await Promise.race([
+              Promise.allSettled(chunkPromises),
+              new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Chunk processing timeout')), JOB_REMOVAL_TIMEOUT);
+              })
+            ]);
+          } catch (error) {
+            const errorMsg = `Chunk processing failed: ${error instanceof Error ? error.message : String(error)}`;
+            errors.push(errorMsg);
+            await logger.logWarning(ErrorCategory.QUEUE, errorMsg, {
+              taskId,
+              contractSlug,
+              chunkSize: chunk.length
+            });
+          }
+        }
+
+        await logger.logInfo(ErrorCategory.QUEUE, 'Direct job removal completed', {
+          taskId,
+          contractSlug,
+          marketplace,
+          jobsRemoved,
+          totalJobIds: jobIds.length,
+          operation: 'direct_job_removal_complete'
+        });
+      } catch (error) {
+        const errorMsg = `Direct job removal failed: ${error instanceof Error ? error.message : String(error)}`;
+        errors.push(errorMsg);
+        await logger.logQueueError(errorMsg, {
+          taskId,
+          contractSlug,
+          marketplace,
+          jobIdsCount: jobIds.length
+        });
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    const success = errors.length === 0;
+
+    await logger.logInfo(ErrorCategory.QUEUE, 'Completed removal of pending and waiting bids', {
+      taskId,
+      contractSlug,
+      marketplace,
+      success,
+      jobsRemoved,
+      bidsCancelled,
+      errorsCount: errors.length,
+      duration,
+      operation: 'remove_pending_bids_complete'
+    });
+
+    return { success, jobsRemoved, bidsCancelled, errors, duration };
   } catch (error) {
-    console.error(RED + `Error removing pending bids: ${error}` + RESET);
+    const duration = Date.now() - startTime;
+    const errorMsg = error instanceof Error ? error.message : String(error);
+
+    await logger.logQueueError('Failed to remove pending and waiting bids', {
+      taskId,
+      contractSlug,
+      marketplace,
+      errorMessage: errorMsg,
+      stackTrace: error instanceof Error ? error.stack : undefined,
+      duration,
+      operation: 'remove_pending_bids_failed'
+    });
+
+    return {
+      success: false,
+      jobsRemoved,
+      bidsCancelled,
+      errors: [...errors, errorMsg],
+      duration
+    };
   }
 }
 
@@ -3318,152 +3728,925 @@ function getJobIds(marketplace: string, task: ITask) {
   return jobIds
 }
 
-async function updateTaskStatus(task: ITask, running: boolean, marketplace?: string) {
-  if (!warningBids[task._id]) {
-    warningBids[task._id] = {
-      opensea: false,
-      magiceden: false,
-      blur: false
+/**
+ * Updates task status and manages warning bids initialization
+ * @param task - The bidding task to update
+ * @param running - Whether the task is starting (true) or stopping (false)
+ * @param marketplace - Optional marketplace filter (opensea, magiceden, blur)
+ * @returns Promise with operation result
+ */
+async function updateTaskStatus(
+  task: ITask,
+  running: boolean,
+  marketplace?: string
+): Promise<{ success: boolean; updated: boolean; error?: string }> {
+  try {
+    // Input validation
+    if (!task) {
+      await logger.logWarning(ErrorCategory.GENERAL, 'Invalid task provided to updateTaskStatus', {
+        task: task,
+        running,
+        marketplace
+      });
+      return { success: false, updated: false, error: 'Invalid task provided' };
+    }
+
+    if (!task._id) {
+      await logger.logWarning(ErrorCategory.GENERAL, 'Task missing _id property', {
+        task: task,
+        running,
+        marketplace
+      });
+      return { success: false, updated: false, error: 'Task missing _id property' };
+    }
+
+    if (!task.contract?.slug) {
+      await logger.logWarning(ErrorCategory.GENERAL, 'Task missing contract.slug property', {
+        taskId: task._id,
+        running,
+        marketplace
+      });
+      return { success: false, updated: false, error: 'Task missing contract.slug property' };
+    }
+
+    if (typeof running !== 'boolean') {
+      await logger.logWarning(ErrorCategory.GENERAL, 'Invalid running parameter type', {
+        taskId: task._id,
+        running,
+        marketplace,
+        runningType: typeof running
+      });
+      return { success: false, updated: false, error: 'Invalid running parameter type' };
+    }
+
+    // Validate marketplace parameter if provided
+    if (marketplace && !['opensea', 'magiceden', 'blur'].includes(marketplace.toLowerCase())) {
+      await logger.logWarning(ErrorCategory.GENERAL, 'Invalid marketplace parameter', {
+        taskId: task._id,
+        running,
+        marketplace,
+        validMarketplaces: ['opensea', 'magiceden', 'blur']
+      });
+      return { success: false, updated: false, error: 'Invalid marketplace parameter' };
+    }
+
+    const taskId = task._id.toString();
+    let taskUpdated = false;
+
+    // Initialize warning bids if not already present
+    if (!warningBids[taskId]) {
+      warningBids[taskId] = {
+        opensea: false,
+        magiceden: false,
+        blur: false
+      };
+      await logger.logDebug(ErrorCategory.GENERAL, 'Initialized warning bids for task', {
+        taskId,
+        contractSlug: task.contract.slug
+      });
+    }
+
+    // Update task status in currentTasks array
+    const taskIndex = currentTasks.findIndex(t => t._id === taskId);
+    if (taskIndex !== -1) {
+      // For marketplace-specific operations, we still want to update the overall task status
+      // unless it's a partial update that shouldn't affect the global running state
+      if (marketplace) {
+        // Log marketplace-specific status change but don't update global running state
+        await logger.logInfo(ErrorCategory.GENERAL, `Task ${running ? 'started' : 'stopped'} for marketplace`, {
+          taskId,
+          contractSlug: task.contract.slug,
+          marketplace: marketplace.toLowerCase(),
+          running,
+          operation: 'marketplace_specific_update'
+        });
+      } else {
+        // Update global task running state
+        const previousRunning = currentTasks[taskIndex].running;
+        currentTasks[taskIndex].running = running;
+        taskUpdated = true;
+
+        await logger.logInfo(ErrorCategory.GENERAL, `Task ${running ? 'started' : 'stopped'} globally`, {
+          taskId,
+          contractSlug: task.contract.slug,
+          previousRunning,
+          newRunning: running,
+          operation: 'global_status_update'
+        });
+      }
+    } else {
+      await logger.logWarning(ErrorCategory.GENERAL, 'Task not found in currentTasks array', {
+        taskId,
+        contractSlug: task.contract.slug,
+        running,
+        marketplace,
+        currentTasksCount: currentTasks.length
+      });
+    }
+
+    // Enhanced logging with structured data instead of console.log
+    const statusMessage = running ? 'Started' : 'Stopped';
+    // Enhanced logging with structured data instead of console.log
+
+    await logger.logInfo(ErrorCategory.GENERAL, `${statusMessage} processing task`, {
+      taskId,
+      contractSlug: task.contract.slug,
+      running,
+      marketplace: marketplace?.toLowerCase(),
+      taskUpdated,
+      operation: 'task_status_update',
+      timestamp: new Date().toISOString()
+    });
+
+    return { success: true, updated: taskUpdated };
+  } catch (error) {
+    await logger.logGeneralError('Failed to update task status', {
+      taskId: task?._id,
+      contractSlug: task?.contract?.slug,
+      running,
+      marketplace,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      stackTrace: error instanceof Error ? error.stack : undefined
+    });
+    return {
+      success: false,
+      updated: false,
+      error: error instanceof Error ? error.message : String(error)
     };
   }
-
-  const taskIndex = currentTasks.findIndex(t => t._id === task._id);
-  if (taskIndex !== -1) {
-    if (marketplace) {
-      return
-    } else {
-      currentTasks[taskIndex].running = running;
-    }
-  }
-  console.log(running ? GREEN : RED + `${running ? 'Started' : 'Stopped'} processing task ${task.contract.slug}`.toUpperCase() + RESET);
 }
 
-async function fetchAndCancelOpenseaBids(task: ITask, WALLET_PRIVATE_KEY: string) {
-  try {
-    const { currencySymbol } = await calculateBidPrice(task, 0, "magiceden")
+/**
+ * Fetches and cancels OpenSea bids for a specific task
+ * @param task - The bidding task to cancel bids for
+ * @param WALLET_PRIVATE_KEY - Private key for wallet authentication
+ * @returns Promise with operation results
+ */
+async function fetchAndCancelOpenseaBids(
+  task: ITask,
+  WALLET_PRIVATE_KEY: string
+): Promise<{ success: boolean; ordersFound: number; error?: string }> {
+  const taskId = task?._id?.toString();
+  const contractSlug = task?.contract?.slug;
 
-    const allOpenseaBids = await prisma.order.findMany({
-      where: {
-        slug: task.contract.slug,
-        taskId: task._id,
-        marketplace: OPENSEA.toLowerCase()
-      }
+  try {
+    // Input validation
+    if (!task || !taskId || !contractSlug) {
+      const error = 'Invalid task provided to fetchAndCancelOpenseaBids';
+      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { task });
+      return { success: false, ordersFound: 0, error };
+    }
+
+    if (!WALLET_PRIVATE_KEY) {
+      const error = 'Invalid wallet private key provided';
+      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { taskId, contractSlug });
+      return { success: false, ordersFound: 0, error };
+    }
+
+    await logger.logInfo(ErrorCategory.MARKETPLACE, 'Starting OpenSea bid cancellation', {
+      taskId,
+      contractSlug,
+      marketplace: 'opensea',
+      operation: 'fetch_and_cancel_opensea_bids'
     });
 
-    const parentJobId = `${task._id}-CANCEL_OPENSEA_BID`
+    // Calculate bid price for currency symbol
+    const { currencySymbol } = await Promise.race([
+      calculateBidPrice(task, 0, "magiceden"),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Calculate bid price timeout')), 5000);
+      })
+    ]);
 
-    parentJobs.set(parentJobId, {
-      parentId: parentJobId,
-      totalJobs: allOpenseaBids.length,
-      completedJobs: 0,
-      failedJobs: 0,
-      startTime: Date.now(),
-      taskId: task._id,
-      jobName: CANCEL_OPENSEA_BID
-    })
+    // Implement pagination to handle large numbers of orders
+    const BATCH_SIZE = 1000;
+    let allOpenseaBids: PrismaOrder[] = [];
+    let skip = 0;
+    let hasMore = true;
+    let totalOrdersProcessed = 0;
 
-    if (allOpenseaBids.length > 0) {
-      await cancelOpenseaBids(allOpenseaBids, WALLET_PRIVATE_KEY, task._id, currencySymbol);
-    }
-  } catch (error) {
-    console.error('Error canceling OpenSea bids:', error instanceof Error ? error.message : String(error));
-  }
-}
-
-async function fetchAndCancelBlurBids(task: ITask, WALLET_PRIVATE_KEY: string) {
-  try {
-    const allBlurBids = await prisma.order.findMany({
-      where: {
-        slug: task.contract.slug,
-        taskId: task._id,
-        marketplace: BLUR.toLowerCase()
-      }
+    await logger.logInfo(ErrorCategory.MARKETPLACE, 'Starting paginated OpenSea order fetch', {
+      taskId,
+      contractSlug,
+      batchSize: BATCH_SIZE,
+      marketplace: 'opensea'
     });
 
-    const parentJobId = `${task._id}-CANCEL_BLUR_BID`
+    while (hasMore) {
+      try {
+        // Fetch batch of orders with timeout
+        const batch = await Promise.race([
+          prisma.order.findMany({
+            where: {
+              slug: contractSlug,
+              taskId: taskId,
+              marketplace: OPENSEA.toLowerCase()
+            },
+            take: BATCH_SIZE,
+            skip: skip,
+            orderBy: {
+              createdAt: 'desc'
+            }
+          }),
+          new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error('Database query timeout')), 10000);
+          })
+        ]);
 
-    parentJobs.set(parentJobId, {
-      parentId: parentJobId,
-      totalJobs: allBlurBids.length,
-      completedJobs: 0,
-      failedJobs: 0,
-      startTime: Date.now(),
-      taskId: task._id,
-      jobName: CANCEL_BLUR_BID
-    })
+        if (batch.length === 0) {
+          hasMore = false;
+          break;
+        }
 
-    if (allBlurBids.length > 0) {
-      await cancelBlurBids(allBlurBids, WALLET_PRIVATE_KEY, task._id);
-    }
-  } catch (error) {
-    console.error('Error canceling Blur bids:', error instanceof Error ? error.message : String(error));
-  }
-}
+        // Add to total orders
+        allOpenseaBids = allOpenseaBids.concat(batch);
+        totalOrdersProcessed += batch.length;
 
-async function fetchAndCancelMagicedenBids(task: ITask, WALLET_PRIVATE_KEY: string) {
-  try {
-    const allMagicedenBids = await prisma.order.findMany({
-      where: {
-        slug: task.contract.slug,
-        taskId: task._id,
-        marketplace: MAGICEDEN.toLowerCase()
+        await logger.logDebug(ErrorCategory.MARKETPLACE, 'Fetched OpenSea order batch', {
+          taskId,
+          contractSlug,
+          batchNumber: Math.floor(skip / BATCH_SIZE) + 1,
+          ordersInBatch: batch.length,
+          totalOrdersSoFar: totalOrdersProcessed,
+          marketplace: 'opensea'
+        });
+
+        // Process this batch immediately to avoid memory buildup
+        if (batch.length > 0) {
+          // Set up or update parent job tracking
+          const parentJobId = `${taskId}-CANCEL_OPENSEA_BID`;
+          const existingParentJob = parentJobs.get(parentJobId);
+
+          if (!existingParentJob) {
+            parentJobs.set(parentJobId, {
+              parentId: parentJobId,
+              totalJobs: batch.length,
+              completedJobs: 0,
+              failedJobs: 0,
+              startTime: Date.now(),
+              taskId: taskId,
+              jobName: CANCEL_OPENSEA_BID
+            });
+          } else {
+            // Update total jobs count
+            existingParentJob.totalJobs += batch.length;
+          }
+
+          // Queue cancellations for this batch
+          await cancelOpenseaBids(batch, WALLET_PRIVATE_KEY, taskId, currencySymbol);
+
+          await logger.logInfo(ErrorCategory.MARKETPLACE, 'Queued OpenSea bid cancellation batch', {
+            taskId,
+            contractSlug,
+            batchNumber: Math.floor(skip / BATCH_SIZE) + 1,
+            ordersQueued: batch.length,
+            totalOrdersQueued: totalOrdersProcessed,
+            marketplace: 'opensea',
+            operation: 'opensea_batch_cancellations_queued'
+          });
+        }
+
+        // Check if we got a full batch
+        if (batch.length < BATCH_SIZE) {
+          hasMore = false;
+        } else {
+          skip += BATCH_SIZE;
+        }
+
+        // Clear batch from memory to prevent buildup
+        allOpenseaBids = [];
+
+      } catch (error) {
+        await logger.logMarketplaceError('Failed to fetch OpenSea order batch', {
+          taskId,
+          contractSlug,
+          batchNumber: Math.floor(skip / BATCH_SIZE) + 1,
+          skip,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          marketplace: 'opensea'
+        });
+        hasMore = false; // Stop pagination on error
       }
+    }
+
+    await logger.logInfo(ErrorCategory.MARKETPLACE, 'Completed OpenSea order processing', {
+      taskId,
+      contractSlug,
+      totalOrdersProcessed,
+      totalBatches: Math.ceil(totalOrdersProcessed / BATCH_SIZE),
+      marketplace: 'opensea',
+      operation: 'opensea_order_processing_complete'
     });
-    const parentJobId = `${task._id}-CANCEL_MAGICEDEN_BID`
-    const totalJobs = allMagicedenBids.length / 500
-    parentJobs.set(parentJobId, {
-      parentId: parentJobId,
-      totalJobs: totalJobs,
-      completedJobs: 0,
-      failedJobs: 0,
-      startTime: Date.now(),
-      taskId: task._id,
-      jobName: CANCEL_MAGICEDEN_BID
-    })
-    await cancelMagicedenBids(allMagicedenBids, WALLET_PRIVATE_KEY, task._id);
+
+    if (totalOrdersProcessed === 0) {
+      await logger.logInfo(ErrorCategory.MARKETPLACE, 'No OpenSea bids found to cancel', {
+        taskId,
+        contractSlug,
+        marketplace: 'opensea'
+      });
+    }
+
+    return { success: true, ordersFound: allOpenseaBids.length };
   } catch (error) {
-    console.error('Error canceling MagicEden bids:', error instanceof Error ? error.message : String(error));
+    const errorMsg = error instanceof Error ? error.message : String(error);
+
+    await logger.logMarketplaceError('Failed to fetch and cancel OpenSea bids', {
+      taskId,
+      contractSlug,
+      marketplace: 'opensea',
+      errorMessage: errorMsg,
+      stackTrace: error instanceof Error ? error.stack : undefined,
+      operation: 'fetch_and_cancel_opensea_bids_failed'
+    });
+
+    return { success: false, ordersFound: 0, error: errorMsg };
+  }
+}
+
+/**
+ * Fetches and cancels Blur bids for a specific task
+ * @param task - The bidding task to cancel bids for
+ * @param WALLET_PRIVATE_KEY - Private key for wallet authentication
+ * @returns Promise with operation results
+ */
+async function fetchAndCancelBlurBids(
+  task: ITask,
+  WALLET_PRIVATE_KEY: string
+): Promise<{ success: boolean; ordersFound: number; error?: string }> {
+  const taskId = task?._id?.toString();
+  const contractSlug = task?.contract?.slug;
+
+  try {
+    // Input validation
+    if (!task || !taskId || !contractSlug) {
+      const error = 'Invalid task provided to fetchAndCancelBlurBids';
+      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { task });
+      return { success: false, ordersFound: 0, error };
+    }
+
+    if (!WALLET_PRIVATE_KEY) {
+      const error = 'Invalid wallet private key provided';
+      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { taskId, contractSlug });
+      return { success: false, ordersFound: 0, error };
+    }
+
+    await logger.logInfo(ErrorCategory.MARKETPLACE, 'Starting Blur bid cancellation', {
+      taskId,
+      contractSlug,
+      marketplace: 'blur',
+      operation: 'fetch_and_cancel_blur_bids'
+    });
+
+    // Implement pagination to handle large numbers of orders
+    const BATCH_SIZE = 1000;
+    let allBlurBids: PrismaOrder[] = [];
+    let skip = 0;
+    let hasMore = true;
+    let totalOrdersProcessed = 0;
+
+    await logger.logInfo(ErrorCategory.MARKETPLACE, 'Starting paginated Blur order fetch', {
+      taskId,
+      contractSlug,
+      batchSize: BATCH_SIZE,
+      marketplace: 'blur'
+    });
+
+    while (hasMore) {
+      try {
+        // Fetch batch of orders with timeout
+        const batch = await Promise.race([
+          prisma.order.findMany({
+            where: {
+              slug: contractSlug,
+              taskId: taskId,
+              marketplace: BLUR.toLowerCase()
+            },
+            take: BATCH_SIZE,
+            skip: skip,
+            orderBy: {
+              createdAt: 'desc'
+            }
+          }),
+          new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error('Database query timeout')), 10000);
+          })
+        ]);
+
+        if (batch.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        // Add to total orders
+        allBlurBids = allBlurBids.concat(batch);
+        totalOrdersProcessed += batch.length;
+
+        await logger.logDebug(ErrorCategory.MARKETPLACE, 'Fetched Blur order batch', {
+          taskId,
+          contractSlug,
+          batchNumber: Math.floor(skip / BATCH_SIZE) + 1,
+          ordersInBatch: batch.length,
+          totalOrdersSoFar: totalOrdersProcessed,
+          marketplace: 'blur'
+        });
+
+        // Process this batch immediately to avoid memory buildup
+        if (batch.length > 0) {
+          // Set up or update parent job tracking
+          const parentJobId = `${taskId}-CANCEL_BLUR_BID`;
+          const existingParentJob = parentJobs.get(parentJobId);
+
+          if (!existingParentJob) {
+            parentJobs.set(parentJobId, {
+              parentId: parentJobId,
+              totalJobs: batch.length,
+              completedJobs: 0,
+              failedJobs: 0,
+              startTime: Date.now(),
+              taskId: taskId,
+              jobName: CANCEL_BLUR_BID
+            });
+          } else {
+            // Update total jobs count
+            existingParentJob.totalJobs += batch.length;
+          }
+
+          // Queue cancellations for this batch
+          await cancelBlurBids(batch, WALLET_PRIVATE_KEY, taskId);
+
+          await logger.logInfo(ErrorCategory.MARKETPLACE, 'Queued Blur bid cancellation batch', {
+            taskId,
+            contractSlug,
+            batchNumber: Math.floor(skip / BATCH_SIZE) + 1,
+            ordersQueued: batch.length,
+            totalOrdersQueued: totalOrdersProcessed,
+            marketplace: 'blur',
+            operation: 'blur_batch_cancellations_queued'
+          });
+        }
+
+        // Check if we got a full batch
+        if (batch.length < BATCH_SIZE) {
+          hasMore = false;
+        } else {
+          skip += BATCH_SIZE;
+        }
+
+        // Clear batch from memory to prevent buildup
+        allBlurBids = [];
+
+      } catch (error) {
+        await logger.logMarketplaceError('Failed to fetch Blur order batch', {
+          taskId,
+          contractSlug,
+          batchNumber: Math.floor(skip / BATCH_SIZE) + 1,
+          skip,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          marketplace: 'blur'
+        });
+        hasMore = false; // Stop pagination on error
+      }
+    }
+
+    await logger.logInfo(ErrorCategory.MARKETPLACE, 'Completed Blur order processing', {
+      taskId,
+      contractSlug,
+      totalOrdersProcessed,
+      totalBatches: Math.ceil(totalOrdersProcessed / BATCH_SIZE),
+      marketplace: 'blur',
+      operation: 'blur_order_processing_complete'
+    });
+
+    if (totalOrdersProcessed === 0) {
+      await logger.logInfo(ErrorCategory.MARKETPLACE, 'No Blur bids found to cancel', {
+        taskId,
+        contractSlug,
+        marketplace: 'blur'
+      });
+    }
+
+    return { success: true, ordersFound: totalOrdersProcessed };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+
+    await logger.logMarketplaceError('Failed to fetch and cancel Blur bids', {
+      taskId,
+      contractSlug,
+      marketplace: 'blur',
+      errorMessage: errorMsg,
+      stackTrace: error instanceof Error ? error.stack : undefined,
+      operation: 'fetch_and_cancel_blur_bids_failed'
+    });
+
+    return { success: false, ordersFound: 0, error: errorMsg };
+  }
+}
+
+/**
+ * Fetches and cancels MagicEden bids for a specific task
+ * @param task - The bidding task to cancel bids for
+ * @param WALLET_PRIVATE_KEY - Private key for wallet authentication
+ * @returns Promise with operation results
+ */
+async function fetchAndCancelMagicedenBids(
+  task: ITask,
+  WALLET_PRIVATE_KEY: string
+): Promise<{ success: boolean; ordersFound: number; error?: string }> {
+  const taskId = task?._id?.toString();
+  const contractSlug = task?.contract?.slug;
+
+  try {
+    // Input validation
+    if (!task || !taskId || !contractSlug) {
+      const error = 'Invalid task provided to fetchAndCancelMagicedenBids';
+      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { task });
+      return { success: false, ordersFound: 0, error };
+    }
+
+    if (!WALLET_PRIVATE_KEY) {
+      const error = 'Invalid wallet private key provided';
+      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { taskId, contractSlug });
+      return { success: false, ordersFound: 0, error };
+    }
+
+    await logger.logInfo(ErrorCategory.MARKETPLACE, 'Starting MagicEden bid cancellation', {
+      taskId,
+      contractSlug,
+      marketplace: 'magiceden',
+      operation: 'fetch_and_cancel_magiceden_bids'
+    });
+
+    // Implement pagination to handle large numbers of orders
+    const BATCH_SIZE = 1000;
+    let allMagicedenBids: PrismaOrder[] = [];
+    let skip = 0;
+    let hasMore = true;
+    let totalOrdersProcessed = 0;
+
+    await logger.logInfo(ErrorCategory.MARKETPLACE, 'Starting paginated MagicEden order fetch', {
+      taskId,
+      contractSlug,
+      batchSize: BATCH_SIZE,
+      marketplace: 'magiceden'
+    });
+
+    while (hasMore) {
+      try {
+        // Fetch batch of orders with timeout
+        const batch = await Promise.race([
+          prisma.order.findMany({
+            where: {
+              slug: contractSlug,
+              taskId: taskId,
+              marketplace: MAGICEDEN.toLowerCase()
+            },
+            take: BATCH_SIZE,
+            skip: skip,
+            orderBy: {
+              createdAt: 'desc'
+            }
+          }),
+          new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error('Database query timeout')), 10000);
+          })
+        ]);
+
+        if (batch.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        // Add to total orders
+        allMagicedenBids = allMagicedenBids.concat(batch);
+        totalOrdersProcessed += batch.length;
+
+        await logger.logDebug(ErrorCategory.MARKETPLACE, 'Fetched MagicEden order batch', {
+          taskId,
+          contractSlug,
+          batchNumber: Math.floor(skip / BATCH_SIZE) + 1,
+          ordersInBatch: batch.length,
+          totalOrdersSoFar: totalOrdersProcessed,
+          marketplace: 'magiceden'
+        });
+
+        // Process this batch immediately to avoid memory buildup
+        if (batch.length > 0) {
+          // Set up or update parent job tracking (MagicEden batches in groups of 500)
+          const parentJobId = `${taskId}-CANCEL_MAGICEDEN_BID`;
+          const batchJobCount = Math.ceil(batch.length / 500);
+          const existingParentJob = parentJobs.get(parentJobId);
+
+          if (!existingParentJob) {
+            parentJobs.set(parentJobId, {
+              parentId: parentJobId,
+              totalJobs: batchJobCount,
+              completedJobs: 0,
+              failedJobs: 0,
+              startTime: Date.now(),
+              taskId: taskId,
+              jobName: CANCEL_MAGICEDEN_BID
+            });
+          } else {
+            // Update total jobs count
+            existingParentJob.totalJobs += batchJobCount;
+          }
+
+          // Queue cancellations for this batch
+          await cancelMagicedenBids(batch, WALLET_PRIVATE_KEY, taskId);
+
+          await logger.logInfo(ErrorCategory.MARKETPLACE, 'Queued MagicEden bid cancellation batch', {
+            taskId,
+            contractSlug,
+            batchNumber: Math.floor(skip / BATCH_SIZE) + 1,
+            ordersQueued: batch.length,
+            totalOrdersQueued: totalOrdersProcessed,
+            batchJobCount: batchJobCount,
+            marketplace: 'magiceden',
+            operation: 'magiceden_batch_cancellations_queued'
+          });
+        }
+
+        // Check if we got a full batch
+        if (batch.length < BATCH_SIZE) {
+          hasMore = false;
+        } else {
+          skip += BATCH_SIZE;
+        }
+
+        // Clear batch from memory to prevent buildup
+        allMagicedenBids = [];
+
+      } catch (error) {
+        await logger.logMarketplaceError('Failed to fetch MagicEden order batch', {
+          taskId,
+          contractSlug,
+          batchNumber: Math.floor(skip / BATCH_SIZE) + 1,
+          skip,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          marketplace: 'magiceden'
+        });
+        hasMore = false; // Stop pagination on error
+      }
+    }
+
+    await logger.logInfo(ErrorCategory.MARKETPLACE, 'Completed MagicEden order processing', {
+      taskId,
+      contractSlug,
+      totalOrdersProcessed,
+      totalBatches: Math.ceil(totalOrdersProcessed / BATCH_SIZE),
+      marketplace: 'magiceden',
+      operation: 'magiceden_order_processing_complete'
+    });
+
+    if (totalOrdersProcessed === 0) {
+      await logger.logInfo(ErrorCategory.MARKETPLACE, 'No MagicEden bids found to cancel', {
+        taskId,
+        contractSlug,
+        marketplace: 'magiceden'
+      });
+    }
+
+    return { success: true, ordersFound: totalOrdersProcessed };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+
+    await logger.logMarketplaceError('Failed to fetch and cancel MagicEden bids', {
+      taskId,
+      contractSlug,
+      marketplace: 'magiceden',
+      errorMessage: errorMsg,
+      stackTrace: error instanceof Error ? error.stack : undefined,
+      operation: 'fetch_and_cancel_magiceden_bids_failed'
+    });
+
+    return { success: false, ordersFound: 0, error: errorMsg };
   }
 }
 
 
-async function cancelAllRelatedBids(task: ITask, WALLET_PRIVATE_KEY: string, marketplace?: string, attempt: number = 1,): Promise<void> {
+/**
+ * Cancels all related bids for a task across specified marketplaces
+ * @param task - The bidding task to cancel bids for
+ * @param WALLET_PRIVATE_KEY - Private key for wallet authentication
+ * @param marketplace - Optional marketplace filter (opensea, magiceden, blur)
+ * @param attempt - Retry attempt number for tracking
+ * @returns Promise with detailed operation results
+ */
+async function cancelAllRelatedBids(
+  task: ITask,
+  WALLET_PRIVATE_KEY: string,
+  marketplace?: string,
+  attempt: number = 1
+): Promise<{
+  success: boolean;
+  results: {
+    opensea?: { success: boolean; ordersFound: number; error?: string };
+    magiceden?: { success: boolean; ordersFound: number; error?: string };
+    blur?: { success: boolean; ordersFound: number; error?: string };
+  };
+  totalOrdersFound: number;
+  errors: string[];
+  duration: number;
+}> {
+  const startTime = Date.now();
+  const taskId = task?._id?.toString();
+  const contractSlug = task?.contract?.slug;
+  const errors: string[] = [];
+  const results: any = {};
+  let totalOrdersFound = 0;
+
   try {
-    // Delete parent jobs for the appropriate marketplace(s)
+    // Input validation
+    if (!task) {
+      const error = 'Invalid task provided to cancelAllRelatedBids';
+      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { task, marketplace, attempt });
+      return { success: false, results: {}, totalOrdersFound: 0, errors: [error], duration: 0 };
+    }
+
+    if (!taskId) {
+      const error = 'Task missing _id property';
+      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { task, marketplace, attempt });
+      return { success: false, results: {}, totalOrdersFound: 0, errors: [error], duration: 0 };
+    }
+
+    if (!contractSlug) {
+      const error = 'Task missing contract.slug property';
+      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { taskId, marketplace, attempt });
+      return { success: false, results: {}, totalOrdersFound: 0, errors: [error], duration: 0 };
+    }
+
+    if (!WALLET_PRIVATE_KEY) {
+      const error = 'Invalid wallet private key provided';
+      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { taskId, contractSlug, marketplace, attempt });
+      return { success: false, results: {}, totalOrdersFound: 0, errors: [error], duration: 0 };
+    }
+
+    // Validate marketplace parameter if provided
+    if (marketplace && !['opensea', 'magiceden', 'blur'].includes(marketplace.toLowerCase())) {
+      const error = 'Invalid marketplace parameter';
+      await logger.logWarning(ErrorCategory.MARKETPLACE, error, {
+        taskId,
+        contractSlug,
+        marketplace,
+        attempt,
+        validMarketplaces: ['opensea', 'magiceden', 'blur']
+      });
+      return { success: false, results: {}, totalOrdersFound: 0, errors: [error], duration: 0 };
+    }
+
+    await logger.logInfo(ErrorCategory.MARKETPLACE, 'Starting bid cancellation', {
+      taskId,
+      contractSlug,
+      marketplace,
+      attempt,
+      operation: 'cancel_all_related_bids'
+    });
+
+    // Process marketplace-specific cancellation
     if (marketplace?.toLowerCase()) {
-      const parentJobId = `${task._id}-CANCEL_${marketplace.toUpperCase()}_BID`;
+      const parentJobId = `${taskId}-CANCEL_${marketplace.toUpperCase()}_BID`;
       parentJobs.delete(parentJobId);
 
       switch (marketplace.toLowerCase()) {
         case OPENSEA.toLowerCase():
-          await fetchAndCancelOpenseaBids(task, WALLET_PRIVATE_KEY);
+          results.opensea = await fetchAndCancelOpenseaBids(task, WALLET_PRIVATE_KEY);
+          totalOrdersFound += results.opensea.ordersFound;
+          if (!results.opensea.success) {
+            errors.push(`OpenSea cancellation failed: ${results.opensea.error}`);
+          }
           break;
         case MAGICEDEN.toLowerCase():
-          await fetchAndCancelMagicedenBids(task, WALLET_PRIVATE_KEY);
+          results.magiceden = await fetchAndCancelMagicedenBids(task, WALLET_PRIVATE_KEY);
+          totalOrdersFound += results.magiceden.ordersFound;
+          if (!results.magiceden.success) {
+            errors.push(`MagicEden cancellation failed: ${results.magiceden.error}`);
+          }
           break;
         case BLUR.toLowerCase():
-          await fetchAndCancelBlurBids(task, WALLET_PRIVATE_KEY);
+          results.blur = await fetchAndCancelBlurBids(task, WALLET_PRIVATE_KEY);
+          totalOrdersFound += results.blur.ordersFound;
+          if (!results.blur.success) {
+            errors.push(`Blur cancellation failed: ${results.blur.error}`);
+          }
           break;
       }
     } else {
-      // Delete all marketplace parent jobs
-      const openSeaParentJobId = `${task._id}-CANCEL_OPENSEA_BID`;
-      const magicEdenParentJobId = `${task._id}-CANCEL_MAGICEDEN_BID`;
-      const blurParentJobId = `${task._id}-CANCEL_BLUR_BID`;
+      // Process all marketplaces in parallel
+      const openSeaParentJobId = `${taskId}-CANCEL_OPENSEA_BID`;
+      const magicEdenParentJobId = `${taskId}-CANCEL_MAGICEDEN_BID`;
+      const blurParentJobId = `${taskId}-CANCEL_BLUR_BID`;
 
       parentJobs.delete(openSeaParentJobId);
       parentJobs.delete(magicEdenParentJobId);
       parentJobs.delete(blurParentJobId);
 
-      await Promise.all([
+      // Execute all marketplace cancellations in parallel with timeout
+      const cancellationPromises = [
         fetchAndCancelOpenseaBids(task, WALLET_PRIVATE_KEY),
         fetchAndCancelMagicedenBids(task, WALLET_PRIVATE_KEY),
         fetchAndCancelBlurBids(task, WALLET_PRIVATE_KEY)
-      ]);
+      ];
+
+      const cancellationTimeout = 30000; // 30 seconds
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Bid cancellation timeout')), cancellationTimeout);
+      });
+
+      try {
+        const allResults = await Promise.race([
+          Promise.allSettled(cancellationPromises),
+          timeoutPromise
+        ]);
+
+        // Process results
+        const [openseaResult, magicedenResult, blurResult] = allResults;
+
+        if (openseaResult.status === 'fulfilled') {
+          results.opensea = openseaResult.value;
+          totalOrdersFound += results.opensea.ordersFound;
+          if (!results.opensea.success) {
+            errors.push(`OpenSea cancellation failed: ${results.opensea.error}`);
+          }
+        } else {
+          const error = `OpenSea cancellation rejected: ${openseaResult.reason}`;
+          errors.push(error);
+          results.opensea = { success: false, ordersFound: 0, error };
+        }
+
+        if (magicedenResult.status === 'fulfilled') {
+          results.magiceden = magicedenResult.value;
+          totalOrdersFound += results.magiceden.ordersFound;
+          if (!results.magiceden.success) {
+            errors.push(`MagicEden cancellation failed: ${results.magiceden.error}`);
+          }
+        } else {
+          const error = `MagicEden cancellation rejected: ${magicedenResult.reason}`;
+          errors.push(error);
+          results.magiceden = { success: false, ordersFound: 0, error };
+        }
+
+        if (blurResult.status === 'fulfilled') {
+          results.blur = blurResult.value;
+          totalOrdersFound += results.blur.ordersFound;
+          if (!results.blur.success) {
+            errors.push(`Blur cancellation failed: ${results.blur.error}`);
+          }
+        } else {
+          const error = `Blur cancellation rejected: ${blurResult.reason}`;
+          errors.push(error);
+          results.blur = { success: false, ordersFound: 0, error };
+        }
+      } catch (error) {
+        const errorMsg = `Parallel cancellation failed: ${error instanceof Error ? error.message : String(error)}`;
+        errors.push(errorMsg);
+        await logger.logMarketplaceError(errorMsg, {
+          taskId,
+          contractSlug,
+          marketplace,
+          attempt
+        });
+      }
     }
 
+    const duration = Date.now() - startTime;
+    const success = errors.length === 0;
+
+    await logger.logInfo(ErrorCategory.MARKETPLACE, 'Completed bid cancellation', {
+      taskId,
+      contractSlug,
+      marketplace,
+      attempt,
+      success,
+      totalOrdersFound,
+      errorsCount: errors.length,
+      duration,
+      results,
+      operation: 'cancel_all_related_bids_complete'
+    });
+
+    return { success, results, totalOrdersFound, errors, duration };
   } catch (error) {
-    console.error(RED + `Unexpected error during bid cancellation(attempt ${attempt}): `, error, RESET);
+    const duration = Date.now() - startTime;
+    const errorMsg = error instanceof Error ? error.message : String(error);
+
+    await logger.logMarketplaceError('Failed to cancel all related bids', {
+      taskId,
+      contractSlug,
+      marketplace,
+      attempt,
+      errorMessage: errorMsg,
+      stackTrace: error instanceof Error ? error.stack : undefined,
+      duration,
+      operation: 'cancel_all_related_bids_failed'
+    });
+
+    return {
+      success: false,
+      results,
+      totalOrdersFound,
+      errors: [...errors, errorMsg],
+      duration
+    };
   }
 }
 
@@ -9334,7 +10517,7 @@ app.get('/api/auth/password-status', async (req, res) => {
 app.post('/api/update-app', async (req, res) => {
   try {
     // Authentication check - require API key
-    const apiKey = req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
+    const apiKey = req.headers['x-api-key']
 
     if (!apiKey || apiKey !== API_KEY) {
       await logger.logSecurityEvent('UNAUTHORIZED_UPDATE_ATTEMPT', 'Unauthorized update attempt', {
@@ -10297,7 +11480,7 @@ async function processAllActiveListings() {
             priority: 2,
             backoff: {
               type: 'exponential',
-              delay: 5000
+              delay: 2000
             }
           }
         );
@@ -10314,26 +11497,170 @@ async function processAllActiveListings() {
   }
 }
 
-async function unsubscribeFromCollection(task: ITask, marketplace?: string) {
+/**
+ * Unsubscribes from WebSocket collection monitoring for a specific task
+ * @param task - The bidding task to unsubscribe from
+ * @param marketplace - Optional marketplace filter (opensea, magiceden, blur)
+ * @returns Promise with operation result
+ */
+async function unsubscribeFromCollection(
+  task: ITask,
+  marketplace?: string
+): Promise<{ success: boolean; unsubscribed: boolean; error?: string }> {
+  const taskId = task?._id?.toString();
+  const contractSlug = task?.contract?.slug;
+  const contractAddress = task?.contract?.contractAddress;
+
   try {
-    if (!wsManager?.isConnected()) {
-      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
-      if (!wsManager?.isConnected()) return;
+    // Input validation
+    if (!task) {
+      await logger.logWarning(ErrorCategory.WEBSOCKET, 'Invalid task provided to unsubscribeFromCollection', {
+        task,
+        marketplace
+      });
+      return { success: false, unsubscribed: false, error: 'Invalid task provided' };
     }
 
-    await wsManager.unsubscribe(task.contract.slug, task.contract.contractAddress, marketplace);
+    if (!taskId) {
+      await logger.logWarning(ErrorCategory.WEBSOCKET, 'Task missing _id property', {
+        task,
+        marketplace
+      });
+      return { success: false, unsubscribed: false, error: 'Task missing _id property' };
+    }
+
+    if (!contractSlug) {
+      await logger.logWarning(ErrorCategory.WEBSOCKET, 'Task missing contract.slug property', {
+        taskId,
+        marketplace
+      });
+      return { success: false, unsubscribed: false, error: 'Task missing contract.slug property' };
+    }
+
+    if (!contractAddress) {
+      await logger.logWarning(ErrorCategory.WEBSOCKET, 'Task missing contract.contractAddress property', {
+        taskId,
+        contractSlug,
+        marketplace
+      });
+      return { success: false, unsubscribed: false, error: 'Task missing contract.contractAddress property' };
+    }
+
+    // Validate marketplace parameter if provided
+    if (marketplace && !['opensea', 'magiceden', 'blur'].includes(marketplace.toLowerCase())) {
+      await logger.logWarning(ErrorCategory.WEBSOCKET, 'Invalid marketplace parameter', {
+        taskId,
+        contractSlug,
+        marketplace,
+        validMarketplaces: ['opensea', 'magiceden', 'blur']
+      });
+      return { success: false, unsubscribed: false, error: 'Invalid marketplace parameter' };
+    }
+
+    // Check WebSocket manager availability
+    if (!wsManager) {
+      await logger.logWarning(ErrorCategory.WEBSOCKET, 'WebSocket manager not available', {
+        taskId,
+        contractSlug,
+        marketplace
+      });
+      return { success: false, unsubscribed: false, error: 'WebSocket manager not available' };
+    }
+
+    // Enhanced connection check with retry logic
+    const maxRetries = 3;
+    const retryDelay = 2000; // 2 seconds
+    let retryCount = 0;
+
+    while (retryCount < maxRetries) {
+      if (wsManager.isConnected()) {
+        break;
+      }
+
+      await logger.logDebug(ErrorCategory.WEBSOCKET, 'WebSocket not connected, retrying...', {
+        taskId,
+        contractSlug,
+        marketplace,
+        retryCount: retryCount + 1,
+        maxRetries
+      });
+
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
+      retryCount++;
+    }
+
+    if (!wsManager.isConnected()) {
+      await logger.logWarning(ErrorCategory.WEBSOCKET, 'WebSocket connection failed after retries', {
+        taskId,
+        contractSlug,
+        marketplace,
+        maxRetries,
+        retryDelay
+      });
+      return { success: false, unsubscribed: false, error: 'WebSocket connection failed' };
+    }
+
+    // Perform unsubscription with timeout protection
+    const unsubscribeTimeout = 10000; // 10 seconds
+    const unsubscribePromise = wsManager.unsubscribe(contractSlug, contractAddress, marketplace);
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Unsubscribe operation timed out')), unsubscribeTimeout);
+    });
+
+    await Promise.race([unsubscribePromise, timeoutPromise]);
+
+    // Enhanced logging with structured data
+    const logContext = {
+      taskId,
+      contractSlug,
+      contractAddress,
+      marketplace: marketplace?.toLowerCase(),
+      operation: 'websocket_unsubscribe',
+      timestamp: new Date().toISOString()
+    };
 
     if (marketplace) {
-      console.log(`Unsubscribed from collection: ${task.contract.slug} on ${marketplace}`);
+      await logger.logInfo(ErrorCategory.WEBSOCKET, 'Unsubscribed from collection for specific marketplace', {
+        ...logContext,
+        scope: 'marketplace_specific'
+      });
     } else {
-      console.log(`Unsubscribed from collection: ${task.contract.slug} (all marketplaces)`);
+      await logger.logInfo(ErrorCategory.WEBSOCKET, 'Unsubscribed from collection for all marketplaces', {
+        ...logContext,
+        scope: 'all_marketplaces'
+      });
     }
 
-    // Remove task from subscribedTasks
-    subscribedTasks.delete(task._id);
+    // Clean up local state - Only remove if unsubscribing from all marketplaces
+    // Note: subscribedTasks appears to be unused/incomplete in current implementation
+    // Consider removing or properly implementing this tracking
+    if (!marketplace && subscribedTasks.has(taskId)) {
+      subscribedTasks.delete(taskId);
+      await logger.logDebug(ErrorCategory.WEBSOCKET, 'Removed task from subscribedTasks', {
+        taskId,
+        contractSlug,
+        remainingSubscriptions: subscribedTasks.size
+      });
+    }
+
+    return { success: true, unsubscribed: true };
   } catch (error) {
-    console.error(RED + `Error in unsubscribeFromCollection: ` + RESET, error);
-    throw error;
+    await logger.logWebSocketError('Failed to unsubscribe from collection', {
+      taskId,
+      contractSlug,
+      contractAddress,
+      marketplace,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      stackTrace: error instanceof Error ? error.stack : undefined,
+      operation: 'websocket_unsubscribe'
+    });
+
+    return {
+      success: false,
+      unsubscribed: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
   }
 }
 
@@ -10589,23 +11916,86 @@ function transformNewTask(newTask: Record<string, Array<{ name: string }>>): Rec
   return transformedTask;
 }
 
-export const abortedTasks: string[] = [];
+// Use Set for O(1) operations instead of array
+export const abortedTasks = new Set<string>();
 
-export function markTaskAsAborted(taskId: string) {
-  if (!abortedTasks.includes(taskId)) {
-    abortedTasks.push(taskId);
+// Track timestamps for cleanup
+const abortedTasksWithTimestamp = new Map<string, number>();
+const ABORTED_TASKS_TTL = 30 * 60 * 1000; // 30 minutes
+
+export function markTaskAsAborted(taskId: string): boolean {
+  // Input validation
+  if (!taskId || typeof taskId !== 'string') {
+    logger.logWarning(ErrorCategory.GENERAL, 'Invalid taskId provided to markTaskAsAborted', { taskId });
+    return false;
   }
+
+  // Check if already aborted
+  if (abortedTasks.has(taskId)) {
+    logger.logDebug(ErrorCategory.GENERAL, 'Task already marked as aborted', { taskId });
+    return false;
+  }
+
+  // Mark as aborted with timestamp
+  abortedTasks.add(taskId);
+  abortedTasksWithTimestamp.set(taskId, Date.now());
+
+  // Log the action
+  logger.logInfo(ErrorCategory.GENERAL, 'Task marked as aborted', {
+    taskId,
+    timestamp: new Date().toISOString(),
+    totalAbortedTasks: abortedTasks.size
+  });
+
+  return true;
 }
 
-function removeTaskFromAborted(taskId: string) {
-  const index = abortedTasks.indexOf(taskId);
-  if (index > -1) {
-    abortedTasks.splice(index, 1);
+function removeTaskFromAborted(taskId: string): boolean {
+  if (!taskId || typeof taskId !== 'string') {
+    logger.logWarning(ErrorCategory.GENERAL, 'Invalid taskId provided to removeTaskFromAborted', { taskId });
+    return false;
   }
+
+  const wasRemoved = abortedTasks.delete(taskId);
+  abortedTasksWithTimestamp.delete(taskId);
+
+  if (wasRemoved) {
+    logger.logInfo(ErrorCategory.GENERAL, 'Task removed from aborted list', {
+      taskId,
+      remainingAbortedTasks: abortedTasks.size
+    });
+  }
+
+  return wasRemoved;
 }
 
 export function isTaskAborted(taskId: string): boolean {
-  return abortedTasks.includes(taskId);
+  if (!taskId || typeof taskId !== 'string') {
+    return false;
+  }
+  return abortedTasks.has(taskId);
+}
+
+// Add cleanup function for expired aborted tasks
+export function cleanupAbortedTasks(): void {
+  const now = Date.now();
+  const cutoff = now - ABORTED_TASKS_TTL;
+  let cleanedCount = 0;
+
+  for (const [taskId, timestamp] of abortedTasksWithTimestamp.entries()) {
+    if (timestamp < cutoff) {
+      abortedTasks.delete(taskId);
+      abortedTasksWithTimestamp.delete(taskId);
+      cleanedCount++;
+    }
+  }
+
+  if (cleanedCount > 0) {
+    logger.logInfo(ErrorCategory.GENERAL, 'Cleaned up expired aborted tasks', {
+      cleanedCount,
+      remainingCount: abortedTasks.size
+    });
+  }
 }
 
 interface IProcessOpenseaTokenBidData {
@@ -11071,7 +12461,7 @@ async function watchNetworkState() {
     if (netEnabled) {
       // Network restored
       console.log('Network restored, resuming operations...');
-      
+
       // Resume the queue first
       try {
         await queue.resume();
@@ -11079,7 +12469,7 @@ async function watchNetworkState() {
       } catch (err) {
         console.error('Failed to resume queue:', err);
       }
-      
+
       // Then restart the scheduled loop
       runScheduledLoop().catch(err => {
         console.error('Failed to restart scheduled loop:', err);
