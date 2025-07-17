@@ -52,7 +52,7 @@ import { BullMQErrorFormatter } from "./utils/bullmq-error-formatter";
 import { IListing } from "./types/listing.types";
 const prisma = new PrismaClient()
 
-const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io/";
+const MARKETPLACE_WS_URL = "ws://localhost:8080";
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
@@ -1339,9 +1339,18 @@ function setupQueueEventHandlers() {
   queueEvents.on('completed', async ({ jobId }) => {
     if (jobId.includes('CANCEL_OPENSEA_BID') || jobId.includes('CANCEL_MAGICEDEN_BID') || jobId.includes('CANCEL_BLUR_BID')) {
       const taskId = jobId.split('-')[1];
-      if (taskStatus[taskId]) {
-        taskStatus[taskId].status = 'CANCELLING';
+
+      if (!taskStatus[taskId]) {
+        taskStatus[taskId] = {
+          status: "CANCELLING",
+          cancellationPercentage: 0,
+          processingPercentage: 0,
+          waitingTime: 0,
+          runningPercentage: 0
+        }
       }
+      taskStatus[taskId].status = 'CANCELLING';
+
 
       const task = activeTasks.get(taskId);
       if (!task) return;
@@ -5137,7 +5146,6 @@ async function handleMarketplaceMessage(message: any) {
     }
 
     if (message.eventType === 'ITEM_SOLD') {
-      console.log(GOLD + JSON.stringify(message) + RESET);
       await updateBalancesForItemSold(message);
       return
     }
@@ -5183,6 +5191,9 @@ async function updateBalancesForItemSold(message: any) {
       console.log(YELLOW + `⚠️  Duplicate ITEM_SOLD event ignored for token ${tokenId}` + RESET);
       return;
     }
+
+    console.log(GOLD + JSON.stringify(data) + RESET);
+
 
     // Add to the set to prevent future duplicates
     recentItemSoldEvents.add(eventKey);
@@ -5411,19 +5422,10 @@ async function handleCounterBid(message: any) {
       const messageContractAddress = contractAddress?.toLowerCase();
       const messageSlug = slug?.toLowerCase();
 
-      // Match by counterbid option
-      const hasCounterbid = task.outbidOptions?.counterbid;
-
       // Match by contract address or slug
       const contractMatches = taskContractAddress === messageContractAddress ||
         taskSlug === messageSlug;
-
-      // Match by stop options
-      const hasValidStopOptions = taskSlug === messageSlug &&
-        task.stopOptions?.triggerStopOptions &&
-        Number(task.stopOptions?.maxPurchase) > 0;
-
-      return (hasCounterbid && contractMatches) || hasValidStopOptions;
+      return contractMatches
     });
 
     // Item transfer events are now handled by updateBalancesForItemSold function
@@ -5476,11 +5478,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       .includes("magiceden")) return;
 
     const expiration = getExpiry(currentTask.bidDuration)
-    if (!currentTask.outbidOptions.counterbid) return
-
     const orderHash = data?.data?.id
     // Include task ID in the hash to make it task-specific
-    const taskSpecificHash = `${orderHash}-${task._id}`;
+    const taskSpecificHash = orderHash;
     if (hasSeenItem(seenOrderHashes, taskSpecificHash)) return;
     addSeenItem(seenOrderHashes, taskSpecificHash)
 
@@ -5926,7 +5926,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
     const expiry = getExpiry(currentTask.bidDuration)
     const outbidOptions = currentTask.outbidOptions
-    if (!outbidOptions.counterbid) return
 
     const maker = data?.payload?.payload?.maker?.address.toLowerCase()
     const quantity = Number(data?.payload?.payload?.quantity) || 1
@@ -5994,7 +5993,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     }
 
     // Include task ID in the hash to make it task-specific
-    const taskSpecificHash = `${orderHash}-${task._id}`;
+    const taskSpecificHash = orderHash
     if (hasSeenItem(seenOrderHashes, taskSpecificHash)) return;
     addSeenItem(seenOrderHashes, taskSpecificHash)
 
