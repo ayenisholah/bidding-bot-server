@@ -540,8 +540,15 @@ async function monitorHealth() {
       console.log(GREEN + '▶️  QUEUE IS RUNNING' + RESET);
     }
 
+    // Show waiting job monitor status
+    if (counts.waiting > 0) {
+      console.log(YELLOW + '⚡ Waiting Job Monitor: Active (failing waiting jobs for retry)' + RESET);
+    }
+
     Object.entries(counts).forEach(([key, value]) => {
-      const color = value > RATE_LIMIT * 2 ? RED : value > RATE_LIMIT ? YELLOW : GREEN;
+      const color = key === 'waiting' && value > 0 ? RED : 
+                    value > RATE_LIMIT * 2 ? RED : 
+                    value > RATE_LIMIT ? YELLOW : GREEN;
       console.log(`${key}: ${color}${value}${RESET}`);
     });
     console.log(`Total Jobs: ${totalJobs}`);
@@ -885,7 +892,7 @@ async function startServer() {
       defaultJobOptions: {
         removeOnComplete: true,
         removeOnFail: true, // Keep failed jobs for debugging
-        attempts: 1, // Reduced from 3 to 2 for faster failure
+        attempts: 3, // Increased to allow retries when jobs would be waiting
         backoff: {
           type: 'exponential',
           delay: 1000, // Reduced from 2000ms to 1000ms for faster retries
@@ -980,6 +987,54 @@ async function startServer() {
         console.error('Unhandled Rejection at:', promise, 'reason:', reason);
       }
     });
+
+    // Monitor for waiting jobs and fail them immediately
+    const WAITING_JOB_CHECK_INTERVAL = 2000; // Check every 2 seconds for faster response
+    const waitingJobMonitor = setInterval(async () => {
+      try {
+        const counts = await queue.getJobCounts();
+        const waitingCount = counts.waiting || 0;
+        
+        // If we have waiting jobs and active jobs are at capacity, fail waiting jobs
+        if (waitingCount > 0) {
+          console.log(`⚠️  Found ${waitingCount} waiting jobs. Failing them to trigger retry...`);
+          
+          // Get waiting jobs in batches to avoid memory issues
+          const BATCH_SIZE = 50;
+          let processedCount = 0;
+          
+          while (processedCount < waitingCount) {
+            const waitingJobs = await queue.getJobs(['waiting'], processedCount, processedCount + BATCH_SIZE);
+            
+            if (waitingJobs.length === 0) break;
+            
+            // Process jobs in parallel for speed
+            await Promise.all(waitingJobs.map(async (job) => {
+              try {
+                // Move job to failed state with a specific error
+                await job.moveToFailed(new Error('Job moved from waiting to failed for immediate retry'), job.token);
+                console.log(`❌ Failed waiting job ${job.id} (${job.name}) to trigger retry`);
+              } catch (error) {
+                // Ignore errors for jobs that may have already been processed
+                if (error instanceof Error && !error.message?.includes('Job not in waiting list')) {
+                  console.error(`Failed to move job ${job.id} to failed state:`, error);
+                }
+              }
+            }));
+            
+            processedCount += waitingJobs.length;
+          }
+          
+          console.log(`✅ Processed ${processedCount} waiting jobs`);
+        }
+      } catch (error) {
+        console.error('Error monitoring waiting jobs:', error);
+      }
+    }, WAITING_JOB_CHECK_INTERVAL);
+
+    // Clean up monitor on shutdown
+    process.on('SIGTERM', () => clearInterval(waitingJobMonitor));
+    process.on('SIGINT', () => clearInterval(waitingJobMonitor));
 
     const mongoUri = process.env.MONGODB_URI;
     if (!mongoUri) {
@@ -1322,11 +1377,12 @@ function createJobOptions(jobId?: string, timeoutMs: number = 60000): JobsOption
     ...(jobId ? { jobId } : {}),
     removeOnComplete: true,
     removeOnFail: true,
-    attempts: 1, // Fail faster with fewer attempts
+    attempts: 3, // Allow retries for jobs that would be waiting
     backoff: {
       type: 'exponential',
       delay: 1000,
     },
+    lifo: true, // Process newest jobs first to prevent old jobs from getting stuck
   };
 }
 
@@ -5493,8 +5549,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.toLowerCase())?.encryptedPrivateKey as string) as string;
     const maker = data?.data?.maker?.toLowerCase()
 
-    console.log(`[DEBUG MagicEden] Checking own bid - maker: ${maker}, walletAddresses: ${walletAddresses.join(', ')}`);
-    console.log(`[DEBUG MagicEden] Is own bid: ${walletAddresses.includes(maker)}`);
 
     if (walletAddresses.includes(maker)) {
       incrementOwnBidCounter('magiceden', task._id);
