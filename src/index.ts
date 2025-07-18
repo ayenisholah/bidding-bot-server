@@ -1698,13 +1698,22 @@ function setupQueueEventHandlers() {
               clearTimeout(existingTimeout);
             }
 
+            // Store a reference to the current task to ensure we're scheduling the right one
+            const taskReference = task._id.toString();
+            
             const timeoutId = setTimeout(async () => {
-              // When we restart, update the status
+              // When we restart, verify it's the same task that scheduled this timeout
               const currentTask = activeTasks.get(taskId);
-              if (currentTask?.running) {
-                await startTask(currentTask, true);
-              } else if (currentTask) {
-                await stopTask(currentTask, false);
+              
+              // Verify this is the same task instance that scheduled the timeout
+              if (currentTask && currentTask._id.toString() === taskReference) {
+                if (currentTask.running) {
+                  await startTask(currentTask, true);
+                } else {
+                  await stopTask(currentTask, false);
+                }
+              } else {
+                console.warn(YELLOW + `Skipping scheduled run for task ${taskId} - task instance has changed or been removed` + RESET);
               }
             }, loopInterval * 1000);
 
