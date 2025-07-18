@@ -357,9 +357,6 @@ export async function fetchOpenSeaCollectionItems(
       },
     }));
 
-    console.log(JSON.stringify(data));
-
-
     // Extract token IDs from the current page
     const tokenIds = data.data.collectionItems.items.map((item) => +item.tokenId);
     // Add current page's token IDs to our accumulated list

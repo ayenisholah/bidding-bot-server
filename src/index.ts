@@ -52,7 +52,7 @@ import { BullMQErrorFormatter } from "./utils/bullmq-error-formatter";
 import { IListing } from "./types/listing.types";
 const prisma = new PrismaClient()
 
-const MARKETPLACE_WS_URL = "ws://localhost:8080";
+const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
@@ -63,8 +63,6 @@ const currentTraits: CurrentTraits = {}
 const taskStatus: TaskStatus = {};
 const bestOffers: BidCounts = {};
 const floorPrices: BidCounts = {};
-// Tracks the number of items purchased per wallet per contract per marketplace
-// Structure: { walletAddress: { contractAddress: { opensea: count, magiceden: count, blur: count } } }
 const balances: WalletBalances = {}
 export const warningBids: WarningBids = {};
 export const warningMessage: WarningMessage = {};
@@ -179,8 +177,6 @@ const COLLECTION_BID_PRIORITY = {
   MAGICEDEN: 2,
   BLUR: 2
 };
-
-type JobState = 'completed' | 'failed' | 'delayed' | 'active' | 'waiting' | 'waiting-children' | 'unknown' | 'prioritized' | 'paused';
 
 const lockManager = new DistributedLockManager({
   lockPrefix: '{marketplace}:',
@@ -4694,6 +4690,9 @@ async function cancelMagicedenBids(orders: PrismaOrder[], privateKey: string, ta
     const orderKeys = batchOrders.map((order: PrismaOrder) => order.id)
     await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId }, { jobId: `CANCEL_MAGICEDEN_BID-${taskId}-${orderKeys[0]}` });
   }
+
+  // Decrement the own bid counter by the number of cancelled orders
+  decrementOwnBidCounter('magiceden', orders.length);
 }
 
 async function cancelBlurBids(orders: PrismaOrder[], privateKey: string, taskId: string) {
@@ -4725,6 +4724,9 @@ async function cancelOpenseaBids(orders: PrismaOrder[], privateKey: string, task
 
   await processBulkCancellations(cancelData)
   // await queue.addBulk(cancelData)
+
+  // Decrement the own bid counter by the number of cancelled orders
+  decrementOwnBidCounter('opensea', orders.length);
 }
 
 async function updateStatus(task: ITask) {
@@ -5490,6 +5492,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     const walletAddresses = wallets.map((wallet) => wallet.address.toLowerCase())
     const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.toLowerCase())?.encryptedPrivateKey as string) as string;
     const maker = data?.data?.maker?.toLowerCase()
+
+    console.log(`[DEBUG MagicEden] Checking own bid - maker: ${maker}, walletAddresses: ${walletAddresses.join(', ')}`);
+    console.log(`[DEBUG MagicEden] Is own bid: ${walletAddresses.includes(maker)}`);
 
     if (walletAddresses.includes(maker)) {
       incrementOwnBidCounter('magiceden', task._id);
@@ -9615,36 +9620,6 @@ app.get("/", (req, res) => {
   res.json({ message: "Welcome to the NFTTools bidding bot server! Let's make magic happen! 🚀🚀🚀" });
 });
 
-// Debug endpoint to check seen items status
-app.get("/seen-items", (req, res) => {
-  const now = Date.now();
-  const orderHashesInfo = Array.from(seenOrderHashes.entries()).map(([hash, timestamp]) => ({
-    hash: hash.substring(0, 8) + '...',
-    age: Math.round((now - timestamp) / 1000) + 's',
-    expired: now - timestamp > SEEN_ITEMS_TTL
-  }));
-
-  const bidsInfo = Array.from(seenBids.entries()).map(([hash, timestamp]) => ({
-    hash: hash.substring(0, 8) + '...',
-    age: Math.round((now - timestamp) / 1000) + 's',
-    expired: now - timestamp > SEEN_ITEMS_TTL
-  }));
-
-  res.json({
-    seenOrderHashes: {
-      count: seenOrderHashes.size,
-      items: orderHashesInfo.slice(0, 10), // Show first 10
-      maxSize: SEEN_ITEMS_MAX_SIZE,
-      ttl: SEEN_ITEMS_TTL / 1000 + 's'
-    },
-    seenBids: {
-      count: seenBids.size,
-      items: bidsInfo.slice(0, 10), // Show first 10
-      maxSize: SEEN_ITEMS_MAX_SIZE,
-      ttl: SEEN_ITEMS_TTL / 1000 + 's'
-    }
-  });
-});
 
 app.get("/health", async (req, res) => {
   try {
@@ -12117,6 +12092,9 @@ export function trackBidRate(marketplace: 'opensea' | 'magiceden' | 'blur', task
  */
 export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', taskId: string) {
   try {
+    console.log(`[DEBUG] incrementOwnBidCounter called for ${marketplace}, task: ${taskId}`);
+    console.log(`[DEBUG] Current ownBidCounts:`, ownBidCounts);
+
     // Update local ownBidCounts object for immediate broadcast
     if (!ownBidCounts[marketplace]) {
       ownBidCounts[marketplace] = 0;
@@ -12124,9 +12102,28 @@ export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
     ownBidCounts[marketplace]++;
 
     console.log(`🔄 Own bid detected - ${marketplace.toUpperCase()}: ${ownBidCounts[marketplace]} total bids for task ${taskId}`);
+    console.log(`[DEBUG] Updated ownBidCounts:`, ownBidCounts);
     return ownBidCounts[marketplace];
   } catch (error) {
     console.error('Failed to increment own bid counter:', error);
+  }
+  return 0;
+}
+
+/**
+ * Decrements memory-based counter for our own bids when we cancel a bid
+ */
+export function decrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', count: number = 1) {
+  try {
+    // Update local ownBidCounts object for immediate broadcast
+    if (ownBidCounts[marketplace] && ownBidCounts[marketplace] > 0) {
+      ownBidCounts[marketplace] = Math.max(0, ownBidCounts[marketplace] - count);
+      console.log(`🔻 Own bid cancelled - ${marketplace.toUpperCase()}: ${ownBidCounts[marketplace]} total bids remaining`);
+      return ownBidCounts[marketplace];
+    }
+    return 0;
+  } catch (error) {
+    console.error('Failed to decrement own bid counter:', error);
   }
   return 0;
 }
