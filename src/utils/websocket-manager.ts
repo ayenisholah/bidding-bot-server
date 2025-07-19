@@ -70,7 +70,7 @@ class WebSocketManager extends EventEmitter {
   private latencies: number[] = [];
   private messageTimestamps: number[] = [];
   private lastMessageReceived = 0;
-  private connectionStaleThreshold = 180000; // 3 minutes without any messages - more aggressive than server's 5 min threshold
+  private connectionStaleThreshold = 600000; // 10 minutes without any messages - allows for quiet collections
 
   // State persistence for listings (per CLIENT_CONNECTION_GUIDE.md)
   private persistentListingSubscriptions: Map<string, SubscriptionInfo> = new Map();

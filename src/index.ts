@@ -50,9 +50,10 @@ import { handleListingPriceUpdate } from "./functions/priceMonitor";
 import { createListing } from "./functions/list";
 import { BullMQErrorFormatter } from "./utils/bullmq-error-formatter";
 import { IListing } from "./types/listing.types";
+import { BoundedCache } from "./utils/bounded-cache";
 const prisma = new PrismaClient()
 
-const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
+const MARKETPLACE_WS_URL = "ws://localhost:8080";
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
@@ -72,7 +73,7 @@ export const blurRateLimitInfo: { [walletAddress: string]: { remaining: number; 
 const QUEUE_NAME = 'BIDDING_BOT';
 
 
-export const WORKER_COUNT = 1
+export const WORKER_COUNT = 4
 
 // BullMQ configuration will use the connection from redis.ts
 // Note: Worker concurrency is set to RATE_LIMIT (default: 100)
@@ -84,67 +85,32 @@ export const WORKER_COUNT = 1
 let traitsToRemove: { [key: string]: string[] } = {}
 let removedTokens: { [key: string]: { opensea: string[]; magiceden: string[] } } = {}
 
-// Use Maps instead of Sets to track timestamps for cleanup
-const seenOrderHashes = new Map<string, number>(); // Map<orderHash, timestamp>
-const seenBids = new Map<string, number>(); // Map<bidHash, timestamp>
+// Use BoundedCache instead of Maps for memory-efficient tracking
+const seenOrderHashes = new BoundedCache<string, number>(10000, 30 * 60 * 1000); // 10k items, 30 min TTL
+const seenBids = new BoundedCache<string, number>(10000, 30 * 60 * 1000); // 10k items, 30 min TTL
 
-// Configuration for cleanup
-const SEEN_ITEMS_TTL = 30 * 60 * 1000; // 30 minutes TTL
-const SEEN_ITEMS_MAX_SIZE = 10000; // Maximum items to keep
+// Configuration for cleanup (no longer needed with BoundedCache)
 const CLEANUP_INTERVAL = 30 * 60 * 1000; // Run cleanup every 30 minutes for better deduplication
 
 // Helper functions for seen items management
-function addSeenItem(map: Map<string, number>, key: string): void {
+function addSeenItem(cache: BoundedCache<string, number>, key: string): void {
   const now = Date.now();
-  map.set(key, now);
-
-  // If map exceeds max size, remove oldest entries
-  if (map.size > SEEN_ITEMS_MAX_SIZE) {
-    const entries = Array.from(map.entries());
-    entries.sort((a, b) => a[1] - b[1]); // Sort by timestamp (oldest first)
-    const toRemove = entries.slice(0, entries.length - SEEN_ITEMS_MAX_SIZE);
-    toRemove.forEach(([key]) => map.delete(key));
-  }
+  cache.set(key, now);
+  // BoundedCache handles cleanup automatically
 }
 
 // Note: Manual .delete() calls after queuing counterbids are intentional
 // They allow immediate re-processing of the same order/bid if needed
 // The TTL system acts as a safety net for any items not manually deleted
 
-function hasSeenItem(map: Map<string, number>, key: string): boolean {
-  const timestamp = map.get(key);
-  if (!timestamp) return false;
-
-  // Check if item has expired
-  if (Date.now() - timestamp > SEEN_ITEMS_TTL) {
-    map.delete(key);
-    return false;
-  }
-
-  return true;
+function hasSeenItem(cache: BoundedCache<string, number>, key: string): boolean {
+  // BoundedCache.get() handles expiry check automatically
+  return cache.has(key);
 }
 
-function cleanupSeenItems(map: Map<string, number>): void {
-  const now = Date.now();
-  const expiredKeys: string[] = [];
-  const beforeSize = map.size;
+// BoundedCache handles cleanup automatically, no need for manual cleanup function
 
-  map.forEach((timestamp, key) => {
-    if (now - timestamp > SEEN_ITEMS_TTL) {
-      expiredKeys.push(key);
-    }
-  });
-
-  expiredKeys.forEach(key => map.delete(key));
-
-  if (expiredKeys.length > 0) {
-    const mapName = map === seenOrderHashes ? 'seenOrderHashes' : 'seenBids';
-    console.log(`[Cleanup] ${mapName}: removed ${expiredKeys.length} expired items, ${beforeSize} -> ${map.size} items`);
-  }
-}
-
-// Set up periodic cleanup
-let cleanupIntervalId: NodeJS.Timeout | null = null;
+// Set up periodic intervals
 let expirationMonitorInterval: NodeJS.Timeout | null = null;
 
 const SERVER_IP = process.env.SERVER_IP as string
@@ -230,7 +196,7 @@ const blurLimiter = new Bottleneck({
 })
 
 // Initialize worker later in startServer function
-let workers: Worker;
+let workers: Worker[] = [];
 
 const taskTimeouts = new Map<string, NodeJS.Timeout>();
 const taskCountdownTimers = new Map<string, NodeJS.Timeout>();
@@ -324,6 +290,105 @@ const MAGICEDEN = "MAGICEDEN";
 const BLUR = "BLUR";
 
 export const currentTasks: ITask[] = [];
+
+// Task indexing for O(1) lookup performance
+const contractToTasksMap = new Map<string, Set<ITask>>();
+const slugToTasksMap = new Map<string, Set<ITask>>();
+
+// Update indexes when tasks change
+function updateTaskIndexes(tasks: ITask[]): void {
+  contractToTasksMap.clear();
+  slugToTasksMap.clear();
+
+  tasks.forEach(task => {
+    if (!task.running || !task.contract) return;
+
+    const contractKey = task.contract.contractAddress?.toLowerCase();
+    const slugKey = task.contract.slug?.toLowerCase();
+
+    if (contractKey) {
+      if (!contractToTasksMap.has(contractKey)) {
+        contractToTasksMap.set(contractKey, new Set());
+      }
+      contractToTasksMap.get(contractKey)!.add(task);
+    }
+
+    if (slugKey) {
+      if (!slugToTasksMap.has(slugKey)) {
+        slugToTasksMap.set(slugKey, new Set());
+      }
+      slugToTasksMap.get(slugKey)!.add(task);
+    }
+  });
+}
+
+// Fast task lookup - O(1) instead of O(n)
+function getRelevantTasks(contractAddress?: string, slug?: string): ITask[] {
+  const tasks = new Set<ITask>();
+
+  if (contractAddress) {
+    const contractTasks = contractToTasksMap.get(contractAddress.toLowerCase());
+    if (contractTasks) {
+      contractTasks.forEach(task => tasks.add(task));
+    }
+  }
+
+  if (slug) {
+    const slugTasks = slugToTasksMap.get(slug.toLowerCase());
+    if (slugTasks) {
+      slugTasks.forEach(task => tasks.add(task));
+    }
+  }
+  return Array.from(tasks);
+}
+
+// Add a single task to the indexes
+function addTaskToIndexes(task: ITask): void {
+  if (!task.running || !task.contract) return;
+
+  const contractKey = task.contract.contractAddress?.toLowerCase();
+  const slugKey = task.contract.slug?.toLowerCase();
+
+  if (contractKey) {
+    if (!contractToTasksMap.has(contractKey)) {
+      contractToTasksMap.set(contractKey, new Set());
+    }
+    contractToTasksMap.get(contractKey)!.add(task);
+  }
+
+  if (slugKey) {
+    if (!slugToTasksMap.has(slugKey)) {
+      slugToTasksMap.set(slugKey, new Set());
+    }
+    slugToTasksMap.get(slugKey)!.add(task);
+  }
+
+  console.log(`[Task Indexes] After adding - Contracts: ${contractToTasksMap.size}, Slugs: ${slugToTasksMap.size}`);
+}
+
+// Remove a single task from the indexes
+function removeTaskFromIndexes(task: ITask): void {
+  const contractKey = task.contract?.contractAddress?.toLowerCase();
+  const slugKey = task.contract?.slug?.toLowerCase();
+
+  if (contractKey && contractToTasksMap.has(contractKey)) {
+    const contractTasks = contractToTasksMap.get(contractKey)!;
+    contractTasks.delete(task);
+    if (contractTasks.size === 0) {
+      contractToTasksMap.delete(contractKey);
+    }
+  }
+
+  if (slugKey && slugToTasksMap.has(slugKey)) {
+    const slugTasks = slugToTasksMap.get(slugKey)!;
+    slugTasks.delete(task);
+    if (slugTasks.size === 0) {
+      slugToTasksMap.delete(slugKey);
+    }
+  }
+
+  console.log(`[Task Indexes] After removing - Contracts: ${contractToTasksMap.size}, Slugs: ${slugToTasksMap.size}`);
+}
 
 export const OPENSEA_SCHEDULE = "OPENSEA_SCHEDULE"
 export const OPENSEA_COLLECTION_BID = "OPENSEA_COLLECTION_BID"
@@ -546,9 +611,9 @@ async function monitorHealth() {
     }
 
     Object.entries(counts).forEach(([key, value]) => {
-      const color = key === 'waiting' && value > 0 ? RED : 
-                    value > RATE_LIMIT * 2 ? RED : 
-                    value > RATE_LIMIT ? YELLOW : GREEN;
+      const color = key === 'waiting' && value > 0 ? RED :
+        value > RATE_LIMIT * 2 ? RED :
+          value > RATE_LIMIT ? YELLOW : GREEN;
       console.log(`${key}: ${color}${value}${RESET}`);
     });
     console.log(`Total Jobs: ${totalJobs}`);
@@ -760,6 +825,7 @@ async function fetchCurrentTasks() {
 
     console.log(`Found ${formattedTasks.length} tasks`);
     currentTasks.push(...formattedTasks);
+    updateTaskIndexes(currentTasks);
 
     console.log('Creating initial jobs...');
     const jobs = formattedTasks
@@ -827,8 +893,8 @@ async function pauseQueueAndWorkers() {
   try {
     console.log(YELLOW + 'No password set - pausing queue and workers...' + RESET);
     await queue.pause();
-    if (workers) {
-      await workers.pause();
+    if (workers.length > 0) {
+      await Promise.all(workers.map(worker => worker.pause()));
     }
     console.log(YELLOW + 'Queue and workers paused. Waiting for password...' + RESET);
     console.log(YELLOW + 'Note: All jobs have been removed from the queue for security.' + RESET);
@@ -836,7 +902,8 @@ async function pauseQueueAndWorkers() {
     await logger.logInfo(ErrorCategory.QUEUE, 'Queue and workers paused due to missing password', {
       queueOperation: QueueOperation.PAUSE_QUEUE,
       queuePaused: true,
-      workersPaused: !!workers
+      workersPaused: workers.length > 0,
+      workerCount: workers.length
     });
   } catch (error) {
     await logger.logQueueError('Error pausing queue and workers', {
@@ -851,8 +918,8 @@ async function resumeQueueAndWorkers() {
   try {
     console.log(GREEN + 'Password set - resuming queue and workers...' + RESET);
     await queue.resume();
-    if (workers) {
-      await workers.resume();
+    if (workers.length > 0) {
+      await Promise.all(workers.map(worker => worker.resume()));
     }
     console.log(GREEN + 'Queue and workers resumed.' + RESET);
   } catch (error) {
@@ -906,78 +973,89 @@ async function startServer() {
     // Set up queue event handlers now that queueEvents is initialized
     setupQueueEventHandlers();
 
-    // Initialize the worker with Redis connection and proper lock settings
-    workers = new Worker(
-      QUEUE_NAME,
-      async (job) => {
-        const startTime = Date.now();
+    // Initialize multiple workers with Redis connection and proper lock settings
+    const concurrencyPerWorker = Math.ceil(Number(RATE_LIMIT) / WORKER_COUNT);
+    
+    for (let i = 0; i < WORKER_COUNT; i++) {
+      const worker = new Worker(
+        QUEUE_NAME,
+        async (job) => {
+          const startTime = Date.now();
 
-        // Check if job has exceeded its timeout
-        if (job.data.timeoutAt && Date.now() > job.data.timeoutAt) {
-          const timeoutError = new Error(`Job ${job.id} timed out after ${job.data.maxDuration}ms`);
-          await logger.logQueueError(`Job timeout: ${job.name}`, {
-            jobId: job.id,
-            timeoutAt: job.data.timeoutAt,
-            maxDuration: job.data.maxDuration,
-            actualDuration: Date.now() - startTime,
-            queueOperation: QueueOperation.PROCESS_JOB
-          });
-          throw timeoutError;
+          // Check if job has exceeded its timeout
+          if (job.data.timeoutAt && Date.now() > job.data.timeoutAt) {
+            const timeoutError = new Error(`Job ${job.id} timed out after ${job.data.maxDuration}ms`);
+            await logger.logQueueError(`Job timeout: ${job.name}`, {
+              jobId: job.id,
+              timeoutAt: job.data.timeoutAt,
+              maxDuration: job.data.maxDuration,
+              actualDuration: Date.now() - startTime,
+              queueOperation: QueueOperation.PROCESS_JOB
+            });
+            throw timeoutError;
+          }
+
+          try {
+            await processJob(job);
+            return { success: true };
+          } catch (error) {
+            // Log the error for debugging
+            console.error(`Job ${job.id} failed:`, error);
+
+            await logger.logQueueJobFailed(job.name, {
+              jobId: job.id,
+              taskId: job.data.taskId,
+              marketplace: job.data.marketplace,
+              error: error as Error,
+              errorMessage: error instanceof Error ? error.message : String(error),
+              jobAttempts: job.attemptsMade,
+              duration: Date.now() - startTime,
+              queueName: QUEUE_NAME
+            });
+
+            // Let BullMQ handle retries based on job configuration
+            // Don't throw UnrecoverableError - let it retry
+            throw error;
+          }
+        },
+        {
+          connection: await createBullMQConnection(),
+          prefix: '{bull}',
+          concurrency: concurrencyPerWorker, // Distribute concurrency across workers
+          // Extended lock settings to prevent lock renewal errors
+          lockDuration: 60000, // 90 seconds (reduced from 120s for faster timeout)
+          lockRenewTime: 20000, // Renew lock every 20 seconds (more frequent)
+          stalledInterval: 60000, // 2 minutes before considering job stalled (reduced)
+          maxStalledCount: 1, // Max 2 stall attempts (reduced for faster failure)
         }
+      );
 
-        try {
-          await processJob(job);
-          return { success: true };
-        } catch (error) {
-          // Log the error for debugging
-          console.error(`Job ${job.id} failed:`, error);
-
-          await logger.logQueueJobFailed(job.name, {
-            jobId: job.id,
-            taskId: job.data.taskId,
-            marketplace: job.data.marketplace,
-            error: error as Error,
-            errorMessage: error instanceof Error ? error.message : String(error),
-            jobAttempts: job.attemptsMade,
-            duration: Date.now() - startTime,
-            queueName: QUEUE_NAME
-          });
-
-          // Let BullMQ handle retries based on job configuration
-          // Don't throw UnrecoverableError - let it retry
-          throw error;
-        }
-      },
-      {
-        connection: await createBullMQConnection(),
-        prefix: '{bull}',
-        concurrency: Number(RATE_LIMIT), // Increased minimum concurrency for faster processing
-        // Extended lock settings to prevent lock renewal errors
-        lockDuration: 60000, // 90 seconds (reduced from 120s for faster timeout)
-        lockRenewTime: 20000, // Renew lock every 20 seconds (more frequent)
-        stalledInterval: 60000, // 2 minutes before considering job stalled (reduced)
-        maxStalledCount: 1, // Max 2 stall attempts (reduced for faster failure)
-      }
-    );
-
-    // Set up worker error handlers
-    workers.on('error', async (error) => {
-      // Format BullMQ lock renewal errors
-      await BullMQErrorFormatter.formatError(error, {
-        workerConcurrency: Number(RATE_LIMIT),
-        queueName: QUEUE_NAME
+      // Set up worker error handlers
+      worker.on('error', async (error) => {
+        // Format BullMQ lock renewal errors
+        await BullMQErrorFormatter.formatError(error, {
+          workerConcurrency: concurrencyPerWorker,
+          workerId: i,
+          queueName: QUEUE_NAME
+        });
       });
-    });
 
-    // Handle worker stalled event
-    workers.on('stalled', async (jobId) => {
-      await logger.logQueueError(`Job stalled: ${jobId}`, {
-        jobId,
-        queueOperation: QueueOperation.PROCESS_JOB,
-        queueName: QUEUE_NAME,
-        stalledAt: new Date().toISOString()
+      // Handle worker stalled event
+      worker.on('stalled', async (jobId) => {
+        await logger.logQueueError(`Job stalled: ${jobId}`, {
+          jobId,
+          workerId: i,
+          queueOperation: QueueOperation.PROCESS_JOB,
+          queueName: QUEUE_NAME,
+          stalledAt: new Date().toISOString()
+        });
       });
-    });
+      
+      // Add worker to array
+      workers.push(worker);
+    }
+    
+    console.log(GREEN + `Initialized ${WORKER_COUNT} workers with ${concurrencyPerWorker} concurrency each (Total: ${Number(RATE_LIMIT)})` + RESET);
 
     // Add process-level error handler for uncaught BullMQ errors
     process.on('unhandledRejection', async (reason, promise) => {
@@ -994,37 +1072,47 @@ async function startServer() {
       try {
         const counts = await queue.getJobCounts();
         const waitingCount = counts.waiting || 0;
-        
+
         // If we have waiting jobs and active jobs are at capacity, fail waiting jobs
         if (waitingCount > 0) {
           console.log(`⚠️  Found ${waitingCount} waiting jobs. Failing them to trigger retry...`);
-          
+
           // Get waiting jobs in batches to avoid memory issues
           const BATCH_SIZE = 50;
           let processedCount = 0;
-          
+
           while (processedCount < waitingCount) {
             const waitingJobs = await queue.getJobs(['waiting'], processedCount, processedCount + BATCH_SIZE);
-            
+
             if (waitingJobs.length === 0) break;
-            
+
             // Process jobs in parallel for speed
             await Promise.all(waitingJobs.map(async (job) => {
               try {
-                // Move job to failed state with a specific error
-                await job.moveToFailed(new Error('Job moved from waiting to failed for immediate retry'), job.token);
-                console.log(`❌ Failed waiting job ${job.id} (${job.name}) to trigger retry`);
+                // Double-check the job is still in waiting state before attempting to move it
+                const currentState = await job.getState();
+                if (currentState === 'waiting') {
+                  // Move job to failed state with a specific error
+                  await job.moveToFailed(new Error('Job moved from waiting to failed for immediate retry'), job.token);
+                  console.log(`❌ Failed waiting job ${job.id} (${job.name}) to trigger retry`);
+                }
+                // If job is no longer waiting, skip it silently
               } catch (error) {
-                // Ignore errors for jobs that may have already been processed
-                if (error instanceof Error && !error.message?.includes('Job not in waiting list')) {
-                  console.error(`Failed to move job ${job.id} to failed state:`, error);
+                // Ignore errors for jobs that have already transitioned to another state
+                if (error instanceof Error) {
+                  if (!error.message?.includes('Job not in waiting list') &&
+                    !error.message?.includes('is not in the active state') &&
+                    !error.message?.includes('Missing lock for job')) {
+                    console.error(`Failed to move job ${job.id} to failed state:`, error);
+                  }
+                  // Silently ignore jobs that have already been picked up by workers
                 }
               }
             }));
-            
+
             processedCount += waitingJobs.length;
           }
-          
+
           console.log(`✅ Processed ${processedCount} waiting jobs`);
         }
       } catch (error) {
@@ -1224,17 +1312,20 @@ async function startServer() {
     });
 
 
-    // Start periodic cleanup of seen items
-    cleanupIntervalId = setInterval(() => {
-      cleanupSeenItems(seenOrderHashes);
-      cleanupSeenItems(seenBids);
-
-      // Also clear ITEM_SOLD events to prevent memory growth
+    // Start periodic cleanup of ITEM_SOLD events only (BoundedCache handles its own cleanup)
+    setInterval(() => {
+      // Clear ITEM_SOLD events to prevent memory growth
       console.log(`Clearing ${recentItemSoldEvents.size} cached ITEM_SOLD events`);
       recentItemSoldEvents.clear();
+
+      // Log cache statistics
+      const orderStats = seenOrderHashes.getStats();
+      const bidStats = seenBids.getStats();
+      console.log(`[Cache Stats] seenOrderHashes: ${orderStats.size}/${orderStats.maxSize} items`);
+      console.log(`[Cache Stats] seenBids: ${bidStats.size}/${bidStats.maxSize} items`);
     }, CLEANUP_INTERVAL);
 
-    console.log(`Started periodic cleanup for seen items (every ${CLEANUP_INTERVAL / 1000 / 60} minutes)`);
+    console.log(`Started periodic cleanup for ITEM_SOLD events (every ${CLEANUP_INTERVAL / 1000 / 60} minutes)`);
 
     // Start internet connectivity monitoring
     startConnectivityMonitoring();
@@ -1262,10 +1353,6 @@ async function startServer() {
 // Cleanup handler for graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\nReceived SIGINT, cleaning up...');
-  if (cleanupIntervalId) {
-    clearInterval(cleanupIntervalId);
-    console.log('Stopped periodic cleanup');
-  }
 
   // Stop connectivity monitoring
   stopConnectivityMonitoring();
@@ -1297,10 +1384,6 @@ process.on('SIGINT', async () => {
 
 process.on('SIGTERM', async () => {
   console.log('\nReceived SIGTERM, cleaning up...');
-  if (cleanupIntervalId) {
-    clearInterval(cleanupIntervalId);
-    console.log('Stopped periodic cleanup');
-  }
 
   // Stop connectivity monitoring
   stopConnectivityMonitoring();
@@ -1542,6 +1625,18 @@ function setupQueueEventHandlers() {
             taskStatus[taskId].cancellationPercentage = 100;
             if (taskStatus[taskId].nextLoopTime && taskStatus[taskId].waitingTime > 0) {
               taskStatus[taskId].status = 'SCHEDULED';
+            } else {
+              // When cancellationPercentage is 100 and there's no next loop, task should be stopped
+              taskStatus[taskId].status = 'STOPPED';
+              delete taskStatus[taskId].nextLoopTime;
+              taskStatus[taskId].waitingTime = 0;
+              
+              // Clear countdown timer when task is stopped
+              const countdownTimer = taskCountdownTimers.get(taskId);
+              if (countdownTimer) {
+                clearInterval(countdownTimer);
+                taskCountdownTimers.delete(taskId);
+              }
             }
           }
         }
@@ -1700,11 +1795,11 @@ function setupQueueEventHandlers() {
 
             // Store a reference to the current task to ensure we're scheduling the right one
             const taskReference = task._id.toString();
-            
+
             const timeoutId = setTimeout(async () => {
               // When we restart, verify it's the same task that scheduled this timeout
               const currentTask = activeTasks.get(taskId);
-              
+
               // Verify this is the same task instance that scheduled the timeout
               if (currentTask && currentTask._id.toString() === taskReference) {
                 if (currentTask.running) {
@@ -2101,6 +2196,7 @@ async function processImportedTasks(tasks: ITask[]) {
       activeTasks.set(task._id, task);
       currentTasks.push(task);
     });
+    updateTaskIndexes(currentTasks);
 
 
     const jobs = tasks.flatMap(task => [
@@ -2157,6 +2253,7 @@ async function processNewTask(task: ITask) {
     // Add to activeTasks Map
     activeTasks.set(task._id, task)
     currentTasks.push(task);
+    updateTaskIndexes(currentTasks);
     const jobs = [
       ...(task.selectedMarketplaces.map(m => m.toLowerCase()).includes("opensea") ? [{ name: OPENSEA_SCHEDULE, data: task }] : []),
       ...(task.selectedMarketplaces.map(m => m.toLowerCase()).includes("blur") ? [{ name: BLUR_SCHEDULE, data: task }] : []),
@@ -2358,6 +2455,7 @@ async function updateTaskData(task: ITask) {
     const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
     currentTasks.splice(existingTaskIndex, 1, task);
     activeTasks.set(task._id, task);
+    updateTaskIndexes(currentTasks);
 
     console.log(YELLOW + `Updated existing task: ${task.contract.slug}`.toUpperCase() + RESET);
 
@@ -3148,6 +3246,10 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     if (taskIndex !== -1) {
       currentTasks[taskIndex].running = true;
     }
+
+    // Add task to indexes for fast lookup
+    addTaskToIndexes(updatedTask);
+
     console.log(GREEN + `Updated task ${task.contract.slug} running status to: ${start}`.toUpperCase() + RESET);
     // Always connect to WebSocket and subscribe all tasks
     try {
@@ -3205,6 +3307,9 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
       markTaskAsAborted(taskId);
       const updatedTask = { ...task, running: false };
       activeTasks.set(taskId, updatedTask);
+
+      // Remove task from indexes
+      removeTaskFromIndexes(task);
 
       // Clear any countdown timer for this task
       const countdownTimer = taskCountdownTimers.get(taskId);
@@ -3455,6 +3560,7 @@ async function deleteTask(task: ITask) {
     const taskIndex = currentTasks.findIndex(t => t._id === task._id);
     if (taskIndex !== -1) {
       currentTasks.splice(taskIndex, 1);
+      updateTaskIndexes(currentTasks);
     }
     const taskId = task._id.toString();
     activeTasks.delete(task._id);
@@ -5137,14 +5243,13 @@ async function connectWebSocket(): Promise<void> {
 
     wsManager.on('message', async (message: any) => {
       try {
-
-
+        // Process heartbeat messages synchronously
         if (message.type === 'pong') {
           console.log('Pong received from server.');
           return;
         }
 
-        // Handle initial data request
+        // Handle initial data request synchronously
         if (message.endpoint === "get-initial-data") {
           const initialDataMessage = {
             type: 'bidRatesUpdate',
@@ -5154,16 +5259,22 @@ async function connectWebSocket(): Promise<void> {
           return;
         }
 
-        // Handle all marketplace messages in a unified function
-        await handleMarketplaceMessage(message);
-      } catch (error) {
-        console.error('Error handling message:', error);
-        await logger.logWebSocketError('Error handling WebSocket message', {
-          error: error as Error,
-          messageType: message?.type,
-          marketplace: message?.data?.marketplace,
-          connectionId: connectionMetrics.currentConnectionId || undefined
+        // Queue other messages for async processing to prevent blocking
+        setImmediate(() => {
+          handleMarketplaceMessage(message).catch(error => {
+            console.error('Error handling message:', error);
+            logger.logWebSocketError('Error handling WebSocket message', {
+              error: error as Error,
+              messageType: message?.type,
+              marketplace: message?.data?.marketplace,
+              connectionId: connectionMetrics.currentConnectionId || undefined
+            }).catch(logError => {
+              console.error('Failed to log WebSocket error:', logError);
+            });
+          });
         });
+      } catch (error) {
+        console.error('Error in message handler:', error);
       }
     });
 
@@ -5206,6 +5317,8 @@ async function connectWebSocket(): Promise<void> {
  */
 async function handleMarketplaceMessage(message: any) {
   try {
+    // Debug logging for message inspection
+
     if (message.eventType === 'LISTING_CREATED') {
       // Handle listing price update for instant price matching
       await handleListingPriceUpdate(message);
@@ -5474,31 +5587,11 @@ async function triggerAutoListingForPurchase(
 
 async function handleCounterBid(message: any) {
   try {
-
     const { contractAddress, slug } = getMarketplaceDetails(message);
-    if (!contractAddress && !slug) return
-
-    const relevantTasks = currentTasks.filter(task => {
-      // Check if task is valid and running
-      if (!task?.running || !task?.contract) {
-        return false;
-      }
-
-      const taskContractAddress = task.contract.contractAddress?.toLowerCase();
-      const taskSlug = task.contract.slug?.toLowerCase();
-      const messageContractAddress = contractAddress?.toLowerCase();
-      const messageSlug = slug?.toLowerCase();
-
-      // Match by contract address or slug
-      const contractMatches = taskContractAddress === messageContractAddress ||
-        taskSlug === messageSlug;
-      return contractMatches
-    });
-
-    // Item transfer events are now handled by updateBalancesForItemSold function
-
+    if (!contractAddress && !slug) return;
+    // Use fast O(1) lookup instead of O(n) filter
+    const relevantTasks = getRelevantTasks(contractAddress, slug);
     if (!relevantTasks.length) return;
-
     await Promise.all(relevantTasks.map(task => handleCounterBidForTask(task, message)));
   } catch (error) {
     console.error("Error in handleCounterBid:", error);
@@ -10900,6 +10993,25 @@ app.get('/health', (req, res) => {
   res.status(200).json(healthStatus);
 });
 
+// Debug endpoint to check task indexes
+app.get('/api/debug/task-indexes', (req, res) => {
+  res.json({
+    currentTasksCount: currentTasks.length,
+    activeTasksCount: activeTasks.size,
+    contractIndexCount: contractToTasksMap.size,
+    slugIndexCount: slugToTasksMap.size,
+    indexedContracts: Array.from(contractToTasksMap.keys()),
+    indexedSlugs: Array.from(slugToTasksMap.keys()),
+    currentTasks: currentTasks.map(t => ({
+      id: t._id,
+      running: t.running,
+      contract: t.contract?.contractAddress,
+      slug: t.contract?.slug,
+      marketplaces: t.selectedMarketplaces
+    }))
+  });
+});
+
 export async function fetchAddressBalances(walletAddress: string): Promise<AddressBalancesResponse> {
   const CACHE_EXPIRY_SECONDS = 30;
   // Use hash tag for deterministic slot assignment in Redis Cluster
@@ -12155,9 +12267,6 @@ export function trackBidRate(marketplace: 'opensea' | 'magiceden' | 'blur', task
  */
 export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', taskId: string) {
   try {
-    console.log(`[DEBUG] incrementOwnBidCounter called for ${marketplace}, task: ${taskId}`);
-    console.log(`[DEBUG] Current ownBidCounts:`, ownBidCounts);
-
     // Update local ownBidCounts object for immediate broadcast
     if (!ownBidCounts[marketplace]) {
       ownBidCounts[marketplace] = 0;
