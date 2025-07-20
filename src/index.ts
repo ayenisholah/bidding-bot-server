@@ -1598,7 +1598,7 @@ function initializeQueueEventHandlers() {
           }
           taskStatus[taskId].cancellationPercentage = 100
           // Only set to SCHEDULED if task is actually running and has a valid next loop time
-          if (task.running && taskStatus[taskId]?.nextLoopTime && taskStatus[taskId]?.waitingTime > 0) {
+          if (task.running && taskStatus[taskId]?.nextLoopTime && Number(taskStatus[taskId]?.waitingTime) > 0) {
             taskStatus[taskId].status = 'SCHEDULED'
           } else {
             taskStatus[taskId].status = 'STOPPED'
@@ -1692,16 +1692,7 @@ function initializeQueueEventHandlers() {
 
           if (task && task.running) {
             const loopInterval = getExpiry(task.loopInterval);
-            
-            // If loopInterval is 0 or less, stop the task instead of scheduling
-            if (loopInterval <= 0) {
-              console.log(YELLOW + `Task ${taskId} has loopInterval of 0, stopping task` + RESET);
-              taskStatus[taskId].status = 'STOPPED';
-              delete taskStatus[taskId].nextLoopTime;
-              taskStatus[taskId].waitingTime = 0;
-              return;
-            }
-            
+
             const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
             const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
@@ -1859,12 +1850,12 @@ function initializeQueueEventHandlers() {
           }
           taskStatus[taskId].cancellationPercentage = 100
           // Only set to SCHEDULED if task is actually running and has a valid next loop time
-          if (task.running && taskStatus[taskId]?.nextLoopTime && taskStatus[taskId]?.waitingTime > 0) {
+          if (task.running && taskStatus[taskId]?.nextLoopTime && Number(taskStatus[taskId]?.waitingTime) > 0) {
             taskStatus[taskId].status = 'SCHEDULED'
           } else {
             taskStatus[taskId].status = 'STOPPED'
             delete taskStatus[taskId].nextLoopTime
-            taskStatus[taskId].waitingTime = 0
+            delete taskStatus[taskId].waitingTime
           }
         }
       }
@@ -1952,16 +1943,7 @@ function initializeQueueEventHandlers() {
 
           if (task && task.running) {
             const loopInterval = getExpiry(task.loopInterval);
-            
-            // If loopInterval is 0 or less, stop the task instead of scheduling
-            if (loopInterval <= 0) {
-              console.log(YELLOW + `Task ${taskId} has loopInterval of 0, stopping task` + RESET);
-              taskStatus[taskId].status = 'STOPPED';
-              delete taskStatus[taskId].nextLoopTime;
-              taskStatus[taskId].waitingTime = 0;
-              return;
-            }
-            
+
             const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
             const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
