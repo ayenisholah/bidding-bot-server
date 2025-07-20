@@ -7697,7 +7697,16 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
         blur: 0
       }
     }
-    await logBidError(data.task._id, "OPENSEA COLLECTION BID ERROR", `Error processing OpenSea collection bid for task: ${data.task._id}: ${error?.response?.data?.errors?.[0] || error?.response?.data || error?.message || String(error)}`, "error", "opensea");
+    // Format OpenSea error message for better readability
+    let errorMessage = '';
+    if (error?.response?.data?.errors && Array.isArray(error.response.data.errors)) {
+      // Extract the first error message from OpenSea API errors
+      errorMessage = error.response.data.errors[0]?.message || 'Unknown OpenSea error';
+    } else {
+      errorMessage = error?.message || String(error);
+    }
+    
+    await logBidError(data.task._id, "OPENSEA COLLECTION BID ERROR", `Error processing OpenSea collection bid for task: ${data.task._id}: ${errorMessage}`, "error", "opensea");
     errorStats[data.task._id]['opensea']++
   }
 }
@@ -8260,7 +8269,16 @@ async function processOpenseaTraitBid(data: {
         blur: 0
       }
     }
-    await logBidError(data.task._id, "OPENSEA TRAIT BID ERROR", `Error bidding on trait ${data.trait} in collection ${data.slug}: ${error?.response?.data?.errors?.[0] || error?.response?.data || error?.message || String(error)}`, "error", "opensea");
+    // Format OpenSea error message for better readability
+    let errorMessage = '';
+    if (error?.response?.data?.errors && Array.isArray(error.response.data.errors)) {
+      // Extract the first error message from OpenSea API errors
+      errorMessage = error.response.data.errors[0]?.message || 'Unknown OpenSea error';
+    } else {
+      errorMessage = error?.message || String(error);
+    }
+    
+    await logBidError(data.task._id, "OPENSEA TRAIT BID ERROR", `Error bidding on trait ${data.trait} in collection ${data.slug}: ${errorMessage}`, "error", "opensea");
     errorStats[data.task._id]['opensea']++
   }
 }
@@ -8455,7 +8473,32 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         blur: 0
       }
     }
-    await logBidError(data.task._id, "OPENSEA TOKEN BID ERROR", `Error bidding on token ${data.asset.tokenId} in collection ${data.slug}: ${error?.response?.data?.errors?.[0] || error?.response?.data || error?.message || String(error)}`, "error", "opensea");
+    // Format OpenSea error message for better readability
+    let errorMessage = '';
+    if (error?.response?.data?.errors && Array.isArray(error.response.data.errors)) {
+      // Extract the first error message from OpenSea API errors
+      errorMessage = error.response.data.errors[0]?.message || 'Unknown OpenSea error';
+      
+      // Special handling for "Trading is disabled" errors
+      if (errorMessage.includes('Trading is disabled')) {
+        // Remove token from the list to avoid repeated attempts
+        if (currentTokenIds[data._id]?.opensea) {
+          const tokenIndex = currentTokenIds[data._id].opensea.indexOf(+data.asset.tokenId);
+          if (tokenIndex > -1) {
+            currentTokenIds[data._id].opensea.splice(tokenIndex, 1);
+            console.log(YELLOW + `Removed token ${data.asset.tokenId} from OpenSea bidding list - Trading is disabled` + RESET);
+          }
+        }
+        
+        // Log as warning instead of error since this is expected behavior
+        await logBidError(data.task._id, "OPENSEA TOKEN TRADING DISABLED", `Token ${data.asset.tokenId} in collection ${data.slug}: ${errorMessage}`, "warning", "opensea");
+        return; // Exit early without counting as error
+      }
+    } else {
+      errorMessage = error?.message || String(error);
+    }
+    
+    await logBidError(data.task._id, "OPENSEA TOKEN BID ERROR", `Error bidding on token ${data.asset.tokenId} in collection ${data.slug}: ${errorMessage}`, "error", "opensea");
     errorStats[data.task._id]['opensea']++
   }
 }

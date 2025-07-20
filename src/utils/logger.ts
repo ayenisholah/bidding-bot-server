@@ -79,7 +79,8 @@ export enum ErrorCategory {
   NETWORK = 'network',
   PERFORMANCE = 'performance',
   SECURITY = 'security',
-  BUSINESS_LOGIC = 'business_logic'
+  BUSINESS_LOGIC = 'business_logic',
+  OPENSEA_BID = 'opensea_bid'
 }
 
 // Marketplace subcategories for granular tracking
@@ -395,7 +396,7 @@ export class AxiomLogger {
 
   // OpenSea specific logging
   async logOpenseaBidError(message: string, context: LogContext = {}) {
-    await this.sendLog(LogLevel.ERROR, ErrorCategory.MARKETPLACE, message, {
+    await this.sendLog(LogLevel.ERROR, ErrorCategory.OPENSEA_BID, message, {
       ...context,
       marketplace: 'opensea',
       marketplaceSubCategory: MarketplaceSubCategory.BIDDING
@@ -693,6 +694,21 @@ export class AxiomLogger {
       levels[error.level] = (levels[error.level] || 0) + 1;
     });
     return levels;
+  }
+
+  // Generic error logging with formatting
+  async logError(category: ErrorCategory, message: string, context: LogContext = {}) {
+    // Format OpenSea errors for better readability
+    if (category === ErrorCategory.OPENSEA_BID && context.error) {
+      // If error is an object with response.data.errors, extract the message
+      if (typeof context.error === 'object' && 
+          'response' in context.error && 
+          context.error.response?.data?.errors?.[0]?.message) {
+        context.errorMessage = context.error.response.data.errors[0].message;
+        context.error = context.errorMessage; // Override the error with the clean message
+      }
+    }
+    await this.sendLog(LogLevel.ERROR, category, message, context);
   }
 
   // Flush logs to Axiom
