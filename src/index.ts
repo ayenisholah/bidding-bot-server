@@ -1598,7 +1598,7 @@ function initializeQueueEventHandlers() {
           }
           taskStatus[taskId].cancellationPercentage = 100
           // Only set to SCHEDULED if task is actually running and has a valid next loop time
-          if (task.running && taskStatus[taskId].nextLoopTime && taskStatus[taskId].waitingTime > 0) {
+          if (task.running && taskStatus[taskId]?.nextLoopTime && taskStatus[taskId]?.waitingTime > 0) {
             taskStatus[taskId].status = 'SCHEDULED'
           } else {
             taskStatus[taskId].status = 'STOPPED'
@@ -1859,7 +1859,7 @@ function initializeQueueEventHandlers() {
           }
           taskStatus[taskId].cancellationPercentage = 100
           // Only set to SCHEDULED if task is actually running and has a valid next loop time
-          if (task.running && taskStatus[taskId].nextLoopTime && taskStatus[taskId].waitingTime > 0) {
+          if (task.running && taskStatus[taskId]?.nextLoopTime && taskStatus[taskId]?.waitingTime > 0) {
             taskStatus[taskId].status = 'SCHEDULED'
           } else {
             taskStatus[taskId].status = 'STOPPED'
