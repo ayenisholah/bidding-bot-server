@@ -5132,20 +5132,30 @@ async function updateMultipleTasksStatus(data: { tasks: ITask[], running: boolea
 
     if (running) {
       // Process tasks one by one to avoid race conditions
-      for (const task of tasks) {
+      for (let i = 0; i < tasks.length; i++) {
+        const task = tasks[i];
         try {
           startTask(task, true);
         } catch (error) {
           console.error(RED + `Error starting task ${task.contract.slug}: ` + RESET, error);
         }
+        // 500ms delay between starting tasks (except after the last one)
+        if (i < tasks.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
       }
     } else {
       // Process tasks one by one for orderly shutdown
-      for (const task of tasks) {
+      for (let i = 0; i < tasks.length; i++) {
+        const task = tasks[i];
         try {
           stopTask(task, false);
         } catch (error) {
           console.error(RED + `Error stopping task ${task.contract.slug}: ` + RESET, error);
+        }
+        // 500ms delay between stopping tasks (except after the last one)
+        if (i < tasks.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
         }
       }
     }
