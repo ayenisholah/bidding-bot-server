@@ -289,8 +289,8 @@ export class AxiomLogger {
     // Categories to exclude from Axiom
     const excludedCategories = [ErrorCategory.QUEUE, ErrorCategory.DATABASE, ErrorCategory.SECURITY, ErrorCategory.AUTH];
 
-    // Send to Axiom if available and category is not excluded
-    if (AXIOM_TOKEN && !excludedCategories.includes(category)) {
+    // Only send ERRORS to Axiom (not info, debug, or warn)
+    if (AXIOM_TOKEN && level === LogLevel.ERROR && !excludedCategories.includes(category)) {
       try {
         const logData = {
           _time: new Date().toISOString(),
@@ -702,10 +702,14 @@ export class AxiomLogger {
     if (category === ErrorCategory.OPENSEA_BID && context.error) {
       // If error is an object with response.data.errors, extract the message
       if (typeof context.error === 'object' && 
-          'response' in context.error && 
-          context.error.response?.data?.errors?.[0]?.message) {
-        context.errorMessage = context.error.response.data.errors[0].message;
-        context.error = context.errorMessage; // Override the error with the clean message
+          context.error !== null &&
+          'response' in context.error) {
+        const errorObj = context.error as any;
+        if (errorObj.response?.data?.errors?.[0]?.message) {
+          context.errorMessage = errorObj.response.data.errors[0].message;
+          // Create a new Error object with the message instead of assigning a string
+          context.error = new Error(context.errorMessage);
+        }
       }
     }
     await this.sendLog(LogLevel.ERROR, category, message, context);

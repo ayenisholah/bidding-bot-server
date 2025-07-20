@@ -1,9 +1,10 @@
 import { ethers, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
 import { config } from "dotenv";
-import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, redis, trackBidRate } from "../..";
+import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, trackBidRate } from "../..";
 import { DistributedLockManager } from '../../utils/lock';
 import { PrismaClient } from '@prisma/client'
+import redisClient from '../../utils/redis';
 import axios from "axios";
 import { USDC, WETH } from "../../utils/currencies";
 import { BASE_URL } from "../../constants";
@@ -781,6 +782,7 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
 
   // Try to get from cache first
   try {
+    const redis = redisClient.getClient();
     const cachedStats = await redis.get(cacheKey);
     if (cachedStats) {
       return JSON.parse(cachedStats);
@@ -802,6 +804,7 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
   const result = await lockManager.withLock(lockKey, async () => {
     // Double check cache after acquiring lock
     try {
+      const redis = redisClient.getClient();
       const cachedStats = await redis.get(cacheKey);
       if (cachedStats) {
         return JSON.parse(cachedStats);
@@ -843,6 +846,7 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
     // Cache the result
     if (stats !== undefined) {
       try {
+        const redis = redisClient.getClient();
         await redis.set(cacheKey, JSON.stringify(stats), 'EX', CACHE_TTL);
       } catch (error) {
         await logger.logDatabaseError('Error writing MagicEden stats to Redis cache', {
@@ -865,6 +869,7 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
     // If we couldn't acquire the lock, wait briefly and try cache again
     await new Promise(resolve => setTimeout(resolve, 100));
     try {
+      const redis = redisClient.getClient();
       const cachedStats = await redis.get(cacheKey);
       if (cachedStats) {
         return JSON.parse(cachedStats);

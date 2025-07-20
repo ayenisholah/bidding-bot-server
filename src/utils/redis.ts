@@ -236,5 +236,11 @@ export const createBullMQConnection = async () => {
     slotsRefreshTimeout: 30000,
   });
   
+  // Wait for the cluster to be ready
+  await new Promise<void>((resolve, reject) => {
+    cluster.once('ready', () => resolve());
+    cluster.once('error', (err) => reject(err));
+  });
+  
   return cluster;
 };

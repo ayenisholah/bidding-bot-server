@@ -3,7 +3,8 @@ import stringify from 'json-stable-stringify';
 import crypto from 'crypto';
 import { axiosInstance, limiter } from "../init"; // Import Redis client
 import { DistributedLockManager } from "../utils/lock";
-import { API_KEY, redis } from "..";
+import { API_KEY } from "..";
+import redisClient from '../utils/redis';
 import { CollectionItemsListQuery } from "../queries";
 import { BASE_URL } from "../constants";
 import { logger, DatabaseOperation } from "../utils/logger";
@@ -13,6 +14,9 @@ config()
 
 const collectionCache: { [key: string]: ICollectionDetails } = {};
 const MAX_CACHE_ITEMS = 1000;
+
+// Helper function to get Redis connection
+const getRedis = () => redisClient.getClient();
 
 const lockManager = new DistributedLockManager({
   lockPrefix: '{collection}:fetch:',
@@ -85,14 +89,14 @@ export async function getOpenseaFloor(collectionSlug: string) {
 
   // Try to get from cache first
   try {
-    const cachedFloor = redis ? await redis.get(cacheKey) : null;
+    const cachedFloor = getRedis() ? await getRedis().get(cacheKey) : null;
     if (cachedFloor) {
       return JSON.parse(cachedFloor);
     }
   } catch (error) {
     await logger.logDatabaseError('Error reading OpenSea floor price from cache', {
       databaseOperation: DatabaseOperation.READ,
-      collection_name: 'redis_cache',
+      collection_name: 'getRedis()_cache',
       collection: collectionSlug,
       cacheKey,
       error: error as Error,
@@ -104,7 +108,7 @@ export async function getOpenseaFloor(collectionSlug: string) {
   // If not in cache, try to acquire lock and fetch
   const result = await lockManager.withLock(lockKey, async () => {
     // Double check cache after acquiring lock
-    const cachedFloor = redis ? await redis.get(cacheKey) : null;
+    const cachedFloor = getRedis() ? await getRedis().get(cacheKey) : null;
     if (cachedFloor) {
       return JSON.parse(cachedFloor);
     }
@@ -117,8 +121,8 @@ export async function getOpenseaFloor(collectionSlug: string) {
     // Check if listings exist and has item
     const floor_price = Number(data?.listings[0]?.price?.current?.value) / 1e18 || 0;
     // Cache the result
-    if (redis) {
-      await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+    if (getRedis()) {
+      await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
     }
     return floor_price;
   });
@@ -127,14 +131,14 @@ export async function getOpenseaFloor(collectionSlug: string) {
     // If we couldn't acquire the lock, wait briefly and try cache again
     await new Promise(resolve => setTimeout(resolve, 100));
     try {
-      const cachedFloor = redis ? await redis.get(cacheKey) : null;
+      const cachedFloor = getRedis() ? await getRedis().get(cacheKey) : null;
       if (cachedFloor) {
         return JSON.parse(cachedFloor);
       }
     } catch (error) {
       await logger.logDatabaseError('Error reading from cache after lock failure', {
         databaseOperation: DatabaseOperation.READ,
-        collection_name: 'redis_cache',
+        collection_name: 'getRedis()_cache',
         collection: collectionSlug,
         cacheKey,
         error: error as Error,
@@ -160,7 +164,7 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
 
   // Try to get from cache first
   try {
-    const cachedFloor = redis ? await redis.get(cacheKey) : null;
+    const cachedFloor = getRedis() ? await getRedis().get(cacheKey) : null;
     if (cachedFloor) {
       return JSON.parse(cachedFloor);
     }
@@ -171,7 +175,7 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
   // If not in cache, try to acquire lock and fetch
   const result = await lockManager.withLock(lockKey, async () => {
     // Double check cache after acquiring lock
-    const cachedFloor = redis ? await redis.get(cacheKey) : null;
+    const cachedFloor = getRedis() ? await getRedis().get(cacheKey) : null;
     if (cachedFloor) {
       return JSON.parse(cachedFloor);
     }
@@ -185,8 +189,8 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
         parseFloat(stats.floorPrice.amount) : 0;
 
       // Cache the result
-      if (redis) {
-        await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+      if (getRedis()) {
+        await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
       }
       return floor_price;
     } catch (error) {
@@ -205,7 +209,7 @@ export async function getMagicEdenFloor(collectionSlug: string): Promise<number>
 
   // Try to get from cache first
   try {
-    const cachedFloor = redis ? await redis.get(cacheKey) : null;
+    const cachedFloor = getRedis() ? await getRedis().get(cacheKey) : null;
     if (cachedFloor) {
       return JSON.parse(cachedFloor);
     }
@@ -216,7 +220,7 @@ export async function getMagicEdenFloor(collectionSlug: string): Promise<number>
   // If not in cache, try to acquire lock and fetch
   const result = await lockManager.withLock(lockKey, async () => {
     // Double check cache after acquiring lock
-    const cachedFloor = redis ? await redis.get(cacheKey) : null;
+    const cachedFloor = getRedis() ? await getRedis().get(cacheKey) : null;
     if (cachedFloor) {
       return JSON.parse(cachedFloor);
     }
@@ -230,8 +234,8 @@ export async function getMagicEdenFloor(collectionSlug: string): Promise<number>
         Number(stats.floorPrice.amount) / 1e18 : 0;
 
       // Cache the result
-      if (redis) {
-        await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+      if (getRedis()) {
+        await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
       }
       return floor_price;
     } catch (error) {
@@ -285,7 +289,7 @@ export async function getCollectionEvents(
   limit: number = 50
 ) {
   const cacheKey = `{collectionEvents:${collectionSlug}:${eventTypes.join(',')}}:${limit}`;
-  const cachedData = redis ? await redis.get(cacheKey) : null;
+  const cachedData = getRedis() ? await getRedis().get(cacheKey) : null;
   if (cachedData) {
     return JSON.parse(cachedData);
   }
@@ -304,8 +308,8 @@ export async function getCollectionEvents(
     ));
 
     // Cache for a short period (e.g., 30 seconds) since events data changes frequently
-    if (redis) {
-      await redis.setex(cacheKey, 10, JSON.stringify(data));
+    if (getRedis()) {
+      await getRedis().setex(cacheKey, 10, JSON.stringify(data));
     }
     return data;
   } catch (error) {
@@ -336,7 +340,7 @@ export async function fetchOpenSeaCollectionItems(
   try {
     // Create a cache key based on the variables (excluding cursor for the initial request)
     const cacheKey = hashData(variables);
-    const cachedData = redis ? await redis.get(cacheKey) : null;
+    const cachedData = getRedis() ? await getRedis().get(cacheKey) : null;
     if (cachedData) {
       return JSON.parse(cachedData);
     }
@@ -372,8 +376,8 @@ export async function fetchOpenSeaCollectionItems(
     const uniqueTokenIds = [...new Set(updatedTokenIds)];
 
     // Cache the final result (only for initial requests that completed pagination)
-    if (redis) {
-      await redis.setex(cacheKey, 24 * 60 * 60, JSON.stringify(uniqueTokenIds));
+    if (getRedis()) {
+      await getRedis().setex(cacheKey, 24 * 60 * 60, JSON.stringify(uniqueTokenIds));
     }
     return uniqueTokenIds;
   } catch (error) {
@@ -434,7 +438,7 @@ export async function fetchOpenseaTraits(
   // Try to get from cache first if no cursor (first page)
   if (!cursor) {
     try {
-      const cachedTraits = redis ? await redis.get(cacheKey) : null;
+      const cachedTraits = getRedis() ? await getRedis().get(cacheKey) : null;
       if (cachedTraits) {
         console.log(`✅ Fetched traits from cache for ${slug} in ${Date.now() - startTime}ms`);
         return JSON.parse(cachedTraits);
@@ -442,7 +446,7 @@ export async function fetchOpenseaTraits(
     } catch (error) {
       await logger.logDatabaseError('Error reading traits from cache', {
         databaseOperation: DatabaseOperation.READ,
-        collection_name: 'redis_cache',
+        collection_name: 'getRedis()_cache',
         collection: slug,
         cacheKey,
         error: error as Error,
@@ -512,8 +516,8 @@ export async function fetchOpenseaTraits(
 
     // Cache the complete result (only for initial requests)
     if (!cursor && cleanedAttributes.length > 0) {
-      if (redis) {
-        await redis.set(cacheKey, JSON.stringify(cleanedAttributes), 'EX', CACHE_TTL);
+      if (getRedis()) {
+        await getRedis().set(cacheKey, JSON.stringify(cleanedAttributes), 'EX', CACHE_TTL);
       }
     }
 

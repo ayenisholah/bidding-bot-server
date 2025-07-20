@@ -1,9 +1,10 @@
 import { ethers, Wallet, formatUnits } from "ethers";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, API_KEY, blurRateLimitInfo, currentTasks, decrementBidCount, pQueue, redis, RESET, trackBidRate } from "../..";
+import { activeTasks, API_KEY, blurRateLimitInfo, currentTasks, decrementBidCount, pQueue, RESET, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { DistributedLockManager } from "../../utils/lock";
 import { PrismaClient } from '@prisma/client'
+import redisClient from '../../utils/redis';
 import axios from "axios";
 import { BASE_URL } from "../../constants";
 import { fetchERC20Balance } from "../../utils/balance";
@@ -245,6 +246,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
     };
 
     const key = `{blurAccessToken}:${wallet.address}`
+    const redis = redisClient.getClient();
     const cachedToken = redis ? await redis.get(key) : null;
     if (cachedToken) {
       return cachedToken;
@@ -561,6 +563,7 @@ export async function fetchBlurCollectionStats(slug: string) {
 
   // Try to get from cache first
   try {
+    const redis = redisClient.getClient();
     if (redis) {
       const cachedStats = await redis.get(cacheKey);
       if (cachedStats) {
@@ -574,6 +577,7 @@ export async function fetchBlurCollectionStats(slug: string) {
   // If not in cache, try to acquire lock and fetch
   const result = await lockManager.withLock(lockKey, async () => {
 
+    const redis = redisClient.getClient();
     if (redis) {
       const cachedStats = await redis.get(cacheKey);
       if (cachedStats) {
