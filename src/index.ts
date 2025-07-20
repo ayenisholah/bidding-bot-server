@@ -1672,9 +1672,9 @@ function initializeQueueEventHandlers() {
           console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
           const wallet = await Wallet.findById(task.walletId)
           const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
-          
+
           let totalCancellationJobs = 0;
-          
+
           if (traitsToRemove[taskId]?.length > 0) {
             const traitJobs = await cancelRemovedTraitBids(traitsToRemove[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
             totalCancellationJobs += traitJobs;
@@ -1691,7 +1691,17 @@ function initializeQueueEventHandlers() {
           await new Promise(resolve => setTimeout(resolve, 1000));
 
           if (task && task.running) {
-            const loopInterval = getExpiry(task.loopInterval) + 1;
+            const loopInterval = getExpiry(task.loopInterval);
+            
+            // If loopInterval is 0 or less, stop the task instead of scheduling
+            if (loopInterval <= 0) {
+              console.log(YELLOW + `Task ${taskId} has loopInterval of 0, stopping task` + RESET);
+              taskStatus[taskId].status = 'STOPPED';
+              delete taskStatus[taskId].nextLoopTime;
+              taskStatus[taskId].waitingTime = 0;
+              return;
+            }
+            
             const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
             const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
@@ -1922,9 +1932,9 @@ function initializeQueueEventHandlers() {
 
           const wallet = await Wallet.findById(task.walletId)
           const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
-          
+
           let totalCancellationJobs = 0;
-          
+
           if (traitsToRemove[taskId]?.length > 0) {
             const traitJobs = await cancelRemovedTraitBids(traitsToRemove[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
             totalCancellationJobs += traitJobs;
@@ -1941,7 +1951,17 @@ function initializeQueueEventHandlers() {
           await new Promise(resolve => setTimeout(resolve, 1000));
 
           if (task && task.running) {
-            const loopInterval = getExpiry(task.loopInterval) + 1;
+            const loopInterval = getExpiry(task.loopInterval);
+            
+            // If loopInterval is 0 or less, stop the task instead of scheduling
+            if (loopInterval <= 0) {
+              console.log(YELLOW + `Task ${taskId} has loopInterval of 0, stopping task` + RESET);
+              taskStatus[taskId].status = 'STOPPED';
+              delete taskStatus[taskId].nextLoopTime;
+              taskStatus[taskId].waitingTime = 0;
+              return;
+            }
+            
             const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
             const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
@@ -3480,7 +3500,7 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
         taskStatus[taskId].cancellationStartTime = Date.now();
         // Delete nextLoopTime and reset waitingTime when stopping
         delete taskStatus[taskId].nextLoopTime;
-        taskStatus[taskId].waitingTime = 0;
+        delete taskStatus[taskId].waitingTime;
       }
 
       warningBids[taskId] = {
@@ -3567,7 +3587,7 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
 
         // Calculate total cancelled count
         let totalCancelledCount = 0;
-        
+
         // Log any failures and count successful cancellations
         const marketplaceNames = ['opensea', 'magiceden', 'blur'];
         results.forEach((result, index) => {
@@ -12598,10 +12618,10 @@ interface TaskStatus {
   [key: string]: {
     status: 'RUNNING' | 'WAITING' | 'CANCELLING' | 'SCHEDULED' | 'COMPLETED' | 'QUEUED' | 'QUEUEING' | 'STARTED' | "STOPPED" | "PROCESSING",
     runningPercentage: number;
-    waitingTime: number;
     cancellationPercentage: number;
     processingPercentage: number;
     nextLoopTime?: Date;
+    waitingTime?: number;
     cancellationStartTime?: number; // Timestamp when cancellation started
   };
 }
