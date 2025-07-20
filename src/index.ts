@@ -713,6 +713,7 @@ async function clearQueueAndRestartJobs() {
 // Network connectivity monitoring
 let isConnected = true;
 let lastConnectivityCheck = Date.now();
+let connectivityLostAt: number | null = null;
 
 async function checkInternetConnectivity(): Promise<boolean> {
   try {
@@ -730,20 +731,36 @@ async function checkInternetConnectivity(): Promise<boolean> {
 async function handleConnectivityRestored() {
   console.log(GREEN + '\n🌐 Internet connectivity restored!' + RESET);
 
-  // Clear and restart all jobs
-  await clearQueueAndRestartJobs();
+  // Calculate how long connectivity was lost
+  const downtime = connectivityLostAt ? Date.now() - connectivityLostAt : 0;
+  const downtimeMinutes = Math.floor(downtime / 60000);
+  
+  if (downtime > 0) {
+    console.log(YELLOW + `Connectivity was lost for ${downtimeMinutes} minutes ${Math.floor((downtime % 60000) / 1000)} seconds` + RESET);
+  }
 
-  // Reconnect WebSocket
+  // Only clear and restart jobs if connectivity was lost for more than 1 minute
+  if (downtime > 60000) {
+    console.log(YELLOW + 'Connectivity lost for more than 1 minute, clearing queue and restarting jobs...' + RESET);
+    await clearQueueAndRestartJobs();
+  } else {
+    console.log(GREEN + 'Brief connectivity loss detected, skipping queue restart' + RESET);
+  }
+
+  // Always reconnect WebSocket
   if (wsManager) {
     console.log('Reconnecting WebSocket...');
     await connectWebSocket();
   }
 
-  // Reinitialize listing scheduler
+  // Always reinitialize listing scheduler
   if (wsManager) {
     await initializeListingScheduler(wsManager);
     console.log('📋 Listing scheduler reinitialized');
   }
+  
+  // Reset connectivity lost timestamp
+  connectivityLostAt = null;
 }
 
 
@@ -771,6 +788,7 @@ function startConnectivityMonitoring() {
     } else if (isConnected && !currentlyConnected) {
       // Connection lost
       isConnected = false;
+      connectivityLostAt = Date.now();
       console.error(RED + '\n⚠️  Internet connectivity lost!' + RESET);
     }
 
