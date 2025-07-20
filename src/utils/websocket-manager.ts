@@ -70,7 +70,7 @@ class WebSocketManager extends EventEmitter {
   private latencies: number[] = [];
   private messageTimestamps: number[] = [];
   private lastMessageReceived = 0;
-  private connectionStaleThreshold = 600000; // 10 minutes without any messages - allows for quiet collections
+  private connectionStaleThreshold = 3600000; // 60 minutes without any messages - increased from 10min for low-activity collections
 
   // State persistence for listings (per CLIENT_CONNECTION_GUIDE.md)
   private persistentListingSubscriptions: Map<string, SubscriptionInfo> = new Map();
@@ -225,6 +225,9 @@ class WebSocketManager extends EventEmitter {
 
     // Start heartbeat
     this.startHeartbeat();
+    
+    // Start keep-alive messages to prevent proxy timeouts
+    this.startKeepAlive();
 
     // Start health monitoring
     this.startHealthMonitoring();
@@ -252,7 +255,7 @@ class WebSocketManager extends EventEmitter {
       // Check for missed pongs
       if (this.lastPingSent && this.lastPingSent > this.lastPongReceived) {
         this.missedPongs++;
-        if (this.missedPongs >= 3) {
+        if (this.missedPongs >= 6) { // Increased from 3 to 6 for better network tolerance
           logger.logWarning(ErrorCategory.WEBSOCKET, 'Connection appears dead, reconnecting...', {
             missedPongs: this.missedPongs
           });
@@ -269,13 +272,15 @@ class WebSocketManager extends EventEmitter {
 
       // Check for stale connection (no messages received for extended period)
       // Only check if we have active subscriptions that should be sending messages
+      // Use adaptive threshold based on collection activity
+      const adaptiveStaleThreshold = this.getAdaptiveStaleThreshold();
       if (this.lastMessageReceived > 0 &&
         (this.activeSubscriptions.size > 0 || this.persistentListingSubscriptions.size > 0) &&
-        (now - this.lastMessageReceived) > this.connectionStaleThreshold) {
+        (now - this.lastMessageReceived) > adaptiveStaleThreshold) {
         logger.logWarning(ErrorCategory.WEBSOCKET, 'Connection appears stale (no messages received), reconnecting...', {
           lastMessageReceived: this.lastMessageReceived,
           staleDuration: now - this.lastMessageReceived,
-          threshold: this.connectionStaleThreshold,
+          threshold: adaptiveStaleThreshold,
           activeSubscriptions: this.activeSubscriptions.size,
           persistentListingSubscriptions: this.persistentListingSubscriptions.size
         });
@@ -304,7 +309,7 @@ class WebSocketManager extends EventEmitter {
         this.missedPongs++;
         logger.logWarning(ErrorCategory.WEBSOCKET, `Pong timeout - missed ${this.missedPongs}/3 pongs`);
 
-        if (this.missedPongs >= 3) {
+        if (this.missedPongs >= 6) { // Increased from 3 to 6 for better network tolerance
           logger.logWebSocketError('Max missed pongs reached, forcing reconnection');
           try {
             this.ws?.close();
@@ -314,9 +319,26 @@ class WebSocketManager extends EventEmitter {
             });
           }
         }
-      }, 5000); // 5 second pong timeout
+      }, 15000); // 15 second pong timeout (increased from 5s for better network tolerance)
 
     }, this.config.heartbeatInterval);
+  }
+
+  private startKeepAlive(): void {
+    this.clearInterval('keepAlive');
+    
+    // Send keep-alive every 90 seconds to prevent proxy timeouts
+    this.setInterval('keepAlive', () => {
+      if (this.isConnected()) {
+        this.sendMessage({ 
+          event: 'keep-alive', 
+          clientId: this.config.clientId,
+          timestamp: Date.now()
+        });
+        
+        logger.logDebug(ErrorCategory.WEBSOCKET, 'Sent keep-alive message');
+      }
+    }, 90000); // 90 seconds
   }
 
   private startHealthMonitoring(): void {
@@ -358,10 +380,10 @@ class WebSocketManager extends EventEmitter {
       }
 
       // Force reconnection if connection appears severely degraded
-      if (timeSinceLastMessage > 600000) { // 10 minutes
+      if (timeSinceLastMessage > 3600000) { // 60 minutes (increased from 10min)
         logger.logWarning(ErrorCategory.WEBSOCKET, 'Forcing reconnection due to severely stale connection', {
           timeSinceLastMessage,
-          threshold: 600000
+          threshold: 3600000
         });
         try {
           this.ws?.close();
@@ -659,10 +681,19 @@ class WebSocketManager extends EventEmitter {
 
     this.metrics.connectionQuality = 'disconnected';
 
+    // Enhanced logging for disconnection analysis
+    const now = Date.now();
     logger.logWarning(ErrorCategory.WEBSOCKET, 'WebSocket disconnected', {
       code: event.code,
-      reason: event.reason,
-      connectionDuration: this.metrics.connectionDuration
+      reason: event.reason || 'unknown',
+      connectionDuration: this.metrics.connectionDuration,
+      connectionDurationMinutes: this.metrics.connectionDuration ? Math.floor(this.metrics.connectionDuration / 60000) : 0,
+      lastMessageAge: this.lastMessageReceived ? now - this.lastMessageReceived : null,
+      lastPongAge: this.lastPongReceived ? now - this.lastPongReceived : null,
+      missedPongs: this.missedPongs,
+      activeSubscriptions: this.activeSubscriptions.size,
+      connectionQuality: this.metrics.connectionQuality,
+      messagesReceived: this.metrics.totalMessages
     });
 
     // Clear intervals and timeouts
@@ -821,6 +852,26 @@ class WebSocketManager extends EventEmitter {
         this.messageQueue.unshift(message);
         break;
       }
+    }
+  }
+
+  private getAdaptiveStaleThreshold(): number {
+    // Calculate message rate over the last 5 minutes
+    const now = Date.now();
+    const fiveMinutesAgo = now - 300000;
+    const recentMessages = this.messageTimestamps.filter(ts => ts > fiveMinutesAgo).length;
+    const messagesPerMinute = recentMessages / 5;
+    
+    // Define thresholds based on activity level
+    if (messagesPerMinute > 10) {
+      // High activity: strict threshold (15 minutes)
+      return 900000;
+    } else if (messagesPerMinute > 1) {
+      // Medium activity: moderate threshold (30 minutes)
+      return 1800000;
+    } else {
+      // Low activity: relaxed threshold (60 minutes)
+      return this.connectionStaleThreshold;
     }
   }
 

@@ -53,7 +53,7 @@ import { IListing } from "./types/listing.types";
 import { BoundedCache } from "./utils/bounded-cache";
 const prisma = new PrismaClient()
 
-const MARKETPLACE_WS_URL = "ws://localhost:8080";
+const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
@@ -73,7 +73,9 @@ export const blurRateLimitInfo: { [walletAddress: string]: { remaining: number; 
 const QUEUE_NAME = 'BIDDING_BOT';
 
 
-export const WORKER_COUNT = 4
+// Dynamic worker count based on available CPUs with minimum of 2
+// Rule of thumb: 0.75 workers per vCPU for I/O-heavy workloads, but ensure at least 2 for redundancy
+export const WORKER_COUNT = Math.max(2, Math.floor(os.cpus().length * 0.75))
 
 // BullMQ configuration will use the connection from redis.ts
 // Note: Worker concurrency is set to RATE_LIMIT (default: 100)
@@ -975,7 +977,7 @@ async function startServer() {
 
     // Initialize multiple workers with Redis connection and proper lock settings
     const concurrencyPerWorker = Math.ceil(Number(RATE_LIMIT) / WORKER_COUNT);
-    
+
     for (let i = 0; i < WORKER_COUNT; i++) {
       const worker = new Worker(
         QUEUE_NAME,
@@ -1050,11 +1052,11 @@ async function startServer() {
           stalledAt: new Date().toISOString()
         });
       });
-      
+
       // Add worker to array
       workers.push(worker);
     }
-    
+
     console.log(GREEN + `Initialized ${WORKER_COUNT} workers with ${concurrencyPerWorker} concurrency each (Total: ${Number(RATE_LIMIT)})` + RESET);
 
     // Add process-level error handler for uncaught BullMQ errors
@@ -1485,6 +1487,7 @@ function setupQueueEventHandlers() {
         }
       }
       taskStatus[taskId].status = 'CANCELLING';
+      taskStatus[taskId].cancellationStartTime = Date.now();
 
 
       const task = activeTasks.get(taskId);
@@ -1536,7 +1539,17 @@ function setupQueueEventHandlers() {
 
         taskStatus[taskId].cancellationPercentage = Math.min(combinedCancellationPercentage, 100);
 
-        if (totalJobs < completedJobs + failedJobs || combinedCancellationPercentage > 99) {
+        // Check for cancellation timeout (5 minutes) to handle stuck cancellations
+        const CANCELLATION_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+        const cancellationStartTime = taskStatus[taskId].cancellationStartTime;
+        const isTimeoutReached = cancellationStartTime && (Date.now() - cancellationStartTime) > CANCELLATION_TIMEOUT;
+
+        // Force completion if timeout reached or percentage is high enough
+        const shouldCompleteCancellation = totalJobs < completedJobs + failedJobs ||
+          combinedCancellationPercentage > 99 ||
+          isTimeoutReached;
+
+        if (shouldCompleteCancellation) {
           const orders = await prisma.order.findMany({
             where: {
               taskId: taskId,
@@ -1622,16 +1635,42 @@ function setupQueueEventHandlers() {
 
           // Only update status if taskStatus exists (it should have been created by startTask)
           if (taskStatus[taskId]) {
+            // Log timeout scenario for debugging (before deleting the timestamp)
+            const cancellationStartTime = taskStatus[taskId].cancellationStartTime;
+            const isTimeoutReached = cancellationStartTime && (Date.now() - cancellationStartTime) > (5 * 60 * 1000);
+            if (isTimeoutReached) {
+              console.log(YELLOW + `[CANCELLATION TIMEOUT] Task ${taskId} timed out after 5 minutes` + RESET);
+            }
+
             taskStatus[taskId].cancellationPercentage = 100;
-            if (taskStatus[taskId].nextLoopTime && taskStatus[taskId].waitingTime > 0) {
-              taskStatus[taskId].status = 'SCHEDULED';
-            } else {
-              // When cancellationPercentage is 100 and there's no next loop, task should be stopped
+            delete taskStatus[taskId].cancellationStartTime; // Clean up timeout tracking
+
+            console.log(`[DEBUG] Task ${taskId} cancellation complete. nextLoopTime: ${taskStatus[taskId].nextLoopTime}, waitingTime: ${taskStatus[taskId].waitingTime}`);
+
+            // Check if the task is still running - if not, it should be stopped
+            const currentTask = activeTasks.get(taskId);
+            const isTaskRunning = currentTask?.running || false;
+
+            if (!isTaskRunning) {
+              // Task is not running, so cancellation means STOPPED
+              console.log(GREEN + `Task ${taskId} is not running, cancellation complete -> STOPPED` + RESET);
               taskStatus[taskId].status = 'STOPPED';
               delete taskStatus[taskId].nextLoopTime;
               taskStatus[taskId].waitingTime = 0;
-              
-              // Clear countdown timer when task is stopped
+            } else if (taskStatus[taskId].nextLoopTime && taskStatus[taskId].waitingTime > 0) {
+              // Task is still running and has a next loop scheduled
+              console.log(GREEN + `Task ${taskId} has next loop scheduled, setting status to SCHEDULED` + RESET);
+              taskStatus[taskId].status = 'SCHEDULED';
+            } else {
+              // Task is running but no next loop, should be stopped
+              console.log(GREEN + `Task ${taskId} cancellation complete, no next loop -> STOPPED` + RESET);
+              taskStatus[taskId].status = 'STOPPED';
+              delete taskStatus[taskId].nextLoopTime;
+              taskStatus[taskId].waitingTime = 0;
+            }
+
+            // Clear countdown timer when task is stopped
+            if (taskStatus[taskId].status === 'STOPPED') {
               const countdownTimer = taskCountdownTimers.get(taskId);
               if (countdownTimer) {
                 clearInterval(countdownTimer);
@@ -1809,6 +1848,87 @@ function setupQueueEventHandlers() {
                 }
               } else {
                 console.warn(YELLOW + `Skipping scheduled run for task ${taskId} - task instance has changed or been removed` + RESET);
+              }
+            }, loopInterval * 1000);
+
+            taskTimeouts.set(taskId, timeoutId);
+          }
+          return;
+        } else if (runningPercentage >= 100) {
+          // Handle case where task is 100% complete but allMarketsComplete is false
+          // This can happen when completedTasks tracking is inconsistent
+          console.log(YELLOW + `Task ${taskId} is 100% complete but not all markets marked as complete. Proceeding with next loop.` + RESET);
+
+          const wallet = await Wallet.findById(task.walletId)
+          const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+          if (traitsToRemove[taskId]?.length > 0) {
+            await cancelRemovedTraitBids(traitsToRemove[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
+          }
+
+          if (removedTokens[taskId]?.opensea?.length > 0 || removedTokens[taskId]?.magiceden?.length > 0) {
+            await cancelRemovedTokenBids(removedTokens[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
+          }
+
+          delete traitsToRemove[taskId];
+          delete removedTokens[taskId];
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+          if (task && task.running) {
+            const loopInterval = getExpiry(task.loopInterval) + 1;
+            const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
+            const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
+
+            console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds (fallback)` + RESET);
+
+            // Only update taskStatus if it exists (it should have been created by startTask)
+            if (taskStatus[taskId]) {
+              taskStatus[taskId].status = 'SCHEDULED';
+              taskStatus[taskId].runningPercentage = 0; // Reset for next run
+              taskStatus[taskId].waitingTime = secondsUntilNextLoop;
+              taskStatus[taskId].nextLoopTime = nextLoopTime;
+            }
+
+            // Clear any existing countdown timer for this task
+            const existingCountdown = taskCountdownTimers.get(taskId);
+            if (existingCountdown) {
+              clearInterval(existingCountdown);
+            }
+
+            // Start countdown timer
+            const countdownTimer = setInterval(() => {
+              const status = taskStatus[taskId];
+              if (!status || !status.nextLoopTime) {
+                clearInterval(countdownTimer);
+                taskCountdownTimers.delete(taskId);
+                return;
+              }
+
+              const remainingSeconds = Math.max(0, Math.floor((status.nextLoopTime.getTime() - Date.now()) / 1000));
+              status.waitingTime = remainingSeconds;
+
+              if (remainingSeconds <= 0) {
+                clearInterval(countdownTimer);
+                taskCountdownTimers.delete(taskId);
+              }
+            }, 1000);
+
+            taskCountdownTimers.set(taskId, countdownTimer);
+
+            // Clear any existing timeout for this task
+            const existingTimeout = taskTimeouts.get(taskId);
+            if (existingTimeout) {
+              clearTimeout(existingTimeout);
+            }
+
+            const taskReference = task._id.toString();
+            const timeoutId = setTimeout(async () => {
+              const currentTask = activeTasks.get(taskId);
+              if (currentTask && currentTask._id.toString() === taskReference) {
+                if (currentTask.running) {
+                  await startTask(currentTask, true);
+                } else {
+                  console.log(RED + `Task ${taskId} is no longer running. Skipping restart.` + RESET);
+                }
               }
             }, loopInterval * 1000);
 
@@ -3337,6 +3457,7 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
       if (taskStatus[taskId]) {
         taskStatus[taskId].status = 'CANCELLING';
         taskStatus[taskId].cancellationPercentage = 0;
+        taskStatus[taskId].cancellationStartTime = Date.now();
       }
 
       warningBids[taskId] = {
@@ -4927,6 +5048,7 @@ async function updateStatus(task: ITask) {
       activeTasks.set(taskId, updatedTask);
       if (taskStatus[taskId]) {
         taskStatus[taskId].status = 'CANCELLING';
+        taskStatus[taskId].cancellationStartTime = Date.now();
       }
       await stopTask(task, false);
     }
@@ -5009,21 +5131,23 @@ async function updateMultipleTasksStatus(data: { tasks: ITask[], running: boolea
     const { tasks, running } = data;
 
     if (running) {
-      await Promise.all(tasks.map(async (task) => {
+      // Process tasks one by one to avoid race conditions
+      for (const task of tasks) {
         try {
-          await startTask(task, true);
+          startTask(task, true);
         } catch (error) {
           console.error(RED + `Error starting task ${task.contract.slug}: ` + RESET, error);
         }
-      }));
+      }
     } else {
-      await Promise.all(tasks.map(async (task) => {
+      // Process tasks one by one for orderly shutdown
+      for (const task of tasks) {
         try {
-          await stopTask(task, false);
+          stopTask(task, false);
         } catch (error) {
           console.error(RED + `Error stopping task ${task.contract.slug}: ` + RESET, error);
         }
-      }));
+      }
     }
   } catch (error) {
     console.error(RED + 'Error updating multiple tasks status:' + RESET, error);
@@ -12372,7 +12496,8 @@ interface TaskStatus {
     waitingTime: number;
     cancellationPercentage: number;
     processingPercentage: number;
-    nextLoopTime?: Date
+    nextLoopTime?: Date;
+    cancellationStartTime?: number; // Timestamp when cancellation started
   };
 }
 
