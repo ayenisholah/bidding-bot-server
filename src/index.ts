@@ -3393,7 +3393,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     addTaskToIndexes(updatedTask);
 
     console.log(GREEN + `Updated task ${task.contract.slug} running status to: ${start}`.toUpperCase() + RESET);
-    // Always connect to WebSocket and subscribe all tasks
+    // Connect to WebSocket if needed
     try {
       if (!wsManager?.isConnected()) {
         try {
@@ -3403,6 +3403,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
         }
       }
 
+      // Subscribe only this specific task
       console.log("subscribing to collection: ", task.contract.slug);
       const newTask = { ...task, running: true };
       await subscribeToCollections([newTask]);
@@ -5391,8 +5392,11 @@ async function connectWebSocket(): Promise<void> {
       activeSubscriptions.clear();
       console.log(YELLOW + "Cleared active subscriptions for fresh reconnect" + RESET);
 
-      // Subscribe to collections after connection
-      subscribeToCollections(currentTasks as unknown as ITask[]);
+      // Subscribe only running tasks after connection
+      const runningTasks = currentTasks.filter(task => task.running);
+      if (runningTasks.length > 0) {
+        subscribeToCollections(runningTasks as unknown as ITask[]);
+      }
 
       // Re-subscribe to listing collections for instant price matching
       resubscribeToListingCollections();
