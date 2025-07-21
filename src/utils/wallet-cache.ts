@@ -3,7 +3,13 @@ import { decryptPrivateKey, getPassword } from './crypto';
 import { logger, ErrorCategory } from './logger';
 import Wallet from '../models/wallet.model';
 
-interface CachedWallet extends IWallet {
+interface CachedWallet {
+  _id: any;
+  address: string;
+  encryptedPrivateKey: string;
+  name: string;
+  user: string;
+  tasks?: string[];
   decryptedPrivateKey?: string;
   lastUsed: number;
 }
@@ -29,17 +35,20 @@ class WalletCache {
   private async loadAllWallets() {
     try {
       const wallets = await Wallet.find({}).lean();
-      await logger.logInfo(ErrorCategory.GENERAL, `Loading ${wallets.length} wallets into cache`);
-      
+
       for (const wallet of wallets) {
         const address = wallet.address.toLowerCase();
         this.cache.set(address, {
-          ...wallet,
+          _id: wallet._id,
+          address: wallet.address,
+          encryptedPrivateKey: wallet.encryptedPrivateKey,
+          name: wallet.name,
+          user: wallet.user,
+          tasks: wallet.tasks,
           lastUsed: Date.now()
         });
       }
-      
-      await logger.logInfo(ErrorCategory.GENERAL, 'Wallet cache initialized successfully');
+
     } catch (error) {
       await logger.logError(ErrorCategory.DATABASE, 'Failed to initialize wallet cache', error as Error);
     }
@@ -52,7 +61,7 @@ class WalletCache {
     const cached = this.cache.get(normalizedAddress);
     if (cached) {
       cached.lastUsed = Date.now();
-      return cached;
+      return cached as unknown as IWallet;
     }
 
     // Cache miss - fetch from database
@@ -84,10 +93,10 @@ class WalletCache {
     // Decrypt the key
     try {
       if (!this.password) {
-        this.password = await getPassword();
+        this.password = getPassword() || null;
       }
       
-      const decryptedKey = await decryptPrivateKey(wallet.encryptedPrivateKey, this.password);
+      const decryptedKey = await decryptPrivateKey(wallet.encryptedPrivateKey);
       
       // Cache the decrypted key
       this.decryptedKeys.set(address, {
@@ -106,7 +115,7 @@ class WalletCache {
     // First check if we have all wallets in cache
     const allWallets = Array.from(this.cache.values());
     if (allWallets.length > 0) {
-      return allWallets.filter(w => w.tasks?.includes(taskId));
+      return allWallets.filter(w => w.tasks && Array.isArray(w.tasks) && w.tasks.includes(taskId)) as unknown as IWallet[];
     }
 
     // Fallback to database
@@ -133,7 +142,11 @@ class WalletCache {
       await this.loadAllWallets();
     }
     
-    return Array.from(this.cache.values());
+    return Array.from(this.cache.values()) as unknown as IWallet[];
+  }
+
+  async getWalletByAddress(address: string): Promise<IWallet | null> {
+    return this.getWallet(address);
   }
 
   invalidateWallet(address: string) {
