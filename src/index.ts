@@ -53,6 +53,7 @@ import { BoundedCache } from "./utils/bounded-cache";
 import { walletCache } from "./utils/wallet-cache";
 import { collectionCache } from "./utils/collection-cache";
 import { initializeDbOptimizer, getDbOptimizer } from "./utils/db-optimizer";
+import { PerformanceMonitor, withPerformanceMonitoring } from "./utils/performance-monitor";
 const prisma = new PrismaClient()
 const dbOptimizer = initializeDbOptimizer(prisma);
 
@@ -957,6 +958,14 @@ async function startServer() {
       console.log(GREEN + '🚀 Running in DEVELOPMENT mode' + RESET);
       // Make processAllActiveListings available globally in dev mode
       (global as any).processAllActiveListings = processAllActiveListings;
+
+      // Print performance report every 5 minutes in dev mode
+      setInterval(() => {
+        PerformanceMonitor.printReport();
+      }, 5 * 60 * 1000);
+
+      // Make PerformanceMonitor available globally in dev mode for debugging
+      (global as any).PerformanceMonitor = PerformanceMonitor;
     }
 
     // Wait for Redis to be ready
@@ -5448,7 +5457,7 @@ async function _doConnect(): Promise<void> {
           return;
         }
         // All messages use the queue
-        wsMessageQueue.add(() => { handleMarketplaceMessage(message) })
+        handleMarketplaceMessage(message)
       } catch (error) {
         console.error('Error in message handler:', error);
       }
@@ -11025,6 +11034,43 @@ app.get('/health', (req, res) => {
   };
 
   res.status(200).json(healthStatus);
+});
+
+// Performance monitoring endpoints
+app.get('/api/performance/metrics', (req, res) => {
+  const { function: functionName } = req.query;
+  const metrics = functionName
+    ? PerformanceMonitor.getMetrics(functionName as string)
+    : PerformanceMonitor.getMetrics();
+
+  res.json({
+    metrics,
+    aggregated: PerformanceMonitor.getAggregatedMetrics(functionName as string),
+    system: PerformanceMonitor.getSystemInfo()
+  });
+});
+
+app.get('/api/performance/report', (req, res) => {
+  const { function: functionName } = req.query;
+  const aggregated = PerformanceMonitor.getAggregatedMetrics(functionName as string);
+  const system = PerformanceMonitor.getSystemInfo();
+
+  res.json({
+    report: aggregated,
+    system,
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.post('/api/performance/clear', (req, res) => {
+  PerformanceMonitor.clearMetrics();
+  res.json({ message: 'Performance metrics cleared', timestamp: new Date().toISOString() });
+});
+
+app.get('/api/performance/export', (req, res) => {
+  const filename = `performance-metrics-${Date.now()}.csv`;
+  PerformanceMonitor.exportToCSV(filename);
+  res.json({ message: `Metrics exported to ${filename}`, timestamp: new Date().toISOString() });
 });
 
 // Debug endpoint to check task indexes
