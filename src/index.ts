@@ -5502,7 +5502,7 @@ async function _doConnect(): Promise<void> {
           return;
         }
         // All messages use the queue
-        // wsMessageQueue.add(() => { handleMarketplaceMessage(message) })
+        wsMessageQueue.add(() => { handleMarketplaceMessage(message) })
       } catch (error) {
         console.error('Error in message handler:', error);
       }
@@ -5911,7 +5911,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
 
     if (walletAddresses.includes(maker)) {
-      // incrementOwnBidCounter('magiceden', task._id);
+      incrementOwnBidCounter('magiceden', task._id);
       return
     }
 
@@ -6415,7 +6415,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     addSeenItem(seenOrderHashes, taskSpecificHash)
 
     if (walletAddresses.includes(maker)) {
-      // incrementOwnBidCounter('opensea', task._id);
+      incrementOwnBidCounter('opensea', task._id);
       return
     }
 
