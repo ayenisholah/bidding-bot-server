@@ -12,7 +12,6 @@ import bodyParser from "body-parser";
 import { clearTimeout } from 'timers';
 import crypto from 'crypto';
 import os from "os"
-import fs from "fs";
 import path from "path";
 import cors from "cors";
 import helmet from "helmet";
@@ -2384,24 +2383,14 @@ async function processImportedTasks(tasks: ITask[]) {
       }
     }
 
-    // Always ensure WebSocket connection for all tasks
-    if (!wsManager?.isConnected()) {
-      console.log(YELLOW + "Waiting for WebSocket connection..." + RESET);
-      try {
-        await connectWebSocket();
-        // Give it a moment to establish connection
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      } catch (error) {
-        console.error('Failed to establish WebSocket connection for task subscription:', error);
-      }
-    }
-
-    // Subscribe all running tasks to WebSocket
+    // Subscribe all running tasks to WebSocket (WebSocket should already be connected at startup)
     const runningTasks = tasks.filter(task => task.running).map(task => ({ ...task, running: true }));
 
-    if (runningTasks.length > 0) {
+    if (runningTasks.length > 0 && wsManager?.isConnected()) {
       console.log(GREEN + `Subscribing to ${runningTasks.length} collections` + RESET);
       subscribeToCollections(runningTasks);
+    } else if (runningTasks.length > 0) {
+      console.log(YELLOW + "WebSocket not connected, skipping task subscription" + RESET);
     }
 
     console.log(GREEN + `=== Imported Tasks Processing Complete ===\n` + RESET);
@@ -2439,22 +2428,15 @@ async function processNewTask(task: ITask) {
       }
     }
 
-    // Always connect to WebSocket and subscribe all tasks
+    // Subscribe to WebSocket collection (WebSocket should already be connected at startup)
     try {
-      if (!wsManager?.isConnected()) {
-        console.log(YELLOW + "Waiting for WebSocket connection..." + RESET);
-        try {
-          await connectWebSocket();
-          // Give it a moment to establish connection
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        } catch (error) {
-          console.error('Failed to establish WebSocket connection for task:', error);
-        }
+      if (wsManager?.isConnected()) {
+        console.log("subscribing to collection: ", task.contract.slug);
+        const newTask = { ...task, running: true };
+        subscribeToCollections([newTask]);
+      } else {
+        console.log(YELLOW + `WebSocket not connected, skipping subscription for ${task.contract.slug}` + RESET);
       }
-
-      console.log("subscribing to collection: ", task.contract.slug);
-      const newTask = { ...task, running: true };
-      subscribeToCollections([newTask]);
     } catch (error) {
       console.error(RED + `Error subscribing to collection ${task.contract.slug}: ` + RESET, error);
     }
@@ -3443,20 +3425,15 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     addTaskToIndexes(updatedTask);
 
     console.log(GREEN + `Updated task ${task.contract.slug} running status to: ${start}`.toUpperCase() + RESET);
-    // Connect to WebSocket if needed
+    // Subscribe to WebSocket collection (WebSocket should already be connected at startup)
     try {
-      if (!wsManager?.isConnected()) {
-        try {
-          await connectWebSocket();
-        } catch (error) {
-          console.error('Failed to establish WebSocket connection for task:', error);
-        }
+      if (wsManager?.isConnected()) {
+        console.log("subscribing to collection: ", task.contract.slug);
+        const newTask = { ...task, running: true };
+        subscribeToCollections([newTask]);
+      } else {
+        console.log(YELLOW + `WebSocket not connected, skipping subscription for ${task.contract.slug}` + RESET);
       }
-
-      // Subscribe only this specific task
-      console.log("subscribing to collection: ", task.contract.slug);
-      const newTask = { ...task, running: true };
-      await subscribeToCollections([newTask]);
     } catch (error) {
       console.error(RED + `Error subscribing to collection ${task.contract.slug}: ` + RESET, error);
     }
@@ -5406,7 +5383,36 @@ function startConnectionMonitoring() {
 }
 
 
+// Connection state management to prevent multiple simultaneous connections
+let isConnecting = false;
+let connectionPromise: Promise<void> | null = null;
+
 async function connectWebSocket(): Promise<void> {
+  // Return existing connection attempt if already in progress
+  if (isConnecting && connectionPromise) {
+    console.log(YELLOW + 'WebSocket connection already in progress, waiting...' + RESET);
+    return connectionPromise;
+  }
+
+  // If already connected, just return
+  if (wsManager?.isConnected()) {
+    console.log(BLUE + 'WebSocket already connected' + RESET);
+    return;
+  }
+
+  // Start new connection attempt
+  isConnecting = true;
+  connectionPromise = _doConnect();
+  
+  try {
+    await connectionPromise;
+  } finally {
+    isConnecting = false;
+    connectionPromise = null;
+  }
+}
+
+async function _doConnect(): Promise<void> {
   if (!wsManager) {
     console.log(GREEN + `Using deterministic client ID: ${clientId}` + RESET);
     console.log(GREEN + `Based on: ${process.env.API_KEY ? 'API_KEY' : process.env.CLIENT_ID ? 'CLIENT_ID' : 'default'}` + RESET);
@@ -5605,32 +5611,7 @@ async function updateBalancesForItemSold(message: any) {
     const testWallet = await Wallet.findOne({}) as IWallet
     await triggerAutoListingForPurchase(testWallet, contractAddress, tokenId, price, marketplace);
 
-    // Write ITEM_SOLD data to file
-    const soldItemData = {
-      timestamp: new Date().toISOString(),
-      toAddress,
-      contractAddress,
-      marketplace,
-      tokenId,
-      price,
-      messageData: data
-    };
-
-    const dataDir = path.join(__dirname, '../data');
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-
-    const fileName = `item-sold-${new Date().toISOString().split('T')[0]}.jsonl`;
-    const filePath = path.join(dataDir, fileName);
-
-    try {
-      fs.appendFileSync(filePath, JSON.stringify(soldItemData) + '\n');
-      console.log(CYAN + `📝 Wrote ITEM_SOLD data to file: ${filePath}` + RESET);
-    } catch (fileError) {
-      console.error(RED + `Failed to write ITEM_SOLD data to file:` + RESET, fileError);
-    }
-
+  
     // Check if the toAddress belongs to one of our wallets (case-insensitive)
     const wallet: IWallet | null = await Wallet.findOne({
       address: { $regex: new RegExp(`^${toAddress}$`, 'i') }
@@ -5930,7 +5911,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
 
     if (walletAddresses.includes(maker)) {
-      incrementOwnBidCounter('magiceden', task._id);
+      // incrementOwnBidCounter('magiceden', task._id);
       return
     }
 
@@ -6434,7 +6415,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     addSeenItem(seenOrderHashes, taskSpecificHash)
 
     if (walletAddresses.includes(maker)) {
-      incrementOwnBidCounter('opensea', task._id);
+      // incrementOwnBidCounter('opensea', task._id);
       return
     }
 
@@ -10146,209 +10127,6 @@ app.get("/health", async (req, res) => {
       status: "error",
       timestamp: new Date().toISOString(),
       error: error.message
-    });
-  }
-});
-
-app.get("/api/websocket/stats", (req, res) => {
-  const currentDuration = connectionMetrics.connectionStartTime
-    ? Date.now() - connectionMetrics.connectionStartTime
-    : 0;
-
-  res.json({
-    current: {
-      connected: wsManager?.isConnected() || false,
-      duration: currentDuration,
-      durationFormatted: formatDuration(currentDuration),
-      connectionId: connectionMetrics.currentConnectionId
-    },
-    stats: {
-      totalConnections: connectionMetrics.totalConnections,
-      totalDisconnections: connectionMetrics.totalDisconnections,
-      averageConnectionDuration: connectionMetrics.averageConnectionDuration,
-      averageConnectionDurationFormatted: formatDuration(connectionMetrics.averageConnectionDuration),
-      longestConnection: connectionMetrics.longestConnection,
-      longestConnectionFormatted: formatDuration(connectionMetrics.longestConnection),
-      shortestConnection: connectionMetrics.shortestConnection === Infinity ? 0 : connectionMetrics.shortestConnection,
-      shortestConnectionFormatted: connectionMetrics.shortestConnection === Infinity ? '0s' : formatDuration(connectionMetrics.shortestConnection)
-    },
-    history: connectionHistory.slice(-20) // Last 20 connections
-  });
-});
-
-// Enhanced WebSocket metrics endpoint
-app.get('/api/websocket/metrics', (req, res) => {
-  if (!wsManager) {
-    return res.json({ error: 'WebSocket manager not initialized' });
-  }
-
-  const metrics = wsManager.getMetrics();
-  const subscriptions = Array.from(wsManager.getActiveSubscriptions().entries()).map(([id, info]) => ({
-    id,
-    ...info
-  }));
-
-  res.json({
-    metrics,
-    subscriptions,
-    isConnected: wsManager.isConnected(),
-    url: MARKETPLACE_WS_URL,
-    clientId: clientId
-  });
-});
-
-// Test endpoint to manually connect WebSocket
-app.post('/api/websocket/connect', async (req, res) => {
-  try {
-    if (!wsManager || !wsManager.isConnected()) {
-      console.log(YELLOW + `Attempting WebSocket connection to ${MARKETPLACE_WS_URL}` + RESET);
-      try {
-        await connectWebSocket();
-      } catch (error) {
-        console.error('Failed to establish WebSocket connection for collection subscription:', error);
-      }
-
-      // Wait up to 3 seconds for connection
-      let attempts = 0;
-      while (!wsManager?.isConnected() && attempts < 6) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-        attempts++;
-      }
-    }
-
-    const isConnected = wsManager?.isConnected() || false;
-    const metrics = wsManager?.getMetrics();
-
-    res.json({
-      success: isConnected,
-      isConnected,
-      message: isConnected ? 'WebSocket connected' : 'WebSocket connection failed',
-      url: MARKETPLACE_WS_URL,
-      metrics: metrics ? {
-        connectionQuality: metrics.connectionQuality,
-        totalConnections: metrics.totalConnections,
-        totalErrors: metrics.totalErrors,
-        lastError: metrics.lastError
-      } : undefined
-    });
-  } catch (error) {
-    console.error(RED + 'WebSocket connection error:' + RESET, error);
-    res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
-      url: MARKETPLACE_WS_URL
-    });
-  }
-});
-
-// Test endpoint to manually subscribe to a collection
-app.post('/api/websocket/subscribe-test', async (req, res) => {
-  try {
-    const { slug, contractAddress, marketplace } = req.body;
-
-    if (!slug || !contractAddress || !marketplace) {
-      return res.status(400).json({
-        error: 'Missing required fields: slug, contractAddress, marketplace'
-      });
-    }
-
-    if (!wsManager?.isConnected()) {
-      try {
-        await connectWebSocket();
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      } catch (error) {
-        console.error('Failed to establish WebSocket connection for subscription:', error);
-      }
-    }
-
-    await wsManager.subscribe(slug, contractAddress, marketplace.toUpperCase());
-
-    res.json({
-      success: true,
-      message: `Subscribed to ${slug} on ${marketplace}`,
-      subscriptions: Array.from(wsManager.getActiveSubscriptions().entries())
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
-    });
-  }
-});
-
-// Test raw WebSocket connectivity
-app.get('/api/websocket/test-raw', async (req, res) => {
-  try {
-    const testWs = new WebSocket(MARKETPLACE_WS_URL);
-    let connected = false;
-
-    const timeout = setTimeout(() => {
-      testWs.close();
-      if (!connected) {
-        res.json({
-          success: false,
-          url: MARKETPLACE_WS_URL,
-          error: 'Connection timeout'
-        });
-      }
-    }, 5000);
-
-    testWs.on('open', () => {
-      connected = true;
-      clearTimeout(timeout);
-      testWs.close();
-      res.json({
-        success: true,
-        url: MARKETPLACE_WS_URL,
-        message: 'Raw WebSocket connection successful'
-      });
-    });
-
-    testWs.on('error', (error) => {
-      clearTimeout(timeout);
-      if (!connected) {
-        res.json({
-          success: false,
-          url: MARKETPLACE_WS_URL,
-          error: error.message
-        });
-      }
-    });
-  } catch (error) {
-    res.json({
-      success: false,
-      url: MARKETPLACE_WS_URL,
-      error: error instanceof Error ? error.message : 'Unknown error'
-    });
-  }
-});
-
-// Test WebSocket ping without response requirement
-app.post('/api/websocket/test-ping', async (req, res) => {
-  try {
-    if (!wsManager?.isConnected()) {
-      return res.status(400).json({
-        success: false,
-        error: 'WebSocket not connected'
-      });
-    }
-
-    // Send a simple ping message that doesn't require response
-    wsManager.sendMessage({
-      event: 'ping',
-      clientId: clientId,
-      timestamp: Date.now()
-    });
-
-    res.json({
-      success: true,
-      message: 'Ping sent',
-      isConnected: wsManager.isConnected()
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 });

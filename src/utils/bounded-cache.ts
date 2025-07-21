@@ -87,6 +87,10 @@ export class BoundedCache<K, V> {
     this.lastCleanup = now;
   }
 
+  keys(): IterableIterator<K> {
+    return this.cache.keys();
+  }
+
   // Get statistics about the cache
   getStats(): {
     size: number;

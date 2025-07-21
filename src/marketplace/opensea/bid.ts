@@ -258,12 +258,7 @@ export async function bidOnOpensea(
   // Early validation - fail fast
   const task = activeTasks.get(taskId)
   if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
-    await logger.logInfo(ErrorCategory.MARKETPLACE, 'OpenSea bid skipped - task not active', {
-      taskId,
-      marketplace: 'opensea',
-      marketplaceSubCategory: MarketplaceSubCategory.BIDDING,
-      reason: !task ? 'task_not_found' : !task.running ? 'task_not_running' : 'marketplace_not_selected'
-    });
+
     return
   }
 
@@ -359,18 +354,6 @@ export async function bidOnOpensea(
     const itemResponse = await postItemOffer(taskId, offer, itemSignature)
     const itemOrderHash = itemResponse?.order?.order_hash
     
-    if (itemOrderHash) {
-      await logger.logBidPlaced('opensea', offerPriceEthFinal, asset.tokenId.toString(), {
-        taskId,
-        walletAddress: wallet_address,
-        contractAddress: asset.contractAddress,
-        collection: slug,
-        orderHash: itemOrderHash,
-        currency: currencySymbol,
-        gasFee: 0, // OpenSea uses gasless transactions
-        expirationTime: expiry
-      });
-    }
     const sanitizedExpiry = expiry > 900 ? expiry : 900
     if (offerPrice && itemOrderHash && sanitizedExpiry && slug && taskId && asset.tokenId) {
       await prisma.order.create({
@@ -447,7 +430,6 @@ export async function bidOnOpensea(
 
     const data = await buildOffer(taskId, buildPayload)
 
-
     if (!data || !data.partialParameters) return
     payload.protocol_data.parameters.startTime = BigInt(Math.floor(Date.now() / 1000)).toString();
     payload.protocol_data.parameters.endTime = BigInt(Math.floor(Date.now() / 1000 + expiry)).toString();
@@ -499,13 +481,11 @@ export async function bidOnOpensea(
     payload.protocol_data.signature = signObj;
     payload.protocol_address = SEAPORT_1_6;
 
-
     if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return
 
     await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry, opensea_traits)
   }
 }
-
 
 /**
  * Posts an offer to OpenSea.
@@ -570,18 +550,7 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
   trackBidRate('opensea', taskId);
   
   // Log successful bid
-  await logger.logBidPlaced('opensea', Number(offerPrice) / Math.pow(10, decimal), identifier, {
-    taskId,
-    walletAddress: payload.protocol_data.parameters.offerer,
-    collection: slug,
-    orderHash: order_hash,
-    currency: currencySymbol,
-    traitType: offer?.criteria?.trait?.type,
-    traitValue: offer?.criteria?.trait?.value,
-    expirationTime: sanitizedExpiry,
-    bidType: opensea_traits ? 'trait' : 'collection'
-  });
-  
+
   const successMessage = opensea_traits ?
     `🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()}  TRAIT: ${opensea_traits} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
     : `🎉 COLLECTION OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
@@ -973,7 +942,6 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
   return uniqueOffers
 }
 
-
 export async function fetchOpenseaOffers(
   offerType: 'COLLECTION' | 'TRAIT' | 'TOKEN',
   collectionSlug: string,
@@ -1001,7 +969,6 @@ export async function fetchOpenseaOffers(
           eth: order.price.amount.native
         }
       })?.sort((a, b) => Number(b?.usd) - Number(a?.usd)).slice(0, 2)
-
 
     return offers
   } else if (offerType === 'TRAIT') {
@@ -1079,7 +1046,6 @@ export async function openseaTraitFloor(slug: string, trait: {
   const floor = data.data.collectionItems.items[0].bestListing?.pricePerItem.token.unit
   return floor
 }
-
 
 export async function fetchOpenseaListings(taskId: string, collectionSlug: string, limit?: number) {
   const baseUrl = `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`;
@@ -1207,7 +1173,6 @@ interface ICriteria {
   [key: string]: any; // Allow additional properties
 }
 
-
 interface IProtocolData {
   parameters: {
     offerer: string;
@@ -1283,11 +1248,7 @@ export async function cancelOpenseaRequest(taskId: string): Promise<{ success: b
 
   const controllers = activeRequests.get(taskId);
   if (!controllers || controllers.length === 0) {
-    await logger.logDebug(ErrorCategory.MARKETPLACE, 'No active OpenSea requests found for task', { 
-      taskId,
-      marketplace: 'opensea',
-      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION
-    });
+
     return { success: false, cancelledCount: 0 };
   }
 
@@ -1319,15 +1280,7 @@ export async function cancelOpenseaRequest(taskId: string): Promise<{ success: b
     }));
     
     activeRequests.delete(taskId);
-    
-    await logger.logInfo(ErrorCategory.MARKETPLACE, 'OpenSea requests cancelled', {
-      marketplace: 'opensea',
-      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
-      taskId,
-      cancelledRequests: cancelledCount,
-      totalRequests: controllers.length
-    });
-    
+
     return { success: true, cancelledCount };
   } catch (error) {
     await logger.logMarketplaceError('Failed to cancel OpenSea requests', {
