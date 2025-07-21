@@ -36,21 +36,10 @@ async function relistOnExpiredMarketplaces(listing: IListing): Promise<void> {
     const expiredMarketplaces = getExpiredMarketplaces(listing);
     
     if (expiredMarketplaces.length === 0) {
-      await logger.logInfo(ErrorCategory.MARKETPLACE, `Listing ${listing._id} has no expired marketplaces`, {
-        tokenId: listing.tokenId,
-        contractAddress: listing.contract.contractAddress,
-        marketplaceSubCategory: MarketplaceSubCategory.LISTING,
-      });
+
       return;
     }
-    
-    await logger.logInfo(ErrorCategory.MARKETPLACE, `Relisting ${listing._id} on expired marketplaces`, {
-      tokenId: listing.tokenId,
-      contractAddress: listing.contract.contractAddress,
-      expiredMarketplaces,
-      marketplaceSubCategory: MarketplaceSubCategory.LISTING,
-    });
-    
+
     // Fetch fresh listing data from database
     const freshListing = await Listing.findById(listing._id);
     if (!freshListing) {
@@ -107,13 +96,7 @@ export async function checkAndRelistExpired(): Promise<void> {
     }
     
     console.log(`Processed ${expiredCount} expired listings`);
-    
-    await logger.logInfo(ErrorCategory.MARKETPLACE, 'Completed expiration check', {
-      totalChecked: activeListings.length,
-      expiredCount,
-      marketplaceSubCategory: MarketplaceSubCategory.LISTING,
-    });
-    
+
   } catch (error) {
     await logger.logMarketplaceError('Failed to check expired listings', {
       operation: 'check_expired',
@@ -139,13 +122,7 @@ export async function updateListingExpiration(
         lastListedAt: new Date(),
       },
     });
-    
-    await logger.logInfo(ErrorCategory.MARKETPLACE, `Updated listing expiration for ${marketplace}`, {
-      listingId,
-      marketplace,
-      expirationDate,
-      marketplaceSubCategory: MarketplaceSubCategory.LISTING,
-    });
+
   } catch (error) {
     await logger.logMarketplaceError('Failed to update listing expiration', {
       listingId,

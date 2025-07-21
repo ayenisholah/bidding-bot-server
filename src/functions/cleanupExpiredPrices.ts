@@ -53,12 +53,7 @@ export async function cleanupExpiredPrices(): Promise<void> {
     }
     
     console.log(`Cleanup complete. Removed expired prices from ${cleanedCount} listings`);
-    
-    await logger.logInfo(ErrorCategory.GENERAL, 'Completed expired price cleanup', {
-      totalChecked: listings.length,
-      cleanedCount
-    });
-    
+
   } catch (error) {
     console.error('Error cleaning up expired prices:', error);
     await logger.logGeneralError('Failed to clean up expired prices', {

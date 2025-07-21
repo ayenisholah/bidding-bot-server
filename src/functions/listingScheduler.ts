@@ -36,7 +36,7 @@ export async function scheduleListing(listing: IListing): Promise<void> {
     await cancelListingJob(listingId);
 
     if (!listing.running) {
-      await logger.logInfo(ErrorCategory.QUEUE, `Listing ${listingId} is not running, skipping schedule`);
+
       return;
     }
 
@@ -66,11 +66,6 @@ export async function scheduleListing(listing: IListing): Promise<void> {
 
     activeJobs.set(listingId, job.id!);
 
-    await logger.logQueueJobAdded(jobId, {
-      taskId: listingId,
-      queueName: 'BIDDING_BOT', // Use main queue name
-      delay: delayMs,
-    });
   } catch (error) {
     await logger.logQueueError('Failed to schedule listing', {
       listingId: listing._id.toString(),
@@ -101,7 +96,7 @@ export async function cancelListingJob(listingId: string): Promise<void> {
           // Use the new removeJobScheduler method
           if (scheduler.id) {
             await queue.removeJobScheduler(scheduler.id);
-            await logger.logInfo(ErrorCategory.QUEUE, `Removed repeatable job for listing ${listingId}`);
+
             removedRepeatable = true;
           }
         }
@@ -115,7 +110,7 @@ export async function cancelListingJob(listingId: string): Promise<void> {
       const job = await queue.getJob(jobId);
       if (job) {
         await job.remove();
-        await logger.logInfo(ErrorCategory.QUEUE, `Removed job ${jobId} for listing ${listingId}`);
+
       }
     }
 
@@ -124,14 +119,14 @@ export async function cancelListingJob(listingId: string): Promise<void> {
     const immediateJob = await queue.getJob(immediateJobId);
     if (immediateJob) {
       await immediateJob.remove();
-      await logger.logInfo(ErrorCategory.QUEUE, `Removed immediate job ${immediateJobId} for listing ${listingId}`);
+
     }
 
     // Clean up the active jobs map
     activeJobs.delete(listingId);
 
     if (!removedRepeatable && !jobId) {
-      await logger.logInfo(ErrorCategory.QUEUE, `No jobs found to cancel for listing ${listingId}`);
+
     }
   } catch (error) {
     await logger.logQueueError('Failed to cancel listing job', {
@@ -178,7 +173,7 @@ export async function processListingJob(job: Job): Promise<boolean> {
 
     if (!listing) {
       console.log('!!! LISTING NOT FOUND - RETURNING EARLY !!!');
-      await logger.logInfo(ErrorCategory.QUEUE, `Listing ${listingId} not found, canceling job`);
+
       // Cancel the repeating job since the listing no longer exists
       await cancelListingJob(listingId);
       return false // Return successfully so the job doesn't retry
@@ -186,7 +181,7 @@ export async function processListingJob(job: Job): Promise<boolean> {
 
     if (!listing.running) {
       console.log('!!! LISTING NOT RUNNING - RETURNING EARLY !!!');
-      await logger.logInfo(ErrorCategory.QUEUE, `Listing ${listingId} is not running, skipping`);
+
       // Cancel the repeating job
       await cancelListingJob(listingId);
       return false;
@@ -203,7 +198,7 @@ export async function processListingJob(job: Job): Promise<boolean> {
     // Fetch fresh listing data again after cleanup to ensure we have the latest state
     const freshListing = await Listing.findById(listingId);
     if (!freshListing) {
-      await logger.logInfo(ErrorCategory.QUEUE, `Listing ${listingId} not found after cleanup, skipping`);
+
       return false;
     }
 
@@ -312,17 +307,6 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
             }
           }
 
-          await logger.logInfo(ErrorCategory.QUEUE,
-            `Subscribed to WebSocket for listing ${listingId} with instant price matching`,
-            {
-              contractSlug,
-              contractAddress,
-              tokenId: listing.tokenId,
-              marketplaces: listing.selectedMarketplaces,
-              subscriptionResults,
-              instantPriceMatchingActive: listing.instantPriceMatching
-            }
-          );
         } catch (error) {
           await logger.logWebSocketError('Failed to subscribe listing to WebSocket', {
             listingId,
@@ -346,9 +330,6 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
         const listingData = listing.toObject();
         await createListing(listingData);
 
-        await logger.logInfo(ErrorCategory.QUEUE,
-          `Processed initial listing for ${listingId} on startup`
-        );
       } catch (error) {
         await logger.logGeneralError('Failed to process initial listing on startup', {
           listingId,
@@ -414,16 +395,6 @@ export async function getListingSubscriptionDiagnostics(wsManager?: WebSocketMan
     const connectionStatus = wsManager ? wsManager.isConnected() : false;
 
     // Log diagnostics
-    await logger.logInfo(ErrorCategory.WEBSOCKET, 'Listing subscription diagnostics', {
-      activeListings: instantPriceMatchingListings.length,
-      subscriptionStats,
-      connectionStatus,
-      listings: instantPriceMatchingListings.map(l => ({
-        tokenId: l.tokenId,
-        contract: l.contract,
-        marketplaces: l.selectedMarketplaces
-      }))
-    });
 
     return {
       activeListings: instantPriceMatchingListings.length,

@@ -32,7 +32,7 @@ class CircuitBreaker {
       }
       // Try to move to half-open
       this.state = CircuitState.HALF_OPEN;
-      await logger.logInfo(ErrorCategory.PERFORMANCE, `Circuit breaker ${this.options.name} moved to HALF_OPEN`);
+
     }
 
     try {
@@ -73,7 +73,7 @@ class CircuitBreaker {
         // Require 3 successful calls to fully close
         this.state = CircuitState.CLOSED;
         this.successCount = 0;
-        logger.logInfo(ErrorCategory.PERFORMANCE, `Circuit breaker ${this.options.name} moved to CLOSED`).catch(() => {});
+
       }
     }
   }
@@ -87,11 +87,10 @@ class CircuitBreaker {
       this.state = CircuitState.OPEN;
       this.nextAttempt = Date.now() + this.options.resetTimeout;
       this.successCount = 0;
-      logger.logWarning(ErrorCategory.PERFORMANCE, `Circuit breaker ${this.options.name} moved to OPEN (half-open failure)`).catch(() => {});
     } else if (this.failureCount >= this.options.failureThreshold) {
       this.state = CircuitState.OPEN;
       this.nextAttempt = Date.now() + this.options.resetTimeout;
-      logger.logWarning(ErrorCategory.PERFORMANCE, `Circuit breaker ${this.options.name} moved to OPEN (threshold reached)`).catch(() => {});
+      logger.logWarning(ErrorCategory.PERFORMANCE, `Circuit breaker ${this.options.name} moved to OPEN (threshold reached)`);
     }
   }
 

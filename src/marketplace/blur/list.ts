@@ -81,7 +81,6 @@ export async function listOnBlur(
     console.log('Expiration time:', expirationTime);
     console.log('Time until expiration (minutes):', (expirationTimestamp - nowTimestamp) / (1000 * 60));
 
-
     // Recalculate expiration time just before sending to minimize delay
     const requestNowTimestamp = Date.now();
     const requestExpirationTimestamp = requestNowTimestamp + durationMs;

@@ -103,7 +103,6 @@ export interface WalletNFTsResponse {
   totalCount: number;
 }
 
-
 /**
  * Fetches NFTs for multiple wallets using OpenSea GraphQL API
  * @param wallets Array of wallet addresses

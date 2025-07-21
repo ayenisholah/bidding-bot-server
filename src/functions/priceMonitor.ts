@@ -132,15 +132,10 @@ async function processListingUpdate(
     // Check if we need to adjust our price
     const shouldAdjust = await shouldAdjustPrice(listing, marketplaceLower, price);
 
-
     if (shouldAdjust) {
       // Calculate the new undercut price
       const undercutMargin = parseFloat(listing.underCutMargin) || 0.0001;
       const newPrice = price - undercutMargin;
-
-      await logger.logInfo(ErrorCategory.GENERAL,
-        `Instant price match triggered for token ${tokenId} on ${marketplace}. Competitor price: ${price} ETH, New price: ${newPrice} ETH`
-      );
 
       // Create a unique job ID based on listing ID and marketplace
       const jobId = `listing-update-${listing._id}-${marketplace}`;
@@ -159,28 +154,20 @@ async function processListingUpdate(
               // Check if job is locked/being processed
               const jobState = await existingJob.getState();
               if (jobState === 'active') {
-                await logger.logInfo(ErrorCategory.GENERAL,
-                  `Cannot update job - currently being processed. State: ${jobState}`
-                );
+
                 continue;
               }
 
               await existingJob.remove();
-              await logger.logInfo(ErrorCategory.GENERAL,
-                `Removed existing job with higher price ${existingPrice} ETH, will add new job with price ${newPrice} ETH`
-              );
+
             } catch (removeError) {
               // If we can't remove the job (e.g., it's locked), skip this update
-              await logger.logInfo(ErrorCategory.GENERAL,
-                `Could not remove existing job (likely locked/processing): ${removeError}. Skipping update.`
-              );
+
               continue;
             }
           } else {
             // Skip adding this job as the existing one has a better price
-            await logger.logInfo(ErrorCategory.GENERAL,
-              `Skipping price update - existing job has better price ${existingPrice} ETH vs new price ${newPrice} ETH`
-            );
+
             continue;
           }
         }
@@ -207,15 +194,9 @@ async function processListingUpdate(
           }
         );
 
-        await logger.logInfo(ErrorCategory.GENERAL,
-          `Enqueued instant price match job for listing ${listing._id} with price ${newPrice} ETH`
-        );
-
       } catch (error) {
         console.error(`Failed to enqueue instant price match job for ${tokenId}:`, error);
-        await logger.logInfo(ErrorCategory.GENERAL,
-          `Failed to enqueue instant price match job for ${tokenId}`
-        );
+
       }
     }
   }
@@ -247,9 +228,7 @@ async function shouldAdjustPrice(
     const newPrice = competitorPrice - undercutMargin;
 
     if (newPrice < minPrice) {
-      await logger.logInfo(ErrorCategory.GENERAL,
-        `Cannot undercut competitor price ${competitorPrice} ETH as it would go below minimum listing price ${minPrice} ETH`
-      );
+
       return false;
     }
 
@@ -259,9 +238,7 @@ async function shouldAdjustPrice(
       const profit = newPrice - listing.buyPrice;
 
       if (profit < minimumProfit && minimumProfit > 0) {
-        await logger.logInfo(ErrorCategory.GENERAL,
-          `Cannot undercut competitor as profit ${profit} would be below minimum ${minimumProfit}`
-        );
+
         return false;
       }
     }
@@ -297,7 +274,6 @@ export function clearListingPriceCache(contractAddress: string, tokenId: string)
   currentListingPrices.delete(priceKey);
 }
 
-
 /**
  * Extend instant price matching session for a listing
  */
@@ -308,7 +284,4 @@ export async function extendInstantPriceMatchingSession(listingId: string, durat
     instantPriceMatchingActiveUntil: newExpiration,
   });
 
-  await logger.logInfo(ErrorCategory.GENERAL,
-    `Extended instant price matching session for listing ${listingId} until ${newExpiration.toISOString()}`
-  );
 }

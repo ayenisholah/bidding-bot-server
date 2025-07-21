@@ -2,7 +2,6 @@ export const MAGICEDEN_CONTRACT_ADDRESS = "0x9A1D00bEd7CD04BCDA516d721A596eb22Aa
 export const BASE_URL = "https://nfttools.pro/kong"
 export const NETWORK = "mainnet"
 
-
 export const domain = {
   name: 'Seaport',
   version: '1.6',
@@ -18,7 +17,6 @@ export const minABI = [
     type: 'function'
   }
 ];
-
 
 export const types = {
   OrderComponents: [
@@ -116,7 +114,6 @@ export const types = {
     }
   ]
 };
-
 
 export const SEAPORT_MIN_ABI = [
   {

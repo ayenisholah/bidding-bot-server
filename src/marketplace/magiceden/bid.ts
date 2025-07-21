@@ -202,13 +202,7 @@ export async function bidOnMagiceden(
   );
   
   if (!task) {
-    await logger.logInfo(ErrorCategory.MARKETPLACE, 'MagicEden bid skipped - task not found', {
-      taskId,
-      marketplace: 'magiceden',
-      marketplaceSubCategory: MarketplaceSubCategory.BIDDING,
-      collection: slug,
-      reason: 'task_not_found'
-    });
+
     return;
   }
 
@@ -490,7 +484,6 @@ async function sendSignedOrderData(
       ? `${BASE_URL}/magiceden/v3/rtp/ethereum/order/v3`
       : `${BASE_URL}/magiceden/v3/rtp/ethereum/order/v4`
 
-
     // check if the tasks is still active before you make the offer
     const currentTask = activeTasks.get(taskId)
     if (!currentTask?.running || !currentTask?.selectedMarketplaces?.map((marketplace) => marketplace.toLowerCase()).includes("magiceden".toLowerCase())) return
@@ -518,7 +511,6 @@ async function sendSignedOrderData(
           : `🎉 OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: ${slug.toUpperCase()} ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} 🎉`
 
       const identifier = trait ? `${trait.attributeKey}:${trait.attributeValue}` : tokenId ? tokenId : 'collection';
-
 
       const payload = JSON.stringify(offerResponse);
 
@@ -561,19 +553,7 @@ async function sendSignedOrderData(
       trackBidRate("magiceden", taskId)
       
       // Log successful bid
-      await logger.logBidPlaced('magiceden', Number(offerPrice) / Math.pow(10, decimal), identifier.toString(), {
-        taskId,
-        walletAddress: data?.items?.[0]?.order?.data?.sellerOrBuyer || data?.maker,
-        collection: slug,
-        orderHash: payload,
-        currency: currencySymbol,
-        tokenId: tokenId?.toString(),
-        traitType: trait?.attributeKey,
-        traitValue: trait?.attributeValue,
-        expirationTime: expiry,
-        bidType: tokenId ? 'token' : trait ? 'trait' : 'collection'
-      });
-      
+
       if (process.env.NODE_ENV !== 'production') {
         console.log(MAGENTA, successMessage, RESET);
       }
@@ -761,7 +741,6 @@ export async function submitSignedOrderData(
   );
   return result;
 
-
 }
 
 export async function cancelMagicEdenBid(orderIds: string[], privateKey: string, taskId: string) {
@@ -856,7 +835,6 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
     }
   }
 }
-
 
 async function signCancelOrder(taskId: string, cancelItem: any | undefined, privateKey: string) {
 
@@ -1285,7 +1263,6 @@ interface TokenResponseMagiceden {
   continuation: string;
 }
 
-
 interface MagicEdenCancelOfferCancel {
   steps: StepCancel[];
 }
@@ -1403,7 +1380,6 @@ interface CreateBidData {
 
 }
 
-
 interface Trait {
   attributeKey: string;
   attributeValue: string;
@@ -1483,7 +1459,6 @@ export interface MagicedenCollectionResponse {
   orders: MagicedenCollectionOrder[];
   continuation: string;
 }
-
 
 export interface MagicedenTraitToken {
   chainId: number;
@@ -1585,10 +1560,7 @@ export interface MagicedenTraitTokenResponse {
   continuation: string;
 }
 
-
-
 // ME_KEY="a86c5cf0-205b-4a6c-a317-0bac8dcea553"
-
 
 export interface MagicEdenTraitOfferResponse {
   orders: MagicEdenTraitOfferOrder[];
@@ -1696,11 +1668,9 @@ interface FloorAsk {
   source: Source;
 }
 
-
 interface Media {
   image: string;
 }
-
 
 export async function cancelMagicedenRequest(taskId: string): Promise<{ success: boolean; cancelledCount: number; error?: string }> {
   // Input validation
@@ -1715,11 +1685,7 @@ export async function cancelMagicedenRequest(taskId: string): Promise<{ success:
 
   const controllers = activeRequests.get(taskId);
   if (!controllers || controllers.length === 0) {
-    await logger.logDebug(ErrorCategory.MARKETPLACE, 'No active MagicEden requests found for task', { 
-      taskId,
-      marketplace: 'magiceden',
-      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION
-    });
+
     return { success: false, cancelledCount: 0 };
   }
 
@@ -1751,15 +1717,7 @@ export async function cancelMagicedenRequest(taskId: string): Promise<{ success:
     }));
     
     activeRequests.delete(taskId);
-    
-    await logger.logInfo(ErrorCategory.MARKETPLACE, 'MagicEden requests cancelled', {
-      marketplace: 'magiceden',
-      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
-      taskId,
-      cancelledRequests: cancelledCount,
-      totalRequests: controllers.length
-    });
-    
+
     return { success: true, cancelledCount };
   } catch (error) {
     await logger.logMarketplaceError('Failed to cancel MagicEden requests', {
@@ -1790,8 +1748,6 @@ interface TokenEntry {
   updatedAt: string;
   media: Media;
 }
-
-
 
 interface TokenDetails {
   chainId: number;
@@ -1856,5 +1812,4 @@ interface Amount {
 interface MarketDetails {
   floorAsk: FloorAsk;
 }
-
 

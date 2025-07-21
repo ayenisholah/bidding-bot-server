@@ -331,7 +331,6 @@ function hashData(data: any): string {
     .digest('hex');
 }
 
-
 export async function fetchOpenSeaCollectionItems(
   variables: CollectionItemsQueryVariables,
   allTokenIds: number[] = [],
@@ -392,7 +391,6 @@ export async function fetchOpenSeaCollectionItems(
     throw new Error(`Failed to fetch collection items`);
   }
 }
-
 
 interface TraitValue {
   value: string;
@@ -535,7 +533,6 @@ export async function fetchOpenseaTraits(
   }
 }
 
-
 interface TraitFloorPrice {
   native?: {
     unit: string;
@@ -675,7 +672,6 @@ export async function fetchOpenseaTraitFloors(
   }
 }
 
-
 interface CollectionItemsFilter {
   attributes?: Array<{
     traitType: string;
@@ -695,7 +691,6 @@ export interface CollectionItemsQueryVariables {
   sort?: CollectionItemsSort;
   cursor?: string;
 }
-
 
 interface TokenPrice {
   unit: number;

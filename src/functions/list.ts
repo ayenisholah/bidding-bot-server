@@ -28,7 +28,7 @@ export async function createListing(data: IListing) {
   try {
     // Only process if listing is running
     if (!data.running) {
-      await logger.logInfo(ErrorCategory.GENERAL, `Skipping listing for token ${data.tokenId} - listing is not running`);
+
       return;
     }
 
@@ -160,9 +160,7 @@ export async function createListing(data: IListing) {
         listingPrice = parseFloat(listingPrice.toFixed(6));
 
         if (listingPrice !== freshData.instantPriceOverride) {
-          await logger.logInfo(ErrorCategory.GENERAL,
-            `Adjusted instant price from ${freshData.instantPriceOverride} to ${listingPrice} ETH on ${marketplace} due to constraints`
-          );
+
         }
 
         if (freshData.finalListingPrice && freshData.listingExpiration) {
@@ -185,9 +183,7 @@ export async function createListing(data: IListing) {
                 const minutes = Math.floor(timeRemaining / 60000);
                 const seconds = Math.floor((timeRemaining % 60000) / 1000);
                 console.log(`Already have active listing at ${currentPrice} ETH on ${marketplace} with ${minutes}m ${seconds}s remaining, skipping`);
-                await logger.logInfo(ErrorCategory.GENERAL,
-                  `Skipping ${marketplace} listing - already listed at same price with sufficient time remaining`
-                );
+
                 // return;
               } else {
                 const seconds = Math.floor(timeRemaining / 1000);
@@ -224,7 +220,6 @@ export async function createListing(data: IListing) {
         console.log('- marketplace specific price:', freshData[propName as keyof IListing]);
         return;
       }
-
 
       try {
         let result;

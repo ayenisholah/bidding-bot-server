@@ -94,8 +94,6 @@ setInterval(() => {
   // Add current RPS to history
   rpsHistory.push(completedInLastSecond);
 
-
-
   // Keep only the last N seconds of history
   if (rpsHistory.length > RPS_HISTORY_SECONDS) {
     rpsHistory.shift();
@@ -116,6 +114,5 @@ setInterval(() => {
   rps.currentRPS = trueRPS
 
 }, 1000);
-
 
 export { limiter, initialize, axiosInstance };

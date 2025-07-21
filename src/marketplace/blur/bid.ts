@@ -48,11 +48,7 @@ export async function cancelBlurRequest(taskId: string): Promise<{ success: bool
 
   const controllers = activeRequests.get(taskId);
   if (!controllers || controllers.length === 0) {
-    await logger.logDebug(ErrorCategory.MARKETPLACE, 'No active Blur requests found for task', { 
-      taskId,
-      marketplace: 'blur',
-      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION
-    });
+
     return { success: false, cancelledCount: 0 };
   }
 
@@ -84,15 +80,7 @@ export async function cancelBlurRequest(taskId: string): Promise<{ success: bool
     }));
     
     activeRequests.delete(taskId);
-    
-    await logger.logInfo(ErrorCategory.MARKETPLACE, 'Blur requests cancelled', {
-      marketplace: 'blur',
-      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
-      taskId,
-      cancelledRequests: cancelledCount,
-      totalRequests: controllers.length
-    });
-    
+
     return { success: true, cancelledCount };
   } catch (error) {
     await logger.logMarketplaceError('Failed to cancel Blur requests', {
@@ -191,7 +179,6 @@ export async function bidOnBlur(
     throw error;
   }
   build = await formatBidOnBlur(taskId, BLUR_API_URL, accessToken, wallet_address, buildPayload);
-
 
   let data = build?.signatures?.[0];
   if (!data) {
@@ -553,7 +540,6 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
     return data;
   }
 
-
 }
 
 export async function fetchBlurCollectionStats(slug: string) {
@@ -641,7 +627,6 @@ export async function fetchBlurTraitFloor(slug: string, trait: { type: string; v
   }
 }
 
-
 interface PriceLevel {
   criteriaType: string;
   criteriaValue: Record<string, unknown>;
@@ -676,7 +661,6 @@ interface SubmitPayload {
   marketplaceData: string[];
   [key: string]: any;
 }
-
 
 export interface BlurTokensResponse {
   success: boolean;
