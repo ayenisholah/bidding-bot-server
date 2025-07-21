@@ -40,7 +40,7 @@ import { USDC, WETH } from "./utils/currencies";
 import axios from "axios";
 import { decryptPrivateKey, setPassword, getPassword, decryptPassword } from "./utils/crypto";
 import { fetchWalletNFTs } from "./utils/nft";
-import { logger, DatabaseOperation, QueueOperation, ErrorCategory } from "./utils/logger";
+import { logger, ErrorCategory } from "./utils/logger";
 import WebSocketManager from "./utils/websocket-manager";
 import Listing from "./models/listing.model";
 import { initializeListingScheduler, shutdownListingScheduler, scheduleListing, cancelListingJob, processListingJob } from "./functions/listingScheduler";
@@ -934,19 +934,8 @@ async function pauseQueueAndWorkers() {
     }
     console.log(YELLOW + 'Queue and workers paused. Waiting for password...' + RESET);
     console.log(YELLOW + 'Note: All jobs have been removed from the queue for security.' + RESET);
-
-    await logger.logInfo(ErrorCategory.QUEUE, 'Queue and workers paused due to missing password', {
-      queueOperation: QueueOperation.PAUSE_QUEUE,
-      queuePaused: true,
-      workersPaused: workers.length > 0,
-      workerCount: workers.length
-    });
   } catch (error) {
-    await logger.logQueueError('Error pausing queue and workers', {
-      queueOperation: QueueOperation.PAUSE_QUEUE,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
+    console.log(error);
   }
 }
 
@@ -959,11 +948,7 @@ async function resumeQueueAndWorkers() {
     }
     console.log(GREEN + 'Queue and workers resumed.' + RESET);
   } catch (error) {
-    await logger.logQueueError('Error resuming queue and workers', {
-      queueOperation: QueueOperation.RESUME_QUEUE,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
+    console.log(error);
   }
 }
 
@@ -1024,13 +1009,6 @@ async function startServer() {
           // Check if job has exceeded its timeout
           if (job.data.timeoutAt && Date.now() > job.data.timeoutAt) {
             const timeoutError = new Error(`Job ${job.id} timed out after ${job.data.maxDuration}ms`);
-            await logger.logQueueError(`Job timeout: ${job.name}`, {
-              jobId: job.id,
-              timeoutAt: job.data.timeoutAt,
-              maxDuration: job.data.maxDuration,
-              actualDuration: Date.now() - startTime,
-              queueOperation: QueueOperation.PROCESS_JOB
-            });
             throw timeoutError;
           }
 
@@ -1078,18 +1056,6 @@ async function startServer() {
           queueName: QUEUE_NAME
         });
       });
-
-      // Handle worker stalled event
-      worker.on('stalled', async (jobId) => {
-        await logger.logQueueError(`Job stalled: ${jobId}`, {
-          jobId,
-          workerId: i,
-          queueOperation: QueueOperation.PROCESS_JOB,
-          queueName: QUEUE_NAME,
-          stalledAt: new Date().toISOString()
-        });
-      });
-
       // Add worker to array
       workers.push(worker);
     }
@@ -1180,12 +1146,6 @@ async function startServer() {
         heartbeatFrequencyMS: 5000 // Add heartbeat to detect connection issues earlier
       });
       console.log('Connected to MongoDB successfully');
-      await logger.logInfo(ErrorCategory.DATABASE, 'MongoDB connection established', {
-        databaseOperation: DatabaseOperation.CONNECTION,
-        environment: process.env.NODE_ENV,
-        mongoUri: mongoUri.replace(/\/\/[^:]+:[^@]+@/, '//***:***@'), // Hide credentials
-        maxPoolSize: 10
-      });
     } catch (error) {
       await logger.logDatabaseConnectionError('Failed to connect to MongoDB', {
         error: error as Error,
@@ -1204,12 +1164,6 @@ async function startServer() {
       }
     } catch (error) {
       console.error(RED + 'Failed to update tasks:' + RESET, error);
-      await logger.logDatabaseError('Failed to update tasks when no password set', {
-        databaseOperation: DatabaseOperation.UPDATE,
-        collection_name: 'tasks',
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
     }
 
     // Clear queue and restart all jobs on server start - AFTER MongoDB is connected
@@ -1238,24 +1192,18 @@ async function startServer() {
       }
 
       await initialize(RATE_LIMIT);
-      
+
       // Initialize wallet cache with pre-decryption
       const password = await getPassword();
       if (password) {
         await walletCache.initialize(password);
         console.log('💰 Wallet cache initialized with pre-decrypted keys');
       }
-      
+
       if (redis) {
         await redis.set(LAST_RUNTIME_KEY, currentTime.toString());
       }
     } catch (redisError) {
-      await logger.logDatabaseError('Redis operation failed during startup', {
-        databaseOperation: DatabaseOperation.CONNECTION,
-        collection_name: 'redis',
-        error: redisError as Error,
-        errorMessage: redisError instanceof Error ? redisError.message : String(redisError)
-      });
       console.error('Redis operation failed:', redisError);
     }
 
@@ -2780,7 +2728,7 @@ async function updateTaskData(task: ITask) {
     const newTask = { ...task, traits: {} } as ITask
     // Check cache first
     let collectionDetails = collectionCache.getCollectionDetails(task.contract.slug);
-    
+
     if (!collectionDetails) {
       // Cache miss - fetch from API with deduplication
       collectionDetails = await collectionCache.fetchWithDedup(
@@ -5403,7 +5351,7 @@ async function connectWebSocket(): Promise<void> {
   // Start new connection attempt
   isConnecting = true;
   connectionPromise = _doConnect();
-  
+
   try {
     await connectionPromise;
   } finally {
@@ -5611,7 +5559,7 @@ async function updateBalancesForItemSold(message: any) {
     const testWallet = await Wallet.findOne({}) as IWallet
     await triggerAutoListingForPurchase(testWallet, contractAddress, tokenId, price, marketplace);
 
-  
+
     // Check if the toAddress belongs to one of our wallets (case-insensitive)
     const wallet: IWallet | null = await Wallet.findOne({
       address: { $regex: new RegExp(`^${toAddress}$`, 'i') }
@@ -5799,7 +5747,7 @@ async function handleCounterBid(message: any) {
     if (!relevantTasks.length) return;
     // Process all relevant tasks in parallel
     await Promise.all(
-      relevantTasks.map(task => 
+      relevantTasks.map(task =>
         handleCounterBidForTask(task, message)
           .catch(error => logger.logError(ErrorCategory.MARKETPLACE, `Failed to handle counterbid for task ${task._id}`, error))
       )
@@ -5835,7 +5783,7 @@ async function handleCounterBidForTask(task: any, message: any) {
       resetTimeout: 60000, // 1 minute
       timeout: 15000 // 15 seconds
     });
-    
+
     promises.push(
       blurBreaker.execute(() => handleBlurCounterbid(message['1'], task))
         .catch(error => logger.logError(ErrorCategory.MARKETPLACE, `Blur counterbid failed for task ${task._id}`, error))
@@ -5848,7 +5796,7 @@ async function handleCounterBidForTask(task: any, message: any) {
       resetTimeout: 60000, // 1 minute
       timeout: 15000 // 15 seconds
     });
-    
+
     promises.push(
       openseaBreaker.execute(() => handleOpenseaCounterbid(message, task))
         .catch(error => logger.logError(ErrorCategory.MARKETPLACE, `OpenSea counterbid failed for task ${task._id}`, error))
@@ -5861,7 +5809,7 @@ async function handleCounterBidForTask(task: any, message: any) {
       resetTimeout: 60000, // 1 minute
       timeout: 15000 // 15 seconds
     });
-    
+
     promises.push(
       magicedenBreaker.execute(() => handleMagicEdenCounterbid(message, task))
         .catch(error => logger.logError(ErrorCategory.MARKETPLACE, `Magic Eden counterbid failed for task ${task._id}`, error))
@@ -5896,15 +5844,15 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       await logger.logError(ErrorCategory.DATABASE, `Wallet not found for task ${task._id}: ${task.wallet}`, new Error('Wallet not found'));
       return;
     }
-    
+
     const WALLET_PRIVATE_KEY = await walletCache.getDecryptedPrivateKey(taskWallet);
     if (!WALLET_PRIVATE_KEY) {
       await logger.logError(ErrorCategory.SECURITY, `Failed to decrypt private key for wallet ${task.wallet}`, new Error('Decryption failed'));
       return;
     }
-    
+
     const maker = data?.data?.maker?.toLowerCase()
-    
+
     // Check if the maker is one of our wallets using cache
     const allWallets = await walletCache.getAllWallets();
     const walletAddresses = allWallets.map((wallet) => wallet.address.toLowerCase())
@@ -5968,7 +5916,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       // Check cache first
       let floor_price = collectionCache.getFloorPrice(task.contract.contractAddress, 'magiceden');
-      
+
       if (floor_price === null) {
         // Cache miss - fetch from API with deduplication
         floor_price = await collectionCache.fetchWithDedup(
@@ -6098,7 +6046,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       // Check cache first
       let floor_price = collectionCache.getFloorPrice(task.contract.contractAddress, 'magiceden');
-      
+
       if (floor_price === null) {
         // Cache miss - fetch from API with deduplication
         floor_price = await collectionCache.fetchWithDedup(
@@ -6220,7 +6168,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       // Check cache first
       let floor_price = collectionCache.getFloorPrice(task.contract.contractAddress, 'magiceden');
-      
+
       if (floor_price === null) {
         // Cache miss - fetch from API with deduplication
         floor_price = await collectionCache.fetchWithDedup(
@@ -6422,7 +6370,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal);
     // Check cache first
     let collectionDetails = collectionCache.getCollectionDetails(task.contract.slug);
-    
+
     if (!collectionDetails) {
       // Cache miss - fetch from API with deduplication
       collectionDetails = await collectionCache.fetchWithDedup(
@@ -6464,7 +6412,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       // Check cache first
       let floor_price = collectionCache.getFloorPrice(task.contract.slug, 'opensea');
-      
+
       if (floor_price === null) {
         // Cache miss - fetch from API with deduplication
         floor_price = await collectionCache.fetchWithDedup(
@@ -6619,7 +6567,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       // Check cache first
       let floor_price = collectionCache.getFloorPrice(task.contract.slug, 'opensea');
-      
+
       if (floor_price === null) {
         // Cache miss - fetch from API with deduplication
         floor_price = await collectionCache.fetchWithDedup(
@@ -6767,7 +6715,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       // Check cache first
       let floor_price = collectionCache.getFloorPrice(task.contract.slug, 'opensea');
-      
+
       if (floor_price === null) {
         // Cache miss - fetch from API with deduplication
         floor_price = await collectionCache.fetchWithDedup(
@@ -6950,7 +6898,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
         // Check cache first
         let floor_price = collectionCache.getFloorPrice(task?.contract?.slug, 'blur');
-        
+
         if (floor_price === null) {
           // Cache miss - fetch from API with deduplication
           floor_price = await collectionCache.fetchWithDedup(
@@ -7090,7 +7038,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
       // Check cache first
       let floor_price = collectionCache.getFloorPrice(task.contract.slug, 'blur');
-      
+
       if (floor_price === null) {
         // Cache miss - fetch from API with deduplication
         floor_price = await collectionCache.fetchWithDedup(
