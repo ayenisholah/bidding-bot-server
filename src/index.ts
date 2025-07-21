@@ -53,8 +53,6 @@ import { BoundedCache } from "./utils/bounded-cache";
 import { walletCache } from "./utils/wallet-cache";
 import { collectionCache } from "./utils/collection-cache";
 import { initializeDbOptimizer, getDbOptimizer } from "./utils/db-optimizer";
-import QueueBatcher from "./utils/queue-batcher";
-import { CircuitBreakerFactory } from "./utils/circuit-breaker";
 const prisma = new PrismaClient()
 const dbOptimizer = initializeDbOptimizer(prisma);
 
@@ -5774,52 +5772,21 @@ function getMarketplaceDetails(message: any): { contractAddress?: string, slug?:
 
 async function handleCounterBidForTask(task: any, message: any) {
   const selectedMarketplaces = task.selectedMarketplaces.map((m: string) => m.toLowerCase());
-  const promises: Promise<void>[] = [];
 
-  // Process each marketplace handler with circuit breakers and error handling
+  // Process each marketplace handler with error handling
   if (selectedMarketplaces.includes('blur') && message.marketplace === BLUR) {
-    const blurBreaker = CircuitBreakerFactory.create('blur-counterbid', {
-      failureThreshold: 10,
-      resetTimeout: 60000, // 1 minute
-      timeout: 15000 // 15 seconds
-    });
+    handleBlurCounterbid(message['1'], task)
 
-    promises.push(
-      blurBreaker.execute(() => handleBlurCounterbid(message['1'], task))
-        .catch(error => logger.logError(ErrorCategory.MARKETPLACE, `Blur counterbid failed for task ${task._id}`, error))
-    );
   }
 
-  if (selectedMarketplaces.includes('opensea') && message.marketplace === OPENSEA) {
-    const openseaBreaker = CircuitBreakerFactory.create('opensea-counterbid', {
-      failureThreshold: 10,
-      resetTimeout: 60000, // 1 minute
-      timeout: 15000 // 15 seconds
-    });
-
-    promises.push(
-      openseaBreaker.execute(() => handleOpenseaCounterbid(message, task))
-        .catch(error => logger.logError(ErrorCategory.MARKETPLACE, `OpenSea counterbid failed for task ${task._id}`, error))
-    );
+  else if (selectedMarketplaces.includes('opensea') && message.marketplace === OPENSEA) {
+    handleOpenseaCounterbid(message, task)
   }
 
-  if (selectedMarketplaces.includes('magiceden') && message.marketplace === MAGICEDEN) {
-    const magicedenBreaker = CircuitBreakerFactory.create('magiceden-counterbid', {
-      failureThreshold: 10,
-      resetTimeout: 60000, // 1 minute
-      timeout: 15000 // 15 seconds
-    });
-
-    promises.push(
-      magicedenBreaker.execute(() => handleMagicEdenCounterbid(message, task))
-        .catch(error => logger.logError(ErrorCategory.MARKETPLACE, `Magic Eden counterbid failed for task ${task._id}`, error))
-    );
+  else if (selectedMarketplaces.includes('magiceden') && message.marketplace === MAGICEDEN) {
+    handleMagicEdenCounterbid(message, task)
   }
 
-  // Wait for all handlers to complete or fail
-  if (promises.length > 0) {
-    await Promise.allSettled(promises);
-  }
 }
 
 
