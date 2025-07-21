@@ -51,7 +51,13 @@ import { createListing } from "./functions/list";
 import { BullMQErrorFormatter } from "./utils/bullmq-error-formatter";
 import { IListing } from "./types/listing.types";
 import { BoundedCache } from "./utils/bounded-cache";
+import { walletCache } from "./utils/wallet-cache";
+import { collectionCache } from "./utils/collection-cache";
+import { initializeDbOptimizer, getDbOptimizer } from "./utils/db-optimizer";
+import QueueBatcher from "./utils/queue-batcher";
+import { CircuitBreakerFactory } from "./utils/circuit-breaker";
 const prisma = new PrismaClient()
+const dbOptimizer = initializeDbOptimizer(prisma);
 
 const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
 
@@ -1233,6 +1239,14 @@ async function startServer() {
       }
 
       await initialize(RATE_LIMIT);
+      
+      // Initialize wallet cache with pre-decryption
+      const password = await getPassword();
+      if (password) {
+        await walletCache.initialize(password);
+        console.log('💰 Wallet cache initialized with pre-decrypted keys');
+      }
+      
       if (redis) {
         await redis.set(LAST_RUNTIME_KEY, currentTime.toString());
       }
@@ -2782,7 +2796,20 @@ async function updateTaskData(task: ITask) {
     console.log(GREEN + '--------------------------------------------------------------' + RESET);
 
     const newTask = { ...task, traits: {} } as ITask
-    const collectionDetails = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
+    // Check cache first
+    let collectionDetails = collectionCache.getCollectionDetails(task.contract.slug);
+    
+    if (!collectionDetails) {
+      // Cache miss - fetch from API with deduplication
+      collectionDetails = await collectionCache.fetchWithDedup(
+        `collection-details-${task.contract.slug}`,
+        async () => {
+          const details = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
+          collectionCache.setCollectionDetails(task.contract.slug, details);
+          return details;
+        }
+      );
+    }
 
     const creatorFees: IFee = collectionDetails.creator_fees.null !== undefined
       ? { null: collectionDetails.creator_fees.null }
@@ -5789,7 +5816,13 @@ async function handleCounterBid(message: any) {
     // Use fast O(1) lookup instead of O(n) filter
     const relevantTasks = getRelevantTasks(contractAddress, slug);
     if (!relevantTasks.length) return;
-    relevantTasks.map(task => handleCounterBidForTask(task, message))
+    // Process all relevant tasks in parallel
+    await Promise.all(
+      relevantTasks.map(task => 
+        handleCounterBidForTask(task, message)
+          .catch(error => logger.logError(ErrorCategory.MARKETPLACE, `Failed to handle counterbid for task ${task._id}`, error))
+      )
+    );
   } catch (error) {
     console.error("Error in handleCounterBid:", error);
   }
@@ -5810,19 +5843,53 @@ function getMarketplaceDetails(message: any): { contractAddress?: string, slug?:
   }
 }
 
-function handleCounterBidForTask(task: any, message: any) {
+async function handleCounterBidForTask(task: any, message: any) {
   const selectedMarketplaces = task.selectedMarketplaces.map((m: string) => m.toLowerCase());
+  const promises: Promise<void>[] = [];
 
+  // Process each marketplace handler with circuit breakers and error handling
   if (selectedMarketplaces.includes('blur') && message.marketplace === BLUR) {
-    handleBlurCounterbid(message['1'], task);
+    const blurBreaker = CircuitBreakerFactory.create('blur-counterbid', {
+      failureThreshold: 10,
+      resetTimeout: 60000, // 1 minute
+      timeout: 15000 // 15 seconds
+    });
+    
+    promises.push(
+      blurBreaker.execute(() => handleBlurCounterbid(message['1'], task))
+        .catch(error => logger.logError(ErrorCategory.MARKETPLACE, `Blur counterbid failed for task ${task._id}`, error))
+    );
   }
 
   if (selectedMarketplaces.includes('opensea') && message.marketplace === OPENSEA) {
-    handleOpenseaCounterbid(message, task);
+    const openseaBreaker = CircuitBreakerFactory.create('opensea-counterbid', {
+      failureThreshold: 10,
+      resetTimeout: 60000, // 1 minute
+      timeout: 15000 // 15 seconds
+    });
+    
+    promises.push(
+      openseaBreaker.execute(() => handleOpenseaCounterbid(message, task))
+        .catch(error => logger.logError(ErrorCategory.MARKETPLACE, `OpenSea counterbid failed for task ${task._id}`, error))
+    );
   }
 
   if (selectedMarketplaces.includes('magiceden') && message.marketplace === MAGICEDEN) {
-    handleMagicEdenCounterbid(message, task)
+    const magicedenBreaker = CircuitBreakerFactory.create('magiceden-counterbid', {
+      failureThreshold: 10,
+      resetTimeout: 60000, // 1 minute
+      timeout: 15000 // 15 seconds
+    });
+    
+    promises.push(
+      magicedenBreaker.execute(() => handleMagicEdenCounterbid(message, task))
+        .catch(error => logger.logError(ErrorCategory.MARKETPLACE, `Magic Eden counterbid failed for task ${task._id}`, error))
+    );
+  }
+
+  // Wait for all handlers to complete or fail
+  if (promises.length > 0) {
+    await Promise.allSettled(promises);
   }
 }
 
@@ -5843,10 +5910,23 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
 
     const domain: string = data?.data?.source?.domain
-    const wallets = await Wallet.find({})
-    const walletAddresses = wallets.map((wallet) => wallet.address.toLowerCase())
-    const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.toLowerCase())?.encryptedPrivateKey as string) as string;
+    const taskWallet = await walletCache.getWallet(task.wallet);
+    if (!taskWallet) {
+      await logger.logError(ErrorCategory.DATABASE, `Wallet not found for task ${task._id}: ${task.wallet}`, new Error('Wallet not found'));
+      return;
+    }
+    
+    const WALLET_PRIVATE_KEY = await walletCache.getDecryptedPrivateKey(taskWallet);
+    if (!WALLET_PRIVATE_KEY) {
+      await logger.logError(ErrorCategory.SECURITY, `Failed to decrypt private key for wallet ${task.wallet}`, new Error('Decryption failed'));
+      return;
+    }
+    
     const maker = data?.data?.maker?.toLowerCase()
+    
+    // Check if the maker is one of our wallets using cache
+    const allWallets = await walletCache.getAllWallets();
+    const walletAddresses = allWallets.map((wallet) => wallet.address.toLowerCase())
 
 
     if (walletAddresses.includes(maker)) {
@@ -5908,7 +5988,20 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       console.log(MAGENTA + `incoming bid for ${task.contract.slug}:${tokenId} for ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} on magiceden`.toUpperCase() + RESET);
       console.log(MAGENTA + '----------------------------------------------------------------------------------' + RESET);
 
-      const floor_price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress))
+      // Check cache first
+      let floor_price = collectionCache.getFloorPrice(task.contract.contractAddress, 'magiceden');
+      
+      if (floor_price === null) {
+        // Cache miss - fetch from API with deduplication
+        floor_price = await collectionCache.fetchWithDedup(
+          `magiceden-floor-${task.contract.contractAddress}`,
+          async () => {
+            const price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress));
+            collectionCache.setFloorPrice(task.contract.contractAddress, 'magiceden', price);
+            return price;
+          }
+        );
+      }
       if (!floor_price) return
 
       const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
@@ -5921,12 +6014,10 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "magiceden");
         return
       }
-      const orders = await prisma.order.findMany({
-        where: {
-          taskId: task._id,
-          marketplace: MAGICEDEN.toLowerCase(),
-          identifier: tokenId.toString()
-        }
+      const orders = await dbOptimizer.getOrders({
+        taskId: task._id,
+        marketplace: MAGICEDEN.toLowerCase(),
+        identifier: tokenId.toString()
       })
 
       const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), true)
@@ -6039,7 +6130,20 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       console.log(MAGENTA + `incoming bid for ${task.contract.slug} ${JSON.stringify(trait)} for ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} on magiceden`.toUpperCase() + RESET);
       console.log(MAGENTA + '----------------------------------------------------------------------------------' + RESET);
 
-      const floor_price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress))
+      // Check cache first
+      let floor_price = collectionCache.getFloorPrice(task.contract.contractAddress, 'magiceden');
+      
+      if (floor_price === null) {
+        // Cache miss - fetch from API with deduplication
+        floor_price = await collectionCache.fetchWithDedup(
+          `magiceden-floor-${task.contract.contractAddress}`,
+          async () => {
+            const price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress));
+            collectionCache.setFloorPrice(task.contract.contractAddress, 'magiceden', price);
+            return price;
+          }
+        );
+      }
       if (!floor_price) return
 
       const identifier = `${trait.attributeKey}:${trait.attributeValue}`
@@ -6160,7 +6264,20 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       console.log(MAGENTA + `incoming collection offer for ${task.contract.slug} for ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} on magiceden`.toUpperCase() + RESET);
       console.log(MAGENTA + '----------------------------------------------------------------------------------' + RESET);
 
-      const floor_price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress))
+      // Check cache first
+      let floor_price = collectionCache.getFloorPrice(task.contract.contractAddress, 'magiceden');
+      
+      if (floor_price === null) {
+        // Cache miss - fetch from API with deduplication
+        floor_price = await collectionCache.fetchWithDedup(
+          `magiceden-floor-${task.contract.contractAddress}`,
+          async () => {
+            const price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress));
+            collectionCache.setFloorPrice(task.contract.contractAddress, 'magiceden', price);
+            return price;
+          }
+        );
+      }
       if (!floor_price) return
 
       const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
@@ -6361,7 +6478,20 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     }
 
     const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal);
-    const collectionDetails = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
+    // Check cache first
+    let collectionDetails = collectionCache.getCollectionDetails(task.contract.slug);
+    
+    if (!collectionDetails) {
+      // Cache miss - fetch from API with deduplication
+      collectionDetails = await collectionCache.fetchWithDedup(
+        `collection-details-${task.contract.slug}`,
+        async () => {
+          const details = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
+          collectionCache.setCollectionDetails(task.contract.slug, details);
+          return details;
+        }
+      );
+    }
 
     const creatorFees: IFee = collectionDetails.creator_fees.null !== undefined
       ? { null: collectionDetails.creator_fees.null }
@@ -6393,7 +6523,20 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       console.log(BLUE + `incoming offer for ${task.contract.slug}:${tokenId} for ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} on opensea`.toUpperCase() + RESET);
       console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
 
-      const floor_price = await getOpenseaFloor(task.contract.slug);
+      // Check cache first
+      let floor_price = collectionCache.getFloorPrice(task.contract.slug, 'opensea');
+      
+      if (floor_price === null) {
+        // Cache miss - fetch from API with deduplication
+        floor_price = await collectionCache.fetchWithDedup(
+          `opensea-floor-${task.contract.slug}`,
+          async () => {
+            const price = await getOpenseaFloor(task.contract.slug);
+            collectionCache.setFloorPrice(task.contract.slug, 'opensea', price);
+            return price;
+          }
+        );
+      }
       if (!floor_price) return
 
       const { maxBidPriceEth, minBidPriceEth, currency } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
@@ -6547,7 +6690,20 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
 
 
-      const floor_price = await getOpenseaFloor(task.contract.slug);
+      // Check cache first
+      let floor_price = collectionCache.getFloorPrice(task.contract.slug, 'opensea');
+      
+      if (floor_price === null) {
+        // Cache miss - fetch from API with deduplication
+        floor_price = await collectionCache.fetchWithDedup(
+          `opensea-floor-${task.contract.slug}`,
+          async () => {
+            const price = await getOpenseaFloor(task.contract.slug);
+            collectionCache.setFloorPrice(task.contract.slug, 'opensea', price);
+            return price;
+          }
+        );
+      }
       if (!floor_price) return
 
       const { maxBidPriceEth, minBidPriceEth, currency } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
@@ -6694,7 +6850,20 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       console.log(BLUE + `incoming collection offer for ${task.contract.slug} for  ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} on opensea`.toUpperCase() + RESET);
       console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
 
-      const floor_price = await getOpenseaFloor(task.contract.slug);
+      // Check cache first
+      let floor_price = collectionCache.getFloorPrice(task.contract.slug, 'opensea');
+      
+      if (floor_price === null) {
+        // Cache miss - fetch from API with deduplication
+        floor_price = await collectionCache.fetchWithDedup(
+          `opensea-floor-${task.contract.slug}`,
+          async () => {
+            const price = await getOpenseaFloor(task.contract.slug);
+            collectionCache.setFloorPrice(task.contract.slug, 'opensea', price);
+            return price;
+          }
+        );
+      }
       if (!floor_price) return
 
       const { maxBidPriceEth, minBidPriceEth, currency } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
@@ -6879,7 +7048,20 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         console.log(GOLD + `incoming trait offer for ${task?.contract?.slug}: ${trait} for ${incomingPrice} BETH on blur`.toUpperCase() + RESET);
         console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
 
-        const floor_price = await fetchBlurCollectionStats(task?.contract?.slug);
+        // Check cache first
+        let floor_price = collectionCache.getFloorPrice(task?.contract?.slug, 'blur');
+        
+        if (floor_price === null) {
+          // Cache miss - fetch from API with deduplication
+          floor_price = await collectionCache.fetchWithDedup(
+            `blur-floor-${task?.contract?.slug}`,
+            async () => {
+              const price = await fetchBlurCollectionStats(task?.contract?.slug);
+              collectionCache.setFloorPrice(task?.contract?.slug, 'blur', price);
+              return price;
+            }
+          );
+        }
         const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, Number(floor_price), "blur")
         const traitsObj = JSON.parse(trait);
         const [traitType, traitValue] = Object.entries(traitsObj)[0] as string[]
@@ -7015,7 +7197,20 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       console.log(GOLD + `incoming collection offer for ${task?.contract?.slug} for ${bestPrice} BETH on blur`.toUpperCase() + RESET);
       console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
 
-      const floor_price = await fetchBlurCollectionStats(task.contract.slug);
+      // Check cache first
+      let floor_price = collectionCache.getFloorPrice(task.contract.slug, 'blur');
+      
+      if (floor_price === null) {
+        // Cache miss - fetch from API with deduplication
+        floor_price = await collectionCache.fetchWithDedup(
+          `blur-floor-${task.contract.slug}`,
+          async () => {
+            const price = await fetchBlurCollectionStats(task.contract.slug);
+            collectionCache.setFloorPrice(task.contract.slug, 'blur', price);
+            return price;
+          }
+        );
+      }
       const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, Number(floor_price), "blur")
 
       const wallets = await Wallet.findById(task.walletId)
