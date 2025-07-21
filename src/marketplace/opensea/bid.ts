@@ -12,9 +12,49 @@ import { CollectionItemsQueryVariables, CollectionItemsResponse } from "../../fu
 import { fetchERC20Balance } from "../../utils/balance";
 import { logger, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
 
+// Helper function to extract meaningful error messages from OpenSea API responses
+function extractOpenseaErrorMessage(error: any): string {
+  if (error?.response?.data) {
+    const data = error.response.data;
+    
+    // Handle array of errors
+    if (data.errors && Array.isArray(data.errors) && data.errors.length > 0) {
+      return data.errors.join(', ');
+    }
+    
+    // Handle single error message
+    if (data.error) {
+      return data.error;
+    }
+    
+    // Handle message field
+    if (data.message) {
+      return data.message;
+    }
+    
+    // Handle detail field
+    if (data.detail) {
+      return data.detail;
+    }
+    
+    // If it's a string, return it
+    if (typeof data === 'string') {
+      return data;
+    }
+    
+    // Fallback to JSON stringify
+    return JSON.stringify(data);
+  }
+  
+  // Fallback to standard error message
+  return error?.message || String(error);
+}
+
 const prisma = new PrismaClient()
 
 config()
+
+// Pre-calculated constants for better performance
 const OPENSEA_ITEM_ZONE = "0x000056f7000000ece9003ca63978907a00ffd100"
 const OPENSEA_COLLECTION_ZONE = "0x004C00500000aD104D7DBd00e3ae0A5C00560C00"
 const ZONE_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000"
@@ -25,6 +65,24 @@ const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 const SEAPORT_CONTRACT = new ethers.Contract(SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI, provider);
 const RESET = '\x1b[0m';
+
+// Pre-calculated values for optimization
+const OPENSEA_FEE_BIGINT = 50n;
+const DIVIDER = 10000n;
+const BASIS_MAP: { [key: number]: number } = { 2: 1e16, 3: 1e15, 4: 1e14 };
+
+// Wallet cache to avoid recreating wallet instances
+const walletCache = new Map<string, Wallet>();
+function getWallet(privateKey: string): Wallet {
+  if (!walletCache.has(privateKey)) {
+    walletCache.set(privateKey, new Wallet(privateKey, provider));
+  }
+  return walletCache.get(privateKey)!;
+}
+
+// Request deduplication cache
+const buildOfferCache = new Map<string, Promise<any>>();
+const CACHE_TTL = 5000; // 5 seconds
 
 const domain = {
   name: 'Seaport',
@@ -197,9 +255,7 @@ export async function bidOnOpensea(
   opensea_traits?: string,
   asset?: { contractAddress: string, tokenId: number }
 ) {
-  const divider = 10000n;
-  const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
-  const currencySymbol = currency.toLowerCase() === USDC.toLowerCase() ? "USDC" : "WETH"
+  // Early validation - fail fast
   const task = activeTasks.get(taskId)
   if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
     await logger.logInfo(ErrorCategory.MARKETPLACE, 'OpenSea bid skipped - task not active', {
@@ -211,7 +267,9 @@ export async function bidOnOpensea(
     return
   }
 
-  const wethBalance = await fetchERC20Balance(wallet_address, currency);
+  // Pre-calculate values
+  const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
+  const currencySymbol = currency.toLowerCase() === USDC.toLowerCase() ? "USDC" : "WETH"
   const offerPriceEth = Number(offer_price) / Math.pow(10, decimal);
 
   let decimals;
@@ -224,11 +282,18 @@ export async function bidOnOpensea(
   }
 
   const roundedEth = currency.toLowerCase() === USDC.toLowerCase() ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
-  const basis = decimals === 2 ? 1e16 : decimals === 3 ? 1e15 : 1e14
+  const basis = BASIS_MAP[decimals] || 1e14;
   const roundedWei = decimal === 18 ? Math.round(roundedEth * Math.pow(10, decimal) / basis) * basis : Math.round(roundedEth * Math.pow(10, decimal))
   const offerPrice = BigInt(roundedWei.toString());
   const offerPriceEthFinal = Number(roundedWei) / Math.pow(10, decimal);
 
+  // Get wallet from cache
+  const wallet = getWallet(private_key);
+
+  // Fetch balance first
+  const wethBalance = await fetchERC20Balance(wallet_address, currency);
+
+  // Balance validation after parallel fetch
   if (offerPriceEthFinal > wethBalance) {
     const error = new Error(`Insufficient ${currencySymbol} balance: required ${offerPriceEthFinal} ${currencySymbol}, available ${wethBalance} ${currencySymbol} for wallet ${wallet_address} on collection ${slug}`);
     await logger.logOpenseaBidError('Insufficient balance for bid', {
@@ -243,9 +308,6 @@ export async function bidOnOpensea(
     });
     throw error;
   }
-
-  const wallet = new Wallet(private_key, provider);
-  const openseaFee = 50n;
 
   if (asset) {
     const offer = await buildItemOffer(task._id, {
@@ -263,8 +325,8 @@ export async function bidOnOpensea(
       itemType: 1,
       token: currency,
       identifierOrCriteria: "0",
-      startAmount: ((offerPrice * openseaFee) / divider).toString(),
-      endAmount: ((offerPrice * openseaFee) / divider).toString(),
+      startAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
+      endAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
       recipient: OPENSEA_FEE_ADDRESS
     };
 
@@ -278,8 +340,8 @@ export async function bidOnOpensea(
           itemType: 1,
           token: currency,
           identifierOrCriteria: "0",
-          startAmount: ((offerPrice * fee) / divider).toString(),
-          endAmount: ((offerPrice * fee) / divider).toString(),
+          startAmount: ((offerPrice * fee) / DIVIDER).toString(),
+          endAmount: ((offerPrice * fee) / DIVIDER).toString(),
           recipient: address
         };
         offer.consideration.push(consideration_item);
@@ -329,7 +391,6 @@ export async function bidOnOpensea(
     console.log(BLUE, successMessage, RESET);
   }
   else {
-    const divider = 10000n;
     const offerPrice = BigInt(roundedWei.toString());
 
     const payload: IPayload = {
@@ -400,8 +461,8 @@ export async function bidOnOpensea(
       itemType: 1,
       token: currency,
       identifierOrCriteria: 0,
-      startAmount: ((offerPrice * openseaFee) / divider).toString(),
-      endAmount: ((offerPrice * openseaFee) / divider).toString(),
+      startAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
+      endAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
       recipient: OPENSEA_FEE_ADDRESS
     };
     payload.protocol_data.parameters.consideration.push(opensea_consideration);
@@ -414,8 +475,8 @@ export async function bidOnOpensea(
           itemType: 1,
           token: currency,
           identifierOrCriteria: 0,
-          startAmount: ((offerPrice * fee) / divider).toString(),
-          endAmount: ((offerPrice * fee) / divider).toString(),
+          startAmount: ((offerPrice * fee) / DIVIDER).toString(),
+          endAmount: ((offerPrice * fee) / DIVIDER).toString(),
           recipient: address
         };
 
@@ -479,7 +540,7 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
       currency: currencySymbol,
       error: error as Error,
       errorCode: (error as any)?.response?.status,
-      errorMessage: (error as any)?.response?.data || (error as Error)?.message || String(error)
+      errorMessage: extractOpenseaErrorMessage(error)
     });
     throw error;
   }
@@ -528,50 +589,70 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
 }
 
 /**
- * Builds an offer on OpenSea.
+ * Builds an offer on OpenSea with request deduplication.
  * @param buildPayload - The payload to build the offer.
  */
 async function buildOffer(taskId: string, buildPayload: any) {
+  // Create cache key from payload
+  const cacheKey = `${taskId}-${JSON.stringify(buildPayload)}`;
+  
+  // Check if we have a cached promise for this request
+  if (buildOfferCache.has(cacheKey)) {
+    const cachedPromise = buildOfferCache.get(cacheKey);
+    return cachedPromise;
+  }
+
   const controller = new AbortController();
   addActiveRequest(taskId, controller);
 
-  try {
-    const { data } = await limiter.schedule(() =>
-      axiosInstance.request<PartialParameters>({
-        method: 'POST',
-        url: `${BASE_URL}/opensea/api/v2/offers/build`,
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY,
-        },
-        data: JSON.stringify(buildPayload),
-        signal: controller.signal
-      })
-    );
-    return data;
-  } catch (error: any) {
-    if (axios.isCancel(error)) {
-      return null;
+  // Create the promise and cache it
+  const promise = (async () => {
+    try {
+      const { data } = await limiter.schedule(() =>
+        axiosInstance.request<PartialParameters>({
+          method: 'POST',
+          url: `${BASE_URL}/opensea/api/v2/offers/build`,
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': API_KEY,
+          },
+          data: JSON.stringify(buildPayload),
+          signal: controller.signal
+        })
+      );
+      return data;
+    } catch (error: any) {
+      if (axios.isCancel(error)) {
+        return null;
+      }
+      await logger.logOpenseaBidError('Failed to build OpenSea offer', {
+        taskId,
+        operation: 'build_offer',
+        error: error,
+        errorCode: error?.response?.status,
+        errorMessage: extractOpenseaErrorMessage(error)
+      });
+      throw error;
     }
-    await logger.logOpenseaBidError('Failed to build OpenSea offer', {
-      taskId,
-      operation: 'build_offer',
-      error: error,
-      errorCode: error?.response?.status,
-      errorMessage: error?.response?.data || error?.message || String(error)
-    });
-    throw error;
-  }
-  finally {
-    const controllers = activeRequests.get(taskId) || [];
-    const index = controllers.indexOf(controller);
-    if (index >= 0) {
-      controllers.splice(index, 1);
+    finally {
+      const controllers = activeRequests.get(taskId) || [];
+      const index = controllers.indexOf(controller);
+      if (index >= 0) {
+        controllers.splice(index, 1);
+      }
+      if (controllers.length === 0) {
+        activeRequests.delete(taskId);
+      }
+      
+      // Clean up cache after TTL
+      setTimeout(() => {
+        buildOfferCache.delete(cacheKey);
+      }, CACHE_TTL);
     }
-    if (controllers.length === 0) {
-      activeRequests.delete(taskId);
-    }
-  }
+  })();
+
+  buildOfferCache.set(cacheKey, promise);
+  return promise;
 }
 
 export async function cancelOrder(orderHash: string, protocolAddress: string, privateKey: string, taskId: string) {
@@ -603,7 +684,7 @@ export async function cancelOrder(orderHash: string, protocolAddress: string, pr
 async function signCancelOrder(taskId: string, orderHash: string, protocolAddress: string, privateKey: string) {
   if (!orderHash) return
 
-  const wallet = new Wallet(privateKey, provider);
+  const wallet = getWallet(privateKey);
   const domain = {
     name: 'Seaport',
     version: '1.6',
@@ -616,11 +697,9 @@ async function signCancelOrder(taskId: string, orderHash: string, protocolAddres
     ]
   };
 
-  if (!orderHash) return
   const value = {
     orderHash: orderHash
   };
-  if (!value) return
   const signature = await wallet.signTypedData(domain, types, value);
   return signature;
 }
@@ -669,7 +748,7 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string) 
       operation: 'post_item_offer',
       error: error,
       errorCode: error?.response?.status,
-      errorMessage: error?.response?.data || error?.message || String(error)
+      errorMessage: extractOpenseaErrorMessage(error)
     });
     throw error
   }

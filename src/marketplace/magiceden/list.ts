@@ -5,6 +5,44 @@ import { axiosInstance } from "../../init";
 import Listing from "../../models/listing.model";
 import { logger } from "../../utils/logger";
 import Bottleneck from "bottleneck";
+
+// Helper function to extract meaningful error messages from MagicEden API responses
+function extractMagicEdenErrorMessage(error: any): string {
+  if (error?.response?.data) {
+    const data = error.response.data;
+    
+    // Handle array of errors
+    if (data.errors && Array.isArray(data.errors) && data.errors.length > 0) {
+      return data.errors.join(', ');
+    }
+    
+    // Handle single error message
+    if (data.error) {
+      return data.error;
+    }
+    
+    // Handle message field
+    if (data.message) {
+      return data.message;
+    }
+    
+    // Handle detail field
+    if (data.detail) {
+      return data.detail;
+    }
+    
+    // If it's a string, return it
+    if (typeof data === 'string') {
+      return data;
+    }
+    
+    // Fallback to JSON stringify
+    return JSON.stringify(data);
+  }
+  
+  // Fallback to standard error message
+  return error?.message || String(error);
+}
 import { convertDurationForMagicEden } from "../../utils/duration";
 
 const API_KEY = process.env.API_KEY;
@@ -257,7 +295,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
       operation: 'submit_listing',
       error: error,
       errorCode: errorStatus,
-      errorMessage: errorData || error?.message || String(error),
+      errorMessage: errorData ? extractMagicEdenErrorMessage({ response: { data: errorData } }) : extractMagicEdenErrorMessage(error),
       responseData: errorData
     });
     

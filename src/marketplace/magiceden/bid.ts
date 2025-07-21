@@ -12,6 +12,44 @@ import { fetchERC20Balance } from "../../utils/balance";
 import { convertBigNumbers } from "../../utils/bigNumberConverter";
 import { logger, DatabaseOperation, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
 
+// Helper function to extract meaningful error messages from MagicEden API responses
+function extractMagicEdenErrorMessage(error: any): string {
+  if (error?.response?.data) {
+    const data = error.response.data;
+    
+    // Handle array of errors
+    if (data.errors && Array.isArray(data.errors) && data.errors.length > 0) {
+      return data.errors.join(', ');
+    }
+    
+    // Handle single error message
+    if (data.error) {
+      return data.error;
+    }
+    
+    // Handle message field
+    if (data.message) {
+      return data.message;
+    }
+    
+    // Handle detail field
+    if (data.detail) {
+      return data.detail;
+    }
+    
+    // If it's a string, return it
+    if (typeof data === 'string') {
+      return data;
+    }
+    
+    // Fallback to JSON stringify
+    return JSON.stringify(data);
+  }
+  
+  // Fallback to standard error message
+  return error?.message || String(error);
+}
+
 const prisma = new PrismaClient()
 
 const RED = '\x1b[31m';
@@ -20,6 +58,7 @@ const RESET = '\x1b[0m';
 config()
 
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
+// Singleton provider with connection pooling
 const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 
 const lockManager = new DistributedLockManager({
@@ -28,6 +67,105 @@ const lockManager = new DistributedLockManager({
 });
 
 const activeRequests = new Map<string, AbortController[]>();
+
+// Pre-calculated constants for performance
+const BASIS_CONSTANTS: Record<number, number> = {
+  2: 1e16,
+  3: 1e15,
+  4: 1e14
+};
+
+// Wallet cache to avoid recreating wallet instances
+const walletCache = new Map<string, Wallet>();
+function getWallet(privateKey: string): Wallet {
+  if (!walletCache.has(privateKey)) {
+    walletCache.set(privateKey, new Wallet(privateKey, provider));
+  }
+  return walletCache.get(privateKey)!;
+}
+
+// Cached domain and types for signing
+const domainCache = {
+  name: "Seaport",
+  version: "1.6",
+  chainId: 1,
+  verifyingContract: "0x0000000000000068f116a894984e2db1123eb395"
+};
+
+const typesCache = {
+  OrderComponents: [
+    { name: "offerer", type: "address" },
+    { name: "zone", type: "address" },
+    { name: "offer", type: "OfferItem[]" },
+    { name: "consideration", type: "ConsiderationItem[]" },
+    { name: "orderType", type: "uint8" },
+    { name: "startTime", type: "uint256" },
+    { name: "endTime", type: "uint256" },
+    { name: "zoneHash", type: "bytes32" },
+    { name: "salt", type: "uint256" },
+    { name: "conduitKey", type: "bytes32" },
+    { name: "counter", type: "uint256" }
+  ],
+  OfferItem: [
+    { name: "itemType", type: "uint8" },
+    { name: "token", type: "address" },
+    { name: "identifierOrCriteria", type: "uint256" },
+    { name: "startAmount", type: "uint256" },
+    { name: "endAmount", type: "uint256" }
+  ],
+  ConsiderationItem: [
+    { name: "itemType", type: "uint8" },
+    { name: "token", type: "address" },
+    { name: "identifierOrCriteria", type: "uint256" },
+    { name: "startAmount", type: "uint256" },
+    { name: "endAmount", type: "uint256" },
+    { name: "recipient", type: "address" }
+  ]
+};
+
+// Request deduplication for concurrent requests
+const pendingRequests = new Map<string, Promise<any>>();
+
+// Batch queue for database operations
+const orderBatchQueue: Array<{
+  slug: string;
+  orderHash: string;
+  expiresAt: Date;
+  offerPrice: string;
+  identifier: string;
+  taskId: string;
+  marketplace: string;
+}> = [];
+
+let batchProcessor: NodeJS.Timeout | null = null;
+
+// Cleanup function for graceful shutdown
+export async function cleanupMagicEden() {
+  // Clear pending requests
+  pendingRequests.clear();
+  
+  // Process any remaining batched orders
+  if (batchProcessor) {
+    clearTimeout(batchProcessor);
+    batchProcessor = null;
+  }
+  
+  if (orderBatchQueue.length > 0) {
+    const batch = [...orderBatchQueue];
+    orderBatchQueue.length = 0;
+    
+    try {
+      await prisma.order.createMany({ data: batch });
+    } catch (error) {
+      await logger.logDatabaseError('Failed to create orders during cleanup', {
+        databaseOperation: DatabaseOperation.CREATE,
+        collection_name: 'orders',
+        affectedRows: batch.length,
+        error: error as Error
+      });
+    }
+  }
+}
 
 /**
  * Places a bid on Magic Eden.
@@ -56,8 +194,13 @@ export async function bidOnMagiceden(
   trait?: Trait,
   tokenId?: number
 ) {
-
-  const task = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase() && task.selectedMarketplaces.includes("MagicEden"))
+  // Early validation before expensive operations
+  const slugLower = slug.toLowerCase();
+  const task = currentTasks.find((task) => 
+    task.contract.slug.toLowerCase() === slugLower && 
+    task.selectedMarketplaces.includes("MagicEden")
+  );
+  
   if (!task) {
     await logger.logInfo(ErrorCategory.MARKETPLACE, 'MagicEden bid skipped - task not found', {
       taskId,
@@ -66,34 +209,37 @@ export async function bidOnMagiceden(
       collection: slug,
       reason: 'task_not_found'
     });
-    return
+    return;
   }
 
+  // Pre-calculate all constants upfront
   const duration = bidExpiry / 60 || 15; // minutes
-  const currentTime = new Date().getTime();
+  const currentTime = Date.now();
   const expiration = Math.floor((currentTime + (duration * 60 * 1000)) / 1000);
-
-  const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
-
-  const wallet = new Wallet(privateKey, provider);
-  const offerPriceEth = Math.round(Number(weiPrice)) / Math.pow(10, decimal)
+  
+  const isUSDC = currency.toLowerCase() === USDC.toLowerCase();
+  const decimal = isUSDC ? 6 : 18;
+  const decimalPower = Math.pow(10, decimal);
+  const currencySymbol = isUSDC ? "USDC" : "WETH";
+  
+  // Get wallet from cache
+  const wallet = getWallet(privateKey);
+  
+  // Fetch balance (can't parallelize with wallet since we need wallet first)
   const wethBalance = await fetchERC20Balance(maker, currency);
-  let decimals;
-  if (offerPriceEth >= 1) {
-    decimals = 2;
-  } else if (offerPriceEth >= 0.1) {
-    decimals = 3;
-  } else {
-    decimals = 4;
-  }
-
-  const roundedEth = currency.toLowerCase() === USDC.toLowerCase() ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
-
-  const basis = decimals === 2 ? 1e16 : decimals === 3 ? 1e15 : 1e14
-  const roundedWei = decimal === 18 ? Math.round(roundedEth * Math.pow(10, decimal) / basis) * basis : Math.round(roundedEth * Math.pow(10, decimal))
-
-  const currencySymbol = currency.toLowerCase() === USDC.toLowerCase() ? "USDC" : "WETH"
-
+  
+  const offerPriceEth = Math.round(Number(weiPrice)) / decimalPower;
+  
+  // Optimize decimal calculation
+  const decimals = offerPriceEth >= 1 ? 2 : offerPriceEth >= 0.1 ? 3 : 4;
+  const roundedEth = isUSDC ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
+  
+  const basis = BASIS_CONSTANTS[decimals];
+  const roundedWei = decimal === 18 ? 
+    Math.round(roundedEth * decimalPower / basis) * basis : 
+    Math.round(roundedEth * decimalPower);
+  
+  // Early validation - fail fast before expensive operations
   if (offerPriceEth > wethBalance) {
     const error = new Error(`Insufficient ${currencySymbol} balance: required ${offerPriceEth} ${currencySymbol}, available ${wethBalance} ${currencySymbol} for wallet ${maker} on collection ${slug}`);
     await logger.logMagicEdenBidError('Insufficient balance for bid', {
@@ -109,18 +255,39 @@ export async function bidOnMagiceden(
     throw error;
   }
 
-  const order = await createBidData(taskId, slug, maker, collection, quantity, Math.round(Number(weiPrice)).toString(), expiration.toString(), currency, trait, tokenId);
+  const order = await createBidData(
+    taskId, 
+    slug, 
+    maker, 
+    collection, 
+    quantity, 
+    Math.round(Number(weiPrice)).toString(), 
+    expiration.toString(), 
+    currency, 
+    trait, 
+    tokenId,
+    task // Pass the cached task
+  );
 
-  if (!order) return
+  if (!order) return;
 
-  if (tokenId) {
-    await submitSignedOrderData(taskId, roundedWei.toString(), decimal, currencySymbol, bidCount, order, wallet, slug, bidExpiry, undefined, tokenId)
-  } else if (trait) {
-    await submitSignedOrderData(taskId, roundedWei.toString(), decimal, currencySymbol, bidCount, order, wallet, slug, bidExpiry, trait, undefined)
-  } else {
-    await submitSignedOrderData(taskId, roundedWei.toString(), decimal, currencySymbol, bidCount, order, wallet, slug, bidExpiry, undefined, undefined)
-  }
-  return order
+  // Simplify the submitSignedOrderData call
+  await submitSignedOrderData(
+    taskId, 
+    roundedWei.toString(), 
+    decimal, 
+    currencySymbol, 
+    bidCount, 
+    order, 
+    wallet, 
+    slug, 
+    bidExpiry, 
+    trait, 
+    tokenId,
+    task // Pass the cached task
+  );
+  
+  return order;
 }
 
 /**
@@ -144,11 +311,14 @@ async function createBidData(
   currency = WETH,
   trait?: Trait,
   tokenId?: number | string,
+  cachedTask?: any // Accept cached task to avoid duplicate lookup
 ) {
-
-  const task = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase() && task?.selectedMarketplaces?.map((marketplace) => marketplace.toLowerCase()).includes("magiceden"))
-
-  if (!task) return
+  const task = cachedTask || currentTasks.find((task) => 
+    task.contract.slug.toLowerCase() === slug.toLowerCase() && 
+    task?.selectedMarketplaces?.map((marketplace) => marketplace.toLowerCase()).includes("magiceden")
+  );
+  
+  if (!task) return;
 
   const options = trait || tokenId ? {
     "seaport-v1.6": {
@@ -185,51 +355,77 @@ async function createBidData(
     params: params
   };
 
-  try {
-    const controller = new AbortController();
-    addActiveRequest(taskId, controller);
-
-    try {
-      const { data: order } = await limiter.schedule(() => axiosInstance.post<CreateBidData>(
-        `${BASE_URL}/magiceden/v3/rtp/ethereum/execute/bid/v5`,
-        data,
-        {
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': API_KEY
-          },
-          signal: controller.signal
-        }
-      ));
-      return order;
-    } finally {
-      const controllers = activeRequests.get(taskId) || [];
-      const index = controllers.indexOf(controller);
-      if (index >= 0) {
-        controllers.splice(index, 1);
-      }
-      if (controllers.length === 0) {
-        activeRequests.delete(taskId);
-      }
-    }
-  } catch (error: any) {
-    if (axios.isCancel(error)) {
-      console.log(`Request for task ${taskId} was cancelled`);
-      return null;
-    }
-    await logger.logMagicEdenBidError('Failed to create bid data on Magic Eden', {
-      taskId,
-      collection: slug,
-      tokenId: tokenId?.toString(),
-      traitType: trait?.attributeKey,
-      traitValue: trait?.attributeValue,
-      operation: 'create_bid_data',
-      error: error,
-      errorCode: error?.response?.status,
-      errorMessage: error?.response?.data || error?.message || String(error)
-    });
-    throw error
+  // Enhanced request deduplication with better cache key
+  const requestKey = `createBid:${taskId}:${slug}:${weiPrice}:${currency}:${expirationTime}:${tokenId || (trait ? `${trait.attributeKey}:${trait.attributeValue}` : 'collection')}`;
+  const existingRequest = pendingRequests.get(requestKey);
+  if (existingRequest) {
+    return existingRequest;
   }
+
+  const requestPromise = (async () => {
+    try {
+      const controller = new AbortController();
+      addActiveRequest(taskId, controller);
+
+      // Add timeout protection
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+
+      try {
+        const { data: order } = await limiter.schedule(() => axiosInstance.post<CreateBidData>(
+          `${BASE_URL}/magiceden/v3/rtp/ethereum/execute/bid/v5`,
+          data,
+          {
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': API_KEY
+            },
+            signal: controller.signal,
+            timeout: 30000
+          }
+        ));
+        clearTimeout(timeoutId);
+ 
+        // Clean up cache after a delay to prevent immediate re-requests
+        setTimeout(() => {
+          pendingRequests.delete(requestKey);
+        }, 5000); // 5 second cache
+        
+        return order;
+      } finally {
+        clearTimeout(timeoutId);
+        const controllers = activeRequests.get(taskId) || [];
+        const index = controllers.indexOf(controller);
+        if (index >= 0) {
+          controllers.splice(index, 1);
+        }
+        if (controllers.length === 0) {
+          activeRequests.delete(taskId);
+        }
+      }
+    } catch (error: any) {
+      // Clean up on error
+      pendingRequests.delete(requestKey);
+      
+      if (axios.isCancel(error)) {
+        return null;
+      }
+      await logger.logMagicEdenBidError('Failed to create bid data on Magic Eden', {
+        taskId,
+        collection: slug,
+        tokenId: tokenId?.toString(),
+        traitType: trait?.attributeKey,
+        traitValue: trait?.attributeValue,
+        operation: 'create_bid_data',
+        error: error,
+        errorCode: error?.response?.status,
+        errorMessage: extractMagicEdenErrorMessage(error)
+      });
+      throw error;
+    }
+  })();
+
+  pendingRequests.set(requestKey, requestPromise);
+  return requestPromise;
 }
 
 /**
@@ -243,55 +439,17 @@ async function signOrderData(taskId: string, wallet: ethers.Wallet, signData: an
     throw new Error('Asset does not exist.');
   }
 
-  const domain = trait ? {
-    "name": "Seaport",
-    "version": "1.6",
-    "chainId": 1,
-    "verifyingContract": "0x0000000000000068f116a894984e2db1123eb395"
-  } : signData && signData.domain ? signData.domain : {
-    "name": "Seaport",
-    "version": "1.6",
-    "chainId": 1,
-    "verifyingContract": "0x0000000000000068f116a894984e2db1123eb395"
-  }
-
-  const types = trait ? {
-    "OrderComponents": [
-      { "name": "offerer", "type": "address" },
-      { "name": "zone", "type": "address" },
-      { "name": "offer", "type": "OfferItem[]" },
-      { "name": "consideration", "type": "ConsiderationItem[]" },
-      { "name": "orderType", "type": "uint8" },
-      { "name": "startTime", "type": "uint256" },
-      { "name": "endTime", "type": "uint256" },
-      { "name": "zoneHash", "type": "bytes32" },
-      { "name": "salt", "type": "uint256" },
-      { "name": "conduitKey", "type": "bytes32" },
-      { "name": "counter", "type": "uint256" }
-    ],
-    "OfferItem": [
-      { "name": "itemType", "type": "uint8" },
-      { "name": "token", "type": "address" },
-      { "name": "identifierOrCriteria", "type": "uint256" },
-      { "name": "startAmount", "type": "uint256" },
-      { "name": "endAmount", "type": "uint256" }
-    ],
-    "ConsiderationItem": [
-      { "name": "itemType", "type": "uint8" },
-      { "name": "token", "type": "address" },
-      { "name": "identifierOrCriteria", "type": "uint256" },
-      { "name": "startAmount", "type": "uint256" },
-      { "name": "endAmount", "type": "uint256" },
-      { "name": "recipient", "type": "address" }
-    ]
-  } : signData.types
+  // Use cached domain and types for better performance
+  const domain = trait ? domainCache : (signData.domain || domainCache);
+  const types = trait ? typesCache : signData.types;
+  
   const signature = await wallet.signTypedData(
     domain,
     types,
     convertBigNumbers(signData.value)
   );
+  
   return signature;
-
 }
 
 /**
@@ -305,16 +463,28 @@ async function signOrderData(taskId: string, wallet: ethers.Wallet, signData: an
 * @param trait - Collection trait
  * @returns The response from the API.
  */
-async function sendSignedOrderData(taskId: string, offerPrice: string | number, decimal: number, currencySymbol: string, bidCount: string, signature: string, data: any, slug: string, expiry: number, trait?: Trait, tokenId?: number | string) {
+async function sendSignedOrderData(
+  taskId: string, 
+  offerPrice: string | number, 
+  decimal: number, 
+  currencySymbol: string, 
+  bidCount: string, 
+  signature: string, 
+  data: any, 
+  slug: string, 
+  expiry: number, 
+  trait?: Trait, 
+  tokenId?: number | string,
+  cachedTask?: any // Accept cached task
+) {
   try {
-
-    const [taskId] = bidCount.split(":")
-
-    const task = await currentTasks.find((task) =>
+    const [_parsedTaskId] = bidCount.split(":");
+    
+    const task = cachedTask || currentTasks.find((task) =>
       task.contract.slug.toLowerCase() === slug.toLowerCase() &&
       task.selectedMarketplaces.includes("MagicEden")
-    )
-    if (!task) return
+    );
+    if (!task) return;
 
     const endpoint = trait || tokenId
       ? `${BASE_URL}/magiceden/v3/rtp/ethereum/order/v3`
@@ -355,17 +525,39 @@ async function sendSignedOrderData(taskId: string, offerPrice: string | number, 
       const task = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase() && task.selectedMarketplaces.includes("MagicEden"))
       if (!task) return
 
-      await prisma.order.create({
-        data: {
-          slug: slug,
-          orderHash: payload,
-          expiresAt: new Date(Date.now() + expiry * 1000),
-          offerPrice: offerPrice.toString(),
-          identifier: identifier.toString(),
-          taskId: taskId,
-          marketplace: "magiceden"
-        }
-      })
+      // Batch database operations
+      orderBatchQueue.push({
+        slug: slug,
+        orderHash: payload,
+        expiresAt: new Date(Date.now() + expiry * 1000),
+        offerPrice: offerPrice.toString(),
+        identifier: identifier.toString(),
+        taskId: taskId,
+        marketplace: "magiceden"
+      });
+      
+      // Process batch if not already scheduled
+      if (!batchProcessor) {
+        batchProcessor = setTimeout(async () => {
+          const batch = [...orderBatchQueue];
+          orderBatchQueue.length = 0;
+          batchProcessor = null;
+          
+          if (batch.length > 0) {
+            try {
+              await prisma.order.createMany({ data: batch });
+            } catch (error) {
+              // Log error but don't fail the bid
+              await logger.logDatabaseError('Failed to batch create orders', {
+                databaseOperation: DatabaseOperation.CREATE,
+                collection_name: 'orders',
+                affectedRows: batch.length,
+                error: error as Error
+              });
+            }
+          }
+        }, 100); // Batch every 100ms
+      }
       trackBidRate("magiceden", taskId)
       
       // Log successful bid
@@ -382,7 +574,9 @@ async function sendSignedOrderData(taskId: string, offerPrice: string | number, 
         bidType: tokenId ? 'token' : trait ? 'trait' : 'collection'
       });
       
-      console.log(MAGENTA, successMessage, RESET);
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(MAGENTA, successMessage, RESET);
+      }
       if (!task) return
       return offerResponse;
     } finally {
@@ -411,7 +605,7 @@ async function sendSignedOrderData(taskId: string, offerPrice: string | number, 
       currency: currencySymbol,
       error: error,
       errorCode: error?.response?.status,
-      errorMessage: error?.response?.data || error?.message || String(error)
+      errorMessage: extractMagicEdenErrorMessage(error)
     });
     throw error
   }
@@ -425,43 +619,59 @@ async function sendSignedOrderData(taskId: string, offerPrice: string | number, 
  * @param slug - Collection slug
 
  */
-export async function submitSignedOrderData(taskId: string, offerPrice: string | number, decimal: number, currencySymbol: string, bidCount: string, order: CreateBidData, wallet: ethers.Wallet, slug: string, expiry: number, trait?: Trait, tokenId?: number | string) {
-  const task = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase() && task.selectedMarketplaces.includes("MagicEden"))
-  if (!task) return
+export async function submitSignedOrderData(
+  taskId: string, 
+  offerPrice: string | number, 
+  decimal: number, 
+  currencySymbol: string, 
+  bidCount: string, 
+  order: CreateBidData, 
+  wallet: ethers.Wallet, 
+  slug: string, 
+  expiry: number, 
+  trait?: Trait, 
+  tokenId?: number | string,
+  cachedTask?: any // Accept cached task
+) {
+  const task = cachedTask || currentTasks.find((task) => 
+    task.contract.slug.toLowerCase() === slug.toLowerCase() && 
+    task.selectedMarketplaces.includes("MagicEden")
+  );
+  if (!task) return;
 
-  if (order && Array.isArray(order.steps)) {
-    order.steps.forEach((step) => {
-      if (Array.isArray(step.items)) {
-        step.items.forEach((item) => {
-          if (item.data?.post?.body) {
-            item.data.post.body.source = "magiceden.us";
+  // Optimize order data transformation with single pass
+  const targetRecipient = "0x6fa303e72bed54f515a513496f922bc331e2f27e".toLowerCase();
+  const replacementRecipient = "0xca9337244b5f04cb946391bc8b8a980e988f9a6a";
+  
+  if (order?.steps) {
+    for (const step of order.steps) {
+      if (!step.items) continue;
+      
+      for (const item of step.items) {
+        // Set source
+        if (item.data?.post?.body) {
+          item.data.post.body.source = "magiceden.us";
+        }
+        
+        // Replace recipients in sign value consideration
+        if (item.data?.sign?.value?.consideration) {
+          for (const considerationItem of item.data.sign.value.consideration) {
+            if (considerationItem.recipient.toLowerCase() === targetRecipient) {
+              considerationItem.recipient = replacementRecipient;
+            }
           }
-        });
+        }
+        
+        // Replace recipients in post body consideration
+        if (item.data?.post?.body?.order?.data?.consideration) {
+          for (const considerationItem of item.data.post.body.order.data.consideration) {
+            if (considerationItem.recipient.toLowerCase() === targetRecipient) {
+              considerationItem.recipient = replacementRecipient.toLowerCase();
+            }
+          }
+        }
       }
-    });
-  }
-
-  if (order && Array.isArray(order.steps)) {
-    order.steps.forEach((step) => {
-      if (Array.isArray(step.items)) {
-        step.items.forEach((item) => {
-          if (Array.isArray(item.data?.sign?.value?.consideration)) {
-            item.data.sign.value.consideration.forEach((considerationItem) => {
-              if (considerationItem.recipient.toLowerCase() === "0x6fa303e72bed54f515a513496f922bc331e2f27e".toLowerCase()) {
-                considerationItem.recipient = "0xca9337244b5f04cb946391bc8b8a980e988f9a6a";
-              }
-            });
-          }
-          if (Array.isArray(item.data?.post?.body?.order?.data?.consideration)) {
-            item.data?.post?.body?.order?.data?.consideration?.forEach((considerationItem) => {
-              if (considerationItem.recipient.toLowerCase() === "0x6fa303e72bed54f515a513496f922bc331e2f27e".toLowerCase()) {
-                considerationItem.recipient = "0xca9337244b5f04cb946391bc8b8a980e988f9a6a".toLowerCase();
-              }
-            });
-          }
-        });
-      }
-    });
+    }
   }
   const signData = order?.steps
     ?.find((step) => step.id === "order-signature")
@@ -528,12 +738,27 @@ export async function submitSignedOrderData(taskId: string, offerPrice: string |
         operation: 'sign_order',
         errorCode: 'MISSING_SIGN_DATA'
       });
-      console.error('Sign data not found in order steps.');
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('Sign data not found in order steps.');
+      }
     }
 
   }
 
-  const result = await sendSignedOrderData(taskId, offerPrice, decimal, currencySymbol, bidCount, signature, data, slug, expiry, trait, tokenId);
+  const result = await sendSignedOrderData(
+    taskId, 
+    offerPrice, 
+    decimal, 
+    currencySymbol, 
+    bidCount, 
+    signature, 
+    data, 
+    slug, 
+    expiry, 
+    trait, 
+    tokenId,
+    task // Pass the cached task
+  );
   return result;
 
 
@@ -588,7 +813,9 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
         orderIds: processedOrderIds,
         errorCode: 'SIGNATURE_GENERATION_FAILED'
       });
-      console.error('Failed to generate signature for cancel order');
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('Failed to generate signature for cancel order');
+      }
       return;
     }
     const body = cancelStep?.items[0].data.post.body
@@ -609,18 +836,24 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
       }
     ))
     if (cancelResponse) {
-      console.log(JSON.stringify(cancelResponse));
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(JSON.stringify(cancelResponse));
+      }
     }
-    console.log(`Successfully cancelled ${orderIds.length} MagicEden bids for task: ${taskId}`.toUpperCase());
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`Successfully cancelled ${orderIds.length} MagicEden bids for task: ${taskId}`.toUpperCase());
+    }
     orderIds.forEach(() => {
       decrementBidCount('magiceden', taskId);
     });
 
   } catch (error: any) {
     const message = `Error cancelling MagicEden bid: ${error?.response?.data?.message || error?.message || error}`
-    console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-    console.log(RED + message + RESET)
-    console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
+      console.log(RED + message + RESET);
+      console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
+    }
   }
 }
 
@@ -629,7 +862,7 @@ async function signCancelOrder(taskId: string, cancelItem: any | undefined, priv
 
   if (!cancelItem) return
 
-  const wallet = new Wallet(privateKey, provider);
+  const wallet = getWallet(privateKey);
 
   const signature = await wallet.signTypedData(
     cancelItem.domain,
@@ -770,7 +1003,9 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
     return floor
   } catch (error) {
     if (error) {
-      console.error('MagicEden trait floor error:', error instanceof Error ? error.message : String(error));
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('MagicEden trait floor error:', error instanceof Error ? error.message : String(error));
+      }
     }
   }
 }
@@ -797,7 +1032,9 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
       error: error as Error,
       errorMessage: error instanceof Error ? error.message : String(error)
     });
-    console.error('Error reading from cache:', error);
+    if (process.env.NODE_ENV !== 'production') {
+      console.error('Error reading from cache:', error);
+    }
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -819,7 +1056,9 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
         error: error as Error,
         errorMessage: error instanceof Error ? error.message : String(error)
       });
-      console.error('Error reading from cache after lock:', error);
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('Error reading from cache after lock:', error);
+      }
     }
 
     const queryParams = {
@@ -858,7 +1097,9 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
           error: error as Error,
           errorMessage: error instanceof Error ? error.message : String(error)
         });
-        console.error('Error writing to cache:', error);
+        if (process.env.NODE_ENV !== 'production') {
+          console.error('Error writing to cache:', error);
+        }
       }
     }
 
@@ -884,7 +1125,9 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
         error: error as Error,
         errorMessage: error instanceof Error ? error.message : String(error)
       });
-      console.error('Error reading from cache after lock failure:', error);
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('Error reading from cache after lock failure:', error);
+      }
     }
     await logger.logMagicEdenCollectionError('Failed to fetch collection stats', {
       contractAddress,

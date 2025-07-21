@@ -371,7 +371,7 @@ function addTaskToIndexes(task: ITask): void {
     slugToTasksMap.get(slugKey)!.add(task);
   }
 
-  console.log(`[Task Indexes] After adding - Contracts: ${contractToTasksMap.size}, Slugs: ${slugToTasksMap.size}`);
+  // Removed console.log for task indexes
 }
 
 // Remove a single task from the indexes
@@ -395,7 +395,7 @@ function removeTaskFromIndexes(task: ITask): void {
     }
   }
 
-  console.log(`[Task Indexes] After removing - Contracts: ${contractToTasksMap.size}, Slugs: ${slugToTasksMap.size}`);
+  // Removed console.log for task indexes
 }
 
 export const OPENSEA_SCHEDULE = "OPENSEA_SCHEDULE"
@@ -626,6 +626,11 @@ async function monitorHealth() {
     });
     console.log(`Total Jobs: ${totalJobs}`);
 
+    // WebSocket Message Queue Status
+    console.log(BLUE + '\n📡 WebSocket Queue:' + RESET);
+    console.log(`Size: ${wsMessageQueue.size}`);
+    console.log(`Pending: ${wsMessageQueue.pending}`);
+
     updateAllBidRates();
 
   } catch (error) {
@@ -734,7 +739,7 @@ async function handleConnectivityRestored() {
   // Calculate how long connectivity was lost
   const downtime = connectivityLostAt ? Date.now() - connectivityLostAt : 0;
   const downtimeMinutes = Math.floor(downtime / 60000);
-  
+
   if (downtime > 0) {
     console.log(YELLOW + `Connectivity was lost for ${downtimeMinutes} minutes ${Math.floor((downtime % 60000) / 1000)} seconds` + RESET);
   }
@@ -758,7 +763,7 @@ async function handleConnectivityRestored() {
     await initializeListingScheduler(wsManager);
     console.log('📋 Listing scheduler reinitialized');
   }
-  
+
   // Reset connectivity lost timestamp
   connectivityLostAt = null;
 }
@@ -1000,7 +1005,7 @@ async function startServer() {
     initializeQueueEventHandlers();
 
     // Initialize multiple workers with Redis connection and proper lock settings
-    const concurrencyPerWorker = Number(RATE_LIMIT);
+    const concurrencyPerWorker = Number(RATE_LIMIT) / WORKER_COUNT;
 
     for (let i = 0; i < WORKER_COUNT; i++) {
       // Create a separate connection for each worker
@@ -5453,11 +5458,6 @@ async function connectWebSocket(): Promise<void> {
 
     wsManager.on('message', async (message: any) => {
       try {
-        // Process heartbeat messages synchronously
-        if (message.type === 'pong') {
-          console.log('Pong received from server.');
-          return;
-        }
 
         // Handle initial data request synchronously
         if (message.endpoint === "get-initial-data") {
@@ -5468,21 +5468,8 @@ async function connectWebSocket(): Promise<void> {
           wsManager.sendMessage(initialDataMessage);
           return;
         }
-
-        // Queue other messages for async processing to prevent blocking
-        setImmediate(() => {
-          handleMarketplaceMessage(message).catch(error => {
-            console.error('Error handling message:', error);
-            logger.logWebSocketError('Error handling WebSocket message', {
-              error: error as Error,
-              messageType: message?.type,
-              marketplace: message?.data?.marketplace,
-              connectionId: connectionMetrics.currentConnectionId || undefined
-            }).catch(logError => {
-              console.error('Failed to log WebSocket error:', logError);
-            });
-          });
-        });
+        // All messages use the queue
+        wsMessageQueue.add(() => { handleMarketplaceMessage(message) })
       } catch (error) {
         console.error('Error in message handler:', error);
       }
@@ -5528,19 +5515,19 @@ async function connectWebSocket(): Promise<void> {
 async function handleMarketplaceMessage(message: any) {
   try {
     // Debug logging for message inspection
+    if (message.eventType === 'BID_CREATED') {
+      return handleCounterBid(message)
+    }
 
-    if (message.eventType === 'LISTING_CREATED') {
+    else if (message.eventType === 'LISTING_CREATED') {
       // Handle listing price update for instant price matching
-      await handleListingPriceUpdate(message);
-      return;
+      return handleListingPriceUpdate(message);
     }
 
-    if (message.eventType === 'ITEM_SOLD') {
-      await updateBalancesForItemSold(message);
-      return
+    else if (message.eventType === 'ITEM_SOLD') {
+      return updateBalancesForItemSold(message);
     }
-    // Otherwise, handle as a counterbid message
-    handleCounterBid(message)
+
   } catch (error) {
     console.error("Error in handleMarketplaceMessage:", error);
   }
@@ -5802,7 +5789,7 @@ async function handleCounterBid(message: any) {
     // Use fast O(1) lookup instead of O(n) filter
     const relevantTasks = getRelevantTasks(contractAddress, slug);
     if (!relevantTasks.length) return;
-    await Promise.all(relevantTasks.map(task => handleCounterBidForTask(task, message)));
+    relevantTasks.map(task => handleCounterBidForTask(task, message))
   } catch (error) {
     console.error("Error in handleCounterBid:", error);
   }
@@ -5823,19 +5810,19 @@ function getMarketplaceDetails(message: any): { contractAddress?: string, slug?:
   }
 }
 
-async function handleCounterBidForTask(task: any, message: any) {
+function handleCounterBidForTask(task: any, message: any) {
   const selectedMarketplaces = task.selectedMarketplaces.map((m: string) => m.toLowerCase());
 
   if (selectedMarketplaces.includes('blur') && message.marketplace === BLUR) {
-    await handleBlurCounterbid(message['1'], task);
+    handleBlurCounterbid(message['1'], task);
   }
 
   if (selectedMarketplaces.includes('opensea') && message.marketplace === OPENSEA) {
-    await handleOpenseaCounterbid(message, task);
+    handleOpenseaCounterbid(message, task);
   }
 
   if (selectedMarketplaces.includes('magiceden') && message.marketplace === MAGICEDEN) {
-    await handleMagicEdenCounterbid(message, task)
+    handleMagicEdenCounterbid(message, task)
   }
 }
 
@@ -7234,6 +7221,11 @@ function roundToValidPrecision(priceEth: number): number {
 
 export const pQueue = new PQueue({
   concurrency: RATE_LIMIT,
+})
+
+// Dedicated queue for WebSocket messages with higher concurrency
+export const wsMessageQueue = new PQueue({
+  concurrency: 1000,
 })
 
 function getTraitCount(traitsJson: any, attribute: any) {
