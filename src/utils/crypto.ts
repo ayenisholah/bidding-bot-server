@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import { config } from "dotenv"
-import { logger } from './logger';
 
 config()
 
@@ -33,18 +32,9 @@ async function getEncryptionKey(): Promise<Buffer> {
   }
 
   // No password available - throw error
-  await logger.logSecurityEvent(
-    "MISSING_PASSWORD",
-    "No password available for encryption",
-    {
-      operation: "get_encryption_key",
-    }
-  );
   throw new Error("No password available. Please provide a password for encryption.");
 
 }
-
-
 
 // Deterministic password encryption/decryption functions
 // Uses a fixed key derived from JWT_SECRET for deterministic encryption
@@ -58,7 +48,6 @@ async function getPasswordEncryptionKey(): Promise<Buffer> {
     .update(secret)
     .digest();
 }
-
 
 export async function encryptPrivateKey(privateKey: string): Promise<string> {
   const key = await getEncryptionKey();
@@ -79,10 +68,6 @@ export async function decryptPrivateKey(encryptedData: string): Promise<string> 
   const parts = encryptedData.split(':');
 
   if (parts.length !== 3) {
-    await logger.logSecurityEvent('INVALID_ENCRYPTED_FORMAT', 'Invalid encrypted data format', {
-      operation: 'decrypt_private_key',
-      partsLength: parts.length
-    });
     throw new Error('Invalid encrypted data format');
   }
 
@@ -123,14 +108,6 @@ export async function decryptPassword(encryptedPassword: string): Promise<string
 
     return decrypted;
   } catch (error) {
-    await logger.logSecurityEvent(
-      "PASSWORD_DECRYPTION_FAILED",
-      "Failed to decrypt password",
-      {
-        operation: "decrypt_password",
-        error: error instanceof Error ? error.message : "Unknown error",
-      } as any
-    );
     throw new Error("Failed to decrypt password");
   }
 }

@@ -5984,9 +5984,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       const tokenBid = task.bidType === "token"
 
       if (!tokenBid || !tokenIds.includes(tokenId)) return
-      console.log(MAGENTA + '----------------------------------------------------------------------------------' + RESET);
-      console.log(MAGENTA + `incoming bid for ${task.contract.slug}:${tokenId} for ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} on magiceden`.toUpperCase() + RESET);
-      console.log(MAGENTA + '----------------------------------------------------------------------------------' + RESET);
 
       // Check cache first
       let floor_price = collectionCache.getFloorPrice(task.contract.contractAddress, 'magiceden');
@@ -6045,9 +6042,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         const message = `magiceden counter offer ${offerPriceEth} ${currencySymbol} for ${task.contract.slug} ${tokenId} exceeds max bid price ${maxBidPriceEth} ${currencySymbol} ON MAGICEDEN.Skipping ...`.toUpperCase()
         await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "magiceden");
 
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-        console.log(RED + message + RESET);
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
 
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
           if (orders.length > 0) {
@@ -6081,9 +6075,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       if (job) {
         if (incomingBidAmount <= Number(job.data.offerPrice)) {
-          console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + `Skipping counterbid since ${task.contract.slug}:${tokenId} incoming bid ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol} Domain: ${domain}` + RESET);
-          console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
           return
         } else {
           await job.updateData(bidData)
@@ -6101,9 +6092,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       seenOrderHashes.delete(orderHash);
 
-      console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(GREEN + `Counterbidding incoming magiceden offer of ${Number(incomingBidAmount) / Math.pow(10, decimal)} ${currencySymbol} for ${task.contract.slug} ${tokenId} for ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} ON MAGICEDEN`.toUpperCase() + RESET);
-      console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
       if (orders.length > 0) {
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
         const orderKeys = orders.map((order: PrismaOrder) => order.id)
@@ -6126,9 +6114,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       const hasTraits = checkMagicEdenTrait(selectedTraits, trait)
       if (!hasTraits || !traitBid || !trait.attributeKey || !trait.attributeValue) return
 
-      console.log(MAGENTA + '----------------------------------------------------------------------------------' + RESET);
-      console.log(MAGENTA + `incoming bid for ${task.contract.slug} ${JSON.stringify(trait)} for ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} on magiceden`.toUpperCase() + RESET);
-      console.log(MAGENTA + '----------------------------------------------------------------------------------' + RESET);
 
       // Check cache first
       let floor_price = collectionCache.getFloorPrice(task.contract.contractAddress, 'magiceden');
@@ -6192,9 +6177,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         const message = `magiceden counter offer ${offerPriceEth} ${currencySymbol} for ${task.contract.slug} ${JSON.stringify(trait)} exceeds max bid price ${maxBidPriceEth} ${currencySymbol} ON MAGICEDEN.Skipping ...`.toUpperCase()
         await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "magiceden");
 
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-        console.log(RED + message + RESET);
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
 
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
           if (orders.length > 0) {
@@ -6224,9 +6206,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       if (job) {
         if (incomingBidAmount <= job.data.offerPrice) {
-          console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + `Skipping counterbid since incoming bid ${task.contract.slug}:${JSON.stringify(trait)} ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol} Domain: ${domain}` + RESET);
-          console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
           return
         } else {
           await job.updateData(data)
@@ -6242,9 +6221,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
       seenOrderHashes.delete(orderHash);
 
-      console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(GREEN + `Counterbidding incoming offer of ${Number(incomingBidAmount) / Math.pow(10, decimal)} ${currencySymbol} for ${task.contract.slug} trait ${JSON.stringify(trait)} for ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} ON MAGICEDEN `.toUpperCase() + RESET);
-      console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
       if (orders.length > 0) {
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
         const orderKeys = orders.map((order: PrismaOrder) => order.id)
@@ -6260,9 +6236,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       if (!collectionBid) return
 
-      console.log(MAGENTA + '----------------------------------------------------------------------------------' + RESET);
-      console.log(MAGENTA + `incoming collection offer for ${task.contract.slug} for ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} on magiceden`.toUpperCase() + RESET);
-      console.log(MAGENTA + '----------------------------------------------------------------------------------' + RESET);
 
       // Check cache first
       let floor_price = collectionCache.getFloorPrice(task.contract.contractAddress, 'magiceden');
@@ -6321,9 +6294,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
         const message = `counter Offer ${offerPriceEth} ${currencySymbol} for ${task.contract.slug}  exceeds max bid price ${maxBidPriceEth} ${currencySymbol}.Skipping ...`.toUpperCase()
         await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "magiceden");
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-        console.log(RED + message + RESET);
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
 
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
           if (orders.length > 0) {
@@ -6355,9 +6325,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       if (job) {
         if (incomingBidAmount <= job.data.offerPrice) {
-          console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + `Skipping counterbid since incoming bid ${task.contract.slug}:collection ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol} Domain: ${domain}` + RESET);
-          console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
           return
         } else {
           await job.updateData(bidData)
@@ -6374,9 +6341,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
       seenOrderHashes.delete(orderHash);
 
-      console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(GREEN + `Counterbidding incoming magiceden offer of ${Number(incomingBidAmount) / Math.pow(10, decimal)} ${currencySymbol} for ${task.contract.slug} for ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol}`.toUpperCase() + RESET);
-      console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
 
       if (orders.length > 0) {
         const orderKeys = orders.map((order: PrismaOrder) => order.id)
@@ -6386,9 +6350,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
     }
   } catch (error) {
-    console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-    console.log(RED + `Error processing magiceden counterbid: ${error}` + RESET);
-    console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
   }
 }
 
@@ -6519,9 +6480,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       if (!tokenBid || !tokenIds.includes(+tokenId)) return
 
-      console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
-      console.log(BLUE + `incoming offer for ${task.contract.slug}:${tokenId} for ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} on opensea`.toUpperCase() + RESET);
-      console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
 
       // Check cache first
       let floor_price = collectionCache.getFloorPrice(task.contract.slug, 'opensea');
@@ -6601,9 +6559,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       if (offerPriceEth > maxBidPriceEth) {
         const message = `counter offer ${offerPriceEth} ${currencySymbol} for ${task.contract.slug}:${tokenId}  exceeds max bid price ${maxBidPriceEth} ${currencySymbol} ON OPENSEA.Skipping ...`.toUpperCase()
         await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea");
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-        console.log(RED + message + RESET);
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
           if (orders.length > 0) {
             const cancelData = orders.map((order, index) => {
@@ -6642,9 +6597,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       const job: Job = await queue.getJob(jobId)
       if (job) {
         if (incomingBidAmount <= job.data.offerPrice) {
-          console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + `Skipping counterbid since incoming bid ${task.contract.slug}:${asset.tokenId} ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol} Domain: Opensea` + RESET);
-          console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
           return
         } else {
           await job.updateData(bidData)
@@ -6659,9 +6611,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         );
       }
       seenOrderHashes.delete(orderHash);
-      console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(GREEN + `Counterbidding incoming opensea offer of ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}:${asset.tokenId} for ${Number(tokenOffer) / Math.pow(10, decimal)} ${currencySymbol} ON OPENSEA`.toUpperCase() + RESET);
-      console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
 
       if (orders.length > 0) {
         const cancelData = orders.map((order, index) => {
@@ -6685,9 +6634,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       const traitFloor = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices ? await openseaTraitFloor(currentTask.contract.slug, { traitType: trait.type, values: [trait.value] }) : undefined
 
-      console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
-      console.log(BLUE + `incoming offer for ${task.contract.slug}:${identifier} for ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} on opensea`.toUpperCase() + RESET);
-      console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
 
 
       // Check cache first
@@ -6769,9 +6715,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       const offerPriceEth = offerPrice / Math.pow(10, decimal)
 
       if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-        console.log(RED + `counter Offer ${offerPriceEth} ${currencySymbol} for ${task.contract.slug} ${JSON.stringify(trait)} exceeds max bid price ${maxBidPriceEth} ${currencySymbol} ON OPENSEA.Skipping ...`.toUpperCase() + RESET);
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
 
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
           if (orders.length > 0) {
@@ -6807,9 +6750,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       if (job) {
         if (incomingBidAmount <= job.data.offerPrice) {
-          console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + `Skipping counterbid since incoming bid ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol} domain: opensea` + RESET);
-          console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
           return
         } else {
           await job.updateData(counterbidData)
@@ -6825,9 +6765,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       }
       seenOrderHashes.delete(orderHash);
 
-      console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(GREEN + `Counterbidding incoming opensea offer of ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug} ${JSON.stringify(trait)} for ${Number(traitOffer) / Math.pow(10, decimal)} ${currencySymbol} ON OPENSEA`.toUpperCase() + RESET);
-      console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
 
       if (orders.length > 0) {
         const cancelData = orders.map((order, index) => {
@@ -6846,9 +6783,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       if (!collectionBid) return
 
-      console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
-      console.log(BLUE + `incoming collection offer for ${task.contract.slug} for  ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} on opensea`.toUpperCase() + RESET);
-      console.log(BLUE + '---------------------------------------------------------------------------------' + RESET);
 
       // Check cache first
       let floor_price = collectionCache.getFloorPrice(task.contract.slug, 'opensea');
@@ -6931,9 +6865,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
         const message = `counter Offer price ${offerPriceEth} ${currencySymbol} for ${task.contract.slug} exceeds max bid price ${maxBidPriceEth} ${currencySymbol} ON OPENSEA.Skipping ...`.toUpperCase()
         await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea");
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-        console.log(RED + message + RESET);
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
 
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
           if (orders.length > 0) {
@@ -6968,9 +6899,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       if (job) {
         if (incomingBidAmount <= job.data.offerPrice) {
-          console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + `Skipping counterbid since incoming bid ${task.contract.slug}:collection ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} is less than or equal to existing bid ${Number(job.data.offerPrice) / Math.pow(10, decimal)} ${currencySymbol} domain: opensea` + RESET);
-          console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
           return
         } else {
           await job.updateData(bidData)
@@ -6987,9 +6915,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       }
       seenOrderHashes.delete(orderHash);
 
-      console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(GREEN + `Counterbidding incoming offer of  ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug} for ${Number(colletionOffer) / Math.pow(10, decimal)} ${currencySymbol} ON OPENSEA`.toUpperCase() + RESET);
-      console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
 
       if (orders.length > 0) {
         const cancelData = orders.map((order, index) => {
@@ -7005,9 +6930,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     seenOrderHashes.delete(orderHash);
 
   } catch (error) {
-    console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-    console.log(RED + `Error processing opensea counterbid: ${error}` + RESET);
-    console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
   }
 }
 
@@ -7044,9 +6966,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         const trait = JSON.stringify(traitBid?.criteriaValue)
         const incomingPrice = Number(traitBid?.bestPrice || traitBid?.price || 0)
         const traits = JSON.stringify(traitBid?.criteriaValue)
-        console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
-        console.log(GOLD + `incoming trait offer for ${task?.contract?.slug}: ${trait} for ${incomingPrice} BETH on blur`.toUpperCase() + RESET);
-        console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
 
         // Check cache first
         let floor_price = collectionCache.getFloorPrice(task?.contract?.slug, 'blur');
@@ -7156,9 +7075,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
         if (job) {
           if (incomingPrice <= Number(job?.data?.offerPrice) / 1e18) {
-            console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-            console.log(RED + `Skipping counterbid since incoming bid ${task.contract.slug}:${JSON.stringify(incomingTrait)} ${incomingPrice} BETH is less than or equal to existing bid ${Number(job.data.offerPrice) / 1e18} BETH domain: blur` + RESET);
-            console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
             return
           } else {
             await job.updateData(data)
@@ -7175,9 +7091,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
         seenBids.delete(bidHash)
 
-        console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-        console.log(GREEN + `Counterbidding incoming blur offer of ${Number(incomingPrice)} BETH for ${task.contract.slug} ${JSON.stringify(incomingTrait)} for ${Number(offerPrice) / 1e18} BETH ON BLUR`.toUpperCase() + RESET);
-        console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
       }
 
     } else {
@@ -7193,9 +7106,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
       const bestPrice = +incomingBestPrice > 0 ? incomingBestPrice : +incomingBidAmount > 0 ? incomingBidAmount : "0"
 
-      console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
-      console.log(GOLD + `incoming collection offer for ${task?.contract?.slug} for ${bestPrice} BETH on blur`.toUpperCase() + RESET);
-      console.log(GOLD + '---------------------------------------------------------------------------------' + RESET);
 
       // Check cache first
       let floor_price = collectionCache.getFloorPrice(task.contract.slug, 'blur');
@@ -7215,7 +7125,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
       const wallets = await Wallet.findById(task.walletId)
       if (!wallets) {
-        console.log(RED + `Wallet not found for task ${task._id}` + RESET);
         return
       }
       const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
@@ -7306,9 +7215,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
       if (job) {
         if (+incomingPrice <= +job?.data?.offerPrice) {
-          console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-          console.log(RED + `Skipping counterbid since incoming bid ${task.contract.slug}:collection ${incomingPrice / 1e18} BETH is less than or equal to existing bid ${Number(job.data.offerPrice) / 1e18} BETH domain: blur` + RESET);
-          console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
           return
         } else {
           await job.updateData(bidData)
@@ -7324,18 +7230,13 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         );
       }
 
-      console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(GREEN + `Counterbidding incoming blur collection offer of ${Number(incomingPrice) / 1e18} BETH for ${task.contract.slug} for ${(Number(offerPrice) / 1e18)} BETH ON BLUR`.toUpperCase() + RESET);
-      console.log(GREEN + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
       seenBids.delete(bidHash)
     }
   } catch (error: any) {
-    console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
     console.log(RED + `Error handling Blur counterbid: ${error?.message || error?.toString() || 'Unknown error'}` + RESET);
     if (error?.stack) {
       console.log(RED + `Stack trace: ${error.stack}` + RESET);
     }
-    console.log(RED + '-------------------------------------------------------------------------------------------------------------------------' + RESET);
   }
 }
 
