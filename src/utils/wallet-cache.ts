@@ -43,8 +43,8 @@ class WalletCache {
           address: wallet.address,
           encryptedPrivateKey: wallet.encryptedPrivateKey,
           name: wallet.name,
-          user: wallet.user,
-          tasks: wallet.tasks,
+          user: String(wallet.user),
+          tasks: (wallet as any).tasks,
           lastUsed: Date.now()
         });
       }
@@ -69,7 +69,12 @@ class WalletCache {
       const wallet = await Wallet.findOne({ address: normalizedAddress }).lean();
       if (wallet) {
         this.cache.set(normalizedAddress, {
-          ...wallet,
+          _id: wallet._id,
+          address: wallet.address,
+          encryptedPrivateKey: wallet.encryptedPrivateKey,
+          name: wallet.name,
+          user: String(wallet.user),
+          tasks: (wallet as any).tasks,
           lastUsed: Date.now()
         });
         return wallet;
@@ -125,7 +130,12 @@ class WalletCache {
       for (const wallet of wallets) {
         const address = wallet.address.toLowerCase();
         this.cache.set(address, {
-          ...wallet,
+          _id: wallet._id,
+          address: wallet.address,
+          encryptedPrivateKey: wallet.encryptedPrivateKey,
+          name: wallet.name,
+          user: String(wallet.user),
+          tasks: (wallet as any).tasks,
           lastUsed: Date.now()
         });
       }

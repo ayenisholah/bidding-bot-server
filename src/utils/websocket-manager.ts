@@ -1,6 +1,5 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
-import { logger, ErrorCategory } from './logger';
 
 export interface WebSocketManagerConfig {
   url: string;
@@ -88,11 +87,6 @@ class WebSocketManager extends EventEmitter {
       ...config
     };
 
-    logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket Manager initialized', {
-      clientId: this.config.clientId,
-      url: this.config.url,
-      heartbeatInterval: this.config.heartbeatInterval
-    });
 
     // Load persistent listing subscriptions on initialization
     this.loadPersistentSubscriptions();
@@ -100,25 +94,11 @@ class WebSocketManager extends EventEmitter {
 
   async connect(): Promise<void> {
     // Check if already connected
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket already connected', {
-        readyState: this.ws?.readyState
-      });
-      return;
-    }
-
+    if (this.ws?.readyState === WebSocket.OPEN) return;
     // Check if already attempting to connect
-    if (this.isReconnecting) {
-      logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket connection already in progress');
-      return;
-    }
+    if (this.isReconnecting) return;
 
     this.isReconnecting = true;
-    logger.logInfo(ErrorCategory.WEBSOCKET, 'Attempting WebSocket connection', {
-      url: this.config.url,
-      clientId: this.config.clientId,
-      attempt: this.retryCount + 1
-    });
 
     try {
       // Clean up existing connection
@@ -128,9 +108,7 @@ class WebSocketManager extends EventEmitter {
           try {
             this.ws.close();
           } catch (error) {
-            logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing WebSocket during cleanup', {
-              error: error instanceof Error ? error : new Error(String(error))
-            });
+            console.log(error);
           }
         }
         this.ws = null;
@@ -141,7 +119,6 @@ class WebSocketManager extends EventEmitter {
       // Connection timeout
       const connectionTimeout = setTimeout(() => {
         try {
-          logger.logWarning(ErrorCategory.WEBSOCKET, 'Connection timeout, closing and retrying');
           this.isReconnecting = false;
           if (this.ws) {
             this.ws.removeAllListeners();
@@ -150,26 +127,17 @@ class WebSocketManager extends EventEmitter {
               try {
                 this.ws.close();
               } catch (error) {
-                // Ignore close errors during connection phase
-                logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing WebSocket during timeout', {
-                  error: error instanceof Error ? error : new Error(String(error))
-                });
+                console.log(error);
               }
             }
           }
           this.attemptReconnect();
         } catch (error) {
-          // Prevent timeout callback from crashing the server
-          logger.logWebSocketError('Error in WebSocket connection timeout callback', {
-            error: error instanceof Error ? error : new Error(String(error))
-          });
-          // Still attempt to reconnect even if there was an error
+          console.log(error);
           try {
             this.attemptReconnect();
           } catch (reconnectError) {
-            logger.logWebSocketError('Error attempting reconnect after timeout error', {
-              error: reconnectError instanceof Error ? reconnectError : new Error(String(reconnectError))
-            });
+            console.log(reconnectError);
           }
         }
       }, this.config.connectionTimeout);
@@ -178,10 +146,6 @@ class WebSocketManager extends EventEmitter {
         clearTimeout(connectionTimeout);
         this.isReconnecting = false;
         this.retryCount = 0;
-        logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket connection opened', {
-          url: this.config.url,
-          clientId: this.config.clientId
-        });
         this.onConnectionEstablished();
       });
 
@@ -191,13 +155,12 @@ class WebSocketManager extends EventEmitter {
 
       // Handle any errors during connection phase
       this.ws.once('error', (error) => {
+        console.log(error);
         clearTimeout(connectionTimeout);
-        logger.logWebSocketError('WebSocket connection error', error);
-        // The error handler and close handler will take care of reconnection
       });
 
     } catch (error) {
-      logger.logWebSocketError('Connection attempt failed', error as Error);
+      console.log(error);
       this.isReconnecting = false;
       this.attemptReconnect();
     }
@@ -215,17 +178,12 @@ class WebSocketManager extends EventEmitter {
     this.lastMessageReceived = Date.now();
     this.missedPongs = 0;
 
-    logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket connected', {
-      connectionId,
-      url: this.config.url
-    });
-
     // Send initial ping immediately after connection (per CLIENT_PROTOCOL.md)
     this.sendPing();
 
     // Start heartbeat
     this.startHeartbeat();
-    
+
     // Start keep-alive messages to prevent proxy timeouts
     this.startKeepAlive();
 
@@ -237,9 +195,7 @@ class WebSocketManager extends EventEmitter {
 
     // Sync subscriptions (don't await to prevent blocking connection)
     this.syncSubscriptions().catch(error => {
-      logger.logWarning(ErrorCategory.WEBSOCKET, 'Subscription sync failed on connection', {
-        error: error instanceof Error ? error : new Error('Unknown error')
-      });
+      console.log(error);
     });
 
     this.emit('connected', connectionId);
@@ -256,15 +212,11 @@ class WebSocketManager extends EventEmitter {
       if (this.lastPingSent && this.lastPingSent > this.lastPongReceived) {
         this.missedPongs++;
         if (this.missedPongs >= 6) { // Increased from 3 to 6 for better network tolerance
-          logger.logWarning(ErrorCategory.WEBSOCKET, 'Connection appears dead, reconnecting...', {
-            missedPongs: this.missedPongs
-          });
+
           try {
             this.ws?.close();
           } catch (error) {
-            logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing dead connection', {
-              error: error instanceof Error ? error : new Error(String(error))
-            });
+            console.log(error);
           }
           return;
         }
@@ -277,20 +229,12 @@ class WebSocketManager extends EventEmitter {
       if (this.lastMessageReceived > 0 &&
         (this.activeSubscriptions.size > 0 || this.persistentListingSubscriptions.size > 0) &&
         (now - this.lastMessageReceived) > adaptiveStaleThreshold) {
-        logger.logWarning(ErrorCategory.WEBSOCKET, 'Connection appears stale (no messages received), reconnecting...', {
-          lastMessageReceived: this.lastMessageReceived,
-          staleDuration: now - this.lastMessageReceived,
-          threshold: adaptiveStaleThreshold,
-          activeSubscriptions: this.activeSubscriptions.size,
-          persistentListingSubscriptions: this.persistentListingSubscriptions.size
-        });
+        console.log('Connection appears stale (no messages received), reconnecting...');
         // Force clean disconnection to ensure server cleans up state
         try {
           this.ws?.close(1001, 'Stale connection detected');
         } catch (error) {
-          logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing stale connection', {
-            error: error instanceof Error ? error : new Error(String(error))
-          });
+          console.log('Error closing stale connection:', error);
         }
         return;
       }
@@ -307,16 +251,14 @@ class WebSocketManager extends EventEmitter {
       this.clearTimeout('pongTimeout');
       this.setTimeout('pongTimeout', () => {
         this.missedPongs++;
-        logger.logWarning(ErrorCategory.WEBSOCKET, `Pong timeout - missed ${this.missedPongs}/3 pongs`);
+        console.log(`Pong timeout - missed ${this.missedPongs}/3 pongs`);
 
         if (this.missedPongs >= 6) { // Increased from 3 to 6 for better network tolerance
-          logger.logWebSocketError('Max missed pongs reached, forcing reconnection');
+          console.log('Max missed pongs reached, forcing reconnection');
           try {
             this.ws?.close();
           } catch (error) {
-            logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing WebSocket after missed pongs', {
-              error: error instanceof Error ? error : new Error(String(error))
-            });
+            console.log('Error closing WebSocket after missed pongs:', error);
           }
         }
       }, 15000); // 15 second pong timeout (increased from 5s for better network tolerance)
@@ -326,17 +268,17 @@ class WebSocketManager extends EventEmitter {
 
   private startKeepAlive(): void {
     this.clearInterval('keepAlive');
-    
+
     // Send keep-alive every 90 seconds to prevent proxy timeouts
     this.setInterval('keepAlive', () => {
       if (this.isConnected()) {
-        this.sendMessage({ 
-          event: 'keep-alive', 
+        this.sendMessage({
+          event: 'keep-alive',
           clientId: this.config.clientId,
           timestamp: Date.now()
         });
-        
-        logger.logDebug(ErrorCategory.WEBSOCKET, 'Sent keep-alive message');
+
+        console.log('Sent keep-alive message');
       }
     }, 90000); // 90 seconds
   }
@@ -346,7 +288,7 @@ class WebSocketManager extends EventEmitter {
 
     this.setInterval('healthMonitor', () => {
       if (!this.isConnected()) {
-        logger.logWarning(ErrorCategory.WEBSOCKET, 'Health monitor detected disconnection');
+        console.log('Health monitor detected disconnection');
         return;
       }
 
@@ -357,7 +299,7 @@ class WebSocketManager extends EventEmitter {
 
       // Log health status periodically
       if (timeSinceLastMessage > 60000 || timeSinceLastPong > 60000) { // 1 minute
-        logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket health status', {
+        console.log('WebSocket health status:', {
           connectionQuality: this.metrics.connectionQuality,
           timeSinceLastMessage,
           timeSinceLastPong,
@@ -373,43 +315,32 @@ class WebSocketManager extends EventEmitter {
         if (this.persistentListingSubscriptions.size > 0) {
           const listingSubs = Array.from(this.persistentListingSubscriptions.entries())
             .map(([, info]) => `${info.slug}:${info.marketplace}`);
-          logger.logInfo(ErrorCategory.WEBSOCKET, 'Active listing subscriptions', {
-            subscriptions: listingSubs
-          });
+          console.log('Active listing subscriptions:', listingSubs);
         }
       }
 
       // Force reconnection if connection appears severely degraded
       if (timeSinceLastMessage > 3600000) { // 60 minutes (increased from 10min)
-        logger.logWarning(ErrorCategory.WEBSOCKET, 'Forcing reconnection due to severely stale connection', {
-          timeSinceLastMessage,
-          threshold: 3600000
-        });
+        console.log('Forcing reconnection due to severely stale connection');
         try {
           this.ws?.close();
         } catch (error) {
-          logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing severely stale connection', {
-            error: error instanceof Error ? error : new Error(String(error))
-          });
+          console.log('Error closing severely stale connection:', error);
         }
       }
 
       // Periodic subscription verification (every 5 minutes)
       if (this.activeSubscriptions.size > 0 && timeSinceLastMessage > 300000) { // 5 minutes
-        logger.logInfo(ErrorCategory.WEBSOCKET, 'Performing periodic subscription verification');
+        console.log('Performing periodic subscription verification');
         this.verifySubscriptions().catch(error => {
-          logger.logWarning(ErrorCategory.WEBSOCKET, 'Periodic subscription verification failed', {
-            error: error instanceof Error ? error : new Error('Unknown error')
-          });
+          console.log('Periodic subscription verification failed:', error);
         });
       }
-      
+
       // Add specific listing subscription health check every 2 minutes
       if (this.persistentListingSubscriptions.size > 0 && timeSinceLastMessage > 120000) { // 2 minutes
         this.verifyListingSubscriptions().catch(error => {
-          logger.logWarning(ErrorCategory.WEBSOCKET, 'Listing subscription verification failed', {
-            error: error instanceof Error ? error : new Error('Unknown error')
-          });
+          console.log('Listing subscription verification failed:', error);
         });
       }
 
@@ -420,7 +351,7 @@ class WebSocketManager extends EventEmitter {
     try {
       // First, request current subscriptions from server to verify state
       this.requestSubscriptions();
-      
+
       // Wait a bit for server response
       await new Promise(resolve => setTimeout(resolve, 1000));
 
@@ -434,11 +365,11 @@ class WebSocketManager extends EventEmitter {
 
       // Skip sync if no subscriptions
       if (this.activeSubscriptions.size === 0 && this.persistentListingSubscriptions.size === 0) {
-        logger.logInfo(ErrorCategory.WEBSOCKET, 'No subscriptions to sync');
+        console.log('No subscriptions to sync');
         return;
       }
 
-      logger.logInfo(ErrorCategory.WEBSOCKET, 'Syncing subscriptions after reconnection', {
+      console.log('Syncing subscriptions after reconnection:', {
         activeSubscriptions: this.activeSubscriptions.size,
         persistentListings: this.persistentListingSubscriptions.size
       });
@@ -466,7 +397,7 @@ class WebSocketManager extends EventEmitter {
               contractAddress: subInfo.contractAddress
             };
 
-            logger.logDebug(ErrorCategory.WEBSOCKET, 'Resubscribing to collection', {
+            console.log('Resubscribing to collection:', {
               subscriptionId,
               slug: subInfo.slug,
               eventName,
@@ -481,16 +412,16 @@ class WebSocketManager extends EventEmitter {
             await new Promise(resolve => setTimeout(resolve, 100));
           } catch (error) {
             failedSubscriptions.push(subInfo.slug);
-            logger.logWarning(ErrorCategory.WEBSOCKET, 'Failed to resubscribe to collection', {
+            console.log('Failed to resubscribe to collection:', {
               slug: subInfo.slug,
               subscriptionType,
-              error: error instanceof Error ? error : new Error('Unknown error')
+              error
             });
           }
         }
       }
 
-      logger.logInfo(ErrorCategory.WEBSOCKET, 'Subscription sync complete', {
+      console.log('Subscription sync complete:', {
         biddingCollections: subscribedSlugs.size,
         listingCollections: subscribedListings.size,
         failed: failedSubscriptions.length,
@@ -509,21 +440,18 @@ class WebSocketManager extends EventEmitter {
       }
 
     } catch (error) {
-      logger.logWebSocketError('Failed to sync subscriptions', error instanceof Error ? error : new Error(String(error)));
-      // Don't let sync failure kill the connection
-      logger.logWarning(ErrorCategory.WEBSOCKET, 'Continuing without subscription sync', {
-        error: error instanceof Error ? error : new Error('Unknown error')
-      });
+      console.log('Failed to sync subscriptions:', error);
+      console.log('Continuing without subscription sync');
     }
   }
 
   private async retryFailedSubscriptions(failedSlugs: string[]): Promise<void> {
     if (!this.isConnected()) {
-      logger.logWarning(ErrorCategory.WEBSOCKET, 'Cannot retry subscriptions - not connected');
+      console.log('Cannot retry subscriptions - not connected');
       return;
     }
 
-    logger.logInfo(ErrorCategory.WEBSOCKET, 'Retrying failed subscriptions', {
+    console.log('Retrying failed subscriptions:', {
       count: failedSlugs.length
     });
 
@@ -545,7 +473,7 @@ class WebSocketManager extends EventEmitter {
             contractAddress: subInfo.contractAddress
           };
 
-          logger.logDebug(ErrorCategory.WEBSOCKET, 'Retrying subscription', {
+          console.log('Retrying subscription:', {
             slug,
             eventName,
             subscriptionType
@@ -554,15 +482,10 @@ class WebSocketManager extends EventEmitter {
           this.sendMessage(message);
           await new Promise(resolve => setTimeout(resolve, 200));
         } else {
-          logger.logWarning(ErrorCategory.WEBSOCKET, 'Failed to find subscription info for retry', {
-            slug
-          });
+          console.log('Failed to find subscription info for retry:', slug);
         }
       } catch (error) {
-        logger.logWarning(ErrorCategory.WEBSOCKET, 'Retry subscription failed', {
-          slug,
-          error: error instanceof Error ? error : new Error('Unknown error')
-        });
+        console.log('Retry subscription failed:', { slug, error });
       }
     }
   }
@@ -584,7 +507,7 @@ class WebSocketManager extends EventEmitter {
 
       // Handle subscription sync response
       if (message.type === 'subscription_sync') {
-        logger.logInfo(ErrorCategory.WEBSOCKET, 'Received subscription sync', {
+        console.log('Received subscription sync:', {
           subscriptions: message.subscriptions?.length || 0
         });
         // Server returns stringified JSON objects in subscriptions array
@@ -600,19 +523,14 @@ class WebSocketManager extends EventEmitter {
 
       // Handle server shutdown notification
       if (message.type === 'server_shutdown') {
-        logger.logWarning(ErrorCategory.WEBSOCKET, 'Server shutdown notification received', {
-          reconnectIn: message.reconnectIn
-        });
+        console.log('Server shutdown notification received');
         this.emit('server_shutdown', message);
         return;
       }
       this.emit('message', message);
 
     } catch (error) {
-      logger.logGeneralError('Failed to parse WebSocket message', {
-        operation: 'websocket_message_parse',
-        error: error instanceof Error ? error : new Error(String(error))
-      });
+      console.log('Failed to parse WebSocket message:', error);
 
       // Still emit the raw message even if parsing fails
       // This helps prevent message loss
@@ -620,7 +538,7 @@ class WebSocketManager extends EventEmitter {
         this.emit('message', { raw: data.toString(), parseError: true });
       } catch (emitError) {
         console.log(emitError);
-        logger.logWebSocketError('Failed to emit raw message after parse error');
+        console.log('Failed to emit raw message after parse error');
       }
     }
   }
@@ -637,10 +555,7 @@ class WebSocketManager extends EventEmitter {
       timestamp <= 0 ||
       timestamp > this.lastPongReceived + maxFutureTolerance
     ) {
-      logger.logWarning(ErrorCategory.WEBSOCKET, 'Invalid pong timestamp received', {
-        timestamp,
-        now: this.lastPongReceived
-      });
+      console.log('Invalid pong timestamp received:', { timestamp, now: this.lastPongReceived });
       return;
     }
 
@@ -650,13 +565,13 @@ class WebSocketManager extends EventEmitter {
     // Clear pong timeout when we receive a pong
     this.clearTimeout('pongTimeout');
 
-    logger.logDebug(ErrorCategory.WEBSOCKET, 'Pong received', { latency });
+    console.log('Pong received, latency:', latency);
   }
 
 
 
   private handleServerStatus(status: any): void {
-    logger.logInfo(ErrorCategory.WEBSOCKET, 'Server status update', status);
+    console.log('Server status update:', status);
 
     // Acknowledge receipt
     this.sendMessage({
@@ -683,7 +598,7 @@ class WebSocketManager extends EventEmitter {
 
     // Enhanced logging for disconnection analysis
     const now = Date.now();
-    logger.logWarning(ErrorCategory.WEBSOCKET, 'WebSocket disconnected', {
+    console.log('WebSocket disconnected:', {
       code: event.code,
       reason: event.reason || 'unknown',
       connectionDuration: this.metrics.connectionDuration,
@@ -719,7 +634,7 @@ class WebSocketManager extends EventEmitter {
     if (event.code !== 1000) {
       this.attemptReconnect();
     } else {
-      logger.logInfo(ErrorCategory.WEBSOCKET, 'Normal disconnection, not reconnecting');
+      console.log('Normal disconnection, not reconnecting');
     }
   }
 
@@ -727,14 +642,14 @@ class WebSocketManager extends EventEmitter {
     this.metrics.totalErrors++;
     this.metrics.lastError = error;
 
-    logger.logWebSocketError('WebSocket error', error);
+    console.log('WebSocket error:', error);
     this.emit('error', error);
 
     // If we get ECONNREFUSED or similar errors, the connection is dead
     if (error.message?.includes('ECONNREFUSED') ||
       error.message?.includes('ETIMEDOUT') ||
       error.message?.includes('ENETUNREACH')) {
-      logger.logWarning(ErrorCategory.WEBSOCKET, 'Connection error detected, will reconnect on close event');
+      console.log('Connection error detected, will reconnect on close event');
       // The close event will handle reconnection
     }
   }
@@ -745,7 +660,7 @@ class WebSocketManager extends EventEmitter {
 
     // Check if we should stop retrying (0 means infinite retries)
     if (this.config.maxRetries > 0 && this.retryCount >= this.config.maxRetries) {
-      logger.logWebSocketError('Max reconnection attempts exceeded', new Error('Max retries reached'));
+      console.log('Max reconnection attempts exceeded');
       this.emit('max_retries_exceeded');
       return;
     }
@@ -765,7 +680,7 @@ class WebSocketManager extends EventEmitter {
     const jitter = exponentialDelay * jitterRange * (Math.random() - 0.5);
     const delay = Math.round(exponentialDelay + jitter);
 
-    logger.logInfo(ErrorCategory.WEBSOCKET, 'Scheduling reconnection', {
+    console.log('Scheduling reconnection:', {
       attempt: this.retryCount + 1,
       maxRetries: this.config.maxRetries || 'unlimited',
       delayMs: delay,
@@ -776,9 +691,9 @@ class WebSocketManager extends EventEmitter {
     this.retryCount++;
 
     this.setTimeout('reconnect', () => {
-      logger.logInfo(ErrorCategory.WEBSOCKET, 'Executing scheduled reconnection');
+      console.log('Executing scheduled reconnection');
       this.connect().catch(error => {
-        logger.logWebSocketError('Reconnection failed', error as Error);
+        console.log('Reconnection failed:', error);
         // Connection will retry through its own error handling
       });
     }, delay);
@@ -789,7 +704,7 @@ class WebSocketManager extends EventEmitter {
       try {
         this.ws.send(JSON.stringify(message));
       } catch (error) {
-        logger.logWebSocketError('Failed to send message', error as Error);
+        console.log('Failed to send message:', error);
         this.queueMessage(message);
       }
     } else {
@@ -808,10 +723,7 @@ class WebSocketManager extends EventEmitter {
 
     this.sendMessage(pingMessage);
 
-    logger.logDebug(ErrorCategory.WEBSOCKET, 'Ping sent', {
-      clientId: this.config.clientId,
-      timestamp: this.lastPingSent
-    });
+    console.log('Ping sent');
   }
 
 
@@ -861,7 +773,7 @@ class WebSocketManager extends EventEmitter {
     const fiveMinutesAgo = now - 300000;
     const recentMessages = this.messageTimestamps.filter(ts => ts > fiveMinutesAgo).length;
     const messagesPerMinute = recentMessages / 5;
-    
+
     // Define thresholds based on activity level
     if (messagesPerMinute > 10) {
       // High activity: strict threshold (15 minutes)
@@ -880,7 +792,7 @@ class WebSocketManager extends EventEmitter {
 
     // Check if already subscribed
     if (this.activeSubscriptions.has(subscriptionId)) {
-      logger.logInfo(ErrorCategory.WEBSOCKET, 'Already subscribed', {
+      console.log('Already subscribed:', {
         subscriptionId,
         totalActive: this.activeSubscriptions.size,
         totalPersistent: this.persistentListingSubscriptions.size
@@ -888,7 +800,7 @@ class WebSocketManager extends EventEmitter {
       // Force resubscribe if we haven't received messages recently
       const now = Date.now();
       if (this.lastMessageReceived > 0 && (now - this.lastMessageReceived) > 60000) {
-        logger.logWarning(ErrorCategory.WEBSOCKET, 'Forcing resubscription due to no recent messages', {
+        console.log('Forcing resubscription due to no recent messages:', {
           subscriptionId,
           timeSinceLastMessage: now - this.lastMessageReceived
         });
@@ -930,7 +842,7 @@ class WebSocketManager extends EventEmitter {
 
       this.metrics.subscriptionCount = this.activeSubscriptions.size;
 
-      logger.logInfo(ErrorCategory.WEBSOCKET, 'Subscribed to collection', {
+      console.log('Subscribed to collection:', {
         slug,
         marketplace,
         subscriptionId,
@@ -945,7 +857,7 @@ class WebSocketManager extends EventEmitter {
       this.emit('subscribed', { slug, marketplace, subscriptionType });
 
     } catch (error) {
-      logger.logWebSocketError('Failed to subscribe', error as Error);
+      console.log('Failed to subscribe:', error);
       throw error;
     }
   }
@@ -958,7 +870,7 @@ class WebSocketManager extends EventEmitter {
       slug: slug,
       contractAddress: contractAddress
     };
-    
+
     const unsubscribeListing = {
       event: 'leave_listings',
       clientId: this.config.clientId,
@@ -1004,7 +916,7 @@ class WebSocketManager extends EventEmitter {
 
       this.metrics.subscriptionCount = this.activeSubscriptions.size;
 
-      logger.logInfo(ErrorCategory.WEBSOCKET, 'Unsubscribed from collection', {
+      console.log('Unsubscribed from collection:', {
         slug,
         marketplace: marketplace || 'all'
       });
@@ -1012,7 +924,7 @@ class WebSocketManager extends EventEmitter {
       this.emit('unsubscribed', { slug, marketplace });
 
     } catch (error) {
-      logger.logWebSocketError('Failed to unsubscribe', error as Error);
+      console.log('Failed to unsubscribe:', error);
       throw error;
     }
   }
@@ -1028,11 +940,11 @@ class WebSocketManager extends EventEmitter {
   // Add subscription verification method
   async verifySubscriptions(): Promise<void> {
     if (!this.isConnected()) {
-      logger.logWarning(ErrorCategory.WEBSOCKET, 'Cannot verify subscriptions - not connected');
+      console.log('Cannot verify subscriptions - not connected');
       return;
     }
 
-    logger.logInfo(ErrorCategory.WEBSOCKET, 'Verifying subscriptions', {
+    console.log('Verifying subscriptions:', {
       localSubscriptions: this.activeSubscriptions.size
     });
 
@@ -1044,15 +956,13 @@ class WebSocketManager extends EventEmitter {
       if (this.activeSubscriptions.size > 0) {
         const timeSinceLastMessage = this.lastMessageReceived ? Date.now() - this.lastMessageReceived : 0;
         if (timeSinceLastMessage > 120000) { // 2 minutes
-          logger.logWarning(ErrorCategory.WEBSOCKET, 'Subscription verification failed - no recent messages', {
+          console.log('Subscription verification failed - no recent messages:', {
             timeSinceLastMessage,
             activeSubscriptions: this.activeSubscriptions.size
           });
           // Force resubscription
           this.syncSubscriptions().catch(error => {
-            logger.logWarning(ErrorCategory.WEBSOCKET, 'Forced resubscription failed', {
-              error: error instanceof Error ? error : new Error('Unknown error')
-            });
+            console.log('Forced resubscription failed:', error);
           });
         }
       }
@@ -1166,9 +1076,7 @@ class WebSocketManager extends EventEmitter {
         this.ws.close(1000, 'Client disconnect'); // Normal closure
       } catch (error) {
         // Ignore close errors during disconnect
-        logger.logDebug(ErrorCategory.WEBSOCKET, 'Error closing WebSocket during disconnect', {
-          error: error instanceof Error ? error : new Error(String(error))
-        });
+        console.log('Error closing WebSocket during disconnect:', error);
       }
       this.ws = null;
     }
@@ -1182,14 +1090,10 @@ class WebSocketManager extends EventEmitter {
         const data = fs.readFileSync(this.subscriptionStateFile, 'utf8');
         const subscriptions = JSON.parse(data);
         this.persistentListingSubscriptions = new Map(subscriptions);
-        logger.logInfo(ErrorCategory.WEBSOCKET, 'Loaded persistent listing subscriptions', {
-          count: this.persistentListingSubscriptions.size
-        });
+        console.log('Loaded persistent listing subscriptions:', this.persistentListingSubscriptions.size);
       }
     } catch (error) {
-      logger.logWarning(ErrorCategory.WEBSOCKET, 'Failed to load persistent subscriptions', {
-        error: error instanceof Error ? error : new Error('Unknown error')
-      });
+      console.log('Failed to load persistent subscriptions:', error);
     }
   }
 
@@ -1199,9 +1103,7 @@ class WebSocketManager extends EventEmitter {
       const subscriptions = Array.from(this.persistentListingSubscriptions.entries());
       fs.writeFileSync(this.subscriptionStateFile, JSON.stringify(subscriptions, null, 2));
     } catch (error) {
-      logger.logWarning(ErrorCategory.WEBSOCKET, 'Failed to save persistent subscriptions', {
-        error: error instanceof Error ? error : new Error('Unknown error')
-      });
+      console.log('Failed to save persistent subscriptions:', error);
     }
   }
 
@@ -1212,10 +1114,10 @@ class WebSocketManager extends EventEmitter {
   async verifyListingSubscriptions(): Promise<void> {
     const listingSubs = Array.from(this.activeSubscriptions.entries())
       .filter(([, info]) => info.subscriptionType === 'listing');
-    
+
     const persistentListingSubs = Array.from(this.persistentListingSubscriptions.entries());
-    
-    logger.logInfo(ErrorCategory.WEBSOCKET, 'Listing subscription verification', {
+
+    console.log('Listing subscription verification:', {
       activeListingSubscriptions: listingSubs.length,
       persistentListingSubscriptions: persistentListingSubs.length,
       subscriptions: listingSubs.map(([key, info]) => ({
@@ -1228,12 +1130,12 @@ class WebSocketManager extends EventEmitter {
       lastMessageReceived: this.lastMessageReceived ? new Date(this.lastMessageReceived).toISOString() : 'never',
       messagesSinceConnect: this.metrics.totalMessages
     });
-    
+
     // Check if we're receiving messages for these subscriptions
     if (listingSubs.length > 0 && this.lastMessageReceived) {
       const timeSinceLastMessage = Date.now() - this.lastMessageReceived;
       if (timeSinceLastMessage > 120000) { // 2 minutes
-        logger.logWarning(ErrorCategory.WEBSOCKET, 'Listing subscriptions may be stale', {
+        console.log('Listing subscriptions may be stale:', {
           timeSinceLastMessage,
           activeListingSubscriptions: listingSubs.length
         });
@@ -1247,9 +1149,9 @@ class WebSocketManager extends EventEmitter {
   getListingSubscriptionStats(): { active: number; persistent: number; slugs: string[] } {
     const listingSubs = Array.from(this.activeSubscriptions.entries())
       .filter(([, info]) => info.subscriptionType === 'listing');
-    
+
     const slugs = Array.from(new Set(listingSubs.map(([, info]) => info.slug)));
-    
+
     return {
       active: listingSubs.length,
       persistent: this.persistentListingSubscriptions.size,
@@ -1262,7 +1164,7 @@ class WebSocketManager extends EventEmitter {
    * This ensures clean state on both client and server
    */
   async forceUnsubscribeAll(): Promise<void> {
-    logger.logInfo(ErrorCategory.WEBSOCKET, 'Force unsubscribing from all collections', {
+    console.log('Force unsubscribing from all collections:', {
       activeSubscriptions: this.activeSubscriptions.size
     });
 
@@ -1282,7 +1184,7 @@ class WebSocketManager extends EventEmitter {
           slug: sub.slug,
           contractAddress: sub.contractAddress
         });
-        
+
         this.sendMessage({
           event: 'leave_listings',
           clientId: this.config.clientId,
