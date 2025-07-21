@@ -5444,6 +5444,7 @@ async function _doConnect(): Promise<void> {
         }
         // All messages use the queue
         wsMessageQueue.add(() => handleMarketplaceMessage(message))
+        
       } catch (error) {
         console.error('Error in message handler:', error);
       }
