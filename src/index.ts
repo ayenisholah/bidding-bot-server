@@ -166,40 +166,13 @@ class CircuitBreaker {
 
 const counterbidCircuitBreaker = new CircuitBreaker();
 
-// Performance metrics for counterbid operations
-interface CounterbidMetrics {
-  total: number;
-  success: number;
-  failed: number;
-  circuitBreakerOpen: number;
-  avgProcessingTime: number;
-  lastReset: number;
-  processingTimes: number[];
+// Utility function for timeout protection
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error(`Operation timeout: ${operation} took longer than ${timeoutMs}ms`)), timeoutMs)
+  );
+  return Promise.race([promise, timeout]);
 }
-
-const counterbidMetrics: { [marketplace: string]: CounterbidMetrics } = {
-  opensea: { total: 0, success: 0, failed: 0, circuitBreakerOpen: 0, avgProcessingTime: 0, lastReset: Date.now(), processingTimes: [] },
-  magiceden: { total: 0, success: 0, failed: 0, circuitBreakerOpen: 0, avgProcessingTime: 0, lastReset: Date.now(), processingTimes: [] },
-  blur: { total: 0, success: 0, failed: 0, circuitBreakerOpen: 0, avgProcessingTime: 0, lastReset: Date.now(), processingTimes: [] }
-};
-
-// Reset metrics every hour
-setInterval(() => {
-  Object.keys(counterbidMetrics).forEach(marketplace => {
-    const metrics = counterbidMetrics[marketplace];
-    console.log(`Counterbid metrics for ${marketplace}: Total: ${metrics.total}, Success: ${metrics.success}, Failed: ${metrics.failed}, CB Open: ${metrics.circuitBreakerOpen}, Avg Time: ${metrics.avgProcessingTime.toFixed(2)}ms`);
-    // Reset metrics
-    counterbidMetrics[marketplace] = { 
-      total: 0, 
-      success: 0, 
-      failed: 0, 
-      circuitBreakerOpen: 0, 
-      avgProcessingTime: 0, 
-      lastReset: Date.now(), 
-      processingTimes: [] 
-    };
-  });
-}, 3600000); // 1 hour
 
 // Set up periodic intervals
 let expirationMonitorInterval: NodeJS.Timeout | null = null;
@@ -5479,6 +5452,20 @@ async function _doConnect(): Promise<void> {
       const runningTasks = currentTasks.filter(task => task.running);
       if (runningTasks.length > 0) {
         subscribeToCollections(runningTasks as unknown as ITask[]);
+
+        // Pre-warm caches for active tasks to improve counterbid performance
+        runningTasks.forEach(async (task) => {
+          if (task.wallet) {
+            // Pre-load wallet data into cache
+            walletCache.getWallet(task.wallet).catch(() => { });
+          }
+          if (task.contract?.contractAddress) {
+            // Pre-load collection data into cache for each marketplace
+            ['opensea', 'magiceden', 'blur'].forEach(marketplace => {
+              collectionCache.getFloorPrice(task.contract.contractAddress, marketplace);
+            });
+          }
+        });
       }
 
       // Re-subscribe to listing collections for instant price matching
@@ -5530,7 +5517,7 @@ async function _doConnect(): Promise<void> {
         }
         // All messages use the queue
         wsMessageQueue.add(() => handleMarketplaceMessage(message))
-        
+
       } catch (error) {
         console.error('Error in message handler:', error);
       }
@@ -5857,87 +5844,47 @@ async function handleCounterBidForTask(task: any, message: any) {
   const marketplace = message.marketplace?.toLowerCase();
   const circuitKey = `${task._id}-${marketplace}`;
 
-  // Track metrics
-  if (counterbidMetrics[marketplace]) {
-    counterbidMetrics[marketplace].total++;
-  }
-
   // Check circuit breaker status
   if (counterbidCircuitBreaker.isOpen(circuitKey)) {
     const status = counterbidCircuitBreaker.getStatus(circuitKey);
     console.log(`Circuit breaker OPEN for ${circuitKey} - failures: ${status.failures}`);
-    if (counterbidMetrics[marketplace]) {
-      counterbidMetrics[marketplace].circuitBreakerOpen++;
-    }
     return;
   }
 
-  const startTime = Date.now();
-
-  // Process each marketplace handler with error handling
+  // Process each marketplace handler with error handling and timeout protection
   try {
     if (selectedMarketplaces.includes('blur') && message.marketplace === BLUR) {
-      handleBlurCounterbid(message['1'], task)
+      withTimeout(handleBlurCounterbid(message['1'], task), 5000, `Blur counterbid for ${task._id}`)
         .then(() => {
           counterbidCircuitBreaker.recordSuccess(circuitKey);
-          const duration = Date.now() - startTime;
-          if (counterbidMetrics.blur) {
-            counterbidMetrics.blur.success++;
-            counterbidMetrics.blur.processingTimes.push(duration);
-            counterbidMetrics.blur.avgProcessingTime = counterbidMetrics.blur.processingTimes.reduce((a, b) => a + b, 0) / counterbidMetrics.blur.processingTimes.length;
-          }
         })
         .catch((error) => {
           counterbidCircuitBreaker.recordFailure(circuitKey);
-          if (counterbidMetrics.blur) {
-            counterbidMetrics.blur.failed++;
-          }
           console.log(`Blur counterbid error for task ${task._id}: ${error.message}`);
         });
     }
     else if (selectedMarketplaces.includes('opensea') && message.marketplace === OPENSEA) {
-      handleOpenseaCounterbid(message, task)
+      withTimeout(handleOpenseaCounterbid(message, task), 5000, `OpenSea counterbid for ${task._id}`)
         .then(() => {
           counterbidCircuitBreaker.recordSuccess(circuitKey);
-          const duration = Date.now() - startTime;
-          if (counterbidMetrics.opensea) {
-            counterbidMetrics.opensea.success++;
-            counterbidMetrics.opensea.processingTimes.push(duration);
-            counterbidMetrics.opensea.avgProcessingTime = counterbidMetrics.opensea.processingTimes.reduce((a, b) => a + b, 0) / counterbidMetrics.opensea.processingTimes.length;
-          }
         })
         .catch((error) => {
           counterbidCircuitBreaker.recordFailure(circuitKey);
-          if (counterbidMetrics.opensea) {
-            counterbidMetrics.opensea.failed++;
-          }
           console.log(`OpenSea counterbid error for task ${task._id}: ${error.message}`);
         });
     }
     else if (selectedMarketplaces.includes('magiceden') && message.marketplace === MAGICEDEN) {
-      handleMagicEdenCounterbid(message, task)
+      withTimeout(handleMagicEdenCounterbid(message, task), 5000, `MagicEden counterbid for ${task._id}`)
         .then(() => {
           counterbidCircuitBreaker.recordSuccess(circuitKey);
-          const duration = Date.now() - startTime;
-          if (counterbidMetrics.magiceden) {
-            counterbidMetrics.magiceden.success++;
-            counterbidMetrics.magiceden.processingTimes.push(duration);
-            counterbidMetrics.magiceden.avgProcessingTime = counterbidMetrics.magiceden.processingTimes.reduce((a, b) => a + b, 0) / counterbidMetrics.magiceden.processingTimes.length;
-          }
         })
         .catch((error) => {
           counterbidCircuitBreaker.recordFailure(circuitKey);
-          if (counterbidMetrics.magiceden) {
-            counterbidMetrics.magiceden.failed++;
-          }
           console.log(`MagicEden counterbid error for task ${task._id}: ${error.message}`);
         });
     }
   } catch (error: any) {
     counterbidCircuitBreaker.recordFailure(circuitKey);
-    if (counterbidMetrics[marketplace]) {
-      counterbidMetrics[marketplace].failed++;
-    }
     console.log(`Counterbid error for task ${task._id}: ${error.message}`);
   }
 }
@@ -5960,26 +5907,26 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
     const domain: string = data?.data?.source?.domain
     const maker = data?.data?.maker?.toLowerCase()
-    
+
     // Parallel fetch wallet data and all wallets
     const [taskWallet, allWallets] = await Promise.all([
       walletCache.getWallet(task.wallet),
       walletCache.getAllWallets()
     ]);
-    
+
     if (!taskWallet) {
       await logger.logError(ErrorCategory.DATABASE, `Wallet not found for task ${task._id}: ${task.wallet}`, new Error('Wallet not found'));
       return;
     }
 
     const walletAddresses = allWallets.map((wallet) => wallet.address.toLowerCase())
-    
+
     // Check if the maker is one of our wallets before decrypting private key
     if (walletAddresses.includes(maker)) {
       incrementOwnBidCounter('magiceden', task._id);
       return
     }
-    
+
     // Only decrypt private key after checking if it's our own bid
     const WALLET_PRIVATE_KEY = await walletCache.getDecryptedPrivateKey(taskWallet);
     if (!WALLET_PRIVATE_KEY) {
@@ -6462,7 +6409,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     } : null
 
     const orderHash = data.payload.payload.order_hash
-    
+
     // Fetch all wallets first to check if it's our own bid
     const wallets = await Wallet.find({})
     const walletAddresses = wallets.map((wallet) => wallet.address.toLowerCase())
@@ -6491,7 +6438,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       incrementOwnBidCounter('opensea', task._id);
       return
     }
-    
+
     // Only decrypt private key after checking if it's our own bid
     const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.toLowerCase())?.encryptedPrivateKey as string);
 
@@ -7002,8 +6949,13 @@ async function handleBlurCounterbid(data: any, task: ITask) {
     if (!currentTask || !currentTask?.running || !currentTask?.selectedMarketplaces?.map((marketplace) => marketplace?.toLowerCase())?.includes("blur") || !enabledMarketplaces?.map((marketplace) => marketplace?.toLowerCase())?.includes("blur")) return
     const expiry = getExpiry(currentTask?.bidDuration)
     if (!currentTask?.outbidOptions?.counterbid) return
-    const wallets = await Wallet.findById(task.walletId)
-    const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallets?.encryptedPrivateKey as string);
+    // Use cached wallet for better performance
+    const wallets = await walletCache.getWallet(task.wallet);
+    if (!wallets) {
+      await logger.logError(ErrorCategory.DATABASE, `Wallet not found for task ${task._id}: ${task.wallet}`, new Error('Wallet not found'));
+      return;
+    }
+    const WALLET_PRIVATE_KEY = await walletCache.getDecryptedPrivateKey(wallets);
     const selectedTraits = transformNewTask(currentTask?.selectedTraits?.blur)
     const traitBid = currentTask?.bidType === "collection" && selectedTraits && Object.keys(selectedTraits)?.length > 0
     const blurOutbidMargin = currentTask?.outbidOptions?.blurOutbidMargin || 0.01
@@ -7121,7 +7073,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
           taskId: task._id,
           bidCount: bidCount,
           address: task.wallet,
-          privateKey: WALLET_PRIVATE_KEY,
+          privateKey: WALLET_PRIVATE_KEY || '',
           contractAddress: task.contract.contractAddress,
           offerPrice: Number(offerPrice),
           slug: task.contract.slug,
@@ -7180,11 +7132,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       }
       const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(task, Number(floor_price), "blur")
 
-      const wallets = await Wallet.findById(task.walletId)
-      if (!wallets) {
-        return
-      }
-      const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+      // Wallet already fetched above, no need to fetch again
 
       const orders = await prisma.order.findMany({
         where: {
@@ -7262,7 +7210,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         taskId: task._id,
         bidCount: bidCount,
         address: task.wallet,
-        privateKey: WALLET_PRIVATE_KEY,
+        privateKey: WALLET_PRIVATE_KEY || '',
         contractAddress: task.contract.contractAddress,
         offerPrice: Number(offerPrice),
         slug: task.contract.slug,
@@ -7378,7 +7326,7 @@ export const pQueue = new PQueue({
 
 // Dedicated queue for WebSocket messages with optimized concurrency
 export const wsMessageQueue = new PQueue({
-  concurrency: 50, // Reduced from 1000 to prevent resource contention
+  concurrency: RATE_LIMIT / 2, // Optimized for better throughput while preventing resource contention
 })
 
 function getTraitCount(traitsJson: any, attribute: any) {
@@ -11186,45 +11134,6 @@ app.get('/health', (req, res) => {
   };
 
   res.status(200).json(healthStatus);
-});
-
-// Counterbid metrics endpoint
-app.get('/metrics/counterbid', (req, res) => {
-  const metrics = {
-    timestamp: new Date().toISOString(),
-    marketplaces: counterbidMetrics,
-    circuitBreaker: {
-      opensea: counterbidCircuitBreaker.getStatus('opensea'),
-      magiceden: counterbidCircuitBreaker.getStatus('magiceden'),
-      blur: counterbidCircuitBreaker.getStatus('blur')
-    },
-    websocketQueue: {
-      concurrency: wsMessageQueue.concurrency,
-      size: wsMessageQueue.size,
-      pending: wsMessageQueue.pending
-    }
-  };
-  
-  res.status(200).json(metrics);
-});
-
-// Debug endpoint to check task indexes
-app.get('/api/debug/task-indexes', (req, res) => {
-  res.json({
-    currentTasksCount: currentTasks.length,
-    activeTasksCount: activeTasks.size,
-    contractIndexCount: contractToTasksMap.size,
-    slugIndexCount: slugToTasksMap.size,
-    indexedContracts: Array.from(contractToTasksMap.keys()),
-    indexedSlugs: Array.from(slugToTasksMap.keys()),
-    currentTasks: currentTasks.map(t => ({
-      id: t._id,
-      running: t.running,
-      contract: t.contract?.contractAddress,
-      slug: t.contract?.slug,
-      marketplaces: t.selectedMarketplaces
-    }))
-  });
 });
 
 export async function fetchAddressBalances(walletAddress: string): Promise<AddressBalancesResponse> {
