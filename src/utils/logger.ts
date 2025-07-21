@@ -281,6 +281,11 @@ export class AxiomLogger {
   }
 
   private async sendLog(level: LogLevel, category: ErrorCategory, message: string, context: LogContext = {}) {
+    // Format error message if it's an object
+    if (context.errorMessage && typeof context.errorMessage === 'object' && 'message' in context.errorMessage) {
+      context.errorMessage = (context.errorMessage as any).message;
+    }
+    
     const formattedMessage = this.formatMessage(category, message, context);
 
     // Add to local metrics
@@ -330,20 +335,49 @@ export class AxiomLogger {
       }
     }
 
-    // Also log to console for local development
+    // Skip console output for noisy logs
+    const skipConsoleCategories = [ErrorCategory.MARKETPLACE, ErrorCategory.QUEUE, ErrorCategory.GENERAL];
+    const skipConsoleLevels = [LogLevel.INFO, LogLevel.DEBUG];
+    
+    if (skipConsoleCategories.includes(category) && skipConsoleLevels.includes(level)) {
+      // Skip console output for these categories at INFO/DEBUG level
+      return;
+    }
+    
+    // Format console output for better readability
     const consoleMessage = `[${level.toUpperCase()}] ${formattedMessage}`;
+    
+    // Create a cleaner context for console output
+    const cleanContext = { ...context };
+    
+    // Extract error message from nested object
+    if (cleanContext.errorMessage && typeof cleanContext.errorMessage === 'object' && 'message' in cleanContext.errorMessage) {
+      cleanContext.errorMessage = (cleanContext.errorMessage as any).message;
+    }
+    
+    // Clean up error stack traces for console
+    if (cleanContext.error && cleanContext.error instanceof Error) {
+      cleanContext.error = {
+        name: cleanContext.error.name,
+        message: cleanContext.error.message
+      };
+    }
+    
     switch (level) {
       case LogLevel.ERROR:
-        console.error(consoleMessage, context);
+        console.error(consoleMessage);
+        if (cleanContext.errorMessage) {
+          console.error(`  Error: ${cleanContext.errorMessage}`);
+        }
         break;
       case LogLevel.WARN:
-        console.warn(consoleMessage, context);
+        console.warn(consoleMessage);
         break;
       case LogLevel.INFO:
-        console.info(consoleMessage, context);
+        console.info(consoleMessage);
         break;
       case LogLevel.DEBUG:
-        console.debug(consoleMessage, context);
+        console.debug(consoleMessage);
         break;
     }
   }
@@ -638,14 +672,9 @@ export class AxiomLogger {
     });
   }
 
-  async logBidPlaced(marketplace: string, amount: number, tokenId: string, context: LogContext = {}) {
-    await this.sendLog(LogLevel.INFO, ErrorCategory.MARKETPLACE, `Bid placed on ${marketplace}`, {
-      ...context,
-      marketplace,
-      bidAmount: amount,
-      tokenId,
-      marketplaceSubCategory: MarketplaceSubCategory.BIDDING
-    });
+  async logBidPlaced(marketplace: string, amount: number, tokenId: string, _context: LogContext = {}) {
+    // Skip logging bid placements to reduce console noise
+    return;
   }
 
   async logBidCancelled(marketplace: string, tokenId: string, reason: string, context: LogContext = {}) {
