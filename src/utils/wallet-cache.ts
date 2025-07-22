@@ -101,7 +101,7 @@ class WalletCache {
         this.password = getPassword() || null;
       }
       
-      const decryptedKey = await decryptPrivateKey(wallet.encryptedPrivateKey);
+      const decryptedKey = decryptPrivateKey(wallet.encryptedPrivateKey);
       
       // Cache the decrypted key
       this.decryptedKeys.set(address, {

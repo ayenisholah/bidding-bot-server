@@ -79,7 +79,7 @@ export async function createListing(data: IListing) {
     }
 
     const wallet = await Wallet.findById(walletId.toString());
-    const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+    const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
     const web3Wallet = new Web3Wallet(private_key, provider)
     const collectionData: ICollectionDetails | null = await getCollectionDetails(freshData.contract.slug, freshData.contract.contractAddress);
     const creatorFees = collectionData?.creator_fees as IFee

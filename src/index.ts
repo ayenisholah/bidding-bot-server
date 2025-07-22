@@ -1031,12 +1031,7 @@ async function startServer() {
       connection: queueConnection,
       defaultJobOptions: {
         removeOnComplete: true,
-        removeOnFail: true,
-        attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 1000,
-        }
+        removeOnFail: true
       }
     };
 
@@ -1417,6 +1412,80 @@ async function startServer() {
 
     console.log(`Started periodic cleanup for ITEM_SOLD events (every ${CLEANUP_INTERVAL / 1000 / 60} minutes)`);
 
+    // Check for stuck tasks periodically (every 30 seconds)
+    setInterval(async () => {
+      try {
+        for (const [taskId, status] of Object.entries(taskStatus)) {
+          // Check if task is stuck at 100% runningPercentage
+          if (status.runningPercentage >= 100 && status.status === 'RUNNING') {
+            const task = activeTasks.get(taskId);
+            if (!task) continue;
+            
+            // Check if all marketplaces are actually complete
+            const selectedMarketplaces = task.selectedMarketplaces.map(m => m.toLowerCase());
+            const enabledAndSelectedMarketplaces = selectedMarketplaces.filter(m =>
+              enabledMarketplaces.map(em => em.toLowerCase()).includes(m)
+            );
+            
+            if (!completedTasks[taskId]) {
+              console.log(YELLOW + `Task ${taskId} stuck at 100% - initializing completedTasks` + RESET);
+              completedTasks[taskId] = {
+                opensea: false,
+                magiceden: false,
+                blur: false
+              };
+            }
+            
+            // Check each marketplace completion
+            let allComplete = true;
+            for (const marketplace of enabledAndSelectedMarketplaces) {
+              const parentId = `${taskId}-${marketplace}`.toLowerCase();
+              const parentJob = parentJobs.get(parentId);
+              
+              if (parentJob) {
+                const isComplete = parentJob.completedJobs + parentJob.failedJobs >= parentJob.totalJobs;
+                completedTasks[taskId][marketplace as 'opensea' | 'magiceden' | 'blur'] = isComplete;
+                if (!isComplete) {
+                  allComplete = false;
+                }
+              }
+            }
+            
+            // If all marketplaces are complete but task is stuck, transition it
+            if (allComplete) {
+              console.log(YELLOW + `Recovering stuck task ${taskId} at 100% completion` + RESET);
+              taskStatus[taskId].status = 'COMPLETED';
+              
+              // Only schedule next loop if task is still running
+              if (task.running) {
+                const loopInterval = getExpiry(task.loopInterval);
+                const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
+                const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
+                
+                console.log(GREEN + `Scheduling recovered task ${taskId} to run again in ${loopInterval} seconds` + RESET);
+                taskStatus[taskId].status = 'SCHEDULED';
+                taskStatus[taskId].waitingTime = secondsUntilNextLoop;
+                taskStatus[taskId].nextLoopTime = nextLoopTime;
+                
+                const timeoutId = setTimeout(async () => {
+                  const currentTask = activeTasks.get(taskId);
+                  if (currentTask?.running) {
+                    await startTask(currentTask, true);
+                  }
+                }, loopInterval * 1000);
+                
+                taskTimeouts.set(taskId, timeoutId);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error(RED + 'Error checking for stuck tasks:' + RESET, error);
+      }
+    }, 30000); // Check every 30 seconds
+
+    console.log('Started periodic check for stuck tasks (every 30 seconds)');
+
     // Start internet connectivity monitoring
     startConnectivityMonitoring();
 
@@ -1427,11 +1496,16 @@ async function startServer() {
 
 
     // Check if password is set on startup
-    if (!getPassword()) {
+    const currentPassword = getPassword();
+    if (!currentPassword) {
       console.log(YELLOW + '⚠️  No password set - all operations are paused' + RESET);
       console.log(YELLOW + 'Please set password via POST /api/auth/password to start operations' + RESET);
+      console.log(YELLOW + 'Or set DEV_PASSWORD environment variable for development' + RESET);
 
       await pauseQueueAndWorkers();
+    } else {
+      console.log(GREEN + '✅ Password is already set - operations can proceed' + RESET);
+      console.log(GREEN + '✅ Queue and workers are active' + RESET);
     }
 
   } catch (error) {
@@ -1550,11 +1624,6 @@ function createJobOptions(jobId?: string, timeoutMs: number = 60000): JobsOption
     ...(jobId ? { jobId } : {}),
     removeOnComplete: true,
     removeOnFail: true,
-    attempts: 3, // Allow retries for jobs that would be waiting
-    backoff: {
-      type: 'exponential',
-      delay: 1000,
-    },
     lifo: true, // Process newest jobs first to prevent old jobs from getting stuck
   };
 }
@@ -1673,7 +1742,7 @@ function initializeQueueEventHandlers() {
 
           if (orders.length > 0) {
             const wallet = await Wallet.findById(task.walletId);
-            const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+            const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
             await cancelAllRelatedBids(task, private_key);
           }
           // Always transition to STOPPED when task is not running and cancellation is complete
@@ -1701,7 +1770,7 @@ function initializeQueueEventHandlers() {
 
           if (orders.length > 0) {
             const wallet = await Wallet.findById(task.walletId);
-            const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+            const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
             await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
           }
           // Always transition to STOPPED when cancellationPercentage reaches 100
@@ -1713,11 +1782,13 @@ function initializeQueueEventHandlers() {
     if (jobId.split('-').length < 3) return;
 
     const taskId = jobId.split('-')[0];
+
     const task = activeTasks.get(taskId);
 
-    if (!task || !task.running) return;
+    if (!task) return;
 
     const marketplace = jobId.split('-')[1].toLowerCase();
+
     const parentId = `${taskId}-${marketplace}`.toLowerCase();
 
     const { currencySymbol } = await calculateBidPrice(task, 0, "magiceden")
@@ -1772,7 +1843,7 @@ function initializeQueueEventHandlers() {
         if (allMarketsComplete && runningPercentage > 99) {
           console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
           const wallet = await Wallet.findById(task.walletId)
-          const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+          const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
 
           let totalCancellationJobs = 0;
 
@@ -1789,11 +1860,13 @@ function initializeQueueEventHandlers() {
           taskStatus[taskId].status = 'COMPLETED';
           delete traitsToRemove[taskId];
           delete removedTokens[taskId];
+          
+          // Wait before scheduling next loop
           await new Promise(resolve => setTimeout(resolve, 1000));
 
+          // Schedule next loop if task is still running
           if (task && task.running) {
             const loopInterval = getExpiry(task.loopInterval);
-
             const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
             const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
@@ -1802,8 +1875,9 @@ function initializeQueueEventHandlers() {
             taskStatus[taskId].waitingTime = secondsUntilNextLoop;
             taskStatus[taskId].nextLoopTime = nextLoopTime;
 
+            // Set up countdown timer
             const countdownTimer = setInterval(() => {
-              const remainingSeconds = taskStatus[taskId].nextLoopTime ? Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000)) : 0
+              const remainingSeconds = taskStatus[taskId].nextLoopTime ? Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000)) : 0;
               taskStatus[taskId].waitingTime = remainingSeconds;
 
               if (remainingSeconds <= 0) {
@@ -1811,14 +1885,16 @@ function initializeQueueEventHandlers() {
               }
             }, 1000);
 
+            taskCountdownTimers.set(taskId, countdownTimer);
+
             // Clear any existing timeout for this task
             const existingTimeout = taskTimeouts.get(taskId);
             if (existingTimeout) {
               clearTimeout(existingTimeout);
             }
 
+            // Schedule the next loop
             const timeoutId = setTimeout(async () => {
-              // When we restart, update the status
               const currentTask = activeTasks.get(taskId);
               if (currentTask?.running) {
                 await startTask(currentTask, true);
@@ -1829,7 +1905,15 @@ function initializeQueueEventHandlers() {
 
             taskTimeouts.set(taskId, timeoutId);
           }
+          
           return;
+        } else if (runningPercentage > 99) {
+          // Debug logging for stuck tasks
+          console.log(YELLOW + `Task ${taskId} at ${runningPercentage}% but not transitioning:` + RESET);
+          console.log(YELLOW + `  - Available marketplaces: ${JSON.stringify(availableMarketplaces)}` + RESET);
+          console.log(YELLOW + `  - Completed status: ${JSON.stringify(completedTasks[taskId])}` + RESET);
+          console.log(YELLOW + `  - All markets complete: ${allMarketsComplete}` + RESET);
+          console.log(YELLOW + `  - Task running: ${task.running}` + RESET);
         }
       }
     }
@@ -1929,7 +2013,7 @@ function initializeQueueEventHandlers() {
 
           if (orders.length > 0) {
             const wallet = await Wallet.findById(task.walletId);
-            const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+            const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
             await cancelAllRelatedBids(task, private_key);
           }
           // Always transition to STOPPED when task is not running and cancellation is complete
@@ -1957,7 +2041,7 @@ function initializeQueueEventHandlers() {
 
           if (orders.length > 0) {
             const wallet = await Wallet.findById(task.walletId);
-            const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+            const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
             await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
           }
           // Always transition to STOPPED when cancellation is complete
@@ -2027,7 +2111,7 @@ function initializeQueueEventHandlers() {
           console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
 
           const wallet = await Wallet.findById(task.walletId)
-          const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+          const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
 
           let totalCancellationJobs = 0;
 
@@ -2044,11 +2128,13 @@ function initializeQueueEventHandlers() {
           taskStatus[taskId].status = 'COMPLETED';
           delete traitsToRemove[taskId];
           delete removedTokens[taskId];
+          
+          // Wait before scheduling next loop
           await new Promise(resolve => setTimeout(resolve, 1000));
 
+          // Schedule next loop if task is still running
           if (task && task.running) {
             const loopInterval = getExpiry(task.loopInterval);
-
             const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
             const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
@@ -2057,8 +2143,9 @@ function initializeQueueEventHandlers() {
             taskStatus[taskId].waitingTime = secondsUntilNextLoop;
             taskStatus[taskId].nextLoopTime = nextLoopTime;
 
+            // Set up countdown timer
             const countdownTimer = setInterval(() => {
-              const remainingSeconds = taskStatus[taskId].nextLoopTime ? Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000)) : 0
+              const remainingSeconds = taskStatus[taskId].nextLoopTime ? Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000)) : 0;
               taskStatus[taskId].waitingTime = remainingSeconds;
 
               if (remainingSeconds <= 0) {
@@ -2066,14 +2153,16 @@ function initializeQueueEventHandlers() {
               }
             }, 1000);
 
+            taskCountdownTimers.set(taskId, countdownTimer);
+
             // Clear any existing timeout for this task
             const existingTimeout = taskTimeouts.get(taskId);
             if (existingTimeout) {
               clearTimeout(existingTimeout);
             }
 
+            // Schedule the next loop
             const timeoutId = setTimeout(async () => {
-              // When we restart, update the status
               const currentTask = activeTasks.get(taskId);
               if (currentTask?.running) {
                 await startTask(currentTask, true);
@@ -2084,6 +2173,7 @@ function initializeQueueEventHandlers() {
 
             taskTimeouts.set(taskId, timeoutId);
           }
+          
           return;
         }
       }
@@ -2683,7 +2773,7 @@ async function updateTaskData(task: ITask) {
     if (existingTaskIndex === -1 || !existingTask) return
 
     const wallet = await Wallet.findById(task.walletId)
-    const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+    const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
     currentTasks.splice(existingTaskIndex, 1, task);
     activeTasks.set(task._id, task);
     updateTaskIndexes(currentTasks);
@@ -3079,11 +3169,6 @@ async function processBulkCancellations(jobs: Job[]) {
                     ...job?.opts,
                     removeOnComplete: true,
                     removeOnFail: true, // Keep failed jobs for debugging
-                    attempts: 3, // Retry failed jobs 3 times
-                    backoff: {
-                      type: 'exponential',
-                      delay: 2000, // Start with 2 second delay
-                    },
                   },
                 }))
             );
@@ -3535,6 +3620,16 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       .filter(job => job !== null);
 
     await queue.addBulk(jobs as Job[]);
+    
+    // Progress task status after jobs are queued
+    setTimeout(() => {
+      if (taskStatus[taskId]?.status === 'STARTED') {
+        console.log(`[TaskProgression] Moving task ${taskId} from STARTED to RUNNING`);
+        taskStatus[taskId].status = 'RUNNING';
+        taskStatus[taskId].processingPercentage = 100; // Processing is complete
+      }
+    }, 1000); // Small delay to allow jobs to be queued
+    
   } catch (error) {
     console.error(RED + `Error starting task ${taskId}: ` + RESET, error);
   } finally {
@@ -3547,7 +3642,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
 async function stopTask(task: ITask, start: boolean, marketplace?: string) {
   const taskId = task._id.toString();
   const wallet = await Wallet.findById(task.walletId)
-  const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+  const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
 
   try {
     if (!marketplace || task.selectedMarketplaces.length === 0) {
@@ -3942,7 +4037,7 @@ async function removePendingAndWaitingBids(
     try {
       const wallet = await Wallet.findById(task.walletId);
       if (wallet?.encryptedPrivateKey) {
-        const privateKey = await decryptPrivateKey(wallet.encryptedPrivateKey);
+        const privateKey = decryptPrivateKey(wallet.encryptedPrivateKey);
 
         // Cancel active bids in parallel for immediate response
         const bidCancellationPromises = [];
@@ -6522,7 +6617,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     }
 
     // Only decrypt private key after checking if it's our own bid
-    const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.toLowerCase())?.encryptedPrivateKey as string);
+    const WALLET_PRIVATE_KEY = decryptPrivateKey(wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.toLowerCase())?.encryptedPrivateKey as string);
 
     const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal);
     // Check cache first
@@ -7363,8 +7458,6 @@ function handleOpenSeaMessages(message: any) {
 }
 
 function handleBlurMessages(message: any) {
-  console.log(GOLD + JSON.stringify(message) + RESET);
-
   let contractAddress: string | undefined;
   try {
     if (message && message['1'] && message['1'].contractAddress) {
@@ -7468,7 +7561,7 @@ async function processOpenseaScheduledBid(task: ITask) {
     taskStatus[currentTask._id].status = 'PROCESSING'
     const wallets = await Wallet.findById(currentTask.walletId)
     taskStatus[currentTask._id].processingPercentage = (1 / 4) * 100
-    const WALLET_PRIVATE_KEY: string = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+    const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
     const collectionDetails = await getCollectionDetails(currentTask.contract.slug, currentTask.contract.contractAddress);
     taskStatus[currentTask._id].processingPercentage = (2 / 4) * 100
@@ -7765,7 +7858,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       .includes("opensea")) return;
 
     const wallets = await Wallet.findById(task.walletId)
-    const privateKey: string = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+    const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
     const floor_price = await getOpenseaFloor(currentTask.contract.slug);
     if (!floor_price) return
@@ -8022,7 +8115,7 @@ async function processBlurScheduledBid(task: ITask) {
 
     const WALLET_ADDRESS: string = currentTask.wallet;
     const wallets = await Wallet.findById(task.walletId)
-    const WALLET_PRIVATE_KEY: string = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+    const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
     const selectedTraits = transformNewTask(filteredTasks)
 
     if (!currentTraits[currentTask._id]) {
@@ -8117,7 +8210,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((market) => market.toLowerCase()).includes("blur")) return;
 
     const wallets = await Wallet.findById(currentTask.walletId)
-    const privateKey: string = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+    const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
     const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
     if (!floor_price) return
@@ -9328,7 +9421,7 @@ async function processMagicedenScheduledBid(task: ITask) {
     const WALLET_ADDRESS: string = currentTask.wallet
     const wallets = await Wallet.findById(currentTask.walletId)
     taskStatus[currentTask._id].processingPercentage = (1 / 4) * 100
-    const WALLET_PRIVATE_KEY: string = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+    const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
     const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0
 
     const contractAddress = currentTask.contract.contractAddress
@@ -9561,7 +9654,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return;
     const expiration = getExpiry(currentTask.bidDuration)
     const wallets = await Wallet.findById(task.walletId)
-    const privateKey: string = await decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+    const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
     const floor_price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress))
 
     if (!floorPrices[task._id]) {
@@ -10270,6 +10363,7 @@ app.get("/health", async (req, res) => {
       status: "ok",
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
+      passwordSet: !!getPassword(),
       components: {
         redis: redis && redis.status === "ready" ? "ok" : "error",
         mongodb: mongoose.connection.readyState === 1 ? "ok" : "error",
@@ -10416,7 +10510,7 @@ app.post('/api/task/cancel/:taskId', async (req, res) => {
       return res.status(404).json({ error: 'Task not found' });
     }
     const wallet = await Wallet.findById(task.walletId)
-    const WALLET_PRIVATE_KEY: string = await decryptPrivateKey(wallet?.encryptedPrivateKey as string)
+    const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string)
     const orders: PrismaOrder[] = req.body
     const openseaOrders = orders.filter((order: any) => order.marketplace === OPENSEA.toLowerCase())
     const magicedenOrders = orders.filter((order: any) => order.marketplace === 'magiceden')
@@ -10887,7 +10981,7 @@ app.post('/api/currency/conversion', async (req, res) => {
 app.post('/api/auth/password', async (req, res) => {
   try {
     const { encryptedPassword } = req.body;
-    const password = await decryptPassword(encryptedPassword)
+    const password = decryptPassword(encryptedPassword)
 
     if (!password) {
       return res.status(400).json({ error: 'Password is required' });
@@ -11888,13 +11982,7 @@ async function processAllActiveListings() {
           {
             jobId: `listing-manual-${listingId}`,
             removeOnComplete: true,
-            removeOnFail: true,
-            attempts: 3,
-            priority: 2,
-            backoff: {
-              type: 'exponential',
-              delay: 2000
-            }
+            removeOnFail: true
           }
         );
 

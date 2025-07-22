@@ -80,7 +80,10 @@ export enum ErrorCategory {
   PERFORMANCE = 'performance',
   SECURITY = 'security',
   BUSINESS_LOGIC = 'business_logic',
-  OPENSEA_BID = 'opensea_bid'
+  OPENSEA_BID = 'opensea_bid',
+  TASK = 'task',
+  TASK_MANAGEMENT = 'task_management',
+  STATE_MANAGEMENT = 'state_management'
 }
 
 // Marketplace subcategories for granular tracking

@@ -20,4 +20,5 @@ const WalletSchema = new Schema<IWallet>(
 
 const Wallet = model<IWallet>("Wallet", WalletSchema);
 
+export { Wallet };
 export default Wallet;

@@ -239,7 +239,7 @@ export class QueueEventHandlerManager {
     console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
     
     const wallet = await Wallet.findById(task.walletId);
-    const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+    const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
     const { currencySymbol } = await calculateBidPrice(task, 0, "magiceden");
 
     // Handle trait and token removals
@@ -249,8 +249,13 @@ export class QueueEventHandlerManager {
       totalCancellationJobs += traitJobs;
     }
 
-    if (this.removedTokens[taskId]?.opensea?.length > 0 || this.removedTokens[taskId]?.magiceden?.length > 0) {
-      const tokenJobs = await cancelRemovedTokenBids(this.removedTokens[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol);
+    if ((this.removedTokens[taskId]?.opensea?.length || 0) > 0 || (this.removedTokens[taskId]?.magiceden?.length || 0) > 0) {
+      const removedTokens = this.removedTokens[taskId];
+      const tokenJobs = await cancelRemovedTokenBids({
+        opensea: removedTokens.opensea || [],
+        magiceden: removedTokens.magiceden || [],
+        blur: removedTokens.blur || []
+      }, task._id, WALLET_PRIVATE_KEY, currencySymbol);
       totalCancellationJobs += tokenJobs;
     }
 
@@ -322,7 +327,7 @@ export class QueueEventHandlerManager {
 
     if (orders.length > 0) {
       const wallet = await Wallet.findById(task.walletId);
-      const private_key = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+      const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
       await cancelAllRelatedBids(task, private_key, marketplace);
     }
 

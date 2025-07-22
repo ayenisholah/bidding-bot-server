@@ -43,7 +43,7 @@ export class TaskOperationsManager {
       // Acquire lock for the entire operation
       const result = await this.lockManager.withLock(lockKey, async () => {
         const wallet = await Wallet.findById(task.walletId);
-        const WALLET_PRIVATE_KEY = await decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
+        const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
 
         // Initialize stats
         this.resetTaskStats(taskId);
@@ -135,7 +135,7 @@ export class TaskOperationsManager {
     }, 30);
   }
 
-  private async performFullTaskStop(taskId: string, task: ITask): void {
+  private async performFullTaskStop(taskId: string, task: ITask): Promise<void> {
     // Mark as aborted
     this.abortedTasks.add(taskId);
     
@@ -144,7 +144,7 @@ export class TaskOperationsManager {
     this.stateManager.setActiveTask(taskId, updatedTask);
     
     // Remove from indexes
-    removeTaskFromIndexes(task);
+    removeTaskFromIndexes(taskId);
     
     // Clear timers
     this.stateManager.clearCountdownTimer(taskId);

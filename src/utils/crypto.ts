@@ -9,15 +9,22 @@ const DETERMINISTIC_ALGORITHM = "aes-256-ecb";
 // In development mode, allow password from environment variable
 let PASSWORD: string | undefined = undefined
 
+// Initialize password from environment variable in development
+if (process.env.NODE_ENV === 'development' && process.env.DEV_PASSWORD) {
+  PASSWORD = process.env.DEV_PASSWORD;
+  console.log('🔑 Password loaded from DEV_PASSWORD environment variable');
+}
+
 export function setPassword(password: string) {
   PASSWORD = password;
+  console.log('🔑 Password has been set in memory');
 }
 
 export function getPassword(): string | undefined {
   return PASSWORD;
 }
 
-async function getEncryptionKey(): Promise<Buffer> {
+function getEncryptionKey(): Buffer {
   let password = PASSWORD; // Current request
 
   // If we have a password, use it for encryption
@@ -38,7 +45,7 @@ async function getEncryptionKey(): Promise<Buffer> {
 
 // Deterministic password encryption/decryption functions
 // Uses a fixed key derived from JWT_SECRET for deterministic encryption
-async function getPasswordEncryptionKey(): Promise<Buffer> {
+function getPasswordEncryptionKey(): Buffer {
   const secret = process.env.JWT_SECRET || "default-jwt-secret";
 
   // Create a deterministic key from JWT_SECRET
@@ -49,8 +56,8 @@ async function getPasswordEncryptionKey(): Promise<Buffer> {
     .digest();
 }
 
-export async function encryptPrivateKey(privateKey: string): Promise<string> {
-  const key = await getEncryptionKey();
+export function encryptPrivateKey(privateKey: string): string {
+  const key = getEncryptionKey();
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
 
@@ -63,8 +70,8 @@ export async function encryptPrivateKey(privateKey: string): Promise<string> {
   return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
 }
 
-export async function decryptPrivateKey(encryptedData: string): Promise<string> {
-  const key = await getEncryptionKey();
+export function decryptPrivateKey(encryptedData: string): string {
+  const key = getEncryptionKey();
   const parts = encryptedData.split(':');
 
   if (parts.length !== 3) {
@@ -85,8 +92,8 @@ export async function decryptPrivateKey(encryptedData: string): Promise<string> 
   return decrypted;
 }
 
-export async function encryptPassword(password: string): Promise<string> {
-  const key = await getPasswordEncryptionKey();
+export function encryptPassword(password: string): string {
+  const key = getPasswordEncryptionKey();
 
   // Use ECB mode for deterministic encryption (same input = same output)
   const cipher = crypto.createCipheriv(DETERMINISTIC_ALGORITHM, key, null);
@@ -97,8 +104,8 @@ export async function encryptPassword(password: string): Promise<string> {
   return encrypted;
 }
 
-export async function decryptPassword(encryptedPassword: string): Promise<string> {
-  const key = await getPasswordEncryptionKey();
+export function decryptPassword(encryptedPassword: string): string {
+  const key = getPasswordEncryptionKey();
 
   try {
     const decipher = crypto.createDecipheriv(DETERMINISTIC_ALGORITHM, key, null);

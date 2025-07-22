@@ -108,5 +108,5 @@ export function isSoftError(error: any): boolean {
  */
 export function isRetryableError(error: any): boolean {
   return error instanceof RateLimitError ||
-         (error instanceof MarketplaceError && error.statusCode && error.statusCode >= 500);
+         (error instanceof MarketplaceError && error.statusCode !== undefined && error.statusCode >= 500);
 }

@@ -1,6 +1,7 @@
 {
 	"watch": ["src"],
-	"ext": "ts,json",
-	"ignore": ["*.json", "**/*.json", "dist/*", "coverage/*", "node_modules/*"],
-	"exec": "node --expose-gc -r ts-node/register/transpile-only src/index.ts"
+	"ext": "ts",
+	"ignore": ["src/**/*.spec.ts", "src/**/*.test.ts", "dist/*", "coverage/*", "node_modules/*"],
+	"exec": "node --expose-gc -r ts-node/register/transpile-only src/index.ts",
+	"delay": "1000"
 }
