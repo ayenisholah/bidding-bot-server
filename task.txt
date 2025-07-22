@@ -1,84 +1,16 @@
-
-there's an edge case that needs to be handled here, if stopTask has a marketplace, which means only a marketplace bids needsto be cancelled and not all bids, don't transition to STOPPED after CANCELLATION or delete or reset and taskStatus property
-
-can we remove loopInterval restart logic from initializeQueuehandler,     // Check if all available marketplaces have completed
-if (availableMarketplaces && availableMarketplaces.length > 0) {
-  const allMarketsComplete = availableMarketplaces.every(m =>
-    completedTasks[taskId]?.[m as 'opensea' | 'magiceden' | 'blur']
-  );
-
-  if (allMarketsComplete && runningPercentage > 99) {
-    console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
-    const wallet = await Wallet.findById(task.walletId)
-    const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
-
-    let totalCancellationJobs = 0;
-
-    if (traitsToRemove[taskId]?.length > 0) {
-      const traitJobs = await cancelRemovedTraitBids(traitsToRemove[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
-      totalCancellationJobs += traitJobs;
-    }
-
-    if (removedTokens[taskId]?.opensea?.length > 0 || removedTokens[taskId]?.magiceden?.length > 0) {
-      const tokenJobs = await cancelRemovedTokenBids(removedTokens[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol)
-      totalCancellationJobs += tokenJobs;
-    }
-
-    taskStatus[taskId].status = 'COMPLETED';
-    delete traitsToRemove[taskId];
-    delete removedTokens[taskId];
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    if (task && task.running) {
-      const loopInterval = getExpiry(task.loopInterval);
-
-      const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
-      const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
-
-      console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
-      taskStatus[taskId].status = 'SCHEDULED';
-      taskStatus[taskId].waitingTime = secondsUntilNextLoop;
-      taskStatus[taskId].nextLoopTime = nextLoopTime;
-
-      const countdownTimer = setInterval(() => {
-        const remainingSeconds = taskStatus[taskId].nextLoopTime ? Math.max(0, Math.floor((taskStatus[taskId].nextLoopTime.getTime() - Date.now()) / 1000)) : 0
-        taskStatus[taskId].waitingTime = remainingSeconds;
-
-        if (remainingSeconds <= 0) {
-          clearInterval(countdownTimer);
-        }
-      }, 1000);
-
-      // Clear any existing timeout for this task
-      const existingTimeout = taskTimeouts.get(taskId);
-      if (existingTimeout) {
-        clearTimeout(existingTimeout);
-      }
-
-      const timeoutId = setTimeout(async () => {
-        // When we restart, update the status
-        const currentTask = activeTasks.get(taskId);
-        if (currentTask?.running) {
-          await startTask(currentTask, true);
-        } else if (currentTask) {
-          await stopTask(currentTask, false);
-        }
-      }, loopInterval * 1000);
-
-      taskTimeouts.set(taskId, timeoutId);
-    }
-    return;
-  }
+Scheduling reconnection: {
+  attempt: 1,
+  maxRetries: 'unlimited',
+  delayMs: 864,
+  baseDelay: 1000,
+  jitter: -136
 }
-
-task still getting stuck at STARTED, find what's blocking it from going above started and here's the queue status:
-
-active: 102
-completed: 0
-delayed: 0
-failed: 0
-paused: 0
-prioritized: 219
-waiting: 364
-waiting-children: 0
-Total Jobs: 685
+/Users/titan/projects/nfttools/bidding-bot/server/node_modules/ws/lib/websocket.js:299
+      abortHandshake(this, this._req, msg);
+      ^
+Error: WebSocket was closed before the connection was established
+    at WebSocket.close (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/ws/lib/websocket.js:299:7)
+    at Timeout._onTimeout (/Users/titan/projects/nfttools/bidding-bot/server/src/utils/websocket-manager.ts:128:25)
+    at listOnTimeout (node:internal/timers:573:17)
+    at processTimers (node:internal/timers:514:7)
+[nodemon] app crashed - waiting for file changes before starting

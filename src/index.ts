@@ -1647,6 +1647,32 @@ function setTaskCancellationComplete(taskId: string) {
   }
 }
 
+// Helper function for marketplace-specific cancellation completion
+function setMarketplaceCancellationComplete(taskId: string) {
+  if (!taskStatus[taskId]) return;
+  
+  console.log(YELLOW + `[setMarketplaceCancellationComplete] Called for task ${taskId}` + RESET);
+  console.log(YELLOW + `  Current status: ${taskStatus[taskId].status}` + RESET);
+  console.log(YELLOW + `  Previous state: ${taskStatus[taskId].previousState || 'none'}` + RESET);
+  
+  taskStatus[taskId].cancellationPercentage = 100;
+  
+  // Restore previous state if this was a marketplace-specific cancellation
+  if (taskStatus[taskId].previousState) {
+    console.log(GREEN + `Restoring task ${taskId} to previous state: ${taskStatus[taskId].previousState}` + RESET);
+    taskStatus[taskId].status = taskStatus[taskId].previousState;
+    delete taskStatus[taskId].previousState;
+    // Reset cancellation percentage after restoration
+    taskStatus[taskId].cancellationPercentage = 0;
+    // Keep all other progress values intact
+    console.log(GREEN + `Task ${taskId} restored. Current status: ${taskStatus[taskId].status}` + RESET);
+  } else {
+    // No previous state means full task cancellation
+    console.log(YELLOW + `No previous state for task ${taskId}, proceeding with full cancellation` + RESET);
+    setTaskCancellationComplete(taskId);
+  }
+}
+
 // Initialize queue event handlers - called after queue is created
 function initializeQueueEventHandlers() {
   queueEvents.on('completed', async ({ jobId }) => {
@@ -1662,7 +1688,10 @@ function initializeQueueEventHandlers() {
           processingPercentage: 0
         }
       }
-      taskStatus[taskId].status = 'CANCELLING'
+      // Only update status if we're not already in CANCELLING
+      if (taskStatus[taskId].status !== 'CANCELLING') {
+        taskStatus[taskId].status = 'CANCELLING';
+      }
 
       const task = activeTasks.get(taskId);
       if (!task) return;
@@ -1677,8 +1706,10 @@ function initializeQueueEventHandlers() {
 
       // Calculate marketplace-specific cancellation percentage
 
-      // If task is not running, calculate combined cancellation percentage with weighting
-      if (!task?.running) {
+      // Check if this is a full task cancellation (no previousState means full cancellation)
+      const isFullTaskCancellation = !taskStatus[taskId].previousState;
+      
+      if (isFullTaskCancellation) {
         // Get all parent jobs for this task (both OpenSea and MagicEden)
         const openSeaParentJobId = `${taskId}-CANCEL_OPENSEA_BID`;
         const magicEdenParentJobId = `${taskId}-CANCEL_MAGICEDEN_BID`;
@@ -1745,7 +1776,7 @@ function initializeQueueEventHandlers() {
             const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
             await cancelAllRelatedBids(task, private_key);
           }
-          // Always transition to STOPPED when task is not running and cancellation is complete
+          // Full task cancellation - always transition to STOPPED
           setTaskCancellationComplete(taskId);
         }
       } else {
@@ -1773,8 +1804,14 @@ function initializeQueueEventHandlers() {
             const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
             await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
           }
-          // Always transition to STOPPED when cancellationPercentage reaches 100
-          setTaskCancellationComplete(taskId);
+          // Check if this is a marketplace-specific cancellation by checking previousState
+          if (taskStatus[taskId].previousState) {
+            // Marketplace-specific cancellation - restore previous state
+            setMarketplaceCancellationComplete(taskId);
+          } else {
+            // Full task cancellation
+            setTaskCancellationComplete(taskId);
+          }
         }
       }
     }
@@ -2016,7 +2053,7 @@ function initializeQueueEventHandlers() {
             const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
             await cancelAllRelatedBids(task, private_key);
           }
-          // Always transition to STOPPED when task is not running and cancellation is complete
+          // Full task cancellation - always transition to STOPPED
           setTaskCancellationComplete(taskId);
         }
       } else {
@@ -2044,8 +2081,14 @@ function initializeQueueEventHandlers() {
             const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
             await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
           }
-          // Always transition to STOPPED when cancellation is complete
-          setTaskCancellationComplete(taskId);
+          // Check if this is a marketplace-specific cancellation by checking previousState
+          if (taskStatus[taskId].previousState) {
+            // Marketplace-specific cancellation - restore previous state
+            setMarketplaceCancellationComplete(taskId);
+          } else {
+            // Full task cancellation
+            setTaskCancellationComplete(taskId);
+          }
         }
       }
     }
@@ -2203,8 +2246,11 @@ function broadcastBidRates() {
   bidRates = getAllBidRates();
 
   // Enforce STOPPED status for any task with 100% cancellation before broadcasting
+  // BUT skip this for marketplace-specific cancellations (those with previousState)
   Object.keys(taskStatus).forEach(taskId => {
-    if (taskStatus[taskId].cancellationPercentage >= 100 && taskStatus[taskId].status !== 'STOPPED') {
+    if (taskStatus[taskId].cancellationPercentage >= 100 && 
+        taskStatus[taskId].status !== 'STOPPED' && 
+        !taskStatus[taskId].previousState) {
       console.log(`Broadcast enforcement: Setting task ${taskId} to STOPPED (cancellation: ${taskStatus[taskId].cancellationPercentage}%)`);
       setTaskCancellationComplete(taskId);
     }
@@ -3533,13 +3579,21 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       processingPercentage: 0,
       nextLoopTime: new Date()
     };
-  } else {
-    // If task already has a status, update it to STARTED when starting
+  } else if (!marketplace) {
+    // Only update status to STARTED when starting the entire task (no marketplace specified)
     // This handles the case where a task is transitioning from SCHEDULED/STOPPED to STARTED
     taskStatus[task._id].status = 'STARTED';
     taskStatus[task._id].runningPercentage = 0;
     taskStatus[task._id].cancellationPercentage = 0;
     taskStatus[task._id].processingPercentage = 0;
+  } else {
+    // For marketplace-specific starts, preserve the current state and just log
+    console.log(GREEN + `Starting marketplace ${marketplace} for task ${task._id} (current status: ${taskStatus[task._id].status})` + RESET);
+    // Clear any previousState if it exists (in case we're restarting a cancelled marketplace)
+    if (taskStatus[task._id].previousState) {
+      console.log(YELLOW + `Clearing previousState for task ${task._id}` + RESET);
+      delete taskStatus[task._id].previousState;
+    }
   }
 
   if (!marketplace) {
@@ -3621,14 +3675,26 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
 
     await queue.addBulk(jobs as Job[]);
     
-    // Progress task status after jobs are queued
-    setTimeout(() => {
-      if (taskStatus[taskId]?.status === 'STARTED') {
-        console.log(`[TaskProgression] Moving task ${taskId} from STARTED to RUNNING`);
-        taskStatus[taskId].status = 'RUNNING';
-        taskStatus[taskId].processingPercentage = 100; // Processing is complete
+    // Progress task status after jobs are queued (only for full task start, not marketplace-specific)
+    if (!marketplace) {
+      setTimeout(() => {
+        if (taskStatus[taskId]?.status === 'STARTED') {
+          console.log(`[TaskProgression] Moving task ${taskId} from STARTED to RUNNING`);
+          taskStatus[taskId].status = 'RUNNING';
+          taskStatus[taskId].processingPercentage = 100; // Processing is complete
+        }
+      }, 1000); // Small delay to allow jobs to be queued
+    } else {
+      // For marketplace-specific starts, recalculate progress percentages
+      console.log(GREEN + `Recalculating progress for task ${taskId} after adding marketplace ${marketplace}` + RESET);
+      
+      // Reset the marketplace completion status
+      if (completedTasks[taskId]) {
+        completedTasks[taskId][marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur'] = false;
       }
-    }, 1000); // Small delay to allow jobs to be queued
+      
+      // The progress will be recalculated automatically as jobs complete
+    }
     
   } catch (error) {
     console.error(RED + `Error starting task ${taskId}: ` + RESET, error);
@@ -3674,26 +3740,37 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
 
 
 
-    if (!marketplace) {
-      // Initialize taskStatus if it doesn't exist
-      if (!taskStatus[taskId]) {
-        taskStatus[taskId] = {
-          status: 'CANCELLING',
-          cancellationPercentage: 0,
-          runningPercentage: 0,
-          waitingTime: 0,
-          processingPercentage: 0,
-          cancellationStartTime: Date.now()
-        };
-      } else {
-        taskStatus[taskId].status = 'CANCELLING';
-        taskStatus[taskId].cancellationPercentage = 0;
-        taskStatus[taskId].cancellationStartTime = Date.now();
-        // Delete nextLoopTime and reset waitingTime when stopping
+    // Initialize taskStatus if it doesn't exist
+    if (!taskStatus[taskId]) {
+      taskStatus[taskId] = {
+        status: 'CANCELLING',
+        cancellationPercentage: 0,
+        runningPercentage: 0,
+        waitingTime: 0,
+        processingPercentage: 0,
+        cancellationStartTime: Date.now()
+      };
+    } else {
+      // Store previous state for marketplace-specific cancellations
+      if (marketplace) {
+        taskStatus[taskId].previousState = taskStatus[taskId].status;
+        console.log(YELLOW + `[stopTask] Marketplace-specific stop for ${marketplace}` + RESET);
+        console.log(YELLOW + `  Storing previous state: ${taskStatus[taskId].previousState}` + RESET);
+        console.log(YELLOW + `  Current values - running%: ${taskStatus[taskId].runningPercentage}, nextLoop: ${taskStatus[taskId].nextLoopTime}` + RESET);
+      }
+      
+      taskStatus[taskId].status = 'CANCELLING';
+      taskStatus[taskId].cancellationPercentage = 0;
+      taskStatus[taskId].cancellationStartTime = Date.now();
+      
+      // Only delete timing info for full task stop
+      if (!marketplace) {
         delete taskStatus[taskId].nextLoopTime;
         delete taskStatus[taskId].waitingTime;
       }
+    }
 
+    if (!marketplace) {
       warningBids[taskId] = {
         opensea: false,
         magiceden: false,
@@ -3712,9 +3789,8 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
           });
         } else if (result.cancelledCount === 0) {
           // If no cancellation jobs were created, immediately update status
-          // Ensure taskStatus exists before updating
-          // Always transition to STOPPED when cancellationPercentage reaches 100
-          setTaskCancellationComplete(taskId);
+          // Use marketplace-specific completion for marketplace cancellations
+          setMarketplaceCancellationComplete(taskId);
         }
         const openseaParentJobId = `${taskId}-opensea`.toLowerCase()
         const openseaParentJob = parentJobs.get(openseaParentJobId)
@@ -3733,9 +3809,8 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
           });
         } else if (result.cancelledCount === 0) {
           // If no cancellation jobs were created, immediately update status
-          // Ensure taskStatus exists before updating
-          // Always transition to STOPPED when cancellationPercentage reaches 100
-          setTaskCancellationComplete(taskId);
+          // Use marketplace-specific completion for marketplace cancellations
+          setMarketplaceCancellationComplete(taskId);
         }
         const magicedenParentJobId = `${taskId}-magiceden`.toLowerCase()
         const magicedenParentJob = parentJobs.get(magicedenParentJobId)
@@ -3754,9 +3829,8 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
           });
         } else if (result.cancelledCount === 0) {
           // If no cancellation jobs were created, immediately update status
-          // Ensure taskStatus exists before updating
-          // Always transition to STOPPED when cancellationPercentage reaches 100
-          setTaskCancellationComplete(taskId);
+          // Use marketplace-specific completion for marketplace cancellations
+          setMarketplaceCancellationComplete(taskId);
         }
         const blurParentJobId = `${taskId}-blur`.toLowerCase()
         const blurParentJob = parentJobs.get(blurParentJobId)
@@ -12726,6 +12800,7 @@ interface TaskStatus {
     nextLoopTime?: Date;
     waitingTime?: number;
     cancellationStartTime?: number; // Timestamp when cancellation started
+    previousState?: 'RUNNING' | 'WAITING' | 'CANCELLING' | 'SCHEDULED' | 'COMPLETED' | 'QUEUED' | 'QUEUEING' | 'STARTED' | "STOPPED" | "PROCESSING"; // For marketplace-specific cancellations
   };
 }
 
