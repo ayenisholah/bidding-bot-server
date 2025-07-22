@@ -11,6 +11,7 @@ import { BASE_URL } from "../../constants";
 import { fetchERC20Balance } from "../../utils/balance";
 import { convertBigNumbers } from "../../utils/bigNumberConverter";
 import { logger, DatabaseOperation, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
+import { InsufficientBalanceError, MinimumPriceError, RateLimitError, InvalidRequestError } from "../errors";
 
 // Helper function to extract meaningful error messages from MagicEden API responses
 function extractMagicEdenErrorMessage(error: any): string {
@@ -235,7 +236,14 @@ export async function bidOnMagiceden(
   
   // Early validation - fail fast before expensive operations
   if (offerPriceEth > wethBalance) {
-    const error = new Error(`Insufficient ${currencySymbol} balance: required ${offerPriceEth} ${currencySymbol}, available ${wethBalance} ${currencySymbol} for wallet ${maker} on collection ${slug}`);
+    const error = new InsufficientBalanceError(
+      'magiceden',
+      currencySymbol,
+      offerPriceEth,
+      wethBalance,
+      maker,
+      slug
+    );
     await logger.logMagicEdenBidError('Insufficient balance for bid', {
       taskId,
       walletAddress: maker,

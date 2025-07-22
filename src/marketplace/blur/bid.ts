@@ -10,6 +10,7 @@ import { BASE_URL } from "../../constants";
 import { fetchERC20Balance } from "../../utils/balance";
 import { convertBigNumbers } from "../../utils/bigNumberConverter";
 import { logger, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
+import { InsufficientBalanceError, TransferRestrictedError, MinimumPriceError, InvalidRequestError } from "../errors";
 
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
 
@@ -27,6 +28,30 @@ const lockManager = new DistributedLockManager({
 });
 
 const activeRequests = new Map<string, AbortController[]>();
+
+// Cache for transfer-restricted collections (TTL: 24 hours)
+const transferRestrictedCollections = new Map<string, number>();
+const RESTRICTION_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+function isCollectionRestricted(contractAddress: string): boolean {
+  const restriction = transferRestrictedCollections.get(contractAddress.toLowerCase());
+  if (!restriction) return false;
+  
+  // Check if cache entry has expired
+  if (Date.now() > restriction) {
+    transferRestrictedCollections.delete(contractAddress.toLowerCase());
+    return false;
+  }
+  
+  return true;
+}
+
+function addRestrictedCollection(contractAddress: string): void {
+  transferRestrictedCollections.set(
+    contractAddress.toLowerCase(), 
+    Date.now() + RESTRICTION_CACHE_TTL
+  );
+}
 
 function addActiveRequest(taskId: string, controller: AbortController) {
   if (!activeRequests.has(taskId)) {
@@ -112,11 +137,24 @@ export async function bidOnBlur(
   expiry = 900,
   traits?: string
 ) {
+  // Check if collection is in the restricted cache
+  if (isCollectionRestricted(contractAddress)) {
+    console.log(`Blur: Collection ${contractAddress} is cached as transfer-restricted - skipping bid`);
+    throw new TransferRestrictedError('blur', contractAddress, true);
+  }
+  
   const bethBalance = await fetchERC20Balance(wallet_address, BLUR_POOL_ADDRESS);
   let offerPriceEth: string = (Number(offer_price) / 1e18).toString()
 
   if (Number(offerPriceEth) > bethBalance) {
-    const error = new Error(`Insufficient BETH balance: required ${offerPriceEth} BETH, available ${bethBalance} BETH for wallet ${wallet_address} on collection ${slug}`);
+    const error = new InsufficientBalanceError(
+      'blur',
+      'BETH',
+      Number(offerPriceEth),
+      bethBalance,
+      wallet_address,
+      slug
+    );
     await logger.logBlurBalanceError('Insufficient BETH balance for bid', {
       taskId,
       walletAddress: wallet_address,
@@ -135,7 +173,13 @@ export async function bidOnBlur(
   offerPriceEth = (Math.floor(Number(formatUnits(offerPrice.toString(), 18)) * 100) / 100).toFixed(2);
 
   if (Number(offerPriceEth) === 0) {
-    const error = new Error(`Offer price ${offerPriceEth} BETH is below minimum Blur offer price (0.01 BETH) for collection ${slug}`);
+    const error = new MinimumPriceError(
+      'blur',
+      'BETH',
+      Number(offerPriceEth),
+      0.01,
+      slug
+    );
     await logger.logBlurBidError('Bid price below minimum', {
       taskId,
       walletAddress: wallet_address,
@@ -301,9 +345,20 @@ async function formatBidOnBlur(
       console.log(`Request for task ${taskId} was cancelled`);
       return null;
     }
+    
+    // Check for transfer restriction error
+    const responseMessage = error.response?.data?.message || '';
+    if (responseMessage.includes('restricts transfers') || responseMessage.includes('cannot be bid on')) {
+      // Add to restricted collections cache
+      addRestrictedCollection(buildPayload.contractAddress);
+      
+      console.log(`Blur: Collection ${buildPayload.contractAddress} restricts transfers - skipping bid`);
+      throw new TransferRestrictedError('blur', buildPayload.contractAddress);
+    }
+    
     const errorMessage = `Failed to format Blur bid for collection ${buildPayload.contractAddress}: ${error.response?.data?.message || error.message || error}`;
     console.error(errorMessage, error);
-    throw new Error(errorMessage)
+    throw new InvalidRequestError('blur', errorMessage, error.response?.status);
   } finally {
     const controllers = activeRequests.get(taskId) || [];
     const index = controllers.indexOf(controller);
@@ -428,7 +483,7 @@ async function submitBidToBlur(
     }
     const errorMessage = `Failed to submit Blur bid for collection ${slug} at price ${formatUnits(offer_price.toString(), 18)} BETH: ${error.response?.data?.message || error.message || error}`;
     console.error(errorMessage, error);
-    throw new Error(errorMessage)
+    throw new InvalidRequestError('blur', errorMessage, error.response?.status);
   } finally {
     const controllers = activeRequests.get(taskId) || [];
     const index = controllers.indexOf(controller);

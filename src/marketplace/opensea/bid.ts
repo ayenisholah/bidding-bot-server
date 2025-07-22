@@ -11,6 +11,7 @@ import { CollectionItemsListQuery } from "../../queries";
 import { CollectionItemsQueryVariables, CollectionItemsResponse } from "../../functions";
 import { fetchERC20Balance } from "../../utils/balance";
 import { logger, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
+import { InsufficientBalanceError, MinimumPriceError, RateLimitError, InvalidRequestError } from "../errors";
 
 // Helper function to extract meaningful error messages from OpenSea API responses
 function extractOpenseaErrorMessage(error: any): string {
@@ -290,7 +291,14 @@ export async function bidOnOpensea(
 
   // Balance validation after parallel fetch
   if (offerPriceEthFinal > wethBalance) {
-    const error = new Error(`Insufficient ${currencySymbol} balance: required ${offerPriceEthFinal} ${currencySymbol}, available ${wethBalance} ${currencySymbol} for wallet ${wallet_address} on collection ${slug}`);
+    const error = new InsufficientBalanceError(
+      'opensea',
+      currencySymbol,
+      offerPriceEthFinal,
+      wethBalance,
+      wallet_address,
+      slug
+    );
     await logger.logOpenseaBidError('Insufficient balance for bid', {
       taskId,
       walletAddress: wallet_address,
