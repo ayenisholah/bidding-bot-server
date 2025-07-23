@@ -5,7 +5,7 @@
 	"main": "index.js",
 	"scripts": {
 		"build": "npx prisma generate && tsc",
-		"start": "npx prisma generate && npx prisma migrate deploy && node --expose-gc dist/src/index.js",
+		"start": "npx prisma generate && npx prisma migrate deploy && NODE_OPTIONS='--max-old-space-size=3072' node --expose-gc dist/src/index.js",
 		"dev": "docker compose -f compose.dev.yaml up -d && npx prisma migrate dev --name init && nodemon",
 		"ci": "npm install --frozen-lockfile",
 		"dc:down": "docker compose down -v",

@@ -126,9 +126,26 @@ class WebSocketManager extends EventEmitter {
                 console.log('Error closing WebSocket:', error);
               }
             } else if (this.ws.readyState === WebSocket.CONNECTING) {
-              // Force terminate if still connecting - close() would throw an error
-              console.log('Connection timeout - terminating WebSocket in CONNECTING state');
-              this.ws.terminate();
+              // Can't terminate a CONNECTING WebSocket - just clean up
+              console.log('Connection timeout - cleaning up WebSocket in CONNECTING state');
+              // Remove all listeners to prevent any callbacks
+              this.ws.removeAllListeners();
+              // Store reference for cleanup
+              const wsToCleanup = this.ws;
+              // Set to null immediately to prevent further operations
+              this.ws = null;
+              
+              // Set up cleanup when the connection eventually completes or fails
+              wsToCleanup.once('open', () => {
+                try {
+                  wsToCleanup.close();
+                } catch (e) {
+                  // Ignore errors during cleanup
+                }
+              });
+              wsToCleanup.once('error', () => {
+                // Connection failed, nothing to do
+              });
             }
             // If CLOSING or CLOSED, no action needed
           }
@@ -150,17 +167,20 @@ class WebSocketManager extends EventEmitter {
         this.onConnectionEstablished();
       });
 
-      this.ws.on('message', this.handleMessage.bind(this));
-      this.ws.on('close', this.handleClose.bind(this));
-      this.ws.on('error', this.handleError.bind(this));
+      // Only set event handlers if WebSocket still exists
+      if (this.ws) {
+        this.ws.on('message', this.handleMessage.bind(this));
+        this.ws.on('close', this.handleClose.bind(this));
+        this.ws.on('error', this.handleError.bind(this));
 
-      // Handle any errors during connection phase
-      this.ws.once('error', (error) => {
-        console.log('WebSocket connection error:', error);
-        clearTimeout(connectionTimeout);
-        this.isReconnecting = false;
-        // The error handler will trigger reconnection
-      });
+        // Handle any errors during connection phase
+        this.ws.once('error', (error) => {
+          console.log('WebSocket connection error:', error);
+          clearTimeout(connectionTimeout);
+          this.isReconnecting = false;
+          // The error handler will trigger reconnection
+        });
+      }
 
     } catch (error) {
       console.log(error);
@@ -1070,26 +1090,53 @@ class WebSocketManager extends EventEmitter {
     
     this.ws.removeAllListeners();
     
-    switch (this.ws.readyState) {
-      case WebSocket.CONNECTING:
-        // Force terminate if still connecting
-        console.log('Terminating WebSocket in CONNECTING state');
-        this.ws.terminate();
-        break;
-      case WebSocket.OPEN:
-        // Gracefully close if open
-        try {
-          this.ws.close(1000, 'Normal closure');
-        } catch (error) {
-          console.log('Error closing WebSocket:', error);
-          this.ws.terminate(); // Force terminate if close fails
-        }
-        break;
-      case WebSocket.CLOSING:
-        // Already closing, terminate to speed it up
-        this.ws.terminate();
-        break;
-      // CLOSED state doesn't need any action
+    try {
+      switch (this.ws.readyState) {
+        case WebSocket.CONNECTING:
+          // Can't terminate a CONNECTING WebSocket - just clean up
+          console.log('Cleaning up WebSocket in CONNECTING state');
+          // Store reference for cleanup
+          const wsToCleanup = this.ws;
+          // Set to null to prevent further operations
+          this.ws = null;
+          
+          // Set up cleanup when the connection eventually completes or fails
+          wsToCleanup.once('open', () => {
+            try {
+              wsToCleanup.close();
+            } catch (e) {
+              // Ignore errors during cleanup
+            }
+          });
+          wsToCleanup.once('error', () => {
+            // Connection failed, nothing to do
+          });
+          break;
+        case WebSocket.OPEN:
+          // Gracefully close if open
+          try {
+            this.ws.close(1000, 'Normal closure');
+          } catch (error) {
+            console.log('Error closing WebSocket:', error);
+            try {
+              this.ws.terminate(); // Force terminate if close fails
+            } catch (terminateError) {
+              console.log('Error terminating WebSocket:', terminateError);
+            }
+          }
+          break;
+        case WebSocket.CLOSING:
+          // Already closing, terminate to speed it up
+          try {
+            this.ws.terminate();
+          } catch (error) {
+            console.log('Error terminating WebSocket in CLOSING state:', error);
+          }
+          break;
+        // CLOSED state doesn't need any action
+      }
+    } catch (error) {
+      console.log('Unexpected error in safeCloseWebSocket:', error);
     }
   }
 

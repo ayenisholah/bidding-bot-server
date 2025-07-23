@@ -1,6 +1,6 @@
 import { ethers, Wallet, formatUnits } from "ethers";
 import { axiosInstance, limiter } from "../../init";
-import { activeTasks, API_KEY, blurRateLimitInfo, currentTasks, decrementBidCount, pQueue, RESET, trackBidRate } from "../..";
+import { activeTasks, API_KEY, currentTasks, decrementBidCount, pQueue, RESET, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { DistributedLockManager } from "../../utils/lock";
 import { PrismaClient } from '@prisma/client'
@@ -32,6 +32,9 @@ const activeRequests = new Map<string, AbortController[]>();
 // Cache for transfer-restricted collections (TTL: 24 hours)
 const transferRestrictedCollections = new Map<string, number>();
 const RESTRICTION_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+// Rate limit tracking for Blur API
+const blurRateLimitInfo: Record<string, { remaining: number; reset: number; limit: number }> = {};
 
 function isCollectionRestricted(contractAddress: string): boolean {
   const restriction = transferRestrictedCollections.get(contractAddress.toLowerCase());

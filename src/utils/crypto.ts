@@ -6,6 +6,11 @@ config()
 const ALGORITHM = 'aes-256-gcm';
 const DETERMINISTIC_ALGORITHM = "aes-256-ecb";
 
+// Cache for decrypted private keys
+const decryptedKeyCache = new Map<string, { key: string; timestamp: number }>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache TTL
+const MAX_CACHE_SIZE = 100; // Maximum number of cached keys
+
 // In development mode, allow password from environment variable
 let PASSWORD: string | undefined = undefined
 
@@ -17,6 +22,8 @@ if (process.env.NODE_ENV === 'development' && process.env.DEV_PASSWORD) {
 
 export function setPassword(password: string) {
   PASSWORD = password;
+  // Clear the cache when password changes
+  decryptedKeyCache.clear();
   console.log('🔑 Password has been set in memory');
 }
 
@@ -71,6 +78,20 @@ export function encryptPrivateKey(privateKey: string): string {
 }
 
 export function decryptPrivateKey(encryptedData: string): string {
+  // Check cache first
+  const cached = decryptedKeyCache.get(encryptedData);
+  if (cached) {
+    const age = Date.now() - cached.timestamp;
+    if (age < CACHE_TTL) {
+      // Cache hit - return cached value
+      return cached.key;
+    } else {
+      // Cache expired - remove it
+      decryptedKeyCache.delete(encryptedData);
+    }
+  }
+
+  // Cache miss or expired - perform decryption
   const key = getEncryptionKey();
   const parts = encryptedData.split(':');
 
@@ -89,7 +110,51 @@ export function decryptPrivateKey(encryptedData: string): string {
   let decrypted = decipher.update(encrypted, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
 
+  // Cache the result
+  cacheDecryptedKey(encryptedData, decrypted);
+
   return decrypted;
+}
+
+// Helper function to manage cache size and add new entries
+function cacheDecryptedKey(encryptedData: string, decryptedKey: string): void {
+  // Check cache size and remove oldest entries if needed
+  if (decryptedKeyCache.size >= MAX_CACHE_SIZE) {
+    // Find and remove the oldest entry
+    let oldestKey: string | null = null;
+    let oldestTime = Date.now();
+    
+    for (const [key, value] of decryptedKeyCache.entries()) {
+      if (value.timestamp < oldestTime) {
+        oldestTime = value.timestamp;
+        oldestKey = key;
+      }
+    }
+    
+    if (oldestKey) {
+      decryptedKeyCache.delete(oldestKey);
+    }
+  }
+  
+  // Add to cache
+  decryptedKeyCache.set(encryptedData, {
+    key: decryptedKey,
+    timestamp: Date.now()
+  });
+}
+
+// Function to clear the decryption cache (useful for security or memory management)
+export function clearDecryptionCache(): void {
+  decryptedKeyCache.clear();
+}
+
+// Function to get cache statistics
+export function getDecryptionCacheStats(): { size: number; maxSize: number; ttl: number } {
+  return {
+    size: decryptedKeyCache.size,
+    maxSize: MAX_CACHE_SIZE,
+    ttl: CACHE_TTL
+  };
 }
 
 export function encryptPassword(password: string): string {

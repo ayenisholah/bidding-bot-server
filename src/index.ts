@@ -1,10 +1,6 @@
 /* eslint-disable */
 import express from "express";
 import { config } from "dotenv";
-import { EventEmitter } from 'events';
-
-// Increase max listeners to prevent warnings when making many concurrent HTTP requests
-EventEmitter.defaultMaxListeners = 50;
 
 config()
 
@@ -31,6 +27,8 @@ import { BASE_URL, ERC20_MIN_ABI } from "./constants";
 import { Contract, ethers, Wallet as Web3Wallet, parseEther, MaxUint256 } from "ethers";
 import { DistributedLockManager } from "./utils/lock";
 import net from 'net'
+import fs from 'fs';
+import path from 'path';
 import BidLogs from "./models/logs.model";
 import PQueue from "p-queue";
 import { PrismaClient, Order as PrismaOrder } from '@prisma/client'
@@ -48,11 +46,13 @@ import { initializeExpirationMonitor, stopExpirationMonitor } from "./functions/
 import { handleListingPriceUpdate } from "./functions/priceMonitor";
 import { createListing } from "./functions/list";
 import { BullMQErrorFormatter } from "./utils/bullmq-error-formatter";
+import { tradingDisabledCache } from "./utils/trading-disabled-cache";
 import { IListing } from "./types/listing.types";
 import { BoundedCache } from "./utils/bounded-cache";
 import { walletCache } from "./utils/wallet-cache";
 import { collectionCache } from "./utils/collection-cache";
 import { initializeDbOptimizer } from "./utils/db-optimizer";
+import { taskCircuitBreaker } from "./utils/task-circuit-breaker";
 const prisma = new PrismaClient()
 const dbOptimizer = initializeDbOptimizer(prisma);
 
@@ -139,17 +139,7 @@ interface WarningMessage {
 }
 
 
-// Dynamic worker count based on available CPUs with minimum of 2
-// Rule of thumb: 0.75 workers per vCPU for I/O-heavy workloads, but ensure at least 2 for redundancy
-export const WORKER_COUNT = Math.max(2, Math.floor(os.cpus().length * 0.75))
-
-// BullMQ configuration will use the connection from redis.ts
-// Note: Worker concurrency is set to RATE_LIMIT (default: 100)
-// If you see many waiting jobs, consider:
-// 1. Increasing RATE_LIMIT in .env (be careful not to overload APIs)
-// 2. Adding more workers by increasing WORKER_COUNT
-// 3. Optimizing job processing time
-
+export const WORKER_COUNT = 1
 let traitsToRemove: { [key: string]: string[] } = {}
 let removedTokens: { [key: string]: { opensea: string[]; magiceden: string[] } } = {}
 
@@ -296,29 +286,57 @@ function releaseLoopSchedulingLock(taskId: string): void {
 // Helper function to clean up stale jobs from queue
 async function cleanupStaleQueueJobs(): Promise<void> {
   try {
-    const [waitingJobs, activeJobs, delayedJobs] = await Promise.all([
+    const [waitingJobs, activeJobs, delayedJobs, isPaused] = await Promise.all([
       queue.getWaitingCount(),
       queue.getActiveCount(),
-      queue.getDelayedCount()
+      queue.getDelayedCount(),
+      queue.isPaused()
     ]);
 
     console.log(YELLOW + `[Queue Cleanup] Checking queue: ${waitingJobs} waiting, ${activeJobs} active, ${delayedJobs} delayed` + RESET);
+
+    // Process waiting jobs if they're stuck
+    if (waitingJobs > 0 && activeJobs === 0) {
+      console.log(YELLOW + '[Queue Cleanup] Found waiting jobs with no active workers - attempting to restart queue' + RESET);
+
+      // Resume queue if paused
+      if (isPaused) {
+        await queue.resume();
+        console.log(GREEN + '[Queue Cleanup] Resumed paused queue' + RESET);
+      }
+
+      // Check first few waiting jobs for disabled tokens
+      const stuckJobs = await queue.getJobs(['waiting'], 0, 10);
+      for (const job of stuckJobs) {
+        if (job && job.data) {
+          // Check if job is for disabled token
+          if (job.name === OPENSEA_TOKEN_BID && job.data.asset &&
+            tradingDisabledCache.isDisabled(job.data.asset.contractAddress, +job.data.asset.tokenId, 'opensea')) {
+            await job.remove();
+            console.log(YELLOW + `[Queue Cleanup] Removed job for disabled token ${job.data.asset.tokenId}` + RESET);
+          }
+        }
+      }
+    }
 
     // Get all jobs that might be stale
     const allJobs = await queue.getJobs(['waiting', 'active', 'delayed']);
     const now = Date.now();
     let cleanedCount = 0;
+    let disabledTokenCount = 0;
 
     for (const job of allJobs) {
       // Skip if job is null or undefined
       if (!job) continue;
 
-      // Check if job is for a task that no longer exists
       const taskId = job.data?._id;
+
+      // Check if job is for a task that no longer exists
       if (taskId && !activeTasks.has(taskId)) {
         await job.remove();
         cleanedCount++;
         console.log(YELLOW + `[Queue Cleanup] Removed stale job ${job.name} for non-existent task ${taskId}` + RESET);
+        continue;
       }
 
       // Check if job has been stuck in active state for too long (> 5 minutes)
@@ -326,11 +344,26 @@ async function cleanupStaleQueueJobs(): Promise<void> {
         await job.remove();
         cleanedCount++;
         console.log(YELLOW + `[Queue Cleanup] Removed stuck job ${job.name} (processing for > 5 minutes)` + RESET);
+        continue;
+      }
+
+      // Remove jobs for disabled tokens
+      if (job.name === OPENSEA_TOKEN_BID && job.data?.asset) {
+        if (tradingDisabledCache.isDisabled(job.data.asset.contractAddress, +job.data.asset.tokenId, 'opensea')) {
+          await job.remove();
+          disabledTokenCount++;
+          cleanedCount++;
+          // Don't log each one to avoid spam
+        }
       }
     }
 
+    if (disabledTokenCount > 0) {
+      console.log(YELLOW + `[Queue Cleanup] Removed ${disabledTokenCount} jobs for disabled tokens` + RESET);
+    }
+
     if (cleanedCount > 0) {
-      console.log(GREEN + `[Queue Cleanup] Cleaned up ${cleanedCount} stale jobs` + RESET);
+      console.log(GREEN + `[Queue Cleanup] Cleaned up ${cleanedCount} total stale/disabled jobs` + RESET);
     }
   } catch (error) {
     console.error(RED + '[Queue Cleanup] Error during cleanup: ' + RESET, error);
@@ -421,6 +454,13 @@ const MAGICEDEN = "MAGICEDEN";
 const BLUR = "BLUR";
 
 export const currentTasks: ITask[] = [];
+
+// Timeout tracking for monitoring
+const timeoutStats = {
+  count: 0,
+  lastHour: [] as { timestamp: number; jobId: string }[],
+  byJobType: {} as Record<string, number>
+};
 
 // Task indexing for O(1) lookup performance
 const contractToTasksMap = new Map<string, Set<ITask>>();
@@ -682,14 +722,24 @@ async function monitorHealth() {
       external: `${Math.round(used.external / 1024 / 1024)}MB`,
     }
 
+    // Get max heap from NODE_OPTIONS or use default
+    const maxHeapMatch = process.execArgv.join(' ').match(/--max-old-space-size=(\d+)/);
+    const MAX_HEAP_MB = maxHeapMatch ? parseInt(maxHeapMatch[1]) : 8192;
+    
+    const heapUsedMB = used.heapUsed / 1024 / 1024;
+    const heapTotalMB = used.heapTotal / 1024 / 1024;
+    const heapPercentOfMax = (heapUsedMB / MAX_HEAP_MB) * 100;
+    const heapPercentOfTotal = (used.heapUsed / used.heapTotal) * 100;
+    
+    // Also track system memory
     const totalMemory = os.totalmem();
-    const memoryUsagePercent = (used.heapUsed / totalMemory) * 100;
+    const systemMemoryPercent = (used.rss / totalMemory) * 100;
 
     // Check if queue is paused
     const isPaused = await queue.isPaused();
 
     // Auto-recovery: If queue is paused but we have waiting jobs and conditions are good
-    if (isPaused && counts.waiting > 0 && memoryUsagePercent < 70 && counts.active < DRAIN_THRESHOLD) {
+    if (isPaused && counts.waiting > 0 && heapPercentOfMax < 70 && counts.active < DRAIN_THRESHOLD) {
       console.log(YELLOW + '⚡ Queue is paused with waiting jobs - attempting auto-recovery...' + RESET);
       try {
         await queue.resume();
@@ -699,8 +749,9 @@ async function monitorHealth() {
       }
     }
 
-    if (memoryUsagePercent > 75) {
-      console.log(RED + `⚠️  HIGH MEMORY USAGE (${memoryUsagePercent.toFixed(2)}%) - INITIATING CLEANUP... ⚠️` + RESET);
+    if (heapPercentOfMax > 75) {
+      console.log(RED + `⚠️  HIGH MEMORY USAGE: ${heapUsedMB.toFixed(0)}MB / ${MAX_HEAP_MB}MB (${heapPercentOfMax.toFixed(1)}% of max heap) ⚠️` + RESET);
+      console.log(RED + `⚠️  Heap allocation: ${heapTotalMB.toFixed(0)}MB (${heapPercentOfTotal.toFixed(1)}% used) ⚠️` + RESET);
       await queue.pause();
       cleanupMemory();
 
@@ -714,9 +765,20 @@ async function monitorHealth() {
       setTimeout(async () => {
         await queue.resume();
       }, 2500);
-    } else if (!isPaused || (isPaused && memoryUsagePercent < 70)) {
+    } else if (!isPaused || (isPaused && heapPercentOfMax < 70)) {
       // Only resume if not already resumed or if memory is OK
       await queue.resume();
+    }
+
+    if (counts.prioritized > RATE_LIMIT) {
+      console.log(YELLOW + `[Queue Rate Limit] Prioritized jobs (${counts.prioritized}) exceed RATE_LIMIT (${RATE_LIMIT})` + RESET);
+      console.log(YELLOW + `[Queue Rate Limit] Pausing queue for ${counts.prioritized / RATE_LIMIT} seconds` + RESET);
+      await queue.pause();
+      const delay = counts.prioritized / RATE_LIMIT
+      setTimeout(async () => {
+        console.log(GREEN + `[Queue Rate Limit] Resuming queue after ${delay}s delay` + RESET);
+        await queue.resume();
+      }, delay * 1000);
     }
 
     const totalJobs = Object.values(counts).reduce((a, b) => a + b, 0);
@@ -750,6 +812,42 @@ async function monitorHealth() {
     });
     console.log(`Total Jobs: ${totalJobs}`);
 
+    // Show trading disabled cache stats
+    const disabledStats = tradingDisabledCache.getStats();
+    if (disabledStats.total > 0) {
+      console.log(YELLOW + '\n🚫 Trading Disabled Cache:' + RESET);
+      console.log(`Total Cached: ${disabledStats.total}`);
+      Object.entries(disabledStats.byMarketplace).forEach(([marketplace, count]) => {
+        console.log(`${marketplace}: ${count}`);
+      });
+
+      // Show cache details
+      const cacheDetails = tradingDisabledCache.getCacheStats();
+      console.log(`Cache TTL: ${Math.floor(cacheDetails.ttl / 1000 / 60)} minutes`);
+      if (cacheDetails.oldestEntry) {
+        const ageMinutes = Math.floor((Date.now() - cacheDetails.oldestEntry) / 1000 / 60);
+        console.log(`Oldest entry: ${ageMinutes} minutes ago`);
+      }
+    }
+
+    // Show timeout stats
+    if (timeoutStats.count > 0) {
+      console.log(RED + '\n⏱️  Job Timeouts:' + RESET);
+      console.log(`Total: ${timeoutStats.count} (Last hour: ${timeoutStats.lastHour.length})`);
+
+      // Show top timeout job types
+      const topTimeouts = Object.entries(timeoutStats.byJobType)
+        .sort(([, a], [, b]) => b - a)
+        .slice(0, 3);
+
+      if (topTimeouts.length > 0) {
+        console.log('Top timeout job types:');
+        topTimeouts.forEach(([jobType, count]) => {
+          console.log(`  ${jobType}: ${count}`);
+        });
+      }
+    }
+
     updateAllBidRates();
 
   } catch (error) {
@@ -763,6 +861,105 @@ async function monitorHealth() {
 
 
 setInterval(monitorHealth, HEALTH_CHECK_INTERVAL);
+
+// Memory cleanup interval - runs every 5 minutes
+const MEMORY_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
+
+async function performMemoryCleanup() {
+  try {
+    const startTime = Date.now();
+    let cleanedItems = 0;
+
+    // Clean up completed tasks older than 1 hour
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+
+    // Clean completedTasks
+    const completedTasksBefore = Object.keys(completedTasks).length;
+    Object.keys(completedTasks).forEach(taskId => {
+      if (!activeTasks.has(taskId)) {
+        delete completedTasks[taskId];
+        cleanedItems++;
+      }
+    });
+
+    // Clean taskStatus for inactive tasks
+    const taskStatusBefore = Object.keys(taskStatus).length;
+    Object.keys(taskStatus).forEach(taskId => {
+      if (!activeTasks.has(taskId) && taskStatus[taskId].status === 'STOPPED') {
+        delete taskStatus[taskId];
+        cleanedItems++;
+      }
+    });
+
+    // Clean errorStats for inactive tasks
+    const errorStatsBefore = Object.keys(errorStats).length;
+    Object.keys(errorStats).forEach(taskId => {
+      if (!activeTasks.has(taskId)) {
+        delete errorStats[taskId];
+        cleanedItems++;
+      }
+    });
+
+    // Clean bidStats for inactive tasks
+    const bidStatsBefore = Object.keys(bidStats).length;
+    Object.keys(bidStats).forEach(taskId => {
+      if (!activeTasks.has(taskId)) {
+        delete bidStats[taskId];
+        cleanedItems++;
+      }
+    });
+
+    // Clean skipStats for inactive tasks
+    Object.keys(skipStats).forEach(taskId => {
+      if (!activeTasks.has(taskId)) {
+        delete skipStats[taskId];
+        cleanedItems++;
+      }
+    });
+
+    // Clean floorPrices for inactive tasks
+    Object.keys(floorPrices).forEach(taskId => {
+      if (!activeTasks.has(taskId)) {
+        delete floorPrices[taskId];
+        cleanedItems++;
+      }
+    });
+
+    // Clean currentTokenIds for inactive tasks
+    Object.keys(currentTokenIds).forEach(taskId => {
+      if (!activeTasks.has(taskId)) {
+        delete currentTokenIds[taskId];
+        cleanedItems++;
+      }
+    });
+
+    // Clean taskLoopCounters
+    taskLoopCounters.forEach((count, taskId) => {
+      if (!activeTasks.has(taskId)) {
+        taskLoopCounters.delete(taskId);
+        cleanedItems++;
+      }
+    });
+
+    // Force garbage collection if available
+    if (global.gc) {
+      global.gc();
+      console.log(GREEN + '[Memory Cleanup] Forced garbage collection' + RESET);
+    }
+
+    const duration = Date.now() - startTime;
+    console.log(GREEN + `[Memory Cleanup] Completed in ${duration}ms - Cleaned ${cleanedItems} items` + RESET);
+    console.log(GREEN + `[Memory Cleanup] Stats: completedTasks ${completedTasksBefore}→${Object.keys(completedTasks).length}, ` +
+      `taskStatus ${taskStatusBefore}→${Object.keys(taskStatus).length}, ` +
+      `errorStats ${errorStatsBefore}→${Object.keys(errorStats).length}, ` +
+      `bidStats ${bidStatsBefore}→${Object.keys(bidStats).length}` + RESET);
+  } catch (error) {
+    console.error(RED + '[Memory Cleanup] Error during cleanup:' + RESET, error);
+  }
+}
+
+// Start cleanup interval
+setInterval(performMemoryCleanup, MEMORY_CLEANUP_INTERVAL);
 
 // Add this near the top with other global variables
 export const activeTasks: Map<string, ITask> = new Map();
@@ -1116,15 +1313,81 @@ async function startServer() {
         async (job) => {
           const startTime = Date.now();
 
+          // Add job timeout handling - 90 seconds for all jobs
+          const jobTimeout = 90000; // 90 seconds for all jobs
+          const abortController = new AbortController();
+
+          const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => {
+              abortController.abort(); // Signal cancellation to any async operations
+              reject(new Error(`Job ${job.id} timed out after ${jobTimeout}ms - aborted`));
+            }, jobTimeout);
+          });
+
           // Check if job has exceeded its timeout
           if (job.data.timeoutAt && Date.now() > job.data.timeoutAt) {
             const timeoutError = new Error(`Job ${job.id} timed out after ${job.data.maxDuration}ms`);
             throw timeoutError;
           }
 
+          // Memory check before processing
+          const memUsage = process.memoryUsage();
+          const heapUsedMB = memUsage.heapUsed / 1024 / 1024;
+          const heapTotalMB = memUsage.heapTotal / 1024 / 1024;
+          
+          // Get max heap from NODE_OPTIONS or use default
+          const maxHeapMatch = process.execArgv.join(' ').match(/--max-old-space-size=(\d+)/);
+          const MAX_HEAP_MB = maxHeapMatch ? parseInt(maxHeapMatch[1]) : 8192; // Default to 8GB if not found
+          
+          // Calculate percentage based on max configured heap
+          const heapPercentOfMax = (heapUsedMB / MAX_HEAP_MB) * 100;
+          const heapPercentOfTotal = (memUsage.heapUsed / memUsage.heapTotal) * 100;
+
+          // Adjust thresholds based on configured heap size
+          const memoryThreshold = MAX_HEAP_MB * 0.8; // 80% of max heap
+          const criticalThreshold = MAX_HEAP_MB * 0.9; // 90% of max heap
+
+          // Only warn if we're actually approaching the memory limit
+          if (heapUsedMB > memoryThreshold) {
+            console.log(YELLOW + `[Memory Warning] Heap Used: ${heapUsedMB.toFixed(0)}MB / ${heapTotalMB.toFixed(0)}MB allocated (${heapPercentOfTotal.toFixed(1)}%)` + RESET);
+            console.log(YELLOW + `[Memory Warning] ${heapUsedMB.toFixed(0)}MB / ${MAX_HEAP_MB}MB max (${heapPercentOfMax.toFixed(1)}% of limit)` + RESET);
+            console.log(YELLOW + `[Memory Warning] Delaying job ${job.id}` + RESET);
+            
+            await queue.pause()
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            await queue.resume()
+
+            // Force GC if available and memory is critical
+            if (global.gc && heapUsedMB > criticalThreshold) {
+              global.gc();
+              console.log(YELLOW + '[Memory Warning] Forced garbage collection' + RESET);
+            }
+          } else if (heapPercentOfTotal > 95 && heapTotalMB < MAX_HEAP_MB * 0.5) {
+            // If allocated heap is nearly full but we have lots of room to grow, just log it
+            if (global.gc) {
+              global.gc();
+              console.log(CYAN + `[Memory] Heap ${heapUsedMB.toFixed(0)}MB/${heapTotalMB.toFixed(0)}MB (${heapPercentOfTotal.toFixed(1)}%) - Triggering GC to expand heap` + RESET);
+            }
+          }
+
           try {
-            await processJob(job);
-            return { success: true };
+            // Track job execution for debugging
+            console.log(CYAN + `[Job Start] ${job.name} (ID: ${job.id}) - Task: ${job.data._id || 'unknown'}` + RESET);
+            
+            const result = await Promise.race([
+              processJob(job, abortController.signal),
+              timeoutPromise
+            ]);
+            
+            console.log(GREEN + `[Job Complete] ${job.name} (ID: ${job.id}) - Duration: ${Date.now() - startTime}ms` + RESET);
+            
+            // Record success in circuit breaker for SCHEDULE jobs
+            if ([OPENSEA_SCHEDULE, MAGICEDEN_SCHEDULE, BLUR_SCHEDULE].includes(job.name)) {
+              const marketplace = job.name.replace('_SCHEDULE', '').toLowerCase();
+              taskCircuitBreaker.recordSuccess(job.data._id || 'unknown', marketplace);
+            }
+            
+            return result || { success: true };
           } catch (error: any) {
             // Check if this is a rate limit error
             if (error?.code === 'RATE_LIMITED') {
@@ -1144,8 +1407,72 @@ async function startServer() {
               throw rateLimitError;
             }
 
+            // Check if it's a timeout error
+            if (error.message && error.message.includes('timed out')) {
+              const isScheduleJob = [OPENSEA_SCHEDULE, MAGICEDEN_SCHEDULE, BLUR_SCHEDULE].includes(job.name);
+
+              if (isScheduleJob) {
+                console.log(RED + `[Timeout] SCHEDULE job ${job.id} timed out - will retry indefinitely to prevent task from getting stuck` + RESET);
+                console.log(RED + `  Job Type: ${job.name}` + RESET);
+                console.log(RED + `  Task ID: ${job.data._id || 'unknown'}` + RESET);
+                console.log(RED + `  Contract: ${job.data.contract?.slug || 'unknown'}` + RESET);
+                console.log(RED + `  Duration: ${Date.now() - startTime}ms` + RESET);
+                console.log(RED + `  Error: ${error.message}` + RESET);
+                
+                // Record timeout in circuit breaker
+                const taskId = job.data._id || 'unknown';
+                const collection = job.data.contract?.slug || 'unknown';
+                const marketplace = job.name.replace('_SCHEDULE', '').toLowerCase();
+                
+                const shouldSuspend = taskCircuitBreaker.recordTimeout(taskId, collection, marketplace);
+                
+                if (shouldSuspend) {
+                  console.log(YELLOW + `[Circuit Breaker] Task ${taskId} (${collection}) suspended for ${marketplace} due to repeated timeouts` + RESET);
+                  // Remove this job and don't retry
+                  await job.remove();
+                  return { suspended: true };
+                }
+              } else {
+                console.log(RED + `[Timeout] Job ${job.id} timed out - failing immediately (no retries for non-SCHEDULE jobs)` + RESET);
+                console.log(RED + `  Job Type: ${job.name}` + RESET);
+                console.log(RED + `  Duration: ${Date.now() - startTime}ms` + RESET);
+              }
+
+              // Track timeout stats
+              timeoutStats.count++;
+              timeoutStats.lastHour.push({ timestamp: Date.now(), jobId: job?.id as string });
+              timeoutStats.byJobType[job.name] = (timeoutStats.byJobType[job.name] || 0) + 1;
+
+              // Clean old entries from lastHour
+              const oneHourAgo = Date.now() - 60 * 60 * 1000;
+              timeoutStats.lastHour = timeoutStats.lastHour.filter(t => t.timestamp > oneHourAgo);
+
+              await logger.logQueueJobFailed(job.name, {
+                jobId: job.id,
+                taskId: job.data.taskId,
+                marketplace: job.data.marketplace,
+                error: error as Error,
+                errorMessage: error.message,
+                jobAttempts: job.attemptsMade,
+                duration: Date.now() - startTime,
+                queueName: QUEUE_NAME,
+                errorType: 'TIMEOUT',
+                skipRetry: !isScheduleJob
+              });
+
+              // SCHEDULE jobs always retry, others fail immediately
+              if (isScheduleJob) {
+                throw error; // Retry indefinitely
+              } else {
+                return { success: false, error: error.message, skipRetry: true };
+              }
+            }
+
             // Log the error for debugging
             console.error(`Job ${job.id} failed:`, error);
+
+            // Check if this is a SCHEDULE job - they must always retry
+            const isScheduleJob = [OPENSEA_SCHEDULE, MAGICEDEN_SCHEDULE, BLUR_SCHEDULE].includes(job.name);
 
             // Handle marketplace-specific errors
             if (error instanceof MarketplaceError) {
@@ -1169,9 +1496,8 @@ async function startServer() {
                 console.warn(`📉 ${error.message}`);
               }
 
-              // Check if we should retry
-              if (!isRetryableError(error) && job.attemptsMade >= 2) {
-                // Don't retry soft errors after 2 attempts
+              // For non-SCHEDULE jobs, fail immediately without retries
+              if (!isScheduleJob) {
                 await logger.logQueueJobFailed(job.name, {
                   jobId: job.id,
                   taskId: job.data.taskId,
@@ -1182,7 +1508,8 @@ async function startServer() {
                   duration: Date.now() - startTime,
                   queueName: QUEUE_NAME,
                   errorType: error.constructor.name,
-                  isSoftError: isSoftError(error)
+                  isSoftError: isSoftError(error),
+                  skipRetry: true
                 });
                 // Move job to failed without retrying
                 await job.moveToFailed(error, '0', false);
@@ -1198,22 +1525,28 @@ async function startServer() {
               errorMessage: error instanceof Error ? error.message : String(error),
               jobAttempts: job.attemptsMade,
               duration: Date.now() - startTime,
-              queueName: QUEUE_NAME
+              queueName: QUEUE_NAME,
+              skipRetry: !isScheduleJob
             });
 
-            // Let BullMQ handle retries based on job configuration
-            throw error;
+            // SCHEDULE jobs always retry, others fail immediately
+            if (isScheduleJob) {
+              throw error; // Let BullMQ handle retries
+            } else {
+              // Non-SCHEDULE jobs fail without retry
+              await job.moveToFailed(error, '0', false);
+              return { success: false, error: error instanceof Error ? error.message : String(error) };
+            }
           }
         },
         {
           connection: workerConnection,
           prefix: '{bull}',
-          concurrency: concurrencyPerWorker, // Distribute concurrency across workers
-          // Extended lock settings to prevent lock renewal errors
-          lockDuration: 60000, // 90 seconds (reduced from 120s for faster timeout)
-          lockRenewTime: 20000, // Renew lock every 20 seconds (more frequent)
-          stalledInterval: 60000, // 2 minutes before considering job stalled (reduced)
-          maxStalledCount: 1, // Max 2 stall attempts (reduced for faster failure)
+          concurrency: concurrencyPerWorker,
+          lockDuration: 30000, // 1 minute (reduced from 2 minutes)
+          lockRenewTime: 10000, // Renew lock every 20 seconds
+          stalledInterval: 15000, // 45 seconds before considering job stalled
+          maxStalledCount: 1, // Max 1 stall attempt (reduced from 2)
         }
       );
 
@@ -1419,12 +1752,12 @@ async function startServer() {
       checkInterval: 5 * 60 * 1000 // 5 minutes
     });
 
-    // Initialize queue cleanup interval
-    queueCleanupInterval = setInterval(cleanupStaleQueueJobs, 2 * 60 * 1000); // Run every 2 minutes
-    console.log('🧹 Queue cleanup interval initialized');
+    // Initialize queue cleanup interval - more aggressive
+    queueCleanupInterval = setInterval(cleanupStaleQueueJobs, 30 * 1000); // Run every 30 seconds
+    console.log('🧹 Queue cleanup interval initialized (30s interval)');
     await logger.logInfo(ErrorCategory.GENERAL, 'Queue cleanup interval initialized', {
       schedulerType: 'queue_cleanup',
-      checkInterval: 2 * 60 * 1000 // 2 minutes
+      checkInterval: 30 * 1000 // 30 seconds
     });
 
 
@@ -1661,17 +1994,20 @@ interface CompletedTasks {
 const completedTasks: CompletedTasks = {};
 
 // Create job options with timeout for faster failure
-function createJobOptions(jobId?: string, timeoutMs: number = 60000): JobsOptions {
+function createJobOptions(jobId?: string, timeoutMs?: number, jobName?: string): JobsOptions {
+  // SCHEDULE jobs must always retry to prevent tasks from getting stuck
+  const isScheduleJob = jobName && [OPENSEA_SCHEDULE, MAGICEDEN_SCHEDULE, BLUR_SCHEDULE].includes(jobName);
+  
   return {
     ...(jobId ? { jobId } : {}),
     removeOnComplete: true,
     removeOnFail: true,
-    lifo: true, // Process newest jobs first to prevent old jobs from getting stuck
-    attempts: 3,
+    lifo: false, // Change to FIFO (First In First Out) for fair processing
+    attempts: isScheduleJob ? -1 : 3, // Unlimited retries for SCHEDULE jobs, 3 retries for others
     backoff: {
       type: 'exponential',
       delay: 8000, // Start with 8 seconds for rate limits
-    },
+    }
   };
 }
 
@@ -1745,8 +2081,6 @@ function cleanupTaskResources(taskId: string): void {
 
   // Release loop scheduling lock
   releaseLoopSchedulingLock(taskId);
-
-  console.log(YELLOW + `[cleanupTaskResources] Cleaned up resources for task ${taskId}` + RESET);
 }
 
 // Initialize queue event handlers - called after queue is created
@@ -2585,8 +2919,13 @@ wss.on('connection', async (ws) => {
 });
 
 
-async function processJob(job: Job) {
+async function processJob(job: Job, signal?: AbortSignal) {
   try {
+    // Check if already aborted
+    if (signal?.aborted) {
+      throw new Error('Job aborted before processing');
+    }
+
     const result = await (async () => {
       switch (job.name) {
         case OPENSEA_COLLECTION_BID:
@@ -3396,14 +3735,14 @@ async function processBulkCancellations(jobs: Job[]) {
             break;
           }
           const delay = (prioritizedCount / DRAIN_THRESHOLD * 2);
-          await new Promise(resolve => setTimeout(resolve, delay * 1000));
+          await new Promise(resolve => setTimeout(resolve, delay * 2000));
         }
 
         // Check queue health
         const counts = await queue.getJobCounts();
-        const prioritizedCount = counts.prioritized || 0;
+        const prioritizedprioritizedCount = counts.prioritized || 0;
 
-        if (prioritizedCount > DRAIN_THRESHOLD) {
+        if (prioritizedprioritizedCount > DRAIN_THRESHOLD) {
           await waitForQueueDrain();
         }
 
@@ -3508,7 +3847,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
           if (prioritizedCount <= DRAIN_THRESHOLD) {
             break;
           }
-          const delay = (prioritizedCount / DRAIN_THRESHOLD);
+          const delay = (prioritizedCount / RATE_LIMIT);
           await new Promise(resolve => setTimeout(resolve, delay * 1000));
         }
 
@@ -3620,7 +3959,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
                   await new Promise(resolve => setTimeout(resolve, delayBetweenJobs));
                 }
                 // Rate limit tracking is now handled by BlurRateLimiter
-                const jobOptions = createJobOptions(job.jobKey, 45000); // 45 second timeout for individual jobs
+                const jobOptions = createJobOptions(job.jobKey, 45000, job.name); // Pass job name for retry logic
 
                 try {
                   // Add job normally
@@ -3677,7 +4016,9 @@ async function waitForQueueDrain(): Promise<void> {
     if ((counts.prioritized || 0) <= DRAIN_THRESHOLD) {
       return;
     }
-    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    const delay = counts.prioritized / RATE_LIMIT
+    await new Promise(resolve => setTimeout(resolve, delay * 1000));
   }
 }
 
@@ -3805,6 +4146,55 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
 
   await BidLogs.deleteMany({ taskId: task._id });
 
+  // Ensure wallet approvals for all selected marketplaces
+  try {
+    const wallet = await Wallet.findById(task.walletId);
+    if (!wallet?.encryptedPrivateKey) {
+      console.log(RED + `Cannot start task - wallet not found or missing private key: ${task.walletId}` + RESET);
+      return;
+    }
+
+    const privateKey = decryptPrivateKey(wallet.encryptedPrivateKey);
+    const validMarketplaces = ["opensea", "magiceden", "blur"];
+    const selectedMarketplaces = marketplace ? [marketplace.toLowerCase()] : task.selectedMarketplaces.map(m => m.toLowerCase());
+    const marketplacesToApprove = selectedMarketplaces.filter(m => validMarketplaces.includes(m));
+
+    console.log(CYAN + `Checking marketplace approvals for wallet ${wallet.address}...` + RESET);
+
+    for (const mp of marketplacesToApprove) {
+      let marketplaceAddress: string;
+      
+      switch (mp) {
+        case "opensea":
+          marketplaceAddress = SEAPORT;
+          break;
+        case "magiceden":
+          marketplaceAddress = MAGICEDEN_MARKETPLACE;
+          break;
+        case "blur":
+          // Blur doesn't require WETH approval - skip for now
+          console.log(YELLOW + `Skipping approval for Blur - not required` + RESET);
+          continue;
+        default:
+          console.log(YELLOW + `Unknown marketplace: ${mp}, skipping approval` + RESET);
+          continue;
+      }
+
+      console.log(CYAN + `Checking ${mp} approval...` + RESET);
+      const approved = await approveMarketplace(marketplaceAddress, privateKey, WETH);
+      
+      if (approved) {
+        console.log(GREEN + `✓ ${mp} approval confirmed for wallet ${wallet.address}` + RESET);
+      } else {
+        console.log(RED + `✗ Failed to approve ${mp} for wallet ${wallet.address}` + RESET);
+        // Continue with other marketplaces even if one fails
+      }
+    }
+  } catch (error) {
+    console.error(RED + `Error during marketplace approval check: ${error}` + RESET);
+    // Continue with task execution even if approval check fails
+  }
+
   const RATE_LIMIT = process.env.RATE_LIMIT;
   if (!RATE_LIMIT) {
     console.log(RED + 'RATE_LIMIT is not set - cannot start task' + RESET);
@@ -3845,6 +4235,14 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     const jobs = selectedMarketplaces
       .filter((m) => enabledMarketplaces.map((m) => m.toLowerCase()).includes(m))
       .filter(m => validMarketplaces.includes(m))
+      .filter(m => {
+        // Check circuit breaker
+        if (taskCircuitBreaker.isSuspended(taskId, m)) {
+          console.log(YELLOW + `[Circuit Breaker] Skipping ${m} for task ${taskId} - currently suspended` + RESET);
+          return false;
+        }
+        return true;
+      })
       .map(m => {
         switch (m) {
           case "opensea":
@@ -3861,10 +4259,16 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
 
     // Add deduplication check before adding jobs (skip deduplication for loop restarts)
     if (jobs.length > 0) {
+      // Add job options for SCHEDULE jobs to ensure unlimited retries
+      const jobsWithOptions = jobs.map(job => ({
+        ...job,
+        opts: createJobOptions(undefined, 60000, job.name)
+      }));
+
       // For loop restarts (start=true), always add jobs without deduplication
       if (start === true) {
         console.log(GREEN + `Loop restart: Adding ${jobs.length} jobs without deduplication` + RESET);
-        await queue.addBulk(jobs as Job[]);
+        await queue.addBulk(jobsWithOptions as Job[]);
       } else {
         // Get existing jobs for this task
         const existingJobs = await queue.getJobs(['waiting', 'active', 'delayed']);
@@ -3875,7 +4279,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
         );
 
         // Filter out duplicate jobs
-        const newJobs = jobs.filter(job => !existingJobNames.has(job.name));
+        const newJobs = jobsWithOptions.filter(job => !existingJobNames.has(job.name));
 
         if (newJobs.length > 0) {
           console.log(GREEN + `Adding ${newJobs.length} new jobs (filtered ${jobs.length - newJobs.length} duplicates)` + RESET);
@@ -5634,13 +6038,22 @@ async function updateMarketplace(task: ITask) {
 
       switch (incoming.toLowerCase()) {
         case "opensea":
-          await queue.add(OPENSEA_SCHEDULE, task, { priority: COLLECTION_BID_PRIORITY.OPENSEA });
+          await queue.add(OPENSEA_SCHEDULE, task, {
+            ...createJobOptions(undefined, 60000, OPENSEA_SCHEDULE),
+            priority: COLLECTION_BID_PRIORITY.OPENSEA
+          });
           break;
         case "magiceden":
-          await queue.add(MAGICEDEN_SCHEDULE, task, { priority: COLLECTION_BID_PRIORITY.MAGICEDEN });
+          await queue.add(MAGICEDEN_SCHEDULE, task, {
+            ...createJobOptions(undefined, 60000, MAGICEDEN_SCHEDULE),
+            priority: COLLECTION_BID_PRIORITY.MAGICEDEN
+          });
           break;
         case "blur":
-          await queue.add(BLUR_SCHEDULE, task, { priority: COLLECTION_BID_PRIORITY.BLUR });
+          await queue.add(BLUR_SCHEDULE, task, {
+            ...createJobOptions(undefined, 60000, BLUR_SCHEDULE),
+            priority: COLLECTION_BID_PRIORITY.BLUR
+          });
           break;
       }
     }
@@ -5966,7 +6379,7 @@ async function _doConnect(): Promise<void> {
           return;
         }
         // All messages use the queue
-        wsMessageQueue.add(() => handleMarketplaceMessage(message))
+        pQueue.add(() => handleMarketplaceMessage(message))
 
       } catch (error) {
         console.error('Error in message handler:', error);
@@ -7698,8 +8111,41 @@ function handleOpenSeaMessages(message: any) {
   return { contractAddress, slug }
 }
 
+// Create logs directory if it doesn't exist
+const logsDir = path.join(process.cwd(), 'logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+}
+
+// Function to log bidLevels messages to file
+function logBidLevelsMessage(message: any) {
+  try {
+    const timestamp = new Date().toISOString();
+    const logEntry = {
+      timestamp,
+      message,
+      processedAt: Date.now()
+    };
+    
+    // Create filename with date for daily rotation
+    const dateStr = new Date().toISOString().split('T')[0];
+    const logFile = path.join(logsDir, `bidLevels-${dateStr}.log`);
+    
+    // Append to log file
+    fs.appendFileSync(logFile, JSON.stringify(logEntry) + '\n', 'utf8');
+  } catch (error) {
+    console.error('Error writing bidLevels log:', error);
+  }
+}
+
 function handleBlurMessages(message: any) {
   console.log(GOLD + JSON.stringify(message) + RESET);
+
+  // Log messages containing bidLevels
+  if (message && message['0'] && typeof message['0'] === 'string' && message['0'].includes('bidLevels')) {
+    console.log(CYAN + `[BidLevels Logger] Writing message to log file` + RESET);
+    logBidLevelsMessage(message);
+  }
 
   let contractAddress: string | undefined;
   try {
@@ -7744,11 +8190,6 @@ export const pQueue = new PQueue({
   concurrency: RATE_LIMIT / 2,
 })
 
-// Dedicated queue for WebSocket messages with optimized concurrency
-export const wsMessageQueue = new PQueue({
-  concurrency: RATE_LIMIT / 2, // Optimized for better throughput while preventing resource contention
-})
-
 function getTraitCount(traitsJson: any, attribute: any) {
   const traits = typeof traitsJson === 'string' ? JSON.parse(traitsJson) : traitsJson;
   const { traitType, values } = attribute;
@@ -7761,6 +8202,9 @@ function getTraitCount(traitsJson: any, attribute: any) {
 }
 
 async function processOpenseaScheduledBid(task: ITask) {
+  const checkpointStart = Date.now();
+  console.log(CYAN + `[OPENSEA_SCHEDULE] Starting task ${task._id} - ${task.contract?.slug || 'unknown'}` + RESET);
+  
   try {
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) return
     const currentTask = activeTasks.get(task._id);
@@ -7806,7 +8250,9 @@ async function processOpenseaScheduledBid(task: ITask) {
     taskStatus[currentTask._id].processingPercentage = (1 / 4) * 100
     const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
+    console.log(CYAN + `[OPENSEA_SCHEDULE] Checkpoint 0: Getting collection details (${Date.now() - checkpointStart}ms)` + RESET);
     const collectionDetails = await getCollectionDetails(currentTask.contract.slug, currentTask.contract.contractAddress);
+    console.log(CYAN + `[OPENSEA_SCHEDULE] Checkpoint 0.1: Got collection details (${Date.now() - checkpointStart}ms)` + RESET);
     taskStatus[currentTask._id].processingPercentage = (2 / 4) * 100
     const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0
 
@@ -7830,7 +8276,9 @@ async function processOpenseaScheduledBid(task: ITask) {
 
     // determine token traits
     const taskTokenIds = currentTask.tokenIds
+    console.log(CYAN + `[OPENSEA_SCHEDULE] Checkpoint 1: Fetching OpenSea listings (${Date.now() - checkpointStart}ms)` + RESET);
     const bottomListings = autoIds ? await fetchOpenseaListings(currentTask._id, currentTask.contract.slug, amount) ?? [] : []
+    console.log(CYAN + `[OPENSEA_SCHEDULE] Checkpoint 2: Got ${bottomListings.length} listings (${Date.now() - checkpointStart}ms)` + RESET);
     const difference = amount !== undefined ? Math.max(0, amount - bottomListings.length) : 0
 
     let tokens: number[] = [...bottomListings, ...taskTokenIds.map((token) => +token)]
@@ -7843,6 +8291,7 @@ async function processOpenseaScheduledBid(task: ITask) {
       let skips = 0
 
       if (currentTask.traitsOperator.value === "or") {
+        console.log(CYAN + `[OPENSEA_SCHEDULE] Checkpoint 3: Fetching trait tokens OR operator (${Date.now() - checkpointStart}ms)` + RESET);
         await pQueue.addAll(
           expandedAttributes.map((attribute) => async () => {
             const count = getTraitCount(currentTask.traits, attribute)
@@ -7951,9 +8400,7 @@ async function processOpenseaScheduledBid(task: ITask) {
     const tokenBid = currentTask.bidType === "token" && tokenIds.length > 0
     const traits = selectedTraits && Object.keys(selectedTraits).length > 0 ? transformOpenseaTraits(selectedTraits) : [];
 
-    const approved = await approveMarketplace(SEAPORT, WALLET_PRIVATE_KEY, currency);
     taskStatus[currentTask._id].processingPercentage = (4 / 4) * 100
-    // if (!approved) return
 
     if (traitBid && !collectionDetails.trait_offers_enabled && !tokenBid) {
 
@@ -8301,6 +8748,9 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
 }
 
 async function processBlurScheduledBid(task: ITask) {
+  const checkpointStart = Date.now();
+  console.log(CYAN + `[BLUR_SCHEDULE] Starting task ${task._id} - ${task.contract?.slug || 'unknown'}` + RESET);
+  
   try {
     const currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur") || !enabledMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur")) return
@@ -8894,6 +9344,22 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     const { address, privateKey, slug, creatorFees, enforceCreatorFee, asset, _id } = data
     if (!currentTokenIds[_id]?.opensea?.includes(+asset.tokenId)) return
 
+    // Check if token is cached as trading disabled
+    if (tradingDisabledCache.isDisabled(asset.contractAddress, +asset.tokenId, 'opensea')) {
+      const message = `Token ${asset.tokenId} is cached as trading disabled - skipping`;
+      console.log(YELLOW + message + RESET);
+
+      // Log the skip and update error stats
+      await logBidError(_id, "TRADING DISABLED (CACHED)", message, "skipped", "opensea");
+
+      if (!errorStats[_id]) {
+        errorStats[_id] = { opensea: 0, magiceden: 0, blur: 0 };
+      }
+      errorStats[_id].opensea++;
+
+      return;
+    }
+
     const currentTask = activeTasks.get(_id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) return;
     const floor_price = await getOpenseaFloor(slug);
@@ -9085,17 +9551,28 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
       // Special handling for "Trading is disabled" errors
       if (errorMessage.includes('Trading is disabled')) {
+        // Cache the disabled token
+        tradingDisabledCache.markAsDisabled(
+          data.asset.contractAddress,
+          +data.asset.tokenId,
+          'opensea',
+          errorMessage
+        );
+
         // Remove token from the list to avoid repeated attempts
         if (currentTokenIds[data._id]?.opensea) {
           const tokenIndex = currentTokenIds[data._id].opensea.indexOf(+data.asset.tokenId);
           if (tokenIndex > -1) {
             currentTokenIds[data._id].opensea.splice(tokenIndex, 1);
-            console.log(YELLOW + `Removed token ${data.asset.tokenId} from OpenSea bidding list - Trading is disabled` + RESET);
           }
         }
 
-        // Log as warning instead of error since this is expected behavior
-        await logBidError(data.task._id, "OPENSEA TOKEN TRADING DISABLED", `Token ${data.asset.tokenId} in collection ${data.slug}: ${errorMessage}`, "warning", "opensea");
+        // Log as warning with updated message
+        console.log(YELLOW + `Token ${data.asset.tokenId} marked as trading disabled and cached for 1 hour` + RESET);
+        await logBidError(data.task._id, "OPENSEA TOKEN TRADING DISABLED",
+          `Token ${data.asset.tokenId} in collection ${data.slug}: ${errorMessage} - Cached for 1 hour`,
+          "warning", "opensea");
+
         return; // Exit early without counting as error
       }
     } else {
@@ -9642,6 +10119,9 @@ async function processBlurTraitBid(data: {
 }
 
 async function processMagicedenScheduledBid(task: ITask) {
+  const checkpointStart = Date.now();
+  console.log(CYAN + `[MAGICEDEN_SCHEDULE] Starting task ${task._id} - ${task.contract?.slug || 'unknown'}` + RESET);
+  
   try {
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return
     const currentTask = activeTasks.get(task._id);
@@ -9710,9 +10190,7 @@ async function processMagicedenScheduledBid(task: ITask) {
       .filter(id => id !== null);
 
     const amount = autoIds[0]
-    const approved = await approveMarketplace(MAGICEDEN_MARKETPLACE, WALLET_PRIVATE_KEY);
     taskStatus[currentTask._id].processingPercentage = (2 / 4) * 100
-    // if (!approved) return
 
     const taskTokenIds = currentTask.tokenIds
     let tokenIds: number[] = []
@@ -11669,6 +12147,15 @@ app.get('/health', (req, res) => {
   res.status(200).json(healthStatus);
 });
 
+// Circuit breaker status endpoint
+app.get('/circuit-breaker/status', (req, res) => {
+  const status = taskCircuitBreaker.getStatus();
+  res.json({
+    totalSuspended: status.filter(s => s.status === 'SUSPENDED').length,
+    tasks: status
+  });
+});
+
 export async function fetchAddressBalances(walletAddress: string): Promise<AddressBalancesResponse> {
   const CACHE_EXPIRY_SECONDS = 30;
   // Use hash tag for deterministic slot assignment in Redis Cluster
@@ -11861,7 +12348,7 @@ const fetchCollectionData = async (slug: string) => {
 
 export function getExpiry(bidDuration: { value: number; unit: string }) {
   // Handle invalid or zero values
-  if (!bidDuration || bidDuration.value <= 0) {
+  if (!bidDuration || bidDuration.value < 0) {
     console.log(YELLOW + `Invalid bid duration value: ${bidDuration?.value}, using default 900 seconds` + RESET);
     return 900; // Default to 15 minutes
   }

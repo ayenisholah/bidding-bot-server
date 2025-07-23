@@ -20,28 +20,48 @@ const getRedis = () => redisClient.getClient();
 
 const lockManager = new DistributedLockManager({
   lockPrefix: '{collection}:fetch:',
-  defaultTTLSeconds: 36000
+  defaultTTLSeconds: 300 // Reduced from 10 hours to 5 minutes
 });
 
+// Helper function to add timeout to promises
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error(`${operation} timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]);
+}
+
 export async function getCollectionDetails(slug: string, contractAddress?: string) {
+  const startTime = Date.now();
+  console.log(`[Collection] Fetching details for ${slug}`);
 
   if (collectionCache[slug]) {
+    console.log(`[Collection] Cache hit for ${slug} (${Date.now() - startTime}ms)`);
     return collectionCache[slug];
   }
+  
   const lockKey = `{${slug}}:collection`;
-  const result = await lockManager.withLock(lockKey, async () => {
-    if (collectionCache[slug]) {
-      return collectionCache[slug];
-    }
-    const { data: collection } = await limiter.schedule(() => axiosInstance
-      .get(
-        `${BASE_URL}/opensea/api/v2/collections/${slug}`,
-        {
-          headers: {
-            'x-api-key': API_KEY
-          }
+  
+  try {
+    const result = await withTimeout(
+      lockManager.withLock(lockKey, async () => {
+        if (collectionCache[slug]) {
+          return collectionCache[slug];
         }
-      ));
+        
+        console.log(`[Collection] Making API call for ${slug} (${Date.now() - startTime}ms)`);
+        const { data: collection } = await withTimeout(
+          limiter.schedule(() => axiosInstance.get(
+            `${BASE_URL}/opensea/api/v2/collections/${slug}`,
+            {
+              headers: {
+                'x-api-key': API_KEY
+              }
+            }
+          )),
+          20000, // 20 second timeout for API call
+          `OpenSea API call for ${slug}`
+        );
 
     let creator_fees;
     let enforceCreatorFee = false;
@@ -64,22 +84,56 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
       enforceCreatorFee: enforceCreatorFee
     };
 
-    collectionCache[slug] = result;
+        collectionCache[slug] = result;
+        console.log(`[Collection] Successfully cached details for ${slug} (${Date.now() - startTime}ms)`);
+        return result;
+      }),
+      30000, // 30 second timeout for entire operation
+      `Collection details fetch for ${slug}`
+    );
+
+    if (!result) {
+      await logger.logOpenseaCollectionError('Failed to acquire lock for collection details', {
+        collection: slug,
+        contractAddress,
+        operation: 'get_collection_details',
+        errorCode: 'LOCK_ACQUISITION_FAILED'
+      });
+      throw new Error('Failed to acquire lock for collection details');
+    }
+
     return result;
-
-  });
-
-  if (!result) {
-    await logger.logOpenseaCollectionError('Failed to acquire lock for collection details', {
+  } catch (error) {
+    console.error(`[Collection] Error fetching details for ${slug} after ${Date.now() - startTime}ms:`, error);
+    
+    // Log the error
+    await logger.logOpenseaCollectionError(`Failed to fetch collection details: ${error}`, {
       collection: slug,
       contractAddress,
       operation: 'get_collection_details',
-      errorCode: 'LOCK_ACQUISITION_FAILED'
+      errorCode: 'FETCH_FAILED',
+      error: error as Error
     });
-    throw new Error('Failed to acquire lock for collection details');
+    
+    // Return a minimal collection object to prevent complete failure
+    const fallbackResult = {
+      collection: slug,
+      name: slug,
+      description: '',
+      creator_fees: { null: 0 },
+      enforceCreatorFee: false,
+      trait_offers_enabled: false,
+      collection_offers_enabled: true,
+      error: true,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    };
+    
+    // Cache the fallback for a short time to prevent hammering
+    collectionCache[slug] = fallbackResult;
+    setTimeout(() => delete collectionCache[slug], 60000); // Clear after 1 minute
+    
+    return fallbackResult;
   }
-
-  return result;
 }
 
 export async function getOpenseaFloor(collectionSlug: string) {
