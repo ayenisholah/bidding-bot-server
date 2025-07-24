@@ -11,6 +11,7 @@ import {
 } from './cancellation';
 import { DistributedLockManager } from '../utils/lock';
 import { removeTaskFromIndexes } from './task';
+import { walletCache } from '../utils/wallet-cache';
 
 interface StopTaskResult {
   success: boolean;
@@ -42,7 +43,7 @@ export class TaskOperationsManager {
     try {
       // Acquire lock for the entire operation
       const result = await this.lockManager.withLock(lockKey, async () => {
-        const wallet = await Wallet.findById(task.walletId);
+        const wallet = await walletCache.getWalletById(task.walletId);
         const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
 
         // Initialize stats

@@ -13,6 +13,7 @@ import Listing from "../models/listing.model";
 import { listOnOpensea } from "../marketplace/opensea/list";
 import { listOnBlur } from "../marketplace/blur/list";
 import { listOnMagicEden } from "../marketplace/magiceden/list";
+import { walletCache } from "../utils/wallet-cache";
 
 config()
 
@@ -78,7 +79,7 @@ export async function createListing(data: IListing) {
       throw new Error('No walletId found in listing data');
     }
 
-    const wallet = await Wallet.findById(walletId.toString());
+    const wallet = await walletCache.getWalletById(walletId.toString());
     const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
     const web3Wallet = new Web3Wallet(private_key, provider)
     const collectionData: ICollectionDetails | null = await getCollectionDetails(freshData.contract.slug, freshData.contract.contractAddress);

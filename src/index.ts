@@ -1132,7 +1132,7 @@ async function fetchCurrentTasks() {
   try {
     console.log(BLUE + '\n=== Fetching Current Tasks ===' + RESET);
     const tasks = await Task.find({})
-    const wallets = (await Wallet.find({})).map((wallet) => wallet.address)
+    const wallets = (await walletCache.getAllWallets()).map((wallet) => wallet.address)
 
     walletsArr.push(...wallets);
     const formattedTasks = tasks.map((task) => ({
@@ -2182,7 +2182,7 @@ function initializeQueueEventHandlers() {
           });
 
           if (orders.length > 0) {
-            const wallet = await Wallet.findById(task.walletId);
+            const wallet = await walletCache.getWalletById(task.walletId);
             const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
             await cancelAllRelatedBids(task, private_key);
           }
@@ -2210,7 +2210,7 @@ function initializeQueueEventHandlers() {
           });
 
           if (orders.length > 0) {
-            const wallet = await Wallet.findById(task.walletId);
+            const wallet = await walletCache.getWalletById(task.walletId);
             const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
             await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
           }
@@ -2289,7 +2289,7 @@ function initializeQueueEventHandlers() {
 
         if (allMarketsComplete && runningPercentage > 99) {
           console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
-          const wallet = await Wallet.findById(task.walletId)
+          const wallet = await walletCache.getWalletById(task.walletId)
           const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
 
           let totalCancellationJobs = 0;
@@ -2524,7 +2524,7 @@ function initializeQueueEventHandlers() {
           });
 
           if (orders.length > 0) {
-            const wallet = await Wallet.findById(task.walletId);
+            const wallet = await walletCache.getWalletById(task.walletId);
             const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
             await cancelAllRelatedBids(task, private_key);
           }
@@ -2552,7 +2552,7 @@ function initializeQueueEventHandlers() {
           });
 
           if (orders.length > 0) {
-            const wallet = await Wallet.findById(task.walletId);
+            const wallet = await walletCache.getWalletById(task.walletId);
             const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
             await cancelAllRelatedBids(task, private_key, marketplace.toLowerCase());
           }
@@ -2628,7 +2628,7 @@ function initializeQueueEventHandlers() {
         if (allMarketsComplete && runningPercentage > 99) {
           console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
 
-          const wallet = await Wallet.findById(task.walletId)
+          const wallet = await walletCache.getWalletById(task.walletId)
           const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
 
           let totalCancellationJobs = 0;
@@ -3363,7 +3363,7 @@ async function updateTaskData(task: ITask) {
 
     if (existingTaskIndex === -1 || !existingTask) return
 
-    const wallet = await Wallet.findById(task.walletId)
+    const wallet = await walletCache.getWalletById(task.walletId)
     const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
     currentTasks.splice(existingTaskIndex, 1, task);
     activeTasks.set(task._id, task);
@@ -4148,7 +4148,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
 
   // Ensure wallet approvals for all selected marketplaces
   try {
-    const wallet = await Wallet.findById(task.walletId);
+    const wallet = await walletCache.getWalletById(task.walletId);
     if (!wallet?.encryptedPrivateKey) {
       console.log(RED + `Cannot start task - wallet not found or missing private key: ${task.walletId}` + RESET);
       return;
@@ -4322,7 +4322,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
 
 async function stopTask(task: ITask, start: boolean, marketplace?: string) {
   const taskId = task._id.toString();
-  const wallet = await Wallet.findById(task.walletId)
+  const wallet = await walletCache.getWalletById(task.walletId)
   const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
 
   try {
@@ -4712,7 +4712,7 @@ async function removePendingAndWaitingBids(
 
     // STEP 1: Immediately cancel active bids for fast response
     try {
-      const wallet = await Wallet.findById(task.walletId);
+      const wallet = await walletCache.getWalletById(task.walletId);
       if (wallet?.encryptedPrivateKey) {
         const privateKey = decryptPrivateKey(wallet.encryptedPrivateKey);
 
@@ -6486,14 +6486,13 @@ async function updateBalancesForItemSold(message: any) {
     // Add to the set to prevent future duplicates
     recentItemSoldEvents.add(eventKey);
 
-    const testWallet = await Wallet.findOne({}) as IWallet
+    const allWallets = await walletCache.getAllWallets();
+    const testWallet = allWallets[0] as IWallet;
     await triggerAutoListingForPurchase(testWallet, contractAddress, tokenId, price, marketplace);
 
 
     // Check if the toAddress belongs to one of our wallets (case-insensitive)
-    const wallet: IWallet | null = await Wallet.findOne({
-      address: { $regex: new RegExp(`^${toAddress}$`, 'i') }
-    });
+    const wallet: IWallet | null = await walletCache.getWallet(toAddress);
 
     if (!wallet) {
       // Not one of our wallets, ignore
@@ -7242,7 +7241,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const orderHash = data.payload.payload.order_hash
 
     // Fetch all wallets first to check if it's our own bid
-    const wallets = await Wallet.find({})
+    const wallets = await walletCache.getAllWallets()
     const walletAddresses = wallets.map((wallet) => wallet.address.toLowerCase())
 
     if (!bestOffers[task._id]) {
@@ -8246,7 +8245,7 @@ async function processOpenseaScheduledBid(task: ITask) {
 
     const WALLET_ADDRESS: string = currentTask.wallet;
     taskStatus[currentTask._id].status = 'PROCESSING'
-    const wallets = await Wallet.findById(currentTask.walletId)
+    const wallets = await walletCache.getWalletById(currentTask.walletId)
     taskStatus[currentTask._id].processingPercentage = (1 / 4) * 100
     const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
@@ -8547,7 +8546,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       .map((m) => m.toLowerCase())
       .includes("opensea")) return;
 
-    const wallets = await Wallet.findById(task.walletId)
+    const wallets = await walletCache.getWalletById(task.walletId)
     const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
     const floor_price = await getOpenseaFloor(currentTask.contract.slug);
@@ -8615,7 +8614,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       if (ttl >= MIN_BID_DURATION && currentPrice === Number(colletionOffer) && Math.abs(orderExpiration - expiry) < 30) return;
     }
     else {
-      const walletsArr = await Wallet.find({})
+      const walletsArr = await walletCache.getAllWallets()
       const [topOffer, secondOffer] = (await fetchOpenseaOffers('COLLECTION', currentTask.contract.slug, currentTask.contract.contractAddress, {}) as unknown) as OpenseaOfferData[]
       const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
       const secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal)
@@ -8807,7 +8806,7 @@ async function processBlurScheduledBid(task: ITask) {
     const expiry = getExpiry(currentTask.bidDuration)
 
     const WALLET_ADDRESS: string = currentTask.wallet;
-    const wallets = await Wallet.findById(task.walletId)
+    const wallets = await walletCache.getWalletById(task.walletId)
     const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
     const selectedTraits = transformNewTask(filteredTasks)
 
@@ -8902,7 +8901,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
     const currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((market) => market.toLowerCase()).includes("blur")) return;
 
-    const wallets = await Wallet.findById(currentTask.walletId)
+    const wallets = await walletCache.getWalletById(currentTask.walletId)
     const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
     const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
@@ -9227,7 +9226,7 @@ async function processOpenseaTraitBid(data: {
 
     else {
       const [topOffer, secondOffer] = await fetchOpenseaOffers('TRAIT', slug, contractAddress, JSON.parse(trait)) as unknown as OpenseaOfferData[]
-      const walletsArr = await Wallet.find({})
+      const walletsArr = await walletCache.getAllWallets()
       const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
       const secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal)
       const outbidMargin = calculateOutbidMargin(highestBidAmount ? highestBidAmount / Math.pow(10, decimal) : offerPriceEth, currency);
@@ -9439,7 +9438,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     if (!outbidOptions.outbid) {
       if (ttl >= MIN_BID_DURATION && currentPrice === Number(tokenOffer) && Math.abs(orderExpiration - expiry) < 30) return;
     } else {
-      const walletsArr = await Wallet.find({})
+      const walletsArr = await walletCache.getAllWallets()
       const highestBid = await fetchItemOffers(asset.contractAddress, asset.tokenId.toString());
       const [topOffer, secondOffer] = highestBid
 
@@ -10164,7 +10163,7 @@ async function processMagicedenScheduledBid(task: ITask) {
 
     taskStatus[currentTask._id].status = 'PROCESSING'
     const WALLET_ADDRESS: string = currentTask.wallet
-    const wallets = await Wallet.findById(currentTask.walletId)
+    const wallets = await walletCache.getWalletById(currentTask.walletId)
     taskStatus[currentTask._id].processingPercentage = (1 / 4) * 100
     const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
     const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0
@@ -10396,7 +10395,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     const currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return;
     const expiration = getExpiry(currentTask.bidDuration)
-    const wallets = await Wallet.findById(task.walletId)
+    const wallets = await walletCache.getWalletById(task.walletId)
     const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
     const floor_price = Number(await fetchMagicEdenCollectionStats(task.contract.contractAddress))
 
@@ -10458,7 +10457,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
 
     else {
       const [topOffer, secondOffer] = await fetchMagicEdenOffer("COLLECTION", task.contract.contractAddress, "{}") as unknown as OpenseaOfferData[]
-      const walletsArr = await Wallet.find({})
+      const walletsArr = await walletCache.getAllWallets()
 
       const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
 
@@ -10636,7 +10635,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       if (ttl >= MIN_BID_DURATION && currentPrice === tokenOffer && Math.abs(orderExpiration - expiration) < 30) return;
 
     } else {
-      const walletsArr = await Wallet.find({})
+      const walletsArr = await walletCache.getAllWallets()
       const [topOffer, secondOffer] = await fetchMagicEdenOffer("TOKEN", contractAddress, tokenId.toString()) as unknown as OpenseaOfferData[]
       // Add null checks and default values 
       const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
@@ -10847,7 +10846,7 @@ async function processMagicedenTraitBid(data: {
     }
 
     else {
-      const walletsArr = await Wallet.find({})
+      const walletsArr = await walletCache.getAllWallets()
       const [topOffer, secondOffer] = await fetchMagicEdenOffer("TRAIT", contractAddress, trait) as unknown as OpenseaOfferData[]
       const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
       const secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal)
@@ -11286,7 +11285,7 @@ app.post('/api/task/cancel/:taskId', async (req, res) => {
     if (!task) {
       return res.status(404).json({ error: 'Task not found' });
     }
-    const wallet = await Wallet.findById(task.walletId)
+    const wallet = await walletCache.getWalletById(task.walletId)
     const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string)
     const orders: PrismaOrder[] = req.body
     const openseaOrders = orders.filter((order: any) => order.marketplace === OPENSEA.toLowerCase())

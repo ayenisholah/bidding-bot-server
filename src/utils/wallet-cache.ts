@@ -159,6 +159,38 @@ class WalletCache {
     return this.getWallet(address);
   }
 
+  async getWalletById(walletId: string): Promise<IWallet | null> {
+    // First check if we have it in cache by scanning
+    for (const cached of this.cache.values()) {
+      if (cached._id.toString() === walletId) {
+        cached.lastUsed = Date.now();
+        return cached as unknown as IWallet;
+      }
+    }
+    
+    // Cache miss - fetch from database
+    try {
+      const wallet = await Wallet.findById(walletId).lean();
+      if (wallet) {
+        const address = wallet.address.toLowerCase();
+        this.cache.set(address, {
+          _id: wallet._id,
+          address: wallet.address,
+          encryptedPrivateKey: wallet.encryptedPrivateKey,
+          name: wallet.name,
+          user: String(wallet.user),
+          tasks: (wallet as any).tasks,
+          lastUsed: Date.now()
+        });
+        return wallet;
+      }
+    } catch (error) {
+      await logger.logError(ErrorCategory.DATABASE, `Failed to fetch wallet by ID ${walletId} from database`, error as Error);
+    }
+    
+    return null;
+  }
+
   invalidateWallet(address: string) {
     const normalizedAddress = address.toLowerCase();
     this.cache.delete(normalizedAddress);
