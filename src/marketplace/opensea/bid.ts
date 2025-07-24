@@ -11,42 +11,42 @@ import { CollectionItemsListQuery } from "../../queries";
 import { CollectionItemsQueryVariables, CollectionItemsResponse } from "../../functions";
 import { fetchERC20Balance } from "../../utils/balance";
 import { logger, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
-import { InsufficientBalanceError, MinimumPriceError, RateLimitError, InvalidRequestError } from "../errors";
+import { InsufficientBalanceError } from "../errors";
 
 // Helper function to extract meaningful error messages from OpenSea API responses
 function extractOpenseaErrorMessage(error: any): string {
   if (error?.response?.data) {
     const data = error.response.data;
-    
+
     // Handle array of errors
     if (data.errors && Array.isArray(data.errors) && data.errors.length > 0) {
       return data.errors.join(', ');
     }
-    
+
     // Handle single error message
     if (data.error) {
       return data.error;
     }
-    
+
     // Handle message field
     if (data.message) {
       return data.message;
     }
-    
+
     // Handle detail field
     if (data.detail) {
       return data.detail;
     }
-    
+
     // If it's a string, return it
     if (typeof data === 'string') {
       return data;
     }
-    
+
     // Fallback to JSON stringify
     return JSON.stringify(data);
   }
-  
+
   // Fallback to standard error message
   return error?.message || String(error);
 }
@@ -361,7 +361,7 @@ export async function bidOnOpensea(
 
     const itemResponse = await postItemOffer(taskId, offer, itemSignature)
     const itemOrderHash = itemResponse?.order?.order_hash
-    
+
     const sanitizedExpiry = expiry > 900 ? expiry : 900
     if (offerPrice && itemOrderHash && sanitizedExpiry && slug && taskId && asset.tokenId) {
       await prisma.order.create({
@@ -556,7 +556,7 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
     })
   }
   trackBidRate('opensea', taskId);
-  
+
   // Log successful bid
 
   const successMessage = opensea_traits ?
@@ -572,7 +572,7 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
 async function buildOffer(taskId: string, buildPayload: any) {
   // Create cache key from payload
   const cacheKey = `${taskId}-${JSON.stringify(buildPayload)}`;
-  
+
   // Check if we have a cached promise for this request
   if (buildOfferCache.has(cacheKey)) {
     const cachedPromise = buildOfferCache.get(cacheKey);
@@ -620,7 +620,7 @@ async function buildOffer(taskId: string, buildPayload: any) {
       if (controllers.length === 0) {
         activeRequests.delete(taskId);
       }
-      
+
       // Clean up cache after TTL
       setTimeout(() => {
         buildOfferCache.delete(cacheKey);
@@ -1246,7 +1246,7 @@ interface ItemOfferSpecification {
 export async function cancelOpenseaRequest(taskId: string): Promise<{ success: boolean; cancelledCount: number; error?: string }> {
   // Input validation
   if (!taskId || typeof taskId !== 'string') {
-    await logger.logWarning(ErrorCategory.MARKETPLACE, 'Invalid taskId provided to cancelOpenseaRequest', { 
+    await logger.logWarning(ErrorCategory.MARKETPLACE, 'Invalid taskId provided to cancelOpenseaRequest', {
       taskId,
       marketplace: 'opensea',
       marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION
@@ -1262,19 +1262,19 @@ export async function cancelOpenseaRequest(taskId: string): Promise<{ success: b
 
   try {
     let cancelledCount = 0;
-    
+
     // Cancel all controllers with timeout protection
     await Promise.all(controllers.map(async (controller) => {
       try {
         const timeoutPromise = new Promise<void>((_, reject) => {
           setTimeout(() => reject(new Error('Abort timeout')), 5000);
         });
-        
+
         const abortPromise = new Promise<void>((resolve) => {
           controller.abort();
           resolve();
         });
-        
+
         await Promise.race([abortPromise, timeoutPromise]);
         cancelledCount++;
       } catch (error) {
@@ -1286,7 +1286,7 @@ export async function cancelOpenseaRequest(taskId: string): Promise<{ success: b
         });
       }
     }));
-    
+
     activeRequests.delete(taskId);
 
     return { success: true, cancelledCount };

@@ -1,0 +1,96 @@
+{
+  "summary": {
+    "jobId": "68601",
+    "jobName": "BLUR_SCHEDULE",
+    "taskId": "6881f4221d29b102d283d05b",
+    "contractSlug": "underworld-gg",
+    "totalDuration": 180007,
+    "timestamp": "2025-07-24T10:26:24.675Z",
+    "lastPhase": "TIMEOUT"
+  },
+  "phases": {},
+  "apiCalls": {
+    "total": 7,
+    "byEndpoint": {
+      "POST https://nfttools.pro/kong/blur/v1/collection-bids/submit": {
+        "count": 2,
+        "totalDuration": 956,
+        "avgDuration": 478
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/offers": {
+        "count": 5,
+        "totalDuration": 3916,
+        "avgDuration": 783
+      }
+    },
+    "slowest": [
+      {
+        "timestamp": "2025-07-24T10:26:27.655Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/offers",
+        "method": "POST",
+        "duration": 1015,
+        "status": 200,
+        "responseSize": 1776
+      },
+      {
+        "timestamp": "2025-07-24T10:26:25.846Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/offers",
+        "method": "POST",
+        "duration": 885,
+        "status": 200,
+        "responseSize": 1793
+      },
+      {
+        "timestamp": "2025-07-24T10:26:25.843Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/offers",
+        "method": "POST",
+        "duration": 867,
+        "status": 200,
+        "responseSize": 1800
+      },
+      {
+        "timestamp": "2025-07-24T10:26:27.261Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/offers",
+        "method": "POST",
+        "duration": 631,
+        "status": 200,
+        "responseSize": 1767
+      },
+      {
+        "timestamp": "2025-07-24T10:26:25.554Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/offers",
+        "method": "POST",
+        "duration": 518,
+        "status": 200,
+        "responseSize": 1799
+      }
+    ],
+    "failed": []
+  },
+  "memory": {
+    "start": {
+      "heapUsed": 205,
+      "heapTotal": 310,
+      "external": 34,
+      "rss": 389
+    },
+    "end": {
+      "heapUsed": 205,
+      "heapTotal": 310,
+      "external": 34,
+      "rss": 389
+    },
+    "delta": {
+      "heapUsed": 0,
+      "heapTotal": 0
+    }
+  },
+  "queue": {
+    "waiting": 94,
+    "active": 64,
+    "completed": 0,
+    "failed": 0,
+    "delayed": 0
+  },
+  "possibleCauses": []
+}

@@ -1,0 +1,68 @@
+{
+  "summary": {
+    "jobId": "69296",
+    "jobName": "MAGICEDEN_SCHEDULE",
+    "taskId": "6881f92dc2516a94e8ff5de4",
+    "contractSlug": "proof-moonbirds",
+    "totalDuration": 180007,
+    "timestamp": "2025-07-24T10:27:07.035Z",
+    "lastPhase": "TIMEOUT"
+  },
+  "phases": {
+    "MAGICEDEN_SCHEDULE_START": {
+      "taskId": "6881f92dc2516a94e8ff5de4",
+      "contract": "proof-moonbirds"
+    },
+    "WALLET_TOKEN_FETCH_START": {
+      "contractAddress": "0x23581767a106ae21c074b2276d25e5c3e136a68b"
+    },
+    "WALLET_TOKEN_FETCH_COMPLETE": {
+      "duration": 20,
+      "tokenCount": 0
+    },
+    "TRAIT_FETCH_START": {
+      "attributeCount": 1,
+      "operator": "OR"
+    },
+    "TRAIT_FETCH_COMPLETE": {
+      "duration": 31,
+      "tokenCount": 989,
+      "skipped": 0
+    },
+    "TOKEN_BID_START": {
+      "tokenCount": 989
+    }
+  },
+  "apiCalls": {
+    "total": 0,
+    "byEndpoint": {},
+    "slowest": [],
+    "failed": []
+  },
+  "memory": {
+    "start": {
+      "heapUsed": 232,
+      "heapTotal": 314,
+      "external": 40,
+      "rss": 400
+    },
+    "end": {
+      "heapUsed": 232,
+      "heapTotal": 314,
+      "external": 40,
+      "rss": 400
+    },
+    "delta": {
+      "heapUsed": 0,
+      "heapTotal": 0
+    }
+  },
+  "queue": {
+    "waiting": 110,
+    "active": 64,
+    "completed": 0,
+    "failed": 0,
+    "delayed": 0
+  },
+  "possibleCauses": []
+}

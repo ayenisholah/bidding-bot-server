@@ -1,0 +1,44 @@
+{
+  "summary": {
+    "jobId": "67541",
+    "jobName": "BLUR_SCHEDULE",
+    "taskId": "6881f4221d29b102d283d05b",
+    "contractSlug": "underworld-gg",
+    "totalDuration": 180003,
+    "timestamp": "2025-07-24T10:25:49.069Z",
+    "lastPhase": "TIMEOUT"
+  },
+  "phases": {},
+  "apiCalls": {
+    "total": 0,
+    "byEndpoint": {},
+    "slowest": [],
+    "failed": []
+  },
+  "memory": {
+    "start": {
+      "heapUsed": 187,
+      "heapTotal": 322,
+      "external": 31,
+      "rss": 402
+    },
+    "end": {
+      "heapUsed": 187,
+      "heapTotal": 322,
+      "external": 31,
+      "rss": 402
+    },
+    "delta": {
+      "heapUsed": 0,
+      "heapTotal": 0
+    }
+  },
+  "queue": {
+    "waiting": 100,
+    "active": 64,
+    "completed": 0,
+    "failed": 0,
+    "delayed": 0
+  },
+  "possibleCauses": []
+}

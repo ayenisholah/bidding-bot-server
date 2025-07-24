@@ -1,0 +1,96 @@
+{
+  "summary": {
+    "jobId": "69362",
+    "jobName": "MAGICEDEN_SCHEDULE",
+    "taskId": "6881f92dc2516a94e8ff5de5",
+    "contractSlug": "good-vibes-club",
+    "totalDuration": 180008,
+    "timestamp": "2025-07-24T10:28:51.951Z",
+    "lastPhase": "TIMEOUT"
+  },
+  "phases": {
+    "MAGICEDEN_SCHEDULE_START": {
+      "taskId": "6881f92dc2516a94e8ff5de5",
+      "contract": "good-vibes-club"
+    },
+    "WALLET_TOKEN_FETCH_START": {
+      "contractAddress": "0xb8ea78fcacef50d41375e44e6814ebba36bb33c4"
+    },
+    "WALLET_TOKEN_FETCH_COMPLETE": {
+      "duration": 4,
+      "tokenCount": 0
+    },
+    "TRAIT_FETCH_START": {
+      "attributeCount": 1,
+      "operator": "OR"
+    },
+    "TRAIT_FETCH_COMPLETE": {
+      "duration": 12,
+      "tokenCount": 354,
+      "skipped": 0
+    },
+    "TOKEN_BID_START": {
+      "tokenCount": 354
+    }
+  },
+  "apiCalls": {
+    "total": 2,
+    "byEndpoint": {
+      "POST https://nfttools.pro/kong/blur/v1/collection-bids/format": {
+        "count": 1,
+        "totalDuration": 565,
+        "avgDuration": 565
+      },
+      "POST https://nfttools.pro/kong/blur/v1/collection-bids/submit": {
+        "count": 1,
+        "totalDuration": 527,
+        "avgDuration": 527
+      }
+    },
+    "slowest": [
+      {
+        "timestamp": "2025-07-24T10:28:52.545Z",
+        "endpoint": "https://nfttools.pro/kong/blur/v1/collection-bids/format",
+        "method": "POST",
+        "duration": 565,
+        "status": 201,
+        "responseSize": 2458
+      },
+      {
+        "timestamp": "2025-07-24T10:28:53.090Z",
+        "endpoint": "https://nfttools.pro/kong/blur/v1/collection-bids/submit",
+        "method": "POST",
+        "duration": 527,
+        "status": 201,
+        "responseSize": 16
+      }
+    ],
+    "failed": []
+  },
+  "memory": {
+    "start": {
+      "heapUsed": 220,
+      "heapTotal": 292,
+      "external": 35,
+      "rss": 358
+    },
+    "end": {
+      "heapUsed": 220,
+      "heapTotal": 292,
+      "external": 35,
+      "rss": 358
+    },
+    "delta": {
+      "heapUsed": 0,
+      "heapTotal": 0
+    }
+  },
+  "queue": {
+    "waiting": 0,
+    "active": 64,
+    "completed": 0,
+    "failed": 0,
+    "delayed": 0
+  },
+  "possibleCauses": []
+}

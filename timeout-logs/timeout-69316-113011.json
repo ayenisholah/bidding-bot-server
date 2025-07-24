@@ -1,0 +1,178 @@
+{
+  "summary": {
+    "jobId": "69316",
+    "jobName": "MAGICEDEN_SCHEDULE",
+    "taskId": "6881f92dc2516a94e8ff5de6",
+    "contractSlug": "good-vibes-club",
+    "totalDuration": 180007,
+    "timestamp": "2025-07-24T10:27:11.957Z",
+    "lastPhase": "TIMEOUT"
+  },
+  "phases": {
+    "MAGICEDEN_SCHEDULE_START": {
+      "taskId": "6881f92dc2516a94e8ff5de6",
+      "contract": "good-vibes-club"
+    },
+    "WALLET_TOKEN_FETCH_START": {
+      "contractAddress": "0xb8ea78fcacef50d41375e44e6814ebba36bb33c4"
+    },
+    "WALLET_TOKEN_FETCH_COMPLETE": {
+      "duration": 4,
+      "tokenCount": 0
+    }
+  },
+  "apiCalls": {
+    "total": 40,
+    "byEndpoint": {
+      "GET https://nfttools.pro/kong/opensea/api/v2/listings/collection/proof-moonbirds/best?limit=1": {
+        "count": 1,
+        "totalDuration": 407,
+        "avgDuration": 407
+      },
+      "POST https://nfttools.pro/kong/opensea/graphql": {
+        "count": 1,
+        "totalDuration": 395,
+        "avgDuration": 395
+      },
+      "GET https://nfttools.pro/kong/opensea/api/v2/listings/collection/underworld-gg/best?limit=1": {
+        "count": 1,
+        "totalDuration": 1270,
+        "avgDuration": 1270
+      },
+      "GET https://nfttools.pro/kong/opensea/api/v2/listings/collection/good-vibes-club/best?limit=1": {
+        "count": 3,
+        "totalDuration": 4388,
+        "avgDuration": 1463
+      },
+      "GET https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/collections/0x23581767a106ae21c074b2276d25e5c3e136a68b/bids/v1?type=collection&sortBy=price": {
+        "count": 3,
+        "totalDuration": 6189,
+        "avgDuration": 2063
+      },
+      "GET https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/collections/0x00000000fe898dae93619d020f1826333e1cfb85/bids/v1?type=collection&sortBy=price": {
+        "count": 1,
+        "totalDuration": 1313,
+        "avgDuration": 1313
+      },
+      "GET https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/collections/0xb8ea78fcacef50d41375e44e6814ebba36bb33c4/bids/v1?type=collection&sortBy=price": {
+        "count": 3,
+        "totalDuration": 3988,
+        "avgDuration": 1329
+      },
+      "GET https://nfttools.pro/kong/blur/v1/collections/proof-moonbirds/tokens": {
+        "count": 3,
+        "totalDuration": 3122,
+        "avgDuration": 1041
+      },
+      "GET https://nfttools.pro/kong/blur/v1/collections/0x00000000fe898dae93619d020f1826333e1cfb85/executable-bids": {
+        "count": 1,
+        "totalDuration": 586,
+        "avgDuration": 586
+      },
+      "GET https://nfttools.pro/kong/blur/v1/collections/good-vibes-club/tokens": {
+        "count": 3,
+        "totalDuration": 2475,
+        "avgDuration": 825
+      },
+      "GET https://nfttools.pro/kong/blur/v1/collections/0x23581767a106ae21c074b2276d25e5c3e136a68b/executable-bids": {
+        "count": 3,
+        "totalDuration": 1578,
+        "avgDuration": 526
+      },
+      "GET https://nfttools.pro/kong/blur/v1/collections/0xb8ea78fcacef50d41375e44e6814ebba36bb33c4/executable-bids": {
+        "count": 3,
+        "totalDuration": 1780,
+        "avgDuration": 593
+      },
+      "GET https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/tokens/v7": {
+        "count": 7,
+        "totalDuration": 9772,
+        "avgDuration": 1396
+      },
+      "GET https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/collections/0x00000000fe898dae93619d020f1826333e1cfb85/bids/v1?type=collection": {
+        "count": 1,
+        "totalDuration": 809,
+        "avgDuration": 809
+      },
+      "GET https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/collections/0x23581767a106ae21c074b2276d25e5c3e136a68b/bids/v1?type=collection": {
+        "count": 3,
+        "totalDuration": 5763,
+        "avgDuration": 1921
+      },
+      "GET https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/collections/0xb8ea78fcacef50d41375e44e6814ebba36bb33c4/bids/v1?type=collection": {
+        "count": 3,
+        "totalDuration": 4343,
+        "avgDuration": 1448
+      }
+    },
+    "slowest": [
+      {
+        "timestamp": "2025-07-24T10:27:34.100Z",
+        "endpoint": "https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/tokens/v7",
+        "method": "GET",
+        "duration": 5394,
+        "status": 200,
+        "responseSize": 4086
+      },
+      {
+        "timestamp": "2025-07-24T10:27:26.860Z",
+        "endpoint": "https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/collections/0x23581767a106ae21c074b2276d25e5c3e136a68b/bids/v1?type=collection&sortBy=price",
+        "method": "GET",
+        "duration": 2106,
+        "status": 200,
+        "responseSize": 80727
+      },
+      {
+        "timestamp": "2025-07-24T10:27:26.823Z",
+        "endpoint": "https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/collections/0x23581767a106ae21c074b2276d25e5c3e136a68b/bids/v1?type=collection&sortBy=price",
+        "method": "GET",
+        "duration": 2060,
+        "status": 200,
+        "responseSize": 80727
+      },
+      {
+        "timestamp": "2025-07-24T10:27:31.509Z",
+        "endpoint": "https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/collections/0x23581767a106ae21c074b2276d25e5c3e136a68b/bids/v1?type=collection",
+        "method": "GET",
+        "duration": 2049,
+        "status": 200,
+        "responseSize": 80646
+      },
+      {
+        "timestamp": "2025-07-24T10:27:30.940Z",
+        "endpoint": "https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/collections/0x23581767a106ae21c074b2276d25e5c3e136a68b/bids/v1?type=collection",
+        "method": "GET",
+        "duration": 2046,
+        "status": 200,
+        "responseSize": 80646
+      }
+    ],
+    "failed": []
+  },
+  "memory": {
+    "start": {
+      "heapUsed": 236,
+      "heapTotal": 315,
+      "external": 42,
+      "rss": 402
+    },
+    "end": {
+      "heapUsed": 236,
+      "heapTotal": 315,
+      "external": 42,
+      "rss": 402
+    },
+    "delta": {
+      "heapUsed": 0,
+      "heapTotal": 0
+    }
+  },
+  "queue": {
+    "waiting": 108,
+    "active": 64,
+    "completed": 0,
+    "failed": 0,
+    "delayed": 0
+  },
+  "possibleCauses": []
+}

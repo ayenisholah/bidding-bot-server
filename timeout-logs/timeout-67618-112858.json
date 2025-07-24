@@ -1,0 +1,346 @@
+{
+  "summary": {
+    "jobId": "67618",
+    "jobName": "BLUR_SCHEDULE",
+    "taskId": "6881f4221d29b102d283d05b",
+    "contractSlug": "underworld-gg",
+    "totalDuration": 180007,
+    "timestamp": "2025-07-24T10:25:58.485Z",
+    "lastPhase": "TIMEOUT"
+  },
+  "phases": {},
+  "apiCalls": {
+    "total": 113,
+    "byEndpoint": {
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x97d22e53f5f697b0fa2e5a31e4c92a00ab5a66edc927b0f40e74e64cd479bed3/cancel": {
+        "count": 1,
+        "totalDuration": 484,
+        "avgDuration": 484
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x6dc86521722c3372865b60be73b200f83257e6a729a78bcb82e20460daff52d7/cancel": {
+        "count": 1,
+        "totalDuration": 497,
+        "avgDuration": 497
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x40637945aa52ba918a9149c1de8054bc9e02290d090561741ba15552a9227f47/cancel": {
+        "count": 1,
+        "totalDuration": 528,
+        "avgDuration": 528
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x0bd9f2d8bb34f7a6dc4ada193b20f0169e40a6a62a17a51e33b7c928721ba7fb/cancel": {
+        "count": 1,
+        "totalDuration": 522,
+        "avgDuration": 522
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x09f88d0726ceb1e5acaff1a62a4113982430e95f5664372b453f9dcc6fe193d2/cancel": {
+        "count": 1,
+        "totalDuration": 473,
+        "avgDuration": 473
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x42415e503b94b6fc56db3f48e0b8ee05c8e584cfc2a3c769bcf0f253c27f4a3d/cancel": {
+        "count": 1,
+        "totalDuration": 591,
+        "avgDuration": 591
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0xae1e350dc6dddbc8d6f2957b4ecf2c0360f4cc9eeb95f81e90d97d0727343ac5/cancel": {
+        "count": 1,
+        "totalDuration": 749,
+        "avgDuration": 749
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0xa6e2b31015f14ac6ecbdfaa957802caf22d237a887ea7b9883bb067bb655c92b/cancel": {
+        "count": 1,
+        "totalDuration": 528,
+        "avgDuration": 528
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x4abffb368d17e28f9c45fb2fe5f6f92dc1a6eb60f7befadb61670faee661374d/cancel": {
+        "count": 1,
+        "totalDuration": 785,
+        "avgDuration": 785
+      },
+      "POST https://nfttools.pro/kong/blur/v1/collection-bids/cancel": {
+        "count": 4,
+        "totalDuration": 2916,
+        "avgDuration": 729
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x404d4a5487e596f3b42a052debdffbfd6d81f58c31205520a6918384b2a38160/cancel": {
+        "count": 1,
+        "totalDuration": 640,
+        "avgDuration": 640
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0xadc0240c5b174242e130da57ed5182836545068cb21ea228259dc8680beee53d/cancel": {
+        "count": 1,
+        "totalDuration": 824,
+        "avgDuration": 824
+      },
+      "GET https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/tokens/v7": {
+        "count": 18,
+        "totalDuration": 13396,
+        "avgDuration": 744
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0xc25ddbe10b262bb15ef7dc696e29cf24ea50d1aa562045d7d800bb5279892cd8/cancel": {
+        "count": 1,
+        "totalDuration": 810,
+        "avgDuration": 810
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/offers/build": {
+        "count": 12,
+        "totalDuration": 9629,
+        "avgDuration": 802
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0xefff7dfbb14ab6a10c4a533c03b733b447488078e4df02a5151ceda5002e3ede/cancel": {
+        "count": 1,
+        "totalDuration": 1001,
+        "avgDuration": 1001
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x61a9f6628716401f4ed20aa75b852a5f54cb5eecb1a761cf6471a0de7d5b8027/cancel": {
+        "count": 1,
+        "totalDuration": 1244,
+        "avgDuration": 1244
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x469653ee668cc08730872d0e82d2963cb1d45ce71635f9590602395640b483bc/cancel": {
+        "count": 1,
+        "totalDuration": 1300,
+        "avgDuration": 1300
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0xba215cdb5e8e90150071f1196ce61efce70cfca0b08603ee0d4be4be7207a806/cancel": {
+        "count": 1,
+        "totalDuration": 1139,
+        "avgDuration": 1139
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x029a7cc2c1c6b5e732e2fecb88d9187da7dfe02ed5c50bbc97d9f5ecf11cf446/cancel": {
+        "count": 1,
+        "totalDuration": 1448,
+        "avgDuration": 1448
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x8a8a3c201d75eb8501a5cbe3fa9dc0b8f9ea3afb290a9391c0a68ea6431b78c4/cancel": {
+        "count": 1,
+        "totalDuration": 748,
+        "avgDuration": 748
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x1854556a5334c93bbdc99d86cd5d417cfd36bb35c9d13805790c8044802295f7/cancel": {
+        "count": 1,
+        "totalDuration": 756,
+        "avgDuration": 756
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0xe8f96951235d48edb05cabd47ce1b0ddc824ba43ade6053951d5f6a5857b50e7/cancel": {
+        "count": 1,
+        "totalDuration": 766,
+        "avgDuration": 766
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0xfbb213393e0298802ed37ed567d1e164be5eb334a132a4daf0ef315865cb4c27/cancel": {
+        "count": 1,
+        "totalDuration": 777,
+        "avgDuration": 777
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x06fdbc24a6f93a1524d22ff1d8ca08443e071ceeb712b3641e43926a72102256/cancel": {
+        "count": 1,
+        "totalDuration": 760,
+        "avgDuration": 760
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x3f668c44c018b33de38b100e8e045ea566155f57ffaff7f1ffed5349417766ac/cancel": {
+        "count": 1,
+        "totalDuration": 1611,
+        "avgDuration": 1611
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/execute/bid/v5": {
+        "count": 18,
+        "totalDuration": 21267,
+        "avgDuration": 1182
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x95b32ad3e78b34f8ad79c0431ef4ff43fe5dae94cc3c7040a583991dc8c5be71/cancel": {
+        "count": 1,
+        "totalDuration": 1072,
+        "avgDuration": 1072
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0x3d224f8df0cfde223d35a0306b97fb0c4a47c425a4ec3e1eba2bec1905e12c16/cancel": {
+        "count": 1,
+        "totalDuration": 1147,
+        "avgDuration": 1147
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0xd5bce591d48a30e81837af34961512762c26d3e65e34ef802cac44c842d65b85/cancel": {
+        "count": 1,
+        "totalDuration": 1317,
+        "avgDuration": 1317
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/offers": {
+        "count": 13,
+        "totalDuration": 9915,
+        "avgDuration": 763
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0xf2fc3fa2c71fc6ae19906e932262300c69ca19e24661bb43a08502389c2791a5/cancel": {
+        "count": 1,
+        "totalDuration": 1337,
+        "avgDuration": 1337
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0xef96bc7298052715b3f60ef666942975f9c0d2b496c1e9d68e558441f0c71e5c/cancel": {
+        "count": 1,
+        "totalDuration": 1517,
+        "avgDuration": 1517
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xd53b16df52b47a3d155b9ff0ff15c65017cfefa3eca20dbb47338cadec924b0c37f605e8c2d04da09c3d37acfdb46d355896f779e51399207d7f6a521dd5673e1b": {
+        "count": 1,
+        "totalDuration": 751,
+        "avgDuration": 751
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0xd76bdb08c2aba85a9c900ca4303d9f7aefdbac015cdecc127565447f80a56386/cancel": {
+        "count": 1,
+        "totalDuration": 1777,
+        "avgDuration": 1777
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0x6ceb866bb50706d31f190e7efa76abf2ea94d4179a038d80c7b8f45b285c06f330ad038ee99f0596ef077fb0b776c7fecf033fd6e0f1131f75074c445da32fa01c": {
+        "count": 1,
+        "totalDuration": 806,
+        "avgDuration": 806
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xdd702304f818e0d723b0a0dff000f4cfe40dcd5f23b19ea432f2f3d9619504010c68d3f59cfda97f97e84d725ab1e683ba66a73fead819207c2fa443156751331c": {
+        "count": 1,
+        "totalDuration": 807,
+        "avgDuration": 807
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0x98bd61c3b49eb5a435ec331ffa49bb47d49a3af3eaa6890baac0ca89fa6851ec26984e9d9f57b8e5adb1a03753b3eaa74bdb687e50b917828be4b17c72ddb7601c": {
+        "count": 1,
+        "totalDuration": 844,
+        "avgDuration": 844
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0x4eafc3e01c1cbd434a5b51d633f9f75864db05c1081140469c91627b39f7f56316b1a6434d5f979c2a8bd3d8e4868c5b28cc8ec5c1862d86399f992511a186dc1b": {
+        "count": 1,
+        "totalDuration": 1021,
+        "avgDuration": 1021
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0x12179e8dee028dfd695e422e16c180dfbda7a1e937ad09120c79cca18dd657e716ee8a83da85e96f1bc64a6440524ac186dc352dbc59795ed5e2fd017fe391ad1b": {
+        "count": 1,
+        "totalDuration": 1012,
+        "avgDuration": 1012
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0x12909f9f4074c85b705b3e04a433f1001296b81957c41eeaec584261ddae787f647f25b8f3badc42b139e2aa307fa4865fc2c583b66037971f50799e620349b31c": {
+        "count": 1,
+        "totalDuration": 528,
+        "avgDuration": 528
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xfd16841da24d9917e171456cef3a6e4708f927a79fba58fa8e0688d5f9ca58e63ab5ce45072fb944848bcc1f2b197d0a1652275d28fe1b6a2bf580795377b9961c": {
+        "count": 1,
+        "totalDuration": 890,
+        "avgDuration": 890
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0x6eafcc423cba8d5b0542f73876463a5a8fa1e760cc3f2012b3080365d78c5d831fe2b3ab4388f79f618d63d0fcaacb300b084f469de11d62634a646b4df4c3061c": {
+        "count": 1,
+        "totalDuration": 982,
+        "avgDuration": 982
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0x8a0530beba0cff1ca6a0b0996562d2911b973d3c5372a3df67e7e664e20560e647849f34687af3fff1c65dbba001e86a7c43509860e7b24e21996b0adf77caed1b": {
+        "count": 1,
+        "totalDuration": 802,
+        "avgDuration": 802
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0x52fe343888d5a96d61bafb370a31cf64cd8080599c7523d696de2e4f4ef098174f0b34bdd84c89402876e1784ebea4cac2ad0c4aef726489fda5aac15d8394ce1b": {
+        "count": 1,
+        "totalDuration": 1222,
+        "avgDuration": 1222
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0x11be8e4b24c62bdd0f633ff83b96a44ced17fe3ed757acfbe80976f84c076f1f04196e682d2bed944737ded7ab596babe5f8e3785e042c825e0b6506dd299e061b": {
+        "count": 1,
+        "totalDuration": 2357,
+        "avgDuration": 2357
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xbac24855ba44ff4c550fda7b4291b98bc0591c7877eca5ca60a23c08a32b41815f104935ba5a57c34da3abfdb964e077f78ad2a568b3e05aa64a1aad5ff3bc431c": {
+        "count": 1,
+        "totalDuration": 515,
+        "avgDuration": 515
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xacf87cffa1536bba16c4217f9f4c685e2010da0845a631e84f70d892267d5422064005b4e2e598fbfc3807abbdafd6920ba18b111fb4cda312e8790ce4e0475b1b": {
+        "count": 1,
+        "totalDuration": 1912,
+        "avgDuration": 1912
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xc95aeca5dd47eb8d1b81b7891688f0484b87f5cabbe58a8210584deff78aaac641dd6c5a13a09b822be8c4265f1940748022d01c162180ae16d3cfddec5d538f1b": {
+        "count": 2,
+        "totalDuration": 2244,
+        "avgDuration": 1122
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xe8d923ca24be283880c1c3b45eb0942c21696d351f6e9ef575eedcfa51e2b5c1639f3ad01e86f41166e041ed9ab37628df161272653e64e13511601fff4ef49f1b": {
+        "count": 1,
+        "totalDuration": 1773,
+        "avgDuration": 1773
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xd9f80b4ead8c75a45ec6c4b5db685656c251878aa5e9176227b876ada4e72e8777db2dd7fc493dc078255602b35859378a1144fbfbc6ecbe4d9ff4c014b1106e1b": {
+        "count": 1,
+        "totalDuration": 4102,
+        "avgDuration": 4102
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0xda5dc504a6db3087f2b14493c67f14a4339de6720f6feb076b4d67501953ed1e/cancel": {
+        "count": 1,
+        "totalDuration": 5992,
+        "avgDuration": 5992
+      }
+    },
+    "slowest": [
+      {
+        "timestamp": "2025-07-24T10:26:05.332Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/chain/ethereum/protocol/0x0000000000000068F116a894984e2DB1123eB395/0xda5dc504a6db3087f2b14493c67f14a4339de6720f6feb076b4d67501953ed1e/cancel",
+        "method": "POST",
+        "duration": 5992,
+        "status": 200,
+        "responseSize": 41
+      },
+      {
+        "timestamp": "2025-07-24T10:26:05.278Z",
+        "endpoint": "https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xd9f80b4ead8c75a45ec6c4b5db685656c251878aa5e9176227b876ada4e72e8777db2dd7fc493dc078255602b35859378a1144fbfbc6ecbe4d9ff4c014b1106e1b",
+        "method": "POST",
+        "duration": 4102,
+        "status": 200,
+        "responseSize": 100
+      },
+      {
+        "timestamp": "2025-07-24T10:26:02.863Z",
+        "endpoint": "https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0x11be8e4b24c62bdd0f633ff83b96a44ced17fe3ed757acfbe80976f84c076f1f04196e682d2bed944737ded7ab596babe5f8e3785e042c825e0b6506dd299e061b",
+        "method": "POST",
+        "duration": 2357,
+        "status": 200,
+        "responseSize": 100
+      },
+      {
+        "timestamp": "2025-07-24T10:26:01.908Z",
+        "endpoint": "https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/execute/bid/v5",
+        "method": "POST",
+        "duration": 2219,
+        "status": 200,
+        "responseSize": 5016
+      },
+      {
+        "timestamp": "2025-07-24T10:26:01.817Z",
+        "endpoint": "https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/execute/bid/v5",
+        "method": "POST",
+        "duration": 2190,
+        "status": 200,
+        "responseSize": 5017
+      }
+    ],
+    "failed": []
+  },
+  "memory": {
+    "start": {
+      "heapUsed": 196,
+      "heapTotal": 323,
+      "external": 33,
+      "rss": 404
+    },
+    "end": {
+      "heapUsed": 196,
+      "heapTotal": 323,
+      "external": 33,
+      "rss": 404
+    },
+    "delta": {
+      "heapUsed": 0,
+      "heapTotal": 0
+    }
+  },
+  "queue": {
+    "waiting": 104,
+    "active": 64,
+    "completed": 0,
+    "failed": 0,
+    "delayed": 0
+  },
+  "possibleCauses": []
+}

@@ -963,6 +963,23 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
 }
 
 export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: { attributeKey: string; attributeValue: string }) {
+  const CACHE_TTL = 120; // 2 minutes cache for trait data
+  const cacheKey = `magiceden:trait:${contractAddress}:${trait.attributeKey}:${trait.attributeValue}`;
+  
+  // Try to get from cache first
+  try {
+    const redis = redisClient.getClient();
+    const cachedFloor = await redis.get(cacheKey);
+    if (cachedFloor) {
+      return JSON.parse(cachedFloor);
+    }
+  } catch (error) {
+    // Log cache error but continue to fetch fresh data
+    if (process.env.NODE_ENV !== 'production') {
+      console.error('Error reading MagicEden trait floor from cache:', error);
+    }
+  }
+  
   try {
     const queryParams = new URLSearchParams({
       collection: contractAddress,
@@ -986,6 +1003,20 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
       },
     }))
     const floor = data?.tokens[0]?.market?.floorAsk?.price?.amount?.native
+    
+    // Cache the result
+    if (floor !== undefined) {
+      try {
+        const redis = redisClient.getClient();
+        await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(floor));
+      } catch (error) {
+        // Log cache error but don't fail the request
+        if (process.env.NODE_ENV !== 'production') {
+          console.error('Error caching MagicEden trait floor:', error);
+        }
+      }
+    }
+    
     return floor
   } catch (error) {
     if (error) {
@@ -1126,11 +1157,38 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
 }
 
 export async function fetchMagicEdenTokens(taskId: string, collectionId: string, limit?: number) {
+  const CACHE_TTL = 60; // 1 minute cache for token listings
+  const cacheKey = `magiceden:tokens:${collectionId}:${limit || 'all'}`;
   const lockKey = `tokens:${collectionId} `;
+  
+  // Try to get from cache first
+  try {
+    const redis = redisClient.getClient();
+    const cachedTokens = await redis.get(cacheKey);
+    if (cachedTokens) {
+      return JSON.parse(cachedTokens);
+    }
+  } catch (error) {
+    // Log cache error but continue to fetch fresh data
+    if (process.env.NODE_ENV !== 'production') {
+      console.error('Error reading MagicEden tokens from cache:', error);
+    }
+  }
 
   return await lockManager.withLock(
     lockKey,
     async () => {
+      // Double-check cache after acquiring lock
+      try {
+        const redis = redisClient.getClient();
+        const cachedTokens = await redis.get(cacheKey);
+        if (cachedTokens) {
+          return JSON.parse(cachedTokens);
+        }
+      } catch (error) {
+        // Continue if cache check fails
+      }
+      
       const params: any = {
         excludeSpam: true,
         excludeBurnt: true,
@@ -1165,7 +1223,20 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
         params.continuation = data?.continuation;
       } while (params.continuation && totalFetched < limit);
 
-      return allTokens.slice(0, limit);
+      const result = allTokens.slice(0, limit);
+      
+      // Cache the result
+      try {
+        const redis = redisClient.getClient();
+        await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(result));
+      } catch (error) {
+        // Log cache error but don't fail the request
+        if (process.env.NODE_ENV !== 'production') {
+          console.error('Error caching MagicEden tokens:', error);
+        }
+      }
+      
+      return result;
 
     },
     60 // Lock TTL in seconds - longer for token fetching since it's paginated

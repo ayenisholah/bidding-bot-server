@@ -1,0 +1,44 @@
+{
+  "summary": {
+    "jobId": "246",
+    "jobName": "BLUR_SCHEDULE",
+    "taskId": "6881f92dc2516a94e8ff5de3",
+    "contractSlug": "proof-moonbirds",
+    "totalDuration": 180014,
+    "timestamp": "2025-07-24T09:58:11.410Z",
+    "lastPhase": "TIMEOUT"
+  },
+  "phases": {},
+  "apiCalls": {
+    "total": 0,
+    "byEndpoint": {},
+    "slowest": [],
+    "failed": []
+  },
+  "memory": {
+    "start": {
+      "heapUsed": 177,
+      "heapTotal": 232,
+      "external": 29,
+      "rss": 306
+    },
+    "end": {
+      "heapUsed": 177,
+      "heapTotal": 232,
+      "external": 29,
+      "rss": 306
+    },
+    "delta": {
+      "heapUsed": 0,
+      "heapTotal": 0
+    }
+  },
+  "queue": {
+    "waiting": 0,
+    "active": 64,
+    "completed": 0,
+    "failed": 0,
+    "delayed": 0
+  },
+  "possibleCauses": []
+}

@@ -1,0 +1,162 @@
+{
+  "summary": {
+    "jobId": "84",
+    "jobName": "OPENSEA_SCHEDULE",
+    "taskId": "6881f92dc2516a94e8ff5de5",
+    "contractSlug": "good-vibes-club",
+    "totalDuration": 180008,
+    "timestamp": "2025-07-24T10:10:49.780Z",
+    "lastPhase": "TIMEOUT"
+  },
+  "phases": {
+    "OPENSEA_SCHEDULE_START": {
+      "taskId": "6881f92dc2516a94e8ff5de5",
+      "contract": "good-vibes-club"
+    },
+    "COLLECTION_DETAILS_START": {
+      "slug": "good-vibes-club"
+    },
+    "COLLECTION_DETAILS_COMPLETE": {
+      "duration": 1,
+      "hasTraitOffers": true
+    },
+    "OPENSEA_LISTINGS_START": {
+      "amount": 0,
+      "hasAutoIds": false
+    },
+    "OPENSEA_LISTINGS_COMPLETE": {
+      "duration": 1,
+      "listingCount": 0,
+      "requestedAmount": 0
+    }
+  },
+  "apiCalls": {
+    "total": 16,
+    "byEndpoint": {
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xad84933c8b18bd73bba210c9efac89c8122e54628dedcce57e8e74370e515535639a00ed4a72abe9118d728616b5bebc9fa229bc3d64fa934a4a5a27777a75141c": {
+        "count": 1,
+        "totalDuration": 583,
+        "avgDuration": 583
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0x45468db5ab240bf9f439c6255a0a382c76a72c77cdce30db713ea2ecdf5a69620c67d88999a0d1d91b9ee0fdd71bceadd79d57906e1dc38f8a426858e7c1776d1b": {
+        "count": 1,
+        "totalDuration": 660,
+        "avgDuration": 660
+      },
+      "POST https://nfttools.pro/kong/blur/v1/collection-bids/format": {
+        "count": 4,
+        "totalDuration": 8358,
+        "avgDuration": 2090
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0x8dd11c2fb3c36949cee0d5e8380df49d8fe63a1178bb2372a27c9492505b15e3183efd405a857ab483badff83734bb7033c1db7189c622c03548d7bbf78fa4c21c": {
+        "count": 1,
+        "totalDuration": 812,
+        "avgDuration": 812
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/execute/bid/v5": {
+        "count": 1,
+        "totalDuration": 971,
+        "avgDuration": 971
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0x7eb636b75fdac44b0b01d26cd50dfc3eb6baa610cbc1bec986550ddb64f316ea6da8b8bd836f0c8dc78a89d562d1ff4028c4e78f899ade514785c3edbd4bf65c1c": {
+        "count": 1,
+        "totalDuration": 1024,
+        "avgDuration": 1024
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0x44c1e1b4779f76951eb0a3a5e29d46fb7310df72f5db0655f21ddf76e0047b6468b0668f034fb8c249fa5190f4e7643cf605cc8dd5d9a7b4f04f651dd1c1d77d1c": {
+        "count": 1,
+        "totalDuration": 1024,
+        "avgDuration": 1024
+      },
+      "POST https://nfttools.pro/kong/opensea/graphql": {
+        "count": 3,
+        "totalDuration": 8316,
+        "avgDuration": 2772
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xc5eb22fccd0168290dc8a26d23c31daeccdf28e3c8eaad9f076375ba4464c83743de76dd359ea7603be2751e00bb3563152fac9d69cd0f750573464c603bf1831c": {
+        "count": 1,
+        "totalDuration": 5469,
+        "avgDuration": 5469
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xab6b03353716c0220159670a48ad8f9d5aebf5811759a9e83e67534add2606fe5ed846dcb4587563f6452d9b7000a85b2cd374a4feb11ebc72f51a5fb2dab63b1b": {
+        "count": 1,
+        "totalDuration": 5496,
+        "avgDuration": 5496
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xa2907d40dcc75e5ec5d6a5bdf952323fafac83b8dda39e786e446a0357e0f41427ab96937bf830ce5aa9d7ca2c01662298f9904ab955fb7a7400a9cf808bf1b11c": {
+        "count": 1,
+        "totalDuration": 5551,
+        "avgDuration": 5551
+      }
+    },
+    "slowest": [
+      {
+        "timestamp": "2025-07-24T10:10:55.537Z",
+        "endpoint": "https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xa2907d40dcc75e5ec5d6a5bdf952323fafac83b8dda39e786e446a0357e0f41427ab96937bf830ce5aa9d7ca2c01662298f9904ab955fb7a7400a9cf808bf1b11c",
+        "method": "POST",
+        "duration": 5551,
+        "status": 200,
+        "responseSize": 100
+      },
+      {
+        "timestamp": "2025-07-24T10:10:55.500Z",
+        "endpoint": "https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xab6b03353716c0220159670a48ad8f9d5aebf5811759a9e83e67534add2606fe5ed846dcb4587563f6452d9b7000a85b2cd374a4feb11ebc72f51a5fb2dab63b1b",
+        "method": "POST",
+        "duration": 5496,
+        "status": 200,
+        "responseSize": 100
+      },
+      {
+        "timestamp": "2025-07-24T10:10:55.375Z",
+        "endpoint": "https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xc5eb22fccd0168290dc8a26d23c31daeccdf28e3c8eaad9f076375ba4464c83743de76dd359ea7603be2751e00bb3563152fac9d69cd0f750573464c603bf1831c",
+        "method": "POST",
+        "duration": 5469,
+        "status": 200,
+        "responseSize": 100
+      },
+      {
+        "timestamp": "2025-07-24T10:10:55.277Z",
+        "endpoint": "https://nfttools.pro/kong/blur/v1/collection-bids/format",
+        "method": "POST",
+        "duration": 5305,
+        "status": 201,
+        "responseSize": 2454
+      },
+      {
+        "timestamp": "2025-07-24T10:10:54.890Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/graphql",
+        "method": "POST",
+        "duration": 5014,
+        "status": 200,
+        "responseSize": 35701
+      }
+    ],
+    "failed": []
+  },
+  "memory": {
+    "start": {
+      "heapUsed": 290,
+      "heapTotal": 342,
+      "external": 29,
+      "rss": 408
+    },
+    "end": {
+      "heapUsed": 290,
+      "heapTotal": 342,
+      "external": 29,
+      "rss": 408
+    },
+    "delta": {
+      "heapUsed": 0,
+      "heapTotal": 0
+    }
+  },
+  "queue": {
+    "waiting": 0,
+    "active": 64,
+    "completed": 0,
+    "failed": 0,
+    "delayed": 0
+  },
+  "possibleCauses": []
+}

@@ -1,0 +1,144 @@
+{
+  "summary": {
+    "jobId": "64196",
+    "jobName": "OPENSEA_SCHEDULE",
+    "taskId": "6881f92dc2516a94e8ff5de4",
+    "contractSlug": "proof-moonbirds",
+    "totalDuration": 180011,
+    "timestamp": "2025-07-24T10:24:45.129Z",
+    "lastPhase": "TIMEOUT"
+  },
+  "phases": {
+    "OPENSEA_SCHEDULE_START": {
+      "taskId": "6881f92dc2516a94e8ff5de4",
+      "contract": "proof-moonbirds"
+    },
+    "COLLECTION_DETAILS_START": {
+      "slug": "proof-moonbirds"
+    },
+    "COLLECTION_DETAILS_COMPLETE": {
+      "duration": 3,
+      "hasTraitOffers": true
+    },
+    "OPENSEA_LISTINGS_START": {
+      "amount": 0,
+      "hasAutoIds": false
+    },
+    "OPENSEA_LISTINGS_COMPLETE": {
+      "duration": 5,
+      "listingCount": 0,
+      "requestedAmount": 0
+    }
+  },
+  "apiCalls": {
+    "total": 59,
+    "byEndpoint": {
+      "GET https://nfttools.pro/kong/opensea/api/v2/listings/collection/good-vibes-club/best?limit=1": {
+        "count": 56,
+        "totalDuration": 82773,
+        "avgDuration": 1478
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers": {
+        "count": 3,
+        "totalDuration": 2249,
+        "avgDuration": 750
+      }
+    },
+    "slowest": [
+      {
+        "timestamp": "2025-07-24T10:24:48.743Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/listings/collection/good-vibes-club/best?limit=1",
+        "method": "GET",
+        "duration": 1942,
+        "status": 200,
+        "responseSize": 1646
+      },
+      {
+        "timestamp": "2025-07-24T10:24:49.101Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/listings/collection/good-vibes-club/best?limit=1",
+        "method": "GET",
+        "duration": 1861,
+        "status": 200,
+        "responseSize": 1646
+      },
+      {
+        "timestamp": "2025-07-24T10:24:48.631Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/listings/collection/good-vibes-club/best?limit=1",
+        "method": "GET",
+        "duration": 1860,
+        "status": 200,
+        "responseSize": 1646
+      },
+      {
+        "timestamp": "2025-07-24T10:24:49.103Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/listings/collection/good-vibes-club/best?limit=1",
+        "method": "GET",
+        "duration": 1837,
+        "status": 200,
+        "responseSize": 1646
+      },
+      {
+        "timestamp": "2025-07-24T10:24:48.488Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/listings/collection/good-vibes-club/best?limit=1",
+        "method": "GET",
+        "duration": 1797,
+        "status": 200,
+        "responseSize": 1646
+      }
+    ],
+    "failed": [
+      {
+        "timestamp": "2025-07-24T10:24:50.392Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 583,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:24:50.494Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 870,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:24:50.617Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 796,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      }
+    ]
+  },
+  "memory": {
+    "start": {
+      "heapUsed": 329,
+      "heapTotal": 484,
+      "external": 37,
+      "rss": 566
+    },
+    "end": {
+      "heapUsed": 329,
+      "heapTotal": 484,
+      "external": 37,
+      "rss": 566
+    },
+    "delta": {
+      "heapUsed": 0,
+      "heapTotal": 0
+    }
+  },
+  "queue": {
+    "waiting": 0,
+    "active": 63,
+    "completed": 0,
+    "failed": 0,
+    "delayed": 0
+  },
+  "possibleCauses": [
+    "3 API calls failed or timed out"
+  ]
+}

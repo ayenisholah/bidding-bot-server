@@ -1,0 +1,65 @@
+{
+  "summary": {
+    "jobId": "69504",
+    "jobName": "OPENSEA_SCHEDULE",
+    "taskId": "6881f92dc2516a94e8ff5de4",
+    "contractSlug": "proof-moonbirds",
+    "totalDuration": 180010,
+    "timestamp": "2025-07-24T10:29:41.969Z",
+    "lastPhase": "TIMEOUT"
+  },
+  "phases": {
+    "OPENSEA_SCHEDULE_START": {
+      "taskId": "6881f92dc2516a94e8ff5de4",
+      "contract": "proof-moonbirds"
+    },
+    "COLLECTION_DETAILS_START": {
+      "slug": "proof-moonbirds"
+    },
+    "COLLECTION_DETAILS_COMPLETE": {
+      "duration": 16,
+      "hasTraitOffers": true
+    },
+    "OPENSEA_LISTINGS_START": {
+      "amount": 0,
+      "hasAutoIds": false
+    },
+    "OPENSEA_LISTINGS_COMPLETE": {
+      "duration": 16,
+      "listingCount": 0,
+      "requestedAmount": 0
+    }
+  },
+  "apiCalls": {
+    "total": 0,
+    "byEndpoint": {},
+    "slowest": [],
+    "failed": []
+  },
+  "memory": {
+    "start": {
+      "heapUsed": 196,
+      "heapTotal": 276,
+      "external": 34,
+      "rss": 341
+    },
+    "end": {
+      "heapUsed": 196,
+      "heapTotal": 276,
+      "external": 34,
+      "rss": 341
+    },
+    "delta": {
+      "heapUsed": 0,
+      "heapTotal": 0
+    }
+  },
+  "queue": {
+    "waiting": 0,
+    "active": 63,
+    "completed": 0,
+    "failed": 0,
+    "delayed": 0
+  },
+  "possibleCauses": []
+}

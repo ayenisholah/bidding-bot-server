@@ -1,0 +1,56 @@
+{
+  "summary": {
+    "jobId": "69421",
+    "jobName": "MAGICEDEN_SCHEDULE",
+    "taskId": "6881f92dc2516a94e8ff5de6",
+    "contractSlug": "good-vibes-club",
+    "totalDuration": 180004,
+    "timestamp": "2025-07-24T10:29:18.195Z",
+    "lastPhase": "TIMEOUT"
+  },
+  "phases": {
+    "MAGICEDEN_SCHEDULE_START": {
+      "taskId": "6881f92dc2516a94e8ff5de6",
+      "contract": "good-vibes-club"
+    },
+    "WALLET_TOKEN_FETCH_START": {
+      "contractAddress": "0xb8ea78fcacef50d41375e44e6814ebba36bb33c4"
+    },
+    "WALLET_TOKEN_FETCH_COMPLETE": {
+      "duration": 2,
+      "tokenCount": 0
+    }
+  },
+  "apiCalls": {
+    "total": 0,
+    "byEndpoint": {},
+    "slowest": [],
+    "failed": []
+  },
+  "memory": {
+    "start": {
+      "heapUsed": 191,
+      "heapTotal": 276,
+      "external": 31,
+      "rss": 340
+    },
+    "end": {
+      "heapUsed": 191,
+      "heapTotal": 276,
+      "external": 31,
+      "rss": 340
+    },
+    "delta": {
+      "heapUsed": 0,
+      "heapTotal": 0
+    }
+  },
+  "queue": {
+    "waiting": 96,
+    "active": 64,
+    "completed": 0,
+    "failed": 0,
+    "delayed": 0
+  },
+  "possibleCauses": []
+}

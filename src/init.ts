@@ -3,6 +3,7 @@ import axios, { AxiosInstance } from "axios";
 import axiosRetry, { IAxiosRetryConfig } from "axios-retry";
 import { config } from "dotenv";
 import { RATE_LIMIT, rps } from ".";
+import { wrapAxiosInstance, jobContext } from "./utils/axios-wrapper";
 
 config()
 
@@ -44,6 +45,10 @@ async function initialize(rateLimit: number) {
   });
 
   axiosRetry(axiosInstance, retryConfig);
+  
+  // Wrap axios instance to track API calls for timeout analysis
+  wrapAxiosInstance(axiosInstance, () => jobContext.getJobId());
+  
   console.log(`Limiter initialized with rate limit: ${rateLimit} requests per second`);
 }
 

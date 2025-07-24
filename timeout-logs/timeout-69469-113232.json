@@ -1,0 +1,65 @@
+{
+  "summary": {
+    "jobId": "69469",
+    "jobName": "OPENSEA_SCHEDULE",
+    "taskId": "6881f92dc2516a94e8ff5de6",
+    "contractSlug": "good-vibes-club",
+    "totalDuration": 180025,
+    "timestamp": "2025-07-24T10:29:32.328Z",
+    "lastPhase": "TIMEOUT"
+  },
+  "phases": {
+    "OPENSEA_SCHEDULE_START": {
+      "taskId": "6881f92dc2516a94e8ff5de6",
+      "contract": "good-vibes-club"
+    },
+    "COLLECTION_DETAILS_START": {
+      "slug": "good-vibes-club"
+    },
+    "COLLECTION_DETAILS_COMPLETE": {
+      "duration": 26,
+      "hasTraitOffers": true
+    },
+    "OPENSEA_LISTINGS_START": {
+      "amount": 0,
+      "hasAutoIds": false
+    },
+    "OPENSEA_LISTINGS_COMPLETE": {
+      "duration": 28,
+      "listingCount": 0,
+      "requestedAmount": 0
+    }
+  },
+  "apiCalls": {
+    "total": 0,
+    "byEndpoint": {},
+    "slowest": [],
+    "failed": []
+  },
+  "memory": {
+    "start": {
+      "heapUsed": 201,
+      "heapTotal": 278,
+      "external": 34,
+      "rss": 342
+    },
+    "end": {
+      "heapUsed": 201,
+      "heapTotal": 278,
+      "external": 34,
+      "rss": 342
+    },
+    "delta": {
+      "heapUsed": 0,
+      "heapTotal": 0
+    }
+  },
+  "queue": {
+    "waiting": 87,
+    "active": 64,
+    "completed": 0,
+    "failed": 0,
+    "delayed": 0
+  },
+  "possibleCauses": []
+}

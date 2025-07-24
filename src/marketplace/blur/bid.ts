@@ -11,6 +11,7 @@ import { fetchERC20Balance } from "../../utils/balance";
 import { convertBigNumbers } from "../../utils/bigNumberConverter";
 import { logger, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
 import { InsufficientBalanceError, TransferRestrictedError, MinimumPriceError, InvalidRequestError } from "../errors";
+import { blurRateLimiter } from "../../utils/blur-rate-limiter";
 
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
 
@@ -32,9 +33,6 @@ const activeRequests = new Map<string, AbortController[]>();
 // Cache for transfer-restricted collections (TTL: 24 hours)
 const transferRestrictedCollections = new Map<string, number>();
 const RESTRICTION_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
-
-// Rate limit tracking for Blur API
-const blurRateLimitInfo: Record<string, { remaining: number; reset: number; limit: number }> = {};
 
 function isCollectionRestricted(contractAddress: string): boolean {
   const restriction = transferRestrictedCollections.get(contractAddress.toLowerCase());
@@ -404,18 +402,24 @@ async function submitBidToBlur(
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("BLUR".toLowerCase())) return
     let running = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase())
     if (!running) return
-    const rateLimitInfo = blurRateLimitInfo[walletAddress];
-    if (rateLimitInfo) {
-      if (rateLimitInfo.remaining < 10) {
-        const waitTime = rateLimitInfo.reset * 1000;
-        await new Promise(resolve => setTimeout(resolve, waitTime));
-        blurRateLimitInfo[walletAddress] = {
-          remaining: 40,
-          reset: 10,
-          limit: 40
-        };
-      }
+    
+    // Check rate limit before making request
+    let retryCount = 0;
+    while (!blurRateLimiter.canMakeRequest(walletAddress) && retryCount < 3) {
+      const waitTime = Math.max(blurRateLimiter.getWaitTime(walletAddress), 2000); // Wait at least 2 seconds
+      console.log(`Blur rate limit: Waiting ${waitTime}ms for wallet ${walletAddress} (attempt ${retryCount + 1}/3)`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+      retryCount++;
     }
+    
+    // If still rate limited after retries, throw error
+    if (!blurRateLimiter.canMakeRequest(walletAddress)) {
+      const error = new Error('Blur rate limit exceeded after retries');
+      throw new InvalidRequestError('blur', error.message, 429);
+    }
+    
+    // Record that we're making a request
+    blurRateLimiter.recordRequest(walletAddress);
 
     const response = await limiter.schedule(() =>
       axiosInstance.request({
@@ -433,19 +437,19 @@ async function submitBidToBlur(
     );
 
     const headers = response.headers;
-    const rateLimitHeaders = {
-      limit: headers['x-ratelimit-limit'],
-      remaining: headers['x-ratelimit-remaining'],
-      reset: headers['x-ratelimit-reset']
-    };
-    const remaining = parseInt(rateLimitHeaders.remaining.toString(), 10);
-    const reset = parseInt(rateLimitHeaders.reset.toString(), 10);
-    const limit = parseInt(rateLimitHeaders.limit.toString(), 10);
+    
+    // Try both header formats (with and without x- prefix)
+    const remaining = parseInt(headers['ratelimit-remaining'] || headers['x-ratelimit-remaining'] || headers['x-ratelimit-remaining-second'] || '40', 10);
+    const reset = parseInt(headers['ratelimit-reset'] || headers['x-ratelimit-reset'] || '10', 10);
+    const limit = parseInt(headers['ratelimit-limit'] || headers['x-ratelimit-limit'] || headers['x-ratelimit-limit-second'] || '100', 10);
 
-    blurRateLimitInfo[walletAddress] = {
-      remaining: remaining,
-      reset: reset,
-      limit: limit
+    // Update rate limiter with actual values from API
+    if (!isNaN(remaining) && !isNaN(reset) && !isNaN(limit)) {
+      blurRateLimiter.updateFromHeaders(walletAddress, {
+        remaining,
+        reset,
+        limit
+      });
     }
     const offers = response.data
 
@@ -484,7 +488,37 @@ async function submitBidToBlur(
       console.log(`Request for task ${taskId} was cancelled`);
       return;
     }
-    const errorMessage = `Failed to submit Blur bid for collection ${slug} at price ${formatUnits(offer_price.toString(), 18)} BETH: ${error.response?.data?.message || error.message || error}`;
+    
+    // Check for rate limit error in different formats
+    const errorData = error.response?.data;
+    const isRateLimitError = error.response?.status === 429 || 
+      error.response?.status === 400 && (
+        errorData?.message?.includes('rate limit') ||
+        (Array.isArray(errorData) && errorData[0]?.includes('rate limit'))
+      );
+    
+    if (isRateLimitError) {
+      // Extract rate limit info from response headers
+      const headers = error.response?.headers || {};
+      const retryAfter = headers['retry-after'];
+      const remaining = parseInt(headers['ratelimit-remaining'] || headers['x-ratelimit-remaining'] || headers['x-ratelimit-remaining-second'] || '0', 10);
+      const reset = parseInt(headers['ratelimit-reset'] || headers['x-ratelimit-reset'] || '10', 10);
+      const limit = parseInt(headers['ratelimit-limit'] || headers['x-ratelimit-limit'] || headers['x-ratelimit-limit-second'] || '100', 10);
+      
+      // Update rate limiter with actual values
+      if (!isNaN(remaining) && !isNaN(reset) && !isNaN(limit)) {
+        blurRateLimiter.updateFromHeaders(walletAddress, {
+          remaining,
+          reset,
+          limit
+        });
+      }
+      
+      blurRateLimiter.markRateLimited(walletAddress, retryAfter ? parseInt(retryAfter) : reset);
+      console.log(`Blur rate limit hit for wallet ${walletAddress} - Remaining: ${remaining}, Reset in: ${reset}s`);
+    }
+    
+    const errorMessage = `Failed to submit Blur bid for collection ${slug} at price ${formatUnits(offer_price.toString(), 18)} BETH: ${Array.isArray(errorData) ? errorData[0] : errorData?.message || error.message || error}`;
     console.error(errorMessage, error);
     throw new InvalidRequestError('blur', errorMessage, error.response?.status);
   } finally {

@@ -1,0 +1,304 @@
+{
+  "summary": {
+    "jobId": "68324",
+    "jobName": "OPENSEA_SCHEDULE",
+    "taskId": "6881f92dc2516a94e8ff5de6",
+    "contractSlug": "good-vibes-club",
+    "totalDuration": 180012,
+    "timestamp": "2025-07-24T10:26:22.145Z",
+    "lastPhase": "TIMEOUT"
+  },
+  "phases": {
+    "OPENSEA_SCHEDULE_START": {
+      "taskId": "6881f92dc2516a94e8ff5de6",
+      "contract": "good-vibes-club"
+    },
+    "COLLECTION_DETAILS_START": {
+      "slug": "good-vibes-club"
+    },
+    "COLLECTION_DETAILS_COMPLETE": {
+      "duration": 56,
+      "hasTraitOffers": true
+    },
+    "OPENSEA_LISTINGS_START": {
+      "amount": 0,
+      "hasAutoIds": false
+    },
+    "OPENSEA_LISTINGS_COMPLETE": {
+      "duration": 56,
+      "listingCount": 0,
+      "requestedAmount": 0
+    }
+  },
+  "apiCalls": {
+    "total": 117,
+    "byEndpoint": {
+      "GET https://nfttools.pro/kong/blur/v1/collections/0xb8ea78fcacef50d41375e44e6814ebba36bb33c4/executable-bids": {
+        "count": 1,
+        "totalDuration": 361,
+        "avgDuration": 361
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/offers/build": {
+        "count": 33,
+        "totalDuration": 26786,
+        "avgDuration": 812
+      },
+      "POST https://nfttools.pro/kong/blur/v1/collection-bids/cancel": {
+        "count": 5,
+        "totalDuration": 7083,
+        "avgDuration": 1417
+      },
+      "POST https://nfttools.pro/kong/blur/v1/collection-bids/format": {
+        "count": 14,
+        "totalDuration": 10142,
+        "avgDuration": 724
+      },
+      "POST https://nfttools.pro/kong/blur/v1/collection-bids/submit": {
+        "count": 13,
+        "totalDuration": 10290,
+        "avgDuration": 792
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0xb34d2793075e4e823fbcc6beb32a820771415ac8b3700148cfcd0bf78917cfd74fa8969bcf89998e0c1c6a47fcfe035cd6b7c2d8d92a58b79b3804dd979dc65e1b": {
+        "count": 3,
+        "totalDuration": 3902,
+        "avgDuration": 1301
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/offers": {
+        "count": 28,
+        "totalDuration": 23489,
+        "avgDuration": 839
+      },
+      "GET https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/collections/0xb8ea78fcacef50d41375e44e6814ebba36bb33c4/bids/v1?type=collection": {
+        "count": 1,
+        "totalDuration": 1493,
+        "avgDuration": 1493
+      },
+      "GET https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/collections/0x23581767a106ae21c074b2276d25e5c3e136a68b/bids/v1?type=collection": {
+        "count": 1,
+        "totalDuration": 1891,
+        "avgDuration": 1891
+      },
+      "POST https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers": {
+        "count": 18,
+        "totalDuration": 13751,
+        "avgDuration": 764
+      }
+    },
+    "slowest": [
+      {
+        "timestamp": "2025-07-24T10:26:27.546Z",
+        "endpoint": "https://nfttools.pro/kong/blur/v1/collection-bids/cancel",
+        "method": "POST",
+        "duration": 4724,
+        "status": 201,
+        "responseSize": 16
+      },
+      {
+        "timestamp": "2025-07-24T10:26:26.303Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/offers/build",
+        "method": "POST",
+        "duration": 3665,
+        "status": 200,
+        "responseSize": 480
+      },
+      {
+        "timestamp": "2025-07-24T10:26:26.316Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/offers/build",
+        "method": "POST",
+        "duration": 3663,
+        "status": 200,
+        "responseSize": 480
+      },
+      {
+        "timestamp": "2025-07-24T10:26:25.964Z",
+        "endpoint": "https://nfttools.pro/kong/blur/v1/collection-bids/submit",
+        "method": "POST",
+        "duration": 2727,
+        "status": 201,
+        "responseSize": 16
+      },
+      {
+        "timestamp": "2025-07-24T10:26:26.842Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/offers",
+        "method": "POST",
+        "duration": 2195,
+        "status": 200,
+        "responseSize": 1797
+      }
+    ],
+    "failed": [
+      {
+        "timestamp": "2025-07-24T10:26:24.736Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 502,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:24.743Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 445,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:24.807Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 430,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:24.834Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 566,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:24.933Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 776,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:24.942Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 804,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:24.963Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 792,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:24.965Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 716,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:25.013Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 734,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:25.120Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 760,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:25.138Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 747,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:25.147Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 820,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:25.171Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 950,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:25.186Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 784,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:25.211Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 758,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:25.227Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 791,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:25.306Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 1114,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      },
+      {
+        "timestamp": "2025-07-24T10:26:25.314Z",
+        "endpoint": "https://nfttools.pro/kong/opensea/api/v2/orders/ethereum/seaport/offers",
+        "method": "POST",
+        "duration": 1262,
+        "status": "error",
+        "error": "Request failed with status code 400"
+      }
+    ]
+  },
+  "memory": {
+    "start": {
+      "heapUsed": 208,
+      "heapTotal": 310,
+      "external": 33,
+      "rss": 389
+    },
+    "end": {
+      "heapUsed": 208,
+      "heapTotal": 310,
+      "external": 33,
+      "rss": 389
+    },
+    "delta": {
+      "heapUsed": 0,
+      "heapTotal": 0
+    }
+  },
+  "queue": {
+    "waiting": 102,
+    "active": 64,
+    "completed": 0,
+    "failed": 0,
+    "delayed": 0
+  },
+  "possibleCauses": [
+    "18 API calls failed or timed out"
+  ]
+}

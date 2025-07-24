@@ -1,0 +1,80 @@
+{
+  "summary": {
+    "jobId": "68075",
+    "jobName": "BLUR_SCHEDULE",
+    "taskId": "6881f4221d29b102d283d05b",
+    "contractSlug": "underworld-gg",
+    "totalDuration": 180003,
+    "timestamp": "2025-07-24T10:26:11.854Z",
+    "lastPhase": "TIMEOUT"
+  },
+  "phases": {},
+  "apiCalls": {
+    "total": 3,
+    "byEndpoint": {
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0x6f1c3f7f412b3d3cd53d87268713ae0cff5c3a15e5f8cd06a4cf3d006810f2b433ecc0468ade394835590fafd0cbace6cb38aad9ffeefa7bece2edc1acb632811b": {
+        "count": 1,
+        "totalDuration": 2141,
+        "avgDuration": 2141
+      },
+      "POST https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/execute/bid/v5": {
+        "count": 2,
+        "totalDuration": 5315,
+        "avgDuration": 2658
+      }
+    },
+    "slowest": [
+      {
+        "timestamp": "2025-07-24T10:26:14.688Z",
+        "endpoint": "https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/execute/bid/v5",
+        "method": "POST",
+        "duration": 2794,
+        "status": 200,
+        "responseSize": 5012
+      },
+      {
+        "timestamp": "2025-07-24T10:26:14.403Z",
+        "endpoint": "https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/execute/bid/v5",
+        "method": "POST",
+        "duration": 2521,
+        "status": 200,
+        "responseSize": 5017
+      },
+      {
+        "timestamp": "2025-07-24T10:26:14.095Z",
+        "endpoint": "https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/order/v3?signature=0x6f1c3f7f412b3d3cd53d87268713ae0cff5c3a15e5f8cd06a4cf3d006810f2b433ecc0468ade394835590fafd0cbace6cb38aad9ffeefa7bece2edc1acb632811b",
+        "method": "POST",
+        "duration": 2141,
+        "status": 200,
+        "responseSize": 100
+      }
+    ],
+    "failed": []
+  },
+  "memory": {
+    "start": {
+      "heapUsed": 202,
+      "heapTotal": 324,
+      "external": 34,
+      "rss": 406
+    },
+    "end": {
+      "heapUsed": 202,
+      "heapTotal": 324,
+      "external": 34,
+      "rss": 406
+    },
+    "delta": {
+      "heapUsed": 0,
+      "heapTotal": 0
+    }
+  },
+  "queue": {
+    "waiting": 0,
+    "active": 61,
+    "completed": 0,
+    "failed": 0,
+    "delayed": 0
+  },
+  "possibleCauses": []
+}
