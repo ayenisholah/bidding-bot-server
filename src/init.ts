@@ -37,7 +37,7 @@ const retryConfig: IAxiosRetryConfig = {
 };
 
 async function initialize(rateLimit: number) {
-  axiosInstance = axios.create({ timeout: 60000 });
+  axiosInstance = axios.create({});
 
   limiter = new Bottleneck({
     minTime: 1000 / rateLimit,
@@ -45,10 +45,10 @@ async function initialize(rateLimit: number) {
   });
 
   axiosRetry(axiosInstance, retryConfig);
-  
+
   // Wrap axios instance to track API calls for timeout analysis
   wrapAxiosInstance(axiosInstance, () => jobContext.getJobId());
-  
+
   console.log(`Limiter initialized with rate limit: ${rateLimit} requests per second`);
 }
 

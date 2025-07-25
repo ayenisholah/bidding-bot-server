@@ -11,11 +11,14 @@ services:
       REDIS_NET_MAP: '{"redis-node-1:6379":{"host":"redis-node-1","port":6379},"redis-node-2:6379":{"host":"redis-node-2","port":6379},"redis-node-3:6379":{"host":"redis-node-3","port":6379},"redis-node-4:6379":{"host":"redis-node-4","port":6379},"redis-node-5:6379":{"host":"redis-node-5","port":6379},"redis-node-6:6379":{"host":"redis-node-6","port":6379}}'
       ALCHEMY_API_KEY: "HGWgCONolXMB2op5UjPH1YreDCwmSbvx"
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
-      DATABASE_URL: "postgresql://bidding_bot:bidding_bot_password@postgres:5432/bidding_bot_db?schema=public&connection_limit=50&pool_timeout=20"
+      DATABASE_URL: "postgresql://bidding_bot:bidding_bot_password@postgres:5432/bidding_bot_db?schema=public&connection_limit=50&pool_timeout=60"
       SERVER_IP: ${SERVER_IP}
       USERNAME: ${USERNAME}
-      NEXT_PUBLIC_EMAIL: ${NEXT_PUBLIC_EMAIL}
+      EMAIL: ${EMAIL}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      JWT_SECRET: "NFTTOOLS TO THE MOON"
+      AXIOM_DATASET: "nft-bidding-bot"
+      AXIOM_TOKEN: "xaat-30ecb9c3-ce16-42f6-b824-ba8ef5c50e7c"
       API_KEY: ${API_KEY}
       RATE_LIMIT: ${RATE_LIMIT}
     depends_on:
@@ -35,17 +38,16 @@ services:
       - "3001:3001"
     environment:
       PORT: 3001
-      REDIS_NODES: '[{"host":"redis-node-1","port":6379},{"host":"redis-node-2","port":6379},{"host":"redis-node-3","port":6379},{"host":"redis-node-4","port":6379},{"host":"redis-node-5","port":6379},{"host":"redis-node-6","port":6379}]'
-      REDIS_NET_MAP: '{"redis-node-1:6379":{"host":"redis-node-1","port":6379},"redis-node-2:6379":{"host":"redis-node-2","port":6379},"redis-node-3:6379":{"host":"redis-node-3","port":6379},"redis-node-4:6379":{"host":"redis-node-4","port":6379},"redis-node-5:6379":{"host":"redis-node-5","port":6379},"redis-node-6:6379":{"host":"redis-node-6","port":6379}}'
+      BODY_SIZE_LIMIT: 104857600
       NEXT_PUBLIC_ALCHEMY_API_KEY: "HGWgCONolXMB2op5UjPH1YreDCwmSbvx"
-      CLIENT_URL: "http://localhost:3001/"
-      NEXT_PUBLIC_SERVER_WEBSOCKET: ${NEXT_PUBLIC_SERVER_WEBSOCKET}
-      MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
-      SERVER_IP: ${SERVER_IP}
-      USERNAME: ${USERNAME}
-      EMAIL: ${EMAIL}
-      SERVER_URL: ${NEXT_PUBLIC_SERVER_URL}
-      API_KEY: ${API_KEY}
+      NEXT_PUBLIC_API_KEY: ${API_KEY}
+      NEXT_PUBLIC_AXIOM_DATASET: "nft-bidding-bot"
+      NEXT_PUBLIC_AXIOM_TOKEN: "xaat-30ecb9c3-ce16-42f6-b824-ba8ef5c50e7c"
+      NEXT_PUBLIC_USERNAME: ${USERNAME}
+      NEXT_PUBLIC_MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
+      NEXT_PUBLIC_JWT_SECRET: "NFTTOOLS TO THE MOON"
+      NEXT_PUBLIC_SERVER_IP: ${SERVER_IP}
+      NEXT_PUBLIC_EMAIL: ${EMAIL}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001"]
       interval: 30s
@@ -95,7 +97,7 @@ services:
       -c max_worker_processes=2
       -c max_parallel_workers_per_gather=0
       -c max_parallel_workers=2
-      -c max_connections=50
+      -c max_connections=200
       -c shared_preload_libraries='pg_stat_statements'
       -c log_min_duration_statement=2000
       -c log_line_prefix='%t [%p]: user=%u,db=%d '
