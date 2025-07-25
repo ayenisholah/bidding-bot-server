@@ -13,4 +13,1082 @@ analyze all the functions in @opensea-functions-analysis.md and what improvement
 │                                                                                                                                                                       │
 │   document the plan to a .md file     
 
-Connections
+[Timeout] SCHEDULE job 39303 timed out - will retry indefinitely to prevent task from getting stuck
+  Job Type: OPENSEA_SCHEDULE
+  Task ID: 688375d71d29b102d283dcfa
+  Contract: lilpudgys
+  Duration: 180208ms
+  Error: Job 39303 timed out after 180000ms - aborted
+
+
+  heapUsed:112MB
+external:25MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 64
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prioritized: 233
+waiting: 0
+waiting-children: 0
+Total Jobs: 297
+Current Limiter Stats: { RECEIVED: 42, QUEUED: 1, RUNNING: 2, EXECUTING: 14, DONE: 995 }
+Average RPS: 33.50 Executing: 59.00 True RPS: 59.00
+[ERROR] 0x_SERVER_OPENSEA_BID_OPENSEA_BIDDING_AxiosError
+  Error: Validation error: Trading is disabled for this item
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_AxiosError
+  Error: Request failed with status code 400
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+Task 6883b58aa027b8e3ee14d0a5 has loopInterval of 0, using minimum interval of 5 seconds
+Scheduling task 6883b58aa027b8e3ee14d0a5 to run again in 1 seconds (Loop #1)
+Task 6883b58aa027b8e3ee14d0a5 - loopInterval config: {"value":0,"unit":"minutes"}
+[Loop Scheduling] Timeout set for task 6883b58aa027b8e3ee14d0a5, will fire in 1 seconds
+ 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Body","value":"Sage"} 0.0014 WETH 🎉 
+ 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: GOOD-VIBES-CLUB  TRAIT: {"type":"Body","value":"TShirt Graphic More Espresso"} 0.0014 WETH 🎉 
+Task 6883b58aa027b8e3ee14d0aa has loopInterval of 0, using minimum interval of 5 seconds
+Scheduling task 6883b58aa027b8e3ee14d0aa to run again in 1 seconds (Loop #1)
+Task 6883b58aa027b8e3ee14d0aa - loopInterval config: {"value":0,"unit":"minutes"}
+[Loop Scheduling] Timeout set for task 6883b58aa027b8e3ee14d0aa, will fire in 1 seconds
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 141 0.0014 WETH 🎉 
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 146 0.0014 WETH 🎉 
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 144 0.0014 WETH 🎉 
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 142 0.0014 WETH 🎉 
+[ERROR] 0x_SERVER_OPENSEA_BID_OPENSEA_BIDDING_AxiosError
+  Error: Validation error: Asset not found
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 143 0.0014 WETH 🎉 
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_AxiosError
+  Error: Request failed with status code 400
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 148 0.0014 WETH 🎉 
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 134 0.0014 WETH 🎉 
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 7, EXECUTING: 39, DONE: 1034 }
+Average RPS: 32.50 Executing: 46.00 True RPS: 46.00
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 136 0.0014 WETH 🎉 
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 130 0.0014 WETH 🎉 
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[Loop Timer] Timeout fired for task 6883b58aa027b8e3ee14d0a5, loop #1
+[Loop 1] Starting next iteration for task 6883b58aa027b8e3ee14d0a5
+[Loop 1] Task running state: true, Task ID: 6883b58aa027b8e3ee14d0a5
+[startTask] Called with task 6883b58aa027b8e3ee14d0a5, start=true, marketplace=all
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+Checking marketplace approvals for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21...
+Checking opensea approval...
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+✓ opensea approval confirmed for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+UPDATED TASK PROOF-MOONBIRDS RUNNING STATUS TO: TRUE
+WebSocket not connected, skipping subscription for proof-moonbirds
+Loop restart: Adding 1 jobs without deduplication
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+ 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Eyes","value":"Adorable"} 0.0014 WETH 🎉 
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+ 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Eyewear","value":"Eyepatch"} 0.0014 WETH 🎉 
+ 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Outerwear","value":"Hoodie"} 0.0014 WETH 🎉 
+ 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Headwear","value":"Bandana"} 0.0014 WETH 🎉 
+ 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Headwear","value":"Cowboy Hat"} 0.0014 WETH 🎉 
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+ 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Headwear","value":"Lincoln"} 0.0014 WETH 🎉 
+ 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Feathers","value":"Legendary Brave"} 0.0014 WETH 🎉 
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[Loop Timer] Timeout fired for task 6883b58aa027b8e3ee14d0aa, loop #1
+[Loop 1] Starting next iteration for task 6883b58aa027b8e3ee14d0aa
+[Loop 1] Task running state: true, Task ID: 6883b58aa027b8e3ee14d0aa
+[startTask] Called with task 6883b58aa027b8e3ee14d0aa, start=true, marketplace=all
+Checking marketplace approvals for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21...
+Checking opensea approval...
+ 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Outerwear","value":"Diamond Necklace"} 0.0014 WETH 🎉 
+✓ opensea approval confirmed for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+UPDATED TASK GOOD-VIBES-CLUB RUNNING STATUS TO: TRUE
+WebSocket not connected, skipping subscription for good-vibes-club
+Loop restart: Adding 1 jobs without deduplication
+ 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Eyewear","value":"Jobs Glasses"} 0.0014 WETH 🎉 
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 147 0.0014 WETH 🎉 
+ 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Feathers","value":"Legendary Guardian"} 0.0014 WETH 🎉 
+ 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Headwear","value":"Gremplin"} 0.0014 WETH 🎉 
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 1, DONE: 1082 }
+Average RPS: 34.20 Executing: 1.00 True RPS: 34.20
+ 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Outerwear","value":"Jean Jacket"} 0.0014 WETH 🎉 
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[TaskProgression] Moving task 6883b58aa027b8e3ee14d0a5 from STARTED to RUNNING
+ 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Outerwear","value":"Punk Jacket"} 0.0014 WETH 🎉 
+Task 6883b58aa027b8e3ee14d0a6 completed for opensea
+Task 6883b58aa027b8e3ee14d0a6 completed for all marketplaces
+[TaskProgression] Moving task 6883b58aa027b8e3ee14d0aa from STARTED to RUNNING
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 1083 }
+Average RPS: 34.20 Executing: 0.00 True RPS: 34.20
+[Queue Rate Limit] Resuming queue after 3.640625s delay
+[Collection] Fetching details for proof-moonbirds
+[Collection] Memory cache hit for proof-moonbirds (0ms)
+Task 6883b58aa027b8e3ee14d0a6 has loopInterval of 0, using minimum interval of 5 seconds
+Scheduling task 6883b58aa027b8e3ee14d0a6 to run again in 1 seconds (Loop #1)
+Task 6883b58aa027b8e3ee14d0a6 - loopInterval config: {"value":0,"unit":"minutes"}
+[Loop Scheduling] Timeout set for task 6883b58aa027b8e3ee14d0a6, will fire in 1 seconds
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 1083 }
+Average RPS: 37.56 Executing: 0.00 True RPS: 37.56
+[Collection] Fetching details for good-vibes-club
+[Collection] Memory cache hit for good-vibes-club (0ms)
+Failed to send logs to Axiom: Request failed with status code 400
+[Loop Timer] Timeout fired for task 6883b58aa027b8e3ee14d0a6, loop #1
+[Loop 1] Starting next iteration for task 6883b58aa027b8e3ee14d0a6
+[Loop 1] Task running state: true, Task ID: 6883b58aa027b8e3ee14d0a6
+[startTask] Called with task 6883b58aa027b8e3ee14d0a6, start=true, marketplace=all
+Checking marketplace approvals for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21...
+Checking opensea approval...
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+✓ opensea approval confirmed for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+UPDATED TASK PROOF-MOONBIRDS RUNNING STATUS TO: TRUE
+WebSocket not connected, skipping subscription for proof-moonbirds
+Loop restart: Adding 1 jobs without deduplication
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 154 0.0014 WETH 🎉 
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[Collection] Fetching details for proof-moonbirds
+[Collection] Memory cache hit for proof-moonbirds (0ms)
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 177 0.0014 WETH 🎉 
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[Queue Rate Limit] Prioritized jobs (171) exceed RATE_LIMIT (64)
+[Queue Rate Limit] Pausing queue for 2.671875 seconds
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:243MB
+heapTotal:156MB
+heapUsed:129MB
+external:27MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 62
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 171
+waiting: 0
+waiting-children: 0
+Total Jobs: 233
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 185 0.0014 WETH 🎉 
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 163 0.0014 WETH 🎉 
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: GOOD-VIBES-CLUB  TOKEN: 131 0.0014 WETH 🎉 
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 158 0.0014 WETH 🎉 
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 168 0.0014 WETH 🎉 
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 155 0.0014 WETH 🎉 
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 164 0.0014 WETH 🎉 
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 19, EXECUTING: 31, DONE: 1098 }
+Average RPS: 31.22 Executing: 50.00 True RPS: 50.00
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 189 0.0014 WETH 🎉 
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 166 0.0014 WETH 🎉 
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 184 0.0014 WETH 🎉 
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 169 0.0014 WETH 🎉 
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 191 0.0014 WETH 🎉 
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: GOOD-VIBES-CLUB  TOKEN: 1579 0.0014 WETH 🎉 
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_OPENSEA_BID_OPENSEA_BIDDING_AxiosError
+  Error: Validation error: Asset not found
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_AxiosError
+  Error: Request failed with status code 400
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 186 0.0014 WETH 🎉 
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: GOOD-VIBES-CLUB  TOKEN: 3147 0.0014 WETH 🎉 
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: GOOD-VIBES-CLUB  TOKEN: 6530 0.0014 WETH 🎉 
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 179 0.0014 WETH 🎉 
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: GOOD-VIBES-CLUB  TOKEN: 6752 0.0014 WETH 🎉 
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 1148 }
+Average RPS: 31.11 Executing: 0.00 True RPS: 31.11
+ 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: GOOD-VIBES-CLUB  TOKEN: 1801 0.0014 WETH 🎉 
+prisma:error 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
+  Error: 
+Invalid `prisma.order.create()` invocation:
+
+
+Too many database connections opened: FATAL: sorry, too many clients already
+Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
+[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
+
+[Timeout] SCHEDULE job 8 timed out - will retry indefinitely to prevent task from getting stuck
+  Job Type: OPENSEA_SCHEDULE
+  Task ID: 6883bdb307e88040e2255320
+  Contract: lilpudgys
+  Duration: 180013ms
+  Error: Job 8 timed out after 180000ms - aborted

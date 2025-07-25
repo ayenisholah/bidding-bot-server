@@ -154,7 +154,7 @@ class ProcessBidTimer {
   getTimingData(taskId: string, slug: string, tokenId: number, wallet: string, amount: number, currency: string, outbidEnabled: boolean, success: boolean, errorMessage?: string): ProcessTokenBidTimingLog {
     const totalDuration = Date.now() - this.startTime;
     const bidOnOpenseaCallTime = this.bidOnOpenseaStartTime ? this.bidOnOpenseaStartTime - this.startTime : undefined;
-    
+
     return {
       taskId,
       timestamp: new Date().toISOString(),
@@ -218,7 +218,7 @@ class ProcessTraitBidTimer {
   getTimingData(taskId: string, slug: string, trait: string, traitType: string, traitValue: string, wallet: string, amount: number, currency: string, outbidEnabled: boolean, success: boolean, errorMessage?: string): ProcessTraitBidTimingLog {
     const totalDuration = Date.now() - this.startTime;
     const bidOnOpenseaCallTime = this.bidOnOpenseaStartTime ? this.bidOnOpenseaStartTime - this.startTime : undefined;
-    
+
     return {
       taskId,
       timestamp: new Date().toISOString(),
@@ -260,11 +260,9 @@ import { IListing } from "./types/listing.types";
 import { BoundedCache } from "./utils/bounded-cache";
 import { walletCache } from "./utils/wallet-cache";
 import { collectionCache } from "./utils/collection-cache";
-import { initializeDbOptimizer } from "./utils/db-optimizer";
 import { taskCircuitBreaker } from "./utils/task-circuit-breaker";
 import { blurRateLimiter } from "./utils/blur-rate-limiter";
 const prisma = new PrismaClient()
-const dbOptimizer = initializeDbOptimizer(prisma);
 
 const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
 
@@ -547,7 +545,8 @@ async function cleanupStaleQueueJobs(): Promise<void> {
       if (taskId && !activeTasks.has(taskId)) {
         await job.remove();
         cleanedCount++;
-        console.log(YELLOW + `[Queue Cleanup] Removed stale job ${job.name} for non-existent task ${taskId}` + RESET);
+        const customJobId = (job.opts as any)?.jobId || job.id;
+        console.log(YELLOW + `[Queue Cleanup] Removed stale job ${job.name} (${customJobId}) for non-existent task ${taskId}` + RESET);
         continue;
       }
 
@@ -555,7 +554,8 @@ async function cleanupStaleQueueJobs(): Promise<void> {
       if (job.processedOn && (now - job.processedOn) > 5 * 60 * 1000) {
         await job.remove();
         cleanedCount++;
-        console.log(YELLOW + `[Queue Cleanup] Removed stuck job ${job.name} (processing for > 5 minutes)` + RESET);
+        const customJobId = (job.opts as any)?.jobId || job.id;
+        console.log(YELLOW + `[Queue Cleanup] Removed stuck job ${job.name} (${customJobId}) (processing for > 5 minutes)` + RESET);
         continue;
       }
 
@@ -1533,13 +1533,15 @@ async function startServer() {
           const timeoutPromise = new Promise((_, reject) => {
             setTimeout(() => {
               abortController.abort(); // Signal cancellation to any async operations
-              reject(new Error(`Job ${job.id} timed out after ${jobTimeout}ms - aborted`));
+              const customJobId = (job.opts as any)?.jobId || job.id;
+              reject(new Error(`Job ${customJobId} (ID: ${job.id}) timed out after ${jobTimeout}ms - aborted`));
             }, jobTimeout);
           });
 
           // Check if job has exceeded its timeout
           if (job.data.timeoutAt && Date.now() > job.data.timeoutAt) {
-            const timeoutError = new Error(`Job ${job.id} timed out after ${job.data.maxDuration}ms`);
+            const customJobId = (job.opts as any)?.jobId || job.id;
+            const timeoutError = new Error(`Job ${customJobId} (ID: ${job.id}) timed out after ${job.data.maxDuration}ms`);
             throw timeoutError;
           }
 
@@ -1564,7 +1566,8 @@ async function startServer() {
           if (heapUsedMB > memoryThreshold) {
             console.log(YELLOW + `[Memory Warning] Heap Used: ${heapUsedMB.toFixed(0)}MB / ${heapTotalMB.toFixed(0)}MB allocated (${heapPercentOfTotal.toFixed(1)}%)` + RESET);
             console.log(YELLOW + `[Memory Warning] ${heapUsedMB.toFixed(0)}MB / ${MAX_HEAP_MB}MB max (${heapPercentOfMax.toFixed(1)}% of limit)` + RESET);
-            console.log(YELLOW + `[Memory Warning] Delaying job ${job.id}` + RESET);
+            const customJobId = (job.opts as any)?.jobId || job.id;
+            console.log(YELLOW + `[Memory Warning] Delaying job ${customJobId} (ID: ${job.id})` + RESET);
 
             await queue.pause()
             await new Promise(resolve => setTimeout(resolve, 3000));
@@ -1603,7 +1606,8 @@ async function startServer() {
             // Check if this is a rate limit error
             if (error?.code === 'RATE_LIMITED') {
               const retryAfter = error.retryAfter || 8; // Default 8 seconds
-              console.log(`[Blur] Rate limit hit for job ${job.id} - will retry in ${retryAfter}s`);
+              const customJobId = (job.opts as any)?.jobId || job.id;
+              console.log(`[Blur] Rate limit hit for job ${customJobId} (ID: ${job.id}) - will retry in ${retryAfter}s`);
 
               // Update job to add delay
               await job.updateData({
@@ -1623,7 +1627,8 @@ async function startServer() {
               const isScheduleJob = [OPENSEA_SCHEDULE, MAGICEDEN_SCHEDULE, BLUR_SCHEDULE].includes(job.name);
 
               if (isScheduleJob) {
-                console.log(RED + `[Timeout] SCHEDULE job ${job.id} timed out - will retry indefinitely to prevent task from getting stuck` + RESET);
+                const customJobId = (job.opts as any)?.jobId || job.id;
+                console.log(RED + `[Timeout] SCHEDULE job ${customJobId} (ID: ${job.id}) timed out - will retry indefinitely to prevent task from getting stuck` + RESET);
                 console.log(RED + `  Job Type: ${job.name}` + RESET);
                 console.log(RED + `  Task ID: ${job.data._id || 'unknown'}` + RESET);
                 console.log(RED + `  Contract: ${job.data.contract?.slug || 'unknown'}` + RESET);
@@ -1654,7 +1659,8 @@ async function startServer() {
                   return { suspended: true };
                 }
               } else {
-                console.log(RED + `[Timeout] Job ${job.id} timed out - failing immediately (no retries for non-SCHEDULE jobs)` + RESET);
+                const customJobId = (job.opts as any)?.jobId || job.id;
+                console.log(RED + `[Timeout] Job ${customJobId} (ID: ${job.id}) timed out - failing immediately (no retries for non-SCHEDULE jobs)` + RESET);
                 console.log(RED + `  Job Type: ${job.name}` + RESET);
                 console.log(RED + `  Duration: ${Date.now() - startTime}ms` + RESET);
               }
@@ -7134,10 +7140,13 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "magiceden");
         return
       }
-      const orders = await dbOptimizer.getOrders({
-        taskId: task._id,
-        marketplace: MAGICEDEN.toLowerCase(),
-        identifier: tokenId.toString()
+
+      const orders = await prisma.order.findMany({
+        where: {
+          taskId: task._id,
+          marketplace: MAGICEDEN.toLowerCase(),
+          identifier: tokenId.toString()
+        }
       })
 
       const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), true)
@@ -9447,7 +9456,7 @@ async function processOpenseaTraitBid(data: {
 
   try {
     timer.startStep('initial_validation');
-    
+
     if (!enabledMarketplaces.length) {
       timer.endStep('initial_validation', false, 'No enabled marketplaces');
       return;
@@ -9487,7 +9496,7 @@ async function processOpenseaTraitBid(data: {
     }
 
     outbidEnabled = currentTask.outbidOptions?.outbid || false;
-    
+
     timer.endStep('task_validation');
     timer.startStep('stats_initialization');
 
@@ -9545,12 +9554,12 @@ async function processOpenseaTraitBid(data: {
 
     floorPrices[_id].opensea = floor_price as number;
     const { maxBidPriceEth, offerPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
-    
+
     finalCurrency = currencySymbol;
-    
+
     timer.endStep('bid_price_calculation');
     timer.startStep('stop_bid_check');
-    
+
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false, traitFloor, identifier)
     const outbidOptions = currentTask.outbidOptions
 
@@ -9612,7 +9621,7 @@ async function processOpenseaTraitBid(data: {
       ]);
       timer.endStep('outbid_offers_and_wallets_fetch');
       timer.startStep('outbid_logic_processing');
-      
+
       const [topOffer, secondOffer] = offers as unknown as OpenseaOfferData[]
       const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
       const secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal)
@@ -9711,7 +9720,7 @@ async function processOpenseaTraitBid(data: {
       currency,
       trait
     )
-    
+
     success = true;
   } catch (error: any) {
     if (!errorStats[data.task._id]) {
@@ -9765,7 +9774,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
   try {
     timer.startStep('initial_validation');
-    
+
     if (!enabledMarketplaces.length) {
       timer.endStep('initial_validation', false, 'No enabled marketplaces');
       return;
@@ -9779,11 +9788,11 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       timer.endStep('initial_validation', false, 'Token not in current token IDs');
       return;
     }
-    
+
     timer.endStep('initial_validation');
 
     timer.startStep('trading_disabled_check');
-    
+
     // Check if token is cached as trading disabled
     if (tradingDisabledCache.isDisabled(asset.contractAddress, +asset.tokenId, 'opensea')) {
       timer.endStep('trading_disabled_check', false, 'Token trading disabled');
@@ -9800,7 +9809,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
       return;
     }
-    
+
     timer.endStep('trading_disabled_check');
     timer.startStep('task_validation');
 
@@ -9809,9 +9818,9 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       timer.endStep('task_validation', false, 'Task not active or OpenSea not selected');
       return;
     }
-    
+
     outbidEnabled = currentTask.outbidOptions?.outbid || false;
-    
+
     timer.endStep('task_validation');
     timer.startStep('stats_initialization');
 
@@ -9831,11 +9840,11 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         blur: 0
       }
     }
-    
+
     timer.endStep('stats_initialization');
 
     timer.startStep('parallel_floor_and_orders');
-    
+
     // Parallel fetch: floor price and orders
     const [floor_price, orders] = await Promise.all([
       getOpenseaFloor(slug),
@@ -9858,7 +9867,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     }
 
     floorPrices[_id].opensea = floor_price as number;
-    
+
     timer.endStep('parallel_floor_and_orders');
     timer.startStep('bid_price_calculation');
 
@@ -9869,7 +9878,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
     let tokenOffer = BigInt(Math.round(offerPriceEth * Math.pow(10, decimal)))
     finalCurrency = currencySymbol;
-    
+
     timer.endStep('bid_price_calculation');
     timer.startStep('stop_bid_check');
 
@@ -9887,10 +9896,10 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       }
       return
     }
-    
+
     timer.endStep('stop_bid_check');
     timer.startStep('order_processing');
-    
+
     const [order, ...remainingOrders] = orders
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
     const currentPrice = Number(order ? order.offerPrice : tokenOffer)
@@ -9908,7 +9917,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     const createdAt = new Date(order?.createdAt).getTime()
     const expiredAt = new Date(order?.expiresAt).getTime()
     const orderExpiration = order ? Math.round((expiredAt - createdAt) / 1000) : expiry
-    
+
     timer.endStep('order_processing');
 
     if (!outbidOptions.outbid) {
@@ -9920,7 +9929,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       timer.endStep('simple_bid_check');
     } else {
       timer.startStep('outbid_logic');
-      
+
       // Parallel fetch: wallets and item offers
       const [walletsArr, highestBid] = await Promise.all([
         walletCache.getAllWallets(),
@@ -9964,12 +9973,12 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       else {
         tokenOffer = BigInt(Math.round(highestBidAmount + (outbidMargin * Math.pow(10, decimal))));
       }
-      
+
       timer.endStep('outbid_logic');
     }
 
     timer.startStep('final_validation');
-    
+
     const bidCount = getIncrementedBidCount(OPENSEA, slug, _id)
     const offerEth = Number(tokenOffer) / Math.pow(10, decimal);
     finalAmount = offerEth;
@@ -10010,7 +10019,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       })
       queue.addBulk(cancelData); // Non-blocking
     }
-    
+
     timer.endStep('final_validation');
     timer.markBidOnOpenseaCall();
 
@@ -10028,7 +10037,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       undefined,
       asset
     )
-    
+
     success = true;
 
   } catch (error: any) {
