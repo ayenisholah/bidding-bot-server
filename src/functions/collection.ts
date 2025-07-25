@@ -35,9 +35,35 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
   const startTime = Date.now();
   console.log(`[Collection] Fetching details for ${slug}`);
 
+  // Check memory cache first
   if (collectionCache[slug]) {
-    console.log(`[Collection] Cache hit for ${slug} (${Date.now() - startTime}ms)`);
+    console.log(`[Collection] Memory cache hit for ${slug} (${Date.now() - startTime}ms)`);
     return collectionCache[slug];
+  }
+
+  // Check Redis cache
+  const cacheKey = `{opensea:collection}:${slug}`;
+  const redis = getRedis();
+  
+  if (redis && redisClient.isReady()) {
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached) {
+        console.log(`[Collection] Redis cache hit for ${slug} (${Date.now() - startTime}ms)`);
+        const details = JSON.parse(cached);
+        collectionCache[slug] = details; // Update memory cache
+        return details;
+      }
+    } catch (error) {
+      await logger.logDatabaseError('Error reading collection details from Redis cache', {
+        databaseOperation: DatabaseOperation.READ,
+        collection_name: 'opensea_collection_cache',
+        collection: slug,
+        cacheKey,
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
   
   const lockKey = `{${slug}}:collection`;
@@ -85,6 +111,24 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
     };
 
         collectionCache[slug] = result;
+        
+        // Cache in Redis with 1-hour TTL
+        if (redis && redisClient.isReady()) {
+          try {
+            await redis.setex(cacheKey, 3600, JSON.stringify(result));
+            console.log(`[Collection] Cached to Redis for ${slug}`);
+          } catch (error) {
+            await logger.logDatabaseError('Error caching collection details to Redis', {
+              databaseOperation: DatabaseOperation.WRITE,
+              collection_name: 'opensea_collection_cache',
+              collection: slug,
+              cacheKey,
+              error: error as Error,
+              errorMessage: error instanceof Error ? error.message : String(error)
+            });
+          }
+        }
+        
         console.log(`[Collection] Successfully cached details for ${slug} (${Date.now() - startTime}ms)`);
         return result;
       }),
@@ -137,9 +181,9 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
 }
 
 export async function getOpenseaFloor(collectionSlug: string) {
-  const CACHE_TTL = 30; // 30 seconds cache
-  const cacheKey = `opensea:floor:${collectionSlug}`;
-  const lockKey = `floor:opensea:${collectionSlug}`;
+  const CACHE_TTL = 60; // 1 minute cache (updated from 30 seconds)
+  const cacheKey = `{opensea:floor}:${collectionSlug}`;
+  const lockKey = `{floor:opensea}:${collectionSlug}`;
 
   // Try to get from cache first
   try {
@@ -212,9 +256,9 @@ export async function getOpenseaFloor(collectionSlug: string) {
 }
 
 export async function getBlurFloor(collectionSlug: string): Promise<number> {
-  const CACHE_TTL = 30; // 30 seconds cache
-  const cacheKey = `blur:floor:${collectionSlug}`;
-  const lockKey = `floor:blur:${collectionSlug}`;
+  const CACHE_TTL = 60; // 1 minute cache (updated from 30 seconds)
+  const cacheKey = `{blur:floor}:${collectionSlug}`;
+  const lockKey = `{floor:blur}:${collectionSlug}`;
 
   // Try to get from cache first
   try {
@@ -257,9 +301,9 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
 }
 
 export async function getMagicEdenFloor(collectionSlug: string): Promise<number> {
-  const CACHE_TTL = 30; // 30 seconds cache
-  const cacheKey = `magiceden:floor:${collectionSlug}`;
-  const lockKey = `floor:magiceden:${collectionSlug}`;
+  const CACHE_TTL = 60; // 1 minute cache (updated from 30 seconds)
+  const cacheKey = `{magiceden:floor}:${collectionSlug}`;
+  const lockKey = `{floor:magiceden}:${collectionSlug}`;
 
   // Try to get from cache first
   try {

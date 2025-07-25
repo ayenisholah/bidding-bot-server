@@ -1,0 +1,15 @@
+│ > list all functions called in processOpenseaScheduledBid, processOpenseaCollectionBid, processOpenseaTraitBid, processOpenseaTokenBid
+analyze all the functions in @opensea-functions-analysis.md and what improvements and optimizations need to be made, don't create new functions, don't delete any   │
+│   function, just make improvements to each function and api calls, cache where necessary using redis with cache key consistent with @src/utils/redis.ts {keyslot}     │
+│   pattern, only cache wallet data and private key in memory                                                                                                           │
+│                                                                                                                                                                       │
+│   use early returns where necessary, use promise.all where necessay, any function that doesn't require await keyword or can be made non-blocking, do it.              │
+│   optimize for speed and memory performance                                                                                                                           │
+│                                                                                                                                                                       │
+│   sensite market data like getOpenseaFloor,fetchOpenseaListings, openseaTraitFloor, fetchERC20Balance should have a 1 minute ttl                                      │
+│                                                                                                                                                                       │
+│   getCollectionDetails, fetchOpenSeaCollectionItems should have 1 hour ttl                                                                                            │
+│                                                                                                                                                                       │
+│   do not cache fetchItemOffers, fetchOpenseaOffers                                                                                                                    │
+│                                                                                                                                                                       │
+│   document the plan to a .md file     

@@ -12,6 +12,104 @@ import { CollectionItemsQueryVariables, CollectionItemsResponse } from "../../fu
 import { fetchERC20Balance } from "../../utils/balance";
 import { logger, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
 import { InsufficientBalanceError } from "../errors";
+import { getCachedOrFetch, CACHE_TTL, CACHE_KEYS } from "../../utils/opensea-cache";
+import fs from 'fs';
+import path from 'path';
+
+// Performance timing utilities
+interface BidTimingLog {
+  taskId: string;
+  timestamp: string;
+  bidType: 'collection' | 'trait' | 'token';
+  slug: string;
+  wallet: string;
+  amount: number;
+  currency: string;
+  steps: {
+    [stepName: string]: {
+      startTime: number;
+      endTime: number;
+      duration: number;
+      success: boolean;
+      error?: string;
+    };
+  };
+  totalDuration: number;
+  success: boolean;
+  errorMessage?: string;
+}
+
+// Ensure logs directory exists
+const logsDir = path.join(process.cwd(), 'logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+}
+
+const timingLogFile = path.join(logsDir, 'opensea-bid-timing.log');
+
+function logTimingData(timingData: BidTimingLog) {
+  try {
+    const logEntry = JSON.stringify(timingData) + '\n';
+    fs.appendFileSync(timingLogFile, logEntry);
+  } catch (error) {
+    console.error('Failed to write timing log:', error);
+  }
+}
+
+class BidTimer {
+  private startTime: number;
+  private steps: BidTimingLog['steps'] = {};
+  private currentStep: string | null = null;
+
+  constructor() {
+    this.startTime = Date.now();
+  }
+
+  startStep(stepName: string) {
+    if (this.currentStep) {
+      this.endStep(this.currentStep, false, 'Step interrupted');
+    }
+    this.currentStep = stepName;
+    this.steps[stepName] = {
+      startTime: Date.now(),
+      endTime: 0,
+      duration: 0,
+      success: false
+    };
+  }
+
+  endStep(stepName: string, success: boolean = true, error?: string) {
+    if (this.steps[stepName]) {
+      const endTime = Date.now();
+      this.steps[stepName].endTime = endTime;
+      this.steps[stepName].duration = endTime - this.steps[stepName].startTime;
+      this.steps[stepName].success = success;
+      if (error) {
+        this.steps[stepName].error = error;
+      }
+    }
+    if (this.currentStep === stepName) {
+      this.currentStep = null;
+    }
+  }
+
+  getTimingData(taskId: string, bidType: 'collection' | 'trait' | 'token', slug: string, wallet: string, amount: number, currency: string, success: boolean, errorMessage?: string): BidTimingLog {
+    const totalDuration = Date.now() - this.startTime;
+    return {
+      taskId,
+      timestamp: new Date().toISOString(),
+      bidType,
+      slug,
+      wallet,
+      amount,
+      currency,
+      steps: this.steps,
+      totalDuration,
+      success,
+      errorMessage
+    };
+  }
+}
 
 // Helper function to extract meaningful error messages from OpenSea API responses
 function extractOpenseaErrorMessage(error: any): string {
@@ -81,9 +179,6 @@ function getWallet(privateKey: string): Wallet {
   return walletCache.get(privateKey)!;
 }
 
-// Request deduplication cache
-const buildOfferCache = new Map<string, Promise<any>>();
-const CACHE_TTL = 5000; // 5 seconds
 
 const domain = {
   name: 'Seaport',
@@ -256,242 +351,346 @@ export async function bidOnOpensea(
   opensea_traits?: string,
   asset?: { contractAddress: string, tokenId: number }
 ) {
-  // Early validation - fail fast
-  const task = activeTasks.get(taskId)
-  if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
+  // Initialize timing tracker
+  const timer = new BidTimer();
+  const bidType: 'collection' | 'trait' | 'token' = asset ? 'token' : opensea_traits ? 'trait' : 'collection';
+  let success = false;
+  let errorMessage: string | undefined;
+  let offerPriceEthFinal: number;
+  let currencySymbol: string;
 
-    return
-  }
+  try {
+    timer.startStep('validation');
 
-  // Pre-calculate values
-  const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
-  const currencySymbol = currency.toLowerCase() === USDC.toLowerCase() ? "USDC" : "WETH"
-  const offerPriceEth = Number(offer_price) / Math.pow(10, decimal);
-
-  let decimals;
-  if (offerPriceEth >= 1) {
-    decimals = 2;
-  } else if (offerPriceEth >= 0.1) {
-    decimals = 3;
-  } else {
-    decimals = 4;
-  }
-
-  const roundedEth = currency.toLowerCase() === USDC.toLowerCase() ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
-  const basis = BASIS_MAP[decimals] || 1e14;
-  const roundedWei = decimal === 18 ? Math.round(roundedEth * Math.pow(10, decimal) / basis) * basis : Math.round(roundedEth * Math.pow(10, decimal))
-  const offerPrice = BigInt(roundedWei.toString());
-  const offerPriceEthFinal = Number(roundedWei) / Math.pow(10, decimal);
-
-  // Get wallet from cache
-  const wallet = getWallet(private_key);
-
-  // Fetch balance first
-  const wethBalance = await fetchERC20Balance(wallet_address, currency);
-
-  // Balance validation after parallel fetch
-  if (offerPriceEthFinal > wethBalance) {
-    const error = new InsufficientBalanceError(
-      'opensea',
-      currencySymbol,
-      offerPriceEthFinal,
-      wethBalance,
-      wallet_address,
-      slug
-    );
-    await logger.logOpenseaBidError('Insufficient balance for bid', {
-      taskId,
-      walletAddress: wallet_address,
-      collection: slug,
-      bidAmount: offerPriceEthFinal,
-      currency: currencySymbol,
-      availableBalance: wethBalance,
-      requiredBalance: offerPriceEthFinal,
-      error
-    });
-    throw error;
-  }
-
-  if (asset) {
-    const offer = await buildItemOffer(task._id, {
-      assetContractAddress: asset.contractAddress,
-      tokenId: asset.tokenId.toString(),
-      walletAddress: wallet_address,
-      quantity: 1,
-      expirationSeconds: BigInt(expiry),
-      priceWei: BigInt(roundedWei)
-    }, currency)
-
-    if (!offer) return
-
-    const opensea_consideration = {
-      itemType: 1,
-      token: currency,
-      identifierOrCriteria: "0",
-      startAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
-      endAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
-      recipient: OPENSEA_FEE_ADDRESS
-    };
-
-    offer.consideration.push(opensea_consideration);
-    offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
-    for (const address in creator_fees) {
-      let fee: bigint | number = creator_fees[address];
-      fee = BigInt(Math.round(fee).toString());
-      if (enforceCreatorFee) {
-        const consideration_item = {
-          itemType: 1,
-          token: currency,
-          identifierOrCriteria: "0",
-          startAmount: ((offerPrice * fee) / DIVIDER).toString(),
-          endAmount: ((offerPrice * fee) / DIVIDER).toString(),
-          recipient: address
-        };
-        offer.consideration.push(consideration_item);
-        offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
-      }
-    }
-    const itemSignature = await signOffer(wallet, offer)
-
-    if (!itemSignature) return
-
-    // check if the tasks is still active before you make the offer
-    const [taskId] = bidCount.split(":")
-    if (!task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) return
-
-    const itemResponse = await postItemOffer(taskId, offer, itemSignature)
-    const itemOrderHash = itemResponse?.order?.order_hash
-
-    const sanitizedExpiry = expiry > 900 ? expiry : 900
-    if (offerPrice && itemOrderHash && sanitizedExpiry && slug && taskId && asset.tokenId) {
-      await prisma.order.create({
-        data: {
-          slug: slug,
-          orderHash: itemOrderHash,
-          expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
-          offerPrice: offerPrice.toString(),
-          identifier: asset.tokenId.toString(),
-          taskId: taskId,
-          marketplace: 'opensea'
-        }
-      })
+    // Early validation - fail fast
+    const task = activeTasks.get(taskId)
+    if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
+      timer.endStep('validation', false, 'Task validation failed');
+      return
     }
 
-    trackBidRate('opensea', taskId);
-    const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()}  TOKEN: ${asset.tokenId} ${Number(offerPriceEthFinal)} ${currencySymbol} 🎉`
-    console.log(BLUE, successMessage, RESET);
-  }
-  else {
-    const offerPrice = BigInt(roundedWei.toString());
+    timer.endStep('validation');
 
-    const payload: IPayload = {
-      criteria: {
-        collection: {
-          slug: slug
-        }
-      },
-      protocol_data: {
-        parameters: {
-          offerer: wallet_address,
-          offer: [
-            {
-              itemType: 1,
-              token: currency,
-              identifierOrCriteria: 0,
-              startAmount: (Date.now() / 1000).toString(),
-              endAmount: (Date.now() / 1000 + 100000).toString()
-            }
-          ],
-          consideration: [],
-          startTime: '1666480886',
-          endTime: '1666680886',
-          orderType: 2,
-          zone: OPENSEA_COLLECTION_ZONE,
-          zoneHash: ZONE_HASH,
-          conduitKey: CONDUIT_KEY,
-          totalOriginalConsiderationItems: 2,
-          counter: '0'
-        },
-        signature: '0x0'
-      },
-      protocol_address: SEAPORT_1_6
-    }
-    // reset consideration list and count
-    payload.protocol_data.parameters.consideration = [];
-    payload.protocol_data.parameters.totalOriginalConsiderationItems = 2;
+    timer.startStep('price_calculation');
 
-    // set correct slug for collection
-    payload.criteria.collection.slug = slug;
+    // Pre-calculate values
+    const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
+    currencySymbol = currency.toLowerCase() === USDC.toLowerCase() ? "USDC" : "WETH"
+    const offerPriceEth = Number(offer_price) / Math.pow(10, decimal);
 
-    if (opensea_traits && typeof opensea_traits !== "undefined") {
-      payload.criteria.trait = JSON.parse(opensea_traits)
+    let decimals;
+    if (offerPriceEth >= 1) {
+      decimals = 2;
+    } else if (offerPriceEth >= 0.1) {
+      decimals = 3;
     } else {
-      delete payload.criteria.trait
+      decimals = 4;
     }
 
-    const buildPayload = {
-      quantity: 1,
-      criteria: payload.criteria,
-      offerer: wallet_address,
-      protocol_address: SEAPORT_1_6
-    };
+    const roundedEth = currency.toLowerCase() === USDC.toLowerCase() ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
+    const basis = BASIS_MAP[decimals] || 1e14;
+    const roundedWei = decimal === 18 ? Math.round(roundedEth * Math.pow(10, decimal) / basis) * basis : Math.round(roundedEth * Math.pow(10, decimal))
+    const offerPrice = BigInt(roundedWei.toString());
+    offerPriceEthFinal = Number(roundedWei) / Math.pow(10, decimal);
 
-    const data = await buildOffer(taskId, buildPayload)
+    timer.endStep('price_calculation');
 
-    if (!data || !data.partialParameters) return
-    payload.protocol_data.parameters.startTime = BigInt(Math.floor(Date.now() / 1000)).toString();
-    payload.protocol_data.parameters.endTime = BigInt(Math.floor(Date.now() / 1000 + expiry)).toString();
-    payload.protocol_data.parameters.offerer = wallet_address;
-    payload.protocol_data.parameters.offer[0].startAmount = offerPrice.toString();
-    payload.protocol_data.parameters.offer[0].token = currency;
-    payload.protocol_data.parameters.offer[0].endAmount = offerPrice.toString();
-    payload.protocol_data.parameters.consideration.push(data.partialParameters.consideration[0]);
+    timer.startStep('wallet_setup');
 
-    const opensea_consideration = {
-      itemType: 1,
-      token: currency,
-      identifierOrCriteria: 0,
-      startAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
-      endAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
-      recipient: OPENSEA_FEE_ADDRESS
-    };
-    payload.protocol_data.parameters.consideration.push(opensea_consideration);
+    // Get wallet from cache
+    const wallet = getWallet(private_key);
 
-    for (const address in creator_fees) {
-      let fee: bigint | number = creator_fees[address];
-      fee = BigInt(Math.round(fee).toString());
-      if (enforceCreatorFee) {
-        const consideration_item = {
-          itemType: 1,
-          token: currency,
-          identifierOrCriteria: 0,
-          startAmount: ((offerPrice * fee) / DIVIDER).toString(),
-          endAmount: ((offerPrice * fee) / DIVIDER).toString(),
-          recipient: address
-        };
+    timer.endStep('wallet_setup');
 
-        payload.protocol_data.parameters.consideration.push(consideration_item);
-        payload.protocol_data.parameters.totalOriginalConsiderationItems += 1;
+    timer.startStep('balance_check');
+
+    // Fetch balance first
+    const wethBalance = await fetchERC20Balance(wallet_address, currency);
+
+    // Balance validation after parallel fetch
+    if (offerPriceEthFinal > wethBalance) {
+      timer.endStep('balance_check', false, 'Insufficient balance');
+      const error = new InsufficientBalanceError(
+        'opensea',
+        currencySymbol,
+        offerPriceEthFinal,
+        wethBalance,
+        wallet_address,
+        slug
+      );
+      await logger.logOpenseaBidError('Insufficient balance for bid', {
+        taskId,
+        walletAddress: wallet_address,
+        collection: slug,
+        bidAmount: offerPriceEthFinal,
+        currency: currencySymbol,
+        availableBalance: wethBalance,
+        requiredBalance: offerPriceEthFinal,
+        error
+      });
+      throw error;
+    }
+
+    timer.endStep('balance_check');
+
+    if (asset) {
+      timer.startStep('token_offer_build');
+
+      const offer = await buildItemOffer(task._id, {
+        assetContractAddress: asset.contractAddress,
+        tokenId: asset.tokenId.toString(),
+        walletAddress: wallet_address,
+        quantity: 1,
+        expirationSeconds: BigInt(expiry),
+        priceWei: BigInt(roundedWei)
+      }, currency)
+
+      if (!offer) {
+        timer.endStep('token_offer_build', false, 'Build item offer failed');
+        return
       }
+
+      timer.endStep('token_offer_build');
+      timer.startStep('token_fees_setup');
+
+      const opensea_consideration = {
+        itemType: 1,
+        token: currency,
+        identifierOrCriteria: "0",
+        startAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
+        endAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
+        recipient: OPENSEA_FEE_ADDRESS
+      };
+
+      offer.consideration.push(opensea_consideration);
+      offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
+      for (const address in creator_fees) {
+        let fee: bigint | number = creator_fees[address];
+        fee = BigInt(Math.round(fee).toString());
+        if (enforceCreatorFee) {
+          const consideration_item = {
+            itemType: 1,
+            token: currency,
+            identifierOrCriteria: "0",
+            startAmount: ((offerPrice * fee) / DIVIDER).toString(),
+            endAmount: ((offerPrice * fee) / DIVIDER).toString(),
+            recipient: address
+          };
+          offer.consideration.push(consideration_item);
+          offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
+        }
+      }
+
+      timer.endStep('token_fees_setup');
+      timer.startStep('token_signing');
+
+      const itemSignature = await signOffer(wallet, offer)
+
+      if (!itemSignature) {
+        timer.endStep('token_signing', false, 'Signing failed');
+        return
+      }
+
+      timer.endStep('token_signing');
+      timer.startStep('token_final_validation');
+
+      // check if the tasks is still active before you make the offer
+      const [taskId] = bidCount.split(":")
+      if (!task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) {
+        timer.endStep('token_final_validation', false, 'Task no longer active');
+        return
+      }
+
+      timer.endStep('token_final_validation');
+      timer.startStep('token_submission');
+
+      const itemResponse = await postItemOffer(taskId, offer, itemSignature)
+      const itemOrderHash = itemResponse?.order?.order_hash
+
+      timer.endStep('token_submission');
+      timer.startStep('token_database_save');
+
+      const sanitizedExpiry = expiry > 900 ? expiry : 900
+      if (offerPrice && itemOrderHash && sanitizedExpiry && slug && taskId && asset.tokenId) {
+        await prisma.order.create({
+          data: {
+            slug: slug,
+            orderHash: itemOrderHash,
+            expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
+            offerPrice: offerPrice.toString(),
+            identifier: asset.tokenId.toString(),
+            taskId: taskId,
+            marketplace: 'opensea'
+          }
+        })
+      }
+
+      timer.endStep('token_database_save');
+
+      trackBidRate('opensea', taskId);
+      const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()}  TOKEN: ${asset.tokenId} ${Number(offerPriceEthFinal)} ${currencySymbol} 🎉`
+      console.log(BLUE, successMessage, RESET);
+      success = true;
+    }
+    else {
+      timer.startStep('collection_payload_setup');
+
+      const offerPrice = BigInt(roundedWei.toString());
+
+      const payload: IPayload = {
+        criteria: {
+          collection: {
+            slug: slug
+          }
+        },
+        protocol_data: {
+          parameters: {
+            offerer: wallet_address,
+            offer: [
+              {
+                itemType: 1,
+                token: currency,
+                identifierOrCriteria: 0,
+                startAmount: (Date.now() / 1000).toString(),
+                endAmount: (Date.now() / 1000 + 100000).toString()
+              }
+            ],
+            consideration: [],
+            startTime: '1666480886',
+            endTime: '1666680886',
+            orderType: 2,
+            zone: OPENSEA_COLLECTION_ZONE,
+            zoneHash: ZONE_HASH,
+            conduitKey: CONDUIT_KEY,
+            totalOriginalConsiderationItems: 2,
+            counter: '0'
+          },
+          signature: '0x0'
+        },
+        protocol_address: SEAPORT_1_6
+      }
+      // reset consideration list and count
+      payload.protocol_data.parameters.consideration = [];
+      payload.protocol_data.parameters.totalOriginalConsiderationItems = 2;
+
+      // set correct slug for collection
+      payload.criteria.collection.slug = slug;
+
+      if (opensea_traits && typeof opensea_traits !== "undefined") {
+        payload.criteria.trait = JSON.parse(opensea_traits)
+      } else {
+        delete payload.criteria.trait
+      }
+
+      const buildPayload = {
+        quantity: 1,
+        criteria: payload.criteria,
+        offerer: wallet_address,
+        protocol_address: SEAPORT_1_6
+      };
+
+      timer.endStep('collection_payload_setup');
+      timer.startStep('build_collection_offer');
+
+      // Parallel operations for collection offers
+      const [data, counter] = await Promise.all([
+        buildOffer(taskId, buildPayload),
+        SEAPORT_CONTRACT.getCounter(wallet_address)
+      ]);
+
+      if (!data || !data.partialParameters) {
+        timer.endStep('build_collection_offer', false, 'Build offer or counter fetch failed');
+        return
+      }
+
+      timer.endStep('build_collection_offer');
+      timer.startStep('collection_offer_assembly');
+
+      payload.protocol_data.parameters.startTime = BigInt(Math.floor(Date.now() / 1000)).toString();
+      payload.protocol_data.parameters.endTime = BigInt(Math.floor(Date.now() / 1000 + expiry)).toString();
+      payload.protocol_data.parameters.offerer = wallet_address;
+      payload.protocol_data.parameters.offer[0].startAmount = offerPrice.toString();
+      payload.protocol_data.parameters.offer[0].token = currency;
+      payload.protocol_data.parameters.offer[0].endAmount = offerPrice.toString();
+      payload.protocol_data.parameters.consideration.push(data.partialParameters.consideration[0]);
+
+      const opensea_consideration = {
+        itemType: 1,
+        token: currency,
+        identifierOrCriteria: 0,
+        startAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
+        endAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
+        recipient: OPENSEA_FEE_ADDRESS
+      };
+      payload.protocol_data.parameters.consideration.push(opensea_consideration);
+
+      for (const address in creator_fees) {
+        let fee: bigint | number = creator_fees[address];
+        fee = BigInt(Math.round(fee).toString());
+        if (enforceCreatorFee) {
+          const consideration_item = {
+            itemType: 1,
+            token: currency,
+            identifierOrCriteria: 0,
+            startAmount: ((offerPrice * fee) / DIVIDER).toString(),
+            endAmount: ((offerPrice * fee) / DIVIDER).toString(),
+            recipient: address
+          };
+
+          payload.protocol_data.parameters.consideration.push(consideration_item);
+          payload.protocol_data.parameters.totalOriginalConsiderationItems += 1;
+        }
+      }
+
+      payload.protocol_data.parameters.zone = data.partialParameters.zone;
+      payload.protocol_data.parameters.zoneHash = data.partialParameters.zoneHash;
+      payload.protocol_data.parameters.salt = getSalt();
+      payload.protocol_data.parameters.counter = counter.toString();
+
+      timer.endStep('collection_offer_assembly');
+      timer.startStep('collection_signing');
+
+      const signObj = await wallet.signTypedData(
+        domain,
+        types,
+        payload.protocol_data.parameters
+      );
+      payload.protocol_data.signature = signObj;
+      payload.protocol_address = SEAPORT_1_6;
+
+      timer.endStep('collection_signing');
+      timer.startStep('collection_final_validation');
+
+      if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
+        timer.endStep('collection_final_validation', false, 'Task no longer active');
+        return
+      }
+
+      timer.endStep('collection_final_validation');
+      timer.startStep('collection_submission');
+
+      await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry, opensea_traits)
+
+      timer.endStep('collection_submission');
+      success = true;
     }
 
-    payload.protocol_data.parameters.zone = data.partialParameters.zone;
-    payload.protocol_data.parameters.zoneHash = data.partialParameters.zoneHash;
-    payload.protocol_data.parameters.salt = getSalt();
-    const counter = await SEAPORT_CONTRACT.getCounter(wallet_address);
-    payload.protocol_data.parameters.counter = counter.toString();
-
-    const signObj = await wallet.signTypedData(
-      domain,
-      types,
-      payload.protocol_data.parameters
+  } catch (error) {
+    errorMessage = error instanceof Error ? error.message : String(error);
+    throw error;
+  } finally {
+    // Log timing data
+    const timingData = timer.getTimingData(
+      taskId,
+      bidType,
+      slug,
+      wallet_address.substring(0, 8) + '...',
+      offer_price,
+      'ETH',
+      success,
+      errorMessage
     );
-    payload.protocol_data.signature = signObj;
-    payload.protocol_address = SEAPORT_1_6;
-
-    if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) return
-
-    await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry, opensea_traits)
+    logTimingData(timingData);
   }
 }
 
@@ -570,66 +769,45 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
  * @param buildPayload - The payload to build the offer.
  */
 async function buildOffer(taskId: string, buildPayload: any) {
-  // Create cache key from payload
-  const cacheKey = `${taskId}-${JSON.stringify(buildPayload)}`;
-
-  // Check if we have a cached promise for this request
-  if (buildOfferCache.has(cacheKey)) {
-    const cachedPromise = buildOfferCache.get(cacheKey);
-    return cachedPromise;
-  }
-
   const controller = new AbortController();
   addActiveRequest(taskId, controller);
 
-  // Create the promise and cache it
-  const promise = (async () => {
-    try {
-      const { data } = await limiter.schedule(() =>
-        axiosInstance.request<PartialParameters>({
-          method: 'POST',
-          url: `${BASE_URL}/opensea/api/v2/offers/build`,
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': API_KEY,
-          },
-          data: JSON.stringify(buildPayload),
-          signal: controller.signal
-        })
-      );
-      return data;
-    } catch (error: any) {
-      if (axios.isCancel(error)) {
-        return null;
-      }
-      await logger.logOpenseaBidError('Failed to build OpenSea offer', {
-        taskId,
-        operation: 'build_offer',
-        error: error,
-        errorCode: error?.response?.status,
-        errorMessage: extractOpenseaErrorMessage(error)
-      });
-      throw error;
+  try {
+    const { data } = await limiter.schedule(() =>
+      axiosInstance.request<PartialParameters>({
+        method: 'POST',
+        url: `${BASE_URL}/opensea/api/v2/offers/build`,
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY,
+        },
+        data: JSON.stringify(buildPayload),
+        signal: controller.signal
+      })
+    );
+    return data;
+  } catch (error: any) {
+    if (axios.isCancel(error)) {
+      return null;
     }
-    finally {
-      const controllers = activeRequests.get(taskId) || [];
-      const index = controllers.indexOf(controller);
-      if (index >= 0) {
-        controllers.splice(index, 1);
-      }
-      if (controllers.length === 0) {
-        activeRequests.delete(taskId);
-      }
-
-      // Clean up cache after TTL
-      setTimeout(() => {
-        buildOfferCache.delete(cacheKey);
-      }, CACHE_TTL);
+    await logger.logOpenseaBidError('Failed to build OpenSea offer', {
+      taskId,
+      operation: 'build_offer',
+      error: error,
+      errorCode: error?.response?.status,
+      errorMessage: extractOpenseaErrorMessage(error)
+    });
+    throw error;
+  } finally {
+    const controllers = activeRequests.get(taskId) || [];
+    const index = controllers.indexOf(controller);
+    if (index >= 0) {
+      controllers.splice(index, 1);
     }
-  })();
-
-  buildOfferCache.set(cacheKey, promise);
-  return promise;
+    if (controllers.length === 0) {
+      activeRequests.delete(taskId);
+    }
+  }
 }
 
 export async function cancelOrder(orderHash: string, protocolAddress: string, privateKey: string, taskId: string) {
@@ -1026,66 +1204,83 @@ export async function openseaTraitFloor(slug: string, trait: {
   traitType: string;
   values: string[];
 }) {
-  const variables: CollectionItemsQueryVariables = {
-    collectionSlug: slug,
-    filter: {
-      attributes: [trait]
-    },
-    limit: 1,
-    sort: {
-      by: 'PRICE',
-      direction: 'ASC',
-    },
-  }
-  const queryVariables = {
-    ...variables,
-  };
-  const payload = {
-    operationName: 'CollectionItemsListQuery',
-    query: CollectionItemsListQuery,
-    variables: queryVariables
-  };
+  const cacheKey = CACHE_KEYS.traitFloor(slug, trait.traitType, trait.values);
 
-  const { data } = await limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
-    headers: {
-      "x-api-key": API_KEY
+  return getCachedOrFetch(
+    cacheKey,
+    CACHE_TTL.TRAIT_FLOOR,
+    async () => {
+      const variables: CollectionItemsQueryVariables = {
+        collectionSlug: slug,
+        filter: {
+          attributes: [trait]
+        },
+        limit: 1,
+        sort: {
+          by: 'PRICE',
+          direction: 'ASC',
+        },
+      }
+      const queryVariables = {
+        ...variables,
+      };
+      const payload = {
+        operationName: 'CollectionItemsListQuery',
+        query: CollectionItemsListQuery,
+        variables: queryVariables
+      };
+
+      const { data } = await limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
+        headers: {
+          "x-api-key": API_KEY
+        },
+      }));
+      const floor = data.data.collectionItems.items[0].bestListing?.pricePerItem.token.unit
+      return floor
     },
-  }));
-  const floor = data.data.collectionItems.items[0].bestListing?.pricePerItem.token.unit
-  return floor
+    true // parseNumber flag to handle the numeric floor value
+  );
 }
 
 export async function fetchOpenseaListings(taskId: string, collectionSlug: string, limit?: number) {
-  const baseUrl = `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`;
-  let allListings: OpenseaOrder[] = [];
-  let nextCursor: string | null = null;
-  let uniqueTokenIds: number[] = [];
+  if (!limit) return;
 
-  if (!limit) return
+  const cacheKey = CACHE_KEYS.listings(collectionSlug, limit);
 
-  while (uniqueTokenIds.length < limit) {
-    const params: any = {
-      next: nextCursor,
-      limit: Math.min(100, limit * 2 - uniqueTokenIds.length) // Fetch more to account for duplicates
+  return getCachedOrFetch(
+    cacheKey,
+    CACHE_TTL.LISTINGS,
+    async () => {
+      const baseUrl = `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`;
+      let allListings: OpenseaOrder[] = [];
+      let nextCursor: string | null = null;
+      let uniqueTokenIds: number[] = [];
+
+      while (uniqueTokenIds.length < limit) {
+        const params: any = {
+          next: nextCursor,
+          limit: Math.min(100, limit * 2 - uniqueTokenIds.length) // Fetch more to account for duplicates
+        }
+        const { data } = await limiter.schedule(() => axiosInstance.get<OpenseaListingData>(baseUrl, {
+          headers: {
+            'accept': 'application/json',
+            'x-api-key': API_KEY
+          },
+          params: params
+        }))
+
+        allListings = [...allListings, ...data.listings];
+        uniqueTokenIds = [...new Set(allListings.map((item) =>
+          +item.protocol_data.parameters.offer[0].identifierOrCriteria
+        ))];
+
+        nextCursor = data.next;
+        if (!nextCursor) break;
+      }
+
+      return uniqueTokenIds.slice(0, limit);
     }
-    const { data } = await limiter.schedule(() => axiosInstance.get<OpenseaListingData>(baseUrl, {
-      headers: {
-        'accept': 'application/json',
-        'x-api-key': API_KEY
-      },
-      params: params
-    }))
-
-    allListings = [...allListings, ...data.listings];
-    uniqueTokenIds = [...new Set(allListings.map((item) =>
-      +item.protocol_data.parameters.offer[0].identifierOrCriteria
-    ))];
-
-    nextCursor = data.next;
-    if (!nextCursor) break;
-  }
-
-  return uniqueTokenIds.slice(0, limit);
+  );
 }
 
 interface OpenseaListingData {
