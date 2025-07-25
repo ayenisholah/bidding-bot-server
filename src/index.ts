@@ -1527,7 +1527,7 @@ async function startServer() {
 
           // Add job timeout handling - longer timeout for SCHEDULE jobs
           const isScheduleJob = job.name && [OPENSEA_SCHEDULE, MAGICEDEN_SCHEDULE, BLUR_SCHEDULE].includes(job.name);
-          const jobTimeout = isScheduleJob ? 180000 : 90000; // 3 minutes for schedule jobs, 90 seconds for others
+          const jobTimeout = 60000; // 3 minutes for schedule jobs, 90 seconds for others
           const abortController = new AbortController();
 
           const timeoutPromise = new Promise((_, reject) => {
