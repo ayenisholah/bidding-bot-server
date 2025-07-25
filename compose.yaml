@@ -11,7 +11,7 @@ services:
       REDIS_NET_MAP: '{"redis-node-1:6379":{"host":"redis-node-1","port":6379},"redis-node-2:6379":{"host":"redis-node-2","port":6379},"redis-node-3:6379":{"host":"redis-node-3","port":6379},"redis-node-4:6379":{"host":"redis-node-4","port":6379},"redis-node-5:6379":{"host":"redis-node-5","port":6379},"redis-node-6:6379":{"host":"redis-node-6","port":6379}}'
       ALCHEMY_API_KEY: "HGWgCONolXMB2op5UjPH1YreDCwmSbvx"
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
-      DATABASE_URL: "postgresql://bidding_bot:bidding_bot_password@postgres:5432/bidding_bot_db?schema=public"
+      DATABASE_URL: "postgresql://bidding_bot:bidding_bot_password@postgres:5432/bidding_bot_db?schema=public&connection_limit=50&pool_timeout=20"
       SERVER_IP: ${SERVER_IP}
       USERNAME: ${USERNAME}
       NEXT_PUBLIC_EMAIL: ${NEXT_PUBLIC_EMAIL}

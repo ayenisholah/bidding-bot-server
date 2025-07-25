@@ -44,7 +44,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
   // Check Redis cache
   const cacheKey = `{opensea:collection}:${slug}`;
   const redis = getRedis();
-  
+
   if (redis && redisClient.isReady()) {
     try {
       const cached = await redis.get(cacheKey);
@@ -65,16 +65,16 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
       });
     }
   }
-  
+
   const lockKey = `{${slug}}:collection`;
-  
+
   try {
     const result = await withTimeout(
       lockManager.withLock(lockKey, async () => {
         if (collectionCache[slug]) {
           return collectionCache[slug];
         }
-        
+
         console.log(`[Collection] Making API call for ${slug} (${Date.now() - startTime}ms)`);
         const { data: collection } = await withTimeout(
           limiter.schedule(() => axiosInstance.get(
@@ -89,46 +89,39 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
           `OpenSea API call for ${slug}`
         );
 
-    let creator_fees;
-    let enforceCreatorFee = false;
-    if (collection?.fees?.length > 1) {
-      creator_fees = {
-        [collection.fees[1].recipient]: collection.fees[1].fee * 100
-      };
-      enforceCreatorFee = collection.fees[1].required;
-    } else {
-      creator_fees = { null: 0 }
-    }
+        let creator_fees;
+        let enforceCreatorFee = false;
+        if (collection?.fees?.length > 1) {
+          creator_fees = {
+            [collection.fees[1].recipient]: collection.fees[1].fee * 100
+          };
+          enforceCreatorFee = collection.fees[1].required;
+        } else {
+          creator_fees = { null: 0 }
+        }
 
-    if (Object.keys(collectionCache).length >= MAX_CACHE_ITEMS) {
-      delete collectionCache[Object.keys(collectionCache)[0]];
-    }
+        if (Object.keys(collectionCache).length >= MAX_CACHE_ITEMS) {
+          delete collectionCache[Object.keys(collectionCache)[0]];
+        }
 
-    const result = {
-      ...collection,
-      creator_fees: creator_fees,
-      enforceCreatorFee: enforceCreatorFee
-    };
+        const result = {
+          ...collection,
+          creator_fees: creator_fees,
+          enforceCreatorFee: enforceCreatorFee
+        };
 
         collectionCache[slug] = result;
-        
+
         // Cache in Redis with 1-hour TTL
         if (redis && redisClient.isReady()) {
           try {
             await redis.setex(cacheKey, 3600, JSON.stringify(result));
             console.log(`[Collection] Cached to Redis for ${slug}`);
           } catch (error) {
-            await logger.logDatabaseError('Error caching collection details to Redis', {
-              databaseOperation: DatabaseOperation.WRITE,
-              collection_name: 'opensea_collection_cache',
-              collection: slug,
-              cacheKey,
-              error: error as Error,
-              errorMessage: error instanceof Error ? error.message : String(error)
-            });
+            console.log(error);
           }
         }
-        
+
         console.log(`[Collection] Successfully cached details for ${slug} (${Date.now() - startTime}ms)`);
         return result;
       }),
@@ -149,7 +142,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
     return result;
   } catch (error) {
     console.error(`[Collection] Error fetching details for ${slug} after ${Date.now() - startTime}ms:`, error);
-    
+
     // Log the error
     await logger.logOpenseaCollectionError(`Failed to fetch collection details: ${error}`, {
       collection: slug,
@@ -158,24 +151,51 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
       errorCode: 'FETCH_FAILED',
       error: error as Error
     });
-    
+
     // Return a minimal collection object to prevent complete failure
-    const fallbackResult = {
+    const fallbackResult: ICollectionDetails & { error: boolean; errorMessage: string } = {
       collection: slug,
       name: slug,
       description: '',
-      creator_fees: { null: 0 },
-      enforceCreatorFee: false,
+      image_url: '',
+      banner_image_url: '',
+      owner: '',
+      safelist_status: 'not_requested',
+      category: '',
+      is_disabled: false,
+      is_nsfw: false,
       trait_offers_enabled: false,
       collection_offers_enabled: true,
+      opensea_url: `https://opensea.io/collection/${slug}`,
+      project_url: '',
+      wiki_url: '',
+      discord_url: '',
+      telegram_url: '',
+      twitter_username: '',
+      instagram_username: '',
+      contracts: [],
+      editors: [],
+      fees: [],
+      rarity: {
+        calculated_at: '',
+        max_rank: 0,
+        total_supply: 0,
+        strategy_id: '',
+        strategy_version: ''
+      },
+      total_supply: 0,
+      created_date: new Date().toISOString(),
+      payment_tokens: [],
+      creator_fees: {},
+      enforceCreatorFee: false,
       error: true,
       errorMessage: error instanceof Error ? error.message : String(error)
     };
-    
+
     // Cache the fallback for a short time to prevent hammering
     collectionCache[slug] = fallbackResult;
     setTimeout(() => delete collectionCache[slug], 60000); // Clear after 1 minute
-    
+
     return fallbackResult;
   }
 }

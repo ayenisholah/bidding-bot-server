@@ -1689,8 +1689,6 @@ async function startServer() {
               }
             }
 
-            // Log the error for debugging
-            console.error(`Job ${job.id} failed:`, error);
 
             // Check if this is a SCHEDULE job - they must always retry
             const isScheduleJob = [OPENSEA_SCHEDULE, MAGICEDEN_SCHEDULE, BLUR_SCHEDULE].includes(job.name);

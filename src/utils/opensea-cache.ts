@@ -30,7 +30,7 @@ export async function getCachedOrFetch<T>(
   parseNumber: boolean = false
 ): Promise<T> {
   const redis = getRedis();
-  
+
   if (redis && redisClient.isReady()) {
     try {
       const cached = await redis.get(cacheKey);
@@ -51,28 +51,20 @@ export async function getCachedOrFetch<T>(
       });
     }
   }
-  
+
   // Fetch fresh data
   const result = await fetchFn();
-  
+
   // Try to cache the result
   if (redis && redisClient.isReady() && result !== null && result !== undefined) {
     try {
       const value = parseNumber ? String(result) : JSON.stringify(result);
       await redis.setex(cacheKey, ttl, value);
     } catch (error) {
-      // Log but continue
-      await logger.logDatabaseError('Redis set error for OpenSea cache', {
-        databaseOperation: DatabaseOperation.WRITE,
-        collection_name: 'opensea_cache',
-        cacheKey,
-        ttl,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+      console.log(error);
     }
   }
-  
+
   return result;
 }
 
@@ -90,9 +82,9 @@ export const CACHE_TTL = {
 export const CACHE_KEYS = {
   floorPrice: (slug: string) => `{opensea:floor}:${slug}`,
   listings: (slug: string, limit: number) => `{opensea:listings}:${slug}:${limit}`,
-  traitFloor: (slug: string, traitType: string, values: string[]) => 
+  traitFloor: (slug: string, traitType: string, values: string[]) =>
     `{opensea:trait-floor}:${slug}:${traitType}:${values.join(',')}`,
-  balance: (walletAddress: string, tokenAddress: string) => 
+  balance: (walletAddress: string, tokenAddress: string) =>
     `{balance}:${walletAddress}:${tokenAddress}`,
   collection: (slug: string) => `{opensea:collection}:${slug}`,
   collectionItems: (variablesHash: string) => `{opensea:items}:${variablesHash}`

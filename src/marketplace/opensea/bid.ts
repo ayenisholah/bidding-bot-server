@@ -4,7 +4,8 @@ import { axiosInstance, limiter } from "../../init";
 import { activeTasks, API_KEY, BLUE, decrementBidCount, pQueue, trackBidRate } from "../..";
 import { config } from "dotenv";
 import axios from "axios";
-import { PrismaClient } from '@prisma/client'
+import prisma from '../../utils/prisma';
+import { withRetry } from '../../utils/db-retry'
 import { USDC, WETH } from "../../utils/currencies";
 import { MagicedenCollectionResponse, MagicEdenTraitOfferResponse } from "../magiceden";
 import { CollectionItemsListQuery } from "../../queries";
@@ -149,7 +150,7 @@ function extractOpenseaErrorMessage(error: any): string {
   return error?.message || String(error);
 }
 
-const prisma = new PrismaClient()
+// Using centralized prisma instance with connection pooling
 
 config()
 
@@ -512,17 +513,19 @@ export async function bidOnOpensea(
 
       const sanitizedExpiry = expiry > 900 ? expiry : 900
       if (offerPrice && itemOrderHash && sanitizedExpiry && slug && taskId && asset.tokenId) {
-        await prisma.order.create({
-          data: {
-            slug: slug,
-            orderHash: itemOrderHash,
-            expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
-            offerPrice: offerPrice.toString(),
-            identifier: asset.tokenId.toString(),
-            taskId: taskId,
-            marketplace: 'opensea'
-          }
-        })
+        await withRetry(async () => {
+          await prisma.order.create({
+            data: {
+              slug: slug,
+              orderHash: itemOrderHash,
+              expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
+              offerPrice: offerPrice.toString(),
+              identifier: asset.tokenId.toString(),
+              taskId: taskId,
+              marketplace: 'opensea'
+            }
+          });
+        });
       }
 
       timer.endStep('token_database_save');
@@ -742,17 +745,19 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
   const sanitizedExpiry = expiry > 900 ? expiry : 900
 
   if (offerPrice && order_hash && sanitizedExpiry && slug && taskId && identifier) {
-    await prisma.order.create({
-      data: {
-        slug: slug,
-        orderHash: order_hash,
-        expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
-        offerPrice: offerPrice.toString(),
-        identifier: identifier,
-        taskId: taskId,
-        marketplace: 'opensea'
-      }
-    })
+    await withRetry(async () => {
+      await prisma.order.create({
+        data: {
+          slug: slug,
+          orderHash: order_hash,
+          expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
+          offerPrice: offerPrice.toString(),
+          identifier: identifier,
+          taskId: taskId,
+          marketplace: 'opensea'
+        }
+      });
+    });
   }
   trackBidRate('opensea', taskId);
 

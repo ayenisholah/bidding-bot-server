@@ -1,4 +1,3 @@
-│ > list all functions called in processOpenseaScheduledBid, processOpenseaCollectionBid, processOpenseaTraitBid, processOpenseaTokenBid
 analyze all the functions in @opensea-functions-analysis.md and what improvements and optimizations need to be made, don't create new functions, don't delete any   │
 │   function, just make improvements to each function and api calls, cache where necessary using redis with cache key consistent with @src/utils/redis.ts {keyslot}     │
 │   pattern, only cache wallet data and private key in memory                                                                                                           │
@@ -13,3 +12,5 @@ analyze all the functions in @opensea-functions-analysis.md and what improvement
 │   do not cache fetchItemOffers, fetchOpenseaOffers                                                                                                                    │
 │                                                                                                                                                                       │
 │   document the plan to a .md file     
+
+Connections

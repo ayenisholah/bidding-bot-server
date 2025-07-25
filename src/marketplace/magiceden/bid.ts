@@ -3,7 +3,8 @@ import { axiosInstance, limiter } from "../../init";
 import { config } from "dotenv";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, trackBidRate } from "../..";
 import { DistributedLockManager } from '../../utils/lock';
-import { PrismaClient } from '@prisma/client'
+import prisma from '../../utils/prisma';
+import { withRetry } from '../../utils/db-retry';
 import redisClient from '../../utils/redis';
 import axios from "axios";
 import { USDC, WETH } from "../../utils/currencies";
@@ -50,8 +51,6 @@ function extractMagicEdenErrorMessage(error: any): string {
   // Fallback to standard error message
   return error?.message || String(error);
 }
-
-const prisma = new PrismaClient()
 
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
@@ -156,7 +155,9 @@ export async function cleanupMagicEden() {
     orderBatchQueue.length = 0;
     
     try {
-      await prisma.order.createMany({ data: batch });
+      await withRetry(async () => {
+        return await prisma.order.createMany({ data: batch });
+      });
     } catch (error) {
       await logger.logDatabaseError('Failed to create orders during cleanup', {
         databaseOperation: DatabaseOperation.CREATE,
@@ -545,7 +546,9 @@ async function sendSignedOrderData(
           
           if (batch.length > 0) {
             try {
-              await prisma.order.createMany({ data: batch });
+              await withRetry(async () => {
+                return await prisma.order.createMany({ data: batch });
+              });
             } catch (error) {
               // Log error but don't fail the bid
               await logger.logDatabaseError('Failed to batch create orders', {

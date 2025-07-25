@@ -3,7 +3,8 @@ import { axiosInstance, limiter } from "../../init";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, pQueue, RESET, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { DistributedLockManager } from "../../utils/lock";
-import { PrismaClient } from '@prisma/client'
+import prisma from '../../utils/prisma';
+import { withRetry } from '../../utils/db-retry';
 import redisClient from '../../utils/redis';
 import axios from "axios";
 import { BASE_URL } from "../../constants";
@@ -14,8 +15,6 @@ import { InsufficientBalanceError, TransferRestrictedError, MinimumPriceError, I
 import { blurRateLimiter } from "../../utils/blur-rate-limiter";
 
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
-
-const prisma = new PrismaClient()
 
 config()
 const BLUR_API_URL = `${BASE_URL}/blur`;
@@ -466,16 +465,18 @@ async function submitBidToBlur(
         identifier = "collection"
       }
 
-      await prisma.order.create({
-        data: {
-          slug: slug,
-          orderHash: JSON.stringify(cancelPayload),
-          expiresAt: new Date(Date.now() + expiry * 1000),
-          offerPrice: offer_price.toString(),
-          identifier: identifier,
-          taskId: taskId,
-          marketplace: "blur"
-        }
+      await withRetry(async () => {
+        return await prisma.order.create({
+          data: {
+            slug: slug,
+            orderHash: JSON.stringify(cancelPayload),
+            expiresAt: new Date(Date.now() + expiry * 1000),
+            offerPrice: offer_price.toString(),
+            identifier: identifier,
+            taskId: taskId,
+            marketplace: "blur"
+          }
+        });
       })
       trackBidRate("blur", taskId)
     }
