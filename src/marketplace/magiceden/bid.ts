@@ -1,3 +1,5 @@
+/* eslint-disable */
+
 import { ethers, Wallet } from "ethers";
 import { axiosInstance, limiter } from "../../init";
 import { config } from "dotenv";
@@ -565,9 +567,8 @@ async function sendSignedOrderData(
       
       // Log successful bid
 
-      if (process.env.NODE_ENV !== 'production') {
-        console.log(MAGENTA, successMessage, RESET);
-      }
+        // console.log(MAGENTA, successMessage, RESET);
+      
       if (!task) return
       return offerResponse;
     } finally {

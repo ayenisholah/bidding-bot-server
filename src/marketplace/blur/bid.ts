@@ -1,3 +1,5 @@
+/* eslint-disable */
+
 import { ethers, Wallet, formatUnits } from "ethers";
 import { axiosInstance, limiter } from "../../init";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, pQueue, RESET, trackBidRate } from "../..";
@@ -454,7 +456,7 @@ async function submitBidToBlur(
 
     if (offers.success) {
       const successMessage = traits ? `🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉 TRAIT: ${traits}` : `🎉 OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉`
-      console.log("\x1b[33m", successMessage, RESET);
+      // console.log("\x1b[33m", successMessage, RESET);
 
       let identifier = ''
       if (traits) {
