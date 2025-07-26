@@ -474,6 +474,8 @@ const taskLocks = new Map<string, TaskLock>();
 const loopSchedulingLocks = new Map<string, boolean>();
 // Add a Map to track tasks being scheduled to prevent duplicates
 const tasksBeingScheduled = new Map<string, boolean>();
+// Add a Map to track marketplaces actively adding jobs
+const marketplacesAddingJobs = new Map<string, Set<string>>();
 
 function unlockTask(taskId: string): void {
   const currentLock = taskLocks.get(taskId);
@@ -2335,6 +2337,9 @@ function cleanupTaskResources(taskId: string): void {
   
   // Clear scheduling flag
   tasksBeingScheduled.delete(taskId);
+  
+  // Clear marketplace adding jobs flag
+  marketplacesAddingJobs.delete(taskId);
 
   // Clear task-specific stats objects
   delete skipStats[taskId];
@@ -2403,6 +2408,24 @@ async function checkTaskCompletionAndScheduleNext(taskId: string) {
   const allMarketsComplete = availableMarketplaces.every(m =>
     completedTasks[taskId]?.[m as 'opensea' | 'magiceden' | 'blur']
   );
+  
+  // Check if any marketplace is still adding jobs
+  const isAddingJobs = marketplacesAddingJobs.has(taskId) && marketplacesAddingJobs.get(taskId)!.size > 0;
+  if (isAddingJobs) {
+    console.log(YELLOW + `[checkTaskCompletionAndScheduleNext] Task ${taskId} - Marketplaces are still adding jobs` + RESET);
+    return;
+  }
+  
+  // Verify all marketplaces have parentJobs entries before considering task complete
+  const allMarketsHaveParentJobs = availableMarketplaces.every(m => {
+    const parentId = `${taskId}-${m}`.toLowerCase();
+    return parentJobs.has(parentId);
+  });
+  
+  if (!allMarketsHaveParentJobs) {
+    console.log(YELLOW + `[checkTaskCompletionAndScheduleNext] Task ${taskId} - Not all marketplaces have parentJobs yet` + RESET);
+    return;
+  }
   
   if (allMarketsComplete && taskStatus[taskId].runningPercentage >= 100) {
     console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
@@ -9060,6 +9083,12 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
 
       await processBulkJobs(jobs, true);
     } else if (traitBid && collectionDetails.trait_offers_enabled) {
+      // Mark that OpenSea is adding jobs
+      if (!marketplacesAddingJobs.has(currentTask._id)) {
+        marketplacesAddingJobs.set(currentTask._id, new Set());
+      }
+      marketplacesAddingJobs.get(currentTask._id)!.add('opensea');
+      
       // Set up parent job BEFORE calling processBulkJobs
       const parentJobId = `${currentTask._id}-opensea`.toLowerCase();
       parentJobs.set(parentJobId, {
@@ -9071,6 +9100,7 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
         taskId: currentTask._id,
         jobName: OPENSEA_TRAIT_BID,
       });
+      console.log(`[OpenSea] Set parentJobs for traitBid: ${parentJobId}, totalJobs: ${traits.length}`);
 
       const traitJobs = traits.map((trait) => ({
         name: OPENSEA_TRAIT_BID,
@@ -9092,6 +9122,12 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
       await processBulkJobs(traitJobs, true);
 
       console.log(`ADDED ${traits.length} ${currentTask.contract.slug} OPENSEA TRAIT BID JOBS TO QUEUE`);
+      
+      // Clear the flag after jobs are added
+      marketplacesAddingJobs.get(currentTask._id)?.delete('opensea');
+      if (marketplacesAddingJobs.get(currentTask._id)?.size === 0) {
+        marketplacesAddingJobs.delete(currentTask._id);
+      }
     } else if (collectionBid) {
       const jobId = `${currentTask._id}-opensea-${currentTask.contract.slug}-collection`
       const parentJobId = `${currentTask._id}-opensea`.toLowerCase()
@@ -9533,6 +9569,12 @@ async function processBlurScheduledBid(task: ITask) {
       const traits = transformBlurTraits(selectedTraits)
       console.log(CYAN + `[BLUR_SCHEDULE] Progress: Processing ${traits.length} traits` + RESET);
 
+      // Mark that Blur is adding jobs
+      if (!marketplacesAddingJobs.has(currentTask._id)) {
+        marketplacesAddingJobs.set(currentTask._id, new Set());
+      }
+      marketplacesAddingJobs.get(currentTask._id)!.add('blur');
+
       // Set up parent job BEFORE calling processBulkJobs
       const parentJobId = `${currentTask._id}-blur`.toLowerCase();
       parentJobs.set(parentJobId, {
@@ -9563,6 +9605,12 @@ async function processBlurScheduledBid(task: ITask) {
       })) as Job[]
 
       await processBulkJobs(traitJobs, true);
+      
+      // Clear the flag after jobs are added
+      marketplacesAddingJobs.get(currentTask._id)?.delete('blur');
+      if (marketplacesAddingJobs.get(currentTask._id)?.size === 0) {
+        marketplacesAddingJobs.delete(currentTask._id);
+      }
 
     } else if (currentTask.bidType.toLowerCase() === "collection" && !traitBid) {
       const jobId = `${currentTask._id}-blur-${currentTask.contract.slug}-collection`
@@ -11503,6 +11551,12 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
       const traits = Object.entries(selectedTraits).flatMap(([key, values]) =>
         values.map(value => ({ attributeKey: key, attributeValue: value })))
 
+      // Mark that MagicEden is adding jobs
+      if (!marketplacesAddingJobs.has(currentTask._id)) {
+        marketplacesAddingJobs.set(currentTask._id, new Set());
+      }
+      marketplacesAddingJobs.get(currentTask._id)!.add('magiceden');
+
       // Set up parent job BEFORE calling processBulkJobs
       const parentJobId = `${currentTask._id}-magiceden`.toLowerCase();
       parentJobs.set(parentJobId, {
@@ -11534,6 +11588,12 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
       })) as Job[]
 
       await processBulkJobs(traitJobs, true);
+      
+      // Clear the flag after jobs are added
+      marketplacesAddingJobs.get(currentTask._id)?.delete('magiceden');
+      if (marketplacesAddingJobs.get(currentTask._id)?.size === 0) {
+        marketplacesAddingJobs.delete(currentTask._id);
+      }
     }
     else if (collectionBid) {
       const jobId = `${currentTask._id}-magiceden-${currentTask.contract.slug}-collection`
