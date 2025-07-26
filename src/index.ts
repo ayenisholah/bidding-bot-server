@@ -3434,7 +3434,9 @@ async function processJob(job: Job, signal?: AbortSignal) {
           await processOpenseaScheduledBid(job.data, job.id as string);
           return { completed: true };
         case OPENSEA_TRAIT_BID:
+          console.log(`[OpenSea Debug] Processing OPENSEA_TRAIT_BID job ${job.id} for task ${job.data._id}`);
           await processOpenseaTraitBid(job.data);
+          console.log(`[OpenSea Debug] Completed OPENSEA_TRAIT_BID job ${job.id}`);
           return { completed: true };
         case OPENSEA_TOKEN_BID:
           await processOpenseaTokenBid(job.data);
@@ -4270,6 +4272,8 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
   const marketplace = firstJob.name.split('_')[0] || 'UNKNOWN';
   const bulkJobId = `${firstJob.data._id}-${marketplace}`.toLowerCase();
   const task = activeTasks.get(taskId);
+  
+  console.log(`[processBulkJobs Debug] Processing ${jobs.length} ${firstJob.name} jobs for task ${taskId}`);
 
   // Only set parentJobs if it doesn't already exist
   if (!parentJobs.has(bulkJobId)) {
@@ -4381,7 +4385,11 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
           };
         }));
         const filteredJobs = validJobs.filter(Boolean);
-        if (!filteredJobs.length) continue;
+        if (!filteredJobs.length) {
+          console.log(`[processBulkJobs Debug] No valid jobs after filtering for chunk ${chunkIndex + 1}`);
+          continue;
+        }
+        console.log(`[processBulkJobs Debug] ${filteredJobs.length} valid jobs in chunk ${chunkIndex + 1}`);
 
         // Filter out jobs for stopped tasks
         const activeJobs = currentChunk.filter(job => {
@@ -4396,9 +4404,10 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
         });
 
         if (!activeJobs.length) {
-          console.log(YELLOW + `No active jobs in chunk ${chunkIndex + 1}, skipping...` + RESET);
+          console.log(YELLOW + `[processBulkJobs Debug] No active jobs in chunk ${chunkIndex + 1}, skipping...` + RESET);
           continue;
         }
+        console.log(`[processBulkJobs Debug] ${activeJobs.length} active jobs after filtering stopped tasks`);
         if (task && task.running) {
           await safeUpdateTaskStatus(taskId, {
             status: 'QUEUEING'
@@ -4412,20 +4421,41 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
           try {
             await rateLimiter.acquire();
             // Add non-Blur jobs first
+            console.log(`[processBulkJobs Debug] Adding ${nonBlurJobs.length} non-Blur jobs to queue`);
             const addedJobs = await queue.addBulk(
               [
-                ...nonBlurJobs.map(job => ({
-                  name: job.name,
-                  data: job.data,
-                  opts: {
+                ...nonBlurJobs.map(job => {
+                  if (job.name === 'OPENSEA_TRAIT_BID') {
+                    console.log(`[processBulkJobs Debug] Adding OPENSEA_TRAIT_BID job with opts:`, job.opts);
+                  }
+                  const jobOpts = {
                     ...(job.jobKey ? { jobId: job.jobKey } : {}),
                     ...job?.opts,
                     removeOnComplete: true,
                     removeOnFail: true, // Keep failed jobs for debugging
-                  },
-                })),
+                  };
+                  if (job.name === 'OPENSEA_TRAIT_BID' && job.jobKey) {
+                    console.log(`[processBulkJobs Debug] OPENSEA_TRAIT_BID jobId (dedup key): ${job.jobKey}`);
+                  }
+                  return {
+                    name: job.name,
+                    data: job.data,
+                    opts: jobOpts,
+                  };
+                }),
               ]
             );
+            console.log(`[processBulkJobs Debug] Successfully added ${addedJobs.length} jobs`);
+            
+            // Debug: Check for OpenSea trait bid jobs
+            const openseaTraitJobs = nonBlurJobs.filter(j => j.name === 'OPENSEA_TRAIT_BID');
+            if (openseaTraitJobs.length > 0) {
+              console.log(`[processBulkJobs Debug] Attempted to add ${openseaTraitJobs.length} OPENSEA_TRAIT_BID jobs`);
+              console.log(`[processBulkJobs Debug] Actually added ${addedJobs.filter(j => j.name === 'OPENSEA_TRAIT_BID').length} OPENSEA_TRAIT_BID jobs`);
+              if (addedJobs.length > 0) {
+                console.log(`[processBulkJobs Debug] First added job ID: ${addedJobs[0].id}`);
+              }
+            }
 
             // Group blur jobs by wallet address
             const blurJobsByWallet = new Map<string, typeof blurJobs>();
@@ -4579,24 +4609,30 @@ function createJobKey(job: Job) {
       trait = JSON.parse(job.data.trait)
       type = trait.type
       value = trait.value
-      uniqueKey = `opensea-${type}-${value}`
+      // Include loop counter to make job keys unique across loops
+      const loopCount = taskLoopCounters.get(job.data._id) || 0;
+      uniqueKey = `opensea-${type}-${value}-loop${loopCount}`
       break;
     case 'BLUR_TRAIT_BID':
       const traitObj = JSON.parse(job.data.trait);
       const traitKey = Object.keys(traitObj)[0];
       const traitValue = traitObj[traitKey];
-      uniqueKey = `blur-${traitKey}-${traitValue}`;
+      const blurLoopCount = taskLoopCounters.get(job.data._id) || 0;
+      uniqueKey = `blur-${traitKey}-${traitValue}-loop${blurLoopCount}`;
       break;
     case 'MAGICEDEN_TRAIT_BID':
       type = job.data.trait.attributeKey
       value = job.data.trait.attributeValue
-      uniqueKey = `magiceden-${type}-${value}`
+      const magicedenLoopCount = taskLoopCounters.get(job.data._id) || 0;
+      uniqueKey = `magiceden-${type}-${value}-loop${magicedenLoopCount}`
       break;
     case 'OPENSEA_TOKEN_BID':
-      uniqueKey = `opensea-${job.data.asset.tokenId}`
+      const openseaTokenLoopCount = taskLoopCounters.get(job.data._id) || 0;
+      uniqueKey = `opensea-${job.data.asset.tokenId}-loop${openseaTokenLoopCount}`
       break;
     case 'MAGICEDEN_TOKEN_BID':
-      uniqueKey = `magiceden-${job.data.tokenId}`;
+      const magicedenTokenLoopCount = taskLoopCounters.get(job.data._id) || 0;
+      uniqueKey = `magiceden-${job.data.tokenId}-loop${magicedenTokenLoopCount}`;
       break;
     default:
       uniqueKey = 'collection';
@@ -9102,9 +9138,8 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
       });
       console.log(`[OpenSea] Set parentJobs for traitBid: ${parentJobId}, totalJobs: ${traits.length}`);
 
-      const traitJobs = traits.map((trait) => ({
-        name: OPENSEA_TRAIT_BID,
-        data: {
+      const traitJobs = traits.map((trait) => {
+        const jobData = {
           _id: currentTask._id,
           address: WALLET_ADDRESS,
           privateKey: WALLET_PRIVATE_KEY,
@@ -9115,13 +9150,33 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
           trait: JSON.stringify(trait),
           outbidOptions: currentTask.outbidOptions,
           task: newTask,
-        },
-        opts: { priority: TRAIT_BID_PRIORITY.OPENSEA } as JobsOptions
-      })) as Job[]
+        };
+        const currentLoop = taskLoopCounters.get(currentTask._id) || 0;
+        console.log(`[OpenSea Debug] Creating trait job for trait: ${JSON.stringify(trait)}, loop: ${currentLoop}`);
+        return {
+          name: OPENSEA_TRAIT_BID,
+          data: jobData,
+          opts: { priority: TRAIT_BID_PRIORITY.OPENSEA } as JobsOptions
+        };
+      }) as Job[]
 
       await processBulkJobs(traitJobs, true);
 
       console.log(`ADDED ${traits.length} ${currentTask.contract.slug} OPENSEA TRAIT BID JOBS TO QUEUE`);
+      
+      // Debug: Check queue status after adding OpenSea trait jobs
+      const queueCounts = await queue.getJobCounts();
+      console.log(`[OpenSea Debug] Queue status after adding trait jobs:`);
+      console.log(`  - Waiting: ${queueCounts.waiting}`);
+      console.log(`  - Active: ${queueCounts.active}`);
+      console.log(`  - Completed: ${queueCounts.completed}`);
+      console.log(`  - Failed: ${queueCounts.failed}`);
+      console.log(`  - Delayed: ${queueCounts.delayed}`);
+      console.log(`  - Prioritized: ${queueCounts.prioritized || 0}`);
+      
+      // Debug: Check if specific jobs were added
+      const addedJobIds = traitJobs.map(j => j.data._id + '-opensea-' + j.data.slug + '-trait-' + JSON.parse(j.data.trait).type + '-' + JSON.parse(j.data.trait).value);
+      console.log(`[OpenSea Debug] Expected job IDs:`, addedJobIds.slice(0, 5), '...');
       
       // Clear the flag after jobs are added
       marketplacesAddingJobs.get(currentTask._id)?.delete('opensea');
@@ -9928,6 +9983,8 @@ async function processOpenseaTraitBid(data: {
   let outbidEnabled = false;
   const parsedTrait: { type: string; value: string } = JSON.parse(data.trait);
 
+  console.log(`[OpenSea Debug] processOpenseaTraitBid called for task ${data._id}, trait: ${data.trait}`);
+
   try {
     timer.startStep('initial_validation');
 
@@ -10203,6 +10260,9 @@ async function processOpenseaTraitBid(data: {
       // Update completed count on success
       if (parentJob) {
         parentJob.completedJobs++;
+        console.log(`[OpenSea Debug] Trait bid success: ${parentJob.completedJobs}/${parentJob.totalJobs} completed for ${parentId}`);
+      } else {
+        console.log(`[OpenSea Debug] WARNING: No parentJob found for successful trait bid ${parentId}`);
       }
       
       success = true;
@@ -10210,6 +10270,9 @@ async function processOpenseaTraitBid(data: {
       // Update failed count on bid error
       if (parentJob) {
         parentJob.failedJobs++;
+        console.log(`[OpenSea Debug] Trait bid failed: ${parentJob.failedJobs} failed, ${parentJob.completedJobs} completed of ${parentJob.totalJobs} for ${parentId}`);
+      } else {
+        console.log(`[OpenSea Debug] WARNING: No parentJob found for failed trait bid ${parentId}`);
       }
       
       // Format OpenSea error message for better readability
