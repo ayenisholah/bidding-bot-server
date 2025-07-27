@@ -1,1094 +1,1064 @@
-analyze all the functions in @opensea-functions-analysis.md and what improvements and optimizations need to be made, don't create new functions, don't delete any   │
-│   function, just make improvements to each function and api calls, cache where necessary using redis with cache key consistent with @src/utils/redis.ts {keyslot}     │
-│   pattern, only cache wallet data and private key in memory                                                                                                           │
-│                                                                                                                                                                       │
-│   use early returns where necessary, use promise.all where necessay, any function that doesn't require await keyword or can be made non-blocking, do it.              │
-│   optimize for speed and memory performance                                                                                                                           │
-│                                                                                                                                                                       │
-│   sensite market data like getOpenseaFloor,fetchOpenseaListings, openseaTraitFloor, fetchERC20Balance should have a 1 minute ttl                                      │
-│                                                                                                                                                                       │
-│   getCollectionDetails, fetchOpenSeaCollectionItems should have 1 hour ttl                                                                                            │
-│                                                                                                                                                                       │
-│   do not cache fetchItemOffers, fetchOpenseaOffers                                                                                                                    │
-│                                                                                                                                                                       │
-│   document the plan to a .md file     
-
-[Timeout] SCHEDULE job 39303 timed out - will retry indefinitely to prevent task from getting stuck
-  Job Type: OPENSEA_SCHEDULE
-  Task ID: 688375d71d29b102d283dcfa
-  Contract: lilpudgys
-  Duration: 180208ms
-  Error: Job 39303 timed out after 180000ms - aborted
-
-
-  heapUsed:112MB
-external:25MB
-
-📋 Queue Status:
-▶️  QUEUE IS RUNNING
-active: 64
-completed: 0
-delayed: 0
-failed: 0
-paused: 0
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prioritized: 233
-waiting: 0
-waiting-children: 0
-Total Jobs: 297
-Current Limiter Stats: { RECEIVED: 42, QUEUED: 1, RUNNING: 2, EXECUTING: 14, DONE: 995 }
-Average RPS: 33.50 Executing: 59.00 True RPS: 59.00
-[ERROR] 0x_SERVER_OPENSEA_BID_OPENSEA_BIDDING_AxiosError
-  Error: Validation error: Trading is disabled for this item
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_AxiosError
-  Error: Request failed with status code 400
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-Task 6883b58aa027b8e3ee14d0a5 has loopInterval of 0, using minimum interval of 5 seconds
-Scheduling task 6883b58aa027b8e3ee14d0a5 to run again in 1 seconds (Loop #1)
-Task 6883b58aa027b8e3ee14d0a5 - loopInterval config: {"value":0,"unit":"minutes"}
-[Loop Scheduling] Timeout set for task 6883b58aa027b8e3ee14d0a5, will fire in 1 seconds
- 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Body","value":"Sage"} 0.0014 WETH 🎉 
- 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: GOOD-VIBES-CLUB  TRAIT: {"type":"Body","value":"TShirt Graphic More Espresso"} 0.0014 WETH 🎉 
-Task 6883b58aa027b8e3ee14d0aa has loopInterval of 0, using minimum interval of 5 seconds
-Scheduling task 6883b58aa027b8e3ee14d0aa to run again in 1 seconds (Loop #1)
-Task 6883b58aa027b8e3ee14d0aa - loopInterval config: {"value":0,"unit":"minutes"}
-[Loop Scheduling] Timeout set for task 6883b58aa027b8e3ee14d0aa, will fire in 1 seconds
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 141 0.0014 WETH 🎉 
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 146 0.0014 WETH 🎉 
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 144 0.0014 WETH 🎉 
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 142 0.0014 WETH 🎉 
-[ERROR] 0x_SERVER_OPENSEA_BID_OPENSEA_BIDDING_AxiosError
-  Error: Validation error: Asset not found
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 143 0.0014 WETH 🎉 
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_AxiosError
-  Error: Request failed with status code 400
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 148 0.0014 WETH 🎉 
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 134 0.0014 WETH 🎉 
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 7, EXECUTING: 39, DONE: 1034 }
-Average RPS: 32.50 Executing: 46.00 True RPS: 46.00
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 136 0.0014 WETH 🎉 
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 130 0.0014 WETH 🎉 
-prisma:error 
-Invalid `prisma.order.create()` invocation:
+OPENSEA: 406/454 completed, 0 failed
+TOTAL: 837/1362 (61.5%)
+Percentage: 61.5% → 61.5%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 406/454 | After: 407/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 407/454 completed, 0 failed
+TOTAL: 838/1362 (61.5%)
+Percentage: 61.5% → 61.5%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 407/454 completed, 0 failed
+TOTAL: 838/1362 (61.5%)
+Percentage: 61.5% → 61.5%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 407/454 | After: 408/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 408/454 completed, 0 failed
+TOTAL: 839/1362 (61.6%)
+Percentage: 61.5% → 61.6%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 408/454 completed, 0 failed
+TOTAL: 839/1362 (61.6%)
+Percentage: 61.6% → 61.6%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 408/454 | After: 409/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 409/454 completed, 0 failed
+TOTAL: 840/1362 (61.7%)
+Percentage: 61.6% → 61.7%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 409/454 completed, 0 failed
+TOTAL: 840/1362 (61.7%)
+Percentage: 61.7% → 61.7%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 409/454 | After: 410/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 410/454 completed, 0 failed
+TOTAL: 841/1362 (61.7%)
+Percentage: 61.7% → 61.7%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 410/454 completed, 0 failed
+TOTAL: 841/1362 (61.7%)
+Percentage: 61.7% → 61.7%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 410/454 | After: 411/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 411/454 completed, 0 failed
+TOTAL: 842/1362 (61.8%)
+Percentage: 61.7% → 61.8%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 411/454 completed, 0 failed
+TOTAL: 842/1362 (61.8%)
+Percentage: 61.8% → 61.8%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 411/454 | After: 412/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 412/454 completed, 0 failed
+TOTAL: 843/1362 (61.9%)
+Percentage: 61.8% → 61.9%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 412/454 completed, 0 failed
+TOTAL: 843/1362 (61.9%)
+Percentage: 61.9% → 61.9%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 412/454 | After: 413/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 413/454 completed, 0 failed
+TOTAL: 844/1362 (62.0%)
+Percentage: 61.9% → 62.0%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 413/454 completed, 0 failed
+TOTAL: 844/1362 (62.0%)
+Percentage: 62.0% → 62.0%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 413/454 | After: 414/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 414/454 completed, 0 failed
+TOTAL: 845/1362 (62.0%)
+Percentage: 62.0% → 62.0%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 414/454 completed, 0 failed
+TOTAL: 845/1362 (62.0%)
+Percentage: 62.0% → 62.0%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 414/454 | After: 415/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 415/454 completed, 0 failed
+TOTAL: 846/1362 (62.1%)
+Percentage: 62.0% → 62.1%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 415/454 completed, 0 failed
+TOTAL: 846/1362 (62.1%)
+Percentage: 62.1% → 62.1%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 415/454 | After: 416/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 416/454 completed, 0 failed
+TOTAL: 847/1362 (62.2%)
+Percentage: 62.1% → 62.2%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 416/454 completed, 0 failed
+TOTAL: 847/1362 (62.2%)
+Percentage: 62.2% → 62.2%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 416/454 | After: 417/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 417/454 completed, 0 failed
+TOTAL: 848/1362 (62.3%)
+Percentage: 62.2% → 62.3%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 417/454 completed, 0 failed
+TOTAL: 848/1362 (62.3%)
+Percentage: 62.3% → 62.3%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 417/454 | After: 418/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 418/454 completed, 0 failed
+TOTAL: 849/1362 (62.3%)
+Percentage: 62.3% → 62.3%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 418/454 completed, 0 failed
+TOTAL: 849/1362 (62.3%)
+Percentage: 62.3% → 62.3%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 418/454 | After: 419/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 419/454 completed, 0 failed
+TOTAL: 850/1362 (62.4%)
+Percentage: 62.3% → 62.4%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 419/454 completed, 0 failed
+TOTAL: 850/1362 (62.4%)
+Percentage: 62.4% → 62.4%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 419/454 | After: 420/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 420/454 completed, 0 failed
+TOTAL: 851/1362 (62.5%)
+Percentage: 62.4% → 62.5%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 420/454 completed, 0 failed
+TOTAL: 851/1362 (62.5%)
+Percentage: 62.5% → 62.5%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 420/454 | After: 421/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 421/454 completed, 0 failed
+TOTAL: 852/1362 (62.6%)
+Percentage: 62.5% → 62.6%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 421/454 completed, 0 failed
+TOTAL: 852/1362 (62.6%)
+Percentage: 62.6% → 62.6%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 421/454 | After: 422/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 422/454 completed, 0 failed
+TOTAL: 853/1362 (62.6%)
+Percentage: 62.6% → 62.6%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 422/454 completed, 0 failed
+TOTAL: 853/1362 (62.6%)
+Percentage: 62.6% → 62.6%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 422/454 | After: 423/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 423/454 completed, 0 failed
+TOTAL: 854/1362 (62.7%)
+Percentage: 62.6% → 62.7%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 423/454 completed, 0 failed
+TOTAL: 854/1362 (62.7%)
+Percentage: 62.7% → 62.7%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 423/454 | After: 424/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 424/454 completed, 0 failed
+TOTAL: 855/1362 (62.8%)
+Percentage: 62.7% → 62.8%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 424/454 completed, 0 failed
+TOTAL: 855/1362 (62.8%)
+Percentage: 62.8% → 62.8%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 424/454 | After: 425/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 425/454 completed, 0 failed
+TOTAL: 856/1362 (62.8%)
+Percentage: 62.8% → 62.8%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 425/454 completed, 0 failed
+TOTAL: 856/1362 (62.8%)
+Percentage: 62.8% → 62.8%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 425/454 | After: 426/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 426/454 completed, 0 failed
+TOTAL: 857/1362 (62.9%)
+Percentage: 62.8% → 62.9%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 426/454 completed, 0 failed
+TOTAL: 857/1362 (62.9%)
+Percentage: 62.9% → 62.9%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 426/454 | After: 427/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 427/454 completed, 0 failed
+TOTAL: 858/1362 (63.0%)
+Percentage: 62.9% → 63.0%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 427/454 completed, 0 failed
+TOTAL: 858/1362 (63.0%)
+Percentage: 63.0% → 63.0%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 427/454 | After: 428/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 428/454 completed, 0 failed
+TOTAL: 859/1362 (63.1%)
+Percentage: 63.0% → 63.1%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 428/454 completed, 0 failed
+TOTAL: 859/1362 (63.1%)
+Percentage: 63.1% → 63.1%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 428/454 | After: 429/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 429/454 completed, 0 failed
+TOTAL: 860/1362 (63.1%)
+Percentage: 63.1% → 63.1%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 429/454 completed, 0 failed
+TOTAL: 860/1362 (63.1%)
+Percentage: 63.1% → 63.1%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 429/454 | After: 430/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 430/454 completed, 0 failed
+TOTAL: 861/1362 (63.2%)
+Percentage: 63.1% → 63.2%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 430/454 completed, 0 failed
+TOTAL: 861/1362 (63.2%)
+Percentage: 63.2% → 63.2%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 430/454 | After: 431/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 431/454 completed, 0 failed
+TOTAL: 862/1362 (63.3%)
+Percentage: 63.2% → 63.3%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 431/454 completed, 0 failed
+TOTAL: 862/1362 (63.3%)
+Percentage: 63.3% → 63.3%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 431/454 | After: 432/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 432/454 completed, 0 failed
+TOTAL: 863/1362 (63.4%)
+Percentage: 63.3% → 63.4%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 432/454 completed, 0 failed
+TOTAL: 863/1362 (63.4%)
+Percentage: 63.4% → 63.4%
+
+----------------------------------------------------------------------------------------------------------------------------------------------
+[OpenSea Counterbid] Task: 68869ddbfd744194919bbd89 | Collection: azuki | Type: Token #489 | Incoming: 5.04 WETH (5.04 WETH) | Quantity: 1 | Maker: 0xc19dc40f81aa9bfeda63f26ccd33aa465e7aa61a
+----------------------------------------------------------------------------------------------------------------------------------------------
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 432/454 | After: 433/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 433/454 completed, 0 failed
+TOTAL: 864/1362 (63.4%)
+Percentage: 63.4% → 63.4%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 433/454 completed, 0 failed
+TOTAL: 864/1362 (63.4%)
+Percentage: 63.4% → 63.4%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 433/454 | After: 434/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 434/454 completed, 0 failed
+TOTAL: 865/1362 (63.5%)
+Percentage: 63.4% → 63.5%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 434/454 completed, 0 failed
+TOTAL: 865/1362 (63.5%)
+Percentage: 63.5% → 63.5%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 434/454 | After: 435/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 435/454 completed, 0 failed
+TOTAL: 866/1362 (63.6%)
+Percentage: 63.5% → 63.6%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 435/454 completed, 0 failed
+TOTAL: 866/1362 (63.6%)
+Percentage: 63.6% → 63.6%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 435/454 | After: 436/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 436/454 completed, 0 failed
+TOTAL: 867/1362 (63.7%)
+Percentage: 63.6% → 63.7%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 436/454 completed, 0 failed
+TOTAL: 867/1362 (63.7%)
+Percentage: 63.7% → 63.7%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 436/454 | After: 437/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 437/454 completed, 0 failed
+TOTAL: 868/1362 (63.7%)
+Percentage: 63.7% → 63.7%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 437/454 completed, 0 failed
+TOTAL: 868/1362 (63.7%)
+Percentage: 63.7% → 63.7%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 437/454 | After: 438/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 438/454 completed, 0 failed
+TOTAL: 869/1362 (63.8%)
+Percentage: 63.7% → 63.8%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 438/454 completed, 0 failed
+TOTAL: 869/1362 (63.8%)
+Percentage: 63.8% → 63.8%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 438/454 | After: 439/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 439/454 completed, 0 failed
+TOTAL: 870/1362 (63.9%)
+Percentage: 63.8% → 63.9%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 439/454 completed, 0 failed
+TOTAL: 870/1362 (63.9%)
+Percentage: 63.9% → 63.9%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 439/454 | After: 440/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 440/454 completed, 0 failed
+TOTAL: 871/1362 (64.0%)
+Percentage: 63.9% → 64.0%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 440/454 completed, 0 failed
+TOTAL: 871/1362 (64.0%)
+Percentage: 64.0% → 64.0%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 440/454 | After: 441/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 441/454 completed, 0 failed
+TOTAL: 872/1362 (64.0%)
+Percentage: 64.0% → 64.0%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 441/454 completed, 0 failed
+TOTAL: 872/1362 (64.0%)
+Percentage: 64.0% → 64.0%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 441/454 | After: 442/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 442/454 completed, 0 failed
+TOTAL: 873/1362 (64.1%)
+Percentage: 64.0% → 64.1%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 442/454 completed, 0 failed
+TOTAL: 873/1362 (64.1%)
+Percentage: 64.1% → 64.1%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 442/454 | After: 443/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 443/454 completed, 0 failed
+TOTAL: 874/1362 (64.2%)
+Percentage: 64.1% → 64.2%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 443/454 completed, 0 failed
+TOTAL: 874/1362 (64.2%)
+Percentage: 64.2% → 64.2%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 443/454 | After: 444/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 444/454 completed, 0 failed
+TOTAL: 875/1362 (64.2%)
+Percentage: 64.2% → 64.2%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 444/454 completed, 0 failed
+TOTAL: 875/1362 (64.2%)
+Percentage: 64.2% → 64.2%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 444/454 | After: 445/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 445/454 completed, 0 failed
+TOTAL: 876/1362 (64.3%)
+Percentage: 64.2% → 64.3%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 445/454 completed, 0 failed
+TOTAL: 876/1362 (64.3%)
+Percentage: 64.3% → 64.3%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 445/454 | After: 446/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 446/454 completed, 0 failed
+TOTAL: 877/1362 (64.4%)
+Percentage: 64.3% → 64.4%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 446/454 completed, 0 failed
+TOTAL: 877/1362 (64.4%)
+Percentage: 64.4% → 64.4%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 446/454 | After: 447/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 447/454 completed, 0 failed
+TOTAL: 878/1362 (64.5%)
+Percentage: 64.4% → 64.5%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 447/454 completed, 0 failed
+TOTAL: 878/1362 (64.5%)
+Percentage: 64.5% → 64.5%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 447/454 | After: 448/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 448/454 completed, 0 failed
+TOTAL: 879/1362 (64.5%)
+Percentage: 64.5% → 64.5%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 448/454 completed, 0 failed
+TOTAL: 879/1362 (64.5%)
+Percentage: 64.5% → 64.5%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 448/454 | After: 449/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 449/454 completed, 0 failed
+TOTAL: 880/1362 (64.6%)
+Percentage: 64.5% → 64.6%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 449/454 completed, 0 failed
+TOTAL: 880/1362 (64.6%)
+Percentage: 64.6% → 64.6%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 449/454 | After: 450/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 450/454 completed, 0 failed
+TOTAL: 881/1362 (64.7%)
+Percentage: 64.6% → 64.7%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 450/454 completed, 0 failed
+TOTAL: 881/1362 (64.7%)
+Percentage: 64.7% → 64.7%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 450/454 | After: 451/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 451/454 completed, 0 failed
+TOTAL: 882/1362 (64.8%)
+Percentage: 64.7% → 64.8%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 451/454 completed, 0 failed
+TOTAL: 882/1362 (64.8%)
+Percentage: 64.8% → 64.8%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 451/454 | After: 452/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 452/454 completed, 0 failed
+TOTAL: 883/1362 (64.8%)
+Percentage: 64.8% → 64.8%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 452/454 completed, 0 failed
+TOTAL: 883/1362 (64.8%)
+Percentage: 64.8% → 64.8%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 452/454 | After: 453/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 453/454 completed, 0 failed
+TOTAL: 884/1362 (64.9%)
+Percentage: 64.8% → 64.9%
+
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 453/454 completed, 0 failed
+TOTAL: 884/1362 (64.9%)
+Percentage: 64.9% → 64.9%
+
+[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
+Before: 453/454 | After: 454/454
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 454/454 completed, 0 failed
+TOTAL: 885/1362 (65.0%)
+Percentage: 64.9% → 65.0%
+
+Task 68869ddbfd744194919bbd89 completed for opensea
+
+[Running % Debug] Task: 68869ddbfd744194919bbd89
+Selected: [blur, magiceden, opensea]
+Enabled & Selected: [blur, magiceden, opensea]
+BLUR: 10/454 completed, 0 failed
+MAGICEDEN: 421/454 completed, 0 failed
+OPENSEA: 454/454 completed, 0 failed
+TOTAL: 885/1362 (65.0%)
+Percentage: 65.0% → 65.0%
 
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[Loop Timer] Timeout fired for task 6883b58aa027b8e3ee14d0a5, loop #1
-[Loop 1] Starting next iteration for task 6883b58aa027b8e3ee14d0a5
-[Loop 1] Task running state: true, Task ID: 6883b58aa027b8e3ee14d0a5
-[startTask] Called with task 6883b58aa027b8e3ee14d0a5, start=true, marketplace=all
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-Checking marketplace approvals for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21...
-Checking opensea approval...
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-✓ opensea approval confirmed for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
-UPDATED TASK PROOF-MOONBIRDS RUNNING STATUS TO: TRUE
-WebSocket not connected, skipping subscription for proof-moonbirds
-Loop restart: Adding 1 jobs without deduplication
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
- 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Eyes","value":"Adorable"} 0.0014 WETH 🎉 
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
- 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Eyewear","value":"Eyepatch"} 0.0014 WETH 🎉 
- 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Outerwear","value":"Hoodie"} 0.0014 WETH 🎉 
- 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Headwear","value":"Bandana"} 0.0014 WETH 🎉 
- 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Headwear","value":"Cowboy Hat"} 0.0014 WETH 🎉 
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
- 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Headwear","value":"Lincoln"} 0.0014 WETH 🎉 
- 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Feathers","value":"Legendary Brave"} 0.0014 WETH 🎉 
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[Loop Timer] Timeout fired for task 6883b58aa027b8e3ee14d0aa, loop #1
-[Loop 1] Starting next iteration for task 6883b58aa027b8e3ee14d0aa
-[Loop 1] Task running state: true, Task ID: 6883b58aa027b8e3ee14d0aa
-[startTask] Called with task 6883b58aa027b8e3ee14d0aa, start=true, marketplace=all
-Checking marketplace approvals for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21...
-Checking opensea approval...
- 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Outerwear","value":"Diamond Necklace"} 0.0014 WETH 🎉 
-✓ opensea approval confirmed for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
-UPDATED TASK GOOD-VIBES-CLUB RUNNING STATUS TO: TRUE
-WebSocket not connected, skipping subscription for good-vibes-club
-Loop restart: Adding 1 jobs without deduplication
- 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Eyewear","value":"Jobs Glasses"} 0.0014 WETH 🎉 
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 147 0.0014 WETH 🎉 
- 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Feathers","value":"Legendary Guardian"} 0.0014 WETH 🎉 
- 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Headwear","value":"Gremplin"} 0.0014 WETH 🎉 
-Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 1, DONE: 1082 }
-Average RPS: 34.20 Executing: 1.00 True RPS: 34.20
- 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Outerwear","value":"Jean Jacket"} 0.0014 WETH 🎉 
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[TaskProgression] Moving task 6883b58aa027b8e3ee14d0a5 from STARTED to RUNNING
- 🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: PROOF-MOONBIRDS  TRAIT: {"type":"Outerwear","value":"Punk Jacket"} 0.0014 WETH 🎉 
-Task 6883b58aa027b8e3ee14d0a6 completed for opensea
-Task 6883b58aa027b8e3ee14d0a6 completed for all marketplaces
-[TaskProgression] Moving task 6883b58aa027b8e3ee14d0aa from STARTED to RUNNING
-Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 1083 }
-Average RPS: 34.20 Executing: 0.00 True RPS: 34.20
-[Queue Rate Limit] Resuming queue after 3.640625s delay
-[Collection] Fetching details for proof-moonbirds
-[Collection] Memory cache hit for proof-moonbirds (0ms)
-Task 6883b58aa027b8e3ee14d0a6 has loopInterval of 0, using minimum interval of 5 seconds
-Scheduling task 6883b58aa027b8e3ee14d0a6 to run again in 1 seconds (Loop #1)
-Task 6883b58aa027b8e3ee14d0a6 - loopInterval config: {"value":0,"unit":"minutes"}
-[Loop Scheduling] Timeout set for task 6883b58aa027b8e3ee14d0a6, will fire in 1 seconds
-Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 1083 }
-Average RPS: 37.56 Executing: 0.00 True RPS: 37.56
-[Collection] Fetching details for good-vibes-club
-[Collection] Memory cache hit for good-vibes-club (0ms)
-Failed to send logs to Axiom: Request failed with status code 400
-[Loop Timer] Timeout fired for task 6883b58aa027b8e3ee14d0a6, loop #1
-[Loop 1] Starting next iteration for task 6883b58aa027b8e3ee14d0a6
-[Loop 1] Task running state: true, Task ID: 6883b58aa027b8e3ee14d0a6
-[startTask] Called with task 6883b58aa027b8e3ee14d0a6, start=true, marketplace=all
-Checking marketplace approvals for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21...
-Checking opensea approval...
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-✓ opensea approval confirmed for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
-UPDATED TASK PROOF-MOONBIRDS RUNNING STATUS TO: TRUE
-WebSocket not connected, skipping subscription for proof-moonbirds
-Loop restart: Adding 1 jobs without deduplication
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 154 0.0014 WETH 🎉 
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[Collection] Fetching details for proof-moonbirds
-[Collection] Memory cache hit for proof-moonbirds (0ms)
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 177 0.0014 WETH 🎉 
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[Queue Rate Limit] Prioritized jobs (171) exceed RATE_LIMIT (64)
-[Queue Rate Limit] Pausing queue for 2.671875 seconds
-
-📊 ═══════ Health Monitor Stats ═══════ 📊
-
-💾 Memory Usage:
-rss:243MB
-heapTotal:156MB
-heapUsed:129MB
-external:27MB
-
-📋 Queue Status:
-▶️  QUEUE IS RUNNING
-active: 62
-completed: 0
-delayed: 0
-failed: 0
-paused: 0
-prioritized: 171
-waiting: 0
-waiting-children: 0
-Total Jobs: 233
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 185 0.0014 WETH 🎉 
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 163 0.0014 WETH 🎉 
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: GOOD-VIBES-CLUB  TOKEN: 131 0.0014 WETH 🎉 
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 158 0.0014 WETH 🎉 
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 168 0.0014 WETH 🎉 
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 155 0.0014 WETH 🎉 
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 164 0.0014 WETH 🎉 
-Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 19, EXECUTING: 31, DONE: 1098 }
-Average RPS: 31.22 Executing: 50.00 True RPS: 50.00
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 189 0.0014 WETH 🎉 
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 166 0.0014 WETH 🎉 
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 184 0.0014 WETH 🎉 
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 169 0.0014 WETH 🎉 
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 191 0.0014 WETH 🎉 
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: GOOD-VIBES-CLUB  TOKEN: 1579 0.0014 WETH 🎉 
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_OPENSEA_BID_OPENSEA_BIDDING_AxiosError
-  Error: Validation error: Asset not found
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_AxiosError
-  Error: Request failed with status code 400
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 186 0.0014 WETH 🎉 
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: GOOD-VIBES-CLUB  TOKEN: 3147 0.0014 WETH 🎉 
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: GOOD-VIBES-CLUB  TOKEN: 6530 0.0014 WETH 🎉 
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: LILPUDGYS  TOKEN: 179 0.0014 WETH 🎉 
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: GOOD-VIBES-CLUB  TOKEN: 6752 0.0014 WETH 🎉 
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 1148 }
-Average RPS: 31.11 Executing: 0.00 True RPS: 31.11
- 🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: GOOD-VIBES-CLUB  TOKEN: 1801 0.0014 WETH 🎉 
-prisma:error 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_PrismaClientKnownRequestError
-  Error: 
-Invalid `prisma.order.create()` invocation:
-
-
-Too many database connections opened: FATAL: sorry, too many clients already
-Prisma Accelerate has built-in connection pooling to prevent such errors: https://pris.ly/client/error-accelerate
-[ERROR] 0x_SERVER_QUEUE_PROCESS_JOB_Error
-
-[Timeout] SCHEDULE job 8 timed out - will retry indefinitely to prevent task from getting stuck
-  Job Type: OPENSEA_SCHEDULE
-  Task ID: 6883bdb307e88040e2255320
-  Contract: lilpudgys
-  Duration: 180013ms
-  Error: Job 8 timed out after 180000ms - aborted

@@ -230,19 +230,57 @@ export async function getOpenseaFloor(collectionSlug: string) {
     if (cachedFloor) {
       return JSON.parse(cachedFloor);
     }
-    const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
-      `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
-      {
-        headers: { 'x-api-key': API_KEY }
+    try {
+      const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
+        `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
+        {
+          headers: { 'x-api-key': API_KEY }
+        }
+      ));
+      // Check if listings exist and has item
+      const floor_price = Number(data?.listings[0]?.price?.current?.value) / 1e18 || 0;
+      // Cache the result
+      if (getRedis()) {
+        await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
       }
-    ));
-    // Check if listings exist and has item
-    const floor_price = Number(data?.listings[0]?.price?.current?.value) / 1e18 || 0;
-    // Cache the result
-    if (getRedis()) {
-      await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+      return floor_price;
+    } catch (error: any) {
+      // Handle 404 errors specifically - collection might be delisted or renamed
+      if (error?.response?.status === 404) {
+        await logger.logOpenseaCollectionError('Collection not found on OpenSea', {
+          collection: collectionSlug,
+          collectionSlug: collectionSlug,
+          endpoint: `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`,
+          method: 'GET',
+          statusCode: 404,
+          operation: 'get_floor_price',
+          errorCode: 'COLLECTION_NOT_FOUND',
+          errorMessage: error?.response?.data?.errors?.[0]?.message || 'Collection not found',
+          error: new Error(`OpenSea collection not found: ${collectionSlug}`)
+        });
+        
+        // Cache the zero floor price for a short time to avoid repeated 404s
+        if (getRedis()) {
+          await getRedis().set(cacheKey, JSON.stringify(0), 'EX', 300); // Cache for 5 minutes
+        }
+        return 0; // Return 0 floor price for non-existent collections
+      }
+      
+      // For other errors, log as API error and re-throw
+      await logger.logApiError('Failed to fetch OpenSea floor price', {
+        collection: collectionSlug,
+        collectionSlug: collectionSlug,
+        endpoint: `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`,
+        method: 'GET',
+        statusCode: error?.response?.status,
+        operation: 'get_floor_price',
+        errorCode: error?.code || 'API_ERROR',
+        errorMessage: error?.response?.data?.errors?.[0]?.message || error?.message || 'Unknown error',
+        error: error
+      });
+      
+      throw error; // Re-throw to let the lock manager handle it
     }
-    return floor_price;
   });
 
   if (!result) {

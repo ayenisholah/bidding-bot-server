@@ -764,6 +764,43 @@ Since multiple process functions can complete simultaneously:
 - Send completion notifications to connected clients
 - Update UI state to reflect scheduling status
 
+## OpenSea Trait Bid Jobs Issue Fix
+
+### Problem
+OpenSea trait bid jobs were stopping at 57.4% on the second loop while MagicEden completed successfully. The jobs were being added to the queue but immediately showed 0 waiting jobs, indicating they were being silently rejected by BullMQ.
+
+### Root Cause
+BullMQ uses job IDs for deduplication. Even with unique job IDs (including loop counters), the combination of:
+1. `removeOnComplete: true` removing jobs from Redis after completion
+2. BullMQ's internal deduplication mechanism still tracking completed job IDs
+3. Completed jobs from previous loops preventing new jobs with the same base ID from being added
+
+### Solution Implemented
+1. **Added loop counters to job IDs**: To ensure unique job IDs across loops and prevent BullMQ's deduplication from rejecting jobs:
+   ```typescript
+   // For OPENSEA_TRAIT_BID:
+   const openseaTraitLoopCount = taskLoopCounters.get(job.data._id) || 0;
+   uniqueKey = `opensea-${type}-${value}-loop${openseaTraitLoopCount}`
+   
+   // For MAGICEDEN_TRAIT_BID (for consistency):
+   const magicedenTraitLoopCount = taskLoopCounters.get(job.data._id) || 0;
+   uniqueKey = `magiceden-${type}-${value}-loop${magicedenTraitLoopCount}`
+   ```
+
+2. **Removed ineffective job cleanup logic**: The pre-emptive cleanup approach wasn't solving the BullMQ internal ID caching issue:
+   ```typescript
+   // Removed the cleanup logic from processOpenseaScheduledBid
+   // Loop counters in job IDs ensure uniqueness without needing cleanup
+   ```
+
+3. **Maintained removeOnComplete: true**: The default BullMQ behavior works correctly when job IDs are unique across loops.
+
+### Key Takeaways
+- BullMQ's deduplication mechanism tracks job IDs internally even after jobs are removed with `removeOnComplete: true`
+- Using loop counters in job IDs ensures each loop gets unique IDs that won't be rejected by deduplication
+- The refactoring guide's approach of setting parentJobs before calling processBulkJobs was already correct and helpful
+- Pre-emptive job cleanup doesn't solve BullMQ's internal ID caching - unique IDs are the proper solution
+
 ## Conclusion
 
 This refactoring improves the accuracy and responsiveness of task progress tracking while maintaining backward compatibility and system stability. The modular approach allows for gradual implementation and easy rollback if issues arise. The addition of proper completion tracking and flexible rescheduling (including immediate rescheduling with loopInterval = 0) ensures tasks can run continuously at maximum efficiency when needed.

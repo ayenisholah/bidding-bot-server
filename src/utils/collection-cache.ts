@@ -1,5 +1,6 @@
 import { BoundedCache } from './bounded-cache';
-import { logger, ErrorCategory } from './logger';
+import redisClient, { getRedisConnection } from './redis';
+import { logger, DatabaseOperation } from './logger';
 
 interface CollectionData {
   floor?: number;
@@ -33,76 +34,220 @@ class CollectionCache {
   }
 
   // Get floor price for a collection on a specific marketplace
-  getFloorPrice(collection: string, marketplace: string): number | null {
-    const key = `${marketplace}:${collection}`.toLowerCase();
-    const cached = this.floorCache.get(key);
+  async getFloorPrice(collection: string, marketplace: string): Promise<number | null> {
+    const memoryKey = `${marketplace}:${collection}`.toLowerCase();
     
-    if (cached) {
-      // Silent cache hit - no logging for performance
-      return cached.price;
+    // L1: Check memory cache first
+    const memoryCached = this.floorCache.get(memoryKey);
+    if (memoryCached) {
+      return memoryCached.price;
+    }
+    
+    // L2: Check Redis cache
+    const redisKey = `{floor:${marketplace}}:${collection}`.toLowerCase();
+    try {
+      const redis = getRedisConnection();
+      if (redis && redisClient.isReady()) {
+        const cached = await redis.get(redisKey);
+        if (cached) {
+          const data = JSON.parse(cached) as FloorPriceData;
+          // Update memory cache with Redis data
+          this.floorCache.set(memoryKey, data);
+          return data.price;
+        }
+      }
+    } catch (error) {
+      // Log error but don't fail the operation
+      await logger.logDatabaseError('Failed to get floor price from Redis', {
+        databaseOperation: DatabaseOperation.READ,
+        collection_name: 'redis_floor_cache',
+        key: redisKey,
+        marketplace,
+        collection,
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
     }
     
     return null;
   }
 
   // Set floor price for a collection on a specific marketplace
-  setFloorPrice(collection: string, marketplace: string, price: number) {
-    const key = `${marketplace}:${collection}`.toLowerCase();
-    this.floorCache.set(key, {
+  async setFloorPrice(collection: string, marketplace: string, price: number): Promise<void> {
+    const memoryKey = `${marketplace}:${collection}`.toLowerCase();
+    const data: FloorPriceData = {
       price,
       marketplace,
       timestamp: Date.now()
-    });
+    };
+    
+    // L1: Update memory cache
+    this.floorCache.set(memoryKey, data);
+    
+    // L2: Update Redis cache
+    const redisKey = `{floor:${marketplace}}:${collection}`.toLowerCase();
+    try {
+      const redis = getRedisConnection();
+      if (redis && redisClient.isReady()) {
+        // Set with 5 minute TTL
+        await redis.setex(redisKey, 5 * 60, JSON.stringify(data));
+      }
+    } catch (error) {
+      // Log error but don't fail the operation
+      await logger.logDatabaseError('Failed to set floor price in Redis', {
+        databaseOperation: DatabaseOperation.UPDATE,
+        collection_name: 'redis_floor_cache',
+        key: redisKey,
+        marketplace,
+        collection,
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
   // Get collection details
-  getCollectionDetails(collection: string): any | null {
-    const key = collection.toLowerCase();
-    const cached = this.detailsCache.get(key);
+  async getCollectionDetails(collection: string): Promise<any | null> {
+    const memoryKey = collection.toLowerCase();
     
-    if (cached?.details) {
-      // Silent cache hit - no logging for performance
-      return cached.details;
+    // L1: Check memory cache first
+    const memoryCached = this.detailsCache.get(memoryKey);
+    if (memoryCached?.details) {
+      return memoryCached.details;
+    }
+    
+    // L2: Check Redis cache
+    const redisKey = `{collection:details}:${collection}`.toLowerCase();
+    try {
+      const redis = getRedisConnection();
+      if (redis && redisClient.isReady()) {
+        const cached = await redis.get(redisKey);
+        if (cached) {
+          const data = JSON.parse(cached) as CollectionData;
+          // Update memory cache with Redis data
+          this.detailsCache.set(memoryKey, data);
+          return data.details;
+        }
+      }
+    } catch (error) {
+      // Log error but don't fail the operation
+      await logger.logDatabaseError('Failed to get collection details from Redis', {
+        databaseOperation: DatabaseOperation.READ,
+        collection_name: 'redis_collection_cache',
+        key: redisKey,
+        collection,
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
     }
     
     return null;
   }
 
   // Set collection details
-  setCollectionDetails(collection: string, details: any) {
-    const key = collection.toLowerCase();
-    const existing = this.detailsCache.get(key) || { timestamp: Date.now() };
-    
-    this.detailsCache.set(key, {
+  async setCollectionDetails(collection: string, details: any): Promise<void> {
+    const memoryKey = collection.toLowerCase();
+    const existing = this.detailsCache.get(memoryKey) || { timestamp: Date.now() };
+    const data: CollectionData = {
       ...existing,
       details,
       timestamp: Date.now()
-    });
+    };
+    
+    // L1: Update memory cache
+    this.detailsCache.set(memoryKey, data);
+    
+    // L2: Update Redis cache
+    const redisKey = `{collection:details}:${collection}`.toLowerCase();
+    try {
+      const redis = getRedisConnection();
+      if (redis && redisClient.isReady()) {
+        // Set with 30 minute TTL
+        await redis.setex(redisKey, 30 * 60, JSON.stringify(data));
+      }
+    } catch (error) {
+      // Log error but don't fail the operation
+      await logger.logDatabaseError('Failed to set collection details in Redis', {
+        databaseOperation: DatabaseOperation.UPDATE,
+        collection_name: 'redis_collection_cache',
+        key: redisKey,
+        collection,
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
   // Get collection stats
-  getCollectionStats(collection: string): any | null {
-    const key = collection.toLowerCase();
-    const cached = this.detailsCache.get(key);
+  async getCollectionStats(collection: string): Promise<any | null> {
+    const memoryKey = collection.toLowerCase();
     
-    if (cached?.stats) {
-      // Silent cache hit - no logging for performance
-      return cached.stats;
+    // L1: Check memory cache first
+    const memoryCached = this.detailsCache.get(memoryKey);
+    if (memoryCached?.stats) {
+      return memoryCached.stats;
+    }
+    
+    // L2: Check Redis cache
+    const redisKey = `{collection:stats}:${collection}`.toLowerCase();
+    try {
+      const redis = getRedisConnection();
+      if (redis && redisClient.isReady()) {
+        const cached = await redis.get(redisKey);
+        if (cached) {
+          const data = JSON.parse(cached) as CollectionData;
+          // Update memory cache with Redis data
+          this.detailsCache.set(memoryKey, data);
+          return data.stats;
+        }
+      }
+    } catch (error) {
+      // Log error but don't fail the operation
+      await logger.logDatabaseError('Failed to get collection stats from Redis', {
+        databaseOperation: DatabaseOperation.READ,
+        collection_name: 'redis_collection_cache',
+        key: redisKey,
+        collection,
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
     }
     
     return null;
   }
 
   // Set collection stats
-  setCollectionStats(collection: string, stats: any) {
-    const key = collection.toLowerCase();
-    const existing = this.detailsCache.get(key) || { timestamp: Date.now() };
-    
-    this.detailsCache.set(key, {
+  async setCollectionStats(collection: string, stats: any): Promise<void> {
+    const memoryKey = collection.toLowerCase();
+    const existing = this.detailsCache.get(memoryKey) || { timestamp: Date.now() };
+    const data: CollectionData = {
       ...existing,
       stats,
       timestamp: Date.now()
-    });
+    };
+    
+    // L1: Update memory cache
+    this.detailsCache.set(memoryKey, data);
+    
+    // L2: Update Redis cache
+    const redisKey = `{collection:stats}:${collection}`.toLowerCase();
+    try {
+      const redis = getRedisConnection();
+      if (redis && redisClient.isReady()) {
+        // Set with 30 minute TTL
+        await redis.setex(redisKey, 30 * 60, JSON.stringify(data));
+      }
+    } catch (error) {
+      // Log error but don't fail the operation
+      await logger.logDatabaseError('Failed to set collection stats in Redis', {
+        databaseOperation: DatabaseOperation.UPDATE,
+        collection_name: 'redis_collection_cache',
+        key: redisKey,
+        collection,
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
   // Batch fetch with deduplication
@@ -133,18 +278,43 @@ class CollectionCache {
   }
 
   // Invalidate all caches for a collection
-  invalidateCollection(collection: string) {
+  async invalidateCollection(collection: string): Promise<void> {
     const key = collection.toLowerCase();
     
-    // Remove from details cache
+    // Remove from memory caches
     this.detailsCache.delete(key);
     
-    // Remove all floor prices for this collection
+    // Remove all floor prices for this collection from memory
     const floorKeys = Array.from(this.floorCache.keys())
       .filter(k => k.endsWith(`:${key}`));
     
     for (const floorKey of floorKeys) {
       this.floorCache.delete(floorKey);
+    }
+    
+    // Remove from Redis
+    try {
+      const redis = getRedisConnection();
+      if (redis && redisClient.isReady()) {
+        // Remove collection details and stats
+        await redis.del(`{collection:details}:${key}`);
+        await redis.del(`{collection:stats}:${key}`);
+        
+        // Remove floor prices for all marketplaces
+        const marketplaces = ['opensea', 'blur', 'magiceden'];
+        for (const marketplace of marketplaces) {
+          await redis.del(`{floor:${marketplace}}:${key}`);
+        }
+      }
+    } catch (error) {
+      // Log error but don't fail the operation
+      await logger.logDatabaseError('Failed to invalidate collection in Redis', {
+        databaseOperation: DatabaseOperation.DELETE,
+        collection_name: 'redis_collection_cache',
+        collection: key,
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
     }
   }
 
