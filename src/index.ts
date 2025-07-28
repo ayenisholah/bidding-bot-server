@@ -4330,7 +4330,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
             for (const [wallet, walletJobs] of blurJobsByWallet.entries()) {
               // Check rate limit before processing wallet's jobs
               if (!blurRateLimiter.canMakeRequest(wallet)) {
-                const waitTime = Math.max(blurRateLimiter.getWaitTime(wallet), 2500); // Wait at least 2.5 seconds
+                const waitTime = Math.max(blurRateLimiter.getWaitTime(wallet), 5000); // Wait at least 2.5 seconds
                 console.log(YELLOW + `Blur rate limit: Waiting ${waitTime}ms for wallet ${wallet}` + RESET);
                 await new Promise(resolve => setTimeout(resolve, waitTime));
               }
@@ -4509,8 +4509,9 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     return;
   }
 
-  // Initialize taskStatus immediately to prevent race conditions
+  // Block 1: Handle task status initialization/updates
   if (!taskStatus[task._id]) {
+    // Initialize new task
     taskStatus[task._id] = {
       status: 'STARTED',
       runningPercentage: 0,
@@ -4521,23 +4522,33 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     };
     // Reset loop counter for new task
     taskLoopCounters.delete(task._id);
-  } else if (!marketplace) {
-    // Only update status to STARTED when starting the entire task (no marketplace specified)
-    // This handles the case where a task is transitioning from SCHEDULED/STOPPED to STARTED
-    taskStatus[task._id].status = 'STARTED';
-    taskStatus[task._id].runningPercentage = 0;
-    taskStatus[task._id].cancellationPercentage = 0;
-    taskStatus[task._id].processingPercentage = 0;
-    // Don't reset loop counter if we're in a scheduled loop (start=true from scheduleNextLoop)
-    // Only reset when manually starting/restarting the task
-    if (!start) {
-      taskLoopCounters.delete(task._id);
-    }
-    // IMPORTANT: Loop counter should ONLY be incremented in scheduleNextLoop
-    // NOT here in startTask, even when start=true
   } else {
-    // Marketplace-specific start - don't modify global task status or loop counters
+    // Task already exists - handle updates based on context
+    if (!marketplace) {
+      // Full task start (no marketplace specified)
+      // This handles the case where a task is transitioning from SCHEDULED/STOPPED to STARTED
+      taskStatus[task._id].status = 'STARTED';
+      taskStatus[task._id].runningPercentage = 0;
+      taskStatus[task._id].cancellationPercentage = 0;
+      taskStatus[task._id].processingPercentage = 0;
+      
+      // Don't reset loop counter if we're in a scheduled loop (start=true from scheduleNextLoop)
+      // Only reset when manually starting/restarting the task
+      if (!start) {
+        taskLoopCounters.delete(task._id);
+      }
+      // IMPORTANT: Loop counter should ONLY be incremented in scheduleNextLoop
+      // NOT here in startTask, even when start=true
+    }
+  }
+
+  // Block 2: Handle marketplace-specific logic
+  if (marketplace) {
+    // Marketplace-specific start - preserve global state
     console.log(CYAN + `[startTask] Marketplace-specific start for ${marketplace} - preserving global task state` + RESET);
+    // Any marketplace-specific initialization can be added here
+  } else {
+    // Full task start - any additional full-task logic can be added here
   }
 
   // Always initialize stats if they don't exist, regardless of marketplace parameter
@@ -9472,17 +9483,6 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
       };
     }
     completedTasks[taskId].opensea = false;
-
-    if (!taskStatus[taskId]) {
-      taskStatus[taskId] = {
-        status: 'STARTED',
-        runningPercentage: 0,
-        waitingTime: 0,
-        cancellationPercentage: 0,
-        processingPercentage: 0,
-        nextLoopTime: new Date()
-      }
-    }
     taskStatus[taskId].status = 'PROCESSING'
 
     // Update currentTokenIds if we have token data
@@ -9908,17 +9908,6 @@ async function processBlurScheduledBid(task: ITask) {
       };
     }
     completedTasks[taskId].blur = false;
-
-    if (!taskStatus[taskId]) {
-      taskStatus[taskId] = {
-        status: 'STARTED',
-        runningPercentage: 0,
-        waitingTime: 0,
-        cancellationPercentage: 0,
-        processingPercentage: 0,
-        nextLoopTime: new Date()
-      }
-    }
     taskStatus[taskId].status = 'PROCESSING'
 
     const { currencySymbol } = await calculateBidPrice(currentTask, 0, "blur")
@@ -11423,17 +11412,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
       };
     }
     completedTasks[taskId].magiceden = false;
-
-    if (!taskStatus[taskId]) {
-      taskStatus[taskId] = {
-        status: 'STARTED',
-        runningPercentage: 0,
-        waitingTime: 0,
-        cancellationPercentage: 0,
-        processingPercentage: 0,
-        nextLoopTime: new Date()
-      }
-    }
     taskStatus[taskId].status = 'PROCESSING'
 
     // Update currentTokenIds if we have token data

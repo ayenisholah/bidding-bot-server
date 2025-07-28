@@ -1,6 +1,50 @@
 // This is the improved startTask function ready to be integrated into src/index.ts
 // Simply copy this entire function and replace the existing startTask function
 
+import { ITask } from './src/models/task.model';
+import { IWallet } from './src/models/wallet.model';
+import { Job, Queue } from 'bullmq';
+import { MaxUint256 } from 'ethers';
+import BidLogs from './src/models/logs.model';
+import { walletCache } from './src/utils/wallet-cache';
+import { approvalCache } from './src/utils/approval-cache';
+import { taskCircuitBreaker } from './src/utils/task-circuit-breaker';
+import { decryptPrivateKey } from './src/utils/crypto';
+import { approveMarketplaceWithCache } from './src/functions/approveMarketplace-improved';
+import { logger, ErrorCategory } from './src/utils/logger';
+import { WETH } from './src/utils/currencies';
+// These constants are defined in the main index.ts file
+declare const SEAPORT: string;
+declare const MAGICEDEN_MARKETPLACE: string;
+
+// Color constants
+const YELLOW = '\x1b[33m';
+const RED = '\x1b[31m';
+const GREEN = '\x1b[32m';
+const CYAN = '\x1b[36m';
+const RESET = '\x1b[0m';
+
+// These would be imported from the main index.ts file
+declare const API_KEY: string | undefined;
+declare const taskStatus: any;
+declare const taskLoopCounters: Map<string, number>;
+declare const skipStats: any;
+declare const errorStats: any;
+declare const completedTasks: any;
+declare const activeTasks: Map<string, ITask>;
+declare const currentTasks: ITask[];
+declare const enabledMarketplaces: string[];
+declare const wsManager: any;
+declare const subscribeToCollections: (tasks: ITask[]) => void;
+declare const removeTaskFromAborted: (taskId: string) => Promise<void>;
+declare const addTaskToIndexes: (task: ITask) => void;
+declare const queue: Queue;
+declare const OPENSEA_SCHEDULE: string;
+declare const BLUR_SCHEDULE: string;
+declare const MAGICEDEN_SCHEDULE: string;
+declare const createJobOptions: (priority?: number, timeout?: number, jobName?: string) => any;
+declare const unlockTask: (taskId: string) => void;
+
 async function startTask(task: ITask, start: boolean, marketplace?: string) {
   const startTime = Date.now();
   const taskId = task._id.toString();
@@ -17,7 +61,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     console.log(RED + 'API_KEY is not set - cannot start task' + RESET);
     console.log(YELLOW + 'Please set API_KEY environment variable and restart' + RESET);
     try {
-      await logger.logError(ErrorCategory.CONFIGURATION, 'Missing API_KEY', { taskId });
+      await logger.logError(ErrorCategory.GENERAL, 'Missing API_KEY', { taskId });
     } catch (logError) {
       console.error('Failed to log error:', logError);
     }
@@ -28,7 +72,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     console.log(RED + 'RATE_LIMIT is not set - cannot start task' + RESET);
     console.log(YELLOW + 'Please set RATE_LIMIT environment variable and restart' + RESET);
     try {
-      await logger.logError(ErrorCategory.CONFIGURATION, 'Missing RATE_LIMIT', { taskId });
+      await logger.logError(ErrorCategory.GENERAL, 'Missing RATE_LIMIT', { taskId });
     } catch (logError) {
       console.error('Failed to log error:', logError);
     }
@@ -65,7 +109,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     console.error(RED + errorMsg + RESET);
     warnings.push(errorMsg);
     try {
-      await logger.logWarning(ErrorCategory.TASK_MANAGEMENT, errorMsg, { taskId, error });
+      await logger.logWarning(ErrorCategory.TASK_MANAGEMENT, errorMsg, { taskId, error: error as Error });
     } catch (logError) {
       console.error('Failed to log warning:', logError);
     }
@@ -105,7 +149,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       const warning = `Failed to delete bid logs for task ${task._id}: ${err.message}`;
       console.error(YELLOW + warning + RESET);
       warnings.push(warning);
-      logger.logWarning(ErrorCategory.DATABASE, warning, { taskId, error: err })
+      logger.logWarning(ErrorCategory.DATABASE, warning, { taskId, error: err as Error })
         .catch((logError: any) => console.error('Failed to log warning:', logError));
     });
 
@@ -121,7 +165,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       errors.push(error);
       criticalError = true;
       try {
-        await logger.logError(ErrorCategory.WALLET, error, { taskId, walletId: task.walletId });
+        await logger.logError(ErrorCategory.GENERAL, error, { taskId, walletId: task.walletId });
       } catch (logError) {
         console.error('Failed to log error:', logError);
       }
@@ -136,7 +180,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       errors.push(error);
       criticalError = true;
       try {
-        await logger.logError(ErrorCategory.SECURITY, error, { taskId, walletId: task.walletId, error: decryptError });
+        await logger.logError(ErrorCategory.SECURITY, error, { taskId, walletId: task.walletId, error: decryptError as Error });
       } catch (logError) {
         console.error('Failed to log error:', logError);
       }
@@ -186,7 +230,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
         // Check on-chain approval
         console.log(CYAN + `Checking ${mp} approval on-chain...` + RESET);
         try {
-          const approved = await approveMarketplace(marketplaceAddress, privateKey!, WETH);
+          const approved = await approveMarketplaceWithCache(marketplaceAddress, privateKey!, WETH, process.env.ALCHEMY_API_KEY || '');
 
           if (approved) {
             console.log(GREEN + `✓ ${mp} approval confirmed for wallet ${wallet!.address}` + RESET);
@@ -261,9 +305,9 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     console.error(RED + errorMsg + RESET);
     errors.push(errorMsg);
     try {
-      await logger.logError(ErrorCategory.WALLET, 'Approval process failed', {
+      await logger.logError(ErrorCategory.GENERAL, 'Approval process failed', {
         taskId,
-        error,
+        error: error as Error,
         errorMessage: errorMsg
       });
     } catch (logError) {
@@ -318,7 +362,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
         await logger.logWarning(ErrorCategory.WEBSOCKET, 'WebSocket subscription failed', {
           taskId,
           collection: task.contract.slug,
-          error: wsError
+          error: wsError as Error
         });
       } catch (logError) {
         console.error('Failed to log warning:', logError);
@@ -430,7 +474,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
           await logger.logError(ErrorCategory.QUEUE, 'Job queueing failed', {
             taskId,
             jobCount: jobs.length,
-            error: queueError
+            error: queueError as Error
           });
         } catch (logError) {
           console.error('Failed to log error:', logError);
@@ -473,7 +517,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       await logger.logError(ErrorCategory.TASK_MANAGEMENT, 'Task start failed', {
         taskId,
         marketplace,
-        error,
+        error: error as Error,
         errorMessage: errorMsg,
         stackTrace: error instanceof Error ? error.stack : undefined
       });

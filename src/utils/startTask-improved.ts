@@ -7,7 +7,7 @@ import { walletCache } from './wallet-cache';
 import { approvalCache } from './approval-cache';
 import { taskCircuitBreaker } from './task-circuit-breaker';
 import { decryptPrivateKey } from './crypto';
-import { approveMarketplace } from '../functions/approveMarketplace-improved';
+import { approveMarketplaceWithCache } from '../functions/approveMarketplace-improved';
 import { logger, ErrorCategory } from './logger';
 
 // Constants - these would be imported from the main file
@@ -45,7 +45,7 @@ interface ApprovalResult {
 export async function startTaskImproved(
   task: ITask,
   start: boolean,
-  marketplace?: string,
+  marketplace: string | undefined,
   // Dependencies injected for better testability
   deps: {
     API_KEY?: string;
@@ -425,7 +425,7 @@ async function processMarketplaceApproval(
     }
 
     console.log(CYAN + `Checking ${marketplace} approval on-chain...` + RESET);
-    const approved = await approveMarketplace(marketplaceAddress, privateKey, deps.WETH);
+    const approved = await approveMarketplaceWithCache(marketplaceAddress, privateKey, deps.WETH, process.env.ALCHEMY_API_KEY || '');
 
     if (approved) {
       console.log(GREEN + `✓ ${marketplace} approval confirmed for wallet ${wallet.address}` + RESET);
