@@ -4399,6 +4399,12 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
   const startTime = Date.now();
   const taskId = task._id.toString();
 
+  // Early return if marketplace is specified and task is not running
+  if (marketplace && !task.running) {
+    console.log(YELLOW + `[startTask] Skipping marketplace ${marketplace} addition for stopped task ${taskId}` + RESET);
+    return;
+  }
+
   // === ENHANCED STARTTASK: REMOVE FROM BLACKLIST ===
   // Remove task from blacklist to allow job execution
   const wasBlacklisted = removeTaskFromBlacklist(taskId, marketplace);
