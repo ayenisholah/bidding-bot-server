@@ -588,7 +588,7 @@ class WebSocketManager extends EventEmitter {
     // Clear pong timeout when we receive a pong
     this.clearTimeout('pongTimeout');
 
-    console.log('Pong received, latency:', latency);
+    // Pong received
   }
 
 
@@ -745,8 +745,6 @@ class WebSocketManager extends EventEmitter {
     };
 
     this.sendMessage(pingMessage);
-
-    console.log('Ping sent');
   }
 
 

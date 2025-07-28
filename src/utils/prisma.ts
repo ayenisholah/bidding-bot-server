@@ -13,7 +13,7 @@ export const prisma = new PrismaClient({
 // Handle connection errors
 prisma.$connect()
   .then(() => {
-    console.log('✅ Prisma connected to PostgreSQL');
+    // Prisma connected to PostgreSQL
   })
   .catch((error) => {
     console.error('❌ Failed to connect to PostgreSQL:', error);

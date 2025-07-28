@@ -1,7 +1,7 @@
 /* eslint-disable */
 
 import { ethers, Wallet } from "ethers";
-import { axiosInstance, limiter } from "../../init";
+import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
 import { config } from "dotenv";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, trackBidRate } from "../..";
 import { DistributedLockManager } from '../../utils/lock';
@@ -20,36 +20,36 @@ import { InsufficientBalanceError, MinimumPriceError, RateLimitError, InvalidReq
 function extractMagicEdenErrorMessage(error: any): string {
   if (error?.response?.data) {
     const data = error.response.data;
-    
+
     // Handle array of errors
     if (data.errors && Array.isArray(data.errors) && data.errors.length > 0) {
       return data.errors.join(', ');
     }
-    
+
     // Handle single error message
     if (data.error) {
       return data.error;
     }
-    
+
     // Handle message field
     if (data.message) {
       return data.message;
     }
-    
+
     // Handle detail field
     if (data.detail) {
       return data.detail;
     }
-    
+
     // If it's a string, return it
     if (typeof data === 'string') {
       return data;
     }
-    
+
     // Fallback to JSON stringify
     return JSON.stringify(data);
   }
-  
+
   // Fallback to standard error message
   return error?.message || String(error);
 }
@@ -145,17 +145,17 @@ let batchProcessor: NodeJS.Timeout | null = null;
 export async function cleanupMagicEden() {
   // Clear pending requests
   pendingRequests.clear();
-  
+
   // Process any remaining batched orders
   if (batchProcessor) {
     clearTimeout(batchProcessor);
     batchProcessor = null;
   }
-  
+
   if (orderBatchQueue.length > 0) {
     const batch = [...orderBatchQueue];
     orderBatchQueue.length = 0;
-    
+
     try {
       await withRetry(async () => {
         return await prisma.order.createMany({ data: batch });
@@ -198,13 +198,20 @@ export async function bidOnMagiceden(
   trait?: Trait,
   tokenId?: number
 ) {
+  // Check if task is blacklisted (stopped)
+  if (isTaskBlacklisted(taskId, 'magiceden')) {
+    const error = new Error(`Bid execution blocked - task ${taskId} is stopped for MagicEden`);
+    console.log(`[MagicEden] Job execution blocked for stopped task: ${taskId}`);
+    throw error;
+  }
+
   // Early validation before expensive operations
   const slugLower = slug.toLowerCase();
-  const task = currentTasks.find((task) => 
-    task.contract.slug.toLowerCase() === slugLower && 
+  const task = currentTasks.find((task) =>
+    task.contract.slug.toLowerCase() === slugLower &&
     task.selectedMarketplaces.includes("MagicEden")
   );
-  
+
   if (!task) {
 
     return;
@@ -214,29 +221,29 @@ export async function bidOnMagiceden(
   const duration = bidExpiry / 60 || 15; // minutes
   const currentTime = Date.now();
   const expiration = Math.floor((currentTime + (duration * 60 * 1000)) / 1000);
-  
+
   const isUSDC = currency.toLowerCase() === USDC.toLowerCase();
   const decimal = isUSDC ? 6 : 18;
   const decimalPower = Math.pow(10, decimal);
   const currencySymbol = isUSDC ? "USDC" : "WETH";
-  
+
   // Get wallet from cache
   const wallet = getWallet(privateKey);
-  
+
   // Fetch balance (can't parallelize with wallet since we need wallet first)
   const wethBalance = await fetchERC20Balance(maker, currency);
-  
+
   const offerPriceEth = Math.round(Number(weiPrice)) / decimalPower;
-  
+
   // Optimize decimal calculation
   const decimals = offerPriceEth >= 1 ? 2 : offerPriceEth >= 0.1 ? 3 : 4;
   const roundedEth = isUSDC ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
-  
+
   const basis = BASIS_CONSTANTS[decimals];
-  const roundedWei = decimal === 18 ? 
-    Math.round(roundedEth * decimalPower / basis) * basis : 
+  const roundedWei = decimal === 18 ?
+    Math.round(roundedEth * decimalPower / basis) * basis :
     Math.round(roundedEth * decimalPower);
-  
+
   // Early validation - fail fast before expensive operations
   if (offerPriceEth > wethBalance) {
     const error = new InsufficientBalanceError(
@@ -261,15 +268,15 @@ export async function bidOnMagiceden(
   }
 
   const order = await createBidData(
-    taskId, 
-    slug, 
-    maker, 
-    collection, 
-    quantity, 
-    Math.round(Number(weiPrice)).toString(), 
-    expiration.toString(), 
-    currency, 
-    trait, 
+    taskId,
+    slug,
+    maker,
+    collection,
+    quantity,
+    Math.round(Number(weiPrice)).toString(),
+    expiration.toString(),
+    currency,
+    trait,
     tokenId,
     task // Pass the cached task
   );
@@ -278,20 +285,20 @@ export async function bidOnMagiceden(
 
   // Simplify the submitSignedOrderData call
   await submitSignedOrderData(
-    taskId, 
-    roundedWei.toString(), 
-    decimal, 
-    currencySymbol, 
-    bidCount, 
-    order, 
-    wallet, 
-    slug, 
-    bidExpiry, 
-    trait, 
+    taskId,
+    roundedWei.toString(),
+    decimal,
+    currencySymbol,
+    bidCount,
+    order,
+    wallet,
+    slug,
+    bidExpiry,
+    trait,
     tokenId,
     task // Pass the cached task
   );
-  
+
   return order;
 }
 
@@ -318,11 +325,11 @@ async function createBidData(
   tokenId?: number | string,
   cachedTask?: any // Accept cached task to avoid duplicate lookup
 ) {
-  const task = cachedTask || currentTasks.find((task) => 
-    task.contract.slug.toLowerCase() === slug.toLowerCase() && 
+  const task = cachedTask || currentTasks.find((task) =>
+    task.contract.slug.toLowerCase() === slug.toLowerCase() &&
     task?.selectedMarketplaces?.map((marketplace) => marketplace.toLowerCase()).includes("magiceden")
   );
-  
+
   if (!task) return;
 
   const options = trait || tokenId ? {
@@ -389,12 +396,12 @@ async function createBidData(
           }
         ));
         clearTimeout(timeoutId);
- 
+
         // Clean up cache after a delay to prevent immediate re-requests
         setTimeout(() => {
           pendingRequests.delete(requestKey);
         }, 5000); // 5 second cache
-        
+
         return order;
       } finally {
         clearTimeout(timeoutId);
@@ -410,7 +417,7 @@ async function createBidData(
     } catch (error: any) {
       // Clean up on error
       pendingRequests.delete(requestKey);
-      
+
       if (axios.isCancel(error)) {
         return null;
       }
@@ -447,13 +454,13 @@ async function signOrderData(taskId: string, wallet: ethers.Wallet, signData: an
   // Use cached domain and types for better performance
   const domain = trait ? domainCache : (signData.domain || domainCache);
   const types = trait ? typesCache : signData.types;
-  
+
   const signature = await wallet.signTypedData(
     domain,
     types,
     convertBigNumbers(signData.value)
   );
-  
+
   return signature;
 }
 
@@ -469,22 +476,22 @@ async function signOrderData(taskId: string, wallet: ethers.Wallet, signData: an
  * @returns The response from the API.
  */
 async function sendSignedOrderData(
-  taskId: string, 
-  offerPrice: string | number, 
-  decimal: number, 
-  currencySymbol: string, 
-  bidCount: string, 
-  signature: string, 
-  data: any, 
-  slug: string, 
-  expiry: number, 
-  trait?: Trait, 
+  taskId: string,
+  offerPrice: string | number,
+  decimal: number,
+  currencySymbol: string,
+  bidCount: string,
+  signature: string,
+  data: any,
+  slug: string,
+  expiry: number,
+  trait?: Trait,
   tokenId?: number | string,
   cachedTask?: any // Accept cached task
 ) {
   try {
     const [_parsedTaskId] = bidCount.split(":");
-    
+
     const task = cachedTask || currentTasks.find((task) =>
       task.contract.slug.toLowerCase() === slug.toLowerCase() &&
       task.selectedMarketplaces.includes("MagicEden")
@@ -496,6 +503,10 @@ async function sendSignedOrderData(
       : `${BASE_URL}/magiceden/v3/rtp/ethereum/order/v4`
 
     // check if the tasks is still active before you make the offer
+    if (isTaskBlacklisted(taskId, 'magiceden')) {
+      console.log(`[MagicEden] Offer submission blocked for stopped task: ${taskId}`);
+      return;
+    }
     const currentTask = activeTasks.get(taskId)
     if (!currentTask?.running || !currentTask?.selectedMarketplaces?.map((marketplace) => marketplace.toLowerCase()).includes("magiceden".toLowerCase())) return
 
@@ -538,14 +549,14 @@ async function sendSignedOrderData(
         taskId: taskId,
         marketplace: "magiceden"
       });
-      
+
       // Process batch if not already scheduled
       if (!batchProcessor) {
         batchProcessor = setTimeout(async () => {
           const batch = [...orderBatchQueue];
           orderBatchQueue.length = 0;
           batchProcessor = null;
-          
+
           if (batch.length > 0) {
             try {
               await withRetry(async () => {
@@ -564,11 +575,11 @@ async function sendSignedOrderData(
         }, 100); // Batch every 100ms
       }
       trackBidRate("magiceden", taskId)
-      
+
       // Log successful bid
 
-        // console.log(MAGENTA, successMessage, RESET);
-      
+      console.log(MAGENTA, successMessage, RESET);
+
       if (!task) return
       return offerResponse;
     } finally {
@@ -612,21 +623,21 @@ async function sendSignedOrderData(
 
  */
 export async function submitSignedOrderData(
-  taskId: string, 
-  offerPrice: string | number, 
-  decimal: number, 
-  currencySymbol: string, 
-  bidCount: string, 
-  order: CreateBidData, 
-  wallet: ethers.Wallet, 
-  slug: string, 
-  expiry: number, 
-  trait?: Trait, 
+  taskId: string,
+  offerPrice: string | number,
+  decimal: number,
+  currencySymbol: string,
+  bidCount: string,
+  order: CreateBidData,
+  wallet: ethers.Wallet,
+  slug: string,
+  expiry: number,
+  trait?: Trait,
   tokenId?: number | string,
   cachedTask?: any // Accept cached task
 ) {
-  const task = cachedTask || currentTasks.find((task) => 
-    task.contract.slug.toLowerCase() === slug.toLowerCase() && 
+  const task = cachedTask || currentTasks.find((task) =>
+    task.contract.slug.toLowerCase() === slug.toLowerCase() &&
     task.selectedMarketplaces.includes("MagicEden")
   );
   if (!task) return;
@@ -634,17 +645,17 @@ export async function submitSignedOrderData(
   // Optimize order data transformation with single pass
   const targetRecipient = "0x6fa303e72bed54f515a513496f922bc331e2f27e".toLowerCase();
   const replacementRecipient = "0xca9337244b5f04cb946391bc8b8a980e988f9a6a";
-  
+
   if (order?.steps) {
     for (const step of order.steps) {
       if (!step.items) continue;
-      
+
       for (const item of step.items) {
         // Set source
         if (item.data?.post?.body) {
           item.data.post.body.source = "magiceden.us";
         }
-        
+
         // Replace recipients in sign value consideration
         if (item.data?.sign?.value?.consideration) {
           for (const considerationItem of item.data.sign.value.consideration) {
@@ -653,7 +664,7 @@ export async function submitSignedOrderData(
             }
           }
         }
-        
+
         // Replace recipients in post body consideration
         if (item.data?.post?.body?.order?.data?.consideration) {
           for (const considerationItem of item.data.post.body.order.data.consideration) {
@@ -738,16 +749,16 @@ export async function submitSignedOrderData(
   }
 
   const result = await sendSignedOrderData(
-    taskId, 
-    offerPrice, 
-    decimal, 
-    currencySymbol, 
-    bidCount, 
-    signature, 
-    data, 
-    slug, 
-    expiry, 
-    trait, 
+    taskId,
+    offerPrice,
+    decimal,
+    currencySymbol,
+    bidCount,
+    signature,
+    data,
+    slug,
+    expiry,
+    trait,
     tokenId,
     task // Pass the cached task
   );
@@ -969,7 +980,7 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
 export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: { attributeKey: string; attributeValue: string }) {
   const CACHE_TTL = 120; // 2 minutes cache for trait data
   const cacheKey = `magiceden:trait:${contractAddress}:${trait.attributeKey}:${trait.attributeValue}`;
-  
+
   // Try to get from cache first
   try {
     const redis = redisClient.getClient();
@@ -983,7 +994,7 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
       console.error('Error reading MagicEden trait floor from cache:', error);
     }
   }
-  
+
   try {
     const queryParams = new URLSearchParams({
       collection: contractAddress,
@@ -1007,7 +1018,7 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
       },
     }))
     const floor = data?.tokens[0]?.market?.floorAsk?.price?.amount?.native
-    
+
     // Cache the result
     if (floor !== undefined) {
       try {
@@ -1020,7 +1031,7 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
         }
       }
     }
-    
+
     return floor
   } catch (error) {
     if (error) {
@@ -1164,7 +1175,7 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
   const CACHE_TTL = 60; // 1 minute cache for token listings
   const cacheKey = `magiceden:tokens:${collectionId}:${limit || 'all'}`;
   const lockKey = `tokens:${collectionId} `;
-  
+
   // Try to get from cache first
   try {
     const redis = redisClient.getClient();
@@ -1192,7 +1203,7 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
       } catch (error) {
         // Continue if cache check fails
       }
-      
+
       const params: any = {
         excludeSpam: true,
         excludeBurnt: true,
@@ -1228,7 +1239,7 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
       } while (params.continuation && totalFetched < limit);
 
       const result = allTokens.slice(0, limit);
-      
+
       // Cache the result
       try {
         const redis = redisClient.getClient();
@@ -1239,7 +1250,7 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
           console.error('Error caching MagicEden tokens:', error);
         }
       }
-      
+
       return result;
 
     },
@@ -1758,7 +1769,7 @@ interface Media {
 export async function cancelMagicedenRequest(taskId: string): Promise<{ success: boolean; cancelledCount: number; error?: string }> {
   // Input validation
   if (!taskId || typeof taskId !== 'string') {
-    await logger.logWarning(ErrorCategory.MARKETPLACE, 'Invalid taskId provided to cancelMagicedenRequest', { 
+    await logger.logWarning(ErrorCategory.MARKETPLACE, 'Invalid taskId provided to cancelMagicedenRequest', {
       taskId,
       marketplace: 'magiceden',
       marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION
@@ -1774,19 +1785,19 @@ export async function cancelMagicedenRequest(taskId: string): Promise<{ success:
 
   try {
     let cancelledCount = 0;
-    
+
     // Cancel all controllers with timeout protection
     await Promise.all(controllers.map(async (controller) => {
       try {
         const timeoutPromise = new Promise<void>((_, reject) => {
           setTimeout(() => reject(new Error('Abort timeout')), 5000);
         });
-        
+
         const abortPromise = new Promise<void>((resolve) => {
           controller.abort();
           resolve();
         });
-        
+
         await Promise.race([abortPromise, timeoutPromise]);
         cancelledCount++;
       } catch (error) {
@@ -1798,7 +1809,7 @@ export async function cancelMagicedenRequest(taskId: string): Promise<{ success:
         });
       }
     }));
-    
+
     activeRequests.delete(taskId);
 
     return { success: true, cancelledCount };

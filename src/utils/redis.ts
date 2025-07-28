@@ -87,8 +87,6 @@ class RedisClient {
     if (!this.client) {
       try {
         const nodes = await getRedisNodes();
-        console.log('Connecting to Redis nodes:', nodes);
-        
         this.client = new Redis.Cluster(nodes, {
           ...defaultConfig,
           scaleReads: 'all',
@@ -154,7 +152,7 @@ class RedisClient {
       this.isConnected = true;
       this.connecting = false;
       this.connectionAttempts = 0;
-      console.log('Redis cluster connection established');
+      // Redis cluster connection established
     });
 
     this.client.on('error', async (err) => {

@@ -53,7 +53,7 @@ async function initialize(rateLimit: number) {
   // Wrap axios instance to track API calls for timeout analysis
   wrapAxiosInstance(axiosInstance, () => jobContext.getJobId());
 
-  console.log(`Limiter initialized with rate limit: ${rateLimit} requests per second`);
+  // Limiter initialized
 }
 
 // Add a function to get current counts
@@ -123,5 +123,87 @@ setInterval(() => {
   rps.currentRPS = trueRPS
 
 }, 1000);
+
+// Task blacklist for preventing stopped tasks from executing
+// Now supports marketplace-specific blacklisting
+const taskBlacklist = new Map<string, Set<string>>();
+
+export function cancelTaskJobs(taskId: string, marketplace?: string) {
+  if (!limiter) return { cancelled: 0, blacklisted: false };
+
+  // Add to blacklist to prevent new jobs
+  if (!taskBlacklist.has(taskId)) {
+    taskBlacklist.set(taskId, new Set());
+  }
+
+  if (marketplace) {
+    // Marketplace-specific blacklist
+    taskBlacklist.get(taskId)!.add(marketplace.toLowerCase());
+    console.log(`Task ${taskId} blacklisted for marketplace: ${marketplace}`);
+  } else {
+    // Full task blacklist - add special marker
+    taskBlacklist.get(taskId)!.add('*');
+    console.log(`Task ${taskId} fully blacklisted`);
+  }
+
+  // Get current limiter queue size for reporting
+  const counts = limiter.counts();
+  const queuedJobs = counts.RECEIVED + counts.QUEUED;
+
+  console.log(`Current limiter queue: ${queuedJobs} jobs`);
+
+  return { cancelled: 0, blacklisted: true, queuedJobs };
+}
+
+export function removeTaskFromBlacklist(taskId: string, marketplace?: string) {
+  const taskEntry = taskBlacklist.get(taskId);
+  if (!taskEntry) return false;
+
+  let wasRemoved = false;
+
+  if (marketplace) {
+    // Remove specific marketplace from blacklist
+    wasRemoved = taskEntry.delete(marketplace.toLowerCase());
+    if (wasRemoved) {
+      console.log(`Task ${taskId} removed from blacklist for marketplace: ${marketplace}`);
+    }
+    // Clean up empty entries
+    if (taskEntry.size === 0) {
+      taskBlacklist.delete(taskId);
+    }
+  } else {
+    // Remove entire task from blacklist
+    taskBlacklist.delete(taskId);
+    wasRemoved = true;
+    console.log(`Task ${taskId} fully removed from blacklist - all marketplaces can execute again`);
+  }
+
+  return wasRemoved;
+}
+
+export function isTaskBlacklisted(taskId: string, marketplace?: string): boolean {
+  const taskEntry = taskBlacklist.get(taskId);
+  if (!taskEntry) return false;
+
+  // Check if fully blacklisted
+  if (taskEntry.has('*')) return true;
+
+  // Check marketplace-specific blacklist
+  if (marketplace) {
+    return taskEntry.has(marketplace.toLowerCase());
+  }
+
+  // If no marketplace specified, check if any marketplace is blacklisted
+  return taskEntry.size > 0;
+}
+
+// Enhanced limiter scheduling with task validation
+export function scheduleWithTaskValidation(fn: () => PromiseLike<any>, taskId: string) {
+  if (isTaskBlacklisted(taskId)) {
+    console.log(`Blocked job execution for stopped task: ${taskId}`);
+    return Promise.reject(new Error(`Task ${taskId} is stopped`));
+  }
+  return limiter.schedule(fn);
+}
 
 export { limiter, initialize, axiosInstance };

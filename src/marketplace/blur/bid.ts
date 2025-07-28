@@ -1,7 +1,5 @@
-/* eslint-disable */
-
 import { ethers, Wallet, formatUnits } from "ethers";
-import { axiosInstance, limiter } from "../../init";
+import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, pQueue, RESET, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { DistributedLockManager } from "../../utils/lock";
@@ -139,6 +137,14 @@ export async function bidOnBlur(
   expiry = 900,
   traits?: string
 ) {
+  // === ENHANCED BID VALIDATION ===
+  // Check if task is blacklisted (stopped)
+  if (isTaskBlacklisted(taskId, 'blur')) {
+    const error = new Error(`Bid execution blocked - task ${taskId} is stopped for Blur`);
+    console.log(`[Blur] Job execution blocked for stopped task: ${taskId}`);
+    throw error;
+  }
+  
   // Check if collection is in the restricted cache
   if (isCollectionRestricted(contractAddress)) {
     console.log(`Blur: Collection ${contractAddress} is cached as transfer-restricted - skipping bid`);
@@ -397,7 +403,14 @@ async function submitBidToBlur(
   addActiveRequest(taskId, controller);
 
   try {
+    // Calculate formatted ETH price for logging
+    const offerPriceEth = (Math.floor(Number(formatUnits(offer_price.toString(), 18)) * 100) / 100).toFixed(2);
+    
     const [taskId] = bidCount.split(":")
+    if (isTaskBlacklisted(taskId, 'blur')) {
+      console.log(`[Blur] Offer submission blocked for stopped task: ${taskId}`);
+      return;
+    }
     const currentTask = activeTasks.get(taskId)
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("BLUR".toLowerCase())) return
     let running = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase())
@@ -454,8 +467,8 @@ async function submitBidToBlur(
     const offers = response.data
 
     if (offers.success) {
-      const successMessage = traits ? `🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉 TRAIT: ${traits}` : `🎉 OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉`
-      // console.log("\x1b[33m", successMessage, RESET);
+      const successMessage = traits ? `🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉 AMOUNT: ${offerPriceEth} BETH 🎉 TRAIT: ${traits}` : `🎉 OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉 AMOUNT: ${offerPriceEth} BETH 🎉`
+      console.log("\x1b[33m", successMessage, RESET);
 
       let identifier = ''
       if (traits) {

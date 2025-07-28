@@ -259,7 +259,7 @@ export async function processListingJob(job: Job): Promise<boolean> {
  */
 export async function initializeListingScheduler(wsManager?: WebSocketManager): Promise<void> {
   try {
-    console.log('Initializing listing scheduler...');
+    // Initializing listing scheduler
 
     // Get the main queue
     const queue = await getMainQueue();
@@ -275,7 +275,7 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
     // Find all active listings
     const activeListings = await Listing.find({ running: true });
 
-    console.log(`Found ${activeListings.length} active listings to schedule`);
+    // Process active listings
 
     // Process each active listing
     for (const listing of activeListings) {
@@ -339,7 +339,7 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
       }
     }
 
-    console.log('Listing scheduler initialized successfully');
+    // Listing scheduler initialized successfully
   } catch (error) {
     await logger.logGeneralError('Failed to initialize listing scheduler', {
       error: error as Error,

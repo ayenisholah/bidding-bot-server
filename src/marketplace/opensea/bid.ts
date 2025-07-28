@@ -1,8 +1,8 @@
-/* eslint-disable */
+
 
 import { ethers, Wallet } from "ethers";
 import { BASE_URL, SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
-import { axiosInstance, limiter } from "../../init";
+import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
 import { activeTasks, API_KEY, BLUE, decrementBidCount, pQueue, trackBidRate } from "../..";
 import { config } from "dotenv";
 import axios from "axios";
@@ -365,6 +365,14 @@ export async function bidOnOpensea(
   try {
     timer.startStep('validation');
 
+    // Check if task is blacklisted (stopped)
+    if (isTaskBlacklisted(taskId, 'opensea')) {
+      const error = new Error(`Bid execution blocked - task ${taskId} is stopped for OpenSea`);
+      console.log(`[OpenSea] Job execution blocked for stopped task: ${taskId}`);
+      timer.endStep('validation', false, 'Task is blacklisted');
+      throw error;
+    }
+
     // Early validation - fail fast
     const task = activeTasks.get(taskId)
     if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
@@ -499,8 +507,8 @@ export async function bidOnOpensea(
 
       // check if the tasks is still active before you make the offer
       const [taskId] = bidCount.split(":")
-      if (!task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) {
-        timer.endStep('token_final_validation', false, 'Task no longer active');
+      if (isTaskBlacklisted(taskId, 'opensea') || !task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) {
+        timer.endStep('token_final_validation', false, 'Task no longer active or blacklisted');
         return
       }
 
@@ -533,8 +541,8 @@ export async function bidOnOpensea(
       timer.endStep('token_database_save');
 
       trackBidRate('opensea', taskId);
-      // const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()}  TOKEN: ${asset.tokenId} ${Number(offerPriceEthFinal)} ${currencySymbol} 🎉`
-      // console.log(BLUE, successMessage, RESET);
+      const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()}  TOKEN: ${asset.tokenId} ${Number(offerPriceEthFinal)} ${currencySymbol} 🎉`
+      console.log(BLUE, successMessage, RESET);
       success = true;
     }
     else {
@@ -666,8 +674,8 @@ export async function bidOnOpensea(
       timer.endStep('collection_signing');
       timer.startStep('collection_final_validation');
 
-      if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
-        timer.endStep('collection_final_validation', false, 'Task no longer active');
+      if (isTaskBlacklisted(taskId, 'opensea') || !task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
+        timer.endStep('collection_final_validation', false, 'Task no longer active or blacklisted');
         return
       }
 
@@ -705,6 +713,10 @@ export async function bidOnOpensea(
  */
 async function submitOfferToOpensea(decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900, opensea_traits?: string) {
   const [taskId] = bidCount.split(":")
+  if (isTaskBlacklisted(taskId, 'opensea')) {
+    console.log(`[OpenSea] Offer submission blocked for stopped task: ${taskId}`);
+    return;
+  }
   const task = activeTasks.get(taskId)
   if (!task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) return
 
@@ -765,10 +777,10 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
 
   // Log successful bid
 
-  // const successMessage = opensea_traits ?
-  //   `🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()}  TRAIT: ${opensea_traits} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
-  //   : `🎉 COLLECTION OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
-  // console.log(BLUE, successMessage, RESET);
+  const successMessage = opensea_traits ?
+    `🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()}  TRAIT: ${opensea_traits} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
+    : `🎉 COLLECTION OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
+  console.log(BLUE, successMessage, RESET);
 }
 
 /**
