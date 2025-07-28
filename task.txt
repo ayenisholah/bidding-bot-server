@@ -1,15 +1,44 @@
-[startTask] Called with task 68875d9cfd744194919bc04d, start=true, marketplace=all
-Checking marketplace approvals for wallet 0x104297386b5Ff2d69420A2CbAddBd1469579cef9...
-Skipping approval for Blur - not required
-UPDATED TASK PUDGYPENGUINS RUNNING STATUS TO: TRUE
-subscribing to collection:  pudgypenguins
-subscribeToCollections called with 1 tasks
-[Preprocessing] Starting task preprocessing for 68875d9cfd744194919bc04d
-[Preprocessing] Blur will create 173 trait bid jobs
-[Parent Job Created] Blur | Task: 68875d9cfd744194919bc04d | Total Jobs: 173
-[Preprocessing] Complete for task 68875d9cfd744194919bc04d - Total jobs across all marketplaces: 173
-  OpenSea: 0 jobs
-  Blur: 173 jobs
-  MagicEden: 0 jobs
-Loop restart: Adding 1 jobs without deduplication
-[BLUR] Creating 173 trait bid jobs
+it] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running
+[MagicEden Trait] Skipping bid - task 688771d0fd744194919bc1ce is no longer active or running

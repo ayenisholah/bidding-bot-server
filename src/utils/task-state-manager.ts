@@ -27,6 +27,10 @@ export interface BulkJobParent {
   failedJobs: number;
   taskId: string;
   marketplace: string;
+  // Optional bid tracking fields (only used for cancellation jobs)
+  totalBids?: number;
+  completedBids?: number;
+  failedBids?: number;
 }
 
 export interface StateTransition {
