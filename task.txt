@@ -1,1064 +1,1056 @@
-OPENSEA: 406/454 completed, 0 failed
-TOTAL: 837/1362 (61.5%)
-Percentage: 61.5% → 61.5%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 406/454 | After: 407/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 407/454 completed, 0 failed
-TOTAL: 838/1362 (61.5%)
-Percentage: 61.5% → 61.5%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 407/454 completed, 0 failed
-TOTAL: 838/1362 (61.5%)
-Percentage: 61.5% → 61.5%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 407/454 | After: 408/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 408/454 completed, 0 failed
-TOTAL: 839/1362 (61.6%)
-Percentage: 61.5% → 61.6%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 408/454 completed, 0 failed
-TOTAL: 839/1362 (61.6%)
-Percentage: 61.6% → 61.6%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 408/454 | After: 409/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 409/454 completed, 0 failed
-TOTAL: 840/1362 (61.7%)
-Percentage: 61.6% → 61.7%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 409/454 completed, 0 failed
-TOTAL: 840/1362 (61.7%)
-Percentage: 61.7% → 61.7%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 409/454 | After: 410/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 410/454 completed, 0 failed
-TOTAL: 841/1362 (61.7%)
-Percentage: 61.7% → 61.7%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 410/454 completed, 0 failed
-TOTAL: 841/1362 (61.7%)
-Percentage: 61.7% → 61.7%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 410/454 | After: 411/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 411/454 completed, 0 failed
-TOTAL: 842/1362 (61.8%)
-Percentage: 61.7% → 61.8%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 411/454 completed, 0 failed
-TOTAL: 842/1362 (61.8%)
-Percentage: 61.8% → 61.8%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 411/454 | After: 412/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 412/454 completed, 0 failed
-TOTAL: 843/1362 (61.9%)
-Percentage: 61.8% → 61.9%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 412/454 completed, 0 failed
-TOTAL: 843/1362 (61.9%)
-Percentage: 61.9% → 61.9%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 412/454 | After: 413/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 413/454 completed, 0 failed
-TOTAL: 844/1362 (62.0%)
-Percentage: 61.9% → 62.0%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 413/454 completed, 0 failed
-TOTAL: 844/1362 (62.0%)
-Percentage: 62.0% → 62.0%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 413/454 | After: 414/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 414/454 completed, 0 failed
-TOTAL: 845/1362 (62.0%)
-Percentage: 62.0% → 62.0%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 414/454 completed, 0 failed
-TOTAL: 845/1362 (62.0%)
-Percentage: 62.0% → 62.0%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 414/454 | After: 415/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 415/454 completed, 0 failed
-TOTAL: 846/1362 (62.1%)
-Percentage: 62.0% → 62.1%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 415/454 completed, 0 failed
-TOTAL: 846/1362 (62.1%)
-Percentage: 62.1% → 62.1%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 415/454 | After: 416/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 416/454 completed, 0 failed
-TOTAL: 847/1362 (62.2%)
-Percentage: 62.1% → 62.2%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 416/454 completed, 0 failed
-TOTAL: 847/1362 (62.2%)
-Percentage: 62.2% → 62.2%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 416/454 | After: 417/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 417/454 completed, 0 failed
-TOTAL: 848/1362 (62.3%)
-Percentage: 62.2% → 62.3%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 417/454 completed, 0 failed
-TOTAL: 848/1362 (62.3%)
-Percentage: 62.3% → 62.3%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 417/454 | After: 418/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 418/454 completed, 0 failed
-TOTAL: 849/1362 (62.3%)
-Percentage: 62.3% → 62.3%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 418/454 completed, 0 failed
-TOTAL: 849/1362 (62.3%)
-Percentage: 62.3% → 62.3%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 418/454 | After: 419/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 419/454 completed, 0 failed
-TOTAL: 850/1362 (62.4%)
-Percentage: 62.3% → 62.4%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 419/454 completed, 0 failed
-TOTAL: 850/1362 (62.4%)
-Percentage: 62.4% → 62.4%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 419/454 | After: 420/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 420/454 completed, 0 failed
-TOTAL: 851/1362 (62.5%)
-Percentage: 62.4% → 62.5%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 420/454 completed, 0 failed
-TOTAL: 851/1362 (62.5%)
-Percentage: 62.5% → 62.5%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 420/454 | After: 421/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 421/454 completed, 0 failed
-TOTAL: 852/1362 (62.6%)
-Percentage: 62.5% → 62.6%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 421/454 completed, 0 failed
-TOTAL: 852/1362 (62.6%)
-Percentage: 62.6% → 62.6%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 421/454 | After: 422/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 422/454 completed, 0 failed
-TOTAL: 853/1362 (62.6%)
-Percentage: 62.6% → 62.6%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 422/454 completed, 0 failed
-TOTAL: 853/1362 (62.6%)
-Percentage: 62.6% → 62.6%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 422/454 | After: 423/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 423/454 completed, 0 failed
-TOTAL: 854/1362 (62.7%)
-Percentage: 62.6% → 62.7%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 423/454 completed, 0 failed
-TOTAL: 854/1362 (62.7%)
-Percentage: 62.7% → 62.7%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 423/454 | After: 424/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 424/454 completed, 0 failed
-TOTAL: 855/1362 (62.8%)
-Percentage: 62.7% → 62.8%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 424/454 completed, 0 failed
-TOTAL: 855/1362 (62.8%)
-Percentage: 62.8% → 62.8%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 424/454 | After: 425/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 425/454 completed, 0 failed
-TOTAL: 856/1362 (62.8%)
-Percentage: 62.8% → 62.8%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 425/454 completed, 0 failed
-TOTAL: 856/1362 (62.8%)
-Percentage: 62.8% → 62.8%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 425/454 | After: 426/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 426/454 completed, 0 failed
-TOTAL: 857/1362 (62.9%)
-Percentage: 62.8% → 62.9%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 426/454 completed, 0 failed
-TOTAL: 857/1362 (62.9%)
-Percentage: 62.9% → 62.9%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 426/454 | After: 427/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 427/454 completed, 0 failed
-TOTAL: 858/1362 (63.0%)
-Percentage: 62.9% → 63.0%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 427/454 completed, 0 failed
-TOTAL: 858/1362 (63.0%)
-Percentage: 63.0% → 63.0%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 427/454 | After: 428/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 428/454 completed, 0 failed
-TOTAL: 859/1362 (63.1%)
-Percentage: 63.0% → 63.1%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 428/454 completed, 0 failed
-TOTAL: 859/1362 (63.1%)
-Percentage: 63.1% → 63.1%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 428/454 | After: 429/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 429/454 completed, 0 failed
-TOTAL: 860/1362 (63.1%)
-Percentage: 63.1% → 63.1%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 429/454 completed, 0 failed
-TOTAL: 860/1362 (63.1%)
-Percentage: 63.1% → 63.1%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 429/454 | After: 430/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 430/454 completed, 0 failed
-TOTAL: 861/1362 (63.2%)
-Percentage: 63.1% → 63.2%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 430/454 completed, 0 failed
-TOTAL: 861/1362 (63.2%)
-Percentage: 63.2% → 63.2%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 430/454 | After: 431/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 431/454 completed, 0 failed
-TOTAL: 862/1362 (63.3%)
-Percentage: 63.2% → 63.3%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 431/454 completed, 0 failed
-TOTAL: 862/1362 (63.3%)
-Percentage: 63.3% → 63.3%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 431/454 | After: 432/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 432/454 completed, 0 failed
-TOTAL: 863/1362 (63.4%)
-Percentage: 63.3% → 63.4%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 432/454 completed, 0 failed
-TOTAL: 863/1362 (63.4%)
-Percentage: 63.4% → 63.4%
-
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 275/354 completed, 0 failed
+TOTAL: 475/708 (67.1%)
+Percentage: 66.9% → 67.1%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 275/354 completed, 0 failed
+TOTAL: 475/708 (67.1%)
+Percentage: 67.1% → 67.1%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 275/354 | After: 276/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 276/354 completed, 0 failed
+TOTAL: 476/708 (67.2%)
+Percentage: 67.1% → 67.2%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 276/354 completed, 0 failed
+TOTAL: 476/708 (67.2%)
+Percentage: 67.2% → 67.2%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 276/354 | After: 277/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 277/354 completed, 0 failed
+TOTAL: 477/708 (67.4%)
+Percentage: 67.2% → 67.4%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 277/354 completed, 0 failed
+TOTAL: 477/708 (67.4%)
+Percentage: 67.4% → 67.4%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 277/354 | After: 278/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 278/354 completed, 0 failed
+TOTAL: 478/708 (67.5%)
+Percentage: 67.4% → 67.5%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 278/354 completed, 0 failed
+TOTAL: 478/708 (67.5%)
+Percentage: 67.5% → 67.5%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 278/354 | After: 279/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 279/354 completed, 0 failed
+TOTAL: 479/708 (67.7%)
+Percentage: 67.5% → 67.7%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 279/354 completed, 0 failed
+TOTAL: 479/708 (67.7%)
+Percentage: 67.7% → 67.7%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 279/354 | After: 280/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 280/354 completed, 0 failed
+TOTAL: 480/708 (67.8%)
+Percentage: 67.7% → 67.8%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 280/354 completed, 0 failed
+TOTAL: 480/708 (67.8%)
+Percentage: 67.8% → 67.8%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 280/354 | After: 281/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 281/354 completed, 0 failed
+TOTAL: 481/708 (67.9%)
+Percentage: 67.8% → 67.9%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 281/354 completed, 0 failed
+TOTAL: 481/708 (67.9%)
+Percentage: 67.9% → 67.9%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 281/354 | After: 282/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 282/354 completed, 0 failed
+TOTAL: 482/708 (68.1%)
+Percentage: 67.9% → 68.1%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 282/354 completed, 0 failed
+TOTAL: 482/708 (68.1%)
+Percentage: 68.1% → 68.1%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 282/354 | After: 283/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 283/354 completed, 0 failed
+TOTAL: 483/708 (68.2%)
+Percentage: 68.1% → 68.2%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 283/354 completed, 0 failed
+TOTAL: 483/708 (68.2%)
+Percentage: 68.2% → 68.2%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 283/354 | After: 284/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 284/354 completed, 0 failed
+TOTAL: 484/708 (68.4%)
+Percentage: 68.2% → 68.4%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 284/354 completed, 0 failed
+TOTAL: 484/708 (68.4%)
+Percentage: 68.4% → 68.4%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 284/354 | After: 285/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 285/354 completed, 0 failed
+TOTAL: 485/708 (68.5%)
+Percentage: 68.4% → 68.5%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 285/354 completed, 0 failed
+TOTAL: 485/708 (68.5%)
+Percentage: 68.5% → 68.5%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 285/354 | After: 286/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 286/354 completed, 0 failed
+TOTAL: 486/708 (68.6%)
+Percentage: 68.5% → 68.6%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 286/354 completed, 0 failed
+TOTAL: 486/708 (68.6%)
+Percentage: 68.6% → 68.6%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 286/354 | After: 287/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 287/354 completed, 0 failed
+TOTAL: 487/708 (68.8%)
+Percentage: 68.6% → 68.8%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 287/354 completed, 0 failed
+TOTAL: 487/708 (68.8%)
+Percentage: 68.8% → 68.8%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 287/354 | After: 288/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 288/354 completed, 0 failed
+TOTAL: 488/708 (68.9%)
+Percentage: 68.8% → 68.9%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 288/354 completed, 0 failed
+TOTAL: 488/708 (68.9%)
+Percentage: 68.9% → 68.9%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 288/354 | After: 289/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 289/354 completed, 0 failed
+TOTAL: 489/708 (69.1%)
+Percentage: 68.9% → 69.1%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 289/354 completed, 0 failed
+TOTAL: 489/708 (69.1%)
+Percentage: 69.1% → 69.1%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 289/354 | After: 290/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 290/354 completed, 0 failed
+TOTAL: 490/708 (69.2%)
+Percentage: 69.1% → 69.2%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 290/354 completed, 0 failed
+TOTAL: 490/708 (69.2%)
+Percentage: 69.2% → 69.2%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de7 | Marketplace: MAGICEDEN | ParentID: 6881f92dc2516a94e8ff5de7-magiceden
+Before: 0/1 | After: 1/1
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de7
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 1/1 completed, 0 failed
+OPENSEA: 0/1 completed, 0 failed
+TOTAL: 1/2 (50.0%)
+Percentage: 0.0% → 50.0%
+
+Task 6881f92dc2516a94e8ff5de7 completed for magiceden
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de7
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 1/1 completed, 0 failed
+OPENSEA: 0/1 completed, 0 failed
+TOTAL: 1/2 (50.0%)
+Percentage: 50.0% → 50.0%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 290/354 | After: 291/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 291/354 completed, 0 failed
+TOTAL: 491/708 (69.4%)
+Percentage: 69.2% → 69.4%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 291/354 completed, 0 failed
+TOTAL: 491/708 (69.4%)
+Percentage: 69.4% → 69.4%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 291/354 | After: 292/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 292/354 completed, 0 failed
+TOTAL: 492/708 (69.5%)
+Percentage: 69.4% → 69.5%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 292/354 completed, 0 failed
+TOTAL: 492/708 (69.5%)
+Percentage: 69.5% → 69.5%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 292/354 | After: 293/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 293/354 completed, 0 failed
+TOTAL: 493/708 (69.6%)
+Percentage: 69.5% → 69.6%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 293/354 completed, 0 failed
+TOTAL: 493/708 (69.6%)
+Percentage: 69.6% → 69.6%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 293/354 | After: 294/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 294/354 completed, 0 failed
+TOTAL: 494/708 (69.8%)
+Percentage: 69.6% → 69.8%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 294/354 completed, 0 failed
+TOTAL: 494/708 (69.8%)
+Percentage: 69.8% → 69.8%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 294/354 | After: 295/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 295/354 completed, 0 failed
+TOTAL: 495/708 (69.9%)
+Percentage: 69.8% → 69.9%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 295/354 completed, 0 failed
+TOTAL: 495/708 (69.9%)
+Percentage: 69.9% → 69.9%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 295/354 | After: 296/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 296/354 completed, 0 failed
+TOTAL: 496/708 (70.1%)
+Percentage: 69.9% → 70.1%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 296/354 completed, 0 failed
+TOTAL: 496/708 (70.1%)
+Percentage: 70.1% → 70.1%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 296/354 | After: 297/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 297/354 completed, 0 failed
+TOTAL: 497/708 (70.2%)
+Percentage: 70.1% → 70.2%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 297/354 completed, 0 failed
+TOTAL: 497/708 (70.2%)
+Percentage: 70.2% → 70.2%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de7 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de7-opensea
+Before: 0/1 | After: 1/1
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de7
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 1/1 completed, 0 failed
+OPENSEA: 1/1 completed, 0 failed
+TOTAL: 2/2 (100.0%)
+Percentage: 50.0% → 100.0%
+
+Task 6881f92dc2516a94e8ff5de7 completed for opensea
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de7
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 1/1 completed, 0 failed
+OPENSEA: 1/1 completed, 0 failed
+TOTAL: 2/2 (100.0%)
+Percentage: 100.0% → 100.0%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 297/354 | After: 298/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 298/354 completed, 0 failed
+TOTAL: 498/708 (70.3%)
+Percentage: 70.2% → 70.3%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 298/354 completed, 0 failed
+TOTAL: 498/708 (70.3%)
+Percentage: 70.3% → 70.3%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 298/354 | After: 299/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 299/354 completed, 0 failed
+TOTAL: 499/708 (70.5%)
+Percentage: 70.3% → 70.5%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 299/354 completed, 0 failed
+TOTAL: 499/708 (70.5%)
+Percentage: 70.5% → 70.5%
+
+[Job Processed] Task: 6881f92dc2516a94e8ff5de5 | Marketplace: OPENSEA | ParentID: 6881f92dc2516a94e8ff5de5-opensea
+Before: 299/354 | After: 300/354
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 300/354 completed, 0 failed
+TOTAL: 500/708 (70.6%)
+Percentage: 70.5% → 70.6%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de5
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 200/354 completed, 0 failed
+OPENSEA: 300/354 completed, 0 failed
+TOTAL: 500/708 (70.6%)
+Percentage: 70.6% → 70.6%
+
+Failed to format Blur bid for collection 0x23581767a106ae21c074b2276d25e5c3e136a68b: Orders must expire at least 15 minutes in the future. AxiosError: Request failed with status code 400
+  at settle (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/core/settle.js:19:12)
+  at IncomingMessage.handleStreamEnd (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/adapters/http.js:599:11)
+  at IncomingMessage.emit (node:events:526:35)
+  at IncomingMessage.emit (node:domain:488:12)
+  at endReadableNT (node:internal/streams/readable:1408:12)
+  at processTicksAndRejections (node:internal/process/task_queues:82:21)
+  at Axios.request (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/core/Axios.js:45:41)
+  at processTicksAndRejections (node:internal/process/task_queues:95:5)
+  at async Axios.request (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/core/Axios.js:40:14)
+  at async Axios.request (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/core/Axios.js:40:14)
+  at async Axios.request (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/core/Axios.js:40:14)
+  at Axios.request (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/core/Axios.js:45:41)
+  at processTicksAndRejections (node:internal/process/task_queues:95:5) {
+code: 'ERR_BAD_REQUEST',
+config: {
+  transitional: {
+    silentJSONParsing: true,
+    forcedJSONParsing: true,
+    clarifyTimeoutError: false
+  },
+  adapter: [ 'xhr', 'http', 'fetch' ],
+  transformRequest: [ [Function (anonymous)] ],
+  transformResponse: [ [Function: transformResponse] ],
+  timeout: 10543,
+  xsrfCookieName: 'XSRF-TOKEN',
+  xsrfHeaderName: 'X-XSRF-TOKEN',
+  maxContentLength: -1,
+  maxBodyLength: -1,
+  env: { FormData: [Function [FormData]], Blob: [class Blob] },
+  validateStatus: [Function: validateStatus],
+  headers: Object [AxiosHeaders] {
+    Accept: 'application/json, text/plain, */*',
+    'Content-Type': 'application/json',
+    authToken: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ3YWxsZXRBZGRyZXNzIjoiMHgxYjhhZmQwZGU4YTkzNjhjZTYzNWJlOGI5NTcyYzY1ZDhmNTkwYjIxIiwic2lnbmF0dXJlIjoiMHhmMmViM2IwMjQ5YTA2ZTQxZDg2MWQ0YjViMjI1NWFkNDQzNDI1MTcyNzRhMDUyMTYxOTY4YmYxOTJkYzRhY2IzNmUzY2U2ZGU4MTk2NDFkMTEzYzMxOWRmMmNhN2E0NWJmMTBlYWI0MDQ5ZTg1ZjEwY2RjNTE1MmQwMmFmNjZlNzFiIiwiaWF0IjoxNzUzNjYwMzE4LCJleHAiOjE3NTYyNTIzMTh9.pve0E7BwkCth4TE89CmN5QXs4CaVwO95TrjAo4tFMWo',
+    walletAddress: '0x1b8afd0de8a9368ce635be8b9572c65d8f590b21',
+    'x-api-key': '11e5f5808c0d472c9bd75e069f3139d6',
+    'User-Agent': 'axios/1.9.0',
+    'Content-Length': '214',
+    'Accept-Encoding': 'gzip, compress, deflate, br'
+  },
+  method: 'post',
+  url: 'https://nfttools.pro/kong/blur/v1/collection-bids/format',
+  data: '{"price":{"unit":"BETH","amount":"0.01"},"quantity":1,"expirationTime":"2025-07-27T23:55:15.562Z","contractAddress":"0x23581767a106ae21c074b2276d25e5c3e136a68b","criteria":{"type":"TRAIT","value":{"Body":"Robot"}}}',
+  signal: AbortSignal { aborted: false },
+  allowAbsoluteUrls: true,
+  metadata: { startTime: 1753660520085, jobId: undefined },
+  'axios-retry': {
+    retries: 3,
+    retryCondition: [AsyncFunction: retryCondition],
+    retryDelay: [Function: retryDelay],
+    shouldResetTimeout: false,
+    onRetry: [Function: onRetry],
+    onMaxRetryTimesExceeded: [Function: onMaxRetryTimesExceeded],
+    validateResponse: null,
+    retryCount: 3,
+    lastRequestTime: 1753660520085
+  }
+},
+request: <ref *1> ClientRequest {
+  _events: [Object: null prototype] {
+    abort: [Function (anonymous)],
+    aborted: [Function (anonymous)],
+    connect: [Function (anonymous)],
+    error: [Function (anonymous)],
+    socket: [Function (anonymous)],
+    timeout: [Function (anonymous)],
+    finish: [Function: requestOnFinish]
+  },
+  _eventsCount: 7,
+  _maxListeners: undefined,
+  outputData: [],
+  outputSize: 0,
+  writable: true,
+  destroyed: true,
+  _last: false,
+  chunkedEncoding: false,
+  shouldKeepAlive: true,
+  maxRequestsOnConnectionReached: false,
+  _defaultKeepAlive: true,
+  useChunkedEncodingByDefault: true,
+  sendDate: false,
+  _removedConnection: false,
+  _removedContLen: false,
+  _removedTE: false,
+  strictContentLength: false,
+  _contentLength: '214',
+  _hasBody: true,
+  _trailer: '',
+  finished: true,
+  _headerSent: true,
+  _closed: true,
+  socket: TLSSocket {
+    _tlsOptions: [Object],
+    _secureEstablished: true,
+    _securePending: false,
+    _newSessionPending: false,
+    _controlReleased: true,
+    secureConnecting: false,
+    _SNICallback: null,
+    servername: 'nfttools.pro',
+    alpnProtocol: false,
+    authorized: true,
+    authorizationError: null,
+    encrypted: true,
+    _events: [Object: null prototype],
+    _eventsCount: 9,
+    connecting: false,
+    _hadError: false,
+    _parent: null,
+    _host: 'nfttools.pro',
+    _closeAfterHandlingError: false,
+    _readableState: [ReadableState],
+    _maxListeners: undefined,
+    _writableState: [WritableState],
+    allowHalfOpen: false,
+    _sockname: null,
+    _pendingData: null,
+    _pendingEncoding: '',
+    server: undefined,
+    _server: null,
+    ssl: [TLSWrap],
+    _requestCert: true,
+    _rejectUnauthorized: true,
+    timeout: 5000,
+    parser: null,
+    _httpMessage: null,
+    [Symbol(alpncallback)]: null,
+    [Symbol(res)]: [TLSWrap],
+    [Symbol(verified)]: true,
+    [Symbol(pendingSession)]: null,
+    [Symbol(async_id_symbol)]: -1,
+    [Symbol(kHandle)]: [TLSWrap],
+    [Symbol(lastWriteQueueSize)]: 0,
+    [Symbol(timeout)]: Timeout {
+      _idleTimeout: 5000,
+      _idlePrev: [TimersList],
+      _idleNext: [Timeout],
+      _idleStart: 305866,
+      _onTimeout: [Function: bound ],
+      _timerArgs: undefined,
+      _repeat: null,
+      _destroyed: false,
+      [Symbol(refed)]: false,
+      [Symbol(kHasPrimitive)]: false,
+      [Symbol(asyncId)]: 965424,
+      [Symbol(triggerId)]: 965422
+    },
+    [Symbol(kBuffer)]: null,
+    [Symbol(kBufferCb)]: null,
+    [Symbol(kBufferGen)]: null,
+    [Symbol(kCapture)]: false,
+    [Symbol(kSetNoDelay)]: false,
+    [Symbol(kSetKeepAlive)]: true,
+    [Symbol(kSetKeepAliveInitialDelay)]: 1,
+    [Symbol(kBytesRead)]: 0,
+    [Symbol(kBytesWritten)]: 0,
+    [Symbol(connect-options)]: [Object]
+  },
+  _header: 'POST /kong/blur/v1/collection-bids/format HTTP/1.1\r\n' +
+    'Accept: application/json, text/plain, */*\r\n' +
+    'Content-Type: application/json\r\n' +
+    'authToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ3YWxsZXRBZGRyZXNzIjoiMHgxYjhhZmQwZGU4YTkzNjhjZTYzNWJlOGI5NTcyYzY1ZDhmNTkwYjIxIiwic2lnbmF0dXJlIjoiMHhmMmViM2IwMjQ5YTA2ZTQxZDg2MWQ0YjViMjI1NWFkNDQzNDI1MTcyNzRhMDUyMTYxOTY4YmYxOTJkYzRhY2IzNmUzY2U2ZGU4MTk2NDFkMTEzYzMxOWRmMmNhN2E0NWJmMTBlYWI0MDQ5ZTg1ZjEwY2RjNTE1MmQwMmFmNjZlNzFiIiwiaWF0IjoxNzUzNjYwMzE4LCJleHAiOjE3NTYyNTIzMTh9.pve0E7BwkCth4TE89CmN5QXs4CaVwO95TrjAo4tFMWo\r\n' +
+    'walletAddress: 0x1b8afd0de8a9368ce635be8b9572c65d8f590b21\r\n' +
+    'x-api-key: 11e5f5808c0d472c9bd75e069f3139d6\r\n' +
+    'User-Agent: axios/1.9.0\r\n' +
+    'Content-Length: 214\r\n' +
+    'Accept-Encoding: gzip, compress, deflate, br\r\n' +
+    'Host: nfttools.pro\r\n' +
+    'Connection: keep-alive\r\n' +
+    '\r\n',
+  _keepAliveTimeout: 0,
+  _onPendingData: [Function: nop],
+  agent: Agent {
+    _events: [Object: null prototype],
+    _eventsCount: 2,
+    _maxListeners: undefined,
+    defaultPort: 443,
+    protocol: 'https:',
+    options: [Object: null prototype],
+    requests: [Object: null prototype] {},
+    sockets: [Object: null prototype],
+    freeSockets: [Object: null prototype],
+    keepAliveMsecs: 1000,
+    keepAlive: true,
+    maxSockets: Infinity,
+    maxFreeSockets: 256,
+    scheduling: 'lifo',
+    maxTotalSockets: Infinity,
+    totalSocketCount: 83,
+    maxCachedSessions: 100,
+    _sessionCache: [Object],
+    [Symbol(kCapture)]: false
+  },
+  socketPath: undefined,
+  method: 'POST',
+  maxHeaderSize: undefined,
+  insecureHTTPParser: undefined,
+  joinDuplicateHeaders: undefined,
+  path: '/kong/blur/v1/collection-bids/format',
+  _ended: true,
+  res: IncomingMessage {
+    _readableState: [ReadableState],
+    _events: [Object: null prototype],
+    _eventsCount: 4,
+    _maxListeners: undefined,
+    socket: null,
+    httpVersionMajor: 1,
+    httpVersionMinor: 1,
+    httpVersion: '1.1',
+    complete: true,
+    rawHeaders: [Array],
+    rawTrailers: [],
+    joinDuplicateHeaders: undefined,
+    aborted: false,
+    upgrade: false,
+    url: '',
+    method: null,
+    statusCode: 400,
+    statusMessage: 'Bad Request',
+    client: [TLSSocket],
+    _consuming: false,
+    _dumped: false,
+    req: [Circular *1],
+    responseUrl: 'https://nfttools.pro/kong/blur/v1/collection-bids/format',
+    redirects: [],
+    [Symbol(kCapture)]: false,
+    [Symbol(kHeaders)]: [Object],
+    [Symbol(kHeadersCount)]: 54,
+    [Symbol(kTrailers)]: null,
+    [Symbol(kTrailersCount)]: 0
+  },
+  aborted: false,
+  timeoutCb: null,
+  upgradeOrConnect: false,
+  parser: null,
+  maxHeadersCount: null,
+  reusedSocket: true,
+  host: 'nfttools.pro',
+  protocol: 'https:',
+  _redirectable: Writable {
+    _writableState: [WritableState],
+    _events: [Object: null prototype],
+    _eventsCount: 3,
+    _maxListeners: undefined,
+    _options: [Object],
+    _ended: true,
+    _ending: true,
+    _redirectCount: 0,
+    _redirects: [],
+    _requestBodyLength: 214,
+    _requestBodyBuffers: [],
+    _onNativeResponse: [Function (anonymous)],
+    _currentRequest: [Circular *1],
+    _currentUrl: 'https://nfttools.pro/kong/blur/v1/collection-bids/format',
+    _timeout: null,
+    [Symbol(kCapture)]: false
+  },
+  [Symbol(kCapture)]: false,
+  [Symbol(kBytesWritten)]: 0,
+  [Symbol(kNeedDrain)]: false,
+  [Symbol(corked)]: 0,
+  [Symbol(kOutHeaders)]: [Object: null prototype] {
+    accept: [Array],
+    'content-type': [Array],
+    authtoken: [Array],
+    walletaddress: [Array],
+    'x-api-key': [Array],
+    'user-agent': [Array],
+    'content-length': [Array],
+    'accept-encoding': [Array],
+    host: [Array]
+  },
+  [Symbol(errored)]: null,
+  [Symbol(kHighWaterMark)]: 16384,
+  [Symbol(kRejectNonStandardBodyWrites)]: false,
+  [Symbol(kUniqueHeaders)]: null
+},
+response: {
+  status: 400,
+  statusText: 'Bad Request',
+  headers: Object [AxiosHeaders] {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': '106',
+    'ratelimit-limit': '100',
+    'ratelimit-remaining': '94',
+    'ratelimit-reset': '1',
+    'x-ratelimit-remaining-second': '94',
+    'x-ratelimit-limit-second': '100',
+    'x-cache-key': '32b9f83f7039b48fc511d09959ff9519a9fef1fb1d0ca7c5725c189b205fbe2a',
+    'x-cache-status': 'Bypass',
+    'x-powered-by': 'Express',
+    date: 'Sun, 27 Jul 2025 23:55:20 GMT',
+    etag: 'W/"6a-B8ARNlViG5Z0228wf3aetjAdK4w"',
+    vary: 'Origin',
+    'cf-cache-status': 'DYNAMIC',
+    'set-cookie': [Array],
+    server: 'cloudflare',
+    'cf-ray': '9660112dae633d59-JAX',
+    'x-kong-upstream-latency': '197',
+    'x-kong-proxy-latency': '1',
+    via: '1.1 kong/3.8.0',
+    'x-kong-request-id': '58990a433eb7ed233fbf154c860a2f79',
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS, PATCH',
+    'access-control-allow-headers': '*',
+    'access-control-max-age': '3600',
+    'access-control-expose-headers': '*'
+  },
+  config: {
+    transitional: [Object],
+    adapter: [Array],
+    transformRequest: [Array],
+    transformResponse: [Array],
+    timeout: 10543,
+    xsrfCookieName: 'XSRF-TOKEN',
+    xsrfHeaderName: 'X-XSRF-TOKEN',
+    maxContentLength: -1,
+    maxBodyLength: -1,
+    env: [Object],
+    validateStatus: [Function: validateStatus],
+    headers: [Object [AxiosHeaders]],
+    method: 'post',
+    url: 'https://nfttools.pro/kong/blur/v1/collection-bids/format',
+    data: '{"price":{"unit":"BETH","amount":"0.01"},"quantity":1,"expirationTime":"2025-07-27T23:55:15.562Z","contractAddress":"0x23581767a106ae21c074b2276d25e5c3e136a68b","criteria":{"type":"TRAIT","value":{"Body":"Robot"}}}',
+    signal: [AbortSignal],
+    allowAbsoluteUrls: true,
+    metadata: [Object],
+    'axios-retry': [Object]
+  },
+  request: <ref *1> ClientRequest {
+    _events: [Object: null prototype],
+    _eventsCount: 7,
+    _maxListeners: undefined,
+    outputData: [],
+    outputSize: 0,
+    writable: true,
+    destroyed: true,
+    _last: false,
+    chunkedEncoding: false,
+    shouldKeepAlive: true,
+    maxRequestsOnConnectionReached: false,
+    _defaultKeepAlive: true,
+    useChunkedEncodingByDefault: true,
+    sendDate: false,
+    _removedConnection: false,
+    _removedContLen: false,
+    _removedTE: false,
+    strictContentLength: false,
+    _contentLength: '214',
+    _hasBody: true,
+    _trailer: '',
+    finished: true,
+    _headerSent: true,
+    _closed: true,
+    socket: [TLSSocket],
+    _header: 'POST /kong/blur/v1/collection-bids/format HTTP/1.1\r\n' +
+      'Accept: application/json, text/plain, */*\r\n' +
+      'Content-Type: application/json\r\n' +
+      'authToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ3YWxsZXRBZGRyZXNzIjoiMHgxYjhhZmQwZGU4YTkzNjhjZTYzNWJlOGI5NTcyYzY1ZDhmNTkwYjIxIiwic2lnbmF0dXJlIjoiMHhmMmViM2IwMjQ5YTA2ZTQxZDg2MWQ0YjViMjI1NWFkNDQzNDI1MTcyNzRhMDUyMTYxOTY4YmYxOTJkYzRhY2IzNmUzY2U2ZGU4MTk2NDFkMTEzYzMxOWRmMmNhN2E0NWJmMTBlYWI0MDQ5ZTg1ZjEwY2RjNTE1MmQwMmFmNjZlNzFiIiwiaWF0IjoxNzUzNjYwMzE4LCJleHAiOjE3NTYyNTIzMTh9.pve0E7BwkCth4TE89CmN5QXs4CaVwO95TrjAo4tFMWo\r\n' +
+      'walletAddress: 0x1b8afd0de8a9368ce635be8b9572c65d8f590b21\r\n' +
+      'x-api-key: 11e5f5808c0d472c9bd75e069f3139d6\r\n' +
+      'User-Agent: axios/1.9.0\r\n' +
+      'Content-Length: 214\r\n' +
+      'Accept-Encoding: gzip, compress, deflate, br\r\n' +
+      'Host: nfttools.pro\r\n' +
+      'Connection: keep-alive\r\n' +
+      '\r\n',
+    _keepAliveTimeout: 0,
+    _onPendingData: [Function: nop],
+    agent: [Agent],
+    socketPath: undefined,
+    method: 'POST',
+    maxHeaderSize: undefined,
+    insecureHTTPParser: undefined,
+    joinDuplicateHeaders: undefined,
+    path: '/kong/blur/v1/collection-bids/format',
+    _ended: true,
+    res: [IncomingMessage],
+    aborted: false,
+    timeoutCb: null,
+    upgradeOrConnect: false,
+    parser: null,
+    maxHeadersCount: null,
+    reusedSocket: true,
+    host: 'nfttools.pro',
+    protocol: 'https:',
+    _redirectable: [Writable],
+    [Symbol(kCapture)]: false,
+    [Symbol(kBytesWritten)]: 0,
+    [Symbol(kNeedDrain)]: false,
+    [Symbol(corked)]: 0,
+    [Symbol(kOutHeaders)]: [Object: null prototype],
+    [Symbol(errored)]: null,
+    [Symbol(kHighWaterMark)]: 16384,
+    [Symbol(kRejectNonStandardBodyWrites)]: false,
+    [Symbol(kUniqueHeaders)]: null
+  },
+  data: {
+    statusCode: 400,
+    message: 'Orders must expire at least 15 minutes in the future.',
+    error: 'Bad Request'
+  }
+},
+status: 400
+}
+Blur trait bid error: Failed to format Blur bid for collection 0x23581767a106ae21c074b2276d25e5c3e136a68b: Orders must expire at least 15 minutes in the future.
+[Job Processed] Task: 688375d71d29b102d283dcfa | Marketplace: MAGICEDEN | ParentID: 688375d71d29b102d283dcfa-magiceden
+Before: 1062/2000 | After: 1063/2000
+
+[Running % Debug] Task: 688375d71d29b102d283dcfa
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 1063/2000 completed, 0 failed
+OPENSEA: 1000/2000 completed, 0 failed
+TOTAL: 2063/4000 (51.6%)
+Percentage: 51.5% → 51.6%
+
+
+[Running % Debug] Task: 688375d71d29b102d283dcfa
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 1063/2000 completed, 0 failed
+OPENSEA: 1000/2000 completed, 0 failed
+TOTAL: 2063/4000 (51.6%)
+Percentage: 51.6% → 51.6%
+
+[Job Processed] Task: 688375d71d29b102d283dcfa | Marketplace: MAGICEDEN | ParentID: 688375d71d29b102d283dcfa-magiceden
+Before: 1063/2000 | After: 1064/2000
+
+[Running % Debug] Task: 688375d71d29b102d283dcfa
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 1064/2000 completed, 0 failed
+OPENSEA: 1000/2000 completed, 0 failed
+TOTAL: 2064/4000 (51.6%)
+Percentage: 51.6% → 51.6%
+
+
+[Running % Debug] Task: 688375d71d29b102d283dcfa
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 1064/2000 completed, 0 failed
+OPENSEA: 1000/2000 completed, 0 failed
+TOTAL: 2064/4000 (51.6%)
+Percentage: 51.6% → 51.6%
+
+Current Limiter Stats: { RECEIVED: 27, QUEUED: 1, RUNNING: 0, EXECUTING: 38, DONE: 10563 }
+Average RPS: 47.50 Executing: 66.00 True RPS: 66.00
 ----------------------------------------------------------------------------------------------------------------------------------------------
-[OpenSea Counterbid] Task: 68869ddbfd744194919bbd89 | Collection: azuki | Type: Token #489 | Incoming: 5.04 WETH (5.04 WETH) | Quantity: 1 | Maker: 0xc19dc40f81aa9bfeda63f26ccd33aa465e7aa61a
+[OpenSea Counterbid] Task: 688375d71d29b102d283dcfa | Collection: lilpudgys | Type: Collection | Incoming: 1.83 WETH (1.83 WETH) | Quantity: 1 | Maker: 0x3772fad0e4de82f27620c946e7f52946332ea02c
 ----------------------------------------------------------------------------------------------------------------------------------------------
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 432/454 | After: 433/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 433/454 completed, 0 failed
-TOTAL: 864/1362 (63.4%)
-Percentage: 63.4% → 63.4%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 433/454 completed, 0 failed
-TOTAL: 864/1362 (63.4%)
-Percentage: 63.4% → 63.4%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 433/454 | After: 434/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 434/454 completed, 0 failed
-TOTAL: 865/1362 (63.5%)
-Percentage: 63.4% → 63.5%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 434/454 completed, 0 failed
-TOTAL: 865/1362 (63.5%)
-Percentage: 63.5% → 63.5%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 434/454 | After: 435/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 435/454 completed, 0 failed
-TOTAL: 866/1362 (63.6%)
-Percentage: 63.5% → 63.6%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 435/454 completed, 0 failed
-TOTAL: 866/1362 (63.6%)
-Percentage: 63.6% → 63.6%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 435/454 | After: 436/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 436/454 completed, 0 failed
-TOTAL: 867/1362 (63.7%)
-Percentage: 63.6% → 63.7%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 436/454 completed, 0 failed
-TOTAL: 867/1362 (63.7%)
-Percentage: 63.7% → 63.7%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 436/454 | After: 437/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 437/454 completed, 0 failed
-TOTAL: 868/1362 (63.7%)
-Percentage: 63.7% → 63.7%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 437/454 completed, 0 failed
-TOTAL: 868/1362 (63.7%)
-Percentage: 63.7% → 63.7%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 437/454 | After: 438/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 438/454 completed, 0 failed
-TOTAL: 869/1362 (63.8%)
-Percentage: 63.7% → 63.8%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 438/454 completed, 0 failed
-TOTAL: 869/1362 (63.8%)
-Percentage: 63.8% → 63.8%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 438/454 | After: 439/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 439/454 completed, 0 failed
-TOTAL: 870/1362 (63.9%)
-Percentage: 63.8% → 63.9%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 439/454 completed, 0 failed
-TOTAL: 870/1362 (63.9%)
-Percentage: 63.9% → 63.9%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 439/454 | After: 440/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 440/454 completed, 0 failed
-TOTAL: 871/1362 (64.0%)
-Percentage: 63.9% → 64.0%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 440/454 completed, 0 failed
-TOTAL: 871/1362 (64.0%)
-Percentage: 64.0% → 64.0%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 440/454 | After: 441/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 441/454 completed, 0 failed
-TOTAL: 872/1362 (64.0%)
-Percentage: 64.0% → 64.0%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 441/454 completed, 0 failed
-TOTAL: 872/1362 (64.0%)
-Percentage: 64.0% → 64.0%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 441/454 | After: 442/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 442/454 completed, 0 failed
-TOTAL: 873/1362 (64.1%)
-Percentage: 64.0% → 64.1%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 442/454 completed, 0 failed
-TOTAL: 873/1362 (64.1%)
-Percentage: 64.1% → 64.1%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 442/454 | After: 443/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 443/454 completed, 0 failed
-TOTAL: 874/1362 (64.2%)
-Percentage: 64.1% → 64.2%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 443/454 completed, 0 failed
-TOTAL: 874/1362 (64.2%)
-Percentage: 64.2% → 64.2%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 443/454 | After: 444/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 444/454 completed, 0 failed
-TOTAL: 875/1362 (64.2%)
-Percentage: 64.2% → 64.2%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 444/454 completed, 0 failed
-TOTAL: 875/1362 (64.2%)
-Percentage: 64.2% → 64.2%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 444/454 | After: 445/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 445/454 completed, 0 failed
-TOTAL: 876/1362 (64.3%)
-Percentage: 64.2% → 64.3%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 445/454 completed, 0 failed
-TOTAL: 876/1362 (64.3%)
-Percentage: 64.3% → 64.3%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 445/454 | After: 446/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 446/454 completed, 0 failed
-TOTAL: 877/1362 (64.4%)
-Percentage: 64.3% → 64.4%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 446/454 completed, 0 failed
-TOTAL: 877/1362 (64.4%)
-Percentage: 64.4% → 64.4%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 446/454 | After: 447/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 447/454 completed, 0 failed
-TOTAL: 878/1362 (64.5%)
-Percentage: 64.4% → 64.5%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 447/454 completed, 0 failed
-TOTAL: 878/1362 (64.5%)
-Percentage: 64.5% → 64.5%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 447/454 | After: 448/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 448/454 completed, 0 failed
-TOTAL: 879/1362 (64.5%)
-Percentage: 64.5% → 64.5%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 448/454 completed, 0 failed
-TOTAL: 879/1362 (64.5%)
-Percentage: 64.5% → 64.5%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 448/454 | After: 449/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 449/454 completed, 0 failed
-TOTAL: 880/1362 (64.6%)
-Percentage: 64.5% → 64.6%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 449/454 completed, 0 failed
-TOTAL: 880/1362 (64.6%)
-Percentage: 64.6% → 64.6%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 449/454 | After: 450/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 450/454 completed, 0 failed
-TOTAL: 881/1362 (64.7%)
-Percentage: 64.6% → 64.7%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 450/454 completed, 0 failed
-TOTAL: 881/1362 (64.7%)
-Percentage: 64.7% → 64.7%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 450/454 | After: 451/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 451/454 completed, 0 failed
-TOTAL: 882/1362 (64.8%)
-Percentage: 64.7% → 64.8%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 451/454 completed, 0 failed
-TOTAL: 882/1362 (64.8%)
-Percentage: 64.8% → 64.8%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 451/454 | After: 452/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 452/454 completed, 0 failed
-TOTAL: 883/1362 (64.8%)
-Percentage: 64.8% → 64.8%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 452/454 completed, 0 failed
-TOTAL: 883/1362 (64.8%)
-Percentage: 64.8% → 64.8%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 452/454 | After: 453/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 453/454 completed, 0 failed
-TOTAL: 884/1362 (64.9%)
-Percentage: 64.8% → 64.9%
-
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 453/454 completed, 0 failed
-TOTAL: 884/1362 (64.9%)
-Percentage: 64.9% → 64.9%
-
-[Job Processed] Task: 68869ddbfd744194919bbd89 | Marketplace: OPENSEA | ParentID: 68869ddbfd744194919bbd89-opensea
-Before: 453/454 | After: 454/454
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 454/454 completed, 0 failed
-TOTAL: 885/1362 (65.0%)
-Percentage: 64.9% → 65.0%
-
-Task 68869ddbfd744194919bbd89 completed for opensea
-
-[Running % Debug] Task: 68869ddbfd744194919bbd89
-Selected: [blur, magiceden, opensea]
-Enabled & Selected: [blur, magiceden, opensea]
-BLUR: 10/454 completed, 0 failed
-MAGICEDEN: 421/454 completed, 0 failed
-OPENSEA: 454/454 completed, 0 failed
-TOTAL: 885/1362 (65.0%)
-Percentage: 65.0% → 65.0%
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 68869ddbfd744194919bbd89 | Collection: azuki | Type: TRAIT | Incoming: 3.51 ETH | Criteria: {"Special":"Sakura"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 68869d36fd744194919bbd62 | Collection: azuki | Type: TRAIT | Incoming: 3.51 ETH | Criteria: {"Special":"Sakura"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+INCOMING OPENSEA LISTING FOR 0XED5AF388653567AF2F388E6224DC7C4B3241C544 #5829 - 2.11958 ETH FROM 0XDE5AE63A348C4D63343C8E20FB6286909418C8A4 AT 2025-07-27T23:55:20.000000Z
+[Job Processed] Task: 6881f92dc2516a94e8ff5de3 | Marketplace: BLUR | ParentID: 6881f92dc2516a94e8ff5de3-blur
+Before: 53/116 | After: 54/116
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de3
+Selected: [blur, magiceden]
+Enabled & Selected: [blur, magiceden]
+BLUR: 54/116 completed, 0 failed
+MAGICEDEN: 156/156 completed, 0 failed
+TOTAL: 210/272 (77.2%)
+Percentage: 76.8% → 77.2%
+
+
+[Running % Debug] Task: 6881f92dc2516a94e8ff5de3
+Selected: [blur, magiceden]
+Enabled & Selected: [blur, magiceden]
+BLUR: 54/116 completed, 0 failed
+MAGICEDEN: 156/156 completed, 0 failed
+TOTAL: 210/272 (77.2%)
+Percentage: 77.2% → 77.2%
+
+[Job Processed] Task: 688375d71d29b102d283dcfa | Marketplace: MAGICEDEN | ParentID: 688375d71d29b102d283dcfa-magiceden
+Before: 1064/2000 | After: 1065/2000
+
+[Running % Debug] Task: 688375d71d29b102d283dcfa
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 1065/2000 completed, 0 failed
+OPENSEA: 1000/2000 completed, 0 failed
+TOTAL: 2065/4000 (51.6%)
+Percentage: 51.6% → 51.6%
+
+
+[Running % Debug] Task: 688375d71d29b102d283dcfa
+Selected: [magiceden, opensea]
+Enabled & Selected: [magiceden, opensea]
+MAGICEDEN: 1065/2000 completed, 0 failed
+OPENSEA: 1000/2000 completed, 0 failed
+TOTAL: 2065/4000 (51.6%)
+Percentage: 51.6% → 51.6%
 

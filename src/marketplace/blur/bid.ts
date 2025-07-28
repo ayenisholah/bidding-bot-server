@@ -359,7 +359,6 @@ async function formatBidOnBlur(
     }
     
     const errorMessage = `Failed to format Blur bid for collection ${buildPayload.contractAddress}: ${error.response?.data?.message || error.message || error}`;
-    console.error(errorMessage, error);
     throw new InvalidRequestError('blur', errorMessage, error.response?.status);
   } finally {
     const controllers = activeRequests.get(taskId) || [];
