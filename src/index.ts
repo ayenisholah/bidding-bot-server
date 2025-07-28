@@ -2291,14 +2291,6 @@ function updateTaskCancellationPercentage(taskId: string) {
   const cancellationPercentage = totalBids > 0 ? ((completedBids + failedBids) / totalBids) * 100 : 0;
   taskStatus[taskId].cancellationPercentage = Math.min(cancellationPercentage, 100);
   taskStatus[taskId].status = 'CANCELLING'
-
-  // Log progress
-  console.log(YELLOW + `[CANCELLATION PROGRESS] Task ${taskId}: ${completedBids + failedBids}/${totalBids} bids processed (${cancellationPercentage.toFixed(1)}%)` + RESET);
-
-  // Check if cancellation is complete
-  if (cancellationPercentage >= 100 && totalBids > 0) {
-    console.log(GREEN + `[CANCELLATION COMPLETE] Task ${taskId}: All ${totalBids} bids processed - ${completedBids} cancelled, ${failedBids} failed` + RESET);
-  }
 }
 
 // Helper function to cancel pending jobs for a task
@@ -2848,11 +2840,13 @@ async function scheduleNextLoop(taskId: string): Promise<void> {
     loopInterval = 1; // Minimum 1 second to prevent tight loops
   }
 
-  // Check loop counter limits - counter is incremented during job creation, not scheduling
+  // Increment loop counter here in scheduleNextLoop (not in startTask)
   const currentLoop = taskLoopCounters.get(taskId) || 0;
-  console.log(GREEN + `[scheduleNextLoop] Task ${taskId} - Current loop count: ${currentLoop}` + RESET);
+  const newLoopCount = currentLoop + 1;
+  taskLoopCounters.set(taskId, newLoopCount);
+  console.log(GREEN + `[scheduleNextLoop] Task ${taskId} - Loop counter incremented: ${currentLoop} -> ${newLoopCount}` + RESET);
 
-  if (currentLoop > MAX_LOOP_COUNT) {
+  if (newLoopCount > MAX_LOOP_COUNT) {
     console.error(RED + `[scheduleNextLoop] Task ${taskId} exceeded maximum loop count (${MAX_LOOP_COUNT}). Stopping task.` + RESET);
     await stopTask(task, false);
     return;
@@ -2862,7 +2856,7 @@ async function scheduleNextLoop(taskId: string): Promise<void> {
   const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
   const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
-  console.log(GREEN + `[scheduleNextLoop] Scheduling task ${taskId} to run in ${loopInterval} seconds (Loop #${currentLoop + 1})` + RESET);
+  console.log(GREEN + `[scheduleNextLoop] Scheduling task ${taskId} to run in ${loopInterval} seconds (Loop #${newLoopCount})` + RESET);
   console.log(GREEN + `[scheduleNextLoop] Next loop time: ${nextLoopTime.toISOString()}` + RESET);
 
   // Update task status
@@ -2924,12 +2918,12 @@ async function scheduleNextLoop(taskId: string): Promise<void> {
   try {
     // Schedule the next iteration with setTimeout
     const timeoutId = setTimeout(async () => {
-      console.log(YELLOW + `[scheduleNextLoop] Timeout fired for task ${taskId}, loop #${currentLoop}` + RESET);
+      console.log(YELLOW + `[scheduleNextLoop] Timeout fired for task ${taskId}, loop #${newLoopCount}` + RESET);
       try {
         // Double-check task is still active and running
         const currentTask = activeTasks.get(taskId);
         if (currentTask?.running) {
-          console.log(YELLOW + `[scheduleNextLoop] Starting next iteration for task ${taskId} (Loop #${currentLoop})` + RESET);
+          console.log(YELLOW + `[scheduleNextLoop] Starting next iteration for task ${taskId} (Loop #${newLoopCount})` + RESET);
           console.log(YELLOW + `[scheduleNextLoop] Task running state: ${currentTask.running}, Task ID: ${taskId}` + RESET);
           await startTask(currentTask, true);
         } else if (currentTask) {
@@ -3472,12 +3466,25 @@ async function processGlobalMarketplaces(incomingMarketplaces: string[]) {
   try {
     const tasks: ITask[] = Array.from(activeTasks.values());
     const newMarketplaces = incomingMarketplaces.map((m) => m.toLowerCase()).filter(m => !enabledMarketplaces.map((m) => m.toLowerCase()).includes(m));
+    
+    // Process each new marketplace
     for (const marketplace of newMarketplaces) {
-      await Promise.all((tasks.map((task) => {
-        if (!task.running || !task.selectedMarketplaces.map((m) => m.toLowerCase()).includes(marketplace.toLowerCase())) return
-        startTask(task, true, marketplace.toLowerCase())
-      })))
+      const tasksToProcess = tasks.filter(task => 
+        task.running && task.selectedMarketplaces.map((m) => m.toLowerCase()).includes(marketplace.toLowerCase())
+      );
+      
+      console.log(GREEN + `[processGlobalMarketplaces] Adding marketplace ${marketplace} to ${tasksToProcess.length} tasks` + RESET);
+      
+      // Use start=false for marketplace-specific additions (not a loop restart)
+      await Promise.all(tasksToProcess.map(async (task) => {
+        try {
+          await startTask(task, false, marketplace.toLowerCase());
+        } catch (error) {
+          console.error(RED + `Error adding marketplace ${marketplace} to task ${task._id}: ` + RESET, error);
+        }
+      }));
     }
+    
     enabledMarketplaces = incomingMarketplaces.map((m) => m.toLowerCase())
   } catch (error) {
     console.error(RED + `Error processing global marketplaces: ` + RESET, error);
@@ -4430,30 +4437,33 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     // Only reset when manually starting/restarting the task
     if (!start) {
       taskLoopCounters.delete(task._id);
-    } else {
-      // For scheduled loops (start=true), increment the loop counter once for all marketplaces
-      const currentLoopCount = taskLoopCounters.get(task._id) || 0;
-      const newLoopCount = currentLoopCount + 1;
-      taskLoopCounters.set(task._id, newLoopCount);
-      console.log(`[startTask] Incremented loop counter for task ${task._id}: ${currentLoopCount} -> ${newLoopCount}`);
-      console.log(`[startTask] taskLoopCounters state after increment:`, Array.from(taskLoopCounters.entries()));
     }
+    // IMPORTANT: Loop counter should ONLY be incremented in scheduleNextLoop
+    // NOT here in startTask, even when start=true
+  } else {
+    // Marketplace-specific start - don't modify global task status or loop counters
+    console.log(CYAN + `[startTask] Marketplace-specific start for ${marketplace} - preserving global task state` + RESET);
   }
 
-  if (!marketplace) {
+  // Always initialize stats if they don't exist, regardless of marketplace parameter
+  if (!skipStats[task._id]) {
     skipStats[task._id] = {
       opensea: 0,
       magiceden: 0,
       blur: 0
     };
+  }
 
+  if (!errorStats[task._id]) {
     errorStats[task._id] = {
       opensea: 0,
       magiceden: 0,
       blur: 0
     };
+  }
 
-    // Initialize completedTasks for this task
+  // Always initialize completedTasks if it doesn't exist
+  if (!completedTasks[task._id]) {
     completedTasks[task._id] = {
       opensea: false,
       magiceden: false,
@@ -4692,8 +4702,10 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
           }
         }
 
-        // Process each marketplace
-        for (const mp of availableMarketplaces) {
+        // Process each marketplace - if marketplace parameter is specified, only process that one
+        const marketplacesToProcess = marketplace ? [marketplace.toLowerCase()].filter(m => availableMarketplaces.includes(m)) : availableMarketplaces;
+        
+        for (const mp of marketplacesToProcess) {
           if (mp === "opensea") {
             preprocessing.opensea.enabled = true;
 
@@ -4896,7 +4908,10 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       }
     }
 
-    const jobs = availableMarketplaces
+    // Only create jobs for the specified marketplace if provided, otherwise create for all available
+    const marketplacesForJobs = marketplace ? [marketplace.toLowerCase()].filter(m => availableMarketplaces.includes(m)) : availableMarketplaces;
+    
+    const jobs = marketplacesForJobs
       .map(m => {
         const jobId = `${task._id}-${m}-schedule`;
         switch (m) {
@@ -7040,28 +7055,12 @@ async function updateMarketplace(task: ITask) {
 
       console.log(color + `Adding marketplace: ${incoming.toUpperCase()} for collection: ${task.contract.slug}`.toUpperCase() + RESET);
 
-      switch (incoming.toLowerCase()) {
-        case "opensea":
-          await queue.add(OPENSEA_SCHEDULE, task, {
-            ...createJobOptions(undefined, OPENSEA_SCHEDULE),
-            priority: COLLECTION_BID_PRIORITY.OPENSEA,
-            jobId: `${task._id}-opensea-schedule`
-          });
-          break;
-        case "magiceden":
-          await queue.add(MAGICEDEN_SCHEDULE, task, {
-            ...createJobOptions(undefined, MAGICEDEN_SCHEDULE),
-            priority: COLLECTION_BID_PRIORITY.MAGICEDEN,
-            jobId: `${task._id}-magiceden-schedule`
-          });
-          break;
-        case "blur":
-          await queue.add(BLUR_SCHEDULE, task, {
-            ...createJobOptions(undefined, BLUR_SCHEDULE),
-            priority: COLLECTION_BID_PRIORITY.BLUR,
-            jobId: `${task._id}-blur-schedule`
-          });
-          break;
+      // Use startTask to handle marketplace addition - it will create the necessary jobs
+      // This prevents duplicate job creation
+      try {
+        await startTask(updatedTask, false, incoming.toLowerCase());
+      } catch (error) {
+        console.error(RED + `Error adding marketplace ${incoming} to task ${task._id}: ` + RESET, error);
       }
     }
 
