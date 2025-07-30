@@ -1,2 +1,2221 @@
-make a comprehensive analysis of stopTask and all functions involved, the current issue is that stopTask is buggy when called with a marketplace
-identify potential issues and make a very comprehensive report from the trigger to the end and recommend fixes
+index.ts:
+★ [Line 278:7] 'jobProcessingLocks' is declared but its value is never read. [6133] (ts)
+★ [Line 280:7] 'completionRetries' is declared but its value is never read. [6133] (ts)
+★ [Line 281:7] 'MAX_COMPLETION_RETRIES' is declared but its value is never read. [6133] (ts)
+★ [Line 594:10] 'req' is declared but its value is never read. [6133] (ts)
+★ [Line 626:5] 'reconnectTimeoutId' is declared but its value is never read. [6133] (ts)
+★ [Line 696:11] 'systemMemoryPercent' is declared but its value is never read. [6133] (ts)
+★ [Line 801:11] 'oneHourAgo' is declared but its value is never read. [6133] (ts)
+★ [Line 864:31] 'count' is declared but its value is never read. [6133] (ts)
+★ [Line 872:34] 'value' is declared but its value is never read. [6133] (ts)
+★ [Line 981:5] 'lastConnectivityCheck' is declared but its value is never read. [6133] (ts)
+★ [Line 1120:11] 'jobs' is declared but its value is never read. [6133] (ts)
+★ [Line 1293:17] 'isScheduleJob' is declared but its value is never read. [6133] (ts)
+★ [Line 1396:23] 'queueStats' is declared but its value is never read. [6133] (ts)
+★ [Line 1575:13] 'result' is declared but its value is never read. [6133] (ts)
+★ [Line 1597:24] 'await' has no effect on the type of this expression. [80007] (ts)
+★ [Line 2208:16] 'getActiveJobCount' is declared but its value is never read. [6133] (ts)
+★ [Line 2659:11] 'parentId' is declared but its value is never read. [6133] (ts)
+★ [Line 2661:11] 'currencySymbol' is declared but its value is never read. [6133] (ts)
+★ [Line 2680:11] 'parentId' is declared but its value is never read. [6133] (ts)
+★ [Line 2682:11] 'currencySymbol' is declared but its value is never read. [6133] (ts)
+★ [Line 3184:140] 'currencySymbol' is declared but its value is never read. [6133] (ts)
+★ [Line 3243:107] 'currencySymbol' is declared but its value is never read. [6133] (ts)
+★ [Line 3768:11] 'existingParent' is declared but its value is never read. [6133] (ts)
+★ [Line 3966:27] 'currentProgress' is declared but its value is never read. [6133] (ts)
+★ [Line 3979:25] 'wallet' is declared but its value is never read. [6133] (ts)
+★ [Line 4254:5] 'await' has no effect on the type of this expression. [80007] (ts)
+★ [Line 4320:15] 'WALLET_PRIVATE_KEY' is declared but its value is never read. [6133] (ts)
+★ [Line 4592:15] 'totalJobs' is declared but its value is never read. [6133] (ts)
+★ [Line 4698:16] 'cancelActiveTaskJobs' is declared but its value is never read. [6133] (ts)
+★ [Line 4960:11] 'limiterResult' is declared but its value is never read. [6133] (ts)
+★ [Line 5397:7] 'BATCH_SIZE' is declared but its value is never read. [6133] (ts)
+★ [Line 6721:41] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 6762:41] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 6929:5] 'pingIntervalId' is declared but its value is never read. [6133] (ts)
+★ [Line 7544:11] 'domain' is declared but its value is never read. [6133] (ts)
+★ [Line 7886:13] 'isTraitBid' is declared but its value is never read. [6133] (ts)
+★ [Line 7887:13] 'tokenBid' is declared but its value is never read. [6133] (ts)
+★ [Line 8192:51] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 8208:49] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 8237:51] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 8293:47] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 8354:51] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 8370:49] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 8396:51] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 8449:47] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 8504:51] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 8520:49] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 8551:51] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 8598:47] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 8711:53] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 8732:51] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 9022:10] 'getTraitCount' is declared but its value is never read. [6133] (ts)
+★ [Line 9033:56] 'jobId' is declared but its value is never read. [6133] (ts)
+★ [Line 9295:54] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 9363:45] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 9402:49] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 9883:11] 'parsedTrait' is declared but its value is never read. [6133] (ts)
+★ [Line 9890:11] 'outbidEnabled' is declared but its value is never read. [6133] (ts)
+★ [Line 9946:47] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 9964:54] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 10003:51] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 10027:45] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 10048:49] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 10065:11] 'parentJob' is declared but its value is never read. [6133] (ts)
+★ [Line 10170:11] 'outbidEnabled' is declared but its value is never read. [6133] (ts)
+★ [Line 10221:47] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 10237:54] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 10277:51] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 10305:49] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 10328:45] 'index' is declared but its value is never read. [6133] (ts)
+★ [Line 10339:11] 'parentJob' is declared but its value is never read. [6133] (ts)
+★ [Line 10488:13] 'currencyType' is declared but its value is never read. [6133] (ts)
+★ [Line 10536:13] 'currencyType' is declared but its value is never read. [6133] (ts)
+★ [Line 10614:11] 'BlurTraitCounterBid' is declared but never used. [6196] (ts)
+★ [Line 10738:11] 'parsedTrait' is declared but its value is never read. [6133] (ts)
+★ [Line 10960:58] 'jobId' is declared but its value is never read. [6133] (ts)
+★ [Line 11950:15] 'req' is declared but its value is never read. [6133] (ts)
+★ [Line 11957:27] 'req' is declared but its value is never read. [6133] (ts)
+★ [Line 12560:45] 'req' is declared but its value is never read. [6133] (ts)
+★ [Line 12618:45] 'req' is declared but its value is never read. [6133] (ts)
+★ [Line 12623:41] 'req' is declared but its value is never read. [6133] (ts)
+★ [Line 12809:36] 'req' is declared but its value is never read. [6133] (ts)
+★ [Line 13027:21] 'req' is declared but its value is never read. [6133] (ts)
+★ [Line 13074:37] 'req' is declared but its value is never read. [6133] (ts)
+★ [Line 13083:31] 'req' is declared but its value is never read. [6133] (ts)
+★ [Line 13656:16] 'subscribeToListingEvents' is declared but its value is never read. [6133] (ts)
+★ [Line 14033:22] 'await' has no effect on the type of this expression. [80007] (ts)
+★ [Line 14181:11] 'BidStats' is declared but never used. [6196] (ts)
+★ [Line 15090:7] 'fetchTraitData' is declared but its value is never read. [6133] (ts)
+★ [Line 15159:10] 'transformOpenseaTrait' is declared but its value is never read. [6133] (ts)
+
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 349
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 350
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 351
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 352
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 353
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 354
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 355
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 356
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 357
+INCOMING OPENSEA LISTING FOR 0XED5AF388653567AF2F388E6224DC7C4B3241C544 #7460 - 3.244 ETH FROM 0X195F46025A6926968A1B3275822096EB12D97E70 AT 2025-07-29T14:12:33.000000Z
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 358
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 359
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 360
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 201
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 361
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 362
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 363
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 364
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 365
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 366
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 367
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 368
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 369
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 370
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 371
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 202
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 203
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 372
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 373
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 374
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 204
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 375
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 376
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 377
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 378
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 205
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 379
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 380
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 381
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 206
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 207
+Current Limiter Stats: { RECEIVED: 1, QUEUED: 1, RUNNING: 4, EXECUTING: 73, DONE: 19225 }
+Average RPS: 87.00 Executing: 79.00 True RPS: 87.00
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 382
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 208
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 209
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 210
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 383
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 211
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 212
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 384
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 213
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 385
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 386
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 214
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 387
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 215
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 216
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 217
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 388
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 218
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 219
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 220
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 221
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 222
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 223
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 224
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 389
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 225
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 226
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 390
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 227
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 228
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 229
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 230
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 231
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 232
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 233
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 234
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 235
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 236
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 237
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 238
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 239
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 240
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 241
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 242
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 243
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 244
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 245
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 391
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 246
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 247
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 248
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 249
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 250
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 392
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 393
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 251
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 252
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 394
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 253
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 254
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 255
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:252MB
+heapTotal:196MB
+heapUsed:142MB
+external:27MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+⚡ Waiting Job Monitor: Active (failing waiting jobs for retry)
+active: 99
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 976
+waiting-children: 0
+Total Jobs: 1075
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 256
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 257
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 258
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 259
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 260
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 261
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 262
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 263
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 264
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 265
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 266
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 267
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 68877323fd744194919bc202 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 68877323fd744194919bc202-CANCEL_MAGICEDEN_BID
+  Total bids: 852, Completed: 852
+OPENSEA - ParentJob: 68877323fd744194919bc202-CANCEL_OPENSEA_BID
+  Total bids: 652, Completed: 395
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 268
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 269
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 270
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 271
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 272
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 273
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 274
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 275
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 276
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 277
+Current Limiter Stats: { RECEIVED: 2, QUEUED: 0, RUNNING: 19, EXECUTING: 79, DONE: 19309 }
+Average RPS: 86.50 Executing: 100.00 True RPS: 100.00
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 278
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 279
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 280
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 281
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 282
+{"cancelled":true}
+[updateTaskCancellationPercentage] Task 688771e9fd744194919bc1d4 - FULL CANCELLATION
+Selected marketplaces: magiceden, opensea
+Enabled and selected: magiceden, opensea
+MAGICEDEN - ParentJob: 688771e9fd744194919bc1d4-CANCEL_MAGICEDEN_BID
+  Total bids: 997, Completed: 997
+OPENSEA - ParentJob: 688771e9fd744194919bc1d4-CANCEL_OPENSEA_BID
+  Total bids: 797, Completed: 283
+
+
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Blur batch 2/3: Waiting 5s before next batch
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 231 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:194MB
+heapTotal:125MB
+heapUsed:101MB
+external:27MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 1
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 1
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 231 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 231 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 1, DONE: 231 }
+Average RPS: 0.00 Executing: 1.00 True RPS: 1.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 232 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 232 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:196MB
+heapTotal:127MB
+heapUsed:92MB
+external:27MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 1
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 1
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 232 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 232 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 232 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 232 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+Blur batch 3/3: Waiting 5s before next batch
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 232 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_Error
+  Error: Job 1 (ID: 1) timed out after 15000ms - aborted
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:196MB
+heapTotal:127MB
+heapUsed:90MB
+external:26MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 0
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 0
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 232 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 232 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 232 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 232 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 1, DONE: 232 }
+Average RPS: 0.00 Executing: 1.00 True RPS: 1.00
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:196MB
+heapTotal:127MB
+heapUsed:95MB
+external:26MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 3
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 3
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 2, DONE: 233 }
+Average RPS: 1.00 Executing: 2.00 True RPS: 2.00
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 1.50 Executing: 0.00 True RPS: 1.50
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 1.50 Executing: 0.00 True RPS: 1.50
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 1.50 Executing: 0.00 True RPS: 1.50
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 1.50 Executing: 0.00 True RPS: 1.50
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:197MB
+heapTotal:127MB
+heapUsed:89MB
+external:27MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 0
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 0
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 1.50 Executing: 0.00 True RPS: 1.50
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 1.50 Executing: 0.00 True RPS: 1.50
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 1.50 Executing: 0.00 True RPS: 1.50
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 1.50 Executing: 0.00 True RPS: 1.50
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 1.50 Executing: 0.00 True RPS: 1.50
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:197MB
+heapTotal:127MB
+heapUsed:98MB
+external:27MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 0
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 0
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 2.00 Executing: 0.00 True RPS: 2.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:197MB
+heapTotal:127MB
+heapUsed:93MB
+external:27MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 0
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 0
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:198MB
+heapTotal:127MB
+heapUsed:98MB
+external:27MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 0
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 0
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:198MB
+heapTotal:127MB
+heapUsed:92MB
+external:27MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 0
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 0
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 235 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+[scheduleNextLoop] Timeout fired for task 688799ebfd744194919bc515, loop #8
+[scheduleNextLoop] Starting next iteration for task 688799ebfd744194919bc515 (Loop #8)
+[scheduleNextLoop] Task running state: true, Task ID: 688799ebfd744194919bc515
+✓ magiceden approval confirmed for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 (cached)
+✓ opensea approval confirmed for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 (cached)
+UPDATED TASK LILPUDGYS RUNNING STATUS TO: TRUE
+WebSocket not connected, skipping subscription for lilpudgys
+[Preprocessing] MagicEden will create 28 trait bid jobs
+[Parent Job Created] MagicEden | Task: 688799ebfd744194919bc515 | Total Jobs: 28
+[Collection] Fetching details for lilpudgys
+[Collection] Memory cache hit for lilpudgys (0ms)
+[Preprocessing] OpenSea will create 28 trait bid jobs
+[Parent Job Created] OpenSea | Task: 688799ebfd744194919bc515 | Total Jobs: 28
+[releaseLoopSchedulingLock] No lock found for task 688799ebfd744194919bc515
+[MAGICEDEN] Creating 28 trait bid jobs
+[Collection] Fetching details for lilpudgys
+[Collection] Memory cache hit for lilpudgys (1ms)
+[OPENSEA] Creating 28 trait bid jobs
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 56, DONE: 235 }
+Average RPS: 0.00 Executing: 56.00 True RPS: 56.00
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:198MB
+heapTotal:126MB
+heapUsed:97MB
+external:26MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 55
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 55
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 10, DONE: 281 }
+Average RPS: 46.00 Executing: 10.00 True RPS: 46.00
+[MARKETPLACE COMPLETE] OPENSEA finished for task 688799ebfd744194919bc515 (28/28 jobs)
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 2, DONE: 290 }
+Average RPS: 27.50 Executing: 2.00 True RPS: 27.50
+[MARKETPLACE COMPLETE] MAGICEDEN finished for task 688799ebfd744194919bc515 (28/28 jobs)
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 2, DONE: 292 }
+Average RPS: 19.00 Executing: 2.00 True RPS: 19.00
+Blur batch 2/3: Waiting 5s before next batch
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 294 }
+Average RPS: 14.75 Executing: 0.00 True RPS: 14.75
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 294 }
+Average RPS: 14.75 Executing: 0.00 True RPS: 14.75
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:199MB
+heapTotal:126MB
+heapUsed:100MB
+external:27MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 1
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 1
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 294 }
+Average RPS: 14.75 Executing: 0.00 True RPS: 14.75
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 294 }
+Average RPS: 14.75 Executing: 0.00 True RPS: 14.75
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 294 }
+Average RPS: 14.75 Executing: 0.00 True RPS: 14.75
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 294 }
+Average RPS: 14.75 Executing: 0.00 True RPS: 14.75
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 294 }
+Average RPS: 14.75 Executing: 0.00 True RPS: 14.75
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:197MB
+heapTotal:127MB
+heapUsed:100MB
+external:27MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 1
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 1
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 294 }
+Average RPS: 4.33 Executing: 0.00 True RPS: 4.33
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 294 }
+Average RPS: 2.00 Executing: 0.00 True RPS: 2.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 294 }
+Average RPS: 2.00 Executing: 0.00 True RPS: 2.00
+Blur batch 3/3: Waiting 5s before next batch
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 294 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+[ERROR] 0x_SERVER_QUEUE_FAIL_JOB_Error
+  Error: Job 144 (ID: 144) timed out after 15000ms - aborted
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 294 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:199MB
+heapTotal:129MB
+heapUsed:102MB
+external:27MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 0
+completed: 0
+delayed: 1
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 1
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 294 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 294 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 1, DONE: 294 }
+Average RPS: 0.00 Executing: 1.00 True RPS: 1.00
+[MARKETPLACE COMPLETE] BLUR finished for task 688799ebfd744194919bc515 (28/28 jobs)
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[COMPLETION] Task 688799ebfd744194919bc515 reached 100% completion, starting completion process
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: true,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[COMPLETION] Task 688799ebfd744194919bc515 reached 100% completion, starting completion process
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: true,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[COMPLETION] Task 688799ebfd744194919bc515 reached 100% completion, starting completion process
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: true,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[COMPLETION] Task 688799ebfd744194919bc515 reached 100% completion, starting completion process
+[cancelPendingJobsForTask] Cancelling pending jobs for task 688799ebfd744194919bc515
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: true,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[COMPLETION] Task 688799ebfd744194919bc515 reached 100% completion, starting completion process
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+[cancelPendingJobsForTask] Cancelling pending jobs for task 688799ebfd744194919bc515
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: true,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[COMPLETION] Task 688799ebfd744194919bc515 reached 100% completion, starting completion process
+[cancelPendingJobsForTask] Cancelling pending jobs for task 688799ebfd744194919bc515
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: true,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[COMPLETION] Task 688799ebfd744194919bc515 reached 100% completion, starting completion process
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:201MB
+heapTotal:131MB
+heapUsed:97MB
+external:27MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 1
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 1
+Blur batch 2/3: Waiting 5s before next batch
+[cancelPendingJobsForTask] Cancelling pending jobs for task 688799ebfd744194919bc515
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: true,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[COMPLETION] Task 688799ebfd744194919bc515 reached 100% completion, starting completion process
+[cancelPendingJobsForTask] Cancelling pending jobs for task 688799ebfd744194919bc515
+[scheduleNextLoop] Starting loop scheduling for task 688799ebfd744194919bc515
+[scheduleNextLoop] Task 688799ebfd744194919bc515 - Loop counter incremented: 8 -> 9
+[scheduleNextLoop] Scheduling task 688799ebfd744194919bc515 to run in 60 seconds (Loop #9)
+[scheduleNextLoop] Next loop time: 2025-07-29T14:20:29.736Z
+[scheduleNextLoop] Countdown timer set for task 688799ebfd744194919bc515
+[acquireLoopSchedulingLock] Acquiring lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Acquired scheduling lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Timeout set for task 688799ebfd744194919bc515, will fire in 60 seconds
+[releaseLoopSchedulingLock] Releasing lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Released scheduling lock for task 688799ebfd744194919bc515 after scheduling
+[scheduleNextLoop] Successfully scheduled next loop for task 688799ebfd744194919bc515
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'SCHEDULED',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+[cancelPendingJobsForTask] Cancelling pending jobs for task 688799ebfd744194919bc515
+[scheduleNextLoop] Starting loop scheduling for task 688799ebfd744194919bc515
+[scheduleNextLoop] Task 688799ebfd744194919bc515 - Loop counter incremented: 9 -> 10
+[scheduleNextLoop] Scheduling task 688799ebfd744194919bc515 to run in 60 seconds (Loop #10)
+[scheduleNextLoop] Next loop time: 2025-07-29T14:20:30.157Z
+[scheduleNextLoop] Clearing existing countdown timer for task 688799ebfd744194919bc515
+[scheduleNextLoop] Countdown timer set for task 688799ebfd744194919bc515
+[scheduleNextLoop] Clearing existing timeout for task 688799ebfd744194919bc515
+[acquireLoopSchedulingLock] Acquiring lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Acquired scheduling lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Timeout set for task 688799ebfd744194919bc515, will fire in 60 seconds
+[releaseLoopSchedulingLock] Releasing lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Released scheduling lock for task 688799ebfd744194919bc515 after scheduling
+[scheduleNextLoop] Successfully scheduled next loop for task 688799ebfd744194919bc515
+[cancelPendingJobsForTask] Cancelling pending jobs for task 688799ebfd744194919bc515
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[scheduleNextLoop] Starting loop scheduling for task 688799ebfd744194919bc515
+[scheduleNextLoop] Task 688799ebfd744194919bc515 - Loop counter incremented: 10 -> 11
+[scheduleNextLoop] Scheduling task 688799ebfd744194919bc515 to run in 60 seconds (Loop #11)
+[scheduleNextLoop] Next loop time: 2025-07-29T14:20:30.249Z
+[scheduleNextLoop] Clearing existing countdown timer for task 688799ebfd744194919bc515
+[scheduleNextLoop] Countdown timer set for task 688799ebfd744194919bc515
+[scheduleNextLoop] Clearing existing timeout for task 688799ebfd744194919bc515
+[acquireLoopSchedulingLock] Acquiring lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Acquired scheduling lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Timeout set for task 688799ebfd744194919bc515, will fire in 60 seconds
+[releaseLoopSchedulingLock] Releasing lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Released scheduling lock for task 688799ebfd744194919bc515 after scheduling
+[scheduleNextLoop] Successfully scheduled next loop for task 688799ebfd744194919bc515
+[cancelPendingJobsForTask] Cancelling pending jobs for task 688799ebfd744194919bc515
+[scheduleNextLoop] Starting loop scheduling for task 688799ebfd744194919bc515
+[scheduleNextLoop] Task 688799ebfd744194919bc515 - Loop counter incremented: 11 -> 12
+[scheduleNextLoop] Scheduling task 688799ebfd744194919bc515 to run in 60 seconds (Loop #12)
+[scheduleNextLoop] Next loop time: 2025-07-29T14:20:30.629Z
+[scheduleNextLoop] Clearing existing countdown timer for task 688799ebfd744194919bc515
+[scheduleNextLoop] Countdown timer set for task 688799ebfd744194919bc515
+[scheduleNextLoop] Clearing existing timeout for task 688799ebfd744194919bc515
+[acquireLoopSchedulingLock] Acquiring lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Acquired scheduling lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Timeout set for task 688799ebfd744194919bc515, will fire in 60 seconds
+[releaseLoopSchedulingLock] Releasing lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Released scheduling lock for task 688799ebfd744194919bc515 after scheduling
+[scheduleNextLoop] Successfully scheduled next loop for task 688799ebfd744194919bc515
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[scheduleNextLoop] Starting loop scheduling for task 688799ebfd744194919bc515
+[scheduleNextLoop] Task 688799ebfd744194919bc515 - Loop counter incremented: 12 -> 13
+[scheduleNextLoop] Scheduling task 688799ebfd744194919bc515 to run in 60 seconds (Loop #13)
+[scheduleNextLoop] Next loop time: 2025-07-29T14:20:30.748Z
+[scheduleNextLoop] Clearing existing countdown timer for task 688799ebfd744194919bc515
+[scheduleNextLoop] Countdown timer set for task 688799ebfd744194919bc515
+[scheduleNextLoop] Clearing existing timeout for task 688799ebfd744194919bc515
+[acquireLoopSchedulingLock] Acquiring lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Acquired scheduling lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Timeout set for task 688799ebfd744194919bc515, will fire in 60 seconds
+[releaseLoopSchedulingLock] Releasing lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Released scheduling lock for task 688799ebfd744194919bc515 after scheduling
+[scheduleNextLoop] Successfully scheduled next loop for task 688799ebfd744194919bc515
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+[scheduleNextLoop] Starting loop scheduling for task 688799ebfd744194919bc515
+[scheduleNextLoop] Task 688799ebfd744194919bc515 - Loop counter incremented: 13 -> 14
+[scheduleNextLoop] Scheduling task 688799ebfd744194919bc515 to run in 60 seconds (Loop #14)
+[scheduleNextLoop] Next loop time: 2025-07-29T14:20:31.147Z
+[scheduleNextLoop] Clearing existing countdown timer for task 688799ebfd744194919bc515
+[scheduleNextLoop] Countdown timer set for task 688799ebfd744194919bc515
+[scheduleNextLoop] Clearing existing timeout for task 688799ebfd744194919bc515
+[acquireLoopSchedulingLock] Acquiring lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Acquired scheduling lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Timeout set for task 688799ebfd744194919bc515, will fire in 60 seconds
+[releaseLoopSchedulingLock] Releasing lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Released scheduling lock for task 688799ebfd744194919bc515 after scheduling
+[scheduleNextLoop] Successfully scheduled next loop for task 688799ebfd744194919bc515
+[scheduleNextLoop] Starting loop scheduling for task 688799ebfd744194919bc515
+[scheduleNextLoop] Task 688799ebfd744194919bc515 - Loop counter incremented: 14 -> 15
+[scheduleNextLoop] Scheduling task 688799ebfd744194919bc515 to run in 60 seconds (Loop #15)
+[scheduleNextLoop] Next loop time: 2025-07-29T14:20:31.250Z
+[scheduleNextLoop] Clearing existing countdown timer for task 688799ebfd744194919bc515
+[scheduleNextLoop] Countdown timer set for task 688799ebfd744194919bc515
+[scheduleNextLoop] Clearing existing timeout for task 688799ebfd744194919bc515
+[acquireLoopSchedulingLock] Acquiring lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Acquired scheduling lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Timeout set for task 688799ebfd744194919bc515, will fire in 60 seconds
+[releaseLoopSchedulingLock] Releasing lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Released scheduling lock for task 688799ebfd744194919bc515 after scheduling
+[scheduleNextLoop] Successfully scheduled next loop for task 688799ebfd744194919bc515
+[scheduleNextLoop] Starting loop scheduling for task 688799ebfd744194919bc515
+[scheduleNextLoop] Task 688799ebfd744194919bc515 - Loop counter incremented: 15 -> 16
+[scheduleNextLoop] Scheduling task 688799ebfd744194919bc515 to run in 60 seconds (Loop #16)
+[scheduleNextLoop] Next loop time: 2025-07-29T14:20:31.644Z
+[scheduleNextLoop] Clearing existing countdown timer for task 688799ebfd744194919bc515
+[scheduleNextLoop] Countdown timer set for task 688799ebfd744194919bc515
+[scheduleNextLoop] Clearing existing timeout for task 688799ebfd744194919bc515
+[acquireLoopSchedulingLock] Acquiring lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Acquired scheduling lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Timeout set for task 688799ebfd744194919bc515, will fire in 60 seconds
+[releaseLoopSchedulingLock] Releasing lock for task 688799ebfd744194919bc515
+[scheduleNextLoop] Released scheduling lock for task 688799ebfd744194919bc515 after scheduling
+[scheduleNextLoop] Successfully scheduled next loop for task 688799ebfd744194919bc515
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:203MB
+heapTotal:132MB
+heapUsed:105MB
+external:27MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 1
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 1
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 1.00 Executing: 0.00 True RPS: 1.00
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Blur batch 3/3: Waiting 5s before next batch
+[DEBUG] Task 688799ebfd744194919bc515 completion check: {
+  allMarketsComplete: true,
+  actualAllMarketsComplete: true,
+  runningPercentage: 100,
+  allMarketsHaveParentJobs: true,
+  availableMarketplaces: [ 'blur', 'magiceden', 'opensea' ],
+  tasksBeingScheduled: false,
+  taskStatus: 'RUNNING',
+  completedFlags: { opensea: true, magiceden: true, blur: true }
+}
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:204MB
+heapTotal:134MB
+heapUsed:108MB
+external:27MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 1
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 1
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+[Circuit Breaker] Suspending blur for task 688799ebfd744194919bc515 (lilpudgys) due to 5 consecutive timeouts
+[ERROR] 0x_SERVER_GENERAL_BLUR_TASK
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+Failed to send logs to Axiom: Request failed with status code 400
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 295 }
+Average RPS: 0.00 Executing: 0.00 True RPS: 0.00
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:213MB
+heapTotal:141MB
+heapUsed:116MB
+external:27MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 3
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 3
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 4, DONE: 295 }
+Average RPS: 0.00 Executing: 4.00 True RPS: 4.00

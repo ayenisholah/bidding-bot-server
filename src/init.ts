@@ -26,6 +26,20 @@ const retryConfig: IAxiosRetryConfig = {
     return axiosRetry.exponentialDelay(retryCount);
   },
   retryCondition: async (error: any) => {
+    // Don't retry on insufficient balance errors
+    if (error.response?.data?.message) {
+      const message = error.response.data.message.toLowerCase();
+      if (message.includes('insufficient') && (message.includes('balance') || message.includes('beth'))) {
+        console.log('Skipping retry for insufficient balance error:', message);
+        return false;
+      }
+    }
+    
+    // Don't retry on authentication errors
+    if (error.response?.status === 401 || error.response?.status === 403) {
+      return false;
+    }
+    
     if (error.response && (error.response.status >= 400 && error.response.status < 600)) {
       return true;
     }

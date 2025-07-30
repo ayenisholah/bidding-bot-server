@@ -1,5 +1,5 @@
 import { ethers, Wallet, formatUnits } from "ethers";
-import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
+import { limiter, isTaskBlacklisted } from "../../init";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, pQueue, RESET, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { DistributedLockManager } from "../../utils/lock";
@@ -291,8 +291,8 @@ export async function getAccessToken(private_key: string): Promise<string | unde
       return cachedToken;
     }
 
-    let response: any = await limiter.schedule(() => axiosInstance
-      .post(`${BLUR_API_URL}/auth/challenge`, options, { headers }));
+    let response: any = await limiter.schedule(() => axios
+      .post(`${BLUR_API_URL}/auth/challenge`, options, { headers, timeout: 15000 }));
     const message = response.data.message;
     const signature = await wallet.signMessage(message);
     const data = {
@@ -302,8 +302,8 @@ export async function getAccessToken(private_key: string): Promise<string | unde
       hmac: response.data.hmac,
       signature: signature
     };
-    response = await limiter.schedule(() => axiosInstance
-      .post(`${BLUR_API_URL}/auth/login`, data, { headers }));
+    response = await limiter.schedule(() => axios
+      .post(`${BLUR_API_URL}/auth/login`, data, { headers, timeout: 15000 }));
     const accessToken = response.data.accessToken;
     if (redis) {
       await redis.set(key, accessToken, 'EX', 5 * 60);
@@ -334,7 +334,7 @@ async function formatBidOnBlur(
 
   try {
     const { data } = await limiter.schedule(() =>
-      axiosInstance.request<BlurBidResponse>({
+      axios.request<BlurBidResponse>({
         method: 'POST',
         url: `${url}/v1/collection-bids/format`,
         headers: {
@@ -344,7 +344,8 @@ async function formatBidOnBlur(
           'x-api-key': API_KEY,
         },
         data: JSON.stringify(buildPayload),
-        signal: controller.signal
+        signal: controller.signal,
+        timeout: 15000
       })
     );
     return data;
@@ -435,7 +436,7 @@ async function submitBidToBlur(
     blurRateLimiter.recordRequest(walletAddress);
 
     const response = await limiter.schedule(() =>
-      axiosInstance.request({
+      axios.request({
         method: 'POST',
         url: `${url}/v1/collection-bids/submit`,
         headers: {
@@ -445,7 +446,8 @@ async function submitBidToBlur(
           'x-api-key': API_KEY,
         },
         data: JSON.stringify(submitPayload),
-        signal: controller.signal
+        signal: controller.signal,
+        timeout: 15000
       })
     );
 
@@ -468,7 +470,7 @@ async function submitBidToBlur(
 
     if (offers.success) {
       const successMessage = traits ? `🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉 AMOUNT: ${offerPriceEth} BETH 🎉 TRAIT: ${traits}` : `🎉 OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉 AMOUNT: ${offerPriceEth} BETH 🎉`
-      console.log("\x1b[33m", successMessage, RESET);
+      // console.log("\x1b[33m", successMessage, RESET);
 
       let identifier = ''
       if (traits) {
@@ -556,13 +558,14 @@ export async function cancelBlurBid(data: BlurCancelPayload) {
     const walletAddress = wallet.address
     const accessToken = await getAccessToken(privateKey);
     const endpoint = `${BLUR_API_URL}/v1/collection-bids/cancel`
-    const { data: cancelResponse } = await limiter.schedule(() => axiosInstance.post(endpoint, payload, {
+    const { data: cancelResponse } = await limiter.schedule(() => axios.post(endpoint, payload, {
       headers: {
         'content-type': 'application/json',
         authToken: accessToken,
         walletAddress: walletAddress.toLowerCase(),
         'x-api-key': API_KEY,
-      }
+      },
+      timeout: 15000
     }))
     decrementBidCount('blur', taskId);
     if (cancelResponse) {
@@ -581,7 +584,7 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
 
   if (criteriaType === 'TRAIT') {
     const tasks = [
-      () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+      () => limiter.schedule(() => axios.get<BlurBidResponse>(url, {
         params: {
           filters: JSON.stringify({
             criteria: {
@@ -593,9 +596,10 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
         headers: {
           'content-type': 'application/json',
           'x-api-key': API_KEY,
-        }
+        },
+        timeout: 15000
       })),
-      () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+      () => limiter.schedule(() => axios.get<BlurBidResponse>(url, {
         params: {
           filters: JSON.stringify({
             criteria: {
@@ -607,7 +611,8 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
         headers: {
           'content-type': 'application/json',
           'x-api-key': API_KEY,
-        }
+        },
+        timeout: 15000
       }))
     ];
 
@@ -630,7 +635,7 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
     return combinedData;
 
   } else {
-    const { data } = await limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+    const { data } = await limiter.schedule(() => axios.get<BlurBidResponse>(url, {
       params: {
         filters: JSON.stringify({
           criteria: {
@@ -642,7 +647,8 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
       headers: {
         'content-type': 'application/json',
         'x-api-key': API_KEY,
-      }
+      },
+      timeout: 15000
     }));
     return data;
   }
@@ -680,11 +686,12 @@ export async function fetchBlurCollectionStats(slug: string) {
     
     try {
       const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens`;
-      const { data } = await limiter.schedule(() => axiosInstance.get<BlurTokensResponse>(url, {
+      const { data } = await limiter.schedule(() => axios.get<BlurTokensResponse>(url, {
         headers: {
           'content-type': 'application/json',
           'x-api-key': API_KEY,
-        }
+        },
+        timeout: 15000
       }));
 
       const listings = data?.tokens?.sort((a, b) => Number(a?.price?.amount) - Number(b?.price?.amount));
@@ -720,10 +727,11 @@ export async function fetchBlurTraitFloor(slug: string, trait: { type: string; v
 
     const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens?filters=${encodedFilters}`;
     const { data } = await limiter.schedule(() =>
-      axiosInstance.get<BlurTokensResponse>(url, {
+      axios.get<BlurTokensResponse>(url, {
         headers: {
           'x-api-key': API_KEY,
         },
+        timeout: 15000
       })
     );
     const amount = data?.tokens[0]?.price?.amount;

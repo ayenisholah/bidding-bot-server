@@ -578,7 +578,7 @@ async function sendSignedOrderData(
 
       // Log successful bid
 
-      console.log(MAGENTA, successMessage, RESET);
+      // console.log(MAGENTA, successMessage, RESET);
 
       if (!task) return
       return offerResponse;

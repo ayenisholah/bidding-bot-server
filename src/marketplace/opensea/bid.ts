@@ -544,7 +544,7 @@ export async function bidOnOpensea(
 
       trackBidRate('opensea', taskId);
       const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()}  TOKEN: ${asset.tokenId} ${Number(offerPriceEthFinal)} ${currencySymbol} 🎉`
-      console.log(BLUE, successMessage, RESET);
+      // console.log(BLUE, successMessage, RESET);
       success = true;
     }
     else {
@@ -803,7 +803,7 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
   const successMessage = opensea_traits ?
     `🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()}  TRAIT: ${opensea_traits} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
     : `🎉 COLLECTION OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
-  console.log(BLUE, successMessage, RESET);
+  // console.log(BLUE, successMessage, RESET);
 }
 
 /**
