@@ -879,6 +879,12 @@ export async function cancelOrder(orderHash: string, protocolAddress: string, pr
 
     const body = { offerer_signature: offererSignature };
 
+    // Check if limiter is initialized
+    if (!limiter) {
+      console.error('Limiter not initialized - cannot process cancelOrder request');
+      throw new Error('Limiter not initialized');
+    }
+
     const response = await limiter.schedule(() => axiosInstance.post(url, body, { headers }))
     console.log(JSON.stringify({ cancelled: true }));
     decrementBidCount('opensea', taskId)

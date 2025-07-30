@@ -277,6 +277,12 @@ export async function getAccessToken(private_key: string): Promise<string | unde
   const wallet = new Wallet(private_key, provider);
   const lockKey = `auth:${wallet.address}`;
 
+  // Check if limiter is initialized
+  if (!limiter) {
+    console.error('Limiter not initialized - cannot get access token');
+    throw new Error('Limiter not initialized');
+  }
+
   return await lockManager.withLock(lockKey, async () => {
     const options = { walletAddress: wallet.address };
     const headers = {
@@ -331,6 +337,12 @@ async function formatBidOnBlur(
 ) {
   const controller = new AbortController();
   addActiveRequest(taskId, controller);
+
+  // Check if limiter is initialized
+  if (!limiter) {
+    console.error('Limiter not initialized - cannot format Blur bid');
+    throw new Error('Limiter not initialized');
+  }
 
   try {
     const { data } = await limiter.schedule(() =>

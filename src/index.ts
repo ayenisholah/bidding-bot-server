@@ -277,11 +277,6 @@ const LOCK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const tasksBeingScheduled = new Map<string, boolean>();
 // Add a Map to track tasks being stopped to prevent double triggering
 const tasksBeingStopped = new Map<string, boolean>();
-// Add a Map to track job processing locks to prevent race conditions
-const jobProcessingLocks = new Map<string, boolean>();
-// Completion retry tracking to prevent infinite loops
-const completionRetries = new Map<string, number>();
-const MAX_COMPLETION_RETRIES = 12; // 60 seconds total (12 * 5s)
 
 function unlockTask(taskId: string): void {
   const currentLock = taskLocks.get(taskId);
@@ -299,15 +294,12 @@ function acquireLoopSchedulingLock(taskId: string): boolean {
   if (existingLock && existingLock.locked) {
     // Check if lock is stale (older than 5 minutes)
     if (now - existingLock.timestamp > LOCK_TIMEOUT_MS) {
-      console.log(YELLOW + `[acquireLoopSchedulingLock] Task ${taskId} has stale lock (age: ${Math.round((now - existingLock.timestamp) / 1000)}s), releasing it` + RESET);
       loopSchedulingLocks.delete(taskId);
     } else {
-      console.log(YELLOW + `[acquireLoopSchedulingLock] Task ${taskId} already has a scheduling lock (age: ${Math.round((now - existingLock.timestamp) / 1000)}s)` + RESET);
       return false;
     }
   }
 
-  console.log(GREEN + `[acquireLoopSchedulingLock] Acquiring lock for task ${taskId}` + RESET);
   loopSchedulingLocks.set(taskId, { locked: true, timestamp: now });
   return true;
 }
@@ -315,10 +307,7 @@ function acquireLoopSchedulingLock(taskId: string): boolean {
 // Helper function to release loop scheduling lock
 function releaseLoopSchedulingLock(taskId: string): void {
   if (loopSchedulingLocks.has(taskId)) {
-    console.log(GREEN + `[releaseLoopSchedulingLock] Releasing lock for task ${taskId}` + RESET);
     loopSchedulingLocks.delete(taskId);
-  } else {
-    console.log(YELLOW + `[releaseLoopSchedulingLock] No lock found for task ${taskId}` + RESET);
   }
 }
 
@@ -536,7 +525,7 @@ const CANCEL_MAGICEDEN_BID = "CANCEL_MAGICEDEN_BID"
 const CANCEL_BLUR_BID = "CANCEL_BLUR_BID"
 
 // Retry configuration for cancellation jobs
-const CANCELLATION_JOB_RETRY_ATTEMPTS = 3;
+const CANCELLATION_JOB_RETRY_ATTEMPTS = 1; // No retries
 const CANCELLATION_JOB_RETRY_DELAY = 2000;
 const CANCELLATION_JOB_TYPES = [CANCEL_OPENSEA_BID, CANCEL_MAGICEDEN_BID, CANCEL_BLUR_BID];
 
@@ -544,7 +533,7 @@ const CANCELLATION_JOB_TYPES = [CANCEL_OPENSEA_BID, CANCEL_MAGICEDEN_BID, CANCEL
 function getCancellationJobOptions(taskId: string, orderId: string, jobType: string) {
   return {
     jobId: `${jobType}-${taskId}-${orderId}`,
-    attempts: CANCELLATION_JOB_RETRY_ATTEMPTS,
+    attempts: CANCELLATION_JOB_RETRY_ATTEMPTS, // No retries
     backoff: {
       type: 'exponential' as const,
       delay: CANCELLATION_JOB_RETRY_DELAY,
@@ -632,7 +621,6 @@ app.use(cors({
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 let wsManager: WebSocketManager;
-let reconnectTimeoutId: NodeJS.Timeout | null = null;
 let retryCount: number = 0;
 
 // WebSocket Connection Metrics
@@ -700,9 +688,6 @@ async function monitorHealth() {
     const heapPercentOfMax = (heapUsedMB / MAX_HEAP_MB) * 100;
     const heapPercentOfTotal = (used.heapUsed / used.heapTotal) * 100;
 
-    // Also track system memory
-    const totalMemory = os.totalmem();
-    const systemMemoryPercent = (used.rss / totalMemory) * 100;
 
     // Check if queue is paused
     const isPaused = await queue.isPaused();
@@ -745,20 +730,25 @@ async function monitorHealth() {
     });
 
     // Check for stuck tasks at 100%
-    const stuckTasks: string[] = [];
-    for (const [taskId, status] of Object.entries(taskStatus)) {
-      if (status.runningPercentage >= 100 && status.status === 'RUNNING') {
-        stuckTasks.push(taskId);
-        console.log(RED + `\n⚠️  STUCK TASK DETECTED: ${taskId}` + RESET);
-        console.log(RED + `   - Progress: ${status.runningPercentage}%` + RESET);
-        console.log(RED + `   - Status: ${status.status}` + RESET);
-        console.log(RED + `   - NextLoopTime: ${status.nextLoopTime || 'not set'}` + RESET);
-        
-        // Force completion check for stuck tasks
-        console.log(YELLOW + `   - Forcing completion check...` + RESET);
-        await checkTaskCompletionAndScheduleNext(taskId);
-      }
-    }
+    // Commented out to prevent false positive warnings during task completion transition
+    // const stuckTasks: string[] = [];
+    // for (const [taskId, status] of Object.entries(taskStatus)) {
+    //   if (status.runningPercentage >= 100 && status.status === 'RUNNING') {
+    //     stuckTasks.push(taskId);
+    //     console.log(RED + `\n⚠️  STUCK TASK DETECTED: ${taskId}` + RESET);
+    //     console.log(RED + `   - Progress: ${status.runningPercentage}%` + RESET);
+    //     console.log(RED + `   - Status: ${status.status}` + RESET);
+    //     console.log(RED + `   - NextLoopTime: ${status.nextLoopTime ? new Date(status.nextLoopTime).toISOString() : 'not set'}` + RESET);
+
+    //     // Only force completion check if no nextLoopTime is set (truly stuck)
+    //     if (!status.nextLoopTime) {
+    //       console.log(YELLOW + `   - Forcing completion check (no nextLoopTime set)...` + RESET);
+    //       await checkTaskCompletionAndScheduleNext(taskId);
+    //     } else {
+    //       console.log(CYAN + `   - Task has nextLoopTime set, will complete naturally` + RESET);
+    //     }
+    //   }
+    // }
 
     console.log(BLUE + '\n📋 Queue Status:' + RESET);
     // Show paused status prominently
@@ -873,7 +863,6 @@ async function clearQueueAndRestartJobs() {
 
 // Network connectivity monitoring
 let isConnected = true;
-let lastConnectivityCheck = Date.now();
 let connectivityLostAt: number | null = null;
 
 async function checkInternetConnectivity(): Promise<boolean> {
@@ -944,7 +933,6 @@ function startConnectivityMonitoring() {
     if (!isConnected && currentlyConnected) {
       // Connection restored
       isConnected = true;
-      lastConnectivityCheck = Date.now();
       await handleConnectivityRestored();
     } else if (isConnected && !currentlyConnected) {
       // Connection lost
@@ -952,8 +940,6 @@ function startConnectivityMonitoring() {
       connectivityLostAt = Date.now();
       console.error(RED + '\n⚠️  Internet connectivity lost!' + RESET);
     }
-
-    lastConnectivityCheck = Date.now();
   }, 30000); // Check every 30 seconds
 
   console.log('🔌 Internet connectivity monitoring started');
@@ -1012,25 +998,6 @@ async function fetchCurrentTasks() {
     currentTasks.push(...formattedTasks);
     updateTaskIndexes(currentTasks);
 
-    const jobs = formattedTasks
-      .filter((task) => task.running)
-      .flatMap(task =>
-        task.running && task.selectedMarketplaces.map((m: string) => m.toLowerCase()).includes("opensea")
-          ? [{ name: OPENSEA_SCHEDULE, data: task, opts: createJobOptions(`${task._id}-opensea-schedule`, OPENSEA_SCHEDULE) }]
-          : []
-      ).concat(
-        formattedTasks.flatMap(task =>
-          task.running && task.selectedMarketplaces.map((m: string) => m.toLowerCase()).includes("blur")
-            ? [{ name: BLUR_SCHEDULE, data: task, opts: createJobOptions(`${task._id}-blur-schedule`, BLUR_SCHEDULE) }]
-            : []
-        )
-      ).concat(
-        formattedTasks.flatMap(task =>
-          task.running && task.selectedMarketplaces.map((m: string) => m.toLowerCase()).includes("magiceden")
-            ? [{ name: MAGICEDEN_SCHEDULE, data: task, opts: createJobOptions(`${task._id}-magiceden-schedule`, MAGICEDEN_SCHEDULE) }]
-            : []
-        )
-      );
     // Task initialization complete
   } catch (error) {
     logger.logDatabaseError("Failed to fetch current tasks", {
@@ -1115,6 +1082,10 @@ async function pauseQueueAndWorkers() {
     if (workers.length > 0) {
       await Promise.all(workers.map(worker => worker.pause()));
     }
+
+    // Actually remove all jobs from the queue for security
+    await queue.obliterate({ force: true });
+
     console.log(YELLOW + 'Queue and workers paused. Waiting for password...' + RESET);
     console.log(YELLOW + 'Note: All jobs have been removed from the queue for security.' + RESET);
   } catch (error) {
@@ -1466,14 +1437,7 @@ async function startServer() {
       }
     );
 
-    // Add Blur worker event handlers
-    blurWorker.on('completed', (job) => {
-      console.log(GOLD + `[Blur Worker] Job ${job.name} completed` + RESET);
-    });
 
-    blurWorker.on('failed', (job, err) => {
-      console.error(RED + `[Blur Worker] Job ${job?.name} failed: ${err.message}` + RESET);
-    });
 
     workers.push(blurWorker);
 
@@ -1787,7 +1751,7 @@ function createJobOptions(jobId?: string, jobName?: string): JobsOptions {
     removeOnComplete: true,
     removeOnFail: true,
     lifo: false,
-    attempts: isScheduleJob ? 3 : (isBidJob ? 1 : 3),
+    attempts: 1, // No retries for any jobs
     backoff: {
       type: 'exponential',
       delay: 2000,
@@ -1925,18 +1889,20 @@ function cleanupTaskResources(taskId: string): void {
 
 // Helper function to update task running percentage
 async function updateTaskRunningPercentage(taskId: string) {
+  console.log(MAGENTA + `\n[DEBUG][updateTaskRunningPercentage] ===== ENTERING =====` + RESET);
+  console.log(MAGENTA + `[DEBUG][updateTaskRunningPercentage] TaskID: ${taskId}` + RESET);
+  
   const task = activeTasks.get(taskId);
-  if (!task || !taskStatus[taskId]) return;
-
-  console.log(CYAN + `\n[updateTaskRunningPercentage] ${'='.repeat(50)}` + RESET);
-  console.log(CYAN + `[updateTaskRunningPercentage] TASK PROGRESS: ${taskId}` + RESET);
-  console.log(CYAN + `[updateTaskRunningPercentage] ${'='.repeat(50)}` + RESET);
+  if (!task || !taskStatus[taskId]) {
+    console.log(MAGENTA + `[DEBUG][updateTaskRunningPercentage] Task not found or not active, returning` + RESET);
+    return;
+  }
+  
+  console.log(MAGENTA + `[DEBUG][updateTaskRunningPercentage] Current status:`, taskStatus[taskId], RESET);
 
   const selectedMarketplaces = task.selectedMarketplaces.map(m => m.toLowerCase());
   const enabledMarketplacesLower = enabledMarketplaces.map(m => m.toLowerCase());
   const marketplacesToCheck = selectedMarketplaces.filter(m => enabledMarketplacesLower.includes(m));
-
-  console.log(BLUE + `[updateTaskRunningPercentage] Checking marketplaces: ${marketplacesToCheck.join(', ')}` + RESET);
 
   let totalJobs = 0;
   let completedJobs = 0;
@@ -1946,9 +1912,6 @@ async function updateTaskRunningPercentage(taskId: string) {
   for (const marketplace of marketplacesToCheck) {
     const parentJobId = `${taskId}-${marketplace}`;
     const parentJob = parentJobs.get(parentJobId);
-
-    console.log(`\n${GREEN}[updateTaskRunningPercentage] ${marketplace.toUpperCase()}:${RESET}`);
-    console.log(`  Parent Job ID: ${parentJobId}`);
 
     if (parentJob) {
       const mpTotal = parentJob.totalJobs || 0;
@@ -1963,16 +1926,7 @@ async function updateTaskRunningPercentage(taskId: string) {
 
       totalJobs += mpTotal;
       completedJobs += mpCompleted;
-
-      console.log(GREEN + `  Progress: ${mpCompleted}/${mpTotal} jobs (${mpPercentage.toFixed(2)}%)` + RESET);
-
-      // Visual progress bar
-      const barLength = 20;
-      const filledLength = Math.min(barLength, Math.round((mpPercentage / 100) * barLength));
-      const progressBar = '█'.repeat(filledLength) + '░'.repeat(Math.max(0, barLength - filledLength));
-      console.log(GREEN + `  [${progressBar}] ${mpPercentage.toFixed(2)}%` + RESET);
     } else {
-      console.log(YELLOW + `  No parent job found` + RESET);
       marketplaceBreakdown[marketplace] = {
         total: 0,
         completed: 0,
@@ -1983,11 +1937,15 @@ async function updateTaskRunningPercentage(taskId: string) {
 
   // Update running percentage
   const runningPercentage = totalJobs > 0 ? (completedJobs / totalJobs) * 100 : 0;
+  
+  console.log(MAGENTA + `[DEBUG][updateTaskRunningPercentage] Calculation: completedJobs=${completedJobs}, totalJobs=${totalJobs}, percentage=${runningPercentage}%` + RESET);
+  console.log(MAGENTA + `[DEBUG][updateTaskRunningPercentage] completedTasks:`, completedTasks[taskId], RESET);
+  
   taskStatus[taskId].runningPercentage = Math.min(runningPercentage, 100);
   taskStatus[taskId].totalJobs = totalJobs;
   taskStatus[taskId].completedJobs = completedJobs;
 
-  // Summary section
+  // Summary section - Keep only TOTAL SUMMARY logs
   console.log(`\n${BLUE}[updateTaskRunningPercentage] TOTAL SUMMARY:${RESET}`);
   console.log(BLUE + `  Total Jobs: ${totalJobs} (` +
     marketplacesToCheck.map(mp =>
@@ -2002,12 +1960,18 @@ async function updateTaskRunningPercentage(taskId: string) {
   const overallProgressBar = '█'.repeat(overallFilledLength) + '░'.repeat(Math.max(0, overallBarLength - overallFilledLength));
   console.log(MAGENTA + `  [${overallProgressBar}] ${runningPercentage.toFixed(2)}%` + RESET);
 
-  console.log(CYAN + `[updateTaskRunningPercentage] ${'='.repeat(50)}\n` + RESET);
-
   // Check if should trigger completion
-  if (taskStatus[taskId].runningPercentage >= 100 && !taskStatus[taskId].nextLoopTime) {
-    console.log(GOLD + `[updateTaskRunningPercentage] Task reached 100% - checking for completion` + RESET);
-    await checkTaskCompletionAndScheduleNext(taskId);
+  if (taskStatus[taskId].runningPercentage >= 100) {
+    console.log(MAGENTA + `[DEBUG][updateTaskRunningPercentage] Task at 100% - Current status: ${taskStatus[taskId].status}` + RESET);
+    // Check if task is truly ready for completion (not already completed)
+    if (taskStatus[taskId].status === 'RUNNING' || taskStatus[taskId].status === 'SCHEDULED') {
+      console.log(GOLD + `[DEBUG][updateTaskRunningPercentage] Task reached 100% - triggering completion check` + RESET);
+      await checkTaskCompletionAndScheduleNext(taskId);
+    } else {
+      console.log(MAGENTA + `[DEBUG][updateTaskRunningPercentage] Task at 100% but status is ${taskStatus[taskId].status}, skipping completion check` + RESET);
+    }
+  } else {
+    console.log(MAGENTA + `[DEBUG][updateTaskRunningPercentage] Task at ${taskStatus[taskId].runningPercentage}%, not ready for completion` + RESET);
   }
 }
 
@@ -2135,7 +2099,7 @@ async function cancelPendingJobsForTask(taskId: string): Promise<void> {
       const allJobs = [...waitingJobs, ...activeJobs];
 
       const taskJobs = allJobs.filter(job =>
-        job.name === jobName && job.data._id === taskId
+        job && job.name === jobName && job.data && job.data._id === taskId
       );
 
       for (const job of taskJobs) {
@@ -2161,43 +2125,64 @@ const lastCompletionCheckTimes = new Map<string, number>();
 
 // Helper function to check task completion and schedule next iteration
 async function checkTaskCompletionAndScheduleNext(taskId: string) {
-  console.log(GOLD + `[checkTaskCompletionAndScheduleNext] Called for task ${taskId}` + RESET);
+  console.log(GOLD + `\n[DEBUG][checkTaskCompletionAndScheduleNext] ===== ENTERING =====` + RESET);
+  console.log(GOLD + `[DEBUG][checkTaskCompletionAndScheduleNext] TaskID: ${taskId}` + RESET);
+  console.log(GOLD + `[DEBUG][checkTaskCompletionAndScheduleNext] Current taskStatus:`, taskStatus[taskId], RESET);
+  console.log(GOLD + `[DEBUG][checkTaskCompletionAndScheduleNext] completedTasks:`, completedTasks[taskId], RESET);
   
   const task = activeTasks.get(taskId);
   const status = taskStatus[taskId];
-  
+
   if (!task || !status) {
-    console.log(YELLOW + `[checkTaskCompletionAndScheduleNext] No task or status found for ${taskId}` + RESET);
+    console.log(YELLOW + `[DEBUG][checkTaskCompletionAndScheduleNext] No task or status found for ${taskId}` + RESET);
     return;
   }
 
-  console.log(CYAN + `[checkTaskCompletionAndScheduleNext] Task ${taskId} status:` + RESET);
-  console.log(CYAN + `  - runningPercentage: ${status.runningPercentage}%` + RESET);
-  console.log(CYAN + `  - status: ${status.status}` + RESET);
-  console.log(CYAN + `  - nextLoopTime: ${status.nextLoopTime || 'not set'}` + RESET);
-  console.log(CYAN + `  - completedJobs: ${status.completedJobs}/${status.totalJobs}` + RESET);
 
   // Check if task has reached 100% and needs completion
   if (taskStatus[taskId].runningPercentage >= 100) {
+    console.log(GOLD + `[DEBUG][checkTaskCompletionAndScheduleNext] Task at 100% - Status: ${taskStatus[taskId].status}` + RESET);
+    
     // If already marked as COMPLETED, skip
     if (taskStatus[taskId].status === 'COMPLETED') {
-      console.log(CYAN + `[checkTaskCompletionAndScheduleNext] Task ${taskId} already marked as COMPLETED` + RESET);
-      return;
-    }
-    
-    // Prevent multiple threads from scheduling
-    if (loopSchedulingLocks.get(taskId)?.locked) {
-      console.log(YELLOW + `[checkTaskCompletion] Task ${taskId} is already being scheduled` + RESET);
+      console.log(GOLD + `[DEBUG][checkTaskCompletionAndScheduleNext] Already COMPLETED, skipping` + RESET);
       return;
     }
 
-    // Set lock
-    loopSchedulingLocks.set(taskId, { locked: true, timestamp: Date.now() });
-    console.log(GREEN + `[checkTaskCompletionAndScheduleNext] Lock acquired for task ${taskId}` + RESET);
+    // If already scheduled and at 100%, we need to reschedule with all marketplaces
+    if (taskStatus[taskId].status === 'SCHEDULED') {
+      console.log(GOLD + `[DEBUG][checkTaskCompletionAndScheduleNext] Task is SCHEDULED at 100% - clearing timers and continuing` + RESET);
+      // Clear the existing scheduled timer
+      clearTaskTimers(taskId);
+      // Continue with completion flow
+    }
+
+    // Check if all enabled marketplaces are truly complete
+    const task = activeTasks.get(taskId);
+    if (task && completedTasks[taskId]) {
+      const selectedMarketplaces = task.selectedMarketplaces.map(m => m.toLowerCase());
+      const enabledMarketplacesLower = enabledMarketplaces.map(m => m.toLowerCase());
+      const activeMarketplaces = selectedMarketplaces.filter(m => enabledMarketplacesLower.includes(m));
+      
+      console.log(GOLD + `[DEBUG][checkTaskCompletionAndScheduleNext] Checking marketplace completion:` + RESET);
+      console.log(GOLD + `  Active marketplaces: ${activeMarketplaces.join(', ')}` + RESET);
+      console.log(GOLD + `  completedTasks:`, completedTasks[taskId], RESET);
+      
+      // Check if all active marketplaces are complete
+      const allMarketplacesComplete = activeMarketplaces.every(mp => 
+        completedTasks[taskId][mp as 'opensea' | 'magiceden' | 'blur'] === true
+      );
+      
+      if (!allMarketplacesComplete) {
+        console.log(GOLD + `[DEBUG][checkTaskCompletionAndScheduleNext] Not all marketplaces complete yet, skipping transition` + RESET);
+        return;
+      }
+      console.log(GOLD + `[DEBUG][checkTaskCompletionAndScheduleNext] All marketplaces complete! Proceeding with transition` + RESET);
+    }
 
     try {
       // Mark task as completed
-      console.log(GREEN + `[checkTaskCompletionAndScheduleNext] Marking task ${taskId} as COMPLETED` + RESET);
+      console.log(GOLD + `[DEBUG][checkTaskCompletionAndScheduleNext] Marking task as COMPLETED` + RESET);
       taskStatus[taskId].status = 'COMPLETED';
 
       // Handle task cleanup
@@ -2209,15 +2194,30 @@ async function checkTaskCompletionAndScheduleNext(taskId: string) {
 
       // Cancel pending jobs
       await cancelPendingJobsForTask(taskId);
+      
+      // Reset completedTasks for the next loop
+      if (completedTasks[taskId]) {
+        console.log(GOLD + `[DEBUG][checkTaskCompletionAndScheduleNext] Resetting completedTasks for next loop` + RESET);
+        completedTasks[taskId] = {
+          opensea: false,
+          magiceden: false,
+          blur: false
+        };
+      }
 
-      // Schedule next loop
+      // Schedule next loop (this will acquire its own lock)
+      console.log(GOLD + `[DEBUG][checkTaskCompletionAndScheduleNext] Calling scheduleNextLoop` + RESET);
       await scheduleNextLoop(taskId);
 
+      // Add 1-second delay before transitioning to SCHEDULED
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
       // Mark as scheduled
+      console.log(GOLD + `[DEBUG][checkTaskCompletionAndScheduleNext] Marking task as SCHEDULED` + RESET);
       taskStatus[taskId].status = 'SCHEDULED';
-    } finally {
-      // Release lock
-      loopSchedulingLocks.delete(taskId);
+    } catch (error) {
+      console.error(RED + `[checkTaskCompletionAndScheduleNext] Error during task completion: ` + RESET, error);
+      throw error;
     }
   } else {
     // Log why completion check was skipped
@@ -2253,13 +2253,11 @@ async function handleTaskCleanup(taskId: string) {
 
 // Helper function to mark a job as processed regardless of outcome
 async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: string) {
+  console.log(BLUE + `\n[DEBUG][markJobAsProcessed] ===== ENTERING =====` + RESET);
+  console.log(BLUE + `[DEBUG][markJobAsProcessed] TaskID: ${taskId}, Marketplace: ${marketplace}` + RESET);
+  
   // Generate a unique identifier for this job
   const uniqueJobId = jobId || `${taskId}-${marketplace}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-  
-  console.log(CYAN + `[markJobAsProcessed] ===== MARKING JOB COMPLETE =====` + RESET);
-  console.log(CYAN + `[markJobAsProcessed] Task ID: ${taskId}` + RESET);
-  console.log(CYAN + `[markJobAsProcessed] Marketplace: ${marketplace.toUpperCase()}` + RESET);
-  console.log(CYAN + `[markJobAsProcessed] Unique Job ID: ${uniqueJobId}` + RESET);
 
   // Get parent job
   const parentJobId = `${taskId}-${marketplace}`;
@@ -2272,48 +2270,36 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
       processedJobs = new Set<string>();
       processedJobsPerParent.set(parentJobId, processedJobs);
     }
-    
+
     if (processedJobs.has(uniqueJobId)) {
-      console.log(YELLOW + `[markJobAsProcessed] WARNING: Job ${uniqueJobId} already processed, skipping` + RESET);
-      console.log(YELLOW + `[markJobAsProcessed] Current progress: ${parentJob.completedJobs}/${parentJob.totalJobs}` + RESET);
       return;
     }
-    
+
     // Add to processed set
     processedJobs.add(uniqueJobId);
-    
-    // Log current state before incrementing
-    console.log(GREEN + `[markJobAsProcessed] Parent Job Found: ${parentJobId}` + RESET);
-    console.log(GREEN + `[markJobAsProcessed] Before: ${parentJob.completedJobs}/${parentJob.totalJobs} jobs completed` + RESET);
-    console.log(GREEN + `[markJobAsProcessed] Processed jobs set size: ${processedJobs.size}` + RESET);
 
     // Increment completed jobs
     parentJob.completedJobs++;
-
-    // Calculate and log marketplace-specific percentage
-    const marketplacePercentage = parentJob.totalJobs > 0 ? (parentJob.completedJobs / parentJob.totalJobs) * 100 : 0;
-    console.log(GREEN + `[markJobAsProcessed] After: ${parentJob.completedJobs}/${parentJob.totalJobs} jobs completed` + RESET);
-    console.log(MAGENTA + `[markJobAsProcessed] ${marketplace.toUpperCase()} Progress: ${marketplacePercentage.toFixed(2)}%` + RESET);
+    console.log(BLUE + `[DEBUG][markJobAsProcessed] Job marked as processed - completedJobs: ${parentJob.completedJobs}, totalJobs: ${parentJob.totalJobs}` + RESET);
     
-    // Log warning if over 100%
-    if (marketplacePercentage > 100) {
-      console.log(RED + `[markJobAsProcessed] WARNING: Progress exceeds 100% for ${marketplace.toUpperCase()}!` + RESET);
-      console.log(RED + `[markJobAsProcessed] This suggests duplicate job processing or incorrect initial count` + RESET);
+    // Check if this marketplace has completed all its jobs
+    if (parentJob.completedJobs >= parentJob.totalJobs) {
+      console.log(BLUE + `[DEBUG][markJobAsProcessed] Marketplace ${marketplace} completed all jobs!` + RESET);
+      if (completedTasks[taskId]) {
+        completedTasks[taskId][marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur'] = true;
+        console.log(BLUE + `[DEBUG][markJobAsProcessed] Set completedTasks[${taskId}].${marketplace} = true` + RESET);
+        console.log(BLUE + `[DEBUG][markJobAsProcessed] completedTasks now:`, completedTasks[taskId], RESET);
+      }
     }
 
     // Update task running percentage
     await updateTaskRunningPercentage(taskId);
-
-    // Check if task is complete
-    if (taskStatus[taskId] && taskStatus[taskId].runningPercentage >= 100 && !taskStatus[taskId].nextLoopTime) {
-      console.log(GOLD + `[markJobAsProcessed] Task ${taskId} reached 100%, triggering completion check` + RESET);
-      await checkTaskCompletionAndScheduleNext(taskId);
-    }
+    
+    // updateTaskRunningPercentage already handles the completion check when task reaches 100%
+    // No need to trigger it again here to avoid lock contention
   } else {
-    console.log(YELLOW + `[markJobAsProcessed] WARNING: No parent job found for ${parentJobId}` + RESET);
+    console.log(BLUE + `[DEBUG][markJobAsProcessed] No parent job found for ${parentJobId}` + RESET);
   }
-
-  console.log(CYAN + `[markJobAsProcessed] ===== END MARKING JOB =====` + RESET);
 }
 
 // Helper function to clear task timers
@@ -2340,40 +2326,26 @@ const lastScheduleTimes = new Map<string, number>();
 async function scheduleNextLoop(taskId: string): Promise<void> {
   const currentTime = Date.now();
   const timestamp = new Date(currentTime).toISOString();
-  console.log(GREEN + `[scheduleNextLoop] ${timestamp} - Starting loop scheduling for task ${taskId}` + RESET);
-  // Check if we're scheduling too rapidly
-  const lastScheduleTime = lastScheduleTimes.get(taskId);
-  if (lastScheduleTime) {
-    const timeSinceLastSchedule = currentTime - lastScheduleTime;
-    console.log(YELLOW + `[scheduleNextLoop] ${timestamp} - Time since last schedule: ${timeSinceLastSchedule}ms` + RESET);
-
-    // Prevent scheduling if less than 5 seconds since last schedule
-    if (timeSinceLastSchedule < 5000) {
-      console.log(RED + `[scheduleNextLoop] ${timestamp} - WARNING: Attempting to schedule too rapidly (${timeSinceLastSchedule}ms < 5000ms), skipping` + RESET);
-      return;
-    }
-  }
-
-  lastScheduleTimes.set(taskId, currentTime);
+  
+  console.log(CYAN + `\n[DEBUG][scheduleNextLoop] ===== ENTERING =====` + RESET);
+  console.log(CYAN + `[DEBUG][scheduleNextLoop] TaskID: ${taskId}` + RESET);
+  console.log(CYAN + `[DEBUG][scheduleNextLoop] Current taskStatus:`, taskStatus[taskId], RESET);
 
   // Get the task from activeTasks
   const task = activeTasks.get(taskId);
   if (!task) {
-    console.log(YELLOW + `[scheduleNextLoop] ${timestamp} - Task ${taskId} not found in activeTasks` + RESET);
+    console.log(YELLOW + `[DEBUG][scheduleNextLoop] ${timestamp} - Task ${taskId} not found in activeTasks` + RESET);
     lastScheduleTimes.delete(taskId);
     return;
   }
 
   // Calculate loopInterval with getExpiry()
   let loopInterval = getExpiry(task.loopInterval);
-  const intervalValue = task.loopInterval?.value || 0;
-  const intervalUnit = task.loopInterval?.unit || 'seconds';
-
-  console.log(CYAN + `[scheduleNextLoop] ${timestamp} - Loop interval configuration: ${intervalValue} ${intervalUnit} = ${loopInterval} seconds` + RESET);
+  console.log(CYAN + `[DEBUG][scheduleNextLoop] loopInterval: ${loopInterval} seconds` + RESET);
 
   // Handle immediate rescheduling when loopInterval = 0
   if (loopInterval < 0) {
-    console.log(YELLOW + `[scheduleNextLoop] ${timestamp} - Negative interval detected, using default 60 seconds` + RESET);
+    console.log(YELLOW + `[DEBUG][scheduleNextLoop] ${timestamp} - Negative interval detected, using default 60 seconds` + RESET);
     loopInterval = 60;
   }
 
@@ -2381,17 +2353,17 @@ async function scheduleNextLoop(taskId: string): Promise<void> {
   const currentLoop = taskLoopCounters.get(taskId) || 0;
   const newLoopCount = currentLoop + 1;
   taskLoopCounters.set(taskId, newLoopCount);
-  console.log(GREEN + `[scheduleNextLoop] ${timestamp} - Task ${taskId} - Loop counter incremented: ${currentLoop} -> ${newLoopCount}` + RESET);
 
   // Set up next loop time and countdown timer
   const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
   const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
-  console.log(GREEN + `[scheduleNextLoop] ${timestamp} - Scheduling task ${taskId} to run in ${loopInterval} seconds (Loop #${newLoopCount})` + RESET);
-  console.log(GREEN + `[scheduleNextLoop] ${timestamp} - Next loop time: ${nextLoopTime.toISOString()}` + RESET);
+  console.log(GREEN + `[DEBUG][scheduleNextLoop] Scheduling task ${taskId} in ${loopInterval}s` + RESET);
+  console.log(GREEN + `[DEBUG][scheduleNextLoop] nextLoopTime: ${nextLoopTime.toISOString()}` + RESET);
 
   // Update task status
   if (taskStatus[taskId]) {
+    console.log(CYAN + `[DEBUG][scheduleNextLoop] Updating taskStatus to SCHEDULED` + RESET);
     taskStatus[taskId].status = 'SCHEDULED';
     taskStatus[taskId].waitingTime = secondsUntilNextLoop;
     taskStatus[taskId].nextLoopTime = nextLoopTime;
@@ -2400,7 +2372,6 @@ async function scheduleNextLoop(taskId: string): Promise<void> {
   // Clear any existing countdown timer before setting a new one
   const existingCountdownTimer = taskCountdownTimers.get(taskId);
   if (existingCountdownTimer) {
-    console.log(YELLOW + `[scheduleNextLoop] ${timestamp} - Clearing existing countdown timer for task ${taskId}` + RESET);
     clearInterval(existingCountdownTimer);
     taskCountdownTimers.delete(taskId);
   }
@@ -2421,12 +2392,10 @@ async function scheduleNextLoop(taskId: string): Promise<void> {
   }, 1000);
 
   taskCountdownTimers.set(taskId, countdownTimer);
-  console.log(GREEN + `[scheduleNextLoop] ${timestamp} - Countdown timer set for task ${taskId}` + RESET);
 
   // Clear any existing timeout for this task
   const existingTimeout = taskTimeouts.get(taskId);
   if (existingTimeout) {
-    console.log(YELLOW + `[scheduleNextLoop] ${timestamp} - Clearing existing timeout for task ${taskId}` + RESET);
     clearTimeout(existingTimeout);
     taskTimeouts.delete(taskId);
   }
@@ -2439,33 +2408,26 @@ async function scheduleNextLoop(taskId: string): Promise<void> {
     return;
   }
 
-  // Acquire scheduling lock
-  if (!acquireLoopSchedulingLock(taskId)) {
-    console.log(YELLOW + `[scheduleNextLoop] ${timestamp} - Task ${taskId} already has a pending loop schedule, skipping duplicate scheduling` + RESET);
-    console.log(YELLOW + `[scheduleNextLoop] ${timestamp} - Current lock status: ${loopSchedulingLocks.has(taskId)}` + RESET);
-    return;
-  }
-
-  console.log(GREEN + `[scheduleNextLoop] ${timestamp} - Acquired scheduling lock for task ${taskId}` + RESET);
-
   try {
     // Schedule the next iteration with setTimeout
     const timeoutId = setTimeout(async () => {
-      const fireTime = new Date().toISOString();
-      console.log(YELLOW + `[scheduleNextLoop] ${fireTime} - Timeout fired for task ${taskId}, loop #${newLoopCount}` + RESET);
-      console.log(YELLOW + `[scheduleNextLoop] ${fireTime} - Expected fire time was: ${nextLoopTime.toISOString()}` + RESET);
+      console.log(CYAN + `[DEBUG][scheduleNextLoop] Timer expired for task ${taskId}, attempting to acquire lock` + RESET);
+      
+      // Acquire scheduling lock when timer expires, not before
+      if (!acquireLoopSchedulingLock(taskId)) {
+        console.log(YELLOW + `[DEBUG][scheduleNextLoop] Failed to acquire lock for task ${taskId}, another execution may be in progress` + RESET);
+        return;
+      }
+
       try {
         // Double-check task is still active and running
         const currentTask = activeTasks.get(taskId);
+
         if (currentTask?.running) {
-          console.log(YELLOW + `[scheduleNextLoop] ${fireTime} - Starting next iteration for task ${taskId} (Loop #${newLoopCount})` + RESET);
-          console.log(YELLOW + `[scheduleNextLoop] ${fireTime} - Task running state: ${currentTask.running}, Task ID: ${taskId}` + RESET);
           await startTask(currentTask, true);
         } else if (currentTask) {
-          console.log(YELLOW + `[scheduleNextLoop] ${fireTime} - Task ${taskId} no longer running (running=${currentTask.running}), stopping...` + RESET);
           await stopTask(currentTask, false);
         } else {
-          console.log(YELLOW + `[scheduleNextLoop] ${fireTime} - Task ${taskId} not found in activeTasks, cleaning up...` + RESET);
           cleanupTaskResources(taskId);
           lastScheduleTimes.delete(taskId);
         }
@@ -2479,17 +2441,9 @@ async function scheduleNextLoop(taskId: string): Promise<void> {
     }, loopInterval * 1000);
 
     taskTimeouts.set(taskId, timeoutId);
-    console.log(GREEN + `[scheduleNextLoop] ${timestamp} - Timeout set for task ${taskId}, will fire in ${loopInterval} seconds` + RESET);
-    console.log(GREEN + `[scheduleNextLoop] ${timestamp} - Timeout will trigger at: ${new Date(Date.now() + loopInterval * 1000).toISOString()}` + RESET);
-
-    // Release the lock immediately after scheduling - the timeout has been set
-    releaseLoopSchedulingLock(taskId);
-    console.log(GREEN + `[scheduleNextLoop] ${timestamp} - Released scheduling lock for task ${taskId} after scheduling` + RESET);
-    console.log(GREEN + `[scheduleNextLoop] ${timestamp} - Successfully scheduled next loop for task ${taskId}` + RESET);
   } catch (error) {
-    // If scheduling fails, ensure we release the lock
-    console.error(RED + `[scheduleNextLoop] ${timestamp} - Error scheduling task ${taskId}: ` + RESET, error);
-    releaseLoopSchedulingLock(taskId);
+    // If scheduling fails, clean up resources
+    console.error(RED + `[scheduleNextLoop] Error scheduling task ${taskId}: ` + RESET, error);
     cleanupTaskResources(taskId);
     lastScheduleTimes.delete(taskId);
   }
@@ -2990,8 +2944,6 @@ async function processNewTask(task: ITask) {
         // console.log("subscribing to collection: ", task.contract.slug);
         const newTask = { ...task, running: true };
         subscribeToCollections([newTask]);
-      } else {
-        console.log(YELLOW + `WebSocket not connected, skipping subscription for ${task.contract.slug}` + RESET);
       }
     } catch (error) {
       console.error(RED + `Error subscribing to collection ${task.contract.slug}: ` + RESET, error);
@@ -3006,33 +2958,41 @@ async function processNewTask(task: ITask) {
 async function processGlobalMarketplaces(incomingMarketplaces: string[]) {
   try {
     const tasks: ITask[] = Array.from(activeTasks.values());
-    const newMarketplaces = incomingMarketplaces.map((m) => m.toLowerCase()).filter(m => !enabledMarketplaces.map((m) => m.toLowerCase()).includes(m));
+    const marketplacesToProcess = incomingMarketplaces.map((m) => m.toLowerCase());
+    
+    // Calculate what's changing for logging purposes
+    const newMarketplaces = marketplacesToProcess.filter(m => !enabledMarketplaces.map((em) => em.toLowerCase()).includes(m));
+    const removedMarketplaces = enabledMarketplaces
+      .map(m => m.toLowerCase())
+      .filter(m => !marketplacesToProcess.includes(m));
 
-    // Early return if no new marketplaces to process
-    if (newMarketplaces.length === 0) {
-      console.log(YELLOW + `[processGlobalMarketplaces] No new marketplaces to add. Current enabled: ${enabledMarketplaces.join(', ')}` + RESET);
+    console.log({ newMarketplaces, removedMarketplaces, enabledMarketplaces, incomingMarketplaces: marketplacesToProcess });
+
+    // Early return if no marketplaces to process
+    if (marketplacesToProcess.length === 0) {
+      console.log(YELLOW + `[processGlobalMarketplaces] No marketplaces to process` + RESET);
+      enabledMarketplaces = [];
       return;
     }
 
-    // Process each new marketplace
-    for (const marketplace of newMarketplaces) {
+    // Process each marketplace in the incoming list
+    for (const marketplace of marketplacesToProcess) {
       const tasksToProcess = tasks.filter(task =>
-        task.running && task.selectedMarketplaces.map((m) => m.toLowerCase()).includes(marketplace.toLowerCase())
+        task.running && task.selectedMarketplaces.map((m) => m.toLowerCase()).includes(marketplace)
       );
 
-      console.log(GREEN + `[processGlobalMarketplaces] Adding marketplace ${marketplace} to ${tasksToProcess.length} tasks` + RESET);
+      console.log(GREEN + `[processGlobalMarketplaces] Processing marketplace ${marketplace} for ${tasksToProcess.length} tasks` + RESET);
 
-      // Use start=false for marketplace-specific additions (not a loop restart)
       await Promise.all(tasksToProcess.map(async (task) => {
         try {
-          await startTask(task, false, marketplace.toLowerCase());
+          await startTask(task, true, marketplace);
         } catch (error) {
-          console.error(RED + `Error adding marketplace ${marketplace} to task ${task._id}: ` + RESET, error);
+          console.error(RED + `Error processing marketplace ${marketplace} for task ${task._id}: ` + RESET, error);
         }
       }));
     }
 
-    enabledMarketplaces = incomingMarketplaces.map((m) => m.toLowerCase())
+    enabledMarketplaces = marketplacesToProcess;
   } catch (error) {
     console.error(RED + `Error processing global marketplaces: ` + RESET, error);
   }
@@ -3879,6 +3839,12 @@ function generateJobKey(job: any): string {
 async function startTask(task: ITask, start: boolean, marketplace?: string) {
   const startTime = Date.now();
   const taskId = task._id.toString();
+  
+  console.log(CYAN + `\n[DEBUG][startTask] ===== ENTERING startTask =====` + RESET);
+  console.log(CYAN + `[DEBUG][startTask] TaskID: ${taskId}, Start: ${start}, Marketplace: ${marketplace || 'ALL'}` + RESET);
+  console.log(CYAN + `[DEBUG][startTask] Current taskStatus:`, taskStatus[taskId] || 'Not initialized' + RESET);
+  console.log(CYAN + `[DEBUG][startTask] Current completedTasks:`, completedTasks[taskId] || 'Not initialized' + RESET);
+  
   clearTaskTimers(taskId)
 
   if (!marketplace) {
@@ -3892,44 +3858,62 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       magiceden: 0,
       blur: 0
     };
-    completedTasks[task._id] = {
-      opensea: false,
-      magiceden: false,
-      blur: false
-    };
+    
+    // Check if we're transitioning from SCHEDULED status
+    const isTransitioningFromScheduled = taskStatus[taskId]?.status === 'SCHEDULED';
+    
+    // Only reset completedTasks if:
+    // 1. It doesn't exist yet, OR
+    // 2. The task is not transitioning from SCHEDULED status
+    if (!completedTasks[task._id] || !isTransitioningFromScheduled) {
+      console.log(CYAN + `[DEBUG][startTask] Initializing completedTasks for task ${taskId}` + RESET);
+      completedTasks[task._id] = {
+        opensea: false,
+        magiceden: false,
+        blur: false
+      };
+    } else {
+      console.log(CYAN + `[DEBUG][startTask] Preserving completedTasks for SCHEDULED->RUNNING transition` + RESET);
+      console.log(CYAN + `[DEBUG][startTask] Current completedTasks:`, completedTasks[task._id], RESET);
+    }
 
-    // Initialize task status
-    taskStatus[taskId] = {
-      status: 'STARTED',
-      runningPercentage: 0,
-      cancellationPercentage: 0,
-      processingPercentage: 0,
-      totalJobs: 0,
-      completedJobs: 0,
-      waitingTime: 0
-    };
+    // Initialize or update task status
+    if (isTransitioningFromScheduled && taskStatus[taskId]) {
+      console.log(CYAN + `[DEBUG][startTask] Transitioning from SCHEDULED to RUNNING` + RESET);
+      // Preserve existing job counts when transitioning from SCHEDULED
+      taskStatus[taskId].status = 'RUNNING';
+      taskStatus[taskId].waitingTime = 0;
+      // Clear nextLoopTime as we're now running
+      delete taskStatus[taskId].nextLoopTime;
+    } else {
+      // Initialize fresh task status
+      taskStatus[taskId] = {
+        status: 'STARTED',
+        runningPercentage: 0,
+        cancellationPercentage: 0,
+        processingPercentage: 0,
+        totalJobs: 0,
+        completedJobs: 0,
+        waitingTime: 0
+      };
+    }
 
     // Clear processedJobsPerParent entries for this task
     // Remove any parent job IDs that contain this taskId
     for (const [parentJobId, processedJobs] of processedJobsPerParent.entries()) {
       if (parentJobId.includes(taskId)) {
         processedJobsPerParent.delete(parentJobId);
-        console.log(CYAN + `[startTask] Cleared processed jobs for parent: ${parentJobId}` + RESET);
       }
     }
   }
 
   // Early return if marketplace is specified and task is not running
   if (marketplace && !task.running) {
-    console.log(YELLOW + `[startTask] Skipping marketplace ${marketplace} addition for stopped task ${taskId}` + RESET);
     return;
   }
 
   // Remove task from blacklist to allow job execution
   await removeTaskFromBlacklist(taskId);
-  if (marketplace) {
-    console.log(GREEN + `[startTask] Task ${taskId} removed from blacklist for marketplace: ${marketplace}` + RESET);
-  }
 
   if (!API_KEY) {
     console.log(RED + 'API_KEY is not set - cannot start task' + RESET);
@@ -3939,9 +3923,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
 
 
   // Async bid log deletion - fire and forget
-  BidLogs.deleteMany({ taskId: task._id }).catch(err =>
-    console.error(YELLOW + `Failed to delete bid logs for task ${task._id}: ${err.message}` + RESET)
-  );
+  BidLogs.deleteMany({ taskId: task._id }).catch(() => { });
 
   // Ensure wallet approvals for all selected marketplaces
   try {
@@ -3979,23 +3961,18 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       // Check cache first
       const cached = await approvalCache.isApproved(wallet.address, marketplaceAddress, WETH);
       if (cached) {
-        console.log(GREEN + `✓ ${mp} approval confirmed for wallet ${wallet.address} (cached)` + RESET);
         return { marketplace: mp, approved: true, cached: true };
       }
 
-      console.log(CYAN + `Checking ${mp} approval on-chain...` + RESET);
       const approved = await approveMarketplace(marketplaceAddress, privateKey, WETH);
 
       if (approved) {
-        console.log(GREEN + `✓ ${mp} approval confirmed for wallet ${wallet.address}` + RESET);
         // Update cache with successful approval
         await approvalCache.setApproval(wallet.address, marketplaceAddress, WETH, {
           approved: true,
           timestamp: Date.now(),
           allowance: MaxUint256.toString()
         });
-      } else {
-        console.log(RED + `✗ Failed to approve ${mp} for wallet ${wallet.address}` + RESET);
       }
 
       return { marketplace: mp, approved, cached: false };
@@ -4024,28 +4001,29 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
 
   try {
     await removeTaskFromAborted(taskId);
-    const updatedTask = { ...task, running: true };
-    activeTasks.set(taskId, updatedTask);
-    const taskIndex = currentTasks.findIndex(t => t._id === task._id);
-    if (taskIndex !== -1) {
-      currentTasks[taskIndex].running = true;
-    }
-
-    // Add task to indexes for fast lookup
-    addTaskToIndexes(updatedTask);
-
-    console.log(GREEN + `Updated task ${task.contract.slug} running status to: ${start}`.toUpperCase() + RESET);
-    // Subscribe to WebSocket collection (WebSocket should already be connected at startup)
-    try {
-      if (wsManager?.isConnected()) {
-        // console.log("subscribing to collection: ", task.contract.slug);
-        const newTask = { ...task, running: true };
-        subscribeToCollections([newTask]);
-      } else {
-        console.log(YELLOW + `WebSocket not connected, skipping subscription for ${task.contract.slug}` + RESET);
+    
+    // Only update task running status if not already running
+    if (!task.running) {
+      const updatedTask = { ...task, running: true };
+      activeTasks.set(taskId, updatedTask);
+      const taskIndex = currentTasks.findIndex(t => t._id === task._id);
+      if (taskIndex !== -1) {
+        currentTasks[taskIndex].running = true;
       }
-    } catch (error) {
-      console.error(RED + `Error subscribing to collection ${task.contract.slug}: ` + RESET, error);
+
+      // Add task to indexes for fast lookup
+      addTaskToIndexes(updatedTask);
+
+      // Subscribe to WebSocket collection (WebSocket should already be connected at startup)
+      try {
+        if (wsManager?.isConnected()) {
+          // console.log("subscribing to collection: ", task.contract.slug);
+          const newTask = { ...task, running: true };
+          subscribeToCollections([newTask]);
+        }
+      } catch (error) {
+        console.error(RED + `Error subscribing to collection ${task.contract.slug}: ` + RESET, error);
+      }
     }
 
     const validMarketplaces = ["opensea", "magiceden", "blur"];
@@ -4058,7 +4036,6 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       .filter(m => {
         // Check circuit breaker before creating jobs
         if (taskCircuitBreaker.isSuspended(taskId, m)) {
-          console.log(YELLOW + `[Circuit Breaker] Skipping ${m} for task ${taskId} - currently suspended` + RESET);
           return false;
         }
         return true;
@@ -4185,20 +4162,12 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
               // Token bid
               preprocessing.opensea.tokens = [...new Set(openseaTokens)];
               preprocessing.opensea.jobCount = preprocessing.opensea.tokens.length;
-              console.log(`${BLUE}[Preprocessing] OpenSea TOKEN BIDS:${RESET}`);
-              console.log(`${BLUE}  Token count: ${preprocessing.opensea.tokens.length}${RESET}`);
-              console.log(`${BLUE}  Job count set to: ${preprocessing.opensea.jobCount}${RESET}`);
             } else if (traitBid) {
               // Trait bid - need to check if collection supports trait offers
               const collectionDetails = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
               if (collectionDetails.trait_offers_enabled) {
-                console.log(`${BLUE}[DEBUG] OpenSea selectedTraits before transform:${RESET}`, JSON.stringify(selectedTraits, null, 2));
                 preprocessing.opensea.traits = transformOpenseaTraits(selectedTraits);
                 preprocessing.opensea.jobCount = preprocessing.opensea.traits.length;
-                console.log(`${BLUE}[Preprocessing] OpenSea TRAIT BIDS:${RESET}`);
-                console.log(`${BLUE}  Trait combinations: ${preprocessing.opensea.traits.length}${RESET}`);
-                console.log(`${BLUE}  Job count set to: ${preprocessing.opensea.jobCount}${RESET}`);
-                console.log(`${BLUE}[DEBUG] Trait details:${RESET}`, JSON.stringify(preprocessing.opensea.traits, null, 2));
               } else {
                 preprocessing.opensea.skipReason = `Trait bidding not available for ${task.contract.slug}`;
                 preprocessing.opensea.jobCount = 0;
@@ -4206,14 +4175,11 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
             } else if (task.bidType === "collection") {
               // Collection bid
               preprocessing.opensea.jobCount = 1;
-              console.log(`${BLUE}[Preprocessing] OpenSea COLLECTION BID:${RESET}`);
-              console.log(`${BLUE}  Job count set to: 1${RESET}`);
             }
 
             // Set up parent job for OpenSea
             // NOTE: Parent job creation moved to schedule functions to ensure totalJobs matches actual jobs created
             if (preprocessing.opensea.jobCount > 0) {
-              console.log(`${BLUE}[Preprocessing] OpenSea estimated ${preprocessing.opensea.jobCount} jobs will be created${RESET}`);
             }
           } else if (mp === "blur") {
             preprocessing.blur.enabled = true;
@@ -4222,7 +4188,6 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
             if (task.bidType === "token") {
               preprocessing.blur.skipReason = "Token bids not supported on Blur";
               preprocessing.blur.jobCount = 0;
-              console.log(`${GOLD}[Preprocessing] Blur skipped - token bids not supported${RESET}`);
             } else {
               // Transform Blur traits
               const filteredTraits = Object.fromEntries(
@@ -4233,24 +4198,16 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
 
               if (traitBid) {
                 // Trait bid
-                console.log(`${GOLD}[DEBUG] Blur selectedTraits before transform:${RESET}`, JSON.stringify(selectedTraits, null, 2));
                 preprocessing.blur.traits = transformBlurTraits(selectedTraits);
                 preprocessing.blur.jobCount = preprocessing.blur.traits.length;
-                console.log(`${GOLD}[Preprocessing] Blur TRAIT BIDS:${RESET}`);
-                console.log(`${GOLD}  Trait combinations: ${preprocessing.blur.traits.length}${RESET}`);
-                console.log(`${GOLD}  Job count set to: ${preprocessing.blur.jobCount}${RESET}`);
-                console.log(`${GOLD}[DEBUG] Trait details:${RESET}`, JSON.stringify(preprocessing.blur.traits, null, 2));
               } else if (task.bidType === "collection") {
                 // Collection bid
                 preprocessing.blur.jobCount = 1;
-                console.log(`${GOLD}[Preprocessing] Blur COLLECTION BID:${RESET}`);
-                console.log(`${GOLD}  Job count set to: 1${RESET}`);
               }
 
               // Set up parent job for Blur
               // NOTE: Parent job creation moved to schedule functions to ensure totalJobs matches actual jobs created
               if (preprocessing.blur.jobCount > 0) {
-                console.log(`${GOLD}[Preprocessing] Blur estimated ${preprocessing.blur.jobCount} jobs will be created${RESET}`);
               }
             }
           } else if (mp === "magiceden") {
@@ -4267,31 +4224,20 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
               // Token bid
               preprocessing.magiceden.tokens = [...new Set(magicedenTokens)];
               preprocessing.magiceden.jobCount = preprocessing.magiceden.tokens.length;
-              console.log(`${MAGENTA}[Preprocessing] MagicEden TOKEN BIDS:${RESET}`);
-              console.log(`${MAGENTA}  Token count: ${preprocessing.magiceden.tokens.length}${RESET}`);
-              console.log(`${MAGENTA}  Job count set to: ${preprocessing.magiceden.jobCount}${RESET}`);
             } else if (traitBid) {
               // Trait bid
-              console.log(`${MAGENTA}[DEBUG] MagicEden selectedTraits before transform:${RESET}`, JSON.stringify(selectedTraits, null, 2));
               preprocessing.magiceden.traits = Object.entries(selectedTraits).flatMap(([key, values]) =>
                 values.map(value => ({ attributeKey: key, attributeValue: value }))
               );
               preprocessing.magiceden.jobCount = preprocessing.magiceden.traits.length;
-              console.log(`${MAGENTA}[Preprocessing] MagicEden TRAIT BIDS:${RESET}`);
-              console.log(`${MAGENTA}  Trait combinations: ${preprocessing.magiceden.traits.length}${RESET}`);
-              console.log(`${MAGENTA}  Job count set to: ${preprocessing.magiceden.jobCount}${RESET}`);
-              console.log(`${MAGENTA}[DEBUG] Trait details:${RESET}`, JSON.stringify(preprocessing.magiceden.traits, null, 2));
             } else if (task.bidType === "collection") {
               // Collection bid
               preprocessing.magiceden.jobCount = 1;
-              console.log(`${MAGENTA}[Preprocessing] MagicEden COLLECTION BID:${RESET}`);
-              console.log(`${MAGENTA}  Job count set to: 1${RESET}`);
             }
 
             // Set up parent job for MagicEden
             // NOTE: Parent job creation moved to schedule functions to ensure totalJobs matches actual jobs created
             if (preprocessing.magiceden.jobCount > 0) {
-              console.log(`${MAGENTA}[Preprocessing] MagicEden estimated ${preprocessing.magiceden.jobCount} jobs will be created${RESET}`);
             }
           }
         }
@@ -4377,22 +4323,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
               taskId: taskId,
               jobName: `${mp.toUpperCase()}_JOBS`
             });
-            console.log(GREEN + `[startTask] Initialized parent job ${parentJobId}: totalJobs=${jobCount}, completedJobs=0` + RESET);
 
-            // Log additional details about the job count source
-            if (mp === 'opensea' && preprocessing.opensea.tokens.length > 0) {
-              console.log(BLUE + `  Source: ${preprocessing.opensea.tokens.length} token bids` + RESET);
-            } else if (mp === 'opensea' && preprocessing.opensea.traits.length > 0) {
-              console.log(BLUE + `  Source: ${preprocessing.opensea.traits.length} trait bid combinations` + RESET);
-            } else if (mp === 'blur' && preprocessing.blur.traits.length > 0) {
-              console.log(GOLD + `  Source: ${preprocessing.blur.traits.length} trait bid combinations` + RESET);
-            } else if (mp === 'magiceden' && preprocessing.magiceden.tokens.length > 0) {
-              console.log(MAGENTA + `  Source: ${preprocessing.magiceden.tokens.length} token bids` + RESET);
-            } else if (mp === 'magiceden' && preprocessing.magiceden.traits.length > 0) {
-              console.log(MAGENTA + `  Source: ${preprocessing.magiceden.traits.length} trait bid combinations` + RESET);
-            } else if (jobCount === 1) {
-              console.log(CYAN + `  Source: 1 collection bid` + RESET);
-            }
           }
         }
 
@@ -4403,23 +4334,73 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     }
 
     // Calculate and store task-wide totals after parent job initialization
-    let taskTotalJobs = 0;
-    let taskCompletedJobs = 0;
-    for (const mp of availableMarketplaces) {
-      const parentJobId = `${taskId}-${mp}`;
+    if (marketplace && task.running) {
+      // When adding a marketplace to running task, just increment totals
+      const parentJobId = `${taskId}-${marketplace}`;
       const parentJob = parentJobs.get(parentJobId);
-      if (parentJob) {
-        taskTotalJobs += parentJob.totalJobs;
-        taskCompletedJobs += parentJob.completedJobs;
+      if (parentJob && taskStatus[taskId]) {
+        // If task is SCHEDULED at 100%, we need to transition it back to RUNNING
+        if (taskStatus[taskId].status === 'SCHEDULED' && taskStatus[taskId].runningPercentage >= 100) {
+          console.log(YELLOW + `[DEBUG][startTask] Task ${taskId} is SCHEDULED at 100% - transitioning to RUNNING for marketplace addition` + RESET);
+          console.log(YELLOW + `[DEBUG][startTask] Before transition - Status: ${taskStatus[taskId].status}, Percentage: ${taskStatus[taskId].runningPercentage}%` + RESET);
+          // Clear existing timers
+          clearTaskTimers(taskId);
+          // Change status to RUNNING
+          taskStatus[taskId].status = 'RUNNING';
+          // Clear nextLoopTime
+          delete taskStatus[taskId].nextLoopTime;
+          taskStatus[taskId].waitingTime = 0;
+          console.log(YELLOW + `[DEBUG][startTask] After transition - Status: ${taskStatus[taskId].status}` + RESET);
+          
+          // IMPORTANT: When adding a marketplace to a SCHEDULED task, we need to mark existing marketplaces
+          // as complete since they've already run in the previous cycle
+          if (completedTasks[taskId]) {
+            // Get the currently selected marketplaces
+            const selectedMarketplaces = task.selectedMarketplaces.map(m => m.toLowerCase());
+            
+            // For each selected marketplace, if it's NOT the one being added, mark it as complete
+            // because it already ran in the previous cycle
+            selectedMarketplaces.forEach(mp => {
+              if (mp !== marketplace.toLowerCase() && enabledMarketplaces.map(m => m.toLowerCase()).includes(mp)) {
+                // Mark as complete since it was part of the previous run
+                completedTasks[taskId][mp as 'opensea' | 'magiceden' | 'blur'] = true;
+                console.log(YELLOW + `[DEBUG][startTask] Marking ${mp} as complete (from previous cycle)` + RESET);
+              }
+            });
+            
+            // Only reset the marketplace being added
+            completedTasks[taskId][marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur'] = false;
+            console.log(YELLOW + `[DEBUG][startTask] Reset only ${marketplace} to false, marked others as complete` + RESET);
+            console.log(YELLOW + `[DEBUG][startTask] completedTasks after update:`, completedTasks[taskId], RESET);
+          }
+        }
+        
+        console.log(GREEN + `[DEBUG][startTask] Before job update - totalJobs: ${taskStatus[taskId].totalJobs}, completedJobs: ${taskStatus[taskId].completedJobs}` + RESET);
+        taskStatus[taskId].totalJobs += parentJob.totalJobs;
+        // Recalculate percentage with new totals
+        const newPercentage = (taskStatus[taskId].completedJobs / taskStatus[taskId].totalJobs) * 100;
+        taskStatus[taskId].runningPercentage = Math.min(100, Math.round(newPercentage * 100) / 100);
+        console.log(GREEN + `[DEBUG][startTask] After job update - totalJobs: ${taskStatus[taskId].totalJobs}, completedJobs: ${taskStatus[taskId].completedJobs}, newPercentage: ${taskStatus[taskId].runningPercentage}%` + RESET);
+      }
+    } else {
+      // Full recalculation for new tasks or full restarts
+      let taskTotalJobs = 0;
+      let taskCompletedJobs = 0;
+      for (const mp of availableMarketplaces) {
+        const parentJobId = `${taskId}-${mp}`;
+        const parentJob = parentJobs.get(parentJobId);
+        if (parentJob) {
+          taskTotalJobs += parentJob.totalJobs;
+          taskCompletedJobs += parentJob.completedJobs;
+        }
+      }
+      
+      // Store the totals in taskStatus
+      if (taskStatus[taskId]) {
+        taskStatus[taskId].totalJobs = taskTotalJobs;
+        taskStatus[taskId].completedJobs = taskCompletedJobs;
       }
     }
-
-    // Store the totals in taskStatus
-    if (taskStatus[taskId]) {
-      taskStatus[taskId].totalJobs = taskTotalJobs;
-      taskStatus[taskId].completedJobs = taskCompletedJobs;
-    }
-    console.log(GREEN + `[startTask] Task ${taskId} totals initialized: totalJobs=${taskTotalJobs}, completedJobs=${taskCompletedJobs}` + RESET);
 
     // Only create jobs for the specified marketplace if provided, otherwise create for all available
     const marketplacesForJobs = marketplace ? [marketplace.toLowerCase()].filter(m => availableMarketplaces.includes(m)) : availableMarketplaces;
@@ -4488,7 +4469,6 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
         const newNonBlurJobs = newJobs.filter(job => job.name !== BLUR_SCHEDULE);
 
         if (newJobs.length > 0) {
-          console.log(GREEN + `Adding ${newJobs.length} new jobs (filtered ${jobs.length - newJobs.length} duplicates)` + RESET);
           if (newNonBlurJobs.length > 0) {
             await queue.addBulk(newNonBlurJobs as Job[]);
           }
@@ -4496,7 +4476,6 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
             await blurQueue.addBulk(newBlurJobs as Job[]);
           }
         } else {
-          console.log(YELLOW + `All ${jobs.length} jobs already exist in queue, skipping` + RESET);
         }
       }
     }
@@ -4504,11 +4483,35 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     // Task status will be updated to RUNNING when jobs are actually queued in scheduled bid functions
     if (marketplace) {
       // For marketplace-specific starts, recalculate progress percentages
-      console.log(GREEN + `Recalculating progress for task ${taskId} after adding marketplace ${marketplace}` + RESET);
 
-      // Reset the marketplace completion status
+      // Reset the marketplace completion status (only if not already handled above for SCHEDULED tasks)
+      console.log(YELLOW + `[DEBUG][startTask] Marketplace-specific start - checking completedTasks` + RESET);
       if (completedTasks[taskId]) {
-        completedTasks[taskId][marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur'] = false;
+        console.log(YELLOW + `[DEBUG][startTask] Before reset - completedTasks:`, completedTasks[taskId], RESET);
+        // Only reset if we haven't already handled it above (for SCHEDULED at 100% case)
+        if (!(taskStatus[taskId]?.status === 'RUNNING' && taskStatus[taskId]?.runningPercentage >= 100)) {
+          completedTasks[taskId][marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur'] = false;
+        }
+        console.log(YELLOW + `[DEBUG][startTask] After reset - completedTasks:`, completedTasks[taskId], RESET);
+      } else {
+        console.log(YELLOW + `[DEBUG][startTask] completedTasks[${taskId}] not initialized!` + RESET);
+      }
+      // DO NOT initialize completedTasks here - it should only be initialized in the non-marketplace startTask
+
+      // Also ensure skipStats and errorStats are initialized
+      if (!skipStats[taskId]) {
+        skipStats[taskId] = {
+          opensea: 0,
+          magiceden: 0,
+          blur: 0
+        };
+      }
+      if (!errorStats[taskId]) {
+        errorStats[taskId] = {
+          opensea: 0,
+          magiceden: 0,
+          blur: 0
+        };
       }
 
       // The progress will be recalculated automatically as jobs complete
@@ -8901,9 +8904,13 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
     }
 
     // Initialize task status and other tracking
+    console.log(BLUE + `[DEBUG][processOpenseaScheduledBid] completedTasks before:`, completedTasks[taskId], RESET);
+    // Always ensure opensea is set to false at the start of processing (unless it's undefined)
     if (completedTasks[taskId]) {
       completedTasks[taskId].opensea = false;
+      console.log(BLUE + `[DEBUG][processOpenseaScheduledBid] Set opensea to false` + RESET);
     }
+    console.log(BLUE + `[DEBUG][processOpenseaScheduledBid] completedTasks after:`, completedTasks[taskId], RESET);
 
     // Ensure task status exists in centralized state manager
     // Initialize task status if it doesn't exist
@@ -9349,9 +9356,13 @@ async function processBlurScheduledBid(task: ITask) {
     }
 
     // Initialize task status and other tracking
+    console.log(GOLD + `[DEBUG][processBlurScheduledBid] completedTasks before:`, completedTasks[taskId], RESET);
+    // Always ensure blur is set to false at the start of processing (unless it's undefined)
     if (completedTasks[taskId]) {
       completedTasks[taskId].blur = false;
+      console.log(GOLD + `[DEBUG][processBlurScheduledBid] Set blur to false` + RESET);
     }
+    console.log(GOLD + `[DEBUG][processBlurScheduledBid] completedTasks after:`, completedTasks[taskId], RESET);
 
     // Initialize task status if it doesn't exist
     if (!taskStatus[taskId]) {
@@ -10906,9 +10917,13 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
     }
 
     // Initialize task status and other tracking
+    console.log(MAGENTA + `[DEBUG][processMagicedenScheduledBid] completedTasks before:`, completedTasks[taskId], RESET);
+    // Always ensure magiceden is set to false at the start of processing (unless it's undefined)
     if (completedTasks[taskId]) {
       completedTasks[taskId].magiceden = false;
+      console.log(MAGENTA + `[DEBUG][processMagicedenScheduledBid] Set magiceden to false` + RESET);
     }
+    console.log(MAGENTA + `[DEBUG][processMagicedenScheduledBid] completedTasks after:`, completedTasks[taskId], RESET);
 
     // Initialize task status if it doesn't exist
     if (!taskStatus[taskId]) {
@@ -10967,7 +10982,7 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
             outbidOptions: currentTask.outbidOptions,
             task: newTask,
           },
-          opts: { 
+          opts: {
             priority: TOKEN_BID_PRIORITY.MAGICEDEN,
             jobId: `bid-${taskId}-magiceden-${currentTask.contract.slug}-token-${token}`
           } as JobsOptions

@@ -32,12 +32,8 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation:
 }
 
 export async function getCollectionDetails(slug: string, contractAddress?: string) {
-  const startTime = Date.now();
-  console.log(`[Collection] Fetching details for ${slug}`);
-
   // Check memory cache first
   if (collectionCache[slug]) {
-    console.log(`[Collection] Memory cache hit for ${slug} (${Date.now() - startTime}ms)`);
     return collectionCache[slug];
   }
 
@@ -49,7 +45,6 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
     try {
       const cached = await redis.get(cacheKey);
       if (cached) {
-        console.log(`[Collection] Redis cache hit for ${slug} (${Date.now() - startTime}ms)`);
         const details = JSON.parse(cached);
         collectionCache[slug] = details; // Update memory cache
         return details;
@@ -75,7 +70,6 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
           return collectionCache[slug];
         }
 
-        console.log(`[Collection] Making API call for ${slug} (${Date.now() - startTime}ms)`);
         const { data: collection } = await withTimeout(
           limiter.schedule(() => axiosInstance.get(
             `${BASE_URL}/opensea/api/v2/collections/${slug}`,
@@ -116,13 +110,11 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
         if (redis && redisClient.isReady()) {
           try {
             await redis.setex(cacheKey, 3600, JSON.stringify(result));
-            console.log(`[Collection] Cached to Redis for ${slug}`);
           } catch (error) {
             console.log(error);
           }
         }
 
-        console.log(`[Collection] Successfully cached details for ${slug} (${Date.now() - startTime}ms)`);
         return result;
       }),
       30000, // 30 second timeout for entire operation
@@ -141,8 +133,6 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
 
     return result;
   } catch (error) {
-    console.error(`[Collection] Error fetching details for ${slug} after ${Date.now() - startTime}ms:`, error);
-
     // Log the error
     await logger.logOpenseaCollectionError(`Failed to fetch collection details: ${error}`, {
       collection: slug,
@@ -258,14 +248,14 @@ export async function getOpenseaFloor(collectionSlug: string) {
           errorMessage: error?.response?.data?.errors?.[0]?.message || 'Collection not found',
           error: new Error(`OpenSea collection not found: ${collectionSlug}`)
         });
-        
+
         // Cache the zero floor price for a short time to avoid repeated 404s
         if (getRedis()) {
           await getRedis().set(cacheKey, JSON.stringify(0), 'EX', 300); // Cache for 5 minutes
         }
         return 0; // Return 0 floor price for non-existent collections
       }
-      
+
       // For other errors, log as API error and re-throw
       await logger.logApiError('Failed to fetch OpenSea floor price', {
         collection: collectionSlug,
@@ -278,7 +268,7 @@ export async function getOpenseaFloor(collectionSlug: string) {
         errorMessage: error?.response?.data?.errors?.[0]?.message || error?.message || 'Unknown error',
         error: error
       });
-      
+
       throw error; // Re-throw to let the lock manager handle it
     }
   });
