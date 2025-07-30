@@ -17,7 +17,7 @@ const rpsHistory: number[] = [];
 const RPS_HISTORY_SECONDS = 10; // Keep a 10-second history for averaging
 
 const retryConfig: IAxiosRetryConfig = {
-  retries: 3,
+  retries: 0, // Disable retries
   retryDelay: (retryCount, error) => {
     limiter.schedule(() => Promise.resolve());
     if (error.response && (error.response.status >= 400 && error.response.status < 600)) {
@@ -25,27 +25,8 @@ const retryConfig: IAxiosRetryConfig = {
     }
     return axiosRetry.exponentialDelay(retryCount);
   },
-  retryCondition: async (error: any) => {
-    // Don't retry on insufficient balance errors
-    if (error.response?.data?.message) {
-      const message = error.response.data.message.toLowerCase();
-      if (message.includes('insufficient') && (message.includes('balance') || message.includes('beth'))) {
-        console.log('Skipping retry for insufficient balance error:', message);
-        return false;
-      }
-    }
-    
-    // Don't retry on authentication errors
-    if (error.response?.status === 401 || error.response?.status === 403) {
-      return false;
-    }
-    
-    if (error.response && (error.response.status >= 400 && error.response.status < 600)) {
-      return true;
-    }
-    if (axiosRetry.isNetworkError(error)) {
-      return true;
-    }
+  retryCondition: async (_error: any) => {
+    // Retries are disabled
     return false;
   },
 };
