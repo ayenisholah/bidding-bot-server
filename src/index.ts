@@ -54,6 +54,7 @@ import { collectionCache } from "./utils/collection-cache";
 import { taskCircuitBreaker } from "./utils/task-circuit-breaker";
 import { blurRateLimiter } from "./utils/blur-rate-limiter";
 import { approvalCache } from "./utils/approval-cache";
+import { atomicBidCache } from "./utils/atomic-bid-cache";
 
 const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
 
@@ -759,6 +760,29 @@ function getActiveTaskWithIdByIndex(index: number): { id: string, task: ITask } 
   return undefined;
 }
 
+// Authorized queue clear function - centralizes all queue obliteration
+async function authorizedQueueClear(reason: 'startup' | 'no-password' | 'downtime' | 'network-loss') {
+  console.log(YELLOW + `[authorizedQueueClear] Clearing queue - Reason: ${reason}` + RESET);
+  
+  try {
+    // Obliterate the queue
+    await queue.obliterate({ force: true });
+    console.log(GREEN + `[authorizedQueueClear] Queue cleared successfully` + RESET);
+    
+    // Wait 5 seconds
+    console.log(YELLOW + `[authorizedQueueClear] Waiting 5 seconds before restarting scheduled loop...` + RESET);
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    
+    // Call runScheduledLoop
+    console.log(GREEN + `[authorizedQueueClear] Starting scheduled loop...` + RESET);
+    await runScheduledLoop();
+    
+  } catch (error) {
+    console.error(RED + `[authorizedQueueClear] Error during queue clear: ${error}` + RESET);
+    throw error;
+  }
+}
+
 // Clear queue and restart all jobs on server start
 async function clearQueueAndRestartJobs() {
   try {
@@ -777,11 +801,11 @@ async function clearQueueAndRestartJobs() {
     // Additional safety wait
     await new Promise(resolve => setTimeout(resolve, 1000));
 
-    // Clear all existing jobs from the queue
-    await queue.obliterate({ force: true });
-
-    // Resume the queue after clearing
+    // Resume the queue first since authorizedQueueClear will restart the loop
     await queue.resume();
+
+    // Use authorized queue clear which includes delay and runScheduledLoop
+    await authorizedQueueClear('startup');
 
     // Clear any stored job states
     parentJobs.clear();
@@ -1024,10 +1048,12 @@ async function pauseQueueAndWorkers() {
     }
 
     // Actually remove all jobs from the queue for security
-    await queue.obliterate({ force: true });
+    console.log(YELLOW + 'Note: All jobs will be removed from the queue for security.' + RESET);
+    
+    // Use authorized queue clear
+    await authorizedQueueClear('no-password');
 
     console.log(YELLOW + 'Queue and workers paused. Waiting for password...' + RESET);
-    console.log(YELLOW + 'Note: All jobs have been removed from the queue for security.' + RESET);
   } catch (error) {
     console.log(error);
   }
@@ -1278,61 +1304,15 @@ async function startServer() {
     await clearQueueAndRestartJobs();
 
     try {
-      const lastRuntime = redis ? await redis.get(LAST_RUNTIME_KEY) : null;
-      const currentTime = Date.now();
-
-      if (lastRuntime) {
-        const downtime = currentTime - parseInt(lastRuntime);
-        if (downtime > DOWNTIME_THRESHOLD) {
-          await queue.obliterate({ force: true })
-        }
-      }
       await initialize(RATE_LIMIT);
       // Initialize wallet cache with pre-decryption
       const password = await getPassword();
       if (password) {
         await walletCache.initialize(password);
       }
-
-      if (redis) {
-        await redis.set(LAST_RUNTIME_KEY, currentTime.toString());
-      }
     } catch (redisError) {
       console.error('Redis operation failed:', redisError);
     }
-
-    setInterval(async () => {
-      if (redis) {
-        await redis.set(LAST_RUNTIME_KEY, Date.now().toString());
-      }
-
-      // Monitor memory usage
-      const memoryUsage = process.memoryUsage();
-      const heapPercentage = (memoryUsage.heapUsed / memoryUsage.heapTotal) * 100;
-
-      if (heapPercentage > 90) {
-        await logger.logMemoryWarning('High memory usage detected', memoryUsage, {
-          heapPercentage,
-          threshold: '90%',
-          availableMemory: os.freemem(),
-          totalMemory: os.totalmem(),
-          uptime: process.uptime()
-        });
-      }
-
-      // Log memory metrics periodically for monitoring
-      if (Date.now() % 300000 < 60000) { // Every 5 minutes
-        await logger.logDebug(ErrorCategory.PERFORMANCE, 'Memory usage metrics', {
-          memoryUsage,
-          heapPercentage,
-          availableMemory: os.freemem(),
-          totalMemory: os.totalmem(),
-          uptime: process.uptime(),
-          activeTasksCount: activeTasks.size,
-          queueMetrics: await queue.getJobCounts()
-        });
-      }
-    }, 60000);
 
     server.listen(port, async () => {
       console.log(`Magic happening on http://localhost:${port}`);
@@ -7096,11 +7076,11 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
   const startTime = Date.now();
   console.log(CYAN + `[DEBUG][handleMagicEdenCounterbid] START - Task: ${task._id}, Collection: ${task.contract.slug}` + RESET);
   console.log(CYAN + `[DEBUG][handleMagicEdenCounterbid] Incoming bid data:`, JSON.stringify(data?.data) + RESET);
-  
+
   try {
     const currentTask = activeTasks.get(task._id)
     console.log(CYAN + `[DEBUG][handleMagicEdenCounterbid] Current task status - Running: ${currentTask?.running}, Selected marketplaces: ${currentTask?.selectedMarketplaces}, Enabled: ${enabledMarketplaces}` + RESET);
-    
+
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces
       .map((m) => m.toLowerCase())
       .includes("magiceden")) {
@@ -7588,11 +7568,11 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
   const startTime = Date.now();
   console.log(CYAN + `[DEBUG][handleOpenseaCounterbid] START - Task: ${task._id}, Collection: ${task.contract.slug}` + RESET);
   console.log(CYAN + `[DEBUG][handleOpenseaCounterbid] Incoming bid data:`, JSON.stringify(data?.payload?.payload) + RESET);
-  
+
   try {
     const currentTask = activeTasks.get(task._id)
     console.log(CYAN + `[DEBUG][handleOpenseaCounterbid] Current task status - Running: ${currentTask?.running}, Selected marketplaces: ${currentTask?.selectedMarketplaces}, Enabled: ${enabledMarketplaces}` + RESET);
-    
+
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces
       .map((m) => m.toLowerCase())
       .includes("opensea")) {
@@ -7861,7 +7841,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       if (job) {
         const existingPrice = job.data.offerPrice / Math.pow(10, decimal);
         console.log(CYAN + `[DEBUG][handleOpenseaCounterbid] Existing job found. Current price: ${existingPrice}, Incoming: ${incomingBidAmountEth}` + RESET);
-        
+
         if (incomingBidAmount <= job.data.offerPrice) {
           console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] Incoming price not higher than existing, skipping` + RESET);
           return
@@ -8208,25 +8188,26 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 async function handleBlurCounterbid(data: any, task: ITask) {
   const startTime = Date.now();
   const incomingBid = data
-  
+
   console.log(CYAN + `[DEBUG][handleBlurCounterbid] START - Task: ${task._id}, Collection: ${task.contract.slug}` + RESET);
   console.log(CYAN + `[DEBUG][handleBlurCounterbid] Incoming bid data:`, JSON.stringify(data) + RESET);
-  
+
   try {
     // Include task ID in the hash to make it task-specific
     const bidHash = hashBid({ ...data, taskId: task._id });
     console.log(CYAN + `[DEBUG][handleBlurCounterbid] Bid hash: ${bidHash}` + RESET);
-    
-    if (hasSeenItem(seenBids, bidHash)) {
+
+    // Use atomic Redis cache for deduplication
+    const isNewBid = await atomicBidCache.checkAndAdd(bidHash);
+    if (!isNewBid) {
       console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Bid already seen, skipping. Hash: ${bidHash}` + RESET);
       return;
     }
-    addSeenItem(seenBids, bidHash);
-    console.log(CYAN + `[DEBUG][handleBlurCounterbid] Added bid to seen cache` + RESET);
+    console.log(CYAN + `[DEBUG][handleBlurCounterbid] Added bid to seen cache (atomic)` + RESET);
 
     const currentTask = activeTasks.get(task._id)
     console.log(CYAN + `[DEBUG][handleBlurCounterbid] Current task status - Running: ${currentTask?.running}, Selected marketplaces: ${currentTask?.selectedMarketplaces}, Enabled: ${enabledMarketplaces}` + RESET);
-    
+
     if (!currentTask || !currentTask?.running || !currentTask?.selectedMarketplaces?.map((marketplace) => marketplace?.toLowerCase())?.includes("blur") || !enabledMarketplaces?.map((marketplace) => marketplace?.toLowerCase())?.includes("blur")) {
       console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Task validation failed, exiting` + RESET);
       return;
@@ -8265,18 +8246,18 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Not a trait bid, exiting trait section` + RESET);
         return;
       }
-      
+
       const traits = transformBlurTraits(selectedTraits)
       console.log(CYAN + `[DEBUG][handleBlurCounterbid] Transformed traits:`, JSON.stringify(traits) + RESET);
-      
+
       const incomingTraitBids = incomingBid?.stats?.filter((item: any) => item?.criteriaType?.toLowerCase() === "trait") || incomingBid?.updates?.filter((item: any) => item?.criteriaType?.toLowerCase() === "trait")
       console.log(CYAN + `[DEBUG][handleBlurCounterbid] Incoming trait bids count: ${incomingTraitBids?.length || 0}` + RESET);
-      
+
       if (!incomingTraitBids) {
         console.log(YELLOW + `[DEBUG][handleBlurCounterbid] No incoming trait bids found` + RESET);
         return;
       }
-      
+
       const hasMatchingTraits = checkBlurTraits(incomingTraitBids, traits);
       console.log(CYAN + `[DEBUG][handleBlurCounterbid] Matching traits found: ${hasMatchingTraits?.length || 0}` + RESET);
 
@@ -8401,8 +8382,8 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
         if (job) {
           const existingPrice = Number(job?.data?.offerPrice) / 1e18;
-          console.log(CYAN + `[DEBUG][handleBlurCounterbid] Existing job found. Current price: ${existingPrice}, Incoming: ${incomingPrice / 1e18}` + RESET);
-          
+          console.log(CYAN + `[DEBUG][handleBlurCounterbid] Existing job found. Current price: ${existingPrice}, Incoming: ${incomingPrice}` + RESET);
+
           if (incomingPrice <= Number(job?.data?.offerPrice) / 1e18) {
             console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Incoming price not higher than existing, skipping` + RESET);
             return
@@ -8427,7 +8408,10 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         console.log(GREEN + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
         console.log(GREEN + `[Blur Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${Number(offerPrice) / 1e18} ETH | Trait: ${identifier} | Outbidding: ${incomingPrice} ETH` + RESET);
         console.log(GREEN + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-        seenBids.delete(bidHash)
+        
+        // Track completion time
+        const completionTime = Date.now() - startTime;
+        console.log(CYAN + `[DEBUG][handleBlurCounterbid] COMPLETED successfully in ${completionTime}ms` + RESET);
       }
 
     } else {
@@ -8555,7 +8539,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       if (job) {
         const existingPrice = Number(job?.data?.offerPrice) / 1e18;
         console.log(CYAN + `[DEBUG][handleBlurCounterbid] Collection: Existing job found. Current price: ${existingPrice}, Incoming: ${bestPrice}` + RESET);
-        
+
         if (+incomingPrice <= +job?.data?.offerPrice) {
           console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Collection: Incoming price not higher than existing, skipping` + RESET);
           return
@@ -8579,13 +8563,12 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       console.log(GREEN + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(GREEN + `[Blur Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${Number(offerPrice) / 1e18} ETH | Collection${traitDisplay} | Outbidding: ${bestPrice} ETH` + RESET);
       console.log(GREEN + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      seenBids.delete(bidHash)
     }
-    
+
     // Log completion time
     const endTime = Date.now();
     console.log(GREEN + `[DEBUG][handleBlurCounterbid] COMPLETED successfully in ${endTime - startTime}ms` + RESET);
-    
+
   } catch (error: any) {
     const endTime = Date.now();
     console.log(RED + `[DEBUG][handleBlurCounterbid] ERROR after ${endTime - startTime}ms: ${error?.message || error?.toString() || 'Unknown error'}` + RESET);
@@ -8597,12 +8580,9 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       console.log(RED + `[DEBUG][handleBlurCounterbid] API Response:`, JSON.stringify(error.response.data) + RESET);
     }
   } finally {
-    // Always clean up the bidHash from seenBids to prevent memory leak
-    const bidHash = hashBid({ ...data, taskId: task._id });
-    if (hasSeenItem(seenBids, bidHash)) {
-      seenBids.delete(bidHash);
-      console.log(CYAN + `[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block` + RESET);
-    }
+    // Redis cache handles cleanup automatically with TTL
+    const duration = Date.now() - startTime;
+    console.log(CYAN + `[DEBUG][handleBlurCounterbid] COMPLETED in ${duration}ms` + RESET);
   }
 }
 
@@ -14297,9 +14277,11 @@ async function watchNetworkState() {
         await queue.pause();
         // Add a small delay to ensure queue is fully paused
         await new Promise(resolve => setTimeout(resolve, 1000));
-        await queue.obliterate({ force: true });
+        // Use authorized queue clear for network loss
+        await authorizedQueueClear('network-loss');
+
       } catch (err) {
-        console.error('Error while pausing/obliterating queue:', err);
+        console.error('Error while pausing/clearing queue:', err);
       }
     }
 

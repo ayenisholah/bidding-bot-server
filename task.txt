@@ -1,11 +1,814 @@
-return {
-  ...(jobId ? { jobId } : {}),
-  removeOnComplete: true,
-  removeOnFail: true,
-  lifo: false,
-  attempts: 1, // No retries for non-SCHEDULE jobs
-  backoff: {
-    type: 'exponential',
-    delay: 2000,
-  },
-};
+
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 3, DONE: 37 }
+Average RPS: 2.00 Executing: 3.00 True RPS: 3.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 3, DONE: 41 }
+Average RPS: 2.40 Executing: 3.00 True RPS: 3.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 1, DONE: 48 }
+Average RPS: 3.60 Executing: 1.00 True RPS: 3.60
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:130MB
+heapTotal:76MB
+heapUsed:46MB
+external:21MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 0
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 0
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 50 }
+Average RPS: 3.00 Executing: 0.00 True RPS: 3.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 50 }
+Average RPS: 3.50 Executing: 0.00 True RPS: 3.50
+[Cache Hit] OpenSea traits for rektguy in 5ms
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 2, DONE: 51 }
+Average RPS: 3.00 Executing: 2.00 True RPS: 3.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 1, DONE: 53 }
+Average RPS: 2.83 Executing: 1.00 True RPS: 2.83
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 1, DONE: 54 }
+Average RPS: 2.57 Executing: 1.00 True RPS: 2.57
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:130MB
+heapTotal:76MB
+heapUsed:48MB
+external:21MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 0
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 0
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 1, DONE: 54 }
+Average RPS: 2.57 Executing: 1.00 True RPS: 2.57
+UPDATED EXISTING TASK: REKTGUY
+--------------------------------------------------------------
+OLD TRAIT BIDS TO CANCEL: 0
+--------------------------------------------------------------
+--------------------------------------------------------------
+NEW TRAIT BIDS TO ADD: 0
+--------------------------------------------------------------
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 56 }
+Average RPS: 2.50 Executing: 0.00 True RPS: 2.50
+[Cache Hit] OpenSea traits for osf-rld in 1ms
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 1, DONE: 58 }
+Average RPS: 2.63 Executing: 1.00 True RPS: 2.63
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 59 }
+Average RPS: 2.25 Executing: 0.00 True RPS: 2.25
+UPDATED EXISTING TASK: OSF-RLD
+--------------------------------------------------------------
+OLD TRAIT BIDS TO CANCEL: 0
+--------------------------------------------------------------
+--------------------------------------------------------------
+NEW TRAIT BIDS TO ADD: 0
+--------------------------------------------------------------
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 60 }
+Average RPS: 1.50 Executing: 0.00 True RPS: 1.50
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:130MB
+heapTotal:76MB
+heapUsed:42MB
+external:21MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 0
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 0
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 60 }
+Average RPS: 1.43 Executing: 0.00 True RPS: 1.43
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 60 }
+Average RPS: 1.43 Executing: 0.00 True RPS: 1.43
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 60 }
+Average RPS: 1.50 Executing: 0.00 True RPS: 1.50
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 60 }
+Average RPS: 1.40 Executing: 0.00 True RPS: 1.40
+----------------------------------------------------------------------
+SUBSCRIBED TO COLLECTION: rektguy (ALL MARKETPLACES)
+----------------------------------------------------------------------
+
+[Preprocessing] ===== SUMMARY FOR TASK 688b6fdf71dd192c2eac9949 =====
+[Preprocessing] Total jobs to be created: 10
+  OpenSea: 0 jobs
+  Blur: 10 jobs
+  MagicEden: 0 jobs
+[Preprocessing] =====================================
+
+Added 10 Blur jobs to dedicated queue
+Current Limiter Stats: { RECEIVED: 1, QUEUED: 0, RUNNING: 0, EXECUTING: 12, DONE: 71 }
+Average RPS: 3.40 Executing: 13.00 True RPS: 13.00
+----------------------------------------------------------------------
+SUBSCRIBED TO COLLECTION: osf-rld (ALL MARKETPLACES)
+----------------------------------------------------------------------
+
+[Preprocessing] ===== SUMMARY FOR TASK 688b6fdf71dd192c2eac994a =====
+[Preprocessing] Total jobs to be created: 1
+  OpenSea: 0 jobs
+  Blur: 1 jobs
+  MagicEden: 0 jobs
+[Preprocessing] =====================================
+
+Added 1 Blur jobs to dedicated queue
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:132MB
+heapTotal:77MB
+heapUsed:43MB
+external:22MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 0
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 0
+Current Limiter Stats: { RECEIVED: 1, QUEUED: 0, RUNNING: 0, EXECUTING: 15, DONE: 85 }
+Average RPS: 5.17 Executing: 16.00 True RPS: 16.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 1, EXECUTING: 10, DONE: 108 }
+Average RPS: 8.67 Executing: 11.00 True RPS: 11.00
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10 (Blur: 10)
+  Completed: 1
+  Overall Progress: 10.00%
+  [███░░░░░░░░░░░░░░░░░░░░░░░░░░░] 10.00%
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 1 (Blur: 1)
+  Completed: 1
+  Overall Progress: 100.00%
+  [██████████████████████████████] 100.00%
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 9, DONE: 120 }
+Average RPS: 10.33 Executing: 9.00 True RPS: 10.33
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10 (Blur: 10)
+  Completed: 2
+  Overall Progress: 20.00%
+  [██████░░░░░░░░░░░░░░░░░░░░░░░░] 20.00%
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10 (Blur: 10)
+  Completed: 3
+  Overall Progress: 30.00%
+  [█████████░░░░░░░░░░░░░░░░░░░░░] 30.00%
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Marshmello"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Maroon"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Invisible"},"bestPrice":"1.05","totalValue":"1.05"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: f19a017fdb7e4e77f97493708e47f6e71a17c35d98d215aabd62a93275bad4ec
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.05 ETH | Criteria: {"Hoody":"Marshmello"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 3
+[DEBUG][handleBlurCounterbid] Matching traits found: 3
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Marshmello"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Maroon"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Invisible"},"bestPrice":"1.05","totalValue":"1.05"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: f19a017fdb7e4e77f97493708e47f6e71a17c35d98d215aabd62a93275bad4ec
+[DEBUG][handleBlurCounterbid] Bid already seen, skipping. Hash: f19a017fdb7e4e77f97493708e47f6e71a17c35d98d215aabd62a93275bad4ec
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Marshmello"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Maroon"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Invisible"},"bestPrice":"1.05","totalValue":"1.05"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: f19a017fdb7e4e77f97493708e47f6e71a17c35d98d215aabd62a93275bad4ec
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.05 ETH | Criteria: {"Hoody":"Marshmello"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 3
+[DEBUG][handleBlurCounterbid] Matching traits found: 3
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10 (Blur: 10)
+  Completed: 4
+  Overall Progress: 40.00%
+  [████████████░░░░░░░░░░░░░░░░░░] 40.00%
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac994a, Collection: osf-rld
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0x513cd71defc801b9c1aa763db47b5df223da77a2","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Artist":"OSF"},"bestPrice":"2.76","totalValue":"7.59"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 14fc186326d2ed52adc7f29a6c8bd9ecdb168983c2efa42c10776044afab99ae
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac994a | Collection: osf-rld | Type: TRAIT | Incoming: 2.76 ETH | Criteria: {"Artist":"OSF"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Artist":"OSF"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 1
+[DEBUG][handleBlurCounterbid] Matching traits found: 1
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac994a, Collection: osf-rld
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0x513cd71defc801b9c1aa763db47b5df223da77a2","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Artist":"OSF"},"bestPrice":"2.76","totalValue":"7.59"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 14fc186326d2ed52adc7f29a6c8bd9ecdb168983c2efa42c10776044afab99ae
+[DEBUG][handleBlurCounterbid] Bid already seen, skipping. Hash: 14fc186326d2ed52adc7f29a6c8bd9ecdb168983c2efa42c10776044afab99ae
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac994a, Collection: osf-rld
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0x513cd71defc801b9c1aa763db47b5df223da77a2","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Artist":"OSF"},"bestPrice":"2.76","totalValue":"7.59"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 14fc186326d2ed52adc7f29a6c8bd9ecdb168983c2efa42c10776044afab99ae
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac994a | Collection: osf-rld | Type: TRAIT | Incoming: 2.76 ETH | Criteria: {"Artist":"OSF"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Artist":"OSF"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 1
+[DEBUG][handleBlurCounterbid] Matching traits found: 1
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 7, DONE: 133 }
+Average RPS: 12.33 Executing: 7.00 True RPS: 12.33
+Server status update: {
+  type: 'server_status',
+  timestamp: 1753968630342,
+  marketplaces: [
+    { name: 'OPENSEA', connections: 3 },
+    { name: 'BLUR', connections: 3 }
+  ],
+  subscriptions: 12
+}
+Server Status Update:  {
+  type: 'server_status',
+  timestamp: 1753968630342,
+  marketplaces: [
+    { name: 'OPENSEA', connections: 3 },
+    { name: 'BLUR', connections: 3 }
+  ],
+  subscriptions: 12
+}
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10 (Blur: 10)
+  Completed: 5
+  Overall Progress: 50.00%
+  [███████████████░░░░░░░░░░░░░░░] 50.00%
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10 (Blur: 10)
+  Completed: 6
+  Overall Progress: 60.00%
+  [██████████████████░░░░░░░░░░░░] 60.00%
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Purple"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Technicolour"},"bestPrice":"1.05","totalValue":"1.05"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 47f08de295237290a1ce1e432957d50f4964a4291f65d01f00df76000c2429c8
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.05 ETH | Criteria: {"Hoody":"Purple"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 2
+[DEBUG][handleBlurCounterbid] Matching traits found: 2
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Purple"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Technicolour"},"bestPrice":"1.05","totalValue":"1.05"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 47f08de295237290a1ce1e432957d50f4964a4291f65d01f00df76000c2429c8
+[DEBUG][handleBlurCounterbid] Bid already seen, skipping. Hash: 47f08de295237290a1ce1e432957d50f4964a4291f65d01f00df76000c2429c8
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Purple"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Technicolour"},"bestPrice":"1.05","totalValue":"1.05"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 47f08de295237290a1ce1e432957d50f4964a4291f65d01f00df76000c2429c8
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.05 ETH | Criteria: {"Hoody":"Purple"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 2
+[DEBUG][handleBlurCounterbid] Matching traits found: 2
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 4, DONE: 139 }
+Average RPS: 13.17 Executing: 4.00 True RPS: 13.17
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10 (Blur: 10)
+  Completed: 7
+  Overall Progress: 70.00%
+  [█████████████████████░░░░░░░░░] 70.00%
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10 (Blur: 10)
+  Completed: 8
+  Overall Progress: 80.00%
+  [████████████████████████░░░░░░] 80.00%
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:133MB
+heapTotal:77MB
+heapUsed:47MB
+external:21MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 0
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 0
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Red"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Tutti Frutti"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Transparent"},"bestPrice":"1.05","totalValue":"1.05"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 0ad21c9f96c78859044f3072ad737fb333957cd876ec9c40e005aca2ab4ce24a
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.05 ETH | Criteria: {"Hoody":"Red"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 3
+[DEBUG][handleBlurCounterbid] Matching traits found: 3
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Red"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Tutti Frutti"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Transparent"},"bestPrice":"1.05","totalValue":"1.05"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 0ad21c9f96c78859044f3072ad737fb333957cd876ec9c40e005aca2ab4ce24a
+[DEBUG][handleBlurCounterbid] Bid already seen, skipping. Hash: 0ad21c9f96c78859044f3072ad737fb333957cd876ec9c40e005aca2ab4ce24a
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Red"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Tutti Frutti"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Transparent"},"bestPrice":"1.05","totalValue":"1.05"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 0ad21c9f96c78859044f3072ad737fb333957cd876ec9c40e005aca2ab4ce24a
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.05 ETH | Criteria: {"Hoody":"Red"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 3
+[DEBUG][handleBlurCounterbid] Matching traits found: 3
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 2, DONE: 144 }
+Average RPS: 12.00 Executing: 2.00 True RPS: 12.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 2, DONE: 144 }
+Average RPS: 12.00 Executing: 2.00 True RPS: 12.00
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10 (Blur: 10)
+  Completed: 9
+  Overall Progress: 90.00%
+  [███████████████████████████░░░] 90.00%
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10 (Blur: 10)
+  Completed: 10
+  Overall Progress: 100.00%
+  [██████████████████████████████] 100.00%
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 146 }
+Average RPS: 10.75 Executing: 0.00 True RPS: 10.75
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Green"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.06","totalValue":"2.11"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: b8c75b881cbf0a23e284af5b0557a5cd8c14822b2aa36b7d158a9a2692d7a024
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.05 ETH | Criteria: {"Hoody":"Green"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 2
+[DEBUG][handleBlurCounterbid] Matching traits found: 2
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Green"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.06","totalValue":"2.11"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: b8c75b881cbf0a23e284af5b0557a5cd8c14822b2aa36b7d158a9a2692d7a024
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.05 ETH | Criteria: {"Hoody":"Green"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 2
+[DEBUG][handleBlurCounterbid] Matching traits found: 2
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Green"},"bestPrice":"1.05","totalValue":"1.05"},{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.06","totalValue":"2.11"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: b8c75b881cbf0a23e284af5b0557a5cd8c14822b2aa36b7d158a9a2692d7a024
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.05 ETH | Criteria: {"Hoody":"Green"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 2
+[DEBUG][handleBlurCounterbid] Matching traits found: 2
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 146 }
+Average RPS: 10.75 Executing: 0.00 True RPS: 10.75
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 146 }
+Average RPS: 10.71 Executing: 0.00 True RPS: 10.71
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.07","totalValue":"2.13"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 00ae04c02915b7b4a902f32198a749972d8d97743220a0e9a34527b9e00d574a
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.07 ETH | Criteria: {"Hoody":"Gold"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 1
+[DEBUG][handleBlurCounterbid] Matching traits found: 1
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.07","totalValue":"2.13"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 00ae04c02915b7b4a902f32198a749972d8d97743220a0e9a34527b9e00d574a
+[DEBUG][handleBlurCounterbid] Bid already seen, skipping. Hash: 00ae04c02915b7b4a902f32198a749972d8d97743220a0e9a34527b9e00d574a
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.07","totalValue":"2.13"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 00ae04c02915b7b4a902f32198a749972d8d97743220a0e9a34527b9e00d574a
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.07 ETH | Criteria: {"Hoody":"Gold"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 1
+[DEBUG][handleBlurCounterbid] Matching traits found: 1
+[DEBUG][handleBlurCounterbid] Creating new trait counterbid job: counterbid-688b6fdf71dd192c2eac9949-rektguy-blur-{"Hoody":"Gold"}
+[DEBUG][handleBlurCounterbid] Creating new trait counterbid job: counterbid-688b6fdf71dd192c2eac9949-rektguy-blur-{"Hoody":"Gold"}
+[DEBUG][handleBlurCounterbid] Trait counterbid job created successfully
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid SUCCESS] Task: 688b6fdf71dd192c2eac9949 | Placing bid: 1.08 ETH | Trait: Hoody:Gold | Outbidding: 1.07 ETH
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] COMPLETED successfully in 29ms
+[DEBUG][handleBlurCounterbid] Trait counterbid job created successfully
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid SUCCESS] Task: 688b6fdf71dd192c2eac9949 | Placing bid: 1.08 ETH | Trait: Hoody:Gold | Outbidding: 1.07 ETH
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] COMPLETED successfully in 25ms
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:133MB
+heapTotal:78MB
+heapUsed:45MB
+external:21MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 0
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 0
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 1, DONE: 147 }
+Average RPS: 8.86 Executing: 1.00 True RPS: 8.86
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 148 }
+Average RPS: 5.71 Executing: 0.00 True RPS: 5.71
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.09","totalValue":"3.23"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 5bfc2eb710da71bc08fcb8ac33ca3d0bc393e3de052fc55788523f15586238f1
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.09 ETH | Criteria: {"Hoody":"Gold"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 1
+[DEBUG][handleBlurCounterbid] Matching traits found: 1
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.09","totalValue":"3.23"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 5bfc2eb710da71bc08fcb8ac33ca3d0bc393e3de052fc55788523f15586238f1
+[DEBUG][handleBlurCounterbid] Bid already seen, skipping. Hash: 5bfc2eb710da71bc08fcb8ac33ca3d0bc393e3de052fc55788523f15586238f1
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.09","totalValue":"3.23"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 5bfc2eb710da71bc08fcb8ac33ca3d0bc393e3de052fc55788523f15586238f1
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.09 ETH | Criteria: {"Hoody":"Gold"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 1
+[DEBUG][handleBlurCounterbid] Matching traits found: 1
+[DEBUG][handleBlurCounterbid] Creating new trait counterbid job: counterbid-688b6fdf71dd192c2eac9949-rektguy-blur-{"Hoody":"Gold"}
+[DEBUG][handleBlurCounterbid] Creating new trait counterbid job: counterbid-688b6fdf71dd192c2eac9949-rektguy-blur-{"Hoody":"Gold"}
+[DEBUG][handleBlurCounterbid] Trait counterbid job created successfully
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid SUCCESS] Task: 688b6fdf71dd192c2eac9949 | Placing bid: 1.1 ETH | Trait: Hoody:Gold | Outbidding: 1.09 ETH
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] COMPLETED successfully in 20ms
+[DEBUG][handleBlurCounterbid] Trait counterbid job created successfully
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid SUCCESS] Task: 688b6fdf71dd192c2eac9949 | Placing bid: 1.1 ETH | Trait: Hoody:Gold | Outbidding: 1.09 ETH
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] COMPLETED successfully in 18ms
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 1, DONE: 148 }
+Average RPS: 4.67 Executing: 1.00 True RPS: 4.67
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 150 }
+Average RPS: 2.83 Executing: 0.00 True RPS: 2.83
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.11","totalValue":"3.29"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 77a1bd97055a933c5638fedae5876bbfe95490dad1b04909be297bfd0be5b138
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.11 ETH | Criteria: {"Hoody":"Gold"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 1
+[DEBUG][handleBlurCounterbid] Matching traits found: 1
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.11","totalValue":"3.29"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 77a1bd97055a933c5638fedae5876bbfe95490dad1b04909be297bfd0be5b138
+[DEBUG][handleBlurCounterbid] Bid already seen, skipping. Hash: 77a1bd97055a933c5638fedae5876bbfe95490dad1b04909be297bfd0be5b138
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.11","totalValue":"3.29"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 77a1bd97055a933c5638fedae5876bbfe95490dad1b04909be297bfd0be5b138
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.11 ETH | Criteria: {"Hoody":"Gold"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 1
+[DEBUG][handleBlurCounterbid] Matching traits found: 1
+[DEBUG][handleBlurCounterbid] Creating new trait counterbid job: counterbid-688b6fdf71dd192c2eac9949-rektguy-blur-{"Hoody":"Gold"}
+[DEBUG][handleBlurCounterbid] Creating new trait counterbid job: counterbid-688b6fdf71dd192c2eac9949-rektguy-blur-{"Hoody":"Gold"}
+[DEBUG][handleBlurCounterbid] Trait counterbid job created successfully
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid SUCCESS] Task: 688b6fdf71dd192c2eac9949 | Placing bid: 1.12 ETH | Trait: Hoody:Gold | Outbidding: 1.11 ETH
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] COMPLETED successfully in 13ms
+[DEBUG][handleBlurCounterbid] Trait counterbid job created successfully
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid SUCCESS] Task: 688b6fdf71dd192c2eac9949 | Placing bid: 1.12 ETH | Trait: Hoody:Gold | Outbidding: 1.11 ETH
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] COMPLETED successfully in 10ms
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 1, DONE: 150 }
+Average RPS: 2.20 Executing: 1.00 True RPS: 2.20
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:133MB
+heapTotal:78MB
+heapUsed:44MB
+external:21MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 0
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 0
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 152 }
+Average RPS: 1.60 Executing: 0.00 True RPS: 1.60
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.13","totalValue":"4.46"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 287aab888568292d56b041b63c4a96bead2da23dcec933b668dfc17ddf2e0377
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.13 ETH | Criteria: {"Hoody":"Gold"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 1
+[DEBUG][handleBlurCounterbid] Matching traits found: 1
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.13","totalValue":"4.46"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 287aab888568292d56b041b63c4a96bead2da23dcec933b668dfc17ddf2e0377
+[DEBUG][handleBlurCounterbid] Bid already seen, skipping. Hash: 287aab888568292d56b041b63c4a96bead2da23dcec933b668dfc17ddf2e0377
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.13","totalValue":"4.46"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 287aab888568292d56b041b63c4a96bead2da23dcec933b668dfc17ddf2e0377
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.13 ETH | Criteria: {"Hoody":"Gold"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 1
+[DEBUG][handleBlurCounterbid] Matching traits found: 1
+[DEBUG][handleBlurCounterbid] Creating new trait counterbid job: counterbid-688b6fdf71dd192c2eac9949-rektguy-blur-{"Hoody":"Gold"}
+[DEBUG][handleBlurCounterbid] Creating new trait counterbid job: counterbid-688b6fdf71dd192c2eac9949-rektguy-blur-{"Hoody":"Gold"}
+[DEBUG][handleBlurCounterbid] Trait counterbid job created successfully
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid SUCCESS] Task: 688b6fdf71dd192c2eac9949 | Placing bid: 1.14 ETH | Trait: Hoody:Gold | Outbidding: 1.13 ETH
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] COMPLETED successfully in 18ms
+[DEBUG][handleBlurCounterbid] Trait counterbid job created successfully
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid SUCCESS] Task: 688b6fdf71dd192c2eac9949 | Placing bid: 1.14 ETH | Trait: Hoody:Gold | Outbidding: 1.13 ETH
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] COMPLETED successfully in 14ms
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 1, DONE: 152 }
+Average RPS: 1.60 Executing: 1.00 True RPS: 1.60
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 1, DONE: 153 }
+Average RPS: 1.40 Executing: 1.00 True RPS: 1.40
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.13","totalValue":"3.35"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: a765f1362e75052273d1242a05cf6af045f94deda13af5b4d9f87e9085c5d6dc
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.13 ETH | Criteria: {"Hoody":"Gold"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 1
+[DEBUG][handleBlurCounterbid] Matching traits found: 1
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.13","totalValue":"3.35"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: a765f1362e75052273d1242a05cf6af045f94deda13af5b4d9f87e9085c5d6dc
+[DEBUG][handleBlurCounterbid] Bid already seen, skipping. Hash: a765f1362e75052273d1242a05cf6af045f94deda13af5b4d9f87e9085c5d6dc
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.13","totalValue":"3.35"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: a765f1362e75052273d1242a05cf6af045f94deda13af5b4d9f87e9085c5d6dc
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.13 ETH | Criteria: {"Hoody":"Gold"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 1
+[DEBUG][handleBlurCounterbid] Matching traits found: 1
+[DEBUG][handleBlurCounterbid] Existing job found. Current price: 1.14, Incoming: 1.13e-18
+[DEBUG][handleBlurCounterbid] Incoming price not higher than existing, skipping
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+[DEBUG][handleBlurCounterbid] Existing job found. Current price: 1.14, Incoming: 1.13e-18
+[DEBUG][handleBlurCounterbid] Incoming price not higher than existing, skipping
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 154 }
+Average RPS: 1.33 Executing: 0.00 True RPS: 1.33
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.13","totalValue":"3.38"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 1a6aacf70b675e9d98666b679a62afd633d7f88c9d6a81cb6900ea1f3a3b6496
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.13 ETH | Criteria: {"Hoody":"Gold"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 1
+[DEBUG][handleBlurCounterbid] Matching traits found: 1
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.13","totalValue":"3.38"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 1a6aacf70b675e9d98666b679a62afd633d7f88c9d6a81cb6900ea1f3a3b6496
+[DEBUG][handleBlurCounterbid] Bid already seen, skipping. Hash: 1a6aacf70b675e9d98666b679a62afd633d7f88c9d6a81cb6900ea1f3a3b6496
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.13","totalValue":"3.38"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: 1a6aacf70b675e9d98666b679a62afd633d7f88c9d6a81cb6900ea1f3a3b6496
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.13 ETH | Criteria: {"Hoody":"Gold"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 1
+[DEBUG][handleBlurCounterbid] Matching traits found: 1
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 154 }
+Average RPS: 1.33 Executing: 0.00 True RPS: 1.33
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:133MB
+heapTotal:78MB
+heapUsed:46MB
+external:22MB
+
+📋 Queue Status:
+▶️  QUEUE IS RUNNING
+active: 0
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 0
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 154 }
+Average RPS: 1.40 Executing: 0.00 True RPS: 1.40
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.14","totalValue":"3.39"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: f681164e507dd96c4c688dead54b338b33975a0a1629b150708e74afc41c1a44
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.14 ETH | Criteria: {"Hoody":"Gold"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 1
+[DEBUG][handleBlurCounterbid] Matching traits found: 1
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.14","totalValue":"3.39"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: f681164e507dd96c4c688dead54b338b33975a0a1629b150708e74afc41c1a44
+[DEBUG][handleBlurCounterbid] Bid already seen, skipping. Hash: f681164e507dd96c4c688dead54b338b33975a0a1629b150708e74afc41c1a44
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+[DEBUG][handleBlurCounterbid] START - Task: 688b6fdf71dd192c2eac9949, Collection: rektguy
+[DEBUG][handleBlurCounterbid] Incoming bid data: {"contractAddress":"0xb852c6b5892256c264cc2c888ea462189154d8d7","stats":[{"criteriaType":"TRAIT","criteriaValue":{"Hoody":"Gold"},"bestPrice":"1.14","totalValue":"3.39"}]}
+[DEBUG][handleBlurCounterbid] Bid hash: f681164e507dd96c4c688dead54b338b33975a0a1629b150708e74afc41c1a44
+[DEBUG][handleBlurCounterbid] Added bid to seen cache
+[DEBUG][handleBlurCounterbid] Current task status - Running: true, Selected marketplaces: Blur, Enabled: blur,opensea,magiceden
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[Blur Counterbid] Task: 688b6fdf71dd192c2eac9949 | Collection: rektguy | Type: TRAIT | Incoming: 1.14 ETH | Criteria: {"Hoody":"Gold"}
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...
+[DEBUG][handleBlurCounterbid] Processing trait bid
+[DEBUG][handleBlurCounterbid] Transformed traits: [{"Hoody":"Gold"},{"Hoody":"Tutti Frutti"},{"Hoody":"Invisible"},{"Hoody":"Transparent"},{"Hoody":"Technicolour"},{"Hoody":"Maroon"},{"Hoody":"Red"},{"Hoody":"Marshmello"},{"Hoody":"Green"},{"Hoody":"Purple"}]
+[DEBUG][handleBlurCounterbid] Incoming trait bids count: 1
+[DEBUG][handleBlurCounterbid] Matching traits found: 1
+[DEBUG][handleBlurCounterbid] Cleaned up bid hash from cache in finally block
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 154 }
+Average RPS: 1.50 Executing: 0.00 True RPS: 1.50
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 154 }
+Average RPS: 1.50 Executing: 0.00 True RPS: 1.50
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 154 }
+Average RPS: 1.33 Executing: 0.00 True RPS: 1.33
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 154 }
+Average RPS: 1.33 Executing: 0.00 True RPS: 1.33
+
