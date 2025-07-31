@@ -10182,6 +10182,40 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
   }
 
   try {
+    // Cancel existing orders for this collection before placing new counterbid
+    const identifier = "collection";
+    
+    console.log(YELLOW + `[DEBUG][blurCollectionCounterBid] Checking for existing orders to cancel for ${identifier}` + RESET);
+    
+    const existingOrders = await Order.find({
+      slug: slug,
+      taskId: taskId,
+      marketplace: "blur",
+      identifier: identifier
+    });
+    
+    if (existingOrders.length > 0) {
+      console.log(YELLOW + `[DEBUG][blurCollectionCounterBid] Found ${existingOrders.length} existing orders to cancel` + RESET);
+      
+      const cancelData = existingOrders.map((order) => {
+        const payload = JSON.parse(order.orderHash);
+        return {
+          name: CANCEL_BLUR_BID,
+          data: {
+            privateKey: privateKey,
+            payload: payload,
+            taskId: taskId,
+            orderKey: order._id
+          }
+        };
+      });
+      
+      await queue.addBulk(cancelData);
+      console.log(GREEN + `[DEBUG][blurCollectionCounterBid] Added ${cancelData.length} cancellation jobs to queue` + RESET);
+    } else {
+      console.log(CYAN + `[DEBUG][blurCollectionCounterBid] No existing orders found to cancel for ${identifier}` + RESET);
+    }
+
     await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry);
   } catch (error: any) {
     // Handle rate limit errors
@@ -10208,6 +10242,44 @@ async function blurTraitCounterBid(data: IBlurBidData) {
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur")) return
 
   try {
+    // Cancel existing orders for this trait before placing new counterbid
+    if (traits) {
+      const traitsObj = JSON.parse(traits);
+      const [traitType, traitValue] = Object.entries(traitsObj)[0] as string[];
+      const identifier = `${traitType}:${traitValue}`;
+      
+      console.log(YELLOW + `[DEBUG][blurTraitCounterBid] Checking for existing orders to cancel for ${identifier}` + RESET);
+      
+      const existingOrders = await Order.find({
+        slug: slug,
+        taskId: taskId,
+        marketplace: "blur",
+        identifier: identifier
+      });
+      
+      if (existingOrders.length > 0) {
+        console.log(YELLOW + `[DEBUG][blurTraitCounterBid] Found ${existingOrders.length} existing orders to cancel` + RESET);
+        
+        const cancelData = existingOrders.map((order) => {
+          const payload = JSON.parse(order.orderHash);
+          return {
+            name: CANCEL_BLUR_BID,
+            data: {
+              privateKey: privateKey,
+              payload: payload,
+              taskId: taskId,
+              orderKey: order._id
+            }
+          };
+        });
+        
+        await queue.addBulk(cancelData);
+        console.log(GREEN + `[DEBUG][blurTraitCounterBid] Added ${cancelData.length} cancellation jobs to queue` + RESET);
+      } else {
+        console.log(CYAN + `[DEBUG][blurTraitCounterBid] No existing orders found to cancel for ${identifier}` + RESET);
+      }
+    }
+
     await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry, traits);
   } catch (error: any) {
     // Handle rate limit errors
