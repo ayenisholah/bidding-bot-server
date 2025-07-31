@@ -8,7 +8,7 @@ export class AtomicBidCache {
   private keyPrefix: string;
   private ttl: number;
 
-  constructor(keyPrefix = 'seenBids:', ttl = 30) {
+  constructor(keyPrefix = '{seenBids}:', ttl = 30) {
     this.keyPrefix = keyPrefix;
     this.ttl = ttl; // TTL in seconds
   }
@@ -30,7 +30,7 @@ export class AtomicBidCache {
       
       // SET NX EX - Set if not exists with expiration
       // Returns 'OK' if set was successful, null if key already exists
-      const result = await redis.set(key, Date.now().toString(), 'NX', 'EX', this.ttl);
+      const result = await redis.set(key, Date.now().toString(), 'PX', this.ttl * 1000, 'NX');
       
       return result === 'OK';
     } catch (error) {
@@ -122,4 +122,4 @@ export class AtomicBidCache {
 }
 
 // Export a singleton instance
-export const atomicBidCache = new AtomicBidCache('seenBids:', 30); // 30 second TTL
+export const atomicBidCache = new AtomicBidCache('{seenBids}:', 30); // 30 second TTL
