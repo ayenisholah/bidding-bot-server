@@ -763,20 +763,20 @@ function getActiveTaskWithIdByIndex(index: number): { id: string, task: ITask } 
 // Authorized queue clear function - centralizes all queue obliteration
 async function authorizedQueueClear(reason: 'startup' | 'no-password' | 'downtime' | 'network-loss') {
   console.log(YELLOW + `[authorizedQueueClear] Clearing queue - Reason: ${reason}` + RESET);
-  
+
   try {
     // Obliterate the queue
     await queue.obliterate({ force: true });
     console.log(GREEN + `[authorizedQueueClear] Queue cleared successfully` + RESET);
-    
+
     // Wait 5 seconds
     console.log(YELLOW + `[authorizedQueueClear] Waiting 5 seconds before restarting scheduled loop...` + RESET);
     await new Promise(resolve => setTimeout(resolve, 5000));
-    
+
     // Call runScheduledLoop
     console.log(GREEN + `[authorizedQueueClear] Starting scheduled loop...` + RESET);
     await runScheduledLoop();
-    
+
   } catch (error) {
     console.error(RED + `[authorizedQueueClear] Error during queue clear: ${error}` + RESET);
     throw error;
@@ -1049,7 +1049,7 @@ async function pauseQueueAndWorkers() {
 
     // Actually remove all jobs from the queue for security
     console.log(YELLOW + 'Note: All jobs will be removed from the queue for security.' + RESET);
-    
+
     // Use authorized queue clear
     await authorizedQueueClear('no-password');
 
@@ -8408,7 +8408,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         console.log(GREEN + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
         console.log(GREEN + `[Blur Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${Number(offerPrice) / 1e18} ETH | Trait: ${identifier} | Outbidding: ${incomingPrice} ETH` + RESET);
         console.log(GREEN + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-        
+
         // Track completion time
         const completionTime = Date.now() - startTime;
         console.log(CYAN + `[DEBUG][handleBlurCounterbid] COMPLETED successfully in ${completionTime}ms` + RESET);
@@ -10184,19 +10184,21 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
   try {
     // Cancel existing orders for this collection before placing new counterbid
     const identifier = "collection";
-    
+
+
+    await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry);
     console.log(YELLOW + `[DEBUG][blurCollectionCounterBid] Checking for existing orders to cancel for ${identifier}` + RESET);
-    
+
     const existingOrders = await Order.find({
       slug: slug,
       taskId: taskId,
       marketplace: "blur",
       identifier: identifier
     });
-    
+
     if (existingOrders.length > 0) {
       console.log(YELLOW + `[DEBUG][blurCollectionCounterBid] Found ${existingOrders.length} existing orders to cancel` + RESET);
-      
+
       const cancelData = existingOrders.map((order) => {
         const payload = JSON.parse(order.orderHash);
         return {
@@ -10209,14 +10211,12 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
           }
         };
       });
-      
+
       await queue.addBulk(cancelData);
       console.log(GREEN + `[DEBUG][blurCollectionCounterBid] Added ${cancelData.length} cancellation jobs to queue` + RESET);
     } else {
       console.log(CYAN + `[DEBUG][blurCollectionCounterBid] No existing orders found to cancel for ${identifier}` + RESET);
     }
-
-    await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry);
   } catch (error: any) {
     // Handle rate limit errors
     if (error?.code === 'RATE_LIMITED') {
@@ -10242,24 +10242,26 @@ async function blurTraitCounterBid(data: IBlurBidData) {
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur")) return
 
   try {
+
+    await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry, traits);
     // Cancel existing orders for this trait before placing new counterbid
     if (traits) {
       const traitsObj = JSON.parse(traits);
       const [traitType, traitValue] = Object.entries(traitsObj)[0] as string[];
       const identifier = `${traitType}:${traitValue}`;
-      
+
       console.log(YELLOW + `[DEBUG][blurTraitCounterBid] Checking for existing orders to cancel for ${identifier}` + RESET);
-      
+
       const existingOrders = await Order.find({
         slug: slug,
         taskId: taskId,
         marketplace: "blur",
         identifier: identifier
       });
-      
+
       if (existingOrders.length > 0) {
         console.log(YELLOW + `[DEBUG][blurTraitCounterBid] Found ${existingOrders.length} existing orders to cancel` + RESET);
-        
+
         const cancelData = existingOrders.map((order) => {
           const payload = JSON.parse(order.orderHash);
           return {
@@ -10272,15 +10274,13 @@ async function blurTraitCounterBid(data: IBlurBidData) {
             }
           };
         });
-        
+
         await queue.addBulk(cancelData);
         console.log(GREEN + `[DEBUG][blurTraitCounterBid] Added ${cancelData.length} cancellation jobs to queue` + RESET);
       } else {
         console.log(CYAN + `[DEBUG][blurTraitCounterBid] No existing orders found to cancel for ${identifier}` + RESET);
       }
     }
-
-    await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry, traits);
   } catch (error: any) {
     // Handle rate limit errors
     if (error?.code === 'RATE_LIMITED') {
