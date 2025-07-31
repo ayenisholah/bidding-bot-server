@@ -88,14 +88,6 @@ activeIntervals.clear();
 
 ### Bid Cancellation Operations
 
-**Current State**: Sequential database and API operations
-- **Location**: Lines 10963-10970 in `bulkCancelOpenseaBid`
-```javascript
-await Promise.all([
-  prisma.order.deleteMany(...),
-  cancelOrder(...)
-])
-```
 **Status**: Already optimized with Promise.all
 
 ### Collection Bid Processing

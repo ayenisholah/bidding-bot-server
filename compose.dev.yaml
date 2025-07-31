@@ -262,47 +262,6 @@ services:
     networks:
       - redis-cluster
 
-  postgres:
-    image: "postgres:16-alpine"
-    container_name: "postgres_container"
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_USER: bidding_bot
-      POSTGRES_PASSWORD: bidding_bot_password
-      POSTGRES_DB: bidding_bot_db
-      # Performance tuning for development (lighter than production)
-      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
-    command: >
-      postgres
-      -c shared_buffers=256MB
-      -c effective_cache_size=1GB
-      -c maintenance_work_mem=64MB
-      -c checkpoint_completion_target=0.9
-      -c wal_buffers=8MB
-      -c default_statistics_target=100
-      -c random_page_cost=1.1
-      -c effective_io_concurrency=200
-      -c work_mem=4MB
-      -c min_wal_size=512MB
-      -c max_wal_size=2GB
-      -c max_worker_processes=4
-      -c max_parallel_workers_per_gather=2
-      -c max_parallel_workers=4
-      -c max_connections=200
-      -c shared_preload_libraries='pg_stat_statements'
-      -c log_min_duration_statement=500
-      -c log_line_prefix='%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - redis-cluster
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bidding_bot"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
 volumes:
   redis_data_1:
   redis_data_2:
@@ -311,7 +270,6 @@ volumes:
   redis_data_5:
   redis_data_6:
   mongodb_data:
-  postgres_data:
 
 networks:
   redis-cluster:

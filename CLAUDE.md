@@ -19,7 +19,7 @@ npm run dev  # Starts Redis, resets DB, runs migrations, and starts nodemon
 
 ### Building for Production
 ```bash
-npm run build  # Cleans DB, runs migrations, generates Prisma client, and compiles TypeScript
+npm run build  # Cleans DB, runs migrations, and compiles TypeScript
 npm run start  # Runs production server with memory optimizations
 ```
 
@@ -56,15 +56,21 @@ npm test  # Runs test.ts with nodemon
 
 ### Database Schema
 
-**PostgreSQL (Prisma)**:
+**MongoDB Models** (Mongoose):
 - **Order**: Tracks NFT orders with marketplace, task ID, collection, price, and timestamps
-- **Wallet**: Manages wallet addresses and marketplace-specific approval states
-
-**MongoDB Models**:
+- **Approval**: Manages wallet addresses and marketplace-specific approval states (replaces Wallet)
 - **Task**: Bidding configurations with trait filtering and marketplace selection
 - **Listing**: NFT listing configurations with marketplace-specific pricing and expiration
-- **User**: Authentication and user management
+- **User**: Authentication and user management  
 - **Logs**: Bid history and activity tracking
+
+### High-Performance MongoDB Configuration
+
+The server is optimized for 100+ queries per second with:
+- **Connection Pool**: 50 max connections, 5 minimum warm connections
+- **Write Optimization**: `w:1, j:false` for fast writes
+- **Connection Monitoring**: Real-time pool stats and reconnection handling
+- **Configurable via ENV**: `MONGO_MAX_POOL_SIZE`, `MONGO_MIN_POOL_SIZE`
 
 ## Key Features
 

@@ -42,10 +42,8 @@ if (validateBidCountInterval) {
 
 #### Key Optimizations:
 1. **Early Exit**: Skip processing when no tasks are active
-2. **Batch Queries**: Use Prisma's `groupBy` to get all counts in one query
 3. **Parallel Execution**: Process counts and expiring orders simultaneously
 4. **Batch Operations**: Delete all expiring orders in one operation
-5. **Improved Error Handling**: Better Prisma error handling with proper logging
 
 ## Performance Improvements
 

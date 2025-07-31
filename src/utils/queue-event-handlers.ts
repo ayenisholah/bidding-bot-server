@@ -5,7 +5,7 @@ import { Wallet } from '../models/wallet.model';
 import { decryptPrivateKey } from './crypto';
 import { calculateBidPrice } from '../functions/bidding';
 import { cancelAllRelatedBids, cancelRemovedTraitBids, cancelRemovedTokenBids } from '../functions/cancellation';
-import { prisma } from './prisma';
+import Order from '../models/order.model';
 import { logger, ErrorCategory } from './logger';
 import { getExpiry } from '../functions/task';
 
@@ -316,14 +316,13 @@ export class QueueEventHandlerManager {
   }
 
   private async completeCancellation(taskId: string, task: ITask, marketplace?: string): Promise<void> {
-    const orders = await prisma.order.findMany({
-      where: marketplace ? {
-        taskId: taskId,
-        marketplace: marketplace
-      } : {
-        taskId: taskId
-      }
-    });
+    const whereQuery = marketplace ? {
+      taskId: taskId,
+      marketplace: marketplace
+    } : {
+      taskId: taskId
+    };
+    const orders = await Order.find(whereQuery);
 
     if (orders.length > 0) {
       const wallet = await Wallet.findById(task.walletId);
@@ -341,9 +340,9 @@ export class QueueEventHandlerManager {
 
   private async calculateCombinedCancellationPercentage(taskId: string): Promise<number> {
     const [openSeaCount, magicEdenCount, blurCount] = await Promise.all([
-      prisma.order.count({ where: { taskId, marketplace: 'opensea' } }),
-      prisma.order.count({ where: { taskId, marketplace: 'magiceden' } }),
-      prisma.order.count({ where: { taskId, marketplace: 'blur' } })
+      Order.countDocuments({ taskId, marketplace: 'opensea' }),
+      Order.countDocuments({ taskId, marketplace: 'magiceden' }),
+      Order.countDocuments({ taskId, marketplace: 'blur' })
     ]);
 
     const totalOrderCount = openSeaCount + magicEdenCount + blurCount;

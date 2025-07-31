@@ -5,7 +5,7 @@ import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
 import { config } from "dotenv";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, trackBidRate } from "../..";
 import { DistributedLockManager } from '../../utils/lock';
-import prisma from '../../utils/prisma';
+import Order from '../../models/order.model';
 import { withRetry } from '../../utils/db-retry';
 import redisClient from '../../utils/redis';
 import axios from "axios";
@@ -158,7 +158,7 @@ export async function cleanupMagicEden() {
 
     try {
       await withRetry(async () => {
-        return await prisma.order.createMany({ data: batch });
+        return await Order.insertMany(batch);
       });
     } catch (error) {
       await logger.logDatabaseError('Failed to create orders during cleanup', {
@@ -560,7 +560,7 @@ async function sendSignedOrderData(
           if (batch.length > 0) {
             try {
               await withRetry(async () => {
-                return await prisma.order.createMany({ data: batch });
+                return await Order.insertMany(batch);
               });
             } catch (error) {
               // Log error but don't fail the bid

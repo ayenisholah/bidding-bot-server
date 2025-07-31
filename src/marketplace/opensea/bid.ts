@@ -6,7 +6,7 @@ import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
 import { activeTasks, API_KEY, BLUE, decrementBidCount, pQueue, trackBidRate } from "../..";
 import { config } from "dotenv";
 import axios from "axios";
-import prisma from '../../utils/prisma';
+import Order from '../../models/order.model';
 import { withRetry } from '../../utils/db-retry'
 import { USDC, WETH } from "../../utils/currencies";
 import { MagicedenCollectionResponse, MagicEdenTraitOfferResponse } from "../magiceden";
@@ -152,7 +152,7 @@ function extractOpenseaErrorMessage(error: any): string {
   return error?.message || String(error);
 }
 
-// Using centralized prisma instance with connection pooling
+// Using Mongoose for database operations
 
 config()
 
@@ -525,17 +525,14 @@ export async function bidOnOpensea(
       const sanitizedExpiry = expiry > 900 ? expiry : 900
       if (offerPrice && itemOrderHash && sanitizedExpiry && slug && taskId && asset.tokenId) {
         await withRetry(async () => {
-          await prisma.order.create({
-            data: {
-              slug: slug,
-              orderHash: itemOrderHash,
-              expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
-              offerPrice: offerPrice.toString(),
-              identifier: asset.tokenId.toString(),
-              taskId: taskId,
-              marketplace: 'opensea'
-            }
-
+          await Order.create({
+            slug: slug,
+            orderHash: itemOrderHash,
+            expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
+            offerPrice: offerPrice.toString(),
+            identifier: asset.tokenId.toString(),
+            taskId: taskId,
+            marketplace: 'opensea'
           });
         });
       }
@@ -783,16 +780,14 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
 
   if (offerPrice && order_hash && sanitizedExpiry && slug && taskId && identifier) {
     await withRetry(async () => {
-      await prisma.order.create({
-        data: {
-          slug: slug,
-          orderHash: order_hash,
-          expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
-          offerPrice: offerPrice.toString(),
-          identifier: identifier,
-          taskId: taskId,
-          marketplace: 'opensea'
-        }
+      await Order.create({
+        slug: slug,
+        orderHash: order_hash,
+        expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
+        offerPrice: offerPrice.toString(),
+        identifier: identifier,
+        taskId: taskId,
+        marketplace: 'opensea'
       });
     });
   }

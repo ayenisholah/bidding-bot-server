@@ -427,11 +427,11 @@ export class EnhancedTaskStateManager {
    */
   private async calculateWeightedCancellationPercentage(taskId: string): Promise<number> {
     // Get actual order counts from database
-    const { prisma } = await import('./prisma');
+    const Order = await import('../models/order.model');
     const [openSeaCount, magicEdenCount, blurCount] = await Promise.all([
-      prisma.order.count({ where: { taskId, marketplace: 'opensea' } }),
-      prisma.order.count({ where: { taskId, marketplace: 'magiceden' } }),
-      prisma.order.count({ where: { taskId, marketplace: 'blur' } })
+      Order.default.countDocuments({ taskId, marketplace: 'opensea' }),
+      Order.default.countDocuments({ taskId, marketplace: 'magiceden' }),
+      Order.default.countDocuments({ taskId, marketplace: 'blur' })
     ]);
 
     const totalOrderCount = openSeaCount + magicEdenCount + blurCount;

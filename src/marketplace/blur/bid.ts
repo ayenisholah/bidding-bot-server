@@ -3,7 +3,7 @@ import { limiter, isTaskBlacklisted } from "../../init";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, pQueue, RESET, trackBidRate } from "../..";
 import { config } from "dotenv";
 import { DistributedLockManager } from "../../utils/lock";
-import prisma from '../../utils/prisma';
+import Order from '../../models/order.model';
 import { withRetry } from '../../utils/db-retry';
 import redisClient from '../../utils/redis';
 import axios from "axios";
@@ -494,16 +494,14 @@ async function submitBidToBlur(
       }
 
       await withRetry(async () => {
-        return await prisma.order.create({
-          data: {
-            slug: slug,
-            orderHash: JSON.stringify(cancelPayload),
-            expiresAt: new Date(Date.now() + expiry * 1000),
-            offerPrice: offer_price.toString(),
-            identifier: identifier,
-            taskId: taskId,
-            marketplace: "blur"
-          }
+        return await Order.create({
+          slug: slug,
+          orderHash: JSON.stringify(cancelPayload),
+          expiresAt: new Date(Date.now() + expiry * 1000),
+          offerPrice: offer_price.toString(),
+          identifier: identifier,
+          taskId: taskId,
+          marketplace: "blur"
         });
       })
       trackBidRate("blur", taskId)

@@ -1,6 +1,3 @@
-import { Prisma } from '@prisma/client';
-import prisma from './prisma';
-
 interface RetryOptions {
   maxRetries?: number;
   initialDelay?: number;
@@ -16,8 +13,8 @@ const DEFAULT_RETRY_OPTIONS: Required<RetryOptions> = {
 };
 
 /**
- * Executes a Prisma operation with retry logic for connection pool timeouts
- * @param operation The Prisma operation to execute
+ * Executes a database operation with retry logic for connection issues
+ * @param operation The database operation to execute
  * @param options Retry configuration options
  * @returns The result of the operation
  */
@@ -35,19 +32,17 @@ export async function withRetry<T>(
     } catch (error) {
       lastError = error as Error;
 
-      // Check if it's a connection pool timeout error
-      const isConnectionPoolError = 
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.message.includes('Timed out fetching a new connection from the connection pool');
-
-      // Also retry on connection errors
+      // Check if it's a connection-related error
       const isConnectionError = 
         error instanceof Error && 
         (error.message.includes('Connection terminated') ||
          error.message.includes('Connection lost') ||
-         error.message.includes('ECONNREFUSED'));
+         error.message.includes('ECONNREFUSED') ||
+         error.message.includes('connection') ||
+         error.message.includes('timeout') ||
+         error.message.includes('ETIMEDOUT'));
 
-      if (!isConnectionPoolError && !isConnectionError) {
+      if (!isConnectionError) {
         throw error; // Don't retry non-connection errors
       }
 
@@ -68,23 +63,4 @@ export async function withRetry<T>(
   }
 
   throw lastError;
-}
-
-/**
- * Wraps Prisma transaction with retry logic
- * @param transaction The transaction function
- * @param options Retry configuration options
- * @returns The result of the transaction
- */
-export async function withTransactionRetry<T>(
-  transaction: (tx: Prisma.TransactionClient) => Promise<T>,
-  options: RetryOptions = {}
-): Promise<T> {
-  return withRetry(
-    () => prisma.$transaction(transaction, {
-      maxWait: 10000, // Maximum time to wait for a transaction slot
-      timeout: 30000, // Maximum time for the transaction to complete
-    }),
-    options
-  );
 }

@@ -1,10 +1,9 @@
 import { Contract, ethers, Wallet as Web3Wallet, MaxUint256 } from "ethers";
-import { PrismaClient } from '@prisma/client';
+import Approval from '../models/approval.model';
 import redisClient from "../utils/redis";
 import { ERC20_MIN_ABI } from "../constants";
 import { WETH } from "../utils/currencies";
 
-const prisma = new PrismaClient();
 
 // Cache TTL: 7 days for marketplace approvals (they rarely change)
 const MARKETPLACE_APPROVAL_CACHE_TTL = 7 * 24 * 60 * 60; // 7 days in seconds
@@ -77,9 +76,7 @@ export async function approveMarketplaceWithCache(
     }
     
     // Check database for existing approval
-    const existingApproval = await prisma.wallet.findUnique({ 
-      where: { address, currency } 
-    });
+    const existingApproval = await Approval.findOne({ address, currency });
     
     // Return early if marketplace is already approved in DB
     const SEAPORT = '0x1e0049783f008a0085193e00003d00cd54003c71';
@@ -131,15 +128,14 @@ export async function approveMarketplaceWithCache(
             ? { openseaApproval: true }
             : { magicedenApproval: true };
           
-          await prisma.wallet.upsert({
-            where: { address },
-            update: updateData,
-            create: {
-              address,
+          await Approval.findOneAndUpdate(
+            { address },
+            {
               currency,
               ...updateData
-            }
-          });
+            },
+            { upsert: true, new: true }
+          );
           
           // Cache in Redis
           if (redis && redisClient.isReady()) {
@@ -172,15 +168,14 @@ export async function approveMarketplaceWithCache(
           ? { openseaApproval: true }
           : { magicedenApproval: true };
         
-        await prisma.wallet.upsert({
-          where: { address },
-          update: updateData,
-          create: {
-            address,
+        await Approval.findOneAndUpdate(
+          { address },
+          {
             currency,
             ...updateData
-          }
-        });
+          },
+          { upsert: true, new: true }
+        );
         
         // Cache in Redis
         if (redis && redisClient.isReady()) {
@@ -280,11 +275,9 @@ export async function checkMultipleMarketplaceApprovals(
   // Check database for uncached wallets
   if (uncachedWallets.length > 0) {
     const addresses = uncachedWallets.map(w => w.address.toLowerCase());
-    const dbApprovals = await prisma.wallet.findMany({
-      where: {
-        address: { in: addresses },
-        currency
-      }
+    const dbApprovals = await Approval.find({
+      address: { $in: addresses },
+      currency
     });
     
     const SEAPORT = '0x1e0049783f008a0085193e00003d00cd54003c71';

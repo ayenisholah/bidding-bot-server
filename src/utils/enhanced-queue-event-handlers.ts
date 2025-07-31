@@ -6,7 +6,7 @@ import { Wallet } from '../models/wallet.model';
 import { decryptPrivateKey } from './crypto';
 import { calculateBidPrice } from '../functions/bidding';
 import { cancelAllRelatedBids, cancelRemovedTraitBids, cancelRemovedTokenBids } from '../functions/cancellation';
-import { prisma } from './prisma';
+import Order from '../models/order.model';
 import { logger, ErrorCategory } from './logger';
 import { getExpiry } from '../functions/task';
 
@@ -422,7 +422,7 @@ export class EnhancedQueueEventHandlerManager {
       taskId: taskId
     };
 
-    const orders = await prisma.order.findMany({ where: whereClause });
+    const orders = await Order.find(whereClause);
 
     if (orders.length > 0) {
       const wallet = await Wallet.findById(task.walletId);

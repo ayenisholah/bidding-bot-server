@@ -78,7 +78,6 @@ export default [
 		ignores: [
 			"dist/**",
 			"node_modules/**",
-			"prisma/**",
 			"*.js",
 			"!eslint.config.js",
 			"test.ts",

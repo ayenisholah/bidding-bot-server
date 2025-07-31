@@ -5,12 +5,7 @@
 *.db
 *.db-journal
 
-prisma/dev.db
-prisma/dev.db-journal
-prisma/migration.sql
-prisma/migrations/
-prisma/*.db
-prisma/*.db-journal
+
 
 ### Node ###
 # Logs
