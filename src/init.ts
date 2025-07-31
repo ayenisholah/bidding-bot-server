@@ -17,7 +17,7 @@ const rpsHistory: number[] = [];
 const RPS_HISTORY_SECONDS = 10; // Keep a 10-second history for averaging
 
 const retryConfig: IAxiosRetryConfig = {
-  retries: 0, // Disable retries
+  retries: 3, // Enable 3 retries
   retryDelay: (retryCount, error) => {
     limiter.schedule(() => Promise.resolve());
     if (error.response && (error.response.status >= 400 && error.response.status < 600)) {
@@ -25,9 +25,16 @@ const retryConfig: IAxiosRetryConfig = {
     }
     return axiosRetry.exponentialDelay(retryCount);
   },
-  retryCondition: async (_error: any) => {
-    // Retries are disabled
-    return false;
+  retryCondition: async (error: any) => {
+    // Retry on network errors and 5xx status codes
+    if (!error.response) {
+      // Network error (no response)
+      return true;
+    }
+    
+    // Retry on server errors (5xx) and specific client errors
+    const status = error.response.status;
+    return status >= 500 || status === 429 || status === 408;
   },
 };
 

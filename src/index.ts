@@ -261,6 +261,9 @@ const blurLimiter = new Bottleneck({
 // Initialize worker later in startServer function
 let workers: Worker[] = [];
 
+// Track all BullMQ connections for proper cleanup
+let bullMQConnections: any[] = [];
+
 const taskTimeouts = new Map<string, NodeJS.Timeout>();
 const taskCountdownTimers = new Map<string, NodeJS.Timeout>();
 // Track consecutive no-progress calls for infinite loop prevention
@@ -1057,12 +1060,43 @@ async function startServer() {
     }
 
 
-    // Create BullMQ connections
-    const queueConnection = await createBullMQConnection();
-    // Initialize queue options
+    // Create separate BullMQ connections for each component
+    console.log('Creating separate Redis connections for BullMQ components...');
+    
+    let mainQueueConnection: any;
+    let mainQueueEventsConnection: any;
+    let blurQueueConnection: any;
+    let blurQueueEventsConnection: any;
+    
+    try {
+      // Main queue connection
+      mainQueueConnection = await createBullMQConnection();
+      bullMQConnections.push(mainQueueConnection);
+      console.log('Created main queue connection');
+      
+      // Main queue events connection
+      mainQueueEventsConnection = await createBullMQConnection();
+      bullMQConnections.push(mainQueueEventsConnection);
+      console.log('Created main queue events connection');
+      
+      // Blur queue connection
+      blurQueueConnection = await createBullMQConnection();
+      bullMQConnections.push(blurQueueConnection);
+      console.log('Created blur queue connection');
+      
+      // Blur queue events connection
+      blurQueueEventsConnection = await createBullMQConnection();
+      bullMQConnections.push(blurQueueEventsConnection);
+      console.log('Created blur queue events connection');
+    } catch (error) {
+      console.error('Failed to create BullMQ connections:', error);
+      throw new Error('Failed to initialize BullMQ connections');
+    }
+    
+    // Initialize queue options with main queue connection
     QUEUE_OPTIONS = {
       prefix: '{bull}',
-      connection: queueConnection,
+      connection: mainQueueConnection,
       defaultJobOptions: {
         removeOnComplete: true,
         removeOnFail: true,
@@ -1073,16 +1107,15 @@ async function startServer() {
       }
     };
 
-    // Initialize queue and events
+    // Initialize queue and events with their own connections
     queue = new Queue(QUEUE_NAME, QUEUE_OPTIONS);
-    queueEvents = new QueueEvents(QUEUE_NAME, { connection: queueConnection, prefix: '{bull}' });
-    blurQueueEvents = new QueueEvents(BLUR_BIDDING_QUEUE, { connection: queueConnection, prefix: '{bull}' });
+    queueEvents = new QueueEvents(QUEUE_NAME, { connection: mainQueueEventsConnection, prefix: '{bull}' });
+    blurQueueEvents = new QueueEvents(BLUR_BIDDING_QUEUE, { connection: blurQueueEventsConnection, prefix: '{bull}' });
 
-
-    // Initialize Blur queue with same connection as main queue
+    // Initialize Blur queue with its own connection
     blurQueue = new Queue(BLUR_BIDDING_QUEUE, {
       prefix: '{bull}',
-      connection: queueConnection,
+      connection: blurQueueConnection,
       defaultJobOptions: {
         removeOnComplete: true,
         removeOnFail: true,
@@ -1098,12 +1131,13 @@ async function startServer() {
     const concurrencyPerWorker = Number(RATE_LIMIT) / WORKER_COUNT;
 
     for (let i = 0; i < WORKER_COUNT; i++) {
+      // Create a separate connection for each worker
       const workerConnection = await createBullMQConnection();
+      bullMQConnections.push(workerConnection);
 
       const worker = new Worker(
         QUEUE_NAME,
         async (job) => {
-          const startTime = Date.now();
           const jobTimeout = 15000; // 15 seconds timeout for all jobs
           const abortController = new AbortController();
 
@@ -1140,8 +1174,10 @@ async function startServer() {
       workers.push(worker);
     }
 
-    // Create Blur worker with rate limiting
+    // Create Blur worker with its own connection and rate limiting
     const blurWorkerConnection = await createBullMQConnection();
+    bullMQConnections.push(blurWorkerConnection);
+    
     const blurWorker = new Worker(
       BLUR_BIDDING_QUEUE,
       async (job) => processBlurJob(job),
@@ -1158,6 +1194,8 @@ async function startServer() {
 
 
     workers.push(blurWorker);
+    
+    console.log(`Created ${bullMQConnections.length} separate Redis connections for BullMQ components`);
 
     // Add process-level error handler for uncaught BullMQ errors
     process.on('unhandledRejection', async (reason, promise) => {
@@ -1370,6 +1408,17 @@ process.on('SIGINT', async () => {
     console.log('WebSocket disconnected');
   }
 
+  // Close all BullMQ connections
+  console.log('Closing BullMQ connections...');
+  for (const connection of bullMQConnections) {
+    try {
+      await connection.quit();
+    } catch (error) {
+      console.error('Error closing connection:', error);
+    }
+  }
+  console.log('All BullMQ connections closed');
+
   // Final cleanup before exit
   seenOrderHashes.clear();
   seenBids.clear();
@@ -1404,6 +1453,17 @@ process.on('SIGTERM', async () => {
     wsManager.disconnect();
     console.log('WebSocket disconnected');
   }
+
+  // Close all BullMQ connections
+  console.log('Closing BullMQ connections...');
+  for (const connection of bullMQConnections) {
+    try {
+      await connection.quit();
+    } catch (error) {
+      console.error('Error closing connection:', error);
+    }
+  }
+  console.log('All BullMQ connections closed');
 
   seenOrderHashes.clear();
   seenBids.clear();
@@ -6608,8 +6668,6 @@ function logConnectionStats() {
   console.log(`Total Connections: ${connectionMetrics.totalConnections}`);
   console.log(`Total Disconnections: ${connectionMetrics.totalDisconnections}`);
   console.log(`Average Connection Duration: ${formatDuration(connectionMetrics.averageConnectionDuration)}`);
-  console.log(`Longest Connection: ${formatDuration(connectionMetrics.longestConnection)}`);
-  console.log(`Shortest Connection: ${connectionMetrics.shortestConnection === Infinity ? '0s' : formatDuration(connectionMetrics.shortestConnection)}`);
 
   if (connectionMetrics.connectionStartTime) {
     const currentDuration = Date.now() - connectionMetrics.connectionStartTime;
