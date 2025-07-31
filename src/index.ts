@@ -840,7 +840,7 @@ async function handleConnectivityRestored() {
   // Always reconnect WebSocket
   if (wsManager) {
     console.log('Reconnecting WebSocket...');
-    // await connectWebSocket();
+    await connectWebSocket();
   }
 
   // Always reinitialize listing scheduler
@@ -1184,6 +1184,7 @@ async function startServer() {
       {
         prefix: '{bull}',
         connection: blurWorkerConnection,
+        concurrency: concurrencyPerWorker,
         limiter: {
           max: 40,
           duration: 10000
@@ -1218,20 +1219,20 @@ async function startServer() {
         serverSelectionTimeoutMS: 30000,
         connectTimeoutMS: 30000,
         socketTimeoutMS: 45000,
-        
+
         // Connection pool optimization for high throughput (100+ QPS)
         maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE) || 50, // Increased from 10
         minPoolSize: Number(process.env.MONGO_MIN_POOL_SIZE) || 5,  // Maintain warm connections
         maxIdleTimeMS: 30000, // Close idle connections after 30s
-        
+
         // Performance optimizations
         retryWrites: true,
         family: 4, // Use IPv4, skip trying IPv6
         heartbeatFrequencyMS: 10000, // Reduced from 5000 to default for less network traffic
-        
+
         // Buffer settings for immediate error feedback
         bufferCommands: false,  // Disable command buffering for immediate errors
-        
+
         // Write concern optimization for performance
         writeConcern: {
           w: 1,      // Wait for acknowledgment from primary only
@@ -1239,20 +1240,20 @@ async function startServer() {
         }
       });
       console.log('Connected to MongoDB successfully');
-      
+
       // Add connection pool monitoring for high-throughput operations
       mongoose.connection.on('disconnected', () => {
         console.warn('🔴 MongoDB disconnected');
       });
-      
+
       mongoose.connection.on('reconnected', () => {
         console.log('🟢 MongoDB reconnected');
       });
-      
+
       mongoose.connection.on('error', (err) => {
         console.error('🔴 MongoDB connection error:', err);
       });
-      
+
       // Log connection pool stats in development
       if (process.env.NODE_ENV === 'development') {
         setInterval(() => {
@@ -1358,7 +1359,7 @@ async function startServer() {
 
     // Connect WebSocket before initializing listing scheduler
     try {
-      // await connectWebSocket();
+      await connectWebSocket();
       await logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket connected to marketplace proxy', {
         url: MARKETPLACE_WS_URL
       });
@@ -1893,19 +1894,18 @@ async function checkTaskCompletionAndScheduleNext(taskId: string) {
   try {
     console.log(MAGENTA + `[DEBUG][checkTaskCompletionAndScheduleNext] Setting status to COMPLETED` + RESET);
     taskStatus[taskId].status = 'COMPLETED';
+    // Add 1-second delay before transitioning to SCHEDULED
+    await new Promise(resolve => setTimeout(resolve, 1000));
 
     // Handle task cleanup
     await handleTaskCleanup(taskId);
 
-    // Clear removal tracking
+    // Clear removal trackingCON
     delete traitsToRemove[taskId];
     delete removedTokens[taskId];
 
     console.log(MAGENTA + `[DEBUG][checkTaskCompletionAndScheduleNext] About to call scheduleNextLoop` + RESET);
     await scheduleNextLoop(taskId);
-
-    // Add 1-second delay before transitioning to SCHEDULED
-    await new Promise(resolve => setTimeout(resolve, 1000));
 
     // Mark as scheduled
     taskStatus[taskId].status = 'SCHEDULED';
