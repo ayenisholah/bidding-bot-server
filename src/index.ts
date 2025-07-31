@@ -54,7 +54,6 @@ import { collectionCache } from "./utils/collection-cache";
 import { taskCircuitBreaker } from "./utils/task-circuit-breaker";
 import { blurRateLimiter } from "./utils/blur-rate-limiter";
 import { approvalCache } from "./utils/approval-cache";
-import { atomicBidCache } from "./utils/atomic-bid-cache";
 
 const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
 
@@ -1126,6 +1125,7 @@ async function startServer() {
       defaultJobOptions: {
         removeOnComplete: true,
         removeOnFail: true,
+        attempts: 3,
         backoff: {
           type: 'exponential',
           delay: 2000
@@ -1145,6 +1145,7 @@ async function startServer() {
       defaultJobOptions: {
         removeOnComplete: true,
         removeOnFail: true,
+        attempts: 3,
         backoff: {
           type: 'exponential',
           delay: 2000
@@ -2337,11 +2338,11 @@ const blurWalletRateLimiter = new Map<string, { count: number; resetTime: number
 async function processBlurJob(job: Job) {
   try {
     // Extract privateKey from job data
-    const privateKey = job.data.privateKey || job.data.address;
+    const address = job.data.address;
 
     // Implement rate limiting: 40 jobs per 10 seconds per wallet
     const now = Date.now();
-    const limiterKey = privateKey;
+    const limiterKey = address;
     const limiterData = blurWalletRateLimiter.get(limiterKey) || { count: 0, resetTime: now + 10000 };
 
     // Reset counter if time window has passed
@@ -7274,23 +7275,10 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         task: currentTask,
       }
 
-      const jobId = `counterbid-${task._id}-${task.contract.slug}-${MAGICEDEN.toLowerCase()}-${tokenId}`
-      const job: Job = await queue.getJob(jobId)
-
-      if (job) {
-        if (incomingBidAmount <= Number(job.data.offerPrice)) {
-          return
-        } else {
-          await job.updateData(bidData)
-        }
-      } else {
-        await queue.add(
-          MAGICEDEN_TOKEN_BID_COUNTERBID,
-          bidData,
-          { jobId }
-        );
-      }
-
+      await queue.add(
+        MAGICEDEN_TOKEN_BID_COUNTERBID,
+        bidData,
+      );
       // Log successful counterbid preparation
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Token: #${tokenId} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
@@ -7408,22 +7396,10 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         trait: JSON.stringify(trait),
       }
 
-      const jobId = `counterbid-${task._id}-${task.contract.slug}-${MAGICEDEN.toLowerCase()}-${JSON.stringify(trait)}`
-      const job: Job = await queue.getJob(jobId)
-
-      if (job) {
-        if (incomingBidAmount <= job.data.offerPrice) {
-          return
-        } else {
-          await job.updateData(data)
-        }
-      } else {
-        await queue.add(
-          MAGICEDEN_TRAIT_BID_COUNTERBID,
-          bidData,
-          { jobId }
-        );
-      }
+      await queue.add(
+        MAGICEDEN_TRAIT_BID_COUNTERBID,
+        bidData,
+      );
 
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${traitDisplay} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
@@ -7530,22 +7506,11 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         currency
       }
 
-      const jobId = `counterbid-${task._id}-${task.contract.slug}-${MAGICEDEN.toLowerCase()}-collection`
-      const job: Job = await queue.getJob(jobId)
+      await queue.add(
+        MAGICEDEN_COLLECTION_BID_COUNTERBID,
+        bidData
+      );
 
-      if (job) {
-        if (incomingBidAmount <= job.data.offerPrice) {
-          return
-        } else {
-          await job.updateData(bidData)
-        }
-      } else {
-        await queue.add(
-          MAGICEDEN_COLLECTION_BID_COUNTERBID,
-          bidData,
-          { jobId }
-        );
-      }
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Collection${traitDisplay} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -7836,29 +7801,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         task
       }
 
-      const jobId = `counterbid-${task._id}-${task.contract.slug}-${OPENSEA.toLowerCase()}-${asset.tokenId}`
-      const job: Job = await queue.getJob(jobId)
-      if (job) {
-        const existingPrice = job.data.offerPrice / Math.pow(10, decimal);
-        console.log(CYAN + `[DEBUG][handleOpenseaCounterbid] Existing job found. Current price: ${existingPrice}, Incoming: ${incomingBidAmountEth}` + RESET);
-
-        if (incomingBidAmount <= job.data.offerPrice) {
-          console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] Incoming price not higher than existing, skipping` + RESET);
-          return
-        } else {
-          console.log(CYAN + `[DEBUG][handleOpenseaCounterbid] Updating existing job with new price` + RESET);
-          await job.updateData(bidData)
-          console.log(GREEN + `[DEBUG][handleOpenseaCounterbid] Job updated successfully` + RESET);
-        }
-      } else {
-        console.log(CYAN + `[DEBUG][handleOpenseaCounterbid] Creating new token counterbid job: ${jobId}` + RESET);
-        await queue.add(
-          OPENSEA_TOKEN_BID_COUNTERBID,
-          bidData,
-          { jobId }
-        );
-        console.log(GREEN + `[DEBUG][handleOpenseaCounterbid] Token counterbid job created successfully` + RESET);
-      }
+      await queue.add(
+        OPENSEA_TOKEN_BID_COUNTERBID,
+        bidData
+      );
 
       // Log successful counterbid preparation
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -7982,8 +7928,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       }
 
       traitOffer = BigInt(offerPrice)
-      const jobId = `counterbid-${task._id}-${task.contract.slug}-${OPENSEA.toLowerCase()}-${trait}`
-      const job: Job = await queue.getJob(jobId)
       const bidCount = getIncrementedBidCount(OPENSEA, task.contract.slug, task._id)
 
       const counterbidData: IProcessOpenseaTraitBidData = {
@@ -7999,19 +7943,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         trait: JSON.stringify(trait)
       }
 
-      if (job) {
-        if (incomingBidAmount <= job.data.offerPrice) {
-          return
-        } else {
-          await job.updateData(counterbidData)
-        }
-      } else {
-        await queue.add(
-          OPENSEA_TRAIT_BID_COUNTERBID,
-          counterbidData,
-          { jobId }
-        );
-      }
+      await queue.add(
+        OPENSEA_TRAIT_BID_COUNTERBID,
+        counterbidData
+      );
 
       // Log successful trait counterbid preparation
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -8148,22 +8083,12 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         enforceCreatorFee: collectionDetails.enforceCreatorFee,
         expiry
       }
-      const jobId = `counterbid-${task._id}-${task.contract.slug}-${OPENSEA.toLowerCase()}-collection`
-      const job: Job = await queue.getJob(jobId)
 
-      if (job) {
-        if (incomingBidAmount <= job.data.offerPrice) {
-          return
-        } else {
-          await job.updateData(bidData)
-        }
-      } else {
-        await queue.add(
-          OPENSEA_COLLECTION_BID_COUNTERBID,
-          bidData,
-          { jobId }
-        );
-      }
+      await queue.add(
+        OPENSEA_COLLECTION_BID_COUNTERBID,
+        bidData
+      );
+
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Collection${traitDisplay} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -8197,12 +8122,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
     const bidHash = hashBid({ ...data, taskId: task._id });
     console.log(CYAN + `[DEBUG][handleBlurCounterbid] Bid hash: ${bidHash}` + RESET);
 
-    // Use atomic Redis cache for deduplication
-    const isNewBid = await atomicBidCache.checkAndAdd(bidHash);
-    if (!isNewBid) {
-      console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Bid already seen, skipping. Hash: ${bidHash}` + RESET);
-      return;
-    }
     console.log(CYAN + `[DEBUG][handleBlurCounterbid] Added bid to seen cache (atomic)` + RESET);
 
     const currentTask = activeTasks.get(task._id)
@@ -8362,9 +8281,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         let offerPrice: any = Number((blurOutbidMargin + Number(incomingPrice))?.toFixed(2))
         offerPrice = parseEther(offerPrice?.toString())
 
-
-        const jobId = `counterbid-${task._id}-${task.contract.slug}-${BLUR.toLowerCase()}-${trait}`
-        const job: Job = await blurQueue.getJob(jobId)
         const bidCount = getIncrementedBidCount(BLUR, task.contract.slug, task._id)
 
         const bidData: IBlurBidData = {
@@ -8380,29 +8296,10 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         }
 
 
-        if (job) {
-          const existingPrice = Number(job?.data?.offerPrice) / 1e18;
-          console.log(CYAN + `[DEBUG][handleBlurCounterbid] Existing job found. Current price: ${existingPrice}, Incoming: ${incomingPrice}` + RESET);
-
-          if (incomingPrice <= Number(job?.data?.offerPrice) / 1e18) {
-            console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Incoming price not higher than existing, skipping` + RESET);
-            return
-          } else {
-            console.log(CYAN + `[DEBUG][handleBlurCounterbid] Updating existing job with new price` + RESET);
-            await job.updateData(bidData)
-            console.log(GREEN + `[DEBUG][handleBlurCounterbid] Job updated successfully` + RESET);
-          }
-        } else {
-          console.log(CYAN + `[DEBUG][handleBlurCounterbid] Creating new trait counterbid job: ${jobId}` + RESET);
-          await blurQueue.add(
-            BLUR_TRAIT_BID_COUNTERBID,
-            bidData,
-            {
-              jobId,
-            },
-          );
-          console.log(GREEN + `[DEBUG][handleBlurCounterbid] Trait counterbid job created successfully` + RESET);
-        }
+        await blurQueue.add(
+          BLUR_TRAIT_BID_COUNTERBID,
+          bidData
+        );
 
         // Log successful trait counterbid preparation
         console.log(GREEN + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -8521,8 +8418,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       // Log successful collection counterbid preparation
       const traitDisplay = selectedTraits && Object.keys(selectedTraits).length > 0 ? ' (Trait bid)' : '';
 
-      const jobId = `counterbid-${task._id}-${task.contract.slug}-${BLUR.toLowerCase()}-collection`
-      const job: Job = await blurQueue.getJob(jobId)
       const bidCount = getIncrementedBidCount(BLUR, task.contract.slug, task._id)
       const bidData: IBlurBidData = {
         taskId: task._id,
@@ -8535,31 +8430,11 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         expiry
       }
 
+      await blurQueue.add(
+        BLUR_COLLECTION_BID_COUNTERBID,
+        bidData
+      );
 
-      if (job) {
-        const existingPrice = Number(job?.data?.offerPrice) / 1e18;
-        console.log(CYAN + `[DEBUG][handleBlurCounterbid] Collection: Existing job found. Current price: ${existingPrice}, Incoming: ${bestPrice}` + RESET);
-
-        if (+incomingPrice <= +job?.data?.offerPrice) {
-          console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Collection: Incoming price not higher than existing, skipping` + RESET);
-          return
-        } else {
-          console.log(CYAN + `[DEBUG][handleBlurCounterbid] Collection: Updating existing job with new price` + RESET);
-          await job.updateData(bidData)
-          console.log(GREEN + `[DEBUG][handleBlurCounterbid] Collection: Job updated successfully` + RESET);
-        }
-      } else {
-        console.log(CYAN + `[DEBUG][handleBlurCounterbid] Creating new collection counterbid job: ${jobId}` + RESET);
-        await blurQueue.add(
-          BLUR_COLLECTION_BID_COUNTERBID,
-          bidData,
-          {
-            jobId,
-          },
-
-        );
-        console.log(GREEN + `[DEBUG][handleBlurCounterbid] Collection counterbid job created successfully` + RESET);
-      }
       console.log(GREEN + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(GREEN + `[Blur Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${Number(offerPrice) / 1e18} ETH | Collection${traitDisplay} | Outbidding: ${bestPrice} ETH` + RESET);
       console.log(GREEN + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -10184,11 +10059,6 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
   try {
     // Cancel existing orders for this collection before placing new counterbid
     const identifier = "collection";
-
-
-    await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry);
-    console.log(YELLOW + `[DEBUG][blurCollectionCounterBid] Checking for existing orders to cancel for ${identifier}` + RESET);
-
     const existingOrders = await Order.find({
       slug: slug,
       taskId: taskId,
@@ -10217,6 +10087,10 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
     } else {
       console.log(CYAN + `[DEBUG][blurCollectionCounterBid] No existing orders found to cancel for ${identifier}` + RESET);
     }
+
+    await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry);
+    console.log(YELLOW + `[DEBUG][blurCollectionCounterBid] Checking for existing orders to cancel for ${identifier}` + RESET);
+
   } catch (error: any) {
     // Handle rate limit errors
     if (error?.code === 'RATE_LIMITED') {
@@ -10242,45 +10116,43 @@ async function blurTraitCounterBid(data: IBlurBidData) {
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur")) return
 
   try {
-
-    await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry, traits);
     // Cancel existing orders for this trait before placing new counterbid
-    if (traits) {
-      const traitsObj = JSON.parse(traits);
-      const [traitType, traitValue] = Object.entries(traitsObj)[0] as string[];
-      const identifier = `${traitType}:${traitValue}`;
 
-      console.log(YELLOW + `[DEBUG][blurTraitCounterBid] Checking for existing orders to cancel for ${identifier}` + RESET);
+    if (!traits) return
+    const traitsObj = JSON.parse(traits);
+    const [traitType, traitValue] = Object.entries(traitsObj)[0] as string[];
+    const identifier = `${traitType}:${traitValue}`;
 
-      const existingOrders = await Order.find({
-        slug: slug,
-        taskId: taskId,
-        marketplace: "blur",
-        identifier: identifier
+    console.log(YELLOW + `[DEBUG][blurTraitCounterBid] Checking for existing orders to cancel for ${identifier}` + RESET);
+
+    const existingOrders = await Order.find({
+      slug: slug,
+      taskId: taskId,
+      marketplace: "blur",
+      identifier: identifier
+    });
+
+    if (existingOrders.length > 0) {
+      console.log(YELLOW + `[DEBUG][blurTraitCounterBid] Found ${existingOrders.length} existing orders to cancel` + RESET);
+      const cancelData = existingOrders.map((order) => {
+        const payload = JSON.parse(order.orderHash);
+        return {
+          name: CANCEL_BLUR_BID,
+          data: {
+            privateKey: privateKey,
+            payload: payload,
+            taskId: taskId,
+            orderKey: order._id
+          }
+        };
       });
 
-      if (existingOrders.length > 0) {
-        console.log(YELLOW + `[DEBUG][blurTraitCounterBid] Found ${existingOrders.length} existing orders to cancel` + RESET);
-
-        const cancelData = existingOrders.map((order) => {
-          const payload = JSON.parse(order.orderHash);
-          return {
-            name: CANCEL_BLUR_BID,
-            data: {
-              privateKey: privateKey,
-              payload: payload,
-              taskId: taskId,
-              orderKey: order._id
-            }
-          };
-        });
-
-        await queue.addBulk(cancelData);
-        console.log(GREEN + `[DEBUG][blurTraitCounterBid] Added ${cancelData.length} cancellation jobs to queue` + RESET);
-      } else {
-        console.log(CYAN + `[DEBUG][blurTraitCounterBid] No existing orders found to cancel for ${identifier}` + RESET);
-      }
+      await queue.addBulk(cancelData);
+      console.log(GREEN + `[DEBUG][blurTraitCounterBid] Added ${cancelData.length} cancellation jobs to queue` + RESET);
+    } else {
+      console.log(CYAN + `[DEBUG][blurTraitCounterBid] No existing orders found to cancel for ${identifier}` + RESET);
     }
+    await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry, traits);
   } catch (error: any) {
     // Handle rate limit errors
     if (error?.code === 'RATE_LIMITED') {
