@@ -81,7 +81,7 @@ services:
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
       --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy noeviction
       --save 900 1
       --save 300 10
       --save 60 10000
@@ -116,7 +116,7 @@ services:
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
       --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy noeviction
       --save 900 1
       --save 300 10
       --save 60 10000
@@ -151,7 +151,7 @@ services:
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
       --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy noeviction
       --save 900 1
       --save 300 10
       --save 60 10000
@@ -186,7 +186,7 @@ services:
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
       --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy noeviction
       --save 900 1
       --save 300 10
       --save 60 10000
@@ -221,7 +221,7 @@ services:
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
       --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy noeviction
       --save 900 1
       --save 300 10
       --save 60 10000
@@ -256,7 +256,7 @@ services:
       --cluster-announce-port 6379
       --cluster-announce-bus-port 16379
       --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy noeviction
       --save 900 1
       --save 300 10
       --save 60 10000

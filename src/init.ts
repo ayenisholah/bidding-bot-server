@@ -17,12 +17,55 @@ const rpsHistory: number[] = [];
 const RPS_HISTORY_SECONDS = 10; // Keep a 10-second history for averaging
 
 const retryConfig: IAxiosRetryConfig = {
-  retries: 3, // Enable 3 retries
+  retries: 3, // Reduced to 1 retry for 408 errors
   retryDelay: (retryCount, error) => {
     limiter.schedule(() => Promise.resolve());
-    if (error.response && (error.response.status >= 400 && error.response.status < 600)) {
-      return 1000;
+    
+    // Special handling for 408 errors
+    if (error.response?.status === 408) {
+      const url = error.config?.url || '';
+      
+      // Blur endpoints need extra time due to rate limiting
+      if (url.includes('/blur/')) {
+        const baseDelay = 30000; // 30 seconds for Blur
+        const progressiveDelay = baseDelay + (retryCount - 1) * 10000; // +10s each retry (30s, 40s, 50s)
+        const jitter = 1000 + Math.random() * 2000; // 1-3s jitter
+        console.log(`[Blur 408] Retrying Blur endpoint after 408 (attempt ${retryCount}), waiting ${progressiveDelay + jitter}ms`);
+        return progressiveDelay + jitter;
+      }
+      
+      // Authentication endpoints get exponential backoff
+      if (url.includes('/auth/challenge') || url.includes('/auth/login')) {
+        // Exponential backoff starting at 5 seconds for auth endpoints
+        const baseDelay = 5000; // 5 seconds
+        const exponentialDelay = Math.min(baseDelay * Math.pow(2, retryCount - 1), 40000); // Max 40 seconds
+        const jitter = 500 + Math.random() * 1500; // 500-2000ms jitter
+        console.log(`[Auth Backoff] Retrying auth endpoint after 408 (attempt ${retryCount}), waiting ${exponentialDelay + jitter}ms`);
+        return exponentialDelay + jitter;
+      } else {
+        // Progressive delay for other 408 errors
+        const delays = [20000, 30000, 40000]; // 20s, 30s, 40s
+        const delay = delays[Math.min(retryCount - 1, delays.length - 1)];
+        const jitter = 200 + Math.random() * 800; // 200-1000ms jitter
+        console.log(`Retrying after 408 error (attempt ${retryCount}), waiting ${delay + jitter}ms`);
+        return delay + jitter;
+      }
     }
+    
+    // Rate limit errors - respect retry-after header or use exponential backoff
+    if (error.response?.status === 429) {
+      const retryAfter = error.response.headers['retry-after'];
+      if (retryAfter) {
+        return parseInt(retryAfter) * 1000;
+      }
+      return Math.min(Math.pow(2, retryCount) * 500, 4000); // Faster backoff
+    }
+    
+    // Other 4xx/5xx errors - quick retry
+    if (error.response && (error.response.status >= 400 && error.response.status < 600)) {
+      return Math.min(retryCount * 500, 2000); // Max 2s
+    }
+    
     return axiosRetry.exponentialDelay(retryCount);
   },
   retryCondition: async (error: any) => {
@@ -31,15 +74,18 @@ const retryConfig: IAxiosRetryConfig = {
       // Network error (no response)
       return true;
     }
-    
+
     // Retry on server errors (5xx) and specific client errors
     const status = error.response.status;
     return status >= 500 || status === 429 || status === 408;
   },
+  onRetry: (retryCount, error, requestConfig) => {
+    console.log(`Retry attempt ${retryCount} for ${requestConfig.url} - Status: ${error.response?.status || 'Network Error'}`);
+  }
 };
 
 async function initialize(rateLimit: number) {
-  axiosInstance = axios.create({ timeout: 15000 });
+  axiosInstance = axios.create({ timeout: 60000 });
 
   limiter = new Bottleneck({
     minTime: 1000 / rateLimit,

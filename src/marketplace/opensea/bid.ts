@@ -56,6 +56,12 @@ function logTimingData(timingData: BidTimingLog) {
     fs.appendFileSync(timingLogFile, logEntry);
   } catch (error) {
     console.error('Failed to write timing log:', error);
+    // Log to Axiom but don't await to avoid blocking
+    logger.logGeneralError('Failed to write timing log', {
+      operation: 'write_timing_log',
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    }).catch(() => { /* Intentionally ignore logging errors */ }); // Ignore logging errors for timing logs
   }
 }
 
@@ -541,7 +547,7 @@ export async function bidOnOpensea(
 
       trackBidRate('opensea', taskId);
       const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()}  TOKEN: ${asset.tokenId} ${Number(offerPriceEthFinal)} ${currencySymbol} 🎉`
-      // console.log(BLUE, successMessage, RESET);
+      console.log(BLUE, successMessage, RESET);
       success = true;
     }
     else {
@@ -798,7 +804,7 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
   const successMessage = opensea_traits ?
     `🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()}  TRAIT: ${opensea_traits} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
     : `🎉 COLLECTION OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
-  // console.log(BLUE, successMessage, RESET);
+  console.log(BLUE, successMessage, RESET);
 }
 
 /**
@@ -886,7 +892,15 @@ export async function cancelOrder(orderHash: string, protocolAddress: string, pr
     return response.data;
   } catch (error) {
     if (error) {
-      console.error(`Failed to cancel OpenSea order: ${error}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to cancel OpenSea order: ${errorMessage}`);
+      await logger.logOpenseaBidError('Failed to cancel OpenSea order', {
+        taskId,
+        orderHash,
+        operation: 'cancel_order',
+        error: error as Error,
+        errorMessage: errorMessage
+      });
     }
     throw error;
   }
@@ -1585,10 +1599,10 @@ export interface Ownership {
 }
 
 export interface ItemOffers {
-  items: Order[];
+  items: OpenSeaOrder[];
 }
 
-export interface Order {
+export interface OpenSeaOrder {
   id: string;
   type: string;
   pricePerItem: IPrice;

@@ -20,8 +20,7 @@ const ApprovalSchema: Schema = new Schema(
   { timestamps: true }
 );
 
-// Add indices for optimal query performance
-ApprovalSchema.index({ address: 1 }, { unique: true });
+// Index is automatically created by unique: true in the schema definition above
 
 const Approval = mongoose.model<IApproval>("Approval", ApprovalSchema)
 export default Approval;

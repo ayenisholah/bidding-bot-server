@@ -8,6 +8,13 @@ interface WalletRateLimit {
   isRateLimited: boolean;
 }
 
+interface WalletErrorTracking {
+  errors: number;
+  successes: number;
+  lastError: number;
+  lastSuccess: number;
+}
+
 interface RateLimitEvent {
   walletAddress: string;
   remaining: number;
@@ -17,20 +24,22 @@ interface RateLimitEvent {
 
 export class BlurRateLimiter extends EventEmitter {
   private walletLimits: Map<string, WalletRateLimit>;
-  private readonly DEFAULT_LIMIT = 40;
+  private walletErrors: Map<string, WalletErrorTracking>;
+  private readonly DEFAULT_LIMIT = 40; // Blur's actual limit
   private readonly DEFAULT_WINDOW = 10000; // 10 seconds
-  private readonly SAFETY_THRESHOLD = 0.7; // Start limiting at 70% usage
-  private requestCounts: Map<string, { count: number; windowStart: number }>;
+  private readonly SAFETY_THRESHOLD = 0.8; // Use 80% of rate limit for safety buffer
+  
 
   constructor() {
     super();
     this.walletLimits = new Map();
-    this.requestCounts = new Map();
+    this.walletErrors = new Map();
   }
 
   private createWalletLimit(): WalletRateLimit {
+    const effectiveLimit = Math.floor(this.DEFAULT_LIMIT * this.SAFETY_THRESHOLD);
     return {
-      remaining: this.DEFAULT_LIMIT,
+      remaining: effectiveLimit,
       resetTime: Date.now() + this.DEFAULT_WINDOW,
       limit: this.DEFAULT_LIMIT,
       lastRequest: Date.now(),
@@ -44,19 +53,13 @@ export class BlurRateLimiter extends EventEmitter {
       // Remove entries that haven't been used for over an hour
       if (now - limit.lastRequest > 3600000) {
         this.walletLimits.delete(wallet);
+        this.walletErrors.delete(wallet);
       }
     }
   }
 
   canMakeRequest(walletAddress: string): boolean {
     this.cleanupOldEntries();
-    
-    // Check local request count first
-    const localCount = this.getLocalRequestCount(walletAddress);
-    if (localCount >= this.DEFAULT_LIMIT * this.SAFETY_THRESHOLD) {
-      console.log(`[BlurRateLimiter] Local rate limit: ${localCount}/${this.DEFAULT_LIMIT} requests in window`);
-      return false;
-    }
     
     const wallet = this.walletLimits.get(walletAddress);
     if (!wallet) {
@@ -67,46 +70,18 @@ export class BlurRateLimiter extends EventEmitter {
     
     // If reset time has passed, reset the limit
     if (now >= wallet.resetTime) {
-      wallet.remaining = wallet.limit;
+      wallet.remaining = Math.floor(wallet.limit * this.SAFETY_THRESHOLD);
       wallet.resetTime = now + this.DEFAULT_WINDOW;
       wallet.isRateLimited = false;
     }
 
-    // Check if we're approaching the limit (safety threshold)
-    const usageRatio = 1 - (wallet.remaining / wallet.limit);
-    if (usageRatio >= this.SAFETY_THRESHOLD) {
-      console.log(`[BlurRateLimiter] Approaching limit: ${wallet.remaining}/${wallet.limit} remaining`);
-      return false;
-    }
-
-    return wallet.remaining > 0 && !wallet.isRateLimited;
+    // Check against safety threshold to avoid hitting hard limits
+    const safetyBuffer = Math.floor(wallet.limit * (1 - this.SAFETY_THRESHOLD));
+    return wallet.remaining > safetyBuffer && !wallet.isRateLimited;
   }
 
-  private getLocalRequestCount(walletAddress: string): number {
-    const counter = this.requestCounts.get(walletAddress);
-    if (!counter) return 0;
-    
-    const now = Date.now();
-    // If window has passed, reset counter
-    if (now - counter.windowStart >= this.DEFAULT_WINDOW) {
-      this.requestCounts.set(walletAddress, { count: 0, windowStart: now });
-      return 0;
-    }
-    
-    return counter.count;
-  }
 
   recordRequest(walletAddress: string): void {
-    // Update local counter
-    const now = Date.now();
-    let counter = this.requestCounts.get(walletAddress);
-    if (!counter || now - counter.windowStart >= this.DEFAULT_WINDOW) {
-      counter = { count: 0, windowStart: now };
-    }
-    counter.count++;
-    this.requestCounts.set(walletAddress, counter);
-    
-    // Update wallet limits
     let wallet = this.walletLimits.get(walletAddress);
     
     if (!wallet) {
@@ -188,7 +163,12 @@ export class BlurRateLimiter extends EventEmitter {
       return 0;
     }
 
-    return wallet.resetTime - now;
+    // Add jitter (10-20% randomization) to prevent thundering herd
+    const baseWaitTime = wallet.resetTime - now;
+    const jitterFactor = 0.1 + (Math.random() * 0.1); // 10-20% jitter
+    const jitter = Math.floor(baseWaitTime * jitterFactor);
+    
+    return baseWaitTime + jitter;
   }
 
   getStatus(walletAddress?: string): any {
@@ -237,7 +217,7 @@ export class BlurRateLimiter extends EventEmitter {
   reset(walletAddress: string): void {
     const wallet = this.walletLimits.get(walletAddress);
     if (wallet) {
-      wallet.remaining = wallet.limit;
+      wallet.remaining = Math.floor(wallet.limit * this.SAFETY_THRESHOLD);
       wallet.resetTime = Date.now() + this.DEFAULT_WINDOW;
       wallet.isRateLimited = false;
       
@@ -254,6 +234,94 @@ export class BlurRateLimiter extends EventEmitter {
     for (const [address] of this.walletLimits.entries()) {
       this.reset(address);
     }
+  }
+
+  // Record error or success for wallet tracking
+  recordError(walletAddress: string, isError: boolean): void {
+    let errorTracking = this.walletErrors.get(walletAddress);
+    
+    if (!errorTracking) {
+      errorTracking = {
+        errors: 0,
+        successes: 0,
+        lastError: 0,
+        lastSuccess: 0
+      };
+      this.walletErrors.set(walletAddress, errorTracking);
+    }
+
+    const now = Date.now();
+    
+    if (isError) {
+      errorTracking.errors++;
+      errorTracking.lastError = now;
+      
+      // Emit error event for monitoring
+      this.emit('error-recorded', {
+        walletAddress,
+        totalErrors: errorTracking.errors,
+        totalSuccesses: errorTracking.successes,
+        errorRate: this.getErrorRate(walletAddress)
+      });
+    } else {
+      errorTracking.successes++;
+      errorTracking.lastSuccess = now;
+    }
+  }
+
+  // Get error rate for a wallet
+  getErrorRate(walletAddress: string): number {
+    const errorTracking = this.walletErrors.get(walletAddress);
+    if (!errorTracking) return 0;
+    
+    const total = errorTracking.errors + errorTracking.successes;
+    if (total === 0) return 0;
+    
+    return (errorTracking.errors / total) * 100;
+  }
+
+  // Get error statistics for monitoring
+  getErrorStats(walletAddress?: string): any {
+    if (walletAddress) {
+      const errorTracking = this.walletErrors.get(walletAddress);
+      if (!errorTracking) {
+        return {
+          walletAddress,
+          errors: 0,
+          successes: 0,
+          errorRate: 0,
+          lastError: null,
+          lastSuccess: null
+        };
+      }
+
+      return {
+        walletAddress,
+        errors: errorTracking.errors,
+        successes: errorTracking.successes,
+        errorRate: this.getErrorRate(walletAddress),
+        lastError: errorTracking.lastError ? new Date(errorTracking.lastError).toISOString() : null,
+        lastSuccess: errorTracking.lastSuccess ? new Date(errorTracking.lastSuccess).toISOString() : null
+      };
+    }
+
+    // Return stats for all wallets
+    const stats: any[] = [];
+    for (const [address, errorTracking] of this.walletErrors.entries()) {
+      stats.push({
+        walletAddress: address,
+        errors: errorTracking.errors,
+        successes: errorTracking.successes,
+        errorRate: this.getErrorRate(address),
+        lastError: errorTracking.lastError ? new Date(errorTracking.lastError).toISOString() : null,
+        lastSuccess: errorTracking.lastSuccess ? new Date(errorTracking.lastSuccess).toISOString() : null
+      });
+    }
+
+    return {
+      totalWallets: this.walletErrors.size,
+      wallets: stats.sort((a, b) => b.errorRate - a.errorRate) // Sort by error rate descending
+    };
   }
 }
 

@@ -1,4 +1,14 @@
 /* eslint-disable */
+/**
+ * JOB REMOVAL POLICY:
+ * Jobs should ONLY be removed from the queue through:
+ * 1. clearQueueAndRestartJobs() - for system restart/recovery (uses obliterate)
+ * 2. stopTask() -> removeAllTaskJobsFromQueue() - for task management
+ * 3. cancelListingJob() - for listing management (in listingScheduler.ts)
+ * 
+ * No other function should directly remove jobs from the queue.
+ * This ensures proper cleanup and prevents race conditions.
+ */
 import express from "express";
 import { config } from "dotenv";
 
@@ -15,7 +25,7 @@ import WebSocket, { Server as WebSocketServer } from 'ws';
 import http from 'http';
 import { axiosInstance, initialize, limiter, cancelTaskJobs, removeTaskFromBlacklist, isTaskBlacklisted } from "./init";
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrder, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor } from "./marketplace/opensea";
-import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor } from "./marketplace/blur/bid";
+import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor, getAccessToken, getAuthMetrics, getTimeoutMetrics } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
 import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, fetchOpenseaTraits, getCollectionDetails, getOpenseaFloor } from "./functions";
 import mongoose from 'mongoose';
@@ -26,7 +36,6 @@ import redisClient, { createBullMQConnection } from "./utils/redis";
 import { BASE_URL, ERC20_MIN_ABI } from "./constants";
 import { Contract, ethers, Wallet as Web3Wallet, parseEther, MaxUint256 } from "ethers";
 import { DistributedLockManager } from "./utils/lock";
-import net from 'net'
 
 import BidLogs from "./models/logs.model";
 import PQueue from "p-queue";
@@ -222,7 +231,7 @@ export { lockManager };
 export { queue };
 // Export redis getter to ensure it always returns current connection
 export const getRedis = () => redis;
-let netEnabled = true;
+// Removed netEnabled - using isConnected from connectivity monitoring instead
 
 class RateLimiter {
   private tokens: number;
@@ -703,7 +712,6 @@ async function monitorHealth() {
     // Show waiting job monitor status
     if (counts.waiting > 0) {
       console.log(YELLOW + '⚡ Waiting Job Monitor: Active (failing waiting jobs for retry)' + RESET);
-      // await queue.drain()
     }
 
     Object.entries(counts).forEach(([key, value]) => {
@@ -735,7 +743,8 @@ async function monitorHealth() {
     updateAllBidRates();
 
   } catch (error) {
-    logger.logGeneralError("Health monitoring failed", {
+    // Log as debug level to avoid sending to Axiom
+    logger.logDebug(ErrorCategory.GENERAL, "Health monitoring failed", {
       error: error as Error,
       uptime: process.uptime(),
       memoryUsage: process.memoryUsage()
@@ -760,39 +769,24 @@ function getActiveTaskWithIdByIndex(index: number): { id: string, task: ITask } 
 }
 
 // Authorized queue clear function - centralizes all queue obliteration
-async function authorizedQueueClear(reason: 'startup' | 'no-password' | 'downtime' | 'network-loss') {
-  console.log(YELLOW + `[authorizedQueueClear] Clearing queue - Reason: ${reason}` + RESET);
-
-  try {
-    // Obliterate the queue
-    await queue.obliterate({ force: true });
-    console.log(GREEN + `[authorizedQueueClear] Queue cleared successfully` + RESET);
-
-    // Wait 5 seconds
-    console.log(YELLOW + `[authorizedQueueClear] Waiting 5 seconds before restarting scheduled loop...` + RESET);
-    await new Promise(resolve => setTimeout(resolve, 5000));
-
-    // Call runScheduledLoop
-    console.log(GREEN + `[authorizedQueueClear] Starting scheduled loop...` + RESET);
-    await runScheduledLoop();
-
-  } catch (error) {
-    console.error(RED + `[authorizedQueueClear] Error during queue clear: ${error}` + RESET);
-    throw error;
-  }
-}
 
 // Clear queue and restart all jobs on server start
+// NOTE: This is the only function (besides stopTask) that should obliterate queues
+// All other job removal should go through stopTask -> removeAllTaskJobsFromQueue
 async function clearQueueAndRestartJobs() {
   try {
-    // Pause the queue before obliterating
-    await queue.pause();
+    console.log(YELLOW + 'Clearing queues and restarting jobs...' + RESET);
 
-    // Wait for queue to fully pause and check status
+    // Pause both queues before obliterating
+    await queue.pause();
+    await blurQueue.pause();
+
+    // Wait for queues to fully pause and check status
     let retries = 10;
     while (retries > 0) {
       const isPaused = await queue.isPaused();
-      if (isPaused) break;
+      const isBlurPaused = await blurQueue.isPaused();
+      if (isPaused && isBlurPaused) break;
       await new Promise(resolve => setTimeout(resolve, 500));
       retries--;
     }
@@ -800,15 +794,22 @@ async function clearQueueAndRestartJobs() {
     // Additional safety wait
     await new Promise(resolve => setTimeout(resolve, 1000));
 
-    // Resume the queue first since authorizedQueueClear will restart the loop
-    await queue.resume();
+    // Obliterate both queues with force option
+    console.log(YELLOW + 'Obliterating main queue...' + RESET);
+    await queue.obliterate({ force: true });
+    console.log(GREEN + 'Main queue obliterated successfully' + RESET);
 
-    // Use authorized queue clear which includes delay and runScheduledLoop
-    await authorizedQueueClear('startup');
+    console.log(YELLOW + 'Obliterating blur queue...' + RESET);
+    await blurQueue.obliterate({ force: true });
+    console.log(GREEN + 'Blur queue obliterated successfully' + RESET);
+
+    // Resume both queues
+    await queue.resume();
+    await blurQueue.resume();
+    console.log(GREEN + 'Queues resumed successfully' + RESET);
 
     // Clear any stored job states
     parentJobs.clear();
-    // DO NOT clear taskStatus - it should persist across queue restarts
     // Clear all countdown timers
     taskCountdownTimers.forEach((timer) => clearInterval(timer));
     taskCountdownTimers.clear();
@@ -819,7 +820,17 @@ async function clearQueueAndRestartJobs() {
 
     // Fetch all tasks from database
     await fetchCurrentTasks();
+
+    // Wait 5 seconds before restarting scheduled loop
+    console.log(YELLOW + 'Waiting 5 seconds before restarting scheduled loop...' + RESET);
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+    // Start the scheduled loop
+    console.log(GREEN + 'Starting scheduled loop...' + RESET);
+    await runScheduledLoop();
+
   } catch (error) {
+    console.error(RED + `Error during clearQueueAndRestartJobs: ${error}` + RESET);
     throw error;
   }
 }
@@ -827,6 +838,9 @@ async function clearQueueAndRestartJobs() {
 // Network connectivity monitoring
 let isConnected = true;
 let connectivityLostAt: number | null = null;
+
+// Export network status for use in other modules if needed
+export const getNetworkStatus = () => isConnected;
 
 async function checkInternetConnectivity(): Promise<boolean> {
   try {
@@ -850,6 +864,14 @@ async function handleConnectivityRestored() {
 
   if (downtime > 0) {
     console.log(YELLOW + `Connectivity was lost for ${downtimeMinutes} minutes ${Math.floor((downtime % 60000) / 1000)} seconds` + RESET);
+  }
+
+  // Resume the queue first
+  try {
+    await queue.resume();
+    console.log(GREEN + 'Queue resumed after network restoration' + RESET);
+  } catch (err) {
+    console.error('Failed to resume queue:', err);
   }
 
   // Only clear and restart jobs if connectivity was lost for more than 1 minute
@@ -888,6 +910,7 @@ setInterval(() => {
   console.log(CYAN + `Clearing ${recentItemSoldEvents.size} cached ITEM_SOLD events` + RESET);
   recentItemSoldEvents.clear();
 }, 30 * 60 * 1000);
+
 function startConnectivityMonitoring() {
   // Check connectivity every 30 seconds
   connectivityCheckInterval = setInterval(async () => {
@@ -902,6 +925,14 @@ function startConnectivityMonitoring() {
       isConnected = false;
       connectivityLostAt = Date.now();
       console.error(RED + '\n⚠️  Internet connectivity lost!' + RESET);
+
+      // Pause queue operations during network outage
+      try {
+        await queue.pause();
+        console.log(YELLOW + 'Queue paused due to network loss' + RESET);
+      } catch (err) {
+        console.error('Failed to pause queue:', err);
+      }
     }
   }, 30000); // Check every 30 seconds
 
@@ -969,10 +1000,6 @@ async function fetchCurrentTasks() {
     });
   }
 }
-
-const DOWNTIME_THRESHOLD = 5 * 60 * 1000;
-const LAST_RUNTIME_KEY = 'server:last_runtime';
-
 
 interface BulkJobTracker {
   taskId: string;
@@ -1049,8 +1076,8 @@ async function pauseQueueAndWorkers() {
     // Actually remove all jobs from the queue for security
     console.log(YELLOW + 'Note: All jobs will be removed from the queue for security.' + RESET);
 
-    // Use authorized queue clear
-    await authorizedQueueClear('no-password');
+    // Just pause the queues without clearing when no password
+    console.log(YELLOW + 'No password set - pausing queues without clearing' + RESET);
 
     console.log(YELLOW + 'Queue and workers paused. Waiting for password...' + RESET);
   } catch (error) {
@@ -1165,7 +1192,7 @@ async function startServer() {
       const worker = new Worker(
         QUEUE_NAME,
         async (job) => {
-          const jobTimeout = 15000; // 15 seconds timeout for all jobs
+          const jobTimeout = 60000; // 15 seconds timeout for all jobs
           const abortController = new AbortController();
 
           const timeoutPromise = new Promise((_, reject) => {
@@ -1206,10 +1233,6 @@ async function startServer() {
         prefix: '{bull}',
         connection: blurWorkerConnection,
         concurrency: concurrencyPerWorker,
-        limiter: {
-          max: 40,
-          duration: 10000
-        }
       }
     );
 
@@ -1805,49 +1828,6 @@ function updateTaskCancellationPercentage(taskId: string) {
   }
 }
 
-// Helper function to cancel pending jobs for a task
-async function cancelPendingJobsForTask(taskId: string): Promise<void> {
-  const timestamp = new Date().toISOString();
-  try {
-    console.log(YELLOW + `[cancelPendingJobsForTask] ${timestamp} - Cancelling pending jobs for task ${taskId}` + RESET);
-
-    // Get all job types that might be associated with this task
-    const jobNames = [
-      'OPENSEA_TRAIT_BID', 'OPENSEA_TOKEN_BID', 'OPENSEA_COLLECTION_BID',
-      'MAGICEDEN_TRAIT_BID', 'MAGICEDEN_TOKEN_BID', 'MAGICEDEN_COLLECTION_BID',
-      'BLUR_TRAIT_BID', 'BLUR_COLLECTION_BID'
-    ];
-
-    let totalCancelled = 0;
-
-    // Cancel both waiting and active jobs for each job type
-    for (const jobName of jobNames) {
-      // Get both waiting and active jobs
-      const waitingJobs = await queue.getJobs(['waiting']);
-      const activeJobs = await queue.getJobs(['active']);
-      const allJobs = [...waitingJobs, ...activeJobs];
-
-      const taskJobs = allJobs.filter(job =>
-        job && job.name === jobName && job.data && job.data._id === taskId
-      );
-
-      for (const job of taskJobs) {
-        try {
-          await job.remove();
-          totalCancelled++;
-        } catch (error) {
-          console.error(`[cancelPendingJobsForTask] Failed to cancel job ${job.id}:`, error);
-        }
-      }
-    }
-
-    if (totalCancelled > 0) {
-      console.log(GREEN + `[cancelPendingJobsForTask] ${timestamp} - Cancelled ${totalCancelled} pending jobs for task ${taskId}` + RESET);
-    }
-  } catch (error) {
-    console.error(`[cancelPendingJobsForTask] Error cancelling jobs for task ${taskId}:`, error);
-  }
-}
 
 // Track last completion check time to prevent rapid checks
 const lastCompletionCheckTimes = new Map<string, number>();
@@ -2052,15 +2032,9 @@ async function scheduleNextLoop(taskId: string): Promise<void> {
 
         if (currentTask?.running) {
           await startTask(currentTask, true);
-        } else if (currentTask) {
-          await stopTask(currentTask, false);
-        } else {
-          cleanupTaskResources(taskId);
-          lastScheduleTimes.delete(taskId);
         }
       } catch (error) {
         console.error(RED + `[scheduleNextLoop] Error in loop execution for task ${taskId}: ` + RESET, error);
-        cleanupTaskResources(taskId);
       } finally {
         // Always release the lock after execution
         releaseLoopSchedulingLock(taskId);
@@ -2071,7 +2045,6 @@ async function scheduleNextLoop(taskId: string): Promise<void> {
   } catch (error) {
     // If scheduling fails, clean up resources
     console.error(RED + `[scheduleNextLoop] Error scheduling task ${taskId}: ` + RESET, error);
-    cleanupTaskResources(taskId);
     lastScheduleTimes.delete(taskId);
   }
 }
@@ -2086,7 +2059,7 @@ function initializeQueueEventHandlers() {
     const task = activeTasks.get(taskId);
 
     if (!task || !task.running) return;
-    // Handle failed bid jobs
+    // Handle bid job completion
     if (jobId.startsWith('bid-')) {
       const parts = jobId.split('-');
       if (parts.length >= 3) {
@@ -2134,7 +2107,8 @@ function initializeQueueEventHandlers() {
     const task = activeTasks.get(taskId);
 
     if (!task || !task.running) return;
-    // Handle failed bid jobs
+
+    // Handle bid job completion
     if (jobId.startsWith('bid-')) {
       const parts = jobId.split('-');
       if (parts.length >= 3) {
@@ -2148,7 +2122,6 @@ function initializeQueueEventHandlers() {
         }
       }
     }
-
   });
   blurQueueEvents.on('failed', async ({ jobId }) => {
     // Cancellation job failures are now handled in the bulk cancel functions
@@ -2331,41 +2304,84 @@ wss.on('connection', async (ws) => {
   };
 });
 
-// Custom rate limiter for Blur jobs per wallet
-const blurWalletRateLimiter = new Map<string, { count: number; resetTime: number }>();
+// Blur rate limiting is now handled by Redis and the BlurRateLimiter
+// No need for in-memory tracking as we trust Blur's API responses
 
-// Process Blur jobs with per-wallet rate limiting
+// Process Blur jobs
 async function processBlurJob(job: Job) {
   try {
-    // Extract privateKey from job data
-    const address = job.data.address;
+    // Extract wallet address from jobId
+    const jobId = (job.opts as any)?.jobId || job.id;
+    const jobParts = jobId.toString().split('-');
 
-    // Implement rate limiting: 40 jobs per 10 seconds per wallet
-    const now = Date.now();
-    const limiterKey = address;
-    const limiterData = blurWalletRateLimiter.get(limiterKey) || { count: 0, resetTime: now + 10000 };
+    const walletAddress = jobParts[jobParts.length - 1];
 
-    // Reset counter if time window has passed
-    if (now >= limiterData.resetTime) {
-      limiterData.count = 0;
-      limiterData.resetTime = now + 10000;
+    if (walletAddress && walletAddress.startsWith('0x')) {
+      // Check for authentication blocks first
+      try {
+        const redis = redisClient.getClient();
+        if (redis) {
+          // Check authentication block
+          const authBlockKey = `{blurAuth}:block:${walletAddress}`;
+          const authBlockTime = await redis.get(authBlockKey);
+          if (authBlockTime) {
+            const blockTime = parseInt(authBlockTime);
+            if (blockTime > Date.now()) {
+              const waitTime = blockTime - Date.now();
+              const waitSeconds = Math.round(waitTime / 1000);
+
+              console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+              console.log(RED + `[Blur Auth Block] Wallet: ${walletAddress}` + RESET);
+              console.log(RED + `[Blur Auth Block] Status: BLOCKED` + RESET);
+              console.log(RED + `[Blur Auth Block] Wait Time: ${waitSeconds} seconds` + RESET);
+              console.log(RED + `[Blur Auth Block] Resume At: ${new Date(blockTime).toLocaleTimeString()}` + RESET);
+              console.log(RED + `[Blur Auth Block] Job: ${job.id || 'unknown'}` + RESET);
+              console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+
+              await new Promise(resolve => setTimeout(resolve, waitTime + 2500));
+
+              console.log(GREEN + `[Blur Auth Block] Resumed processing for wallet ${walletAddress.substring(0, 8)}...` + RESET);
+            } else {
+              // Block has expired, clean it up
+              await redis.del(authBlockKey);
+              console.log(CYAN + `[Blur Auth Block] Cleaned up expired block for wallet ${walletAddress.substring(0, 8)}...` + RESET);
+            }
+          }
+
+          // Then check rate limit pauses
+          const pauseKey = `{blurWallet}:pause:${walletAddress}`;
+          const redisPauseUntil = await redis.get(pauseKey);
+          if (redisPauseUntil) {
+            const pauseTime = parseInt(redisPauseUntil);
+            if (pauseTime > Date.now()) {
+              const waitTime = pauseTime - Date.now();
+              const waitSeconds = Math.round(waitTime / 1000);
+
+              // Enhanced logging with more details
+              console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+              console.log(YELLOW + `[Blur API Rate Limit] Wallet: ${walletAddress}` + RESET);
+              console.log(YELLOW + `[Blur API Rate Limit] Status: PAUSED` + RESET);
+              console.log(YELLOW + `[Blur API Rate Limit] Wait Time: ${waitSeconds} seconds (${waitTime}ms)` + RESET);
+              console.log(YELLOW + `[Blur API Rate Limit] Resume At: ${new Date(pauseTime).toLocaleTimeString()}` + RESET);
+              console.log(YELLOW + `[Blur API Rate Limit] Job: ${job.id || 'unknown'}` + RESET);
+              console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+
+              await new Promise(resolve => setTimeout(resolve, waitTime + 2500));
+
+              console.log(GREEN + `[Blur API Rate Limit] Resumed processing for wallet ${walletAddress.substring(0, 8)}...` + RESET);
+            } else {
+              // Pause has expired, clean it up
+              await redis.del(pauseKey);
+              console.log(CYAN + `[Blur API Rate Limit] Cleaned up expired pause for wallet ${walletAddress.substring(0, 8)}...` + RESET);
+            }
+          }
+        }
+      } catch (error) {
+        console.warn(`Failed to check Redis for wallet status: ${error}`);
+      }
     }
 
-    // Check rate limit
-    if (limiterData.count >= 40) {
-      const waitTime = limiterData.resetTime - now;
-      console.log(YELLOW + `[Blur Rate Limit] Waiting ${waitTime}ms for wallet ${limiterKey.substring(0, 8)}...` + RESET);
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-      // Reset after waiting
-      limiterData.count = 0;
-      limiterData.resetTime = Date.now() + 10000;
-    }
-
-    // Increment counter
-    limiterData.count++;
-    blurWalletRateLimiter.set(limiterKey, limiterData);
-
-    // Process job
+    // Process job based on type
     switch (job.name) {
       case BLUR_SCHEDULE:
         await processBlurScheduledBid(job.data);
@@ -2541,15 +2557,12 @@ async function processListingUpdateJob(job: Job): Promise<boolean> {
 }
 
 async function runScheduledLoop() {
-
-
   if (!API_KEY) {
     console.log(RED + 'API_KEY is not set - queue operations disabled' + RESET);
     console.log(YELLOW + 'Please set API_KEY environment variable and restart' + RESET);
     // Don't pause queue, just skip task creation
     return
   }
-
 
   if (!RATE_LIMIT) {
     console.log(RED + 'RATE_LIMIT is not set - queue operations disabled' + RESET);
@@ -3505,7 +3518,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
 
             const addedJobs = await queue.addBulk(jobsToAdd);
 
-            // Add Blur jobs to Blur queue
+            // Add Blur jobs to Blur queue with staggered approach
             if (blurJobs.length > 0) {
               const blurJobsToAdd = blurJobs.map(job => {
                 const jobOpts = {
@@ -3521,10 +3534,26 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
                 };
               });
 
-              // Add to Blur queue - rate limiting is handled by the queue configuration
-              const addedBlurJobs = await blurQueue.addBulk(blurJobsToAdd);
-              console.log(GOLD + `Added ${addedBlurJobs.length} Blur jobs to dedicated queue` + RESET);
-              totalAdded += addedJobs.length + addedBlurJobs.length;
+              // Stagger Blur job creation to prevent overwhelming the API
+              const BLUR_BATCH_SIZE = 20; // Add 20 jobs at a time
+              const BLUR_BATCH_DELAY = 2000; // 2 second delay between batches
+
+              let totalBlurJobsAdded = 0;
+              const blurBatches = chunk(blurJobsToAdd, BLUR_BATCH_SIZE);
+
+              for (const [batchIndex, batch] of blurBatches.entries()) {
+                if (batchIndex > 0) {
+                  // Wait between batches to give API time to process
+                  console.log(BLUE + `[Blur Stagger] Waiting ${BLUR_BATCH_DELAY}ms before batch ${batchIndex + 1}/${blurBatches.length}...` + RESET);
+                  await new Promise(resolve => setTimeout(resolve, BLUR_BATCH_DELAY));
+                }
+
+                const addedBlurBatch = await blurQueue.addBulk(batch);
+                totalBlurJobsAdded += addedBlurBatch.length;
+                console.log(GOLD + `[Blur Stagger] Added batch ${batchIndex + 1}/${blurBatches.length}: ${addedBlurBatch.length} jobs (total: ${totalBlurJobsAdded}/${blurJobsToAdd.length})` + RESET);
+              }
+
+              totalAdded += addedJobs.length + totalBlurJobsAdded;
             } else {
               totalAdded += addedJobs.length;
             }
@@ -3602,7 +3631,7 @@ function createJobKey(job: Job) {
       const traitObj = JSON.parse(job.data.trait);
       const traitKey = Object.keys(traitObj)[0];
       const traitValue = traitObj[traitKey];
-      uniqueKey = `blur-${traitKey}-${traitValue}`;
+      uniqueKey = `blur-${traitKey}${traitValue}`;
       break;
     case 'MAGICEDEN_TRAIT_BID':
       type = job.data.trait.attributeKey
@@ -3619,7 +3648,10 @@ function createJobKey(job: Job) {
       uniqueKey = 'collection';
   }
   const baseKey = `${job?.data?._id}`
-  const key = `bid-${baseKey}-${uniqueKey}-${job?.data?.contract?.slug || job?.data?.slug}`
+
+  const rawSlug = job?.data?.contract?.slug || job?.data?.slug
+  const slug = removeChar(rawSlug, "-")
+  const key = `bid-${baseKey}-${uniqueKey}-${slug}-${job?.data?.address}`
   return key
 }
 
@@ -3629,6 +3661,10 @@ function generateJobKey(job: any): string {
   const name = job?.name || '';
 
   return `${taskId}-${contractSlug}-${name}`;
+}
+
+function removeChar(str: string, char: string): string {
+  return str.split(char).join('');
 }
 
 
@@ -3672,8 +3708,6 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     }
   }
 
-
-
   await removeTaskFromBlacklist(taskId);
 
   if (!API_KEY) {
@@ -3681,7 +3715,6 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     console.log(YELLOW + 'Please set API_KEY environment variable and restart' + RESET);
     return;
   }
-
 
   // Async bid log deletion - fire and forget
   BidLogs.deleteMany({ taskId: task._id }).catch(() => { });
@@ -4289,51 +4322,10 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
 }
 
 // Enhanced BullMQ job cancellation for active jobs
-async function cancelActiveTaskJobs(taskId: string, marketplace?: string) {
-  const marketplaces = marketplace ? [marketplace.toLowerCase()] : ['opensea', 'blur', 'magiceden'];
-  let cancelledCount = 0;
-  const results = [];
-
-  for (const mp of marketplaces) {
-    const jobIdPrefix = `$bid-${taskId}-${mp}-`;
-
-    try {
-      // Get active jobs and manually fail them using BullMQ pattern
-      const activeJobs = await queue.getJobs(['active'], 0, -1);
-      const taskActiveJobs = activeJobs.filter(job =>
-        job.id && job.id.startsWith(jobIdPrefix)
-      );
-
-      for (const job of taskActiveJobs) {
-        try {
-          // Use BullMQ's moveToFailed to properly terminate active jobs
-          await job.moveToFailed(new Error(`Task ${taskId} stopped - job cancelled`), job.token, false);
-          cancelledCount++;
-          console.log(`Cancelled active job: ${job.id}`);
-        } catch (error) {
-          console.error(`Failed to cancel active job ${job.id}:`, error);
-        }
-      }
-
-      results.push({
-        marketplace: mp,
-        activeJobsCancelled: taskActiveJobs.length
-      });
-
-    } catch (error: any) {
-      console.error(`Error cancelling active ${mp} jobs for task ${taskId}:`, error);
-      results.push({
-        marketplace: mp,
-        activeJobsCancelled: 0,
-        error: error?.message || String(error)
-      });
-    }
-  }
-
-  return { cancelled: cancelledCount, results };
-}
-
 // Enhanced job removal from all queue states using correct job ID format
+// Remove all jobs for a specific task from the queue
+// NOTE: This function should ONLY be called from stopTask
+// No other part of the codebase should remove jobs directly
 async function removeAllTaskJobsFromQueue(taskId: string, marketplace?: string) {
   const marketplaces = marketplace ? [marketplace.toLowerCase()] : ['opensea', 'blur', 'magiceden'];
   let totalRemoved = 0;
@@ -4436,7 +4428,7 @@ async function fetchOrdersForCancellation(taskId: string, marketplace?: string):
     const now = new Date();
     const baseConditions = {
       taskId: taskId,
-      expiresAt: { gt: now } // Only fetch non-expired orders
+      expiresAt: { $gt: now } // Only fetch non-expired orders
     };
 
     if (marketplace) {
@@ -7121,7 +7113,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
     // Check if the maker is one of our wallets before decrypting private key
     if (walletAddresses.includes(maker)) {
-      // incrementOwnBidCounter('magiceden', task._id);
+      incrementOwnBidCounter('magiceden', task._id);
       return
     }
 
@@ -7530,10 +7522,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 }
 
 async function handleOpenseaCounterbid(data: any, task: ITask) {
-  const startTime = Date.now();
-  console.log(CYAN + `[DEBUG][handleOpenseaCounterbid] START - Task: ${task._id}, Collection: ${task.contract.slug}` + RESET);
-  console.log(CYAN + `[DEBUG][handleOpenseaCounterbid] Incoming bid data:`, JSON.stringify(data?.payload?.payload) + RESET);
-
   try {
     const currentTask = activeTasks.get(task._id)
     console.log(CYAN + `[DEBUG][handleOpenseaCounterbid] Current task status - Running: ${currentTask?.running}, Selected marketplaces: ${currentTask?.selectedMarketplaces}, Enabled: ${enabledMarketplaces}` + RESET);
@@ -7620,7 +7608,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     addSeenItem(seenOrderHashes, taskSpecificHash)
 
     if (walletAddresses.includes(maker)) {
-      // incrementOwnBidCounter('opensea', task._id);
+      incrementOwnBidCounter('opensea', task._id);
       return
     }
 
@@ -8114,9 +8102,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
   const startTime = Date.now();
   const incomingBid = data
 
-  console.log(CYAN + `[DEBUG][handleBlurCounterbid] START - Task: ${task._id}, Collection: ${task.contract.slug}` + RESET);
-  console.log(CYAN + `[DEBUG][handleBlurCounterbid] Incoming bid data:`, JSON.stringify(data) + RESET);
-
   try {
     // Include task ID in the hash to make it task-specific
     const bidHash = hashBid({ ...data, taskId: task._id });
@@ -8167,8 +8152,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       }
 
       const traits = transformBlurTraits(selectedTraits)
-      console.log(CYAN + `[DEBUG][handleBlurCounterbid] Transformed traits:`, JSON.stringify(traits) + RESET);
-
       const incomingTraitBids = incomingBid?.stats?.filter((item: any) => item?.criteriaType?.toLowerCase() === "trait") || incomingBid?.updates?.filter((item: any) => item?.criteriaType?.toLowerCase() === "trait")
       console.log(CYAN + `[DEBUG][handleBlurCounterbid] Incoming trait bids count: ${incomingTraitBids?.length || 0}` + RESET);
 
@@ -8298,7 +8281,8 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
         await blurQueue.add(
           BLUR_TRAIT_BID_COUNTERBID,
-          bidData
+          bidData,
+          { jobId: bidHash }
         );
 
         // Log successful trait counterbid preparation
@@ -8432,7 +8416,8 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
       await blurQueue.add(
         BLUR_COLLECTION_BID_COUNTERBID,
-        bidData
+        bidData,
+        { jobId: bidHash }
       );
 
       console.log(GREEN + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -9055,33 +9040,174 @@ async function processBlurScheduledBid(task: ITask) {
     const contractAddress = currentTask.contract.contractAddress
     const newTask = { ...currentTask, traits: {} } as ITask
 
+    // Check authentication block status before pre-authenticating
+    const redis = redisClient.getClient();
+    if (redis) {
+      const authBlockKey = `blur:auth:block:${WALLET_ADDRESS}`;
+      const authBlockTime = await redis.get(authBlockKey);
+
+      if (authBlockTime) {
+        const blockTime = parseInt(authBlockTime);
+        if (blockTime > Date.now()) {
+          const waitTime = blockTime - Date.now();
+          const waitSeconds = Math.round(waitTime / 1000);
+
+          console.log(RED + `[Blur Auth Block] Wallet ${WALLET_ADDRESS} is blocked from authentication` + RESET);
+          console.log(RED + `[Blur Auth Block] Will resume at: ${new Date(blockTime).toLocaleTimeString()}` + RESET);
+          console.log(RED + `[Blur Auth Block] Skipping task ${taskId} - wait ${waitSeconds} seconds` + RESET);
+
+          // Update warning for UI
+          if (!warningBids[taskId]) {
+            warningBids[taskId] = { opensea: false, magiceden: false, blur: true };
+          }
+          if (!warningMessage[taskId]) {
+            warningMessage[taskId] = { opensea: "", magiceden: "", blur: "" };
+          }
+          warningBids[taskId].blur = true;
+          warningMessage[taskId].blur = `Authentication blocked - retry in ${waitSeconds}s`;
+
+          return; // Skip creating jobs for this task
+        }
+      }
+    }
+
+    // Pre-authenticate for Blur before creating jobs
+    console.log(`${BLUE}[Blur Auth Warm-up] Pre-authenticating wallet ${WALLET_ADDRESS}...${RESET}`);
+    try {
+      const authStartTime = Date.now();
+      const accessToken = await getAccessToken(WALLET_PRIVATE_KEY);
+
+      if (accessToken) {
+        const authTime = Date.now() - authStartTime;
+        console.log(`${GREEN}[Blur Auth Warm-up] Successfully pre-authenticated wallet ${WALLET_ADDRESS} in ${authTime}ms${RESET}`);
+      } else {
+        console.log(`${YELLOW}[Blur Auth Warm-up] Failed to pre-authenticate wallet ${WALLET_ADDRESS}${RESET}`);
+      }
+    } catch (authError: any) {
+      console.error(`${RED}[Blur Auth Warm-up] Error pre-authenticating wallet ${WALLET_ADDRESS}: ${authError}${RESET}`);
+
+      // Check if error is due to authentication block
+      if (authError.message && authError.message.includes('Authentication blocked until')) {
+        console.log(RED + `[Blur Auth Block] Cannot create jobs for blocked wallet ${WALLET_ADDRESS}` + RESET);
+
+        // Update warning for UI
+        if (!warningBids[taskId]) {
+          warningBids[taskId] = { opensea: false, magiceden: false, blur: true };
+        }
+        if (!warningMessage[taskId]) {
+          warningMessage[taskId] = { opensea: "", magiceden: "", blur: "" };
+        }
+        warningBids[taskId].blur = true;
+        warningMessage[taskId].blur = `Authentication blocked - ${authError.message}`;
+
+        return; // Skip creating jobs for this task
+      }
+      // Continue anyway - individual jobs will attempt auth if needed
+    }
+
+    // Check wallet pause status before creating jobs
+    const walletPauseKey = `blur:wallet:pause:${WALLET_ADDRESS}`;
+    const walletPauseUntil = redis ? await redis.get(walletPauseKey) : null;
+
+    if (walletPauseUntil) {
+      const pauseTime = parseInt(walletPauseUntil);
+      if (pauseTime > Date.now()) {
+        const waitTime = pauseTime - Date.now();
+        console.log(YELLOW + `[Blur Job Creation] Wallet ${WALLET_ADDRESS.substring(0, 8)}... is paused for ${Math.round(waitTime / 1000)}s. Skipping job creation.` + RESET);
+
+        // Set warning for UI visibility
+        if (!warningBids[taskId]) {
+          warningBids[taskId] = { opensea: false, magiceden: false, blur: true };
+        }
+        if (!warningMessage[taskId]) {
+          warningMessage[taskId] = { opensea: "", magiceden: "", blur: "" };
+        }
+        warningBids[taskId].blur = true;
+        warningMessage[taskId].blur = `Blur API rate limited - waiting ${Math.round(waitTime / 1000)}s`;
+
+        return;
+      }
+    }
+
+    // Define Blur rate limits based on API documentation
+    const BLUR_RATE_LIMIT = {
+      maxBidsPerWindow: 40,  // Maximum 40 bids per 10 seconds
+      windowDuration: 10000, // 10 second window
+      batchSize: 35,         // Process 35 jobs at a time (87.5% of limit for safety)
+      batchDelay: 10000      // 10 second delay between batches to respect the window
+    };
+
     // Create jobs based on preprocessing results
     if (preprocessing.blur.traits.length > 0) {
-      // Trait bid
-      // console.log(`${GOLD}[BLUR] Creating ${preprocessing.blur.traits.length} trait bid jobs${RESET}`);
+      // Trait bid - process all traits respecting Blur's rate limit
+      const totalTraits = preprocessing.blur.traits.length;
+      const batchSize = BLUR_RATE_LIMIT.batchSize;
+      const totalBatches = Math.ceil(totalTraits / batchSize);
 
-      const traitJobs = preprocessing.blur.traits.map((trait) => ({
-        name: BLUR_TRAIT_BID,
-        data: {
-          _id: taskId,
-          address: WALLET_ADDRESS,
-          privateKey: WALLET_PRIVATE_KEY,
-          contractAddress,
-          slug: currentTask.contract.slug,
-          trait: JSON.stringify(trait),
-          expiry,
-          outbidOptions: currentTask.outbidOptions,
-          task: newTask
-        },
-        opts: { priority: TRAIT_BID_PRIORITY.BLUR } as JobsOptions
-      })) as Job[]
+      console.log(`${GOLD}[BLUR] Processing ${totalTraits} trait bids in ${totalBatches} batches (${batchSize} per batch)${RESET}`);
+      console.log(`${GOLD}[BLUR] Rate limit: ${BLUR_RATE_LIMIT.maxBidsPerWindow} bids per ${BLUR_RATE_LIMIT.windowDuration / 1000} seconds${RESET}`);
 
-      await processBulkJobs(traitJobs, true);
+      // Process traits in smaller batches that respect the rate limit
+      for (let i = 0; i < totalTraits; i += batchSize) {
+        const batchNumber = Math.floor(i / batchSize) + 1;
+        const batchTraits = preprocessing.blur.traits.slice(i, i + batchSize);
+        const batchDelay = (batchNumber - 1) * BLUR_RATE_LIMIT.batchDelay;
+
+        console.log(`${BLUE}[BLUR] Scheduling batch ${batchNumber}/${totalBatches} (${batchTraits.length} traits) with ${batchDelay / 1000}s delay${RESET}`);
+
+        // Create jobs for this batch with staggered delays within the batch
+        const traitJobs = batchTraits.map((trait, index) => {
+          // Add a small delay between each job within the batch (150ms)
+          const inBatchDelay = index * 150;
+          const totalDelay = batchDelay + inBatchDelay;
+
+          return {
+            name: BLUR_TRAIT_BID,
+            data: {
+              _id: taskId,
+              address: WALLET_ADDRESS,
+              privateKey: WALLET_PRIVATE_KEY,
+              contractAddress,
+              slug: currentTask.contract.slug,
+              trait: JSON.stringify(trait),
+              expiry,
+              outbidOptions: currentTask.outbidOptions,
+              task: newTask,
+              batchInfo: {
+                batchNumber,
+                totalBatches,
+                traitIndex: i + index,
+                totalTraits,
+                batchSize
+              }
+            },
+            opts: {
+              priority: TRAIT_BID_PRIORITY.BLUR,
+              delay: totalDelay
+            } as JobsOptions
+          };
+        }) as Job[]
+
+        await processBulkJobs(traitJobs, true);
+
+        // Log batch scheduling
+        console.log(`${GREEN}[BLUR] Batch ${batchNumber}/${totalBatches} scheduled (will start in ${batchDelay / 1000}s)${RESET}`);
+      }
+
+      const totalTime = (totalBatches - 1) * BLUR_RATE_LIMIT.batchDelay / 1000;
+      const effectiveBidsPerSecond = BLUR_RATE_LIMIT.batchSize / BLUR_RATE_LIMIT.windowDuration * 1000;
+      const utilizationPercent = (BLUR_RATE_LIMIT.batchSize / BLUR_RATE_LIMIT.maxBidsPerWindow * 100).toFixed(1);
+
+      console.log(`${GREEN}[BLUR] All ${totalTraits} trait bids scheduled across ${totalBatches} batches${RESET}`);
+      console.log(`${GREEN}[BLUR] Rate: ${effectiveBidsPerSecond} bids/second, ${BLUR_RATE_LIMIT.batchSize} bids/10s (${utilizationPercent}% of limit)${RESET}`);
+      console.log(`${GREEN}[BLUR] Estimated completion time: ~${totalTime}s${RESET}`);
 
     } else if (preprocessing.blur.jobCount === 1) {
       // Collection bid
       console.log(`${GOLD}[BLUR] Creating 1 collection bid job${RESET}`);
-      const jobId = `bid-${taskId}-blur-${currentTask.contract.slug}-collection`
+
+      const slug = removeChar(currentTask.contract.slug, "-")
+      const jobId = `bid-${taskId}-blur-${slug}-collection-${WALLET_ADDRESS}`
 
       await blurQueue.add(
         BLUR_COLLECTION_BID,
@@ -10281,7 +10407,14 @@ async function processBlurTraitBid(data: {
     magicedenOutbidMargin: number | null;
     counterbid: boolean;
   };
-  task: ITask,
+  task: ITask;
+  batchInfo?: {
+    batchNumber: number;
+    totalBatches: number;
+    traitIndex: number;
+    totalTraits: number;
+    batchSize?: number;
+  };
 }) {
   const taskId = data._id;
 
@@ -10471,7 +10604,7 @@ async function processBlurTraitBid(data: {
     }
 
 
-    await bidOnBlur(_id, bidCount, address, privateKey, contractAddress, traitOffer, slug, expiry, trait);
+    await bidOnBlur(_id, bidCount, address, privateKey, contractAddress, traitOffer, slug, expiry, trait, data.batchInfo);
   } catch (error: any) {
     // Handle rate limit errors
     if (error?.code === 'RATE_LIMITED') {
@@ -11689,6 +11822,12 @@ app.post('/api/floor', async (req, res) => {
       const slug = task.slug;
       const contractAddress = task.contractAddress;
 
+      // Validate taskId exists
+      if (!taskId) {
+        console.warn(`Skipping task with missing _id: ${JSON.stringify(task)}`);
+        return;
+      }
+
       if (!floorPrices[taskId]) {
         floorPrices[taskId] = {
           opensea: 0,
@@ -12201,6 +12340,136 @@ app.post('/api/blur-rate-limits/:wallet/reset', async (req, res) => {
   }
 });
 
+// Clear all Blur authentication tokens
+app.post('/api/blur-auth/clear', async (req, res) => {
+  try {
+    // Only allow in development mode or with API key
+    if (process.env.NODE_ENV !== 'development') {
+      const apiKey = req.headers['x-api-key'];
+      if (!apiKey || apiKey !== API_KEY) {
+        return res.status(401).json({
+          success: false,
+          error: 'Unauthorized'
+        });
+      }
+    }
+
+    const redis = redisClient.getClient();
+    if (!redis) {
+      return res.status(500).json({
+        success: false,
+        error: 'Redis not available'
+      });
+    }
+
+    // Find all Blur access token keys
+    const keys = await redis.keys('{blurAccessToken}:*');
+    let clearedCount = 0;
+
+    if (keys.length > 0) {
+      // Delete all tokens
+      await redis.del(...keys);
+      clearedCount = keys.length;
+    }
+
+    console.log(`Cleared ${clearedCount} Blur authentication tokens`);
+
+    res.status(200).json({
+      success: true,
+      message: `Cleared ${clearedCount} Blur authentication tokens`,
+      clearedTokens: clearedCount
+    });
+  } catch (error: any) {
+    console.error('Failed to clear Blur auth tokens:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to clear authentication tokens'
+    });
+  }
+});
+
+// Blur API health check endpoint
+app.get('/api/blur-health', async (req, res) => {
+  try {
+    const startTime = Date.now();
+    const healthStatus: {
+      status: string;
+      responseTime: number;
+      rateLimitStatus: { totalWallets?: number; rateLimitedWallets?: number; wallets?: any[] };
+      authStatus: { success?: boolean; error?: string; wallet?: string; tokenReceived?: boolean; statusCode?: number };
+      authMetrics: any;
+      timeoutMetrics: any;
+      lastError: string | null;
+      timestamp: string;
+    } = {
+      status: 'unknown',
+      responseTime: 0,
+      rateLimitStatus: {},
+      authStatus: {},
+      authMetrics: getAuthMetrics(),
+      timeoutMetrics: getTimeoutMetrics(),
+      lastError: null,
+      timestamp: new Date().toISOString()
+    };
+
+    // Check rate limit status
+    healthStatus.rateLimitStatus = blurRateLimiter.getStatus();
+
+    // Test authentication for a sample wallet if tasks exist
+    if (currentTasks.length > 0) {
+      const sampleTask = currentTasks[0];
+      const wallet = await walletCache.getWalletById(sampleTask.walletId);
+
+      if (wallet) {
+        try {
+          const privateKey = decryptPrivateKey(wallet.encryptedPrivateKey as string);
+          const accessToken = await getAccessToken(privateKey);
+
+          healthStatus.authStatus = {
+            success: !!accessToken,
+            wallet: sampleTask.wallet,
+            tokenReceived: !!accessToken
+          };
+        } catch (authError: any) {
+          healthStatus.authStatus = {
+            success: false,
+            error: authError.message,
+            statusCode: authError.response?.status
+          };
+          healthStatus.lastError = authError.message;
+        }
+      }
+    }
+
+    // Calculate overall status
+    const hasAuthIssues = healthStatus.authStatus.success === false;
+    const hasRateLimitIssues = (healthStatus.rateLimitStatus.rateLimitedWallets || 0) > 0;
+
+    if (hasAuthIssues) {
+      healthStatus.status = 'unhealthy';
+    } else if (hasRateLimitIssues) {
+      healthStatus.status = 'degraded';
+    } else {
+      healthStatus.status = 'healthy';
+    }
+
+    healthStatus.responseTime = Date.now() - startTime;
+
+    // Return appropriate status code based on health
+    const statusCode = healthStatus.status === 'healthy' ? 200 :
+      healthStatus.status === 'degraded' ? 200 : 503;
+
+    res.status(statusCode).json(healthStatus);
+  } catch (error: any) {
+    console.error('Failed to check Blur health:', error);
+    res.status(500).json({
+      status: 'error',
+      error: error.message || 'Failed to check Blur health',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 
 // Secure update endpoint with authentication and rate limiting
 app.post('/api/update-app', async (req, res) => {
@@ -12558,6 +12827,33 @@ app.get('/health', (req, res) => {
   };
 
   res.status(200).json(healthStatus);
+});
+
+// 408 Error monitoring endpoint
+app.get('/api/blur-timeout-metrics', async (req, res) => {
+  try {
+    const metrics = getTimeoutMetrics();
+
+    // Add alert status based on error rate
+    const alertStatus = {
+      isAlerting: metrics.total408Errors > 10 && metrics.retrySuccessRate < 50,
+      recommendation: metrics.total408Errors > 10 && metrics.retrySuccessRate < 50
+        ? 'High 408 error rate detected. Consider reducing concurrent requests or increasing timeouts.'
+        : 'System operating normally'
+    };
+
+    res.json({
+      ...metrics,
+      alertStatus,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error fetching timeout metrics:', error);
+    res.status(500).json({
+      error: 'Failed to fetch timeout metrics',
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
 });
 
 // Debug endpoint for taskStatus
@@ -14152,111 +14448,7 @@ export interface Orders {
 }
 
 
-/**
- * Network Monitoring System
- * 
- * This code implements a network connectivity monitoring system that manages the application's
- * behavior during network outages. Here's what it does:
- * 
- * 1. Tracks network state with two variables:
- *    - previousNetState: Remembers if network was previously available
- *    - lastConnectedTime: Records timestamp of last successful connection
- * 
- * 2. watchNetworkState() function:
- *    - Compares current and previous network states
- *    - When network is restored:
- *      a. Pauses the queue temporarily
- *      b. Drains existing jobs
- *      c. Resumes queue and workers
- *      d. Restarts the scheduled task loop
- *    - When network is lost:
- *      a. Pauses queue and workers to prevent failed operations
- *    - Requires 5 minutes of continuous disconnection before taking action
- * 
- * 3. checkNetwork() function:
- *    - Creates a socket connection to google.com:80 to test connectivity
- *    - Updates netEnabled flag based on connection success/failure
- *    - Calls watchNetworkState() to take appropriate action
- * 
- * 4. Runs network checks:
- *    - Initial check at startup
- *    - Periodic checks every 30 seconds
- * 
- * This system ensures the application gracefully handles network interruptions
- * by pausing operations during outages and resuming them when connectivity returns.
- */
-
-let previousNetState = true; // Track previous network state
-let lastConnectedTime = Date.now(); // Track last successful connection time
-
-async function watchNetworkState() {
-  const now = Date.now();
-  const timeSinceLastConnection = now - lastConnectedTime;
-
-  if (!netEnabled && timeSinceLastConnection < 60000 * 5) {
-    return; // Wait for the full minute confirmation
-  }
-
-  if (previousNetState !== netEnabled) {
-    if (netEnabled) {
-      // Network restored
-      console.log('Network restored, resuming operations...');
-
-      // Resume the queue first
-      try {
-        await queue.resume();
-        console.log(GREEN + 'Queue resumed after network restoration' + RESET);
-      } catch (err) {
-        console.error('Failed to resume queue:', err);
-      }
-
-      // Then restart the scheduled loop
-      runScheduledLoop().catch(err => {
-        console.error('Failed to restart scheduled loop:', err);
-      });
-    } else {
-      // Network lost after a full minute
-      console.log('Network lost for a full minute, pausing operations...');
-      try {
-        await queue.pause();
-        // Add a small delay to ensure queue is fully paused
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        // Use authorized queue clear for network loss
-        await authorizedQueueClear('network-loss');
-
-      } catch (err) {
-        console.error('Error while pausing/clearing queue:', err);
-      }
-    }
-
-    previousNetState = netEnabled;
-  }
-}
-
-function checkNetwork() {
-  const socket = new net.Socket();
-  socket.setTimeout(5000);
-
-  socket.on('connect', () => {
-    // Network is connected
-    netEnabled = true;
-    lastConnectedTime = Date.now(); // Update last successful connection time
-    socket.destroy();
-    watchNetworkState();
-  });
-
-  socket.on('error', () => {
-    console.log('Network is not connected');
-    netEnabled = false;
-    watchNetworkState();
-  });
-
-  socket.connect(80, 'google.com');
-}
-
-// Periodic network checks
-setInterval(checkNetwork, 30000); // Check every 30 seconds
-checkNetwork(); // Initial check
+// Legacy network monitoring system removed - now using unified HTTP-based monitoring in startConnectivityMonitoring()
 
 
 

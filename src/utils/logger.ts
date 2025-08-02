@@ -7,6 +7,7 @@ const USERNAME = process.env.USERNAME || 'UNKNOWN';
 const AXIOM_TOKEN = process.env.AXIOM_TOKEN;
 const AXIOM_DATASET = process.env.AXIOM_DATASET || 'nft-bidding-bot';
 const AXIOM_URL = 'https://api.axiom.co/v1/datasets';
+const DISABLE_AXIOM = process.env.NODE_ENV === 'production'; // Disable in production, enable in development
 
 // Batch logging for performance
 const logBatch: any[] = [];
@@ -14,7 +15,7 @@ const BATCH_SIZE = 10;
 const BATCH_TIMEOUT = 5000; // 5 seconds
 
 // Initialize Axiom
-if (AXIOM_TOKEN) {
+if (AXIOM_TOKEN && !DISABLE_AXIOM) {
   console.log('✅ Axiom logging initialized');
 
   // Flush batch periodically
@@ -28,21 +29,40 @@ if (AXIOM_TOKEN) {
   process.on('SIGTERM', () => {
     flushLogs().finally(() => process.exit(0));
   });
+} else if (DISABLE_AXIOM) {
+  console.log('⚠️ Axiom logging disabled in production environment');
 } else {
   console.warn('⚠️ AXIOM_TOKEN not found. Axiom logging disabled.');
 }
 
 // Flush logs to Axiom
 async function flushLogs() {
-  if (!AXIOM_TOKEN || logBatch.length === 0) return;
+  if (!AXIOM_TOKEN || DISABLE_AXIOM || logBatch.length === 0) return;
 
   try {
     const logsToSend = [...logBatch];
     logBatch.length = 0; // Clear batch
 
+    // Validate log data structure
+    const validatedLogs = logsToSend.map(log => {
+      // Ensure _time is properly formatted
+      if (!log._time || typeof log._time !== 'string') {
+        log._time = new Date().toISOString();
+      }
+      // Ensure required fields are present
+      if (!log.message || !log.level) {
+        console.warn('Invalid log entry missing required fields:', log);
+      }
+      return log;
+    }).filter(log => log.message && log.level); // Only send valid logs
+
+    if (validatedLogs.length === 0) {
+      return; // Nothing to send
+    }
+
     await axios.post(
       `${AXIOM_URL}/${AXIOM_DATASET}/ingest`,
-      logsToSend,
+      validatedLogs,
       {
         headers: {
           'Authorization': `Bearer ${AXIOM_TOKEN}`,
@@ -52,7 +72,16 @@ async function flushLogs() {
       }
     );
   } catch (error) {
-    console.error('Failed to send logs to Axiom:', error instanceof Error ? error.message : String(error));
+    if (axios.isAxiosError(error)) {
+      console.error('Failed to send logs to Axiom:', {
+        message: error.message,
+        status: error.response?.status,
+        data: error.response?.data,
+        headers: error.response?.headers
+      });
+    } else {
+      console.error('Failed to send logs to Axiom:', error instanceof Error ? error.message : String(error));
+    }
     // Don't re-add failed logs to avoid infinite loops
   }
 }
@@ -299,7 +328,7 @@ export class AxiomLogger {
     const excludedCategories = [ErrorCategory.QUEUE, ErrorCategory.DATABASE, ErrorCategory.SECURITY, ErrorCategory.AUTH];
 
     // Only send ERRORS to Axiom (not info, debug, or warn)
-    if (AXIOM_TOKEN && level === LogLevel.ERROR && !excludedCategories.includes(category)) {
+    if (AXIOM_TOKEN && !DISABLE_AXIOM && level === LogLevel.ERROR && !excludedCategories.includes(category)) {
       try {
         const logData = {
           _time: new Date().toISOString(),
@@ -317,7 +346,9 @@ export class AxiomLogger {
           // Remove sensitive data
           encryptedPrivateKey: undefined,
           privateKey: undefined,
-          password: undefined
+          password: undefined,
+          // Remove field that exceeds Axiom column limit
+          counterbidEnabled: undefined
         };
 
         // Remove undefined values
@@ -694,6 +725,25 @@ export class AxiomLogger {
       marketplace,
       tokenId,
       cancellationReason: reason,
+      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION
+    });
+  }
+
+  // === CACHE OPERATION LOGGING ===
+  
+  async logCacheError(operation: 'read' | 'write' | 'delete', cacheType: string, message: string, context: LogContext = {}) {
+    await this.sendLog(LogLevel.ERROR, ErrorCategory.DATABASE, message, {
+      ...context,
+      cacheOperation: operation,
+      cacheType,
+      databaseOperation: operation === 'read' ? DatabaseOperation.READ : operation === 'write' ? DatabaseOperation.CREATE : DatabaseOperation.DELETE
+    });
+  }
+
+  async logCancellationError(marketplace: string, message: string, context: LogContext = {}) {
+    await this.sendLog(LogLevel.ERROR, ErrorCategory.MARKETPLACE, message, {
+      ...context,
+      marketplace,
       marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION
     });
   }

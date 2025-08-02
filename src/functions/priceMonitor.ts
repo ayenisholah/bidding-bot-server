@@ -1,7 +1,6 @@
 import { IListing } from "../types/listing.types";
 import Listing from "../models/listing.model";
 import { getAllFloorPrices } from "./collection";
-import { logger, ErrorCategory } from "../utils/logger";
 import { PROCESS_LISTING_UPDATE, queue } from "../index";
 
 // Store current best prices for listings we're monitoring
@@ -148,28 +147,24 @@ async function processListingUpdate(
           // Get the existing job's price
           const existingPrice = existingJob.data.newPrice;
 
-          // If the new price is lower, update the job
-          if (newPrice < existingPrice) {
-            try {
-              // Check if job is locked/being processed
-              const jobState = await existingJob.getState();
-              if (jobState === 'active') {
-
-                continue;
-              }
-
-              await existingJob.remove();
-
-            } catch (removeError) {
-              // If we can't remove the job (e.g., it's locked), skip this update
-
-              continue;
-            }
-          } else {
+          // If the new price is lower than existing, skip this update
+          // The existing job will handle the better price
+          if (newPrice >= existingPrice) {
             // Skip adding this job as the existing one has a better price
-
+            console.log(`Skipping price update for ${tokenId} - existing job has better price (${existingPrice} vs ${newPrice})`);
             continue;
           }
+
+          // Check if job is being processed
+          const jobState = await existingJob.getState();
+          if (jobState === 'active') {
+            console.log(`Skipping price update for ${tokenId} - existing job is being processed`);
+            continue;
+          }
+
+          // Job exists but new price is better - let it complete naturally
+          // The job processor should check current market conditions
+          console.log(`Existing job for ${tokenId} will be superseded by market conditions`);
         }
 
         // Add the job to the queue

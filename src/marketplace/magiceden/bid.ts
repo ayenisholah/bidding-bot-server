@@ -578,7 +578,7 @@ async function sendSignedOrderData(
 
       // Log successful bid
 
-      // console.log(MAGENTA, successMessage, RESET);
+      console.log(MAGENTA, successMessage, RESET);
 
       if (!task) return
       return offerResponse;
@@ -856,6 +856,14 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
       console.log(RED + message + RESET);
       console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
     }
+    await logger.logMagicEdenBidError('Failed to cancel MagicEden bid', {
+      taskId,
+      operation: 'cancel_bid',
+      orderIds: orderIds,
+      error: error,
+      errorCode: error?.response?.status,
+      errorMessage: error?.response?.data?.message || error?.message || String(error)
+    });
   }
 }
 
@@ -993,6 +1001,15 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
     if (process.env.NODE_ENV !== 'production') {
       console.error('Error reading MagicEden trait floor from cache:', error);
     }
+    await logger.logDatabaseError('Error reading MagicEden trait floor from Redis cache', {
+      databaseOperation: DatabaseOperation.READ,
+      collection_name: 'redis_cache',
+      operation: 'get_magiceden_trait_floor',
+      contractAddress,
+      cacheKey,
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
   }
 
   try {
@@ -1029,6 +1046,15 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
         if (process.env.NODE_ENV !== 'production') {
           console.error('Error caching MagicEden trait floor:', error);
         }
+        await logger.logDatabaseError('Error writing MagicEden trait floor to Redis cache', {
+          databaseOperation: DatabaseOperation.CREATE,
+          collection_name: 'redis_cache',
+          operation: 'set_magiceden_trait_floor',
+          contractAddress,
+          cacheKey,
+          error: error as Error,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
       }
     }
 
@@ -1038,6 +1064,14 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
       if (process.env.NODE_ENV !== 'production') {
         console.error('MagicEden trait floor error:', error instanceof Error ? error.message : String(error));
       }
+      await logger.logMagicEdenCollectionError('Failed to fetch MagicEden trait floor', {
+        contractAddress,
+        traitKey: trait.attributeKey,
+        traitValue: trait.attributeValue,
+        operation: 'fetch_trait_floor',
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
     }
   }
 }
@@ -1188,6 +1222,15 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
     if (process.env.NODE_ENV !== 'production') {
       console.error('Error reading MagicEden tokens from cache:', error);
     }
+    await logger.logDatabaseError('Error reading MagicEden tokens from Redis cache', {
+      databaseOperation: DatabaseOperation.READ,
+      collection_name: 'redis_cache',
+      operation: 'get_magiceden_tokens',
+      collectionId,
+      cacheKey,
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
   }
 
   return await lockManager.withLock(
@@ -1249,6 +1292,15 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
         if (process.env.NODE_ENV !== 'production') {
           console.error('Error caching MagicEden tokens:', error);
         }
+        await logger.logDatabaseError('Error writing MagicEden tokens to Redis cache', {
+          databaseOperation: DatabaseOperation.CREATE,
+          collection_name: 'redis_cache',
+          operation: 'set_magiceden_tokens',
+          collectionId,
+          cacheKey,
+          error: error as Error,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
       }
 
       return result;
