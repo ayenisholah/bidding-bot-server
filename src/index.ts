@@ -787,24 +787,30 @@ const STUCK_JOB_THRESHOLD = 60 * 1000; // 1 minute in milliseconds
 // Queue monitoring function
 async function monitorQueueForStuckJobs() {
   try {
+    // Check if queues are initialized
+    if (!queue || !blurQueue) {
+      console.log(YELLOW + '⚠️ Queues not initialized yet, skipping monitor check' + RESET);
+      return;
+    }
+
     const currentTime = Date.now();
-    
+
     // Get current queue counts for both queues
     const [counts, blurCounts] = await Promise.all([
       queue.getJobCounts(),
       blurQueue.getJobCounts()
     ]);
-    
+
     // Get all waiting jobs from both queues
     const [waitingJobs, blurWaitingJobs] = await Promise.all([
       queue.getJobs(['waiting']),
       blurQueue.getJobs(['waiting'])
     ]);
-    
+
     // Combine jobs from both queues
     const allWaitingJobs = [...waitingJobs, ...blurWaitingJobs];
     const waitingJobIds = new Set(allWaitingJobs.map(job => job.id || ''));
-    
+
     // Create current state snapshot (combine both queues)
     const currentState: QueueState = {
       timestamp: currentTime,
@@ -815,10 +821,10 @@ async function monitorQueueForStuckJobs() {
       failedCount: (counts.failed || 0) + (blurCounts.failed || 0),
       prioritizedCount: (counts.prioritized || 0) + (blurCounts.prioritized || 0)
     };
-    
+
     // Store current state
     queueStateHistory.set(currentTime, currentState);
-    
+
     // Clean up old history (keep only last 10 minutes)
     const cutoffTime = currentTime - (MAX_HISTORY_SIZE * 60 * 1000);
     for (const [timestamp, _] of queueStateHistory) {
@@ -826,20 +832,20 @@ async function monitorQueueForStuckJobs() {
         queueStateHistory.delete(timestamp);
       }
     }
-    
+
     // Track individual jobs
     let stuckJobsFound = false;
     const stuckJobsList: string[] = [];
-    
+
     for (const job of allWaitingJobs) {
       if (!job.id) continue;
-      
+
       const jobInfo = stuckJobsTracker.get(job.id);
-      
+
       if (jobInfo) {
         // Update existing job tracking
         jobInfo.lastSeenAt = currentTime;
-        
+
         // Check if job has been stuck for more than threshold
         const stuckDuration = currentTime - jobInfo.firstSeenAt;
         if (stuckDuration >= STUCK_JOB_THRESHOLD) {
@@ -860,19 +866,19 @@ async function monitorQueueForStuckJobs() {
         });
       }
     }
-    
+
     // Clean up jobs that are no longer waiting
     for (const [jobId, jobInfo] of stuckJobsTracker) {
       if (!waitingJobIds.has(jobId)) {
         stuckJobsTracker.delete(jobId);
       }
     }
-    
+
     // Check for stuck patterns
     const previousStates = Array.from(queueStateHistory.values())
       .filter(state => state.timestamp !== currentTime)
       .sort((a, b) => b.timestamp - a.timestamp);
-    
+
     // Pattern 1: Same waiting count for multiple checks
     let sameWaitingCount = 0;
     for (const prevState of previousStates) {
@@ -882,23 +888,23 @@ async function monitorQueueForStuckJobs() {
         break;
       }
     }
-    
+
     // Pattern 2: No progress (active = 0, waiting > 0)
     const noProgress = currentState.activeCount === 0 && currentState.waitingCount > 0;
-    
+
     // Log monitoring status
     console.log(CYAN + `\n📋 Queue Monitor: Waiting=${currentState.waitingCount}, Active=${currentState.activeCount}, Stuck Jobs=${stuckJobsList.length}` + RESET);
-    
+
     // Log stuck jobs details
     if (stuckJobsFound) {
       console.log(RED + `⚠️  ${stuckJobsList.length} job(s) stuck for more than 60 seconds - WILL CLEAR QUEUE` + RESET);
     }
-    
+
     // Determine if we should clear the queue
-    const shouldClear = stuckJobsFound || 
-                       (sameWaitingCount >= 2 && currentState.waitingCount > 0) ||
-                       (noProgress && previousStates.length > 0);
-    
+    const shouldClear = stuckJobsFound ||
+      (sameWaitingCount >= 2 && currentState.waitingCount > 0) ||
+      (noProgress && previousStates.length > 0);
+
     if (shouldClear) {
       // Check cooldown
       if (currentTime - lastClearTime < CLEAR_COOLDOWN) {
@@ -906,7 +912,7 @@ async function monitorQueueForStuckJobs() {
         console.log(YELLOW + `⏱️  Clear cooldown active. Waiting ${remainingCooldown}s before next clear.` + RESET);
         return;
       }
-      
+
       // Log detailed state before clearing
       console.log(RED + '\n🚨 ═══════ STUCK QUEUE DETECTED - INITIATING CLEAR ═══════ 🚨' + RESET);
       console.log(RED + `Reason: ${stuckJobsFound ? 'Stuck jobs detected' : sameWaitingCount >= 2 ? 'No progress in waiting count' : 'No active workers with waiting jobs'}` + RESET);
@@ -914,16 +920,16 @@ async function monitorQueueForStuckJobs() {
       console.log(RED + `Current State: Waiting=${currentState.waitingCount}, Active=${currentState.activeCount}` + RESET);
       console.log(RED + `Same waiting count for: ${sameWaitingCount + 1} checks` + RESET);
       console.log(RED + '═══════════════════════════════════════════════════════════' + RESET);
-      
+
       // Clear the queue
       lastClearTime = currentTime;
       await clearQueueAndRestartJobs();
-      
+
       // Clear tracking after queue clear
       stuckJobsTracker.clear();
       queueStateHistory.clear();
     }
-    
+
   } catch (error) {
     console.error(RED + 'Error in queue monitor:' + RESET, error);
     await logger.logGeneralError('Queue monitoring failed', {
@@ -938,11 +944,7 @@ const QUEUE_MONITOR_INTERVAL = 60 * 1000; // 1 minute
 setInterval(monitorQueueForStuckJobs, QUEUE_MONITOR_INTERVAL);
 console.log(GREEN + '✅ Enhanced queue monitoring started (checking every 60s for stuck jobs)' + RESET);
 
-// Run monitoring immediately on startup to catch any already stuck jobs
-setTimeout(() => {
-  console.log(CYAN + '🔍 Running initial queue monitor check...' + RESET);
-  monitorQueueForStuckJobs();
-}, 5000); // Wait 5 seconds for system to stabilize
+// Queue monitor will be initialized after queues are created in startServer()
 
 // Add this near the top with other global variables
 export const activeTasks: Map<string, ITask> = new Map();
@@ -1430,6 +1432,12 @@ async function startServer() {
     workers.push(blurWorker);
 
     console.log(`Created ${bullMQConnections.length} separate Redis connections for BullMQ components`);
+
+    // Initialize queue monitor after queues are created
+    setTimeout(() => {
+      console.log(CYAN + '🔍 Running initial queue monitor check...' + RESET);
+      monitorQueueForStuckJobs();
+    }, 5000); // Wait 5 seconds for system to stabilize
 
     // Add process-level error handler for uncaught BullMQ errors
     process.on('unhandledRejection', async (reason, promise) => {
@@ -2779,73 +2787,14 @@ async function processImportedTasks(tasks: ITask[]) {
     });
     updateTaskIndexes(currentTasks);
 
-
-    const jobs = tasks.flatMap(task => [
-      ...(task.selectedMarketplaces.map(m => m.toLowerCase()).includes("opensea") ? [{
-        name: OPENSEA_SCHEDULE,
-        data: task,
-        opts: {
-          jobId: `${task._id}-opensea-schedule`,
-          removeOnComplete: true,
-          removeOnFail: {
-            age: 3600, // keep up to 1 hour
-            count: 1000, // keep up to 1000 jobs
-          },
-          attempts: 3,
-          backoff: {
-            type: 'exponential',
-            delay: 2000,
-          },
-        }
-      }] : []),
-      ...(task.selectedMarketplaces.map(m => m.toLowerCase()).includes("blur") ? [{
-        name: BLUR_SCHEDULE,
-        data: task,
-        opts: {
-          jobId: `${task._id}-blur-schedule`,
-          removeOnComplete: true,
-          removeOnFail: {
-            age: 3600, // keep up to 1 hour
-            count: 1000, // keep up to 1000 jobs
-          },
-          attempts: 3,
-          backoff: {
-            type: 'exponential',
-            delay: 2000,
-          },
-        }
-      }] : []),
-      ...(task.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden") ? [{
-        name: MAGICEDEN_SCHEDULE, data: task,
-        opts: {
-          jobId: `${task._id}-magiceden-schedule`,
-          removeOnComplete: true,
-          removeOnFail: {
-            age: 3600, // keep up to 1 hour
-            count: 1000, // keep up to 1000 jobs
-          },
-          attempts: 3,
-          backoff: {
-            type: 'exponential',
-            delay: 2000,
-          },
-        }
-      }] : []),
-    ]);
-
-    if (jobs.length > 0) {
-      await queue.addBulk(jobs)
-      console.log(`Successfully added ${jobs.length} jobs to the queue.`);
-    }
-
-    // Subscribe all running tasks to WebSocket (WebSocket should already be connected at startup)
-    const runningTasks = tasks.filter(task => task.running).map(task => ({ ...task, running: true }));
-
-    if (runningTasks.length > 0 && wsManager?.isConnected()) {
-      console.log(GREEN + `Subscribing to ${runningTasks.length} collections` + RESET);
-      subscribeToCollections(runningTasks);
-    } else if (runningTasks.length > 0) {
-      console.log(YELLOW + "WebSocket not connected, skipping task subscription" + RESET);
+    // Start all running tasks concurrently
+    const runningTasks = tasks.filter(task => task.running);
+    if (runningTasks.length > 0) {
+      console.log(CYAN + `Starting ${runningTasks.length} running tasks...` + RESET);
+      await Promise.all(
+        runningTasks.map(task => startTask(task, true))
+      );
+      console.log(GREEN + `Started ${runningTasks.length} tasks successfully` + RESET);
     }
 
     console.log(GREEN + `=== Imported Tasks Processing Complete ===\n` + RESET);
@@ -2861,84 +2810,90 @@ async function processNewTask(task: ITask) {
     activeTasks.set(task._id, task)
     currentTasks.push(task);
     updateTaskIndexes(currentTasks);
-    const jobs = [
-      ...(task.selectedMarketplaces.map(m => m.toLowerCase()).includes("opensea") ? [{
-        name: OPENSEA_SCHEDULE,
-        data: task,
-        opts: {
-          jobId: `${task._id}-opensea-schedule`,
-          removeOnComplete: true,
-          removeOnFail: {
-            age: 3600, // keep up to 1 hour
-            count: 1000, // keep up to 1000 jobs
-          },
-          attempts: 3,
-          backoff: {
-            type: 'exponential',
-            delay: 2000,
-          },
-        }
-      }] : []),
-      ...(task.selectedMarketplaces.map(m => m.toLowerCase()).includes("blur") ? [{
-        name: BLUR_SCHEDULE,
-        data: task,
-        opts: {
-          jobId: `${task._id}-blur-schedule`,
-          removeOnComplete: true,
-          removeOnFail: {
-            age: 3600, // keep up to 1 hour
-            count: 1000, // keep up to 1000 jobs
-          },
-          attempts: 3,
-          backoff: {
-            type: 'exponential',
-            delay: 2000,
-          },
-        }
-      }] : []),
-      ...(task.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden") ? [{
-        name: MAGICEDEN_SCHEDULE, data: task, opts: {
-          jobId: `${task._id}-magiceden-schedule`,
-          removeOnComplete: true,
-          removeOnFail: {
-            age: 3600, // keep up to 1 hour
-            count: 1000, // keep up to 1000 jobs
-          },
-          attempts: 3,
-          backoff: {
-            type: 'exponential',
-            delay: 2000,
-          },
-        }
-      }] : []),
-    ];
+    // const jobs = [
+    //   ...(task.selectedMarketplaces.map(m => m.toLowerCase()).includes("opensea") ? [{
+    //     name: OPENSEA_SCHEDULE,
+    //     data: task,
+    //     opts: {
+    //       jobId: `${task._id}-opensea-schedule`,
+    //       removeOnComplete: true,
+    //       removeOnFail: {
+    //         age: 3600, // keep up to 1 hour
+    //         count: 1000, // keep up to 1000 jobs
+    //       },
+    //       attempts: 3,
+    //       backoff: {
+    //         type: 'exponential',
+    //         delay: 2000,
+    //       },
+    //     }
+    //   }] : []),
+    //   ...(task.selectedMarketplaces.map(m => m.toLowerCase()).includes("blur") ? [{
+    //     name: BLUR_SCHEDULE,
+    //     data: task,
+    //     opts: {
+    //       jobId: `${task._id}-blur-schedule`,
+    //       removeOnComplete: true,
+    //       removeOnFail: {
+    //         age: 3600, // keep up to 1 hour
+    //         count: 1000, // keep up to 1000 jobs
+    //       },
+    //       attempts: 3,
+    //       backoff: {
+    //         type: 'exponential',
+    //         delay: 2000,
+    //       },
+    //     }
+    //   }] : []),
+    //   ...(task.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden") ? [{
+    //     name: MAGICEDEN_SCHEDULE, data: task, opts: {
+    //       jobId: `${task._id}-magiceden-schedule`,
+    //       removeOnComplete: true,
+    //       removeOnFail: {
+    //         age: 3600, // keep up to 1 hour
+    //         count: 1000, // keep up to 1000 jobs
+    //       },
+    //       attempts: 3,
+    //       backoff: {
+    //         type: 'exponential',
+    //         delay: 2000,
+    //       },
+    //     }
+    //   }] : []),
+    // ];
 
-    if (jobs.length > 0) {
-      await queue.addBulk(jobs)
-      console.log(`Successfully added ${jobs.length} jobs to the queue.`);
+    console.log({ running: task.running });
 
-      // Log each job added
-      for (const job of jobs) {
-        await logger.logQueueJobAdded(job.name, {
-          jobName: job.name,
-          taskId: job.data._id,
-          taskName: (job.data as any).name || job.data.contract?.slug,
-          marketplace: job.name.replace('_SCHEDULE', '').toLowerCase(),
-          queueName: QUEUE_NAME
-        });
-      }
-    }
 
-    // Subscribe to WebSocket collection (WebSocket should already be connected at startup)
-    try {
-      if (wsManager?.isConnected()) {
-        // console.log("subscribing to collection: ", task.contract.slug);
-        const newTask = { ...task, running: true };
-        subscribeToCollections([newTask]);
-      }
-    } catch (error) {
-      console.error(RED + `Error subscribing to collection ${task.contract.slug}: ` + RESET, error);
-    }
+    await startTask(task, task.running)
+
+
+    // if (jobs.length > 0) {
+    //   await queue.addBulk(jobs)
+    //   console.log(`Successfully added ${jobs.length} jobs to the queue.`);
+
+    //   // Log each job added
+    //   for (const job of jobs) {
+    //     await logger.logQueueJobAdded(job.name, {
+    //       jobName: job.name,
+    //       taskId: job.data._id,
+    //       taskName: (job.data as any).name || job.data.contract?.slug,
+    //       marketplace: job.name.replace('_SCHEDULE', '').toLowerCase(),
+    //       queueName: QUEUE_NAME
+    //     });
+    //   }
+    // }
+
+    // // Subscribe to WebSocket collection (WebSocket should already be connected at startup)
+    // try {
+    //   if (wsManager?.isConnected()) {
+    //     // console.log("subscribing to collection: ", task.contract.slug);
+    //     const newTask = { ...task, running: true };
+    //     subscribeToCollections([newTask]);
+    //   }
+    // } catch (error) {
+    //   console.error(RED + `Error subscribing to collection ${task.contract.slug}: ` + RESET, error);
+    // }
 
     console.log(GREEN + `=== New Task Processing Complete ===\n` + RESET);
   } catch (error) {
@@ -13086,26 +13041,26 @@ app.post('/api/queue-monitor/clear', async (req, res) => {
     // Check if cooldown is active
     if (lastClearTime && (Date.now() - lastClearTime) < CLEAR_COOLDOWN) {
       const remainingCooldown = Math.ceil((CLEAR_COOLDOWN - (Date.now() - lastClearTime)) / 1000);
-      return res.status(429).json({ 
-        error: 'Clear cooldown active', 
-        remainingSeconds: remainingCooldown 
+      return res.status(429).json({
+        error: 'Clear cooldown active',
+        remainingSeconds: remainingCooldown
       });
     }
 
     console.log(YELLOW + '\n🔧 Manual queue clear requested via API' + RESET);
-    
+
     // Update last clear time
     lastClearTime = Date.now();
-    
+
     // Clear the queues
     await clearQueueAndRestartJobs();
-    
+
     // Clear tracking
     stuckJobsTracker.clear();
     queueStateHistory.clear();
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Queue cleared and jobs restarted',
       timestamp: new Date().toISOString()
     });
