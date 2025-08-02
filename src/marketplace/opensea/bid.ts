@@ -1132,35 +1132,16 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
       limit: 2
     }
   };
-  const tasks = [
-    () => limiter.schedule(() => axiosInstance.get(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price`, {
+  const itemOffers = await limiter.schedule(() => axiosInstance.post(
+    `${BASE_URL}/opensea/graphql`,
+    query,
+    {
       headers: {
         'content-type': 'application/json',
         'x-api-key': API_KEY
       }
-    })),
-    () => limiter.schedule(() => axiosInstance.get(`${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${tokenId}&sortBy=price&status=active&excludeEOA=false`, {
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': API_KEY
-      }
-    })),
-
-    () => limiter.schedule(() => axiosInstance.post(
-      `${BASE_URL}/opensea/graphql`,
-      query,
-      {
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY
-        }
-      }
-    ))
-  ];
-
-  const [collectionResponse, tokenResponse, itemOffers] = await pQueue.addAll(tasks, {
-    throwOnTimeout: true,
-  });
+    }
+  ));
 
   const order = ((itemOffers.data) as unknown as GraphQLItemOfferResponse).data.itemOffers.items
     .filter((offer) => new Date(offer.endTime).getTime() > Date.now()) // remove expired offers
@@ -1173,29 +1154,7 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
       eth: offer.pricePerItem.token.unit
     }))
 
-  const data = [...collectionResponse.data.orders, ...tokenResponse.data.orders].filter((offer) => offer.source.name.toLowerCase() === "opensea")
-
-  const offers = data.map((order) => {
-    return {
-      amount: order?.price?.amount?.raw,
-      owner: order?.maker,
-      currency: order?.price.currency.symbol.toUpperCase(),
-      usd: order?.price?.amount?.usd,
-      decimal: order.price.currency.decimals,
-      eth: order.price.amount.native
-    }
-  })
-  const allOffers = [...offers, ...order]
-  const uniqueKey = (o: { owner: string; amount: string }) => `${o.owner}-${o.amount}`;
-  const seen = new Set<string>();
-
-  const uniqueOffers = allOffers.filter((offer) => {
-    const key = uniqueKey(offer);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).sort((a, b) => Number(b.usd) - Number(a.usd)).slice(0, 2)
-  return uniqueOffers
+  return order
 }
 
 export async function fetchOpenseaOffers(
@@ -1205,68 +1164,527 @@ export async function fetchOpenseaOffers(
   identifiers: Record<string, string> | string
 ) {
   if (offerType === 'COLLECTION') {
-    const { data } = await limiter?.schedule(() =>
-      axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price`, {
+    // Use OpenSea GraphQL API for collection offers
+    const query = {
+      operationName: "CollectionOffersTableQuery",
+      query: `query CollectionOffersTableQuery($collectionSlug: String!, $filter: CollectionOffersFilter, $sort: CollectionOfferAggregateSort!, $cursor: String, $limit: Int!) {
+        collectionOfferAggregates(
+          collectionSlug: $collectionSlug
+          filter: $filter
+          sort: $sort
+          cursor: $cursor
+          limit: $limit
+        ) {
+          items {
+            id
+            totalOffers
+            offerPrice {
+              token {
+                unit
+                __typename
+              }
+              __typename
+            }
+            ...OfferAggregateTable
+            __typename
+          }
+          nextPageCursor
+          __typename
+        }
+        collectionBySlug(slug: $collectionSlug) {
+          ...OfferAggregateTable_collection
+          __typename
+        }
+      }
+      fragment OfferAggregateTable_collection on Collection {
+        ...useCollectionOffers
+        ...OfferAggregateTableRow_collection
+        __typename
+      }
+      fragment useCollectionOffers on CollectionResult {
+        __typename
+        ... on Collection {
+          slug
+          flags {
+            isOffersEnabled
+            __typename
+          }
+          traitOffersEnabled
+          chain {
+            identifier
+            arch
+            __typename
+          }
+          __typename
+        }
+      }
+      fragment OfferAggregateTableRow_collection on Collection {
+        ...useCollectionOffers
+        __typename
+      }
+      fragment OfferAggregateTable on OfferAggregate {
+        id
+        ...OfferAggregateTableRow
+        __typename
+      }
+      fragment OfferAggregateTableRow on OfferAggregate {
+        offerPrice {
+          token {
+            unit
+            contractAddress
+            __typename
+          }
+          ...TokenPrice
+          __typename
+        }
+        totalValue {
+          token {
+            unit
+            __typename
+          }
+          ...TokenPrice
+          __typename
+        }
+        totalOffers
+        bidders {
+          quantity
+          __typename
+        }
+        ...OfferAggregateBidders
+        __typename
+      }
+      fragment TokenPrice on Price {
+        usd
+        token {
+          unit
+          symbol
+          contractAddress
+          chain {
+            identifier
+            __typename
+          }
+          __typename
+        }
+        __typename
+      }
+      fragment OfferAggregateBidders on OfferAggregate {
+        offerPrice {
+          ...TokenPrice
+          __typename
+        }
+        totalValue {
+          ...TokenPrice
+          __typename
+        }
+        totalOffers
+        bidders {
+          quantity
+          imageUrl
+          address
+          ...AccountLockup
+          __typename
+        }
+        __typename
+      }
+      fragment AccountLockup on ProfileIdentifier {
+        address
+        displayName
+        imageUrl
+        ...profileUrl
+        __typename
+      }
+      fragment profileUrl on ProfileIdentifier {
+        displayName
+        address
+        __typename
+      }`,
+      variables: {
+        collectionSlug: collectionSlug,
+        filter: {},
+        limit: 2,
+        sort: {
+          by: "OFFER_PRICE",
+          direction: "DESC"
+        }
+      }
+    };
+
+    const response = await limiter?.schedule(() =>
+      axiosInstance.post(`${BASE_URL}/opensea/graphql`, query, {
         headers: {
           'content-type': 'application/json',
           'x-api-key': API_KEY
         }
       })
     );
-    const offers = data?.orders
-      .filter((offer) => offer.source.name.toLowerCase() === "opensea")
-      .map((order) => {
+    // Parse the GraphQL response
+    const offerAggregates = response.data?.data?.collectionOfferAggregates?.items || [];
+
+    // Map to the expected format and get top 2 offers
+    const offers = offerAggregates
+      .slice(0, 2)
+      .map((aggregate: any) => {
+        // Get the first bidder if available
+        const firstBidder = aggregate.bidders?.[0];
+
         return {
-          amount: order?.price?.amount?.raw,
-          owner: order?.maker,
-          currency: order?.price.currency.symbol,
-          usd: order?.price?.amount?.usd,
-          decimal: order.price.currency.decimals,
-          eth: order.price.amount.native
-        }
-      })?.sort((a, b) => Number(b?.usd) - Number(a?.usd)).slice(0, 2)
+          amount: aggregate.offerPrice?.token?.unit || 0,
+          owner: firstBidder?.address || 'unknown',
+          currency: aggregate.offerPrice?.token?.symbol || 'WETH',
+          usd: aggregate.offerPrice?.usd || 0,
+          decimal: aggregate.offerPrice?.token?.symbol?.toUpperCase() === 'USDC' ? 6 : 18,
+          eth: aggregate.offerPrice?.token?.unit || 0
+        };
+      });
 
     return offers
   } else if (offerType === 'TRAIT') {
     const { type, value } = identifiers as Record<string, string>;
+    
+    // Create tasks for both collection and trait offers
     const tasks = [
-      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price`, {
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY
-        }
-      })),
-
+      // Collection offers task
       () => {
-        const URL = `${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v5?collection=${contractAddress}&attribute%5B${type}%5D=${value}&status=active&sortBy=price`;
-
-        return limiter.schedule(() => axiosInstance.get<MagicEdenTraitOfferResponse>(
-          URL,
-          {
-            headers: {
-              'x-api-key': API_KEY,
+        const collectionQuery = {
+          operationName: "CollectionOffersTableQuery",
+          query: `query CollectionOffersTableQuery($collectionSlug: String!, $filter: CollectionOffersFilter, $sort: CollectionOfferAggregateSort!, $cursor: String, $limit: Int!) {
+            collectionOfferAggregates(
+              collectionSlug: $collectionSlug
+              filter: $filter
+              sort: $sort
+              cursor: $cursor
+              limit: $limit
+            ) {
+              items {
+                id
+                totalOffers
+                offerPrice {
+                  token {
+                    unit
+                    __typename
+                  }
+                  __typename
+                }
+                ...OfferAggregateTable
+                __typename
+              }
+              nextPageCursor
+              __typename
+            }
+            collectionBySlug(slug: $collectionSlug) {
+              ...OfferAggregateTable_collection
+              __typename
             }
           }
-        ));
+          fragment OfferAggregateTable_collection on Collection {
+            ...useCollectionOffers
+            ...OfferAggregateTableRow_collection
+            __typename
+          }
+          fragment useCollectionOffers on CollectionResult {
+            __typename
+            ... on Collection {
+              slug
+              flags {
+                isOffersEnabled
+                __typename
+              }
+              traitOffersEnabled
+              chain {
+                identifier
+                arch
+                __typename
+              }
+              __typename
+            }
+          }
+          fragment OfferAggregateTableRow_collection on Collection {
+            ...useCollectionOffers
+            __typename
+          }
+          fragment OfferAggregateTable on OfferAggregate {
+            id
+            ...OfferAggregateTableRow
+            __typename
+          }
+          fragment OfferAggregateTableRow on OfferAggregate {
+            offerPrice {
+              token {
+                unit
+                contractAddress
+                __typename
+              }
+              ...TokenPrice
+              __typename
+            }
+            totalValue {
+              token {
+                unit
+                __typename
+              }
+              ...TokenPrice
+              __typename
+            }
+            totalOffers
+            bidders {
+              quantity
+              __typename
+            }
+            ...OfferAggregateBidders
+            __typename
+          }
+          fragment TokenPrice on Price {
+            usd
+            token {
+              unit
+              symbol
+              contractAddress
+              chain {
+                identifier
+                __typename
+              }
+              __typename
+            }
+            __typename
+          }
+          fragment OfferAggregateBidders on OfferAggregate {
+            offerPrice {
+              ...TokenPrice
+              __typename
+            }
+            totalValue {
+              ...TokenPrice
+              __typename
+            }
+            totalOffers
+            bidders {
+              quantity
+              imageUrl
+              address
+              ...AccountLockup
+              __typename
+            }
+            __typename
+          }
+          fragment AccountLockup on ProfileIdentifier {
+            address
+            displayName
+            imageUrl
+            ...profileUrl
+            __typename
+          }
+          fragment profileUrl on ProfileIdentifier {
+            displayName
+            address
+            __typename
+          }`,
+          variables: {
+            collectionSlug: collectionSlug,
+            filter: {},
+            limit: 10,
+            sort: {
+              by: "OFFER_PRICE",
+              direction: "DESC"
+            }
+          }
+        };
+
+        return limiter?.schedule(() =>
+          axiosInstance.post(`${BASE_URL}/opensea/graphql`, collectionQuery, {
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': API_KEY
+            }
+          })
+        );
+      },
+      
+      // Trait offers task
+      () => {
+        const traitQuery = {
+          operationName: "TraitOffersTableQuery",
+          query: `query TraitOffersTableQuery($collectionSlug: String!, $filter: TraitOffersFilter, $sort: TraitOfferAggregateSort!, $cursor: String, $limit: Int!) {
+            traitOfferAggregates(
+              collectionSlug: $collectionSlug
+              filter: $filter
+              sort: $sort
+              cursor: $cursor
+              limit: $limit
+            ) {
+              items {
+                id
+                totalOffers
+                offerPrice {
+                  usd
+                  __typename
+                }
+                ...OfferAggregateTable
+                __typename
+              }
+              nextPageCursor
+              __typename
+            }
+            collectionBySlug(slug: $collectionSlug) {
+              ...OfferAggregateTable_collection
+              __typename
+            }
+          }
+          fragment OfferAggregateTable_collection on Collection {
+            ...useCollectionOffers
+            ...OfferAggregateTableRow_collection
+            __typename
+          }
+          fragment useCollectionOffers on CollectionResult {
+            __typename
+            ... on Collection {
+              slug
+              flags {
+                isOffersEnabled
+                __typename
+              }
+              traitOffersEnabled
+              chain {
+                identifier
+                arch
+                __typename
+              }
+              __typename
+            }
+          }
+          fragment OfferAggregateTableRow_collection on Collection {
+            ...useCollectionOffers
+            __typename
+          }
+          fragment OfferAggregateTable on OfferAggregate {
+            id
+            ...OfferAggregateTableRow
+            __typename
+          }
+          fragment OfferAggregateTableRow on OfferAggregate {
+            offerPrice {
+              token {
+                unit
+                contractAddress
+                __typename
+              }
+              ...TokenPrice
+              __typename
+            }
+            totalValue {
+              token {
+                unit
+                __typename
+              }
+              ...TokenPrice
+              __typename
+            }
+            totalOffers
+            bidders {
+              quantity
+              __typename
+            }
+            ...OfferAggregateBidders
+            __typename
+          }
+          fragment TokenPrice on Price {
+            usd
+            token {
+              unit
+              symbol
+              contractAddress
+              chain {
+                identifier
+                __typename
+              }
+              __typename
+            }
+            __typename
+          }
+          fragment OfferAggregateBidders on OfferAggregate {
+            offerPrice {
+              ...TokenPrice
+              __typename
+            }
+            totalValue {
+              ...TokenPrice
+              __typename
+            }
+            totalOffers
+            bidders {
+              quantity
+              imageUrl
+              address
+              ...AccountLockup
+              __typename
+            }
+            __typename
+          }
+          fragment AccountLockup on ProfileIdentifier {
+            address
+            displayName
+            imageUrl
+            ...profileUrl
+            __typename
+          }
+          fragment profileUrl on ProfileIdentifier {
+            displayName
+            address
+            __typename
+          }`,
+          variables: {
+            collectionSlug: collectionSlug,
+            filter: {
+              traitType: type,
+              traitValue: value
+            },
+            limit: 10,
+            sort: {
+              by: "OFFER_PRICE",
+              direction: "DESC"
+            }
+          }
+        };
+
+        return limiter?.schedule(() =>
+          axiosInstance.post(`${BASE_URL}/opensea/graphql`, traitQuery, {
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': API_KEY
+            }
+          })
+        );
       }
     ];
 
+    // Execute both queries in parallel
     const [collectionResponse, traitResponse] = await pQueue.addAll(tasks, {
       throwOnTimeout: true,
     });
 
-    const data = [...collectionResponse.data.orders, ...traitResponse.data.orders].filter((offer) => offer.source.name.toLowerCase() === "opensea")
-    const offers = data.map((order) => {
-      return {
-        amount: order?.price?.amount?.raw,
-        owner: order?.maker,
-        currency: order?.price.currency.symbol.toUpperCase(),
-        usd: order?.price?.amount?.usd,
-        decimal: order.price.currency.decimals,
-        eth: order.price.amount.native
-      }
-    })?.sort((a, b) => Number(b.usd) - Number(a.usd)).slice(0, 2)
-    return offers
+    // Parse responses
+    const collectionOffers = collectionResponse?.data?.data?.collectionOfferAggregates?.items || [];
+    const traitOffers = traitResponse?.data?.data?.traitOfferAggregates?.items || [];
+
+    // Combine and map all offers
+    const allOffers = [...collectionOffers, ...traitOffers]
+      .map((aggregate: any) => {
+        // Get the first bidder if available
+        const firstBidder = aggregate.bidders?.[0];
+
+        return {
+          amount: aggregate.offerPrice?.token?.unit || 0,
+          owner: firstBidder?.address || 'unknown',
+          currency: aggregate.offerPrice?.token?.symbol || 'WETH',
+          usd: aggregate.offerPrice?.usd || 0,
+          decimal: aggregate.offerPrice?.token?.symbol?.toUpperCase() === 'USDC' ? 6 : 18,
+          eth: aggregate.offerPrice?.token?.unit || 0
+        };
+      })
+      // Sort by USD value descending and take top 2
+      .sort((a, b) => b.usd - a.usd)
+      .slice(0, 2);
+
+    return allOffers;
   }
 }
 

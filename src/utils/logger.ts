@@ -330,26 +330,33 @@ export class AxiomLogger {
     // Only send ERRORS to Axiom (not info, debug, or warn)
     if (AXIOM_TOKEN && !DISABLE_AXIOM && level === LogLevel.ERROR && !excludedCategories.includes(category)) {
       try {
-        const logData = {
+        // Create a minimal log data object with only the most essential fields
+        const logData: any = {
           _time: new Date().toISOString(),
           level: level.toUpperCase(),
           message: formattedMessage,
           category,
-          username: USERNAME,  // Add explicit username field
+          username: USERNAME,
           server_type: 'nft_bidding_bot',
-          original_message: message,
-          ...context,
-          // Add system context
-          environment: process.env.NODE_ENV || 'development',
-          server_uptime: process.uptime(),
-          memory_usage: process.memoryUsage(),
-          // Remove sensitive data
-          encryptedPrivateKey: undefined,
-          privateKey: undefined,
-          password: undefined,
-          // Remove field that exceeds Axiom column limit
-          counterbidEnabled: undefined
+          environment: process.env.NODE_ENV || 'development'
         };
+
+        // Add only the most critical context fields
+        if (context.taskId) logData.taskId = context.taskId;
+        if (context.marketplace) logData.marketplace = context.marketplace;
+        if (context.operation) logData.operation = context.operation;
+        if (context.collection) logData.collection = context.collection;
+        
+        // Add error information (flattened, no error name to save columns)
+        if (context.errorMessage) {
+          logData.errorMessage = context.errorMessage;
+        } else if (context.error && context.error instanceof Error) {
+          logData.errorMessage = context.error.message;
+        }
+        if (context.errorCode) logData.errorCode = context.errorCode;
+        
+        // Add marketplace subcategory if present
+        if (context.marketplaceSubCategory) logData.marketplaceSubCategory = context.marketplaceSubCategory;
 
         // Remove undefined values
         Object.keys(logData).forEach(key => {

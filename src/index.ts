@@ -755,6 +755,195 @@ async function monitorHealth() {
 
 setInterval(monitorHealth, HEALTH_CHECK_INTERVAL);
 
+// ===== ENHANCED QUEUE MONITORING WITH MANUAL STUCK JOB TRACKING =====
+
+// Data structures for tracking queue state
+interface QueueState {
+  timestamp: number;
+  waitingCount: number;
+  waitingJobIds: Set<string>;
+  activeCount: number;
+  completedCount: number;
+  failedCount: number;
+  prioritizedCount: number;
+}
+
+interface JobTrackingInfo {
+  jobId: string;
+  jobName: string;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  data?: any;
+}
+
+// Queue monitoring state
+const queueStateHistory: Map<number, QueueState> = new Map();
+const stuckJobsTracker: Map<string, JobTrackingInfo> = new Map();
+let lastClearTime = 0;
+const CLEAR_COOLDOWN = 5 * 60 * 1000; // 5 minutes cooldown between clears
+const MAX_HISTORY_SIZE = 10; // Keep last 10 minutes of history
+const STUCK_JOB_THRESHOLD = 60 * 1000; // 1 minute in milliseconds
+
+// Queue monitoring function
+async function monitorQueueForStuckJobs() {
+  try {
+    const currentTime = Date.now();
+    
+    // Get current queue counts for both queues
+    const [counts, blurCounts] = await Promise.all([
+      queue.getJobCounts(),
+      blurQueue.getJobCounts()
+    ]);
+    
+    // Get all waiting jobs from both queues
+    const [waitingJobs, blurWaitingJobs] = await Promise.all([
+      queue.getJobs(['waiting']),
+      blurQueue.getJobs(['waiting'])
+    ]);
+    
+    // Combine jobs from both queues
+    const allWaitingJobs = [...waitingJobs, ...blurWaitingJobs];
+    const waitingJobIds = new Set(allWaitingJobs.map(job => job.id || ''));
+    
+    // Create current state snapshot (combine both queues)
+    const currentState: QueueState = {
+      timestamp: currentTime,
+      waitingCount: (counts.waiting || 0) + (blurCounts.waiting || 0),
+      waitingJobIds,
+      activeCount: (counts.active || 0) + (blurCounts.active || 0),
+      completedCount: (counts.completed || 0) + (blurCounts.completed || 0),
+      failedCount: (counts.failed || 0) + (blurCounts.failed || 0),
+      prioritizedCount: (counts.prioritized || 0) + (blurCounts.prioritized || 0)
+    };
+    
+    // Store current state
+    queueStateHistory.set(currentTime, currentState);
+    
+    // Clean up old history (keep only last 10 minutes)
+    const cutoffTime = currentTime - (MAX_HISTORY_SIZE * 60 * 1000);
+    for (const [timestamp, _] of queueStateHistory) {
+      if (timestamp < cutoffTime) {
+        queueStateHistory.delete(timestamp);
+      }
+    }
+    
+    // Track individual jobs
+    let stuckJobsFound = false;
+    const stuckJobsList: string[] = [];
+    
+    for (const job of allWaitingJobs) {
+      if (!job.id) continue;
+      
+      const jobInfo = stuckJobsTracker.get(job.id);
+      
+      if (jobInfo) {
+        // Update existing job tracking
+        jobInfo.lastSeenAt = currentTime;
+        
+        // Check if job has been stuck for more than threshold
+        const stuckDuration = currentTime - jobInfo.firstSeenAt;
+        if (stuckDuration >= STUCK_JOB_THRESHOLD) {
+          stuckJobsFound = true;
+          stuckJobsList.push(job.id);
+          const queueName = waitingJobs.includes(job) ? 'MAIN' : 'BLUR';
+          console.log(RED + `⚠️  STUCK JOB DETECTED [${queueName}]: ${job.name || 'unknown'} (ID: ${job.id}) - Waiting for ${Math.floor(stuckDuration / 1000)}s` + RESET);
+          console.log(RED + `⚠️  This job has exceeded the 60-second threshold - Queue will be cleared!` + RESET);
+        }
+      } else {
+        // New job, start tracking
+        stuckJobsTracker.set(job.id, {
+          jobId: job.id,
+          jobName: job.name || 'unknown',
+          firstSeenAt: currentTime,
+          lastSeenAt: currentTime,
+          data: job.data
+        });
+      }
+    }
+    
+    // Clean up jobs that are no longer waiting
+    for (const [jobId, jobInfo] of stuckJobsTracker) {
+      if (!waitingJobIds.has(jobId)) {
+        stuckJobsTracker.delete(jobId);
+      }
+    }
+    
+    // Check for stuck patterns
+    const previousStates = Array.from(queueStateHistory.values())
+      .filter(state => state.timestamp !== currentTime)
+      .sort((a, b) => b.timestamp - a.timestamp);
+    
+    // Pattern 1: Same waiting count for multiple checks
+    let sameWaitingCount = 0;
+    for (const prevState of previousStates) {
+      if (prevState.waitingCount === currentState.waitingCount && currentState.waitingCount > 0) {
+        sameWaitingCount++;
+      } else {
+        break;
+      }
+    }
+    
+    // Pattern 2: No progress (active = 0, waiting > 0)
+    const noProgress = currentState.activeCount === 0 && currentState.waitingCount > 0;
+    
+    // Log monitoring status
+    console.log(CYAN + `\n📋 Queue Monitor: Waiting=${currentState.waitingCount}, Active=${currentState.activeCount}, Stuck Jobs=${stuckJobsList.length}` + RESET);
+    
+    // Log stuck jobs details
+    if (stuckJobsFound) {
+      console.log(RED + `⚠️  ${stuckJobsList.length} job(s) stuck for more than 60 seconds - WILL CLEAR QUEUE` + RESET);
+    }
+    
+    // Determine if we should clear the queue
+    const shouldClear = stuckJobsFound || 
+                       (sameWaitingCount >= 2 && currentState.waitingCount > 0) ||
+                       (noProgress && previousStates.length > 0);
+    
+    if (shouldClear) {
+      // Check cooldown
+      if (currentTime - lastClearTime < CLEAR_COOLDOWN) {
+        const remainingCooldown = Math.ceil((CLEAR_COOLDOWN - (currentTime - lastClearTime)) / 1000);
+        console.log(YELLOW + `⏱️  Clear cooldown active. Waiting ${remainingCooldown}s before next clear.` + RESET);
+        return;
+      }
+      
+      // Log detailed state before clearing
+      console.log(RED + '\n🚨 ═══════ STUCK QUEUE DETECTED - INITIATING CLEAR ═══════ 🚨' + RESET);
+      console.log(RED + `Reason: ${stuckJobsFound ? 'Stuck jobs detected' : sameWaitingCount >= 2 ? 'No progress in waiting count' : 'No active workers with waiting jobs'}` + RESET);
+      console.log(RED + `Stuck Jobs: ${stuckJobsList.join(', ') || 'N/A'}` + RESET);
+      console.log(RED + `Current State: Waiting=${currentState.waitingCount}, Active=${currentState.activeCount}` + RESET);
+      console.log(RED + `Same waiting count for: ${sameWaitingCount + 1} checks` + RESET);
+      console.log(RED + '═══════════════════════════════════════════════════════════' + RESET);
+      
+      // Clear the queue
+      lastClearTime = currentTime;
+      await clearQueueAndRestartJobs();
+      
+      // Clear tracking after queue clear
+      stuckJobsTracker.clear();
+      queueStateHistory.clear();
+    }
+    
+  } catch (error) {
+    console.error(RED + 'Error in queue monitor:' + RESET, error);
+    await logger.logGeneralError('Queue monitoring failed', {
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
+// Start queue monitoring - runs every minute
+const QUEUE_MONITOR_INTERVAL = 60 * 1000; // 1 minute
+setInterval(monitorQueueForStuckJobs, QUEUE_MONITOR_INTERVAL);
+console.log(GREEN + '✅ Enhanced queue monitoring started (checking every 60s for stuck jobs)' + RESET);
+
+// Run monitoring immediately on startup to catch any already stuck jobs
+setTimeout(() => {
+  console.log(CYAN + '🔍 Running initial queue monitor check...' + RESET);
+  monitorQueueForStuckJobs();
+}, 5000); // Wait 5 seconds for system to stabilize
+
 // Add this near the top with other global variables
 export const activeTasks: Map<string, ITask> = new Map();
 
@@ -2235,6 +2424,7 @@ wss.on('connection', async (ws) => {
         warningMessage,
         rps,
         taskStatus,
+        ownBidCounts
       },
     });
 
@@ -7066,13 +7256,8 @@ async function handleCounterBidForTask(task: any, message: any) {
 
 
 async function handleMagicEdenCounterbid(data: any, task: ITask) {
-  const startTime = Date.now();
-  console.log(CYAN + `[DEBUG][handleMagicEdenCounterbid] START - Task: ${task._id}, Collection: ${task.contract.slug}` + RESET);
-  console.log(CYAN + `[DEBUG][handleMagicEdenCounterbid] Incoming bid data:`, JSON.stringify(data?.data) + RESET);
-
   try {
     const currentTask = activeTasks.get(task._id)
-    console.log(CYAN + `[DEBUG][handleMagicEdenCounterbid] Current task status - Running: ${currentTask?.running}, Selected marketplaces: ${currentTask?.selectedMarketplaces}, Enabled: ${enabledMarketplaces}` + RESET);
 
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces
       .map((m) => m.toLowerCase())
@@ -12827,6 +13012,107 @@ app.get('/health', (req, res) => {
   };
 
   res.status(200).json(healthStatus);
+});
+
+// Queue monitoring status endpoint
+app.get('/api/queue-monitor/status', async (req, res) => {
+  try {
+    // Get current queue counts
+    const [mainCounts, blurCounts] = await Promise.all([
+      queue.getJobCounts(),
+      blurQueue.getJobCounts()
+    ]);
+
+    // Get stuck jobs info
+    const stuckJobs = Array.from(stuckJobsTracker.values()).map(job => ({
+      jobId: job.jobId,
+      jobName: job.jobName,
+      waitingTime: Math.floor((Date.now() - job.firstSeenAt) / 1000),
+      isStuck: (Date.now() - job.firstSeenAt) >= STUCK_JOB_THRESHOLD
+    }));
+
+    // Get queue state history
+    const history = Array.from(queueStateHistory.values())
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, 10)
+      .map(state => ({
+        timestamp: new Date(state.timestamp).toISOString(),
+        waitingCount: state.waitingCount,
+        activeCount: state.activeCount,
+        completedCount: state.completedCount,
+        failedCount: state.failedCount
+      }));
+
+    const monitorStatus = {
+      mainQueue: {
+        waiting: mainCounts.waiting || 0,
+        active: mainCounts.active || 0,
+        completed: mainCounts.completed || 0,
+        failed: mainCounts.failed || 0,
+        delayed: mainCounts.delayed || 0,
+        prioritized: mainCounts.prioritized || 0
+      },
+      blurQueue: {
+        waiting: blurCounts.waiting || 0,
+        active: blurCounts.active || 0,
+        completed: blurCounts.completed || 0,
+        failed: blurCounts.failed || 0,
+        delayed: blurCounts.delayed || 0,
+        prioritized: blurCounts.prioritized || 0
+      },
+      stuckJobs: {
+        count: stuckJobs.filter(j => j.isStuck).length,
+        jobs: stuckJobs
+      },
+      monitoring: {
+        lastClearTime: lastClearTime ? new Date(lastClearTime).toISOString() : null,
+        clearCooldownRemaining: lastClearTime ? Math.max(0, CLEAR_COOLDOWN - (Date.now() - lastClearTime)) / 1000 : 0,
+        historySize: queueStateHistory.size,
+        trackedJobs: stuckJobsTracker.size
+      },
+      recentHistory: history
+    };
+
+    res.json(monitorStatus);
+  } catch (error) {
+    console.error('Error getting queue monitor status:', error);
+    res.status(500).json({ error: 'Failed to get queue monitor status' });
+  }
+});
+
+// Manual queue clear endpoint
+app.post('/api/queue-monitor/clear', async (req, res) => {
+  try {
+    // Check if cooldown is active
+    if (lastClearTime && (Date.now() - lastClearTime) < CLEAR_COOLDOWN) {
+      const remainingCooldown = Math.ceil((CLEAR_COOLDOWN - (Date.now() - lastClearTime)) / 1000);
+      return res.status(429).json({ 
+        error: 'Clear cooldown active', 
+        remainingSeconds: remainingCooldown 
+      });
+    }
+
+    console.log(YELLOW + '\n🔧 Manual queue clear requested via API' + RESET);
+    
+    // Update last clear time
+    lastClearTime = Date.now();
+    
+    // Clear the queues
+    await clearQueueAndRestartJobs();
+    
+    // Clear tracking
+    stuckJobsTracker.clear();
+    queueStateHistory.clear();
+
+    res.json({ 
+      success: true, 
+      message: 'Queue cleared and jobs restarted',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error during manual queue clear:', error);
+    res.status(500).json({ error: 'Failed to clear queue' });
+  }
 });
 
 // 408 Error monitoring endpoint
