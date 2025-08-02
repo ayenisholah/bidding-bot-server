@@ -1419,7 +1419,30 @@ async function startServer() {
 
     const blurWorker = new Worker(
       BLUR_BIDDING_QUEUE,
-      async (job) => processBlurJob(job),
+      async (job) => {
+        const jobTimeout = 60000; // 60 seconds timeout for Blur jobs
+        const abortController = new AbortController();
+
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => {
+            abortController.abort(); // Signal cancellation to any async operations
+            const customJobId = (job.opts as any)?.jobId || job.id;
+            reject(new Error(`Blur job ${customJobId} (ID: ${job.id}) timed out after ${jobTimeout}ms - aborted`));
+          }, jobTimeout);
+        });
+        
+        try {
+          const result = await Promise.race([
+            processBlurJob(job),
+            timeoutPromise
+          ]);
+          return result || { success: true };
+        } catch (error: any) {
+          console.error(RED + `[Blur Worker Error] Job ${job.id} failed:` + RESET, error.message || error);
+          // Don't re-throw - let the worker continue processing other jobs
+          return { success: false, error: error.message || String(error) };
+        }
+      },
       {
         prefix: '{bull}',
         connection: blurWorkerConnection,
@@ -1430,6 +1453,38 @@ async function startServer() {
 
 
     workers.push(blurWorker);
+
+    // Add error handlers for Blur queue components
+    blurWorker.on('error', (error) => {
+      console.error(RED + '[Blur Worker] Worker error:' + RESET, error);
+      logger.logGeneralError('Blur worker error', {
+        error: error,
+        errorMessage: error.message || String(error),
+        errorStack: error.stack
+      });
+    });
+
+    blurWorker.on('failed', (job, error) => {
+      console.error(RED + `[Blur Worker] Job ${job?.id} failed:` + RESET, error.message || error);
+    });
+
+    blurQueue.on('error', (error) => {
+      console.error(RED + '[Blur Queue] Queue error:' + RESET, error);
+      logger.logGeneralError('Blur queue error', {
+        error: error,
+        errorMessage: error.message || String(error),
+        errorStack: error.stack
+      });
+    });
+
+    blurQueueEvents.on('error', (error) => {
+      console.error(RED + '[Blur Queue Events] Events error:' + RESET, error);
+      logger.logGeneralError('Blur queue events error', {
+        error: error,
+        errorMessage: error.message || String(error),
+        errorStack: error.stack
+      });
+    });
 
     console.log(`Created ${bullMQConnections.length} separate Redis connections for BullMQ components`);
 
