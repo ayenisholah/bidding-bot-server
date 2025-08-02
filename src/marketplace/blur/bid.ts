@@ -188,7 +188,7 @@ export async function bidOnBlur(
   }
 
   const bethBalance = await fetchERC20Balance(wallet_address, BLUR_POOL_ADDRESS);
-  let offerPriceEth: string = (Number(offer_price) / 1e18).toString()
+  let offerPriceEth: string = (Math.round(Number(offer_price) / 1e18 * 100) / 100).toFixed(2)
 
   if (Number(offerPriceEth) > bethBalance) {
     const error = new InsufficientBalanceError(
@@ -214,7 +214,7 @@ export async function bidOnBlur(
   const offerPrice = BigInt(offer_price.toString());
   const accessToken = await getAccessToken(private_key);
 
-  offerPriceEth = (Math.floor(Number(formatUnits(offerPrice.toString(), 18)) * 100) / 100).toFixed(2);
+  offerPriceEth = (Math.round(Number(formatUnits(offerPrice.toString(), 18)) * 100) / 100).toFixed(2);
 
   if (Number(offerPriceEth) === 0) {
     const error = new MinimumPriceError(
@@ -725,7 +725,7 @@ async function submitBidToBlur(
 
   try {
     // Calculate formatted ETH price for logging
-    const offerPriceEth = (Math.floor(Number(formatUnits(offer_price.toString(), 18)) * 100) / 100).toFixed(2);
+    const offerPriceEth = (Math.round(Number(formatUnits(offer_price.toString(), 18)) * 100) / 100).toFixed(2);
 
     const [taskId] = bidCount.split(":")
     if (isTaskBlacklisted(taskId, 'blur')) {
@@ -933,13 +933,14 @@ async function submitBidToBlur(
       });
     }
 
-    const errorMessage = `Failed to submit Blur bid for collection ${slug} at price ${formatUnits(offer_price.toString(), 18)} BETH: ${Array.isArray(errorData) ? errorData[0] : errorData?.message || error.message || error}`;
+    const formattedPrice = (Math.round(Number(formatUnits(offer_price.toString(), 18)) * 100) / 100).toFixed(2);
+    const errorMessage = `Failed to submit Blur bid for collection ${slug} at price ${formattedPrice} BETH: ${Array.isArray(errorData) ? errorData[0] : errorData?.message || error.message || error}`;
     console.error(errorMessage, error);
     await logger.logBlurBidError(errorMessage, {
       taskId,
       walletAddress,
       collection: slug,
-      bidAmount: formatUnits(offer_price.toString(), 18),
+      bidAmount: formattedPrice,
       currency: 'BETH',
       operation: 'submit_bid',
       error: error,
