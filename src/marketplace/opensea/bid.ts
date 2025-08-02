@@ -9,7 +9,6 @@ import axios from "axios";
 import Order from '../../models/order.model';
 import { withRetry } from '../../utils/db-retry'
 import { USDC, WETH } from "../../utils/currencies";
-import { MagicedenCollectionResponse, MagicEdenTraitOfferResponse } from "../magiceden";
 import { CollectionItemsListQuery } from "../../queries";
 import { CollectionItemsQueryVariables, CollectionItemsResponse } from "../../functions";
 import { fetchERC20Balance } from "../../utils/balance";
