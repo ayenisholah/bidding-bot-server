@@ -289,6 +289,17 @@ const tasksBeingScheduled = new Map<string, boolean>();
 // Add a Map to track tasks being stopped to prevent double triggering
 const tasksBeingStopped = new Map<string, boolean>();
 
+// Track active cancellation operations
+interface CancellationOperation {
+  taskId: string;
+  marketplace?: string;
+  totalJobs: number;
+  completedJobs: number;
+  startTime: number;
+}
+
+const activeCancellationOperations = new Map<string, CancellationOperation>();
+
 function unlockTask(taskId: string): void {
   const currentLock = taskLocks.get(taskId);
   if (currentLock) {
@@ -892,18 +903,32 @@ async function monitorQueueForStuckJobs() {
     // Pattern 2: No progress (active = 0, waiting > 0)
     const noProgress = currentState.activeCount === 0 && currentState.waitingCount > 0;
 
+    // Check if cancellation is in progress
+    const hasActiveCancellations = activeCancellationOperations.size > 0;
+
     // Log monitoring status
     console.log(CYAN + `\n📋 Queue Monitor: Waiting=${currentState.waitingCount}, Active=${currentState.activeCount}, Stuck Jobs=${stuckJobsList.length}` + RESET);
+
+    if (hasActiveCancellations) {
+      console.log(YELLOW + `⚠️  Cancellation in progress. Active operations: ${activeCancellationOperations.size}` + RESET);
+      // Log active cancellations
+      for (const [key, op] of activeCancellationOperations) {
+        const duration = (currentTime - op.startTime) / 1000;
+        console.log(YELLOW + `  - ${key}: ${op.completedJobs}/${op.totalJobs} jobs (${duration.toFixed(1)}s)` + RESET);
+      }
+    }
 
     // Log stuck jobs details
     if (stuckJobsFound) {
       console.log(RED + `⚠️  ${stuckJobsList.length} job(s) stuck for more than 60 seconds - WILL CLEAR QUEUE` + RESET);
     }
 
-    // Determine if we should clear the queue
-    const shouldClear = stuckJobsFound ||
+    // Determine if we should clear the queue (skip if cancellation is active)
+    const shouldClear = !hasActiveCancellations && (
+      stuckJobsFound ||
       (sameWaitingCount >= 2 && currentState.waitingCount > 0) ||
-      (noProgress && previousStates.length > 0);
+      (noProgress && previousStates.length > 0)
+    );
 
     if (shouldClear) {
       // Check cooldown
@@ -1800,6 +1825,25 @@ function setTaskCancellationComplete(taskId: string) {
       taskStatus[taskId].waitingTime = 0;
     }
   }
+
+  // Resume queues after cancellation completion
+  const cancellationOp = activeCancellationOperations.get(taskId);
+  if (cancellationOp) {
+    console.log(GREEN + `[Cancellation Complete] Task ${taskId} cancellation finished. Resuming queues...` + RESET);
+    queue.resume().then(() => {
+      console.log(GREEN + `Main queue resumed after ${taskId} cancellation` + RESET);
+    }).catch(err => {
+      console.error(RED + `Error resuming main queue: ${err.message}` + RESET);
+    });
+    blurQueue.resume().then(() => {
+      console.log(GREEN + `Blur queue resumed after ${taskId} cancellation` + RESET);
+    }).catch(err => {
+      console.error(RED + `Error resuming blur queue: ${err.message}` + RESET);
+    });
+
+    // Clean up cancellation operation tracking
+    activeCancellationOperations.delete(taskId);
+  }
 }
 
 // Helper function for marketplace-specific cancellation completion
@@ -1844,6 +1888,30 @@ function setMarketplaceCancellationComplete(taskId: string, marketplace?: string
     // No previous state means full task cancellation
     console.log(YELLOW + `No previous state for task ${taskId}, proceeding with full cancellation` + RESET);
     setTaskCancellationComplete(taskId);
+  }
+
+  // Resume queue after marketplace-specific cancellation
+  const cancellationOp = activeCancellationOperations.get(`${taskId}-${marketplace}`);
+  if (cancellationOp) {
+    console.log(GREEN + `[Cancellation Complete] ${marketplace} cancellation for task ${taskId} finished. Resuming queue...` + RESET);
+
+    // Resume appropriate queue based on marketplace
+    if (marketplace === 'blur') {
+      blurQueue.resume().then(() => {
+        console.log(GREEN + `Blur queue resumed after ${taskId} ${marketplace} cancellation` + RESET);
+      }).catch(err => {
+        console.error(RED + `Error resuming blur queue: ${err.message}` + RESET);
+      });
+    } else {
+      queue.resume().then(() => {
+        console.log(GREEN + `Main queue resumed after ${taskId} ${marketplace} cancellation` + RESET);
+      }).catch(err => {
+        console.error(RED + `Error resuming main queue: ${err.message}` + RESET);
+      });
+    }
+
+    // Clean up cancellation operation tracking
+    activeCancellationOperations.delete(`${taskId}-${marketplace}`);
   }
 }
 
@@ -3483,7 +3551,7 @@ async function updateTaskData(task: ITask) {
 }
 
 const MAX_MEMORY_USAGE = 75;
-const DRAIN_THRESHOLD = RATE_LIMIT * 2;
+const DRAIN_THRESHOLD = RATE_LIMIT;
 
 const BLUR_JOBS = [
   'BLUR_COLLECTION_BID',
@@ -3495,8 +3563,15 @@ const BLUR_JOBS = [
 async function processBulkCancellations(jobs: Job[]) {
   if (!jobs?.length) return;
 
-  const rateLimiter = new RateLimiter(RATE_LIMIT * 2);
-  const chunks = chunk(jobs, RATE_LIMIT * 2);
+  const rateLimiter = new RateLimiter(RATE_LIMIT);
+  const chunks = chunk(jobs, RATE_LIMIT);
+
+  // Check if this is a cancellation operation
+  const isCancellation = jobs.length > 0 && (
+    jobs[0].name === CANCEL_OPENSEA_BID ||
+    jobs[0].name === CANCEL_MAGICEDEN_BID ||
+    jobs[0].name === CANCEL_BLUR_BID
+  );
 
   try {
     for (const [chunkIndex, currentChunk] of chunks.entries()) {
@@ -3511,23 +3586,26 @@ async function processBulkCancellations(jobs: Job[]) {
           continue;
         }
 
-        while (true) {
-          const counts = await queue.getJobCounts();
-          const prioritizedCount = counts.prioritized || 0;
+        // Skip queue drain checks if this is a cancellation operation (queue is paused)
+        if (!isCancellation) {
+          while (true) {
+            const counts = await queue.getJobCounts();
+            const prioritizedCount = counts.prioritized || 0;
 
-          if (prioritizedCount <= DRAIN_THRESHOLD * 2) {
-            break;
+            if (prioritizedCount <= DRAIN_THRESHOLD) {
+              break;
+            }
+            const delay = (prioritizedCount / DRAIN_THRESHOLD);
+            await new Promise(resolve => setTimeout(resolve, delay * 2000));
           }
-          const delay = (prioritizedCount / DRAIN_THRESHOLD * 2);
-          await new Promise(resolve => setTimeout(resolve, delay * 2000));
-        }
 
-        // Check queue health
-        const counts = await queue.getJobCounts();
-        const prioritizedprioritizedCount = counts.prioritized || 0;
+          // Check queue health
+          const counts = await queue.getJobCounts();
+          const prioritizedprioritizedCount = counts.prioritized || 0;
 
-        if (prioritizedprioritizedCount > DRAIN_THRESHOLD) {
-          await waitForQueueDrain();
+          if (prioritizedprioritizedCount > DRAIN_THRESHOLD) {
+            await waitForQueueDrain();
+          }
         }
 
         let retries = 3;
@@ -4808,6 +4886,21 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
         // Now cancel actual orders
         if (orders.opensea.length > 0 && WALLET_PRIVATE_KEY) {
           console.log(GOLD + `  Cancelling ${orders.opensea.length} OpenSea orders...` + RESET);
+
+          // Pause queues for marketplace-specific cancellation
+          console.log(YELLOW + `[stopTask] Pausing queues for OpenSea cancellation...` + RESET);
+          await queue.pause();
+
+          // Track cancellation operation
+          const cancellationOp: CancellationOperation = {
+            taskId,
+            marketplace: 'opensea',
+            totalJobs: orders.opensea.length,
+            completedJobs: 0,
+            startTime: Date.now()
+          };
+          activeCancellationOperations.set(`${taskId}-opensea`, cancellationOp);
+
           await cancelOpenseaBids(orders.opensea, WALLET_PRIVATE_KEY, taskId, currencySymbol);
         } else if (orders.opensea.length === 0) {
           console.log(GREEN + `  ✅ No orders to cancel - calling immediate completion` + RESET);
@@ -4838,6 +4931,21 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
         // Now cancel actual orders
         if (orders.magiceden.length > 0 && WALLET_PRIVATE_KEY) {
           console.log(MAGENTA + `  Cancelling ${orders.magiceden.length} MagicEden orders...` + RESET);
+
+          // Pause queues for marketplace-specific cancellation
+          console.log(YELLOW + `[stopTask] Pausing queues for MagicEden cancellation...` + RESET);
+          await queue.pause();
+
+          // Track cancellation operation
+          const cancellationOp: CancellationOperation = {
+            taskId,
+            marketplace: 'magiceden',
+            totalJobs: orders.magiceden.length,
+            completedJobs: 0,
+            startTime: Date.now()
+          };
+          activeCancellationOperations.set(`${taskId}-magiceden`, cancellationOp);
+
           await cancelMagicedenBids(orders.magiceden, WALLET_PRIVATE_KEY, taskId);
         } else if (orders.magiceden.length === 0) {
           console.log(GREEN + `  ✅ No orders to cancel - calling immediate completion` + RESET);
@@ -4868,6 +4976,21 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
         // Now cancel actual orders
         if (orders.blur.length > 0 && WALLET_PRIVATE_KEY) {
           console.log(BLUE + `  Cancelling ${orders.blur.length} Blur orders...` + RESET);
+
+          // Pause queues for marketplace-specific cancellation
+          console.log(YELLOW + `[stopTask] Pausing queues for Blur cancellation...` + RESET);
+          await blurQueue.pause();
+
+          // Track cancellation operation
+          const cancellationOp: CancellationOperation = {
+            taskId,
+            marketplace: 'blur',
+            totalJobs: orders.blur.length,
+            completedJobs: 0,
+            startTime: Date.now()
+          };
+          activeCancellationOperations.set(`${taskId}-blur`, cancellationOp);
+
           await cancelBlurBids(orders.blur, WALLET_PRIVATE_KEY, taskId);
         } else if (orders.blur.length === 0) {
           console.log(GREEN + `  ✅ No orders to cancel - calling immediate completion` + RESET);
@@ -4915,6 +5038,21 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
 
         if (totalOrderCount > 0 && WALLET_PRIVATE_KEY) {
           console.log(YELLOW + `[stopTask] Cancelling orders for all marketplaces...` + RESET);
+
+          // Pause queues before starting cancellation to prevent new jobs
+          console.log(YELLOW + `[stopTask] Pausing queues to prevent new jobs during cancellation...` + RESET);
+          await queue.pause();
+          await blurQueue.pause();
+
+          // Track cancellation operation
+          const cancellationOp: CancellationOperation = {
+            taskId,
+            marketplace: undefined,
+            totalJobs: totalOrderCount,
+            completedJobs: 0,
+            startTime: Date.now()
+          };
+          activeCancellationOperations.set(taskId, cancellationOp);
 
           // Cancel orders for each marketplace
           const cancellationPromises = [];
@@ -7996,16 +8134,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
       seenOrderHashes.delete(orderHash);
-
-      if (orders.length > 0) {
-        const cancelData = orders.map((order, index) => {
-          return {
-            name: CANCEL_OPENSEA_BID,
-            data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
-          }
-        })
-        queue.addBulk(cancelData)
-      }
     }
 
     if (data.event === "trait_offer") {
@@ -8139,17 +8267,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
       seenOrderHashes.delete(orderHash);
-
-
-      if (orders.length > 0) {
-        const cancelData = orders.map((order, index) => {
-          return {
-            name: CANCEL_OPENSEA_BID,
-            data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
-          }
-        })
-        queue.addBulk(cancelData)
-      }
     }
     if (data.event === "collection_offer") {
       const collectionBid = task.bidType.toLowerCase() === "collection" && Object.keys(task?.selectedTraits?.opensea || {}).length === 0
@@ -8279,20 +8396,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Collection${traitDisplay} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       seenOrderHashes.delete(orderHash);
-      if (orders.length > 0) {
-        const cancelData = orders.map((order, index) => {
-          return {
-            name: CANCEL_OPENSEA_BID,
-            data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
-          }
-        })
-        queue.addBulk(cancelData)
-      }
     }
-
     seenOrderHashes.delete(orderHash);
-
   } catch (error) {
+    console.log("Error handling opensea counterbid: ", error);
   }
 }
 

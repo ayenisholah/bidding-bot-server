@@ -91,9 +91,6 @@ async function initialize(rateLimit: number) {
     minTime: 1000 / rateLimit,
     maxConcurrent: rateLimit,
     trackDoneStatus: true,
-    reservoir: rateLimit,
-    reservoirRefreshAmount: rateLimit,
-    reservoirRefreshInterval: 1000,
   });
 
   axiosRetry(axiosInstance, retryConfig);
