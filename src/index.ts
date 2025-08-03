@@ -1430,7 +1430,7 @@ async function startServer() {
             reject(new Error(`Blur job ${customJobId} (ID: ${job.id}) timed out after ${jobTimeout}ms - aborted`));
           }, jobTimeout);
         });
-        
+
         try {
           const result = await Promise.race([
             processBlurJob(job),
@@ -7282,9 +7282,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     const taskSpecificHash = orderHash;
     if (hasSeenItem(seenOrderHashes, taskSpecificHash)) return;
     addSeenItem(seenOrderHashes, taskSpecificHash)
-
-
-    const domain: string = data?.data?.source?.domain
     const maker = data?.data?.maker?.toLowerCase()
 
     // Parallel fetch wallet data and all wallets
@@ -7465,6 +7462,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       await queue.add(
         MAGICEDEN_TOKEN_BID_COUNTERBID,
         bidData,
+        { jobId: orderHash }
       );
       // Log successful counterbid preparation
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -7586,6 +7584,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       await queue.add(
         MAGICEDEN_TRAIT_BID_COUNTERBID,
         bidData,
+        { jobId: orderHash }
       );
 
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -7695,7 +7694,8 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       await queue.add(
         MAGICEDEN_COLLECTION_BID_COUNTERBID,
-        bidData
+        bidData,
+        { jobId: orderHash }
       );
 
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -7986,7 +7986,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       await queue.add(
         OPENSEA_TOKEN_BID_COUNTERBID,
-        bidData
+        bidData,
+        { jobId: orderHash }
       );
 
       // Log successful counterbid preparation
@@ -8128,7 +8129,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       await queue.add(
         OPENSEA_TRAIT_BID_COUNTERBID,
-        counterbidData
+        counterbidData,
+        { jobId: orderHash }
       );
 
       // Log successful trait counterbid preparation
@@ -8269,7 +8271,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       await queue.add(
         OPENSEA_COLLECTION_BID_COUNTERBID,
-        bidData
+        bidData,
+        { jobId: orderHash }
       );
 
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -10269,6 +10272,27 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
   }
 
   try {
+    // Fetch existing collection orders before placing new bid
+    const existingOrders = await Order.find({
+      slug: slug,
+      taskId: taskId,
+      marketplace: "opensea",
+      identifier: "collection"
+    });
+
+
+    if (existingOrders.length > 0) {
+      console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] Cancelling ${existingOrders.length} existing bids due to max price exceeded` + RESET);
+      const cancelData = existingOrders.map((order, index) => {
+        return {
+          name: CANCEL_OPENSEA_BID,
+          data: { privateKey: walletPrivateKey, orderId: order.orderHash, taskId, orderKey: order._id },
+
+        }
+      })
+      await queue.addBulk(cancelData)
+      console.log(GREEN + `[DEBUG][handleOpenseaCounterbid] Cancel jobs added successfully` + RESET);
+    }
     await bidOnOpensea(
       taskId,
       bidCount,
@@ -10520,6 +10544,25 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
   const expiry = getExpiry(currentTask.bidDuration)
   const bidCount = getIncrementedBidCount(OPENSEA, slug, _id)
   try {
+
+    const orders = await Order.find({
+      slug: slug,
+      taskId: _id,
+      marketplace: OPENSEA.toLowerCase(),
+      identifier: asset.tokenId.toString()
+    })
+    if (orders.length > 0) {
+      console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] Cancelling ${orders.length} existing bids due to max price exceeded` + RESET);
+      const cancelData = orders.map((order, index) => {
+        return {
+          name: CANCEL_OPENSEA_BID,
+          data: { privateKey: privateKey, orderId: order.orderHash, taskId: _id, orderKey: order._id },
+
+        }
+      })
+      await queue.addBulk(cancelData)
+      console.log(GREEN + `[DEBUG][handleOpenseaCounterbid] Cancel jobs added successfully` + RESET);
+    }
     const { currency } = await calculateBidPrice(currentTask, 0, "opensea")
 
     await bidOnOpensea(
@@ -10549,6 +10592,27 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
     const currentTask = activeTasks.get(_id)
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) return
     if (!trait) return
+
+    const parsedTrait: { type: string; value: string } = JSON.parse(trait)
+    const identifier = `${parsedTrait.type}:${parsedTrait.value}`
+    const orders = await Order.find({
+      slug: slug,
+      taskId: _id,
+      marketplace: OPENSEA.toLowerCase(),
+      identifier: identifier
+    })
+    if (orders.length > 0) {
+      console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] Cancelling ${orders.length} existing bids due to max price exceeded` + RESET);
+      const cancelData = orders.map((order, index) => {
+        return {
+          name: CANCEL_OPENSEA_BID,
+          data: { privateKey: privateKey, orderId: order.orderHash, taskId: _id, orderKey: order._id },
+
+        }
+      })
+      await queue.addBulk(cancelData)
+      console.log(GREEN + `[DEBUG][handleOpenseaCounterbid] Cancel jobs added successfully` + RESET);
+    }
 
     const { currency } = await calculateBidPrice(currentTask, 0, "opensea")
 
