@@ -1339,7 +1339,7 @@ export async function fetchOpenseaOffers(
     return offers
   } else if (offerType === 'TRAIT') {
     const { type, value } = identifiers as Record<string, string>;
-    
+
     // Create tasks for both collection and trait offers
     const tasks = [
       // Collection offers task
@@ -1497,7 +1497,7 @@ export async function fetchOpenseaOffers(
           })
         );
       },
-      
+
       // Trait offers task
       () => {
         const traitQuery = {
@@ -1664,6 +1664,8 @@ export async function fetchOpenseaOffers(
     const collectionOffers = collectionResponse?.data?.data?.collectionOfferAggregates?.items || [];
     const traitOffers = traitResponse?.data?.data?.traitOfferAggregates?.items || [];
 
+
+
     // Combine and map all offers
     const allOffers = [...collectionOffers, ...traitOffers]
       .map((aggregate: any) => {
@@ -1680,8 +1682,12 @@ export async function fetchOpenseaOffers(
         };
       })
       // Sort by USD value descending and take top 2
-      .sort((a, b) => b.usd - a.usd)
+      .sort((a, b) => +b.eth - +a.eth)
       .slice(0, 2);
+
+
+    console.log({ allOffers });
+
 
     return allOffers;
   }

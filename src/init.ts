@@ -20,11 +20,11 @@ const retryConfig: IAxiosRetryConfig = {
   retries: 3, // Reduced to 1 retry for 408 errors
   retryDelay: (retryCount, error) => {
     limiter.schedule(() => Promise.resolve());
-    
+
     // Special handling for 408 errors
     if (error.response?.status === 408) {
       const url = error.config?.url || '';
-      
+
       // Blur endpoints need extra time due to rate limiting
       if (url.includes('/blur/')) {
         const baseDelay = 30000; // 30 seconds for Blur
@@ -33,7 +33,7 @@ const retryConfig: IAxiosRetryConfig = {
         console.log(`[Blur 408] Retrying Blur endpoint after 408 (attempt ${retryCount}), waiting ${progressiveDelay + jitter}ms`);
         return progressiveDelay + jitter;
       }
-      
+
       // Authentication endpoints get exponential backoff
       if (url.includes('/auth/challenge') || url.includes('/auth/login')) {
         // Exponential backoff starting at 5 seconds for auth endpoints
@@ -51,21 +51,21 @@ const retryConfig: IAxiosRetryConfig = {
         return delay + jitter;
       }
     }
-    
+
     // Rate limit errors - respect retry-after header or use exponential backoff
-    if (error.response?.status === 429) {
+    if (error.response?.status === 429 || error.response?.status === 430) {
       const retryAfter = error.response.headers['retry-after'];
       if (retryAfter) {
         return parseInt(retryAfter) * 1000;
       }
       return Math.min(Math.pow(2, retryCount) * 500, 4000); // Faster backoff
     }
-    
+
     // Other 4xx/5xx errors - quick retry
     if (error.response && (error.response.status >= 400 && error.response.status < 600)) {
       return Math.min(retryCount * 500, 2000); // Max 2s
     }
-    
+
     return axiosRetry.exponentialDelay(retryCount);
   },
   retryCondition: async (error: any) => {
