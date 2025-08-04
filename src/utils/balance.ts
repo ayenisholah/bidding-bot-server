@@ -142,3 +142,100 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
     return 0;
   }
 }
+
+export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress: string): Promise<number> {
+  const CACHE_EXPIRY_SECONDS = 60;
+  const STALE_CACHE_EXPIRY_SECONDS = 3600; // Keep stale cache for 1 hour as fallback
+  const cacheKey = `{erc20_balance:${walletAddress}}:${tokenAddress}`;
+  const staleCacheKey = `{erc20_balance_stale:${walletAddress}}:${tokenAddress}`;
+
+  const lockManager = new DistributedLockManager({
+    lockPrefix: '{erc20_balance}:lock:',
+    defaultTTLSeconds: CACHE_EXPIRY_SECONDS
+  });
+
+  const lockKey = `{erc20_${walletAddress}}_${tokenAddress}`;
+
+  try {
+    const result = await lockManager.withLock(
+      lockKey,
+      async () => {
+        try {
+          // Use Alchemy provider with API key
+          const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY;
+          if (!ALCHEMY_API_KEY) {
+            throw new Error('ALCHEMY_API_KEY environment variable is not set');
+          }
+
+          const { AlchemyProvider } = await import('ethers');
+          const provider = new AlchemyProvider('mainnet', ALCHEMY_API_KEY);
+
+          const tokenContract = new Contract(
+            tokenAddress,
+            ['function balanceOf(address) view returns (uint256)'],
+            provider
+          );
+          const maxRetries = 3;
+          let lastError;
+
+          for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+              const balance = await tokenContract.balanceOf(walletAddress);
+              const formattedBalance = Number(formatEther(balance));
+
+              // Store in both fresh and stale cache
+              try {
+                const redis = getRedis();
+                if (redis) {
+                  await redis.set(cacheKey, formattedBalance.toString(), 'EX', CACHE_EXPIRY_SECONDS);
+                  await redis.set(staleCacheKey, formattedBalance.toString(), 'EX', STALE_CACHE_EXPIRY_SECONDS);
+                }
+              } catch (error) {
+                console.warn('Failed to cache balance:', error);
+              }
+
+              console.log(`[fetchERC20BalanceFresh] Fresh balance for ${walletAddress}/${tokenAddress}: ${formattedBalance}`);
+              return formattedBalance;
+            } catch (error: any) {
+              lastError = error;
+
+              // Check if it's a network error
+              if (error.code === 'NETWORK_ERROR' || error.message?.includes('could not detect network')) {
+                console.warn(`Network error for ${walletAddress}/${tokenAddress}, attempt ${attempt + 1}/${maxRetries + 1}`);
+              }
+
+              if (attempt < maxRetries) {
+                const backoffTime = Math.pow(2, attempt) * 1000;
+                await new Promise(resolve => setTimeout(resolve, backoffTime));
+              }
+            }
+          }
+
+          throw lastError;
+        } catch (error) {
+          await logger.logBlockchainError(`Error fetching fresh ERC20 balance for token ${tokenAddress}`, {
+            walletAddress,
+            tokenAddress,
+            operation: 'fetch_erc20_balance_fresh',
+            error: error as Error,
+            errorMessage: error instanceof Error ? error.message : String(error)
+          });
+          console.error(RED + `Error fetching fresh ERC20 balance for token ${tokenAddress}:` + RESET, error);
+          throw error;
+        }
+      }
+    );
+
+    return result || 0;
+  } catch (error: any) {
+    // For fresh balance, we don't fall back to stale cache
+    await logger.logWarning(ErrorCategory.BLOCKCHAIN, `Failed to fetch fresh balance for ${walletAddress}/${tokenAddress}`, {
+      walletAddress,
+      tokenAddress,
+      operation: 'fetch_erc20_balance_fresh_fallback',
+      error: error.message || error
+    });
+    console.error(RED + `Failed to fetch fresh balance for ${walletAddress}/${tokenAddress}` + RESET);
+    throw error; // Throw error instead of returning 0 for fresh balance
+  }
+}

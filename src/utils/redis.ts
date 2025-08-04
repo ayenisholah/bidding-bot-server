@@ -50,11 +50,8 @@ const defaultConfig = {
   showFriendlyErrorStack: true,
   enableOfflineQueue: true,
   reconnectOnError: (err: Error) => {
-    const targetError = 'READONLY';
-    if (err.message.includes(targetError)) {
-      return true;
-    }
-    return false;
+    const targetErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED'];
+    return targetErrors.some(errType => err.message.includes(errType));
   }
 };
 
@@ -217,28 +214,258 @@ const redisClient = RedisClient.getInstance();
 export default redisClient;
 export const getRedisConnection = () => redisClient.getClient();
 
-// Create a new Redis Cluster connection for BullMQ
-export const createBullMQConnection = async () => {
-  const nodes = await getRedisNodes();
-  const cluster = new Redis.Cluster(nodes, {
-    clusterRetryStrategy: (times: number) => {
-      const delay = Math.min(times * 2000, 20000);
-      return delay;
-    },
-    enableOfflineQueue: true,
-    redisOptions: {
-      enableReadyCheck: true,
-      maxRetriesPerRequest: null,
-    },
-    natMap: REDIS_NET_MAP,
-    slotsRefreshTimeout: 30000,
-  });
+// Connection tracking for BullMQ
+const bullMQConnections = new Map<string, { cluster: Cluster; createdAt: number; lastHealthCheck: number }>();
+let connectionIdCounter = 0;
+
+// Create a new Redis Cluster connection for BullMQ with enhanced configuration
+export const createBullMQConnection = async (identifier?: string): Promise<Cluster> => {
+  const connectionId = identifier || `bullmq-${++connectionIdCounter}`;
+  console.log(`[Redis] Creating BullMQ connection: ${connectionId}`);
   
-  // Wait for the cluster to be ready
-  await new Promise<void>((resolve, reject) => {
-    cluster.once('ready', () => resolve());
-    cluster.once('error', (err) => reject(err));
-  });
+  // Check if this is a queue events or worker connection that needs special handling
+  // Both queue events and workers use blocking commands (BLPOP/BRPOP) which require special timeout configuration
+  const isQueueEvents = identifier?.includes('events');
+  const isWorker = identifier?.includes('worker');
+  const needsBlockingConfig = isQueueEvents || isWorker;
   
-  return cluster;
+  if (needsBlockingConfig) {
+    console.log(`[Redis] ${connectionId} is a ${isQueueEvents ? 'queue events' : 'worker'} connection - using blocking command configuration`);
+  }
+  
+  try {
+    const nodes = await getRedisNodes();
+    
+    const cluster = new Redis.Cluster(nodes, {
+      // Cluster-level retry strategy
+      clusterRetryStrategy: (times: number, reason?: Error) => {
+        // Log the retry reason
+        if (reason) {
+          console.log(`[Redis] BullMQ connection ${connectionId} retry ${times} due to: ${reason.message}`);
+        }
+        
+        if (times > RETRY_MAX_ATTEMPTS) {
+          console.error(`[Redis] BullMQ connection ${connectionId} exceeded max retry attempts`);
+          return null;
+        }
+        
+        // Use shorter delays for initial retries
+        const delay = times <= 3 ? 1000 : Math.min(times * INITIAL_RETRY_DELAY, 20000);
+        console.log(`[Redis] BullMQ connection ${connectionId} retry attempt ${times}, delay: ${delay}ms`);
+        return delay;
+      },
+      
+      // Critical: disable offline queue to fail fast (except for blocking connections)
+      enableOfflineQueue: needsBlockingConfig ? true : false,
+      
+      // Connection pool configuration
+      scaleReads: 'slave',
+      
+      // Node-level Redis options
+      redisOptions: {
+        // Connection settings
+        // Blocking connections don't need ready check as they use blocking operations
+        enableReadyCheck: !needsBlockingConfig,
+        connectTimeout: 10000, // 10 second connection timeout
+        // Don't set commandTimeout for blocking connections - let ioredis handle blocking commands automatically
+        ...(needsBlockingConfig ? {} : { commandTimeout: 5000 }), // Only set timeout for non-blocking connections
+        
+        // Retry configuration - BullMQ requires null for blocking operations
+        maxRetriesPerRequest: null,
+        
+        
+        // Performance settings
+        enableAutoPipelining: false,
+        
+        // Keep-alive settings
+        keepAlive: 30000,
+        noDelay: true,
+        
+        // Don't set socket timeout - let ioredis handle it based on operation type
+      },
+      
+      // NAT mapping for Docker environments
+      natMap: REDIS_NET_MAP,
+      
+      // Cluster refresh settings
+      slotsRefreshTimeout: 10000, // 10 seconds for all connections
+      slotsRefreshInterval: 30000, // Refresh every 30 seconds
+      
+      // DNS resolution
+      dnsLookup: (address, callback) => callback(null, address),
+      
+      
+      // Show friendly error messages
+      showFriendlyErrorStack: true,
+    });
+    
+    // Set up event handlers before connecting
+    cluster.on('error', (err) => {
+      // Check if it's a timeout error
+      const isTimeoutError = err.message.includes('Command timed out') || err.message.includes('ETIMEDOUT');
+      
+      if (isTimeoutError && needsBlockingConfig) {
+        console.warn(`[Redis] BullMQ connection ${connectionId} timeout (expected for ${isQueueEvents ? 'queue events' : 'worker'}):`, err.message);
+      } else {
+        console.error(`[Redis] BullMQ connection ${connectionId} error:`, err.message);
+        logger.logDatabaseError(`BullMQ Redis connection error: ${connectionId}`, {
+          databaseOperation: DatabaseOperation.CONNECTION,
+          collection_name: 'bullmq_redis',
+          connectionId,
+          error: err,
+          errorMessage: err.message,
+          isTimeoutError,
+          isQueueEvents,
+          isWorker,
+          needsBlockingConfig
+        });
+      }
+    });
+    
+    cluster.on('connect', () => {
+      console.log(`[Redis] BullMQ connection ${connectionId} connected`);
+    });
+    
+    cluster.on('ready', () => {
+      console.log(`[Redis] BullMQ connection ${connectionId} ready`);
+    });
+    
+    cluster.on('close', () => {
+      console.log(`[Redis] BullMQ connection ${connectionId} closed`);
+      bullMQConnections.delete(connectionId);
+    });
+    
+    cluster.on('reconnecting', () => {
+      console.log(`[Redis] BullMQ connection ${connectionId} reconnecting...`);
+    });
+    
+    cluster.on('end', () => {
+      console.log(`[Redis] BullMQ connection ${connectionId} ended`);
+      bullMQConnections.delete(connectionId);
+    });
+    
+    // Check if already connected/connecting before calling connect
+    if (cluster.status === 'ready') {
+      console.log(`[Redis] BullMQ connection ${connectionId} already ready`);
+    } else if (cluster.status === 'connecting' || cluster.status === 'connect') {
+      console.log(`[Redis] BullMQ connection ${connectionId} already connecting, waiting...`);
+      // Wait for connection to complete
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error(`Connection timeout waiting for ${connectionId}`));
+        }, 15000);
+        
+        cluster.once('ready', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+        
+        cluster.once('error', (err) => {
+          clearTimeout(timeout);
+          reject(err);
+        });
+      });
+    } else {
+      // Only connect if not already connected/connecting
+      await cluster.connect();
+    }
+    
+    // Ensure cluster is ready
+    if (cluster.status !== 'ready') {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error(`BullMQ connection ${connectionId} timed out waiting for ready state`));
+        }, 15000);
+        
+        cluster.once('ready', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+        
+        cluster.once('error', (err) => {
+          clearTimeout(timeout);
+          reject(err);
+        });
+      });
+    }
+    
+    // Verify connection with a ping
+    try {
+      await cluster.ping();
+      console.log(`[Redis] BullMQ connection ${connectionId} verified with ping`);
+    } catch (pingError) {
+      console.error(`[Redis] BullMQ connection ${connectionId} ping failed:`, pingError);
+      throw pingError;
+    }
+    
+    // Track connection
+    bullMQConnections.set(connectionId, {
+      cluster,
+      createdAt: Date.now(),
+      lastHealthCheck: Date.now()
+    });
+    
+    console.log(`[Redis] BullMQ connection ${connectionId} successfully created. Total connections: ${bullMQConnections.size}`);
+    return cluster;
+    
+  } catch (error) {
+    console.error(`[Redis] Failed to create BullMQ connection ${connectionId}:`, error);
+    await logger.logDatabaseConnectionError(`Failed to create BullMQ connection: ${connectionId}`, {
+      operation: 'bullmq_connection_creation',
+      connectionId,
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
+    throw error;
+  }
+};
+
+// Get all active BullMQ connections
+export const getBullMQConnections = () => {
+  return Array.from(bullMQConnections.entries()).map(([id, info]) => ({
+    id,
+    createdAt: info.createdAt,
+    lastHealthCheck: info.lastHealthCheck,
+    age: Date.now() - info.createdAt,
+    status: info.cluster.status || 'unknown'
+  }));
+};
+
+// Health check for all BullMQ connections
+export const checkBullMQConnectionsHealth = async () => {
+  const results: { [key: string]: { healthy: boolean; error?: string } } = {};
+  
+  for (const [id, info] of bullMQConnections.entries()) {
+    try {
+      await info.cluster.ping();
+      info.lastHealthCheck = Date.now();
+      results[id] = { healthy: true };
+    } catch (error) {
+      results[id] = { 
+        healthy: false, 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      };
+    }
+  }
+  
+  return results;
+};
+
+// Close all BullMQ connections gracefully
+export const closeAllBullMQConnections = async () => {
+  console.log(`[Redis] Closing ${bullMQConnections.size} BullMQ connections...`);
+  
+  const promises: Promise<void>[] = [];
+  
+  for (const [id, info] of bullMQConnections.entries()) {
+    promises.push(
+      info.cluster.quit()
+        .then(() => console.log(`[Redis] Closed BullMQ connection: ${id}`))
+        .catch(err => console.error(`[Redis] Error closing BullMQ connection ${id}:`, err))
+    );
+  }
+  
+  await Promise.all(promises);
+  bullMQConnections.clear();
+  console.log('[Redis] All BullMQ connections closed');
 };
