@@ -155,7 +155,7 @@ interface WarningMessage {
 
 
 // Dynamically allocate up to 75% of available CPU cores
-export const WORKER_COUNT = Math.max(1, Math.floor(os.cpus().length * 0.75))
+export const WORKER_COUNT = 1
 let traitsToRemove: { [key: string]: string[] } = {}
 let removedTokens: { [key: string]: { opensea: string[]; magiceden: string[] } } = {}
 
@@ -496,8 +496,6 @@ const CANCEL_BLUR_BID = "CANCEL_BLUR_BID"
 // Retry configuration for cancellation jobs
 const CANCELLATION_JOB_RETRY_ATTEMPTS = 1; // No retries
 const CANCELLATION_JOB_RETRY_DELAY = 2000;
-const CANCELLATION_JOB_TYPES = [CANCEL_OPENSEA_BID, CANCEL_MAGICEDEN_BID, CANCEL_BLUR_BID];
-
 // Helper function to create cancellation job options with retry configuration
 function getCancellationJobOptions(taskId: string, orderId: string, jobType: string) {
   return {
@@ -507,21 +505,7 @@ function getCancellationJobOptions(taskId: string, orderId: string, jobType: str
       type: 'exponential' as const,
       delay: CANCELLATION_JOB_RETRY_DELAY,
     },
-    removeOnFail: false, // Keep failed jobs for inspection
-    removeOnComplete: true
-  };
-}
-
-// Helper function to create SCHEDULE job options with infinite retries
-function getScheduleJobOptions(jobId: string): JobsOptions {
-  return {
-    jobId,
-    attempts: 999999, // Effectively infinite retries
-    backoff: {
-      type: 'exponential' as const,
-      delay: 2000 // Start with 2 seconds, exponentially increase
-    },
-    removeOnFail: false, // Never remove SCHEDULE jobs on failure
+    removeOnFail: true, // Keep failed jobs for inspection
     removeOnComplete: true
   };
 }
@@ -715,7 +699,7 @@ async function monitorHealth() {
     });
 
     console.log(BLUE + '\n📋 Queue Status:' + RESET);
-    
+
     // Show password status first
     const hasPassword = !!getPassword();
     if (!hasPassword) {
@@ -724,7 +708,7 @@ async function monitorHealth() {
     } else {
       console.log(GREEN + '🔓 Password is set' + RESET);
     }
-    
+
     // Show paused status prominently
     if (isPaused) {
       console.log(RED + '⏸️  QUEUE IS PAUSED' + RESET);
@@ -988,13 +972,13 @@ let isCheckingPassword = false;
 async function checkPasswordAndResume() {
   // Prevent concurrent checks
   if (isCheckingPassword) return;
-  
+
   try {
     isCheckingPassword = true;
-    
+
     // If password is already set, nothing to do
     if (getPassword()) return;
-    
+
     // Try to recover password from Redis
     const recovered = await recoverPasswordFromRedis();
     if (recovered) {
@@ -1080,7 +1064,7 @@ async function clearQueueAndRestartJobs() {
     // Clear all task timeouts
     taskTimeouts.forEach((timeout) => clearTimeout(timeout));
     taskTimeouts.clear();
-    
+
     // Clear task status tracking since all jobs were obliterated
     Object.keys(taskStatus).forEach(taskId => {
       delete taskStatus[taskId];
@@ -1341,11 +1325,11 @@ const taskPreprocessing = new Map<string, TaskPreprocessing>();
 async function pauseQueueAndWorkers() {
   try {
     console.log(YELLOW + 'No password set - pausing queues and workers...' + RESET);
-    
+
     // Pause both queues
     await queue.pause();
     await blurQueue.pause();
-    
+
     // Pause all workers
     if (workers.length > 0) {
       await Promise.all(workers.map(worker => worker.pause()));
@@ -1360,37 +1344,37 @@ async function pauseQueueAndWorkers() {
 async function resumeQueueAndWorkers() {
   try {
     console.log(GREEN + 'Password set - resuming queues and workers...' + RESET);
-    
+
     // Resume both queues
     await queue.resume();
     await blurQueue.resume();
-    
+
     // Resume all workers
     if (workers.length > 0) {
       await Promise.all(workers.map(worker => worker.resume()));
     }
-    
+
     console.log(GREEN + 'All queues and workers resumed.' + RESET);
-    
+
     // Retry any failed jobs that were due to missing password
     try {
       const failedJobs = await queue.getFailed();
       const blurFailedJobs = await blurQueue.getFailed();
-      
+
       // Retry jobs that failed due to missing password
-      const passwordFailedJobs = failedJobs.filter(job => 
+      const passwordFailedJobs = failedJobs.filter(job =>
         job.failedReason?.includes('No password available')
       );
-      
+
       const blurPasswordFailedJobs = blurFailedJobs.filter(job =>
         job.failedReason?.includes('No password available')
       );
-      
+
       if (passwordFailedJobs.length > 0) {
         console.log(GREEN + `Retrying ${passwordFailedJobs.length} main queue jobs that failed due to missing password` + RESET);
         await Promise.all(passwordFailedJobs.map(job => job.retry()));
       }
-      
+
       if (blurPasswordFailedJobs.length > 0) {
         console.log(GREEN + `Retrying ${blurPasswordFailedJobs.length} blur queue jobs that failed due to missing password` + RESET);
         await Promise.all(blurPasswordFailedJobs.map(job => job.retry()));
@@ -1407,16 +1391,46 @@ async function resumeQueueAndWorkers() {
 let workerHealthInterval: NodeJS.Timeout | null = null;
 const WORKER_HEALTH_CHECK_INTERVAL = 30000; // 30 seconds
 
+// Worker failure tracking
+const workerFailures = new Map<number, { count: number; lastFailure: number; errorTypes: string[] }>();
+const WORKER_FAILURE_THRESHOLD = 3; // Failures before restart
+const WORKER_FAILURE_WINDOW = 5 * 60 * 1000; // 5 minutes
+let lastWorkerRestartTime = 0;
+const WORKER_RESTART_COOLDOWN = 5 * 60 * 1000; // 5 minutes between restarts
+
+// Queue drain monitoring
+const QUEUE_BACKLOG_THRESHOLD = (RATE_LIMIT || 100) * 2; // 2x rate limit
+const QUEUE_STAGNATION_TIME = 3 * 60 * 1000; // 3 minutes
+const DRAIN_CHECK_INTERVAL = 30 * 1000; // Check every 30 seconds
+let queueDrainInterval: NodeJS.Timeout | null = null;
+const queueProcessingHistory = new Map<number, { processed: number; waiting: number }>();
+let lastQueueClearForBacklog = 0;
+
 function startWorkerHealthMonitoring() {
   console.log(GREEN + '🏥 Starting worker health monitoring...' + RESET);
-  
+
   // Initial health check
   checkWorkerHealth();
-  
+
   // Set up periodic health checks
   workerHealthInterval = setInterval(() => {
     checkWorkerHealth();
   }, WORKER_HEALTH_CHECK_INTERVAL);
+
+  // Start queue drain monitoring
+  startQueueDrainMonitoring();
+}
+
+function startQueueDrainMonitoring() {
+  console.log(GREEN + '💧 Starting queue drain monitoring...' + RESET);
+
+  // Initial drain check
+  monitorQueueDrain();
+
+  // Set up periodic drain checks
+  queueDrainInterval = setInterval(() => {
+    monitorQueueDrain();
+  }, DRAIN_CHECK_INTERVAL);
 }
 
 async function checkWorkerHealth() {
@@ -1425,14 +1439,14 @@ async function checkWorkerHealth() {
     const connectionHealth = await checkBullMQConnectionsHealth();
     const unhealthyConnections = Object.entries(connectionHealth)
       .filter(([_, status]) => !status.healthy);
-    
+
     if (unhealthyConnections.length > 0) {
       console.error(RED + `❌ Unhealthy Redis connections detected: ${unhealthyConnections.length}` + RESET);
       unhealthyConnections.forEach(([id, status]) => {
         console.error(RED + `  - ${id}: ${status.error}` + RESET);
       });
     }
-    
+
     // Check worker status
     const workerStatuses = await Promise.all(
       workers.map(async (worker, index) => {
@@ -1440,7 +1454,7 @@ async function checkWorkerHealth() {
           // Check if worker is running
           const isRunning = worker.isRunning();
           const isPaused = worker.isPaused();
-          
+
           return {
             index,
             running: isRunning,
@@ -1458,16 +1472,24 @@ async function checkWorkerHealth() {
         }
       })
     );
-    
+
     const unhealthyWorkers = workerStatuses.filter(status => !status.healthy);
-    
+
     if (unhealthyWorkers.length > 0) {
       console.error(RED + `❌ Unhealthy workers detected: ${unhealthyWorkers.length}/${workers.length}` + RESET);
-      
+
+      let shouldRestartAll = false;
+
       // Attempt to restart unhealthy workers
       for (const workerStatus of unhealthyWorkers) {
         if ('error' in workerStatus && workerStatus.error) {
           console.error(RED + `  Worker ${workerStatus.index}: ${workerStatus.error}` + RESET);
+          
+          // Track the failure
+          const thresholdExceeded = trackWorkerFailure(workerStatus.index, workerStatus.error);
+          if (thresholdExceeded) {
+            shouldRestartAll = true;
+          }
         } else if (workerStatus.paused) {
           console.log(YELLOW + `  Worker ${workerStatus.index} is paused, attempting to resume...` + RESET);
           try {
@@ -1475,17 +1497,58 @@ async function checkWorkerHealth() {
             console.log(GREEN + `  ✅ Worker ${workerStatus.index} resumed successfully` + RESET);
           } catch (error) {
             console.error(RED + `  Failed to resume worker ${workerStatus.index}: ${error}` + RESET);
+            
+            // Track resume failure
+            const thresholdExceeded = trackWorkerFailure(workerStatus.index, `Resume failed: ${error}`);
+            if (thresholdExceeded) {
+              shouldRestartAll = true;
+            }
+          }
+        } else if (!workerStatus.running) {
+          // Worker is not running at all
+          console.error(RED + `  Worker ${workerStatus.index} is not running` + RESET);
+          const thresholdExceeded = trackWorkerFailure(workerStatus.index, 'Worker not running');
+          if (thresholdExceeded) {
+            shouldRestartAll = true;
           }
         }
       }
+
+      // Check if we should restart all workers
+      if (shouldRestartAll) {
+        const now = Date.now();
+        if (now - lastWorkerRestartTime > WORKER_RESTART_COOLDOWN) {
+          console.log(RED + '🚨 WORKER FAILURE THRESHOLD EXCEEDED 🚨' + RESET);
+          console.log(YELLOW + 'Multiple workers have failed. Initiating full system restart...' + RESET);
+          
+          // Log failure details
+          workerFailures.forEach((failure, index) => {
+            if (failure.count >= WORKER_FAILURE_THRESHOLD) {
+              console.log(RED + `Worker ${index}: ${failure.count} failures, last error types:` + RESET);
+              failure.errorTypes.slice(-3).forEach(err => console.log(RED + `  - ${err}` + RESET));
+            }
+          });
+          
+          lastWorkerRestartTime = now;
+          
+          // Clear failure tracking
+          workerFailures.clear();
+          
+          // Clear queues and restart
+          await clearQueueAndRestartJobs();
+        } else {
+          const cooldownRemaining = Math.ceil((WORKER_RESTART_COOLDOWN - (now - lastWorkerRestartTime)) / 1000);
+          console.log(YELLOW + `Worker restart needed but cooldown active (${cooldownRemaining}s remaining)` + RESET);
+        }
+      }
     }
-    
+
     // Check queue status
     const [mainQueueCounts, blurQueueCounts] = await Promise.all([
       queue.getJobCounts(),
       blurQueue.getJobCounts()
     ]);
-    
+
     // Log health summary
     const healthSummary = {
       connections: {
@@ -1509,7 +1572,7 @@ async function checkWorkerHealth() {
         }
       }
     };
-    
+
     // Connection pool monitoring
     const connectionPoolStats = getBullMQConnections();
     const connectionAges = connectionPoolStats.map(conn => ({
@@ -1517,10 +1580,10 @@ async function checkWorkerHealth() {
       age: Math.floor(conn.age / 1000), // Convert to seconds
       healthy: connectionHealth[conn.id]?.healthy || false
     }));
-    
+
     // Log connection pool information if there are old connections or in development
     const oldConnections = connectionAges.filter(conn => conn.age > 3600); // Connections older than 1 hour
-    
+
     // Only log if there are issues or if in development mode
     if (unhealthyConnections.length > 0 || unhealthyWorkers.length > 0 || oldConnections.length > 0 || process.env.NODE_ENV === 'development') {
       console.log(CYAN + '\n📊 Worker Health Check Summary:' + RESET);
@@ -1528,7 +1591,7 @@ async function checkWorkerHealth() {
       console.log(CYAN + `  Workers: ${healthSummary.workers.healthy}/${healthSummary.workers.total} healthy` + RESET);
       console.log(CYAN + `  Main Queue: ${healthSummary.queues.main.waiting} waiting, ${healthSummary.queues.main.active} active` + RESET);
       console.log(CYAN + `  Blur Queue: ${healthSummary.queues.blur.waiting} waiting, ${healthSummary.queues.blur.active} active` + RESET);
-      
+
       if (oldConnections.length > 0) {
         console.log(YELLOW + `  ⚠️  ${oldConnections.length} connections older than 1 hour:` + RESET);
         oldConnections.forEach(conn => {
@@ -1536,7 +1599,7 @@ async function checkWorkerHealth() {
         });
       }
     }
-    
+
     // Log detailed connection pool stats to monitoring system
     await logger.logInfo(ErrorCategory.GENERAL, 'Connection pool statistics', {
       totalConnections: connectionPoolStats.length,
@@ -1545,7 +1608,7 @@ async function checkWorkerHealth() {
       oldestConnectionAge: Math.max(...connectionAges.map(c => c.age)),
       connectionDetails: connectionAges
     });
-    
+
   } catch (error) {
     console.error(RED + 'Error during worker health check:' + RESET, error);
   }
@@ -1556,6 +1619,130 @@ function stopWorkerHealthMonitoring() {
     clearInterval(workerHealthInterval);
     workerHealthInterval = null;
     console.log('Worker health monitoring stopped');
+  }
+  if (queueDrainInterval) {
+    clearInterval(queueDrainInterval);
+    queueDrainInterval = null;
+    console.log('Queue drain monitoring stopped');
+  }
+}
+
+// Track worker failures
+function trackWorkerFailure(workerIndex: number, error: string) {
+  const now = Date.now();
+  const failure = workerFailures.get(workerIndex) || { count: 0, lastFailure: 0, errorTypes: [] };
+  
+  // Reset count if outside the failure window
+  if (now - failure.lastFailure > WORKER_FAILURE_WINDOW) {
+    failure.count = 0;
+    failure.errorTypes = [];
+  }
+  
+  failure.count++;
+  failure.lastFailure = now;
+  failure.errorTypes.push(error);
+  
+  // Keep only last 10 error types
+  if (failure.errorTypes.length > 10) {
+    failure.errorTypes = failure.errorTypes.slice(-10);
+  }
+  
+  workerFailures.set(workerIndex, failure);
+  
+  console.error(RED + `[Worker ${workerIndex}] Failure tracked: ${failure.count}/${WORKER_FAILURE_THRESHOLD} in window` + RESET);
+  console.error(RED + `[Worker ${workerIndex}] Error: ${error}` + RESET);
+  
+  return failure.count >= WORKER_FAILURE_THRESHOLD;
+}
+
+// Monitor queue drain and detect backlogs
+async function monitorQueueDrain() {
+  try {
+    if (!queue || !blurQueue) {
+      return;
+    }
+    
+    const now = Date.now();
+    const [mainCounts, blurCounts] = await Promise.all([
+      queue.getJobCounts(),
+      blurQueue.getJobCounts()
+    ]);
+    
+    const totalWaiting = (mainCounts.waiting || 0) + (blurCounts.waiting || 0);
+    const totalActive = (mainCounts.active || 0) + (blurCounts.active || 0);
+    const totalCompleted = (mainCounts.completed || 0) + (blurCounts.completed || 0);
+    
+    // Store current state for history
+    queueProcessingHistory.set(now, { processed: totalCompleted, waiting: totalWaiting });
+    
+    // Clean old history (keep 5 minutes)
+    const historyLimit = now - (5 * 60 * 1000);
+    for (const [timestamp] of queueProcessingHistory) {
+      if (timestamp < historyLimit) {
+        queueProcessingHistory.delete(timestamp);
+      }
+    }
+    
+    // Check for backlog conditions
+    let shouldClearQueue = false;
+    let clearReason = '';
+    
+    // Condition 1: High waiting count with no active workers
+    if (totalWaiting > QUEUE_BACKLOG_THRESHOLD && totalActive === 0) {
+      shouldClearQueue = true;
+      clearReason = `High waiting jobs (${totalWaiting}) with no active workers`;
+    }
+    
+    // Condition 2: Check for stagnation (no progress in processing)
+    const historyEntries = Array.from(queueProcessingHistory.entries()).sort((a, b) => a[0] - b[0]);
+    if (historyEntries.length >= 3) {
+      const recentHistory = historyEntries.slice(-3);
+      const noProgress = recentHistory.every((entry, idx) => {
+        if (idx === 0) return true;
+        const prevEntry = recentHistory[idx - 1];
+        return entry[1].processed === prevEntry[1].processed && entry[1].waiting > 0;
+      });
+      
+      if (noProgress && totalWaiting > 0) {
+        const stagnationTime = now - recentHistory[0][0];
+        if (stagnationTime > QUEUE_STAGNATION_TIME) {
+          shouldClearQueue = true;
+          clearReason = `Queue stagnation detected - no progress for ${Math.round(stagnationTime / 1000)}s`;
+        }
+      }
+    }
+    
+    // Condition 3: Extreme backlog
+    if (totalWaiting > QUEUE_BACKLOG_THRESHOLD * 3) {
+      shouldClearQueue = true;
+      clearReason = `Extreme backlog detected: ${totalWaiting} waiting jobs`;
+    }
+    
+    // Check cooldown before clearing
+    if (shouldClearQueue && (now - lastQueueClearForBacklog) > CLEAR_COOLDOWN) {
+      console.log(RED + '🚨 QUEUE BACKLOG DETECTED 🚨' + RESET);
+      console.log(RED + `Reason: ${clearReason}` + RESET);
+      console.log(YELLOW + `Queue stats - Waiting: ${totalWaiting}, Active: ${totalActive}` + RESET);
+      console.log(YELLOW + 'Initiating queue clear and restart...' + RESET);
+      
+      lastQueueClearForBacklog = now;
+      await clearQueueAndRestartJobs();
+    } else if (shouldClearQueue) {
+      const cooldownRemaining = Math.ceil((CLEAR_COOLDOWN - (now - lastQueueClearForBacklog)) / 1000);
+      console.log(YELLOW + `Queue backlog detected but cooldown active (${cooldownRemaining}s remaining)` + RESET);
+    }
+    
+    // Log drain status if high waiting count
+    if (totalWaiting > RATE_LIMIT) {
+      const processingRate = historyEntries.length >= 2 
+        ? (historyEntries[historyEntries.length - 1][1].processed - historyEntries[0][1].processed) / (historyEntries.length - 1)
+        : 0;
+      
+      console.log(YELLOW + `[Queue Drain Monitor] High waiting: ${totalWaiting}, Active: ${totalActive}, Rate: ${processingRate.toFixed(1)} jobs/check` + RESET);
+    }
+    
+  } catch (error) {
+    console.error(RED + 'Error in queue drain monitoring:' + RESET, error);
   }
 }
 
@@ -1576,10 +1763,10 @@ async function startServer() {
     // Create separate BullMQ connections for each component
     console.log('Creating separate Redis connections for BullMQ components...');
 
-  let mainQueueConnection: any;
-  let mainQueueEventsConnection: any;
-  let blurQueueConnection: any;
-  let blurQueueEventsConnection: any;
+    let mainQueueConnection: any;
+    let mainQueueEventsConnection: any;
+    let blurQueueConnection: any;
+    let blurQueueEventsConnection: any;
 
     try {
       // Main queue connection
@@ -1601,11 +1788,11 @@ async function startServer() {
       blurQueueEventsConnection = await createBullMQConnection('blur-queue-events');
       bullMQConnections.push(blurQueueEventsConnection);
       console.log(GREEN + '✅ Created blur queue events connection' + RESET);
-      
+
       // Verify all connections are healthy before proceeding
       const healthCheck = await checkBullMQConnectionsHealth();
       const unhealthyConnections = Object.entries(healthCheck).filter(([_, status]) => !status.healthy);
-      
+
       if (unhealthyConnections.length > 0) {
         console.error(RED + 'Unhealthy Redis connections detected:' + RESET);
         unhealthyConnections.forEach(([id, status]) => {
@@ -1613,7 +1800,7 @@ async function startServer() {
         });
         throw new Error('One or more Redis connections are unhealthy');
       }
-      
+
       console.log(GREEN + '✅ All Redis connections verified healthy' + RESET);
     } catch (error) {
       console.error(RED + 'Failed to create BullMQ connections:' + RESET, error);
@@ -1705,6 +1892,29 @@ async function startServer() {
           maxStalledCount: 1 // Move to failed after 1 stall
         }
       );
+      
+      // Add error handlers for main workers
+      worker.on('error', (error) => {
+        console.error(RED + `[Worker ${i + 1}] Worker error:` + RESET, error);
+        trackWorkerFailure(i, `Worker error: ${error.message || String(error)}`);
+        logger.logGeneralError(`Main worker ${i + 1} error`, {
+          error: error,
+          errorMessage: error.message || String(error),
+          errorStack: error.stack,
+          workerIndex: i
+        });
+      });
+
+      worker.on('failed', (job, error) => {
+        console.error(RED + `[Worker ${i + 1}] Job ${job?.id} failed:` + RESET, error.message || error);
+        // Only track as worker failure if it's a systemic issue
+        if (error.message?.includes('could not renew lock') || 
+            error.message?.includes('Missing lock') ||
+            error.message?.includes('connection lost')) {
+          trackWorkerFailure(i, `Job processing error: ${error.message}`);
+        }
+      });
+      
       // Add worker to array
       workers.push(worker);
     }
@@ -1761,6 +1971,8 @@ async function startServer() {
     // Add error handlers for Blur queue components
     blurWorker.on('error', (error) => {
       console.error(RED + '[Blur Worker] Worker error:' + RESET, error);
+      const blurWorkerIndex = workers.length - 1; // Blur worker is the last one
+      trackWorkerFailure(blurWorkerIndex, `Blur worker error: ${error.message || String(error)}`);
       logger.logGeneralError('Blur worker error', {
         error: error,
         errorMessage: error.message || String(error),
@@ -1770,6 +1982,13 @@ async function startServer() {
 
     blurWorker.on('failed', (job, error) => {
       console.error(RED + `[Blur Worker] Job ${job?.id} failed:` + RESET, error.message || error);
+      // Track systemic failures
+      if (error.message?.includes('could not renew lock') || 
+          error.message?.includes('Missing lock') ||
+          error.message?.includes('connection lost')) {
+        const blurWorkerIndex = workers.length - 1;
+        trackWorkerFailure(blurWorkerIndex, `Blur job processing error: ${error.message}`);
+      }
     });
 
     blurQueue.on('error', (error) => {
@@ -1887,19 +2106,19 @@ async function startServer() {
     console.log(CYAN + '🔍 Checking for stored password...' + RESET);
     let passwordRecovered = false;
     const maxRetries = 3;
-    
+
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       console.log(CYAN + `📡 Password recovery attempt ${attempt}/${maxRetries}...` + RESET);
-      
+
       // Check Redis connection status
       if (!redisClient.isReady()) {
         console.log(YELLOW + 'Waiting for Redis connection...' + RESET);
         await new Promise(resolve => setTimeout(resolve, 1000));
         continue;
       }
-      
+
       passwordRecovered = await recoverPasswordFromRedis();
-      
+
       if (passwordRecovered) {
         break;
       } else if (attempt < maxRetries) {
@@ -1907,7 +2126,7 @@ async function startServer() {
         await new Promise(resolve => setTimeout(resolve, attempt * 1000));
       }
     }
-    
+
     // Check if password is set (either from Redis recovery or needs to be set)
     const currentPassword = getPassword();
     if (!currentPassword) {
@@ -1932,10 +2151,10 @@ async function startServer() {
     } else {
       // Verify all workers are ready before processing jobs
       console.log(CYAN + '🔍 Verifying workers are ready...' + RESET);
-      
+
       // Give workers time to fully initialize
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       // Check worker health
       const workerStatuses = await Promise.all(
         workers.map(async (worker, index) => {
@@ -1948,14 +2167,14 @@ async function startServer() {
           }
         })
       );
-      
+
       const unhealthyWorkers = workerStatuses.filter(s => !s.healthy);
       if (unhealthyWorkers.length > 0) {
         console.error(RED + `⚠️  ${unhealthyWorkers.length} workers are not ready:` + RESET);
         unhealthyWorkers.forEach(w => {
           console.error(RED + `  - Worker ${w.index}: running=${w.running}, paused=${w.paused}` + RESET);
         });
-        
+
         // Try to resume paused workers
         for (const workerStatus of unhealthyWorkers) {
           if (!workerStatus.running || workerStatus.paused) {
@@ -1970,11 +2189,11 @@ async function startServer() {
       } else {
         console.log(GREEN + '✅ All workers are ready and healthy' + RESET);
       }
-      
+
       // Verify Redis connections one more time
       const finalHealthCheck = await checkBullMQConnectionsHealth();
       const finalUnhealthy = Object.entries(finalHealthCheck).filter(([_, status]) => !status.healthy);
-      
+
       if (finalUnhealthy.length > 0) {
         console.error(RED + '⚠️  Some Redis connections are still unhealthy:' + RESET);
         finalUnhealthy.forEach(([id, status]) => {
@@ -2054,7 +2273,7 @@ async function startServer() {
     startConnectivityMonitoring();
 
     await fetchCurrentTasks()
-    
+
     // Start password auto-recovery checker now that Redis is connected
     setInterval(checkPasswordAndResume, PASSWORD_CHECK_INTERVAL);
     console.log(GREEN + '✅ Password auto-recovery checker started (checking every 30s)' + RESET);
@@ -3003,12 +3222,18 @@ wss.on('connection', async (ws) => {
 // Process Blur jobs
 async function processBlurJob(job: Job) {
   try {
+    // Update progress to indicate job started
+    await job.updateProgress(5);
+    
     // Check if password is available before processing
     if (!getPassword()) {
       const error = new Error('No password available. Job will be retried when password is set.');
       (error as any).code = 'NO_PASSWORD';
       throw error;
     }
+    
+    // Update progress after password check
+    await job.updateProgress(10);
     // Extract wallet address from jobId
     const jobId = (job.opts as any)?.jobId || job.id;
     const jobParts = jobId.toString().split('-');
@@ -3016,6 +3241,9 @@ async function processBlurJob(job: Job) {
     const walletAddress = jobParts[jobParts.length - 1];
 
     if (walletAddress && walletAddress.startsWith('0x')) {
+      // Update progress before Redis checks
+      await job.updateProgress(15);
+      
       // Check for authentication blocks first
       try {
         const redis = redisClient.getClient();
@@ -3037,7 +3265,10 @@ async function processBlurJob(job: Job) {
               console.log(RED + `[Blur Auth Block] Job: ${job.id || 'unknown'}` + RESET);
               console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
+              // Update progress periodically during wait
+              const updateInterval = setInterval(() => job.updateProgress(20), 10000);
               await new Promise(resolve => setTimeout(resolve, waitTime + 2500));
+              clearInterval(updateInterval);
 
               console.log(GREEN + `[Blur Auth Block] Resumed processing for wallet ${walletAddress.substring(0, 8)}...` + RESET);
             } else {
@@ -3046,6 +3277,9 @@ async function processBlurJob(job: Job) {
               console.log(CYAN + `[Blur Auth Block] Cleaned up expired block for wallet ${walletAddress.substring(0, 8)}...` + RESET);
             }
           }
+
+          // Update progress after auth check
+          await job.updateProgress(25);
 
           // Then check rate limit pauses
           const pauseKey = `{blurWallet}:pause:${walletAddress}`;
@@ -3065,7 +3299,10 @@ async function processBlurJob(job: Job) {
               console.log(YELLOW + `[Blur API Rate Limit] Job: ${job.id || 'unknown'}` + RESET);
               console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
+              // Update progress periodically during wait
+              const updateInterval = setInterval(() => job.updateProgress(30), 10000);
               await new Promise(resolve => setTimeout(resolve, waitTime + 2500));
+              clearInterval(updateInterval);
 
               console.log(GREEN + `[Blur API Rate Limit] Resumed processing for wallet ${walletAddress.substring(0, 8)}...` + RESET);
             } else {
@@ -3080,22 +3317,35 @@ async function processBlurJob(job: Job) {
       }
     }
 
+    // Update progress before processing job
+    await job.updateProgress(40);
+
     // Process job based on type
     switch (job.name) {
       case BLUR_SCHEDULE:
+        await job.updateProgress(45);
         await processBlurScheduledBid(job.data);
+        await job.updateProgress(95);
         return { completed: true };
       case BLUR_COLLECTION_BID:
+        await job.updateProgress(45);
         await processBlurCollectionBid(job.data);
+        await job.updateProgress(95);
         return { completed: true };
       case BLUR_TRAIT_BID:
+        await job.updateProgress(45);
         await processBlurTraitBid(job.data);
+        await job.updateProgress(95);
         return { completed: true };
       case BLUR_COLLECTION_BID_COUNTERBID:
+        await job.updateProgress(45);
         await blurCollectionCounterBid(job.data);
+        await job.updateProgress(95);
         return { completed: true };
       case BLUR_TRAIT_BID_COUNTERBID:
+        await job.updateProgress(45);
         await blurTraitCounterBid(job.data);
+        await job.updateProgress(95);
         return { completed: true };
       default:
         throw new Error(`Unknown Blur job type: ${job.name}`);
@@ -3103,12 +3353,18 @@ async function processBlurJob(job: Job) {
   } catch (error) {
     console.error(RED + `[Blur Job Error] ${job.name}: ${error}` + RESET);
     throw error;
+  } finally {
+    // Always update to 100% if we haven't already
+    await job.updateProgress(100);
   }
 }
 
 async function processJob(job: Job, signal?: AbortSignal) {
 
   try {
+    // Update progress to indicate job started
+    await job.updateProgress(5);
+    
     // Check if password is available before processing
     if (!getPassword()) {
       const error = new Error('No password available. Job will be retried when password is set.');
@@ -3121,67 +3377,110 @@ async function processJob(job: Job, signal?: AbortSignal) {
       throw new Error('Job aborted before processing');
     }
 
+    // Update progress after initial checks
+    await job.updateProgress(10);
+
     const result = await (async () => {
       switch (job.name) {
         case OPENSEA_COLLECTION_BID:
+          await job.updateProgress(15);
           await processOpenseaCollectionBid(job.data);
+          await job.updateProgress(95);
           return { completed: true };
         case MAGICEDEN_COLLECTION_BID:
+          await job.updateProgress(15);
           await processMagicedenCollectionBid(job.data);
+          await job.updateProgress(95);
           return { completed: true };
         case OPENSEA_COLLECTION_BID_COUNTERBID:
+          await job.updateProgress(15);
           await openseaCollectionCounterBid(job.data);
+          await job.updateProgress(95);
           return { completed: true };
         case MAGICEDEN_COLLECTION_BID_COUNTERBID:
+          await job.updateProgress(15);
           await magicedenCollectionCounterBid(job.data);
+          await job.updateProgress(95);
           return { completed: true };
         case OPENSEA_TOKEN_BID_COUNTERBID:
+          await job.updateProgress(15);
           await openseaTokenCounterBid(job.data);
+          await job.updateProgress(95);
           return { completed: true };
         case OPENSEA_TRAIT_BID_COUNTERBID:
+          await job.updateProgress(15);
           await openseaTraitCounterBid(job.data);
+          await job.updateProgress(95);
           return { completed: true };
         case MAGICEDEN_TOKEN_BID_COUNTERBID:
+          await job.updateProgress(15);
           await magicedenTokenCounterBid(job.data);
+          await job.updateProgress(95);
           return { completed: true };
         case MAGICEDEN_TRAIT_BID_COUNTERBID:
+          await job.updateProgress(15);
           await magicedenTraitCounterBid(job.data);
+          await job.updateProgress(95);
           return { completed: true };
         case OPENSEA_SCHEDULE:
+          await job.updateProgress(15);
           await processOpenseaScheduledBid(job.data, job.id as string);
+          await job.updateProgress(95);
           return { completed: true };
         case OPENSEA_TRAIT_BID:
+          await job.updateProgress(15);
           await processOpenseaTraitBid(job.data);
+          await job.updateProgress(95);
           return { completed: true };
         case OPENSEA_TOKEN_BID:
+          await job.updateProgress(15);
           await processOpenseaTokenBid(job.data);
+          await job.updateProgress(95);
           return { completed: true };
         case MAGICEDEN_SCHEDULE:
+          await job.updateProgress(15);
           await processMagicedenScheduledBid(job.data, job.id as string);
+          await job.updateProgress(95);
           return { completed: true };
         case MAGICEDEN_TRAIT_BID:
+          await job.updateProgress(15);
           await processMagicedenTraitBid(job.data);
+          await job.updateProgress(95);
           return { completed: true };
         case MAGICEDEN_TOKEN_BID:
+          await job.updateProgress(15);
           await processMagicedenTokenBid(job.data);
+          await job.updateProgress(95);
           return { completed: true };
         case CANCEL_OPENSEA_BID:
+          await job.updateProgress(15);
           await bulkCancelOpenseaBid(job.data);
+          await job.updateProgress(95);
           return { completed: true };
         case CANCEL_MAGICEDEN_BID:
+          await job.updateProgress(15);
           await bulkCancelMagicedenBid(job.data);
+          await job.updateProgress(95);
           return { completed: true };
         case CANCEL_BLUR_BID:
+          await job.updateProgress(15);
           await bulkCancelBlurBid(job.data);
+          await job.updateProgress(95);
           return { completed: true };
         case PROCESS_LISTING:
           return await processListingJob(job);
         case PROCESS_LISTING_UPDATE:
-          return await processListingUpdateJob(job);
+          await job.updateProgress(15);
+          const updateResult = await processListingUpdateJob(job);
+          await job.updateProgress(95);
+          return updateResult;
         default:
           return { completed: false, error: 'Unknown job type' };
       }
     })();
+    
+    // Final progress update
+    await job.updateProgress(100);
     return result;
   } catch (error) {
     throw error;
@@ -3314,95 +3613,10 @@ async function processImportedTasks(tasks: ITask[]) {
 
 async function processNewTask(task: ITask) {
   try {
-    // Add to activeTasks Map
     activeTasks.set(task._id, task)
     currentTasks.push(task);
     updateTaskIndexes(currentTasks);
-    // const jobs = [
-    //   ...(task.selectedMarketplaces.map(m => m.toLowerCase()).includes("opensea") ? [{
-    //     name: OPENSEA_SCHEDULE,
-    //     data: task,
-    //     opts: {
-    //       jobId: `${task._id}-opensea-schedule`,
-    //       removeOnComplete: true,
-    //       removeOnFail: {
-    //         age: 3600, // keep up to 1 hour
-    //         count: 1000, // keep up to 1000 jobs
-    //       },
-    //       attempts: 3,
-    //       backoff: {
-    //         type: 'exponential',
-    //         delay: 2000,
-    //       },
-    //     }
-    //   }] : []),
-    //   ...(task.selectedMarketplaces.map(m => m.toLowerCase()).includes("blur") ? [{
-    //     name: BLUR_SCHEDULE,
-    //     data: task,
-    //     opts: {
-    //       jobId: `${task._id}-blur-schedule`,
-    //       removeOnComplete: true,
-    //       removeOnFail: {
-    //         age: 3600, // keep up to 1 hour
-    //         count: 1000, // keep up to 1000 jobs
-    //       },
-    //       attempts: 3,
-    //       backoff: {
-    //         type: 'exponential',
-    //         delay: 2000,
-    //       },
-    //     }
-    //   }] : []),
-    //   ...(task.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden") ? [{
-    //     name: MAGICEDEN_SCHEDULE, data: task, opts: {
-    //       jobId: `${task._id}-magiceden-schedule`,
-    //       removeOnComplete: true,
-    //       removeOnFail: {
-    //         age: 3600, // keep up to 1 hour
-    //         count: 1000, // keep up to 1000 jobs
-    //       },
-    //       attempts: 3,
-    //       backoff: {
-    //         type: 'exponential',
-    //         delay: 2000,
-    //       },
-    //     }
-    //   }] : []),
-    // ];
-
-    console.log({ running: task.running });
-
-
     await startTask(task, task.running)
-
-
-    // if (jobs.length > 0) {
-    //   await queue.addBulk(jobs)
-    //   console.log(`Successfully added ${jobs.length} jobs to the queue.`);
-
-    //   // Log each job added
-    //   for (const job of jobs) {
-    //     await logger.logQueueJobAdded(job.name, {
-    //       jobName: job.name,
-    //       taskId: job.data._id,
-    //       taskName: (job.data as any).name || job.data.contract?.slug,
-    //       marketplace: job.name.replace('_SCHEDULE', '').toLowerCase(),
-    //       queueName: QUEUE_NAME
-    //     });
-    //   }
-    // }
-
-    // // Subscribe to WebSocket collection (WebSocket should already be connected at startup)
-    // try {
-    //   if (wsManager?.isConnected()) {
-    //     // console.log("subscribing to collection: ", task.contract.slug);
-    //     const newTask = { ...task, running: true };
-    //     subscribeToCollections([newTask]);
-    //   }
-    // } catch (error) {
-    //   console.error(RED + `Error subscribing to collection ${task.contract.slug}: ` + RESET, error);
-    // }
-
     console.log(GREEN + `=== New Task Processing Complete ===\n` + RESET);
   } catch (error) {
     console.error(RED + `Error processing new task: ${task.contract.slug}` + RESET, error);
@@ -4835,10 +5049,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
               opts: {
                 jobId: `${task._id}-opensea-schedule`,
                 removeOnComplete: true,
-                removeOnFail: {
-                  age: 3600, // keep up to 1 hour
-                  count: 1000, // keep up to 1000 jobs
-                },
+                removeOnFail: true,
                 attempts: 3,
                 backoff: {
                   type: 'exponential',
@@ -4853,10 +5064,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
               opts: {
                 jobId: `${task._id}-blur-schedule`,
                 removeOnComplete: true,
-                removeOnFail: {
-                  age: 3600, // keep up to 1 hour
-                  count: 1000, // keep up to 1000 jobs
-                },
+                removeOnFail: true,
                 attempts: 3,
                 backoff: {
                   type: 'exponential',
@@ -4871,10 +5079,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
               opts: {
                 jobId: `${task._id}-magiceden-schedule`,
                 removeOnComplete: true,
-                removeOnFail: {
-                  age: 3600, // keep up to 1 hour
-                  count: 1000, // keep up to 1000 jobs
-                },
+                removeOnFail: true,
                 attempts: 3,
                 backoff: {
                   type: 'exponential',
@@ -4949,21 +5154,16 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     // Task status will be updated to RUNNING when jobs are actually queued in scheduled bid functions
     if (marketplace) {
       // Also ensure skipStats and errorStats are initialized
-      if (!skipStats[taskId]) {
-        skipStats[taskId] = {
-          opensea: 0,
-          magiceden: 0,
-          blur: 0
-        };
-      }
-      if (!errorStats[taskId]) {
-        errorStats[taskId] = {
-          opensea: 0,
-          magiceden: 0,
-          blur: 0
-        };
-      }
-
+      skipStats[taskId] = {
+        opensea: 0,
+        magiceden: 0,
+        blur: 0
+      };
+      errorStats[taskId] = {
+        opensea: 0,
+        magiceden: 0,
+        blur: 0
+      };
       // The progress will be recalculated automatically as jobs complete
     }
 
@@ -9733,13 +9933,13 @@ async function processBlurScheduledBid(task: ITask) {
     const WALLET_ADDRESS: string = currentTask.wallet;
     const wallets = await walletCache.getWalletById(task.walletId)
     const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
-    
+
     // Fetch fresh BETH balance
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
     const { BETH } = await import('./utils/currencies');
     const bethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, BETH);
     console.log(`${CYAN}[Blur] Fresh BETH balance for ${WALLET_ADDRESS}: ${bethBalance}${RESET}`);
-    
+
     const contractAddress = currentTask.contract.contractAddress
     const newTask = { ...currentTask, traits: {} } as ITask
 
@@ -11471,13 +11671,13 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
     const WALLET_ADDRESS: string = currentTask.wallet;
     const wallets = await walletCache.getWalletById(currentTask.walletId);
     const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
-    
+
     // Fetch fresh WETH balance
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
     const { WETH } = await import('./utils/currencies');
     const wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, WETH);
     console.log(`${MAGENTA}[MagicEden] Fresh WETH balance for ${WALLET_ADDRESS}: ${wethBalance}${RESET}`);
-    
+
     const contractAddress = currentTask.contract.contractAddress
     const expiration = getExpiry(currentTask.bidDuration)
     const newTask = { ...currentTask, traits: {} } as ITask
@@ -12370,9 +12570,9 @@ app.get("/health", async (req, res) => {
   try {
     // Silently renew password TTL on health checks (client calls this frequently)
     if (getPassword()) {
-      renewPasswordTTL().catch(() => {}); // Fire and forget, don't block health check
+      renewPasswordTTL().catch(() => { }); // Fire and forget, don't block health check
     }
-    
+
     const queueCounts = await queue.getJobCounts();
     const metrics = {
       status: "ok",
@@ -13046,7 +13246,7 @@ app.post('/api/auth/renew-password', async (req, res) => {
     if (!getPassword()) {
       return res.status(401).json({ error: 'No password set' });
     }
-    
+
     await renewPasswordTTL();
     res.status(200).json({ success: true, message: 'Password TTL renewed' });
   } catch (error: any) {
@@ -13062,28 +13262,28 @@ app.post('/api/auth/renew-password', async (req, res) => {
 app.post('/api/auth/recover-password', async (req, res) => {
   try {
     console.log('Manual password recovery requested...');
-    
+
     // Check Redis connection
     if (!redisClient.isReady()) {
-      return res.status(503).json({ 
+      return res.status(503).json({
         error: 'Redis not connected',
         message: 'Redis connection is not ready'
       });
     }
-    
+
     const recovered = await recoverPasswordFromRedis();
-    
+
     if (recovered) {
       // Resume operations if password was recovered
       await resumeQueueAndWorkers();
-      
-      res.status(200).json({ 
-        success: true, 
+
+      res.status(200).json({
+        success: true,
         message: 'Password recovered from Redis and operations resumed',
         passwordSet: true
       });
     } else {
-      res.status(404).json({ 
+      res.status(404).json({
         success: false,
         message: 'No password found in Redis',
         passwordSet: false
@@ -13670,13 +13870,13 @@ app.get('/api/health/redis', async (req, res) => {
     // Get BullMQ connections
     const bullMQConnections = getBullMQConnections();
     const connectionHealth = await checkBullMQConnectionsHealth();
-    
+
     // Get main Redis client status
     const mainRedisStatus = {
       connected: redisClient.isReady(),
       client: redisClient.getClient() ? 'initialized' : 'not initialized'
     };
-    
+
     // Combine results
     const redisHealth = {
       mainClient: mainRedisStatus,
@@ -13693,11 +13893,11 @@ app.get('/api/health/redis', async (req, res) => {
         environment: process.env.NODE_ENV || 'development'
       }
     };
-    
+
     // Determine overall health
     const unhealthyCount = Object.values(connectionHealth).filter(status => !status.healthy).length;
     const isHealthy = mainRedisStatus.connected && unhealthyCount === 0;
-    
+
     res.status(isHealthy ? 200 : 503).json({
       status: isHealthy ? 'healthy' : 'unhealthy',
       timestamp: new Date().toISOString(),
@@ -13721,7 +13921,7 @@ app.get('/api/health/workers', async (req, res) => {
         try {
           const isRunning = worker.isRunning();
           const isPaused = worker.isPaused();
-          
+
           return {
             index,
             name: index < WORKER_COUNT ? `main-worker-${index + 1}` : 'blur-worker',
@@ -13741,16 +13941,16 @@ app.get('/api/health/workers', async (req, res) => {
         }
       })
     );
-    
+
     // Get queue counts
     const [mainQueueCounts, blurQueueCounts] = await Promise.all([
       queue.getJobCounts(),
       blurQueue.getJobCounts()
     ]);
-    
+
     const healthyWorkers = workerStatuses.filter(w => w.healthy).length;
     const isHealthy = healthyWorkers === workers.length;
-    
+
     res.status(isHealthy ? 200 : 503).json({
       status: isHealthy ? 'healthy' : 'unhealthy',
       timestamp: new Date().toISOString(),
@@ -13785,10 +13985,10 @@ app.get('/api/health/system', async (req, res) => {
       checkBullMQConnectionsHealth(),
       Promise.all(workers.map(w => ({ running: w.isRunning(), paused: w.isPaused() })))
     ]);
-    
+
     const unhealthyRedis = Object.values(redisHealth).filter(s => !s.healthy).length;
     const unhealthyWorkers = workerHealth.filter(w => !w.running || w.paused).length;
-    
+
     const systemHealth = {
       status: unhealthyRedis === 0 && unhealthyWorkers === 0 ? 'healthy' : 'degraded',
       timestamp: new Date().toISOString(),
@@ -13808,7 +14008,7 @@ app.get('/api/health/system', async (req, res) => {
       uptime: process.uptime(),
       memory: process.memoryUsage()
     };
-    
+
     const isHealthy = systemHealth.status === 'healthy';
     res.status(isHealthy ? 200 : 503).json(systemHealth);
   } catch (error) {
