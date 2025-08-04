@@ -1684,11 +1684,6 @@ export async function fetchOpenseaOffers(
       // Sort by USD value descending and take top 2
       .sort((a, b) => +b.eth - +a.eth)
       .slice(0, 2);
-
-
-    console.log({ allOffers });
-
-
     return allOffers;
   }
 }
