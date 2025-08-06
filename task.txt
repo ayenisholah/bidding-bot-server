@@ -1,3 +1,0 @@
-analyze markJobAsProcessed and all functions between there and scheduleNextLoop, initializeQueueEventHandlers, the queues and everywhere taskStatus is updated and how the whole system works
-the current issue is that taskStatus runningPercentage stops at random numbers i.e 92.7 which indicates all jobs do not end up in either failed or completed state\
-what do you think the problem is and what do you recommend
