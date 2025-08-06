@@ -3944,9 +3944,6 @@ async function processNewTask(task: ITask) {
     activeTasks.set(task._id, task)
     currentTasks.push(task);
     updateTaskIndexes(currentTasks);
-
-    console.log({ running: task.running });
-
     await startTask(task, task.running)
     console.log(GREEN + `=== New Task Processing Complete ===\n` + RESET);
   } catch (error) {
@@ -4896,9 +4893,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
   const startTime = Date.now();
   const taskId = task._id.toString();
 
-  console.log({ startTask: task.running });
-
-  if (!task.running) return
+  if (!start) return
 
   clearTaskTimers(taskId)
 
