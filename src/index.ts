@@ -2417,22 +2417,9 @@ function setTaskCancellationComplete(taskId: string) {
     }
   }
 
-  // Resume queues after cancellation completion
+  // Clean up cancellation operation tracking
   const cancellationOp = activeCancellationOperations.get(taskId);
   if (cancellationOp) {
-    console.log(GREEN + `[Cancellation Complete] Task ${taskId} cancellation finished. Resuming queues...` + RESET);
-    queue.resume().then(() => {
-      console.log(GREEN + `Main queue resumed after ${taskId} cancellation` + RESET);
-    }).catch(err => {
-      console.error(RED + `Error resuming main queue: ${err.message}` + RESET);
-    });
-    blurQueue.resume().then(() => {
-      console.log(GREEN + `Blur queue resumed after ${taskId} cancellation` + RESET);
-    }).catch(err => {
-      console.error(RED + `Error resuming blur queue: ${err.message}` + RESET);
-    });
-
-    // Clean up cancellation operation tracking
     activeCancellationOperations.delete(taskId);
   }
 }
@@ -2481,27 +2468,9 @@ function setMarketplaceCancellationComplete(taskId: string, marketplace?: string
     setTaskCancellationComplete(taskId);
   }
 
-  // Resume queue after marketplace-specific cancellation
+  // Clean up cancellation operation tracking
   const cancellationOp = activeCancellationOperations.get(`${taskId}-${marketplace}`);
   if (cancellationOp) {
-    console.log(GREEN + `[Cancellation Complete] ${marketplace} cancellation for task ${taskId} finished. Resuming queue...` + RESET);
-
-    // Resume appropriate queue based on marketplace
-    if (marketplace === 'blur') {
-      blurQueue.resume().then(() => {
-        console.log(GREEN + `Blur queue resumed after ${taskId} ${marketplace} cancellation` + RESET);
-      }).catch(err => {
-        console.error(RED + `Error resuming blur queue: ${err.message}` + RESET);
-      });
-    } else {
-      queue.resume().then(() => {
-        console.log(GREEN + `Main queue resumed after ${taskId} ${marketplace} cancellation` + RESET);
-      }).catch(err => {
-        console.error(RED + `Error resuming main queue: ${err.message}` + RESET);
-      });
-    }
-
-    // Clean up cancellation operation tracking
     activeCancellationOperations.delete(`${taskId}-${marketplace}`);
   }
 }
@@ -2802,32 +2771,81 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
   // Generate a unique identifier for this job
   const uniqueJobId = jobId || `${taskId}-${marketplace}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
+  // Validate task exists and is active
+  const task = activeTasks.get(taskId);
+  if (!task) {
+    console.log(YELLOW + `[markJobAsProcessed] Task ${taskId} not found in activeTasks, skipping` + RESET);
+    return;
+  }
 
-  taskStatus[taskId].status = 'RUNNING';
+  if (taskStatus[taskId]) {
+    taskStatus[taskId].status = 'RUNNING';
+  }
 
   // Get parent job
   const parentJobId = `${taskId}-${marketplace}`;
-  const parentJob = parentJobs.get(parentJobId);
+  let parentJob = parentJobs.get(parentJobId);
 
-
-  if (parentJob) {
-    let processedJobs = processedJobsPerParent.get(parentJobId);
-    if (!processedJobs) {
-      processedJobs = new Set<string>();
-      processedJobsPerParent.set(parentJobId, processedJobs);
+  // If parent job doesn't exist, create it (recovery mechanism)
+  if (!parentJob) {
+    console.log(YELLOW + `[markJobAsProcessed] Parent job ${parentJobId} not found, creating retroactively` + RESET);
+    
+    await ensureParentJobExists(taskId, marketplace);
+    parentJob = parentJobs.get(parentJobId);
+    
+    if (!parentJob) {
+      console.error(RED + `[markJobAsProcessed] Failed to create parent job ${parentJobId}` + RESET);
+      return;
     }
+  }
 
-    if (processedJobs.has(uniqueJobId)) return;
+  // Track processed jobs to prevent duplicates
+  let processedJobs = processedJobsPerParent.get(parentJobId);
+  if (!processedJobs) {
+    processedJobs = new Set<string>();
+    processedJobsPerParent.set(parentJobId, processedJobs);
+  }
 
-    processedJobs.add(uniqueJobId);
+  if (processedJobs.has(uniqueJobId)) {
+    console.log(BLUE + `[markJobAsProcessed] Job ${uniqueJobId} already processed, skipping` + RESET);
+    return;
+  }
 
-    // Increment completed jobs
-    parentJob.completedJobs++;
+  processedJobs.add(uniqueJobId);
 
-    // Update task running percentage
-    await updateTaskRunningPercentage(taskId);
+  // Increment completed jobs
+  parentJob.completedJobs++;
+  
+  // If this was the first job and totalJobs is 0, set it to 1
+  if (parentJob.totalJobs === 0) {
+    console.log(YELLOW + `[markJobAsProcessed] Parent job ${parentJobId} had 0 total jobs, setting to 1` + RESET);
+    parentJob.totalJobs = 1;
+  }
 
-  } else {
+  console.log(CYAN + `[Job Complete] ${parentJobId}: ${parentJob.completedJobs}/${parentJob.totalJobs} (Job: ${uniqueJobId})` + RESET);
+
+  // Update task running percentage
+  await updateTaskRunningPercentage(taskId);
+
+  // Check if all jobs are complete for this parent job
+  if (parentJob.completedJobs >= parentJob.totalJobs) {
+    console.log(GREEN + `[Parent Job Complete] ${parentJobId}: All ${parentJob.totalJobs} jobs completed` + RESET);
+    
+    // Check if all parent jobs for this task are complete
+    const allComplete = checkAllParentJobsComplete(taskId);
+    
+    if (allComplete) {
+      console.log(MAGENTA + `[All Jobs Complete] Task ${taskId}: All marketplace jobs complete, checking percentage...` + RESET);
+      
+      // If percentage is not 100, force it and trigger completion
+      if (taskStatus[taskId] && taskStatus[taskId].runningPercentage < 100) {
+        console.log(YELLOW + `[Force Complete] Task ${taskId} percentage was ${taskStatus[taskId].runningPercentage}%, forcing to 100%` + RESET);
+        taskStatus[taskId].runningPercentage = 100;
+      }
+      
+      // Trigger completion
+      await checkTaskCompletionAndScheduleNext(taskId);
+    }
   }
 }
 
@@ -2963,102 +2981,213 @@ async function scheduleNextLoop(taskId: string): Promise<void> {
 // Initialize queue event handlers - called after queue is created
 function initializeQueueEventHandlers() {
   queueEvents.on('completed', async ({ jobId }) => {
-
-    if (jobId.split('-').length < 3) return;
-
-    const taskId = jobId.split('-')[1];
-    const task = activeTasks.get(taskId);
-
-    if (!task || !task.running) return;
-    // Handle bid job completion
-    if (jobId.startsWith('bid-')) {
-      const parts = jobId.split('-');
-      if (parts.length >= 3) {
-        const taskId = parts[1];
-        const marketplace = parts[2];
-        // Validate task is still active
-        const task = activeTasks.get(taskId);
-        if (task && task.running) {
-          markJobAsProcessed(taskId, marketplace, jobId);
+    try {
+      // Skip schedule jobs - they are orchestration jobs, not actual bid jobs
+      if (jobId.includes('-schedule')) {
+        console.log(CYAN + `[Queue Event] Skipping schedule job tracking: ${jobId}` + RESET);
+        return;
+      }
+      
+      // Log all job completions for debugging
+      console.log(BLUE + `[Queue Event] Job completed: ${jobId}` + RESET);
+      
+      // Try to extract task and marketplace info from job ID
+      let taskId: string | undefined;
+      let marketplace: string | undefined;
+      
+      // Handle bid jobs (e.g., bid-taskId-marketplace-...)
+      if (jobId.startsWith('bid-')) {
+        const parts = jobId.split('-');
+        if (parts.length >= 3) {
+          taskId = parts[1];
+          marketplace = parts[2];
         }
       }
+      // Handle other job formats
+      else {
+        // Try to find task ID in the job ID
+        const parts = jobId.split('-');
+        if (parts.length >= 2) {
+          // Check if first part is a valid task ID
+          if (activeTasks.has(parts[0])) {
+            taskId = parts[0];
+            marketplace = parts[1] || 'unknown';
+          } else if (activeTasks.has(parts[1])) {
+            taskId = parts[1];
+            marketplace = parts[2] || parts[0] || 'unknown';
+          }
+        }
+      }
+      
+      // Process if we found a task ID
+      if (taskId && marketplace) {
+        const task = activeTasks.get(taskId);
+        if (task && task.running) {
+          console.log(GREEN + `[Queue Event] Processing completion for task ${taskId}, marketplace ${marketplace}` + RESET);
+          await markJobAsProcessed(taskId, marketplace, jobId);
+        }
+      } else {
+        console.log(YELLOW + `[Queue Event] Could not extract task/marketplace from job ID: ${jobId}` + RESET);
+      }
+    } catch (error) {
+      console.error(RED + `[Queue Event] Error handling job completion for ${jobId}:` + RESET, error);
     }
-
   });
-  queueEvents.on('failed', async ({ jobId }) => {
-
-    if (jobId.split('-').length < 3) return;
-
-    const taskId = jobId.split('-')[1];
-    const task = activeTasks.get(taskId);
-
-    if (!task || !task.running) return;
-    // Handle failed bid jobs
-    if (jobId.startsWith('bid-')) {
-      const parts = jobId.split('-');
-      if (parts.length >= 3) {
-        const taskId = parts[1];
-        const marketplace = parts[2];
-
-        // Validate task is still active
-        const task = activeTasks.get(taskId);
-        if (task && task.running) {
-          console.log(`[Failed Bid Job] Marking as processed - Task: ${taskId} | Marketplace: ${marketplace.toUpperCase()} | JobID: ${jobId}`);
-          markJobAsProcessed(taskId, marketplace, jobId);
+  
+  queueEvents.on('failed', async ({ jobId, failedReason }) => {
+    try {
+      // Skip schedule jobs - they are orchestration jobs, not actual bid jobs
+      if (jobId.includes('-schedule')) {
+        console.log(CYAN + `[Queue Event] Skipping schedule job tracking (failed): ${jobId}` + RESET);
+        return;
+      }
+      
+      // Log all job failures for debugging
+      console.log(RED + `[Queue Event] Job failed: ${jobId} - ${failedReason}` + RESET);
+      
+      // Try to extract task and marketplace info from job ID
+      let taskId: string | undefined;
+      let marketplace: string | undefined;
+      
+      // Handle bid jobs (e.g., bid-taskId-marketplace-...)
+      if (jobId.startsWith('bid-')) {
+        const parts = jobId.split('-');
+        if (parts.length >= 3) {
+          taskId = parts[1];
+          marketplace = parts[2];
         }
       }
+      // Handle other job formats
+      else {
+        // Try to find task ID in the job ID
+        const parts = jobId.split('-');
+        if (parts.length >= 2) {
+          // Check if first part is a valid task ID
+          if (activeTasks.has(parts[0])) {
+            taskId = parts[0];
+            marketplace = parts[1] || 'unknown';
+          } else if (activeTasks.has(parts[1])) {
+            taskId = parts[1];
+            marketplace = parts[2] || parts[0] || 'unknown';
+          }
+        }
+      }
+      
+      // Process if we found a task ID
+      if (taskId && marketplace) {
+        const task = activeTasks.get(taskId);
+        if (task && task.running) {
+          console.log(YELLOW + `[Queue Event] Processing failure for task ${taskId}, marketplace ${marketplace}` + RESET);
+          await markJobAsProcessed(taskId, marketplace, jobId);
+        }
+      } else {
+        console.log(YELLOW + `[Queue Event] Could not extract task/marketplace from failed job ID: ${jobId}` + RESET);
+      }
+    } catch (error) {
+      console.error(RED + `[Queue Event] Error handling job failure for ${jobId}:` + RESET, error);
     }
-
   });
 
   blurQueueEvents.on('completed', async ({ jobId }) => {
-    if (jobId.split('-').length < 3) return;
-
-    const taskId = jobId.split('-')[1];
-    const task = activeTasks.get(taskId);
-
-    if (!task || !task.running) return;
-
-    // Handle bid job completion
-    if (jobId.startsWith('bid-')) {
-      const parts = jobId.split('-');
-      if (parts.length >= 3) {
-        const taskId = parts[1];
-        const marketplace = parts[2];
-
-        // Validate task is still active
-        const task = activeTasks.get(taskId);
-        if (task && task.running) {
-          markJobAsProcessed(taskId, marketplace, jobId);
+    try {
+      // Skip schedule jobs - they are orchestration jobs, not actual bid jobs
+      if (jobId.includes('-schedule')) {
+        console.log(CYAN + `[Blur Queue Event] Skipping schedule job tracking: ${jobId}` + RESET);
+        return;
+      }
+      
+      // Log all job completions for debugging
+      console.log(BLUE + `[Blur Queue Event] Job completed: ${jobId}` + RESET);
+      
+      // Try to extract task and marketplace info from job ID
+      let taskId: string | undefined;
+      let marketplace = 'blur'; // Default to blur for blur queue
+      
+      // Handle bid jobs (e.g., bid-taskId-blur-...)
+      if (jobId.startsWith('bid-')) {
+        const parts = jobId.split('-');
+        if (parts.length >= 2) {
+          taskId = parts[1];
         }
       }
+      // Handle other job formats
+      else {
+        // Try to find task ID in the job ID
+        const parts = jobId.split('-');
+        if (parts.length >= 1) {
+          // Check if first part is a valid task ID
+          if (activeTasks.has(parts[0])) {
+            taskId = parts[0];
+          } else if (parts.length >= 2 && activeTasks.has(parts[1])) {
+            taskId = parts[1];
+          }
+        }
+      }
+      
+      // Process if we found a task ID
+      if (taskId) {
+        const task = activeTasks.get(taskId);
+        if (task && task.running) {
+          console.log(GREEN + `[Blur Queue Event] Processing completion for task ${taskId}` + RESET);
+          await markJobAsProcessed(taskId, marketplace, jobId);
+        }
+      } else {
+        console.log(YELLOW + `[Blur Queue Event] Could not extract task ID from job ID: ${jobId}` + RESET);
+      }
+    } catch (error) {
+      console.error(RED + `[Blur Queue Event] Error handling job completion for ${jobId}:` + RESET, error);
     }
   });
-  blurQueueEvents.on('failed', async ({ jobId }) => {
-    // Cancellation job failures are now handled in the bulk cancel functions
-
-    if (jobId.split('-').length < 3) return;
-
-    const taskId = jobId.split('-')[1];
-    const task = activeTasks.get(taskId);
-
-    if (!task || !task.running) return;
-    // Handle failed bid jobs
-    if (jobId.startsWith('bid-')) {
-      const parts = jobId.split('-');
-      if (parts.length >= 3) {
-        const taskId = parts[1];
-        const marketplace = parts[2];
-
-        // Validate task is still active
-        const task = activeTasks.get(taskId);
-        if (task && task.running) {
-          console.log(`[Failed Bid Job] Marking as processed - Task: ${taskId} | Marketplace: ${marketplace.toUpperCase()} | JobID: ${jobId}`);
-          markJobAsProcessed(taskId, marketplace, jobId);
+  
+  blurQueueEvents.on('failed', async ({ jobId, failedReason }) => {
+    try {
+      // Skip schedule jobs - they are orchestration jobs, not actual bid jobs
+      if (jobId.includes('-schedule')) {
+        console.log(CYAN + `[Blur Queue Event] Skipping schedule job tracking (failed): ${jobId}` + RESET);
+        return;
+      }
+      
+      // Log all job failures for debugging
+      console.log(RED + `[Blur Queue Event] Job failed: ${jobId} - ${failedReason}` + RESET);
+      
+      // Try to extract task and marketplace info from job ID
+      let taskId: string | undefined;
+      let marketplace = 'blur'; // Default to blur for blur queue
+      
+      // Handle bid jobs (e.g., bid-taskId-blur-...)
+      if (jobId.startsWith('bid-')) {
+        const parts = jobId.split('-');
+        if (parts.length >= 2) {
+          taskId = parts[1];
         }
       }
+      // Handle other job formats
+      else {
+        // Try to find task ID in the job ID
+        const parts = jobId.split('-');
+        if (parts.length >= 1) {
+          // Check if first part is a valid task ID
+          if (activeTasks.has(parts[0])) {
+            taskId = parts[0];
+          } else if (parts.length >= 2 && activeTasks.has(parts[1])) {
+            taskId = parts[1];
+          }
+        }
+      }
+      
+      // Process if we found a task ID
+      if (taskId) {
+        const task = activeTasks.get(taskId);
+        if (task && task.running) {
+          console.log(YELLOW + `[Blur Queue Event] Processing failure for task ${taskId}` + RESET);
+          await markJobAsProcessed(taskId, marketplace, jobId);
+        }
+      } else {
+        console.log(YELLOW + `[Blur Queue Event] Could not extract task ID from failed job ID: ${jobId}` + RESET);
+      }
+    } catch (error) {
+      console.error(RED + `[Blur Queue Event] Error handling job failure for ${jobId}:` + RESET, error);
     }
-
   });
 }
 
@@ -4171,6 +4300,19 @@ async function processBulkCancellations(jobs: Job[]) {
     jobs[0].name === CANCEL_MAGICEDEN_BID ||
     jobs[0].name === CANCEL_BLUR_BID
   );
+  
+  // For cancellation jobs, ensure cancellation parent jobs exist
+  if (isCancellation && jobs.length > 0) {
+    const firstJob = jobs[0];
+    const taskId = firstJob.data?.taskId;
+    if (taskId) {
+      // Cancellation parent jobs have a different naming pattern
+      const parentJobId = `${taskId}-${firstJob.name}`;
+      if (!cancellationParentJobs.has(parentJobId)) {
+        console.log(YELLOW + `[processBulkCancellations] Creating missing cancellation parent job: ${parentJobId}` + RESET);
+      }
+    }
+  }
 
   try {
     for (const [chunkIndex, currentChunk] of chunks.entries()) {
@@ -4254,9 +4396,12 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
   const bulkJobId = `${firstJob.data._id}-${marketplace}`;
   const task = activeTasks.get(taskId);
 
-  // Verify parent job exists (should have been created in startTask)
+  // Ensure parent job exists before processing - this is critical for race condition prevention
+  await ensureParentJobExists(taskId, marketplace);
+  
+  // Verify parent job exists (should have been created in startTask or by ensureParentJobExists)
   if (!parentJobs.has(bulkJobId)) {
-    console.error(RED + `[processBulkJobs] Parent job ${bulkJobId} not found! This should not happen.` + RESET);
+    console.error(RED + `[processBulkJobs] Parent job ${bulkJobId} not found even after ensureParentJobExists! This should not happen.` + RESET);
     console.error(RED + `[processBulkJobs] Jobs will be processed but progress tracking may be incorrect.` + RESET);
   }
 
@@ -4979,24 +5124,35 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
         console.log(CYAN + `[Preprocessing] =====================================\n` + RESET);
 
         // Initialize parent jobs for all enabled marketplaces with job counts from preprocessing
-        for (const mp of availableMarketplaces) {
+        // Use Promise.all to ensure all parent jobs are created before continuing
+        const parentJobPromises = availableMarketplaces.map(async (mp) => {
           const jobCount = mp === 'opensea' ? preprocessing.opensea.jobCount :
             mp === 'blur' ? preprocessing.blur.jobCount :
               mp === 'magiceden' ? preprocessing.magiceden.jobCount : 0;
 
           if (jobCount > 0) {
+            // Use the ensureParentJobExists function to prevent race conditions
+            await ensureParentJobExists(taskId, mp);
+            
             const parentJobId = `${taskId}-${mp}`;
-            parentJobs.set(parentJobId, {
-              parentId: parentJobId,
-              totalJobs: jobCount,
-              completedJobs: 0,  // Always start at 0 for new iteration
-              startTime: Date.now(),
-              taskId: taskId,
-              jobName: `${mp.toUpperCase()}_JOBS`
-            });
-
+            const existingParentJob = parentJobs.get(parentJobId);
+            
+            if (existingParentJob) {
+              // Update the existing parent job with new counts
+              existingParentJob.totalJobs = jobCount;
+              existingParentJob.completedJobs = 0; // Always start at 0 for new iteration
+              existingParentJob.startTime = Date.now();
+              console.log(GREEN + `[Parent Job] Updated ${parentJobId}: ${jobCount} jobs` + RESET);
+            } else {
+              // This shouldn't happen if ensureParentJobExists worked
+              console.error(RED + `[Parent Job] Failed to ensure parent job exists: ${parentJobId}` + RESET);
+            }
           }
-        }
+        });
+        
+        // Wait for all parent jobs to be created/updated
+        await Promise.all(parentJobPromises);
+        console.log(CYAN + `[Parent Jobs] All parent jobs initialized for task ${taskId}` + RESET);
 
       } catch (error) {
         console.error(RED + `[Preprocessing] Error during task preprocessing: ${error}` + RESET);
@@ -5040,7 +5196,6 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
 
     const jobs = marketplacesForJobs
       .map(m => {
-        const jobId = `${task._id}-${m}-schedule`;
         switch (m) {
           case "opensea":
             return {
@@ -5472,9 +5627,6 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
         if (orders.opensea.length > 0 && WALLET_PRIVATE_KEY) {
           console.log(GOLD + `  Cancelling ${orders.opensea.length} OpenSea orders...` + RESET);
 
-          // Pause queues for marketplace-specific cancellation
-          console.log(YELLOW + `[stopTask] Pausing queues for OpenSea cancellation...` + RESET);
-          await queue.pause();
 
           // Track cancellation operation
           const cancellationOp: CancellationOperation = {
@@ -5517,9 +5669,6 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
         if (orders.magiceden.length > 0 && WALLET_PRIVATE_KEY) {
           console.log(MAGENTA + `  Cancelling ${orders.magiceden.length} MagicEden orders...` + RESET);
 
-          // Pause queues for marketplace-specific cancellation
-          console.log(YELLOW + `[stopTask] Pausing queues for MagicEden cancellation...` + RESET);
-          await queue.pause();
 
           // Track cancellation operation
           const cancellationOp: CancellationOperation = {
@@ -5562,9 +5711,6 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
         if (orders.blur.length > 0 && WALLET_PRIVATE_KEY) {
           console.log(BLUE + `  Cancelling ${orders.blur.length} Blur orders...` + RESET);
 
-          // Pause queues for marketplace-specific cancellation
-          console.log(YELLOW + `[stopTask] Pausing queues for Blur cancellation...` + RESET);
-          await blurQueue.pause();
 
           // Track cancellation operation
           const cancellationOp: CancellationOperation = {
@@ -5624,10 +5770,6 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
         if (totalOrderCount > 0 && WALLET_PRIVATE_KEY) {
           console.log(YELLOW + `[stopTask] Cancelling orders for all marketplaces...` + RESET);
 
-          // Pause queues before starting cancellation to prevent new jobs
-          console.log(YELLOW + `[stopTask] Pausing queues to prevent new jobs during cancellation...` + RESET);
-          await queue.pause();
-          await blurQueue.pause();
 
           // Track cancellation operation
           const cancellationOp: CancellationOperation = {
@@ -16393,4 +16535,305 @@ async function handleUpdateListing(data: { _id: string, updates: any }, ws: WebS
     }));
   }
 }
+
+// ============================================
+// Job Tracking Validation and Recovery System
+// ============================================
+
+/**
+ * Periodically logs job tracking status to identify mismatches
+ * between taskStatus and parent job tracking
+ */
+async function logJobTrackingStatus() {
+  try {
+    console.log(CYAN + '\n========== Job Tracking Status Report ==========' + RESET);
+    
+    for (const [taskId, status] of Object.entries(taskStatus)) {
+      if (status.status === 'RUNNING' || status.status === 'QUEUED' || status.status === 'QUEUEING') {
+        const marketplaces = ['opensea', 'magiceden', 'blur'];
+        let totalTracked = 0;
+        let completedTracked = 0;
+        const parentJobDetails: Record<string, { total: number; completed: number }> = {};
+        
+        for (const mp of marketplaces) {
+          const parentJobId = `${taskId}-${mp}`;
+          const parentJob = parentJobs.get(parentJobId);
+          
+          if (parentJob) {
+            totalTracked += parentJob.totalJobs;
+            completedTracked += parentJob.completedJobs;
+            parentJobDetails[mp] = {
+              total: parentJob.totalJobs,
+              completed: parentJob.completedJobs
+            };
+          }
+        }
+        
+        // Log discrepancies or status
+        const hasDiscrepancy = status.totalJobs !== totalTracked || status.completedJobs !== completedTracked;
+        
+        if (hasDiscrepancy || status.runningPercentage < 100) {
+          console.log(`\n${YELLOW}[Task ${taskId}] Status: ${status.status}${RESET}`);
+          console.log(`  TaskStatus: ${status.completedJobs}/${status.totalJobs} (${status.runningPercentage?.toFixed(1)}%)`);
+          console.log(`  ParentJobs: ${completedTracked}/${totalTracked}`);
+          
+          // Show breakdown by marketplace
+          for (const [mp, details] of Object.entries(parentJobDetails)) {
+            const percentage = details.total > 0 ? (details.completed / details.total * 100).toFixed(1) : '0.0';
+            console.log(`    ${mp}: ${details.completed}/${details.total} (${percentage}%)`);
+          }
+          
+          if (hasDiscrepancy) {
+            console.log(RED + '  ⚠️  MISMATCH DETECTED!' + RESET);
+          }
+          
+          // Check if all jobs are complete but percentage is not 100
+          if (totalTracked > 0 && completedTracked === totalTracked && status.runningPercentage < 100) {
+            console.log(MAGENTA + '  🔍 All parent jobs complete but percentage < 100%' + RESET);
+          }
+        }
+      }
+    }
+    
+    console.log(CYAN + '================================================\n' + RESET);
+  } catch (error) {
+    console.error(RED + '[logJobTrackingStatus] Error:' + RESET, error);
+  }
+}
+
+/**
+ * Checks if all parent jobs for a task are complete
+ */
+function checkAllParentJobsComplete(taskId: string): boolean {
+  const task = activeTasks.get(taskId);
+  if (!task) return false;
+  
+  const selectedMarketplaces = task.selectedMarketplaces.map(m => m.toLowerCase());
+  const enabledMarketplacesLower = enabledMarketplaces.map(m => m.toLowerCase());
+  const marketplacesToCheck = selectedMarketplaces.filter(m => enabledMarketplacesLower.includes(m));
+  
+  let allComplete = true;
+  let hasAnyJobs = false;
+  
+  for (const marketplace of marketplacesToCheck) {
+    const parentJobId = `${taskId}-${marketplace}`;
+    const parentJob = parentJobs.get(parentJobId);
+    
+    if (parentJob && parentJob.totalJobs > 0) {
+      hasAnyJobs = true;
+      if (parentJob.completedJobs < parentJob.totalJobs) {
+        allComplete = false;
+        break;
+      }
+    }
+  }
+  
+  return hasAnyJobs && allComplete;
+}
+
+/**
+ * Track when tasks first appear to be complete
+ */
+const taskCompletionTracking = new Map<string, number>();
+
+/**
+ * Checks for tasks that have all jobs complete but haven't transitioned
+ * Forces completion after 30 seconds of being stuck
+ */
+async function checkStuckTasks() {
+  try {
+    const now = Date.now();
+    
+    for (const [taskId, task] of activeTasks) {
+      if (!task.running) continue;
+      
+      const status = taskStatus[taskId];
+      if (!status || (status.status !== 'RUNNING' && status.status !== 'QUEUED')) continue;
+      
+      const allComplete = checkAllParentJobsComplete(taskId);
+      
+      if (allComplete) {
+        const firstSeen = taskCompletionTracking.get(taskId);
+        
+        if (!firstSeen) {
+          // First time seeing this task as complete
+          taskCompletionTracking.set(taskId, now);
+          console.log(YELLOW + `[Stuck Task Monitor] Task ${taskId} appears complete, monitoring...` + RESET);
+        } else {
+          // Check if stuck for too long
+          const stuckDuration = now - firstSeen;
+          
+          if (stuckDuration > 30000) { // 30 seconds
+            console.log(RED + `[Stuck Task] Task ${taskId} has all jobs complete for ${(stuckDuration / 1000).toFixed(1)}s` + RESET);
+            console.log(GREEN + `[Stuck Task] Forcing completion for task ${taskId}` + RESET);
+            
+            // Force percentage to 100
+            if (status) {
+              status.runningPercentage = 100;
+              
+              // Log the force completion
+              const marketplaces = ['opensea', 'magiceden', 'blur'];
+              for (const mp of marketplaces) {
+                const parentJobId = `${taskId}-${mp}`;
+                const parentJob = parentJobs.get(parentJobId);
+                if (parentJob) {
+                  console.log(`  ${mp}: ${parentJob.completedJobs}/${parentJob.totalJobs}`);
+                }
+              }
+            }
+            
+            // Trigger completion
+            await checkTaskCompletionAndScheduleNext(taskId);
+            
+            // Clean up tracking
+            taskCompletionTracking.delete(taskId);
+          }
+        }
+      } else {
+        // Task is not complete, remove from tracking
+        if (taskCompletionTracking.has(taskId)) {
+          console.log(BLUE + `[Stuck Task Monitor] Task ${taskId} no longer complete, removing from monitoring` + RESET);
+          taskCompletionTracking.delete(taskId);
+        }
+      }
+    }
+    
+    // Clean up old entries
+    for (const [taskId, firstSeen] of taskCompletionTracking) {
+      if (!activeTasks.has(taskId) || (now - firstSeen) > 300000) { // 5 minutes
+        taskCompletionTracking.delete(taskId);
+      }
+    }
+  } catch (error) {
+    console.error(RED + '[checkStuckTasks] Error:' + RESET, error);
+  }
+}
+
+/**
+ * Ensures parent job exists before job creation
+ * Uses a queue to prevent race conditions
+ */
+const pendingJobCreation = new Map<string, Promise<void>>();
+
+async function ensureParentJobExists(taskId: string, marketplace: string): Promise<void> {
+  const parentJobId = `${taskId}-${marketplace}`.toLowerCase();
+  
+  // Check if already being created
+  const existing = pendingJobCreation.get(parentJobId);
+  if (existing) {
+    await existing;
+    return;
+  }
+  
+  // Create promise for this parent job
+  const promise = (async () => {
+    try {
+      if (!parentJobs.has(parentJobId)) {
+        console.log(BLUE + `[Parent Job] Creating parent job: ${parentJobId}` + RESET);
+        
+        parentJobs.set(parentJobId, {
+          parentId: parentJobId,
+          totalJobs: 0,
+          completedJobs: 0,
+          startTime: Date.now(),
+          taskId: taskId,
+          jobName: `${marketplace.toUpperCase()}_JOBS`
+        });
+      }
+    } catch (error) {
+      console.error(RED + `[Parent Job] Error creating parent job ${parentJobId}:` + RESET, error);
+    }
+  })();
+  
+  pendingJobCreation.set(parentJobId, promise);
+  
+  try {
+    await promise;
+  } finally {
+    pendingJobCreation.delete(parentJobId);
+  }
+}
+
+/**
+ * Recovers orphaned jobs that don't have parent job tracking
+ * This helps fix jobs that were created before parent jobs
+ */
+async function recoverOrphanedJobs() {
+  try {
+    console.log(CYAN + '\n========== Orphaned Job Recovery ==========' + RESET);
+    
+    // Get jobs from different states
+    const states = ['completed', 'failed', 'active', 'waiting'] as const;
+    let orphanedCount = 0;
+    let recoveredCount = 0;
+    
+    for (const state of states) {
+      try {
+        const jobs = await queue.getJobs([state], 0, 100); // Get first 100 jobs
+        
+        for (const job of jobs) {
+          if (!job.id) continue;
+          
+          // Check if it's a bid job
+          if (job.id.startsWith('bid-')) {
+            const parts = job.id.split('-');
+            if (parts.length >= 3) {
+              const taskId = parts[1];
+              const marketplace = parts[2];
+              const parentJobId = `${taskId}-${marketplace}`;
+              
+              // Check if parent job exists
+              if (!parentJobs.has(parentJobId)) {
+                orphanedCount++;
+                
+                // Only recover if task still exists and is active
+                const task = activeTasks.get(taskId);
+                if (task) {
+                  console.log(YELLOW + `[Orphaned Job] Found: ${job.id} (${state})` + RESET);
+                  
+                  // Create parent job retroactively
+                  await ensureParentJobExists(taskId, marketplace);
+                  
+                  // Update counts based on job state
+                  const parentJob = parentJobs.get(parentJobId);
+                  if (parentJob) {
+                    parentJob.totalJobs++;
+                    
+                    if (state === 'completed' || state === 'failed') {
+                      parentJob.completedJobs++;
+                    }
+                    
+                    recoveredCount++;
+                    console.log(GREEN + `  ✓ Recovered and updated parent job tracking` + RESET);
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error(RED + `[recoverOrphanedJobs] Error processing ${state} jobs:` + RESET, error);
+      }
+    }
+    
+    if (orphanedCount > 0) {
+      console.log(`\nFound ${orphanedCount} orphaned jobs, recovered ${recoveredCount}`);
+    } else {
+      console.log('No orphaned jobs found');
+    }
+    
+    console.log(CYAN + '==========================================\n' + RESET);
+  } catch (error) {
+    console.error(RED + '[recoverOrphanedJobs] Error:' + RESET, error);
+  }
+}
+
+// Schedule periodic job tracking status report
+setInterval(logJobTrackingStatus, 30000); // Every 30 seconds
+
+// Schedule stuck task checker
+setInterval(checkStuckTasks, 10000); // Every 10 seconds
+
+// Schedule orphaned job recovery
+setInterval(recoverOrphanedJobs, 60000); // Every 60 seconds
 

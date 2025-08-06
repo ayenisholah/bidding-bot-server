@@ -909,6 +909,23 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
       }
     })?.sort((a, b) => Number(b?.usd) - Number(a?.usd))
 
+    // Default offer structure
+    const defaultOffer = {
+      amount: 0,
+      owner: '0x0000000000000000000000000000000000000000',
+      currency: 'ETH',
+      usd: 0,
+      decimal: 18,
+      eth: 0
+    };
+
+    // Ensure we always return at least 2 offers
+    if (!offers || offers.length === 0) {
+      return [defaultOffer, defaultOffer];
+    } else if (offers.length === 1) {
+      return [offers[0], defaultOffer];
+    }
+
     return offers
   } else if (type === "TOKEN") {
     const tasks = [
@@ -943,6 +960,23 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
         eth: order.price.amount.native
       }
     })?.sort((a, b) => Number(b.usd) - Number(a.usd))
+
+    // Default offer structure
+    const defaultOffer = {
+      amount: 0,
+      owner: '0x0000000000000000000000000000000000000000',
+      currency: 'ETH',
+      usd: 0,
+      decimal: 18,
+      eth: 0
+    };
+
+    // Ensure we always return at least 2 offers
+    if (!offers || offers.length === 0) {
+      return [defaultOffer, defaultOffer];
+    } else if (offers.length === 1) {
+      return [offers[0], defaultOffer];
+    }
 
     return offers
 
@@ -981,6 +1015,23 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
         eth: order.price.amount.native
       }
     })?.sort((a, b) => Number(b.usd) - Number(a.usd))
+    // Default offer structure
+    const defaultOffer = {
+      amount: 0,
+      owner: '0x0000000000000000000000000000000000000000',
+      currency: 'ETH',
+      usd: 0,
+      decimal: 18,
+      eth: 0
+    };
+
+    // Ensure we always return at least 2 offers
+    if (!offers || offers.length === 0) {
+      return [defaultOffer, defaultOffer];
+    } else if (offers.length === 1) {
+      return [offers[0], defaultOffer];
+    }
+
     return offers
   }
 }

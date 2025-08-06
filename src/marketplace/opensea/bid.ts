@@ -1142,16 +1142,33 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
     }
   ));
 
-  const order = ((itemOffers.data) as unknown as GraphQLItemOfferResponse).data.itemOffers.items
-    .filter((offer) => new Date(offer.endTime).getTime() > Date.now()) // remove expired offers
+  // Default offer structure
+  const defaultOffer = {
+    amount: 0,
+    owner: '0x0000000000000000000000000000000000000000',
+    currency: 'WETH',
+    usd: 0,
+    decimal: 18,
+    eth: 0
+  };
+
+  const order = ((itemOffers.data) as unknown as GraphQLItemOfferResponse)?.data?.itemOffers?.items
+    ?.filter((offer) => offer && new Date(offer?.endTime).getTime() > Date.now()) // remove expired offers
     .map((offer) => ({
-      amount: offer.pricePerItem.token.unit,
-      owner: offer.maker.address,
-      currency: offer.pricePerItem.token.symbol.toUpperCase(),
-      usd: offer.pricePerItem.usd,
-      decimal: offer.pricePerItem.token.symbol.toUpperCase() === "WETH" ? 18 : offer.pricePerItem.token.symbol.toUpperCase() === "ETH" ? 18 : offer.pricePerItem.token.symbol.toUpperCase() === "BETH" ? 18 : offer.pricePerItem.token.symbol.toUpperCase() === "USDC" ? 6 : offer.pricePerItem.token.symbol.toUpperCase() === "USDT" ? 6 : 18,
-      eth: offer.pricePerItem.token.unit
-    }))
+      amount: offer?.pricePerItem?.token?.unit || 0,
+      owner: offer?.maker?.address || '0x0000000000000000000000000000000000000000',
+      currency: offer?.pricePerItem?.token?.symbol?.toUpperCase() || 'WETH',
+      usd: offer?.pricePerItem?.usd || 0,
+      decimal: offer?.pricePerItem?.token?.symbol?.toUpperCase() === "WETH" ? 18 : offer?.pricePerItem?.token?.symbol?.toUpperCase() === "ETH" ? 18 : offer?.pricePerItem?.token?.symbol?.toUpperCase() === "BETH" ? 18 : offer?.pricePerItem?.token?.symbol?.toUpperCase() === "USDC" ? 6 : offer?.pricePerItem?.token?.symbol?.toUpperCase() === "USDT" ? 6 : 18,
+      eth: offer?.pricePerItem?.token?.unit || 0
+    })) || []
+
+  // Ensure we always return at least 2 offers
+  if (order.length === 0) {
+    return [defaultOffer, defaultOffer];
+  } else if (order.length === 1) {
+    return [order[0], defaultOffer];
+  }
 
   return order
 }
@@ -1324,17 +1341,34 @@ export async function fetchOpenseaOffers(
       .slice(0, 2)
       .map((aggregate: any) => {
         // Get the first bidder if available
-        const firstBidder = aggregate.bidders?.[0];
+        const firstBidder = aggregate?.bidders?.[0];
 
         return {
-          amount: aggregate.offerPrice?.token?.unit || 0,
+          amount: aggregate?.offerPrice?.token?.unit || 0,
           owner: firstBidder?.address || 'unknown',
-          currency: aggregate.offerPrice?.token?.symbol || 'WETH',
-          usd: aggregate.offerPrice?.usd || 0,
-          decimal: aggregate.offerPrice?.token?.symbol?.toUpperCase() === 'USDC' ? 6 : 18,
-          eth: aggregate.offerPrice?.token?.unit || 0
+          currency: aggregate?.offerPrice?.token?.symbol || 'WETH',
+          usd: aggregate?.offerPrice?.usd || 0,
+          decimal: aggregate?.offerPrice?.token?.symbol?.toUpperCase() === 'USDC' ? 6 : 18,
+          eth: aggregate?.offerPrice?.token?.unit || 0
         };
       });
+
+    // Default offer structure
+    const defaultOffer = {
+      amount: 0,
+      owner: '0x0000000000000000000000000000000000000000',
+      currency: 'WETH',
+      usd: 0,
+      decimal: 18,
+      eth: 0
+    };
+
+    // Ensure we always return at least 2 offers
+    if (offers.length === 0) {
+      return [defaultOffer, defaultOffer];
+    } else if (offers.length === 1) {
+      return [offers[0], defaultOffer];
+    }
 
     return offers
   } else if (offerType === 'TRAIT') {
@@ -1684,6 +1718,24 @@ export async function fetchOpenseaOffers(
       // Sort by USD value descending and take top 2
       .sort((a, b) => +b.eth - +a.eth)
       .slice(0, 2);
+
+    // Default offer structure
+    const defaultOffer = {
+      amount: 0,
+      owner: '0x0000000000000000000000000000000000000000',
+      currency: 'WETH',
+      usd: 0,
+      decimal: 18,
+      eth: 0
+    };
+
+    // Ensure we always return at least 2 offers
+    if (allOffers.length === 0) {
+      return [defaultOffer, defaultOffer];
+    } else if (allOffers.length === 1) {
+      return [allOffers[0], defaultOffer];
+    }
+
     return allOffers;
   }
 }
