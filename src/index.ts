@@ -63,6 +63,7 @@ import { collectionCache } from "./utils/collection-cache";
 import { taskCircuitBreaker } from "./utils/task-circuit-breaker";
 import { blurRateLimiter } from "./utils/blur-rate-limiter";
 import { approvalCache } from "./utils/approval-cache";
+import { errorStatsManager } from "./utils/error-stats-manager";
 
 const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
 
@@ -78,7 +79,7 @@ const floorPrices: BidCounts = {};
 const balances: WalletBalances = {}
 export const warningBids: WarningBids = {};
 export const warningMessage: WarningMessage = {};
-export const errorStats: BidCounts = {};
+export const errorStats = errorStatsManager.getAllErrorStats();
 export const skipStats: BidCounts = {};
 // Blur rate limiting is now handled by BlurRateLimiter class
 const QUEUE_NAME = 'BIDDING_BOT';
@@ -1819,11 +1820,6 @@ async function startServer() {
       defaultJobOptions: {
         removeOnComplete: true,
         removeOnFail: true,
-        attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 2000
-        }
       }
     };
 
@@ -4903,11 +4899,9 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       magiceden: 0,
       blur: 0
     };
-    errorStats[task._id] = {
-      opensea: 0,
-      magiceden: 0,
-      blur: 0
-    };
+    // Reset error stats and seen job IDs when starting task without marketplace parameter
+    errorStatsManager.resetErrorStats(taskId);
+    errorStatsManager.resetSeenJobIds(taskId);
 
     // Check if we're transitioning from SCHEDULED status
     taskStatus[taskId] = {
@@ -10211,7 +10205,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
     }
 
     await logBidError(data.task._id, "OPENSEA COLLECTION BID ERROR", `Error processing OpenSea collection bid for task: ${data.task._id}: ${errorMessage}`, "error", "opensea");
-    errorStats[data.task._id]['opensea']++
+    errorStatsManager.updateErrorStats(data.task._id, 'opensea', error, { bidType: 'collection' });
   }
 }
 
@@ -10707,7 +10701,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
     if (error.code === 'TRANSFER_RESTRICTED') {
       console.log(`Skipping Blur bid for ${data.task.contract.slug} - transfer restricted collection`);
       await logBidError(data.task._id, "BLUR TRANSFER RESTRICTION", error.message, "warning", "blur");
-      errorStats[data?.task?._id]['blur']++; // Count transfer restriction errors
+      errorStatsManager.updateErrorStats(data.task._id, 'blur', error, { bidType: 'collection' });
 
       // Update tracking for transfer restriction
       return;
@@ -10715,7 +10709,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 
     console.error('Blur collection bid error:', error instanceof Error ? error.message : String(error));
     await logBidError(data.task._id, "BLUR COLLECTION BID ERROR", `Error processing Blur collection bid for task: ${data.task._id}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)}`, "error", "blur");
-    errorStats[data?.task?._id]['blur']++
+    errorStatsManager.updateErrorStats(data.task._id, 'blur', error, { bidType: 'collection' });
   }
 }
 
@@ -10999,7 +10993,7 @@ async function processOpenseaTraitBid(data: {
     // Don't log bid errors for stopped/cancelled tasks
     if (errorMessage && !errorMessage.includes('Bid execution blocked - task') && !errorMessage.includes('is stopped')) {
       await logBidError(data.task._id, "OPENSEA TRAIT BID ERROR", `Error bidding on trait ${data.trait} in collection ${data.slug}: ${errorMessage}`, "error", "opensea");
-      errorStats[data.task._id]['opensea']++
+      errorStatsManager.updateErrorStats(data.task._id, 'opensea', error, { bidType: 'trait', trait: data.trait });
     }
   }
 }
@@ -11300,7 +11294,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     }
 
     await logBidError(data._id, "OPENSEA TOKEN BID ERROR", `Error bidding on token ${data.asset.tokenId} in collection ${data.slug}: ${errorMessage}`, "error", "opensea");
-    errorStats[data._id]['opensea']++
+    errorStatsManager.updateErrorStats(data._id, 'opensea', error, { bidType: 'token', tokenId: data.asset.tokenId });
   }
 }
 
@@ -11943,7 +11937,7 @@ async function processBlurTraitBid(data: {
     if (error.code === 'TRANSFER_RESTRICTED') {
       console.log(`Skipping Blur trait bid for ${data.slug} - transfer restricted collection`);
       await logBidError(data.task._id, "BLUR TRANSFER RESTRICTION", error.message, "warning", "blur");
-      errorStats[data?.task?._id]['blur']++; // Count transfer restriction errors
+      errorStatsManager.updateErrorStats(data.task._id, 'blur', error, { bidType: 'trait', trait: data.trait });
 
       return;
     }
@@ -11953,7 +11947,7 @@ async function processBlurTraitBid(data: {
     // Don't log bid errors for stopped/cancelled tasks
     const errorMessage = error?.message || String(error);
     if (!errorMessage.includes('Bid execution blocked - task') && !errorMessage.includes('is stopped')) {
-      errorStats[data?.task?._id]['blur']++
+      errorStatsManager.updateErrorStats(data.task._id, 'blur', error, { bidType: 'trait', trait: data.trait });
       await logBidError(data.task._id, "BLUR TRAIT BID ERROR", `Error bidding on trait ${data.trait} in collection ${data.slug}: ${error?.response?.data?.message || error?.response?.data || errorMessage}`, "error", "blur");
     }
   }
@@ -12305,14 +12299,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
 
   } catch (error: any) {
     logBidError(data.task._id, "MAGICEDEN COLLECTION BID ERROR", `Error processing MagicEden collection bid for task: ${data.task._id}: ${error?.response?.data?.message || error?.message || String(error)}`, "error", "magiceden"); // Non-blocking
-    if (!errorStats[data.task._id]) {
-      errorStats[data.task._id] = {
-        magiceden: 0,
-        opensea: 0,
-        blur: 0
-      }
-    }
-    errorStats[data.task._id]['magiceden']++
+    errorStatsManager.updateErrorStats(data.task._id, 'magiceden', error, { bidType: 'collection' });
   }
 }
 
@@ -12492,14 +12479,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, tokenOffer.toString(), privateKey, slug, expiration, currency, undefined, tokenId);
   } catch (error: any) {
     logBidError(data._id, "MAGICEDEN TOKEN BID ERROR", `Error bidding on token ${data.tokenId} in collection ${data.slug}: ${error?.response?.data?.message || error?.message || String(error)}`, "error", "magiceden"); // Non-blocking
-    if (!errorStats[data.task._id]) {
-      errorStats[data.task._id] = {
-        magiceden: 0,
-        opensea: 0,
-        blur: 0
-      }
-    }
-    errorStats[data.task._id]['magiceden']++
+    errorStatsManager.updateErrorStats(data.task._id, 'magiceden', error, { bidType: 'token', tokenId: data.tokenId });
   }
 }
 
@@ -12722,14 +12702,8 @@ async function processMagicedenTraitBid(data: {
     const errorMessage = error?.message || String(error);
     if (!errorMessage.includes('Bid execution blocked - task') && !errorMessage.includes('is stopped')) {
       logBidError(data._id, "MAGICEDEN TRAIT BID ERROR", `Error bidding on trait ${JSON.stringify(data.trait)} in collection ${data.slug}: ${error?.response?.data?.message || error?.response?.data || errorMessage}`, "error", "magiceden"); // Non-blocking
-      if (!errorStats[data._id]) {
-        errorStats[data._id] = {
-          magiceden: 0,
-          opensea: 0,
-          blur: 0
-        }
-      }
-      errorStats[data._id]['magiceden']++
+      const traitString = `${data.trait.attributeKey}-${data.trait.attributeValue}`;
+      errorStatsManager.updateErrorStats(data._id, 'magiceden', error, { bidType: 'trait', trait: traitString });
     }
   }
 }
