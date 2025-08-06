@@ -2573,6 +2573,11 @@ async function updateTaskRunningPercentage(taskId: string) {
 
       totalJobs += mpTotal;
       completedJobs += mpCompleted;
+      
+      // Additional safety check for individual marketplace overflow
+      if (mpCompleted > mpTotal && mpTotal > 0) {
+        console.log(RED + `[updateTaskRunningPercentage] MARKETPLACE OVERFLOW: ${marketplace} completed ${mpCompleted} exceeds total ${mpTotal}` + RESET);
+      }
     } else {
       marketplaceBreakdown[marketplace] = {
         total: 0,
@@ -2582,9 +2587,15 @@ async function updateTaskRunningPercentage(taskId: string) {
     }
   }
 
-  // Update running percentage
-  const runningPercentage = totalJobs > 0 ? (completedJobs / totalJobs) * 100 : 0;
-
+  // Update running percentage with overflow protection
+  let runningPercentage = 0;
+  if (totalJobs > 0) {
+    runningPercentage = (completedJobs / totalJobs) * 100;
+    // Additional safety check for total overflow
+    if (completedJobs > totalJobs) {
+      console.log(RED + `[updateTaskRunningPercentage] TOTAL OVERFLOW: completed ${completedJobs} exceeds total ${totalJobs}, percentage would be ${runningPercentage.toFixed(2)}%` + RESET);
+    }
+  }
 
   taskStatus[taskId].runningPercentage = Math.min(runningPercentage, 100);
   taskStatus[taskId].totalJobs = totalJobs;
@@ -2608,6 +2619,15 @@ async function updateTaskRunningPercentage(taskId: string) {
   // Check if should trigger completion
   if (taskStatus[taskId].runningPercentage >= 100) {
     await checkTaskCompletionAndScheduleNext(taskId);
+  }
+  // Recovery mechanism: If we have high percentage and all parent jobs show complete, force completion
+  else if (taskStatus[taskId].runningPercentage >= 95) {
+    const allParentJobsComplete = checkAllParentJobsComplete(taskId);
+    if (allParentJobsComplete) {
+      console.log(YELLOW + `[Recovery] Task ${taskId} at ${taskStatus[taskId].runningPercentage.toFixed(1)}% but all parent jobs complete - forcing completion` + RESET);
+      taskStatus[taskId].runningPercentage = 100;
+      await checkTaskCompletionAndScheduleNext(taskId);
+    }
   }
 }
 
@@ -2772,7 +2792,7 @@ async function handleTaskCleanup(taskId: string) {
 
 // Helper function to mark a job as processed regardless of outcome
 async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: string) {
-  // Generate a unique identifier for this job
+  // Generate a unique identifier for this job - use actual jobId when provided
   const uniqueJobId = jobId || `${taskId}-${marketplace}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
   // Validate task exists and is active
@@ -2803,22 +2823,34 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
     }
   }
 
-  // Track processed jobs to prevent duplicates
+  // Track processed jobs to prevent duplicates - but be more lenient for legitimate jobs
   let processedJobs = processedJobsPerParent.get(parentJobId);
   if (!processedJobs) {
     processedJobs = new Set<string>();
     processedJobsPerParent.set(parentJobId, processedJobs);
   }
 
-  if (processedJobs.has(uniqueJobId)) {
-    console.log(BLUE + `[markJobAsProcessed] Job ${uniqueJobId} already processed, skipping` + RESET);
+  // Skip if job already processed OR if parent job is already complete (prevents overflow)
+  if (processedJobs.has(uniqueJobId) || parentJob.completedJobs >= parentJob.totalJobs) {
+    if (processedJobs.has(uniqueJobId)) {
+      console.log(BLUE + `[markJobAsProcessed] Job ${uniqueJobId} already processed, skipping` + RESET);
+    } else {
+      console.log(YELLOW + `[markJobAsProcessed] Parent job ${parentJobId} already complete (${parentJob.completedJobs}/${parentJob.totalJobs}), preventing overflow` + RESET);
+    }
     return;
   }
 
+  // Add to processed jobs set
   processedJobs.add(uniqueJobId);
 
-  // Increment completed jobs
+  // Increment completed jobs with hard cap protection
   parentJob.completedJobs++;
+  
+  // Additional safety check to prevent overflow (should never happen with above logic)
+  if (parentJob.completedJobs > parentJob.totalJobs) {
+    console.log(RED + `[markJobAsProcessed] OVERFLOW DETECTED: ${parentJobId} completed ${parentJob.completedJobs} exceeds total ${parentJob.totalJobs}, capping to total` + RESET);
+    parentJob.completedJobs = parentJob.totalJobs;
+  }
 
   // If this was the first job and totalJobs is 0, set it to 1
   if (parentJob.totalJobs === 0) {
@@ -3163,6 +3195,12 @@ function initializeQueueEventHandlers() {
         }
         // Handle other job formats
         else {
+          // Handle numeric job IDs (like 94460, 94481) - these should be tracked but may not have task context
+          if (/^\d+$/.test(jobId)) {
+            console.log(CYAN + `[Queue Event] Numeric job ID ${jobId} completed - no task context available` + RESET);
+            return; // Skip numeric job IDs as they don't relate to task tracking
+          }
+          
           // Try to find task ID in the job ID
           const parts = jobId.split('-');
           if (parts.length >= 2) {
@@ -3173,6 +3211,16 @@ function initializeQueueEventHandlers() {
             } else if (activeTasks.has(parts[1])) {
               taskId = parts[1];
               marketplace = parts[2] || parts[0] || 'unknown';
+            }
+            // Check if any part is a valid task ID
+            else {
+              for (let i = 0; i < parts.length; i++) {
+                if (activeTasks.has(parts[i])) {
+                  taskId = parts[i];
+                  marketplace = parts[i + 1] || parts[i - 1] || 'unknown';
+                  break;
+                }
+              }
             }
           }
         }
@@ -4707,7 +4755,10 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
           continue;
         }
         if (task && task.running) {
-          taskStatus[taskId].status = "QUEUEING";
+          // Set status to QUEUEING when jobs are being queued
+          if (taskStatus[taskId].status !== "RUNNING") {
+            taskStatus[taskId].status = "QUEUEING";
+          }
         }
 
         let retries = 3;
@@ -4914,8 +4965,10 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       waitingTime: 0
     };
 
+    // Clear all processed jobs for this task to ensure fresh tracking
     for (const [parentJobId, processedJobs] of processedJobsPerParent.entries()) {
       if (parentJobId.includes(taskId)) {
+        console.log(YELLOW + `[startTask] Clearing processed jobs for parent: ${parentJobId} (${processedJobs.size} entries)` + RESET);
         processedJobsPerParent.delete(parentJobId);
       }
     }
