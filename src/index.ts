@@ -2651,21 +2651,14 @@ function cleanupTaskResources(taskId: string): void {
 
 // Helper function to update task running percentage
 async function updateTaskRunningPercentage(taskId: string) {
-  console.log(`${CYAN}[updateTaskRunningPercentage DEBUG] Called for taskId: ${taskId}${RESET}`);
-
   const task = activeTasks.get(taskId);
   if (!task || !taskStatus[taskId]) {
-    console.log(`${CYAN}[updateTaskRunningPercentage DEBUG] Task or taskStatus not found, returning${RESET}`);
     return;
   }
-
-  console.log(`${CYAN}[updateTaskRunningPercentage DEBUG] Task bidType: ${task.bidType}${RESET}`);
 
   const selectedMarketplaces = task.selectedMarketplaces.map(m => m.toLowerCase());
   const enabledMarketplacesLower = enabledMarketplaces.map(m => m.toLowerCase());
   const marketplacesToCheck = selectedMarketplaces.filter(m => enabledMarketplacesLower.includes(m));
-  
-  console.log(`${CYAN}[updateTaskRunningPercentage DEBUG] Marketplaces to check: ${JSON.stringify(marketplacesToCheck)}${RESET}`);
 
   let totalJobs = 0;
   let completedJobs = 0;
@@ -2675,16 +2668,11 @@ async function updateTaskRunningPercentage(taskId: string) {
   for (const marketplace of marketplacesToCheck) {
     const parentJobId = `${taskId}-${marketplace}`;
     const parentJob = parentJobs.get(parentJobId);
-    
-    console.log(`${CYAN}[updateTaskRunningPercentage DEBUG] Checking parent job: ${parentJobId}${RESET}`);
-    console.log(`${CYAN}[updateTaskRunningPercentage DEBUG] Parent job exists: ${!!parentJob}${RESET}`);
 
     if (parentJob) {
       const mpTotal = parentJob.totalJobs || 0;
       const mpCompleted = parentJob.completedJobs || 0;
       const mpPercentage = mpTotal > 0 ? (mpCompleted / mpTotal) * 100 : 0;
-      
-      console.log(`${CYAN}[updateTaskRunningPercentage DEBUG] ${marketplace} - totalJobs: ${mpTotal}, completedJobs: ${mpCompleted}, percentage: ${mpPercentage.toFixed(2)}%${RESET}`);
 
       marketplaceBreakdown[marketplace] = {
         total: mpTotal,
@@ -2916,27 +2904,12 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
   // Generate a unique identifier for this job - use actual jobId when provided
   const uniqueJobId = jobId || `${taskId}-${marketplace}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
-  // Comprehensive debug logging
-  console.log(`\n${CYAN}[markJobAsProcessed DEBUG] ========== START ===========${RESET}`);
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] taskId: ${taskId}${RESET}`);
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] marketplace: ${marketplace}${RESET}`);
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] jobId: ${jobId}${RESET}`);
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] uniqueJobId: ${uniqueJobId}${RESET}`);
-
   // Validate task exists and is active
   const task = activeTasks.get(taskId);
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] Task found: ${task ? 'YES' : 'NO'}${RESET}`);
-  
   if (!task) {
     console.log(YELLOW + `[markJobAsProcessed] Task ${taskId} not found in activeTasks, skipping` + RESET);
-    console.log(`${CYAN}[markJobAsProcessed DEBUG] ========== END (NO TASK) ===========${RESET}\n`);
     return;
   }
-
-  // Log task details
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] Task bidType: ${task.bidType}${RESET}`);
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] Task running: ${task.running}${RESET}`);
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] Task selectedMarketplaces: ${JSON.stringify(task.selectedMarketplaces)}${RESET}`);
 
   if (taskStatus[taskId]) {
     taskStatus[taskId].status = 'RUNNING';
@@ -2944,15 +2917,7 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
 
   // Get parent job
   const parentJobId = `${taskId}-${marketplace}`;
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] Parent job ID: ${parentJobId}${RESET}`);
-  
   let parentJob = parentJobs.get(parentJobId);
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] Parent job exists: ${parentJob ? 'YES' : 'NO'}${RESET}`);
-  
-  if (parentJob) {
-    console.log(`${CYAN}[markJobAsProcessed DEBUG] Parent job totalJobs: ${parentJob.totalJobs}${RESET}`);
-    console.log(`${CYAN}[markJobAsProcessed DEBUG] Parent job completedJobs: ${parentJob.completedJobs}${RESET}`);
-  }
 
   // If parent job doesn't exist, create it (recovery mechanism)
   if (!parentJob) {
@@ -2963,12 +2928,8 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
 
     if (!parentJob) {
       console.error(RED + `[markJobAsProcessed] Failed to create parent job ${parentJobId}` + RESET);
-      console.log(`${CYAN}[markJobAsProcessed DEBUG] ========== END (FAILED TO CREATE PARENT) ===========${RESET}\n`);
       return;
     }
-    
-    console.log(`${CYAN}[markJobAsProcessed DEBUG] After creation - Parent job totalJobs: ${parentJob.totalJobs}${RESET}`);
-    console.log(`${CYAN}[markJobAsProcessed DEBUG] After creation - Parent job completedJobs: ${parentJob.completedJobs}${RESET}`);
   }
 
   // Track processed jobs to prevent duplicates - but be more lenient for legitimate jobs
@@ -2978,10 +2939,6 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
     processedJobsPerParent.set(parentJobId, processedJobs);
   }
 
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] ProcessedJobs set size: ${processedJobs.size}${RESET}`);
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] Job already processed: ${processedJobs.has(uniqueJobId)}${RESET}`);
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] Parent job complete check: ${parentJob.completedJobs} >= ${parentJob.totalJobs} = ${parentJob.completedJobs >= parentJob.totalJobs}${RESET}`);
-
   // Skip if job already processed OR if parent job is already complete (prevents overflow)
   if (processedJobs.has(uniqueJobId) || parentJob.completedJobs >= parentJob.totalJobs) {
     if (processedJobs.has(uniqueJobId)) {
@@ -2989,18 +2946,14 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
     } else {
       console.log(YELLOW + `[markJobAsProcessed] Parent job ${parentJobId} already complete (${parentJob.completedJobs}/${parentJob.totalJobs}), preventing overflow` + RESET);
     }
-    console.log(`${CYAN}[markJobAsProcessed DEBUG] ========== END (SKIPPED) ===========${RESET}\n`);
     return;
   }
 
   // Add to processed jobs set
   processedJobs.add(uniqueJobId);
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] Added job to processedJobs set${RESET}`);
 
   // Increment completed jobs with hard cap protection
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] Before increment - completedJobs: ${parentJob.completedJobs}${RESET}`);
   parentJob.completedJobs++;
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] After increment - completedJobs: ${parentJob.completedJobs}${RESET}`);
 
   // Additional safety check to prevent overflow (should never happen with above logic)
   if (parentJob.completedJobs > parentJob.totalJobs) {
@@ -3016,12 +2969,8 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
 
   console.log(CYAN + `[Job Complete] ${parentJobId}: ${parentJob.completedJobs}/${parentJob.totalJobs} (Job: ${uniqueJobId})` + RESET);
 
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] Before updateTaskRunningPercentage - completedJobs: ${parentJob.completedJobs}, totalJobs: ${parentJob.totalJobs}${RESET}`);
-  
   // Update task running percentage
   await updateTaskRunningPercentage(taskId);
-  
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] After updateTaskRunningPercentage${RESET}`);
 
   // Check if all jobs are complete for this parent job
   if (parentJob.completedJobs >= parentJob.totalJobs) {
@@ -3043,8 +2992,6 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
       await checkTaskCompletionAndScheduleNext(taskId);
     }
   }
-  
-  console.log(`${CYAN}[markJobAsProcessed DEBUG] ========== END (SUCCESS) ===========${RESET}\n`);
 }
 
 // Helper function to mark a cancellation job as processed (similar to markJobAsProcessed)
@@ -3388,16 +3335,11 @@ function initializeQueueEventHandlers() {
         }
 
         // Process bid job completion
-        console.log(`${CYAN}[Queue Event DEBUG] Job completed: ${jobId}${RESET}`);
-        console.log(`${CYAN}[Queue Event DEBUG] Extracted taskId: ${taskId}, marketplace: ${marketplace}${RESET}`);
-        
         if (taskId && marketplace) {
           const task = activeTasks.get(taskId);
           if (task && task.running) {
             console.log(GREEN + `[Queue Event] Processing completion for task ${taskId}, marketplace ${marketplace}` + RESET);
             await markJobAsProcessed(taskId, marketplace, jobId);
-          } else {
-            console.log(`${CYAN}[Queue Event DEBUG] Task not found or not running - task exists: ${!!task}, running: ${task?.running}${RESET}`);
           }
         } else {
           console.log(YELLOW + `[Queue Event] Could not extract task/marketplace from job ID: ${jobId}` + RESET);
