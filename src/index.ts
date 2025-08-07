@@ -85,8 +85,6 @@ export const skipStats: BidCounts = {};
 const QUEUE_NAME = 'BIDDING_BOT';
 const BLUR_BIDDING_QUEUE = 'BLUR_BIDDING_QUEUE';
 
-// Debug counter for OpenSea trait bid completions
-let openseaTraitBidCompletionCounter = 0;
 
 // Type definitions
 interface BidCounts {
@@ -164,9 +162,6 @@ let removedTokens: { [key: string]: { opensea: string[]; magiceden: string[] } }
 const seenOrderHashes = new BoundedCache<string, number>(10000, 30 * 60 * 1000); // 10k items, 30 min TTL
 const seenBids = new BoundedCache<string, number>(10000, 30 * 60 * 1000); // 10k items, 30 min TTL
 
-// Configuration for cleanup (no longer needed with BoundedCache)
-const CLEANUP_INTERVAL = 30 * 60 * 1000; // Run cleanup every 30 minutes for better deduplication
-
 // Helper functions for seen items management
 function addSeenItem(cache: BoundedCache<string, number>, key: string): void {
   const now = Date.now();
@@ -211,11 +206,6 @@ const TRAIT_BID_PRIORITY = {
   BLUR: 2
 };
 
-const COLLECTION_BID_PRIORITY = {
-  OPENSEA: 2,
-  MAGICEDEN: 2,
-  BLUR: 2
-};
 
 
 const lockManager = new DistributedLockManager({
@@ -264,9 +254,6 @@ class RateLimiter {
   }
 }
 
-const blurLimiter = new Bottleneck({
-  minTime: 250, maxConcurrent: 4,
-})
 
 // Initialize worker later in startServer function
 let workers: Worker[] = [];
@@ -515,7 +502,8 @@ const MAGICEDEN_MARKETPLACE = "0x9A1D00bEd7CD04BCDA516d721A596eb22Aac6834"
 const MAX_RETRIES: number = 5;
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 const OPENSEA_PROTOCOL_ADDRESS = "0x0000000000000068F116a894984e2DB1123eB395"
-const HEALTH_CHECK_INTERVAL = 5000;
+const STANDARD_INTERVAL = 60000; // 60 seconds - standard interval for most timers
+const HEALTH_CHECK_INTERVAL = STANDARD_INTERVAL;
 // Initialize with default marketplaces - will be updated by WebSocket
 let enabledMarketplaces: string[] = ['opensea', 'magiceden', 'blur']
 console.log(CYAN + `[Server] Initialized enabledMarketplaces with defaults: ${enabledMarketplaces.join(', ')}` + RESET)
@@ -641,10 +629,10 @@ const REDIS_RECOVERY_COOLDOWN = 60000; // 1 minute cooldown between recovery att
 // Helper to detect Redis cluster errors
 function isRedisClusterError(error: any): boolean {
   const errorMessage = error instanceof Error ? error.message : String(error);
-  return errorMessage.includes('CLUSTERDOWN') || 
-         errorMessage.includes('Too many Cluster redirections') ||
-         errorMessage.includes('MOVED') ||
-         errorMessage.includes('ASK');
+  return errorMessage.includes('CLUSTERDOWN') ||
+    errorMessage.includes('Too many Cluster redirections') ||
+    errorMessage.includes('MOVED') ||
+    errorMessage.includes('ASK');
 }
 
 function cleanupMemory() {
@@ -659,14 +647,14 @@ async function checkRedisClusterHealth(): Promise<boolean> {
     if (!redis) {
       return false;
     }
-    
+
     // Check cluster info using proper command
     const clusterInfo = await redis.cluster('INFO') as string;
     const clusterState = clusterInfo.split('\n')
       .find((line: string) => line.startsWith('cluster_state:'))
       ?.split(':')[1]
       ?.trim();
-    
+
     return clusterState === 'ok';
   } catch (error) {
     // If we can't even check cluster info, it's definitely not healthy
@@ -676,21 +664,21 @@ async function checkRedisClusterHealth(): Promise<boolean> {
 
 async function handleRedisClusterFailure() {
   const now = Date.now();
-  
+
   // Check cooldown
   if (now - lastRedisClusterRecovery < REDIS_RECOVERY_COOLDOWN) {
     const cooldownRemaining = Math.ceil((REDIS_RECOVERY_COOLDOWN - (now - lastRedisClusterRecovery)) / 1000);
     console.log(YELLOW + `Redis cluster recovery on cooldown (${cooldownRemaining}s remaining)` + RESET);
     return;
   }
-  
+
   console.log(RED + '🚨 REDIS CLUSTER FAILURE DETECTED - Initiating recovery 🚨' + RESET);
   console.log(RED + `Consecutive failures: ${redisClusterFailures}` + RESET);
-  
+
   try {
     lastRedisClusterRecovery = now;
     await clearQueueAndRestartJobs();
-    
+
     // Reset failure counter after successful recovery
     redisClusterFailures = 0;
     console.log(GREEN + '✅ Redis cluster recovery completed' + RESET);
@@ -707,7 +695,7 @@ async function monitorHealth() {
     if (!isRedisHealthy) {
       redisClusterFailures++;
       console.log(RED + `⚠️  Redis cluster unhealthy - failure count: ${redisClusterFailures}/${REDIS_CLUSTER_FAILURE_THRESHOLD}` + RESET);
-      
+
       if (redisClusterFailures >= REDIS_CLUSTER_FAILURE_THRESHOLD) {
         await handleRedisClusterFailure();
       }
@@ -719,7 +707,7 @@ async function monitorHealth() {
         redisClusterFailures = 0;
       }
     }
-    
+
     const counts = await queue.getJobCounts();
     const used = process.memoryUsage();
     const memoryStats = {
@@ -1042,12 +1030,12 @@ async function monitorQueueForStuckJobs() {
 }
 
 // Start queue monitoring - runs every minute
-const QUEUE_MONITOR_INTERVAL = 60 * 1000; // 1 minute
+const QUEUE_MONITOR_INTERVAL = STANDARD_INTERVAL;
 setInterval(monitorQueueForStuckJobs, QUEUE_MONITOR_INTERVAL);
 console.log(GREEN + '✅ Enhanced queue monitoring started (checking every 60s for stuck jobs)' + RESET);
 
-// Auto-resume checker - runs every 30 seconds to check for password availability
-const PASSWORD_CHECK_INTERVAL = 30 * 1000; // 30 seconds
+// Auto-resume checker - runs every 60 seconds to check for password availability
+const PASSWORD_CHECK_INTERVAL = STANDARD_INTERVAL;
 let isCheckingPassword = false;
 
 async function checkPasswordAndResume() {
@@ -1243,15 +1231,15 @@ let connectivityCheckInterval: NodeJS.Timeout | null;
 
 // Track recently seen ITEM_SOLD events to prevent duplicates
 const recentItemSoldEvents = new Set<string>();
-// Clean up old events every 30 minutes to prevent memory growth
-// This is long enough to catch duplicates but not so long as to cause memory issues
+// Clean up old events every 60 seconds to prevent memory growth
+// Regular cleanup to maintain memory efficiency
 setInterval(() => {
   console.log(CYAN + `Clearing ${recentItemSoldEvents.size} cached ITEM_SOLD events` + RESET);
   recentItemSoldEvents.clear();
-}, 30 * 60 * 1000);
+}, STANDARD_INTERVAL);
 
 function startConnectivityMonitoring() {
-  // Check connectivity every 30 seconds
+  // Check connectivity every 60 seconds
   connectivityCheckInterval = setInterval(async () => {
     const currentlyConnected = await checkInternetConnectivity();
 
@@ -1274,7 +1262,7 @@ function startConnectivityMonitoring() {
         console.error('Failed to pause queues:', err);
       }
     }
-  }, 30000); // Check every 30 seconds
+  }, STANDARD_INTERVAL);
 
   console.log('🔌 Internet connectivity monitoring started');
 }
@@ -1475,7 +1463,7 @@ async function resumeQueueAndWorkers() {
 
 // Worker health monitoring
 let workerHealthInterval: NodeJS.Timeout | null = null;
-const WORKER_HEALTH_CHECK_INTERVAL = 30000; // 30 seconds
+const WORKER_HEALTH_CHECK_INTERVAL = STANDARD_INTERVAL;
 
 // Worker failure tracking
 const workerFailures = new Map<number, { count: number; lastFailure: number; errorTypes: string[] }>();
@@ -1902,6 +1890,7 @@ async function startServer() {
       defaultJobOptions: {
         removeOnComplete: true,
         removeOnFail: true,
+        attempts: 1,  // Prevent BullMQ's default 3 retries to avoid duplicate job processing
       }
     };
 
@@ -1917,11 +1906,7 @@ async function startServer() {
       defaultJobOptions: {
         removeOnComplete: true,
         removeOnFail: true,
-        attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 2000
-        }
+        attempts: 1,
       }
     });
 
@@ -1978,17 +1963,17 @@ async function startServer() {
       worker.on('error', async (error) => {
         console.error(RED + `[Worker ${i + 1}] Worker error:` + RESET, error);
         trackWorkerFailure(i, `Worker error: ${error.message || String(error)}`);
-        
+
         // Check if this is a Redis cluster error
         if (isRedisClusterError(error)) {
           console.log(RED + '🚨 Redis cluster error detected in worker' + RESET);
           redisClusterFailures++;
-          
+
           if (redisClusterFailures >= REDIS_CLUSTER_FAILURE_THRESHOLD) {
             await handleRedisClusterFailure();
           }
         }
-        
+
         logger.logGeneralError(`Main worker ${i + 1} error`, {
           error: error,
           errorMessage: error.message || String(error),
@@ -2065,17 +2050,17 @@ async function startServer() {
       console.error(RED + '[Blur Worker] Worker error:' + RESET, error);
       const blurWorkerIndex = workers.length - 1; // Blur worker is the last one
       trackWorkerFailure(blurWorkerIndex, `Blur worker error: ${error.message || String(error)}`);
-      
+
       // Check if this is a Redis cluster error
       if (isRedisClusterError(error)) {
         console.log(RED + '🚨 Redis cluster error detected in blur worker' + RESET);
         redisClusterFailures++;
-        
+
         if (redisClusterFailures >= REDIS_CLUSTER_FAILURE_THRESHOLD) {
           await handleRedisClusterFailure();
         }
       }
-      
+
       logger.logGeneralError('Blur worker error', {
         error: error,
         errorMessage: error.message || String(error),
@@ -2185,7 +2170,7 @@ async function startServer() {
           const readyState = mongoose.connection.readyState;
           const stateMap = { 0: 'disconnected', 1: 'connected', 2: 'connecting', 3: 'disconnecting' };
           console.log(`📊 MongoDB Status: ${stateMap[readyState as keyof typeof stateMap]} | Max Pool: ${Number(process.env.MONGO_MAX_POOL_SIZE) || 50}`);
-        }, 30000); // Log every 30 seconds
+        }, STANDARD_INTERVAL);
       }
     } catch (error) {
       await logger.logDatabaseConnectionError('Failed to connect to MongoDB', {
@@ -2666,16 +2651,21 @@ function cleanupTaskResources(taskId: string): void {
 
 // Helper function to update task running percentage
 async function updateTaskRunningPercentage(taskId: string) {
+  console.log(`${CYAN}[updateTaskRunningPercentage DEBUG] Called for taskId: ${taskId}${RESET}`);
 
   const task = activeTasks.get(taskId);
   if (!task || !taskStatus[taskId]) {
+    console.log(`${CYAN}[updateTaskRunningPercentage DEBUG] Task or taskStatus not found, returning${RESET}`);
     return;
   }
 
+  console.log(`${CYAN}[updateTaskRunningPercentage DEBUG] Task bidType: ${task.bidType}${RESET}`);
 
   const selectedMarketplaces = task.selectedMarketplaces.map(m => m.toLowerCase());
   const enabledMarketplacesLower = enabledMarketplaces.map(m => m.toLowerCase());
   const marketplacesToCheck = selectedMarketplaces.filter(m => enabledMarketplacesLower.includes(m));
+  
+  console.log(`${CYAN}[updateTaskRunningPercentage DEBUG] Marketplaces to check: ${JSON.stringify(marketplacesToCheck)}${RESET}`);
 
   let totalJobs = 0;
   let completedJobs = 0;
@@ -2685,11 +2675,16 @@ async function updateTaskRunningPercentage(taskId: string) {
   for (const marketplace of marketplacesToCheck) {
     const parentJobId = `${taskId}-${marketplace}`;
     const parentJob = parentJobs.get(parentJobId);
+    
+    console.log(`${CYAN}[updateTaskRunningPercentage DEBUG] Checking parent job: ${parentJobId}${RESET}`);
+    console.log(`${CYAN}[updateTaskRunningPercentage DEBUG] Parent job exists: ${!!parentJob}${RESET}`);
 
     if (parentJob) {
       const mpTotal = parentJob.totalJobs || 0;
       const mpCompleted = parentJob.completedJobs || 0;
       const mpPercentage = mpTotal > 0 ? (mpCompleted / mpTotal) * 100 : 0;
+      
+      console.log(`${CYAN}[updateTaskRunningPercentage DEBUG] ${marketplace} - totalJobs: ${mpTotal}, completedJobs: ${mpCompleted}, percentage: ${mpPercentage.toFixed(2)}%${RESET}`);
 
       marketplaceBreakdown[marketplace] = {
         total: mpTotal,
@@ -2921,12 +2916,27 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
   // Generate a unique identifier for this job - use actual jobId when provided
   const uniqueJobId = jobId || `${taskId}-${marketplace}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
+  // Comprehensive debug logging
+  console.log(`\n${CYAN}[markJobAsProcessed DEBUG] ========== START ===========${RESET}`);
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] taskId: ${taskId}${RESET}`);
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] marketplace: ${marketplace}${RESET}`);
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] jobId: ${jobId}${RESET}`);
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] uniqueJobId: ${uniqueJobId}${RESET}`);
+
   // Validate task exists and is active
   const task = activeTasks.get(taskId);
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] Task found: ${task ? 'YES' : 'NO'}${RESET}`);
+  
   if (!task) {
     console.log(YELLOW + `[markJobAsProcessed] Task ${taskId} not found in activeTasks, skipping` + RESET);
+    console.log(`${CYAN}[markJobAsProcessed DEBUG] ========== END (NO TASK) ===========${RESET}\n`);
     return;
   }
+
+  // Log task details
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] Task bidType: ${task.bidType}${RESET}`);
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] Task running: ${task.running}${RESET}`);
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] Task selectedMarketplaces: ${JSON.stringify(task.selectedMarketplaces)}${RESET}`);
 
   if (taskStatus[taskId]) {
     taskStatus[taskId].status = 'RUNNING';
@@ -2934,7 +2944,15 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
 
   // Get parent job
   const parentJobId = `${taskId}-${marketplace}`;
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] Parent job ID: ${parentJobId}${RESET}`);
+  
   let parentJob = parentJobs.get(parentJobId);
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] Parent job exists: ${parentJob ? 'YES' : 'NO'}${RESET}`);
+  
+  if (parentJob) {
+    console.log(`${CYAN}[markJobAsProcessed DEBUG] Parent job totalJobs: ${parentJob.totalJobs}${RESET}`);
+    console.log(`${CYAN}[markJobAsProcessed DEBUG] Parent job completedJobs: ${parentJob.completedJobs}${RESET}`);
+  }
 
   // If parent job doesn't exist, create it (recovery mechanism)
   if (!parentJob) {
@@ -2945,8 +2963,12 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
 
     if (!parentJob) {
       console.error(RED + `[markJobAsProcessed] Failed to create parent job ${parentJobId}` + RESET);
+      console.log(`${CYAN}[markJobAsProcessed DEBUG] ========== END (FAILED TO CREATE PARENT) ===========${RESET}\n`);
       return;
     }
+    
+    console.log(`${CYAN}[markJobAsProcessed DEBUG] After creation - Parent job totalJobs: ${parentJob.totalJobs}${RESET}`);
+    console.log(`${CYAN}[markJobAsProcessed DEBUG] After creation - Parent job completedJobs: ${parentJob.completedJobs}${RESET}`);
   }
 
   // Track processed jobs to prevent duplicates - but be more lenient for legitimate jobs
@@ -2956,6 +2978,10 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
     processedJobsPerParent.set(parentJobId, processedJobs);
   }
 
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] ProcessedJobs set size: ${processedJobs.size}${RESET}`);
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] Job already processed: ${processedJobs.has(uniqueJobId)}${RESET}`);
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] Parent job complete check: ${parentJob.completedJobs} >= ${parentJob.totalJobs} = ${parentJob.completedJobs >= parentJob.totalJobs}${RESET}`);
+
   // Skip if job already processed OR if parent job is already complete (prevents overflow)
   if (processedJobs.has(uniqueJobId) || parentJob.completedJobs >= parentJob.totalJobs) {
     if (processedJobs.has(uniqueJobId)) {
@@ -2963,14 +2989,18 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
     } else {
       console.log(YELLOW + `[markJobAsProcessed] Parent job ${parentJobId} already complete (${parentJob.completedJobs}/${parentJob.totalJobs}), preventing overflow` + RESET);
     }
+    console.log(`${CYAN}[markJobAsProcessed DEBUG] ========== END (SKIPPED) ===========${RESET}\n`);
     return;
   }
 
   // Add to processed jobs set
   processedJobs.add(uniqueJobId);
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] Added job to processedJobs set${RESET}`);
 
   // Increment completed jobs with hard cap protection
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] Before increment - completedJobs: ${parentJob.completedJobs}${RESET}`);
   parentJob.completedJobs++;
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] After increment - completedJobs: ${parentJob.completedJobs}${RESET}`);
 
   // Additional safety check to prevent overflow (should never happen with above logic)
   if (parentJob.completedJobs > parentJob.totalJobs) {
@@ -2986,8 +3016,12 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
 
   console.log(CYAN + `[Job Complete] ${parentJobId}: ${parentJob.completedJobs}/${parentJob.totalJobs} (Job: ${uniqueJobId})` + RESET);
 
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] Before updateTaskRunningPercentage - completedJobs: ${parentJob.completedJobs}, totalJobs: ${parentJob.totalJobs}${RESET}`);
+  
   // Update task running percentage
   await updateTaskRunningPercentage(taskId);
+  
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] After updateTaskRunningPercentage${RESET}`);
 
   // Check if all jobs are complete for this parent job
   if (parentJob.completedJobs >= parentJob.totalJobs) {
@@ -3009,6 +3043,8 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
       await checkTaskCompletionAndScheduleNext(taskId);
     }
   }
+  
+  console.log(`${CYAN}[markJobAsProcessed DEBUG] ========== END (SUCCESS) ===========${RESET}\n`);
 }
 
 // Helper function to mark a cancellation job as processed (similar to markJobAsProcessed)
@@ -3352,11 +3388,16 @@ function initializeQueueEventHandlers() {
         }
 
         // Process bid job completion
+        console.log(`${CYAN}[Queue Event DEBUG] Job completed: ${jobId}${RESET}`);
+        console.log(`${CYAN}[Queue Event DEBUG] Extracted taskId: ${taskId}, marketplace: ${marketplace}${RESET}`);
+        
         if (taskId && marketplace) {
           const task = activeTasks.get(taskId);
           if (task && task.running) {
             console.log(GREEN + `[Queue Event] Processing completion for task ${taskId}, marketplace ${marketplace}` + RESET);
             await markJobAsProcessed(taskId, marketplace, jobId);
+          } else {
+            console.log(`${CYAN}[Queue Event DEBUG] Task not found or not running - task exists: ${!!task}, running: ${task?.running}${RESET}`);
           }
         } else {
           console.log(YELLOW + `[Queue Event] Could not extract task/marketplace from job ID: ${jobId}` + RESET);
@@ -5211,12 +5252,9 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
         return true;
       });
 
-    // Perform preprocessing to determine bid types and job counts
+    // Clear parentJobs for this task at the start of each loop
+    // This ensures we start fresh and don't have stale data from previous loops
     if (availableMarketplaces.length > 0) {
-      // console.log(CYAN + `[Preprocessing] Starting task preprocessing for ${taskId}${marketplace ? ` (marketplace: ${marketplace})` : ''}` + RESET);
-
-      // Clear parentJobs for this task at the start of each loop
-      // This ensures we start fresh and don't have stale data from previous loops
       const marketplacesToClear = marketplace ? [marketplace.toLowerCase()] : ['opensea', 'magiceden', 'blur'];
       for (const mp of marketplacesToClear) {
         const parentId = `${taskId}-${mp}`.toLowerCase();
@@ -5224,294 +5262,8 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
           parentJobs.delete(parentId);
         }
       }
-
-      try {
-        // Initialize preprocessing result
-        const preprocessing: TaskPreprocessing = {
-          bidType: task.bidType as 'token' | 'trait' | 'collection',
-          opensea: { enabled: false, traits: [], tokens: [], jobCount: 0 },
-          blur: { enabled: false, traits: [], tokens: [], jobCount: 0 },
-          magiceden: { enabled: false, traits: [], tokens: [], jobCount: 0 }
-        };
-
-        // Get wallet info for token fetching
-        const wallet = await walletCache.getWalletById(task.walletId);
-        const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
-
-        // Process autoIds for token fetching
-        const autoIds = task.tokenIds
-          .filter(id => id.toString().toLowerCase().startsWith('bot'))
-          .map(id => {
-            const matches = id.toString().match(/\d+/);
-            return matches ? parseInt(matches[0]) : null;
-          })
-          .filter(id => id !== null);
-        const amount = autoIds[0];
-
-        // Fetch tokens if needed for token bid type
-        let openseaTokens: number[] = [];
-        let magicedenTokens: number[] = [];
-
-        if (task.bidType === "token") {
-          // First, fetch bottom listings if autoIds are present
-          if (amount) {
-            const [openseaListings, magicedenListings] = await Promise.all([
-              availableMarketplaces.includes("opensea") ?
-                fetchOpenseaListings(taskId, task.contract.slug, amount).catch(() => []) :
-                Promise.resolve([]),
-              availableMarketplaces.includes("magiceden") ?
-                fetchMagicEdenTokens(taskId, task.contract.contractAddress, amount).catch(() => []) :
-                Promise.resolve([])
-            ]);
-
-            openseaTokens = [...(openseaListings || [])];
-            magicedenTokens = [...(magicedenListings || [])];
-          }
-
-          // Add manually specified token IDs
-          const manualTokenIds = task.tokenIds.filter(id => !isNaN(Number(id)) && !id.toString().toLowerCase().includes('bot')).map(id => Number(id));
-          openseaTokens = [...openseaTokens, ...manualTokenIds];
-          magicedenTokens = [...magicedenTokens, ...manualTokenIds];
-
-          // If traits are selected for token bid type, fetch trait-based tokens
-          const openseaFilteredTraits = Object.fromEntries(
-            Object.entries(task?.selectedTraits?.opensea || {}).filter(([_, traits]) => traits.length > 0)
-          );
-
-          if (Object.keys(openseaFilteredTraits).length > 0) {
-            const selectedTraits = transformNewTask(openseaFilteredTraits);
-            const attributes = transformSelectedTraitsToAttributes(selectedTraits);
-            const expandedAttributes = expandAttributes(attributes);
-            let traitTokens: number[] = [];
-
-            if (task.traitsOperator.value === "or") {
-              await pQueue.addAll(
-                expandedAttributes.map((attribute) => async () => {
-                  const variable: CollectionItemsQueryVariables = {
-                    collectionSlug: task.contract.slug,
-                    filter: { attributes: [attribute] },
-                    limit: 100,
-                    sort: { by: 'PRICE', direction: 'ASC' },
-                  };
-                  const items = await fetchOpenSeaCollectionItems(variable);
-                  traitTokens.push(...items);
-                })
-              );
-            } else if (task.traitsOperator.value === "and") {
-              const variable: CollectionItemsQueryVariables = {
-                collectionSlug: task.contract.slug,
-                filter: { attributes },
-                limit: 100,
-                sort: { by: 'PRICE', direction: 'ASC' },
-              };
-              const items = await fetchOpenSeaCollectionItems(variable);
-              traitTokens.push(...items);
-            }
-
-            // Add trait tokens to both OpenSea and MagicEden lists
-            openseaTokens = [...openseaTokens, ...traitTokens];
-            magicedenTokens = [...magicedenTokens, ...traitTokens];
-          }
-        }
-
-        // Process each marketplace - if marketplace parameter is specified, only process that one
-        const marketplacesToProcess = marketplace ? [marketplace.toLowerCase()].filter(m => availableMarketplaces.includes(m)) : availableMarketplaces;
-
-        for (const mp of marketplacesToProcess) {
-          if (mp === "opensea") {
-            preprocessing.opensea.enabled = true;
-
-            // Transform OpenSea traits
-            const filteredTraits = Object.fromEntries(
-              Object.entries(task?.selectedTraits?.opensea || {}).filter(([_, traits]) => traits.length > 0)
-            );
-            const selectedTraits = transformNewTask(filteredTraits);
-            const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0;
-
-            if (task.bidType === "token" && openseaTokens.length > 0) {
-              // Token bid
-              preprocessing.opensea.tokens = [...new Set(openseaTokens)];
-              preprocessing.opensea.jobCount = preprocessing.opensea.tokens.length;
-            } else if (traitBid) {
-              // Trait bid - need to check if collection supports trait offers
-              const collectionDetails = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
-              if (collectionDetails.trait_offers_enabled) {
-                preprocessing.opensea.traits = transformOpenseaTraits(selectedTraits);
-                preprocessing.opensea.jobCount = preprocessing.opensea.traits.length;
-              } else {
-                preprocessing.opensea.skipReason = `Trait bidding not available for ${task.contract.slug}`;
-                preprocessing.opensea.jobCount = 0;
-              }
-            } else if (task.bidType === "collection") {
-              // Collection bid
-              preprocessing.opensea.jobCount = 1;
-            }
-
-            // Set up parent job for OpenSea
-            // NOTE: Parent job creation moved to schedule functions to ensure totalJobs matches actual jobs created
-            if (preprocessing.opensea.jobCount > 0) {
-            }
-          } else if (mp === "blur") {
-            preprocessing.blur.enabled = true;
-
-            // Check if Blur supports this bid type
-            if (task.bidType === "token") {
-              preprocessing.blur.skipReason = "Token bids not supported on Blur";
-              preprocessing.blur.jobCount = 0;
-            } else {
-              // Transform Blur traits
-              const filteredTraits = Object.fromEntries(
-                Object.entries(task?.selectedTraits?.blur || {}).filter(([_, traits]) => traits.length > 0)
-              );
-              const selectedTraits = transformNewTask(filteredTraits);
-              const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0;
-
-              if (traitBid) {
-                // Trait bid
-                preprocessing.blur.traits = transformBlurTraits(selectedTraits);
-                preprocessing.blur.jobCount = preprocessing.blur.traits.length;
-              } else if (task.bidType === "collection") {
-                // Collection bid
-                preprocessing.blur.jobCount = 1;
-              }
-
-              // Set up parent job for Blur
-              // NOTE: Parent job creation moved to schedule functions to ensure totalJobs matches actual jobs created
-              if (preprocessing.blur.jobCount > 0) {
-              }
-            }
-          } else if (mp === "magiceden") {
-            preprocessing.magiceden.enabled = true;
-
-            // Transform MagicEden traits
-            const filteredTraits = Object.fromEntries(
-              Object.entries(task?.selectedTraits?.magiceden || {}).filter(([_, traits]) => traits.length > 0)
-            );
-            const selectedTraits = transformNewTask(filteredTraits);
-            const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0;
-
-            if (task.bidType === "token" && magicedenTokens.length > 0) {
-              // Token bid
-              preprocessing.magiceden.tokens = [...new Set(magicedenTokens)];
-              preprocessing.magiceden.jobCount = preprocessing.magiceden.tokens.length;
-            } else if (traitBid) {
-              // Trait bid
-              preprocessing.magiceden.traits = Object.entries(selectedTraits).flatMap(([key, values]) =>
-                values.map(value => ({ attributeKey: key, attributeValue: value }))
-              );
-              preprocessing.magiceden.jobCount = preprocessing.magiceden.traits.length;
-            } else if (task.bidType === "collection") {
-              // Collection bid
-              preprocessing.magiceden.jobCount = 1;
-            }
-
-            // Set up parent job for MagicEden
-            // NOTE: Parent job creation moved to schedule functions to ensure totalJobs matches actual jobs created
-            if (preprocessing.magiceden.jobCount > 0) {
-            }
-          }
-        }
-
-        // Store preprocessing results
-        taskPreprocessing.set(taskId, preprocessing);
-
-        // Also update currentTraits for backwards compatibility
-        if (!currentTraits[taskId]) {
-          currentTraits[taskId] = {
-            opensea: {},
-            magiceden: {},
-            blur: {}
-          };
-        }
-
-        // Convert preprocessed traits back to the format expected by currentTraits
-        if (preprocessing.opensea.traits.length > 0) {
-          const openseaTraitMap: Record<string, string[]> = {};
-          preprocessing.opensea.traits.forEach(trait => {
-            if (!openseaTraitMap[trait.type]) {
-              openseaTraitMap[trait.type] = [];
-            }
-            if (!openseaTraitMap[trait.type].includes(trait.value)) {
-              openseaTraitMap[trait.type].push(trait.value);
-            }
-          });
-          currentTraits[taskId].opensea = openseaTraitMap;
-        }
-
-        if (preprocessing.blur.traits.length > 0) {
-          const blurTraitMap: Record<string, string[]> = {};
-          preprocessing.blur.traits.forEach(trait => {
-            const key = Object.keys(trait)[0];
-            const value = trait[key];
-            if (!blurTraitMap[key]) {
-              blurTraitMap[key] = [];
-            }
-            if (!blurTraitMap[key].includes(value)) {
-              blurTraitMap[key].push(value);
-            }
-          });
-          currentTraits[taskId].blur = blurTraitMap;
-        }
-
-        if (preprocessing.magiceden.traits.length > 0) {
-          const magicedenTraitMap: Record<string, string[]> = {};
-          preprocessing.magiceden.traits.forEach(trait => {
-            if (!magicedenTraitMap[trait.attributeKey]) {
-              magicedenTraitMap[trait.attributeKey] = [];
-            }
-            if (!magicedenTraitMap[trait.attributeKey].includes(trait.attributeValue)) {
-              magicedenTraitMap[trait.attributeKey].push(trait.attributeValue);
-            }
-          });
-          currentTraits[taskId].magiceden = magicedenTraitMap;
-        }
-
-        // Log summary
-        const totalJobs = preprocessing.opensea.jobCount + preprocessing.blur.jobCount + preprocessing.magiceden.jobCount;
-
-        // Summary of preprocessing results
-        console.log(CYAN + `\n[Preprocessing] ===== SUMMARY FOR TASK ${taskId} =====` + RESET);
-        console.log(CYAN + `[Preprocessing] Total jobs to be created: ${totalJobs}` + RESET);
-        console.log(BLUE + `  OpenSea: ${preprocessing.opensea.jobCount} jobs${preprocessing.opensea.skipReason ? ' (skipped: ' + preprocessing.opensea.skipReason + ')' : ''}` + RESET);
-        console.log(GOLD + `  Blur: ${preprocessing.blur.jobCount} jobs${preprocessing.blur.skipReason ? ' (skipped: ' + preprocessing.blur.skipReason + ')' : ''}` + RESET);
-        console.log(MAGENTA + `  MagicEden: ${preprocessing.magiceden.jobCount} jobs${preprocessing.magiceden.skipReason ? ' (skipped: ' + preprocessing.magiceden.skipReason + ')' : ''}` + RESET);
-        console.log(CYAN + `[Preprocessing] =====================================\n` + RESET);
-
-        // Initialize parent jobs for all enabled marketplaces with job counts from preprocessing
-        // Use Promise.all to ensure all parent jobs are created before continuing
-        const parentJobPromises = availableMarketplaces.map(async (mp) => {
-          const jobCount = mp === 'opensea' ? preprocessing.opensea.jobCount :
-            mp === 'blur' ? preprocessing.blur.jobCount :
-              mp === 'magiceden' ? preprocessing.magiceden.jobCount : 0;
-
-          if (jobCount > 0) {
-            // Use the ensureParentJobExists function to prevent race conditions
-            await ensureParentJobExists(taskId, mp);
-
-            const parentJobId = `${taskId}-${mp}`;
-            const existingParentJob = parentJobs.get(parentJobId);
-
-            if (existingParentJob) {
-              // Update the existing parent job with new counts
-              existingParentJob.totalJobs = jobCount;
-              existingParentJob.completedJobs = 0; // Always start at 0 for new iteration
-              existingParentJob.startTime = Date.now();
-              console.log(GREEN + `[Parent Job] Updated ${parentJobId}: ${jobCount} jobs` + RESET);
-            } else {
-              // This shouldn't happen if ensureParentJobExists worked
-              console.error(RED + `[Parent Job] Failed to ensure parent job exists: ${parentJobId}` + RESET);
-            }
-          }
-        });
-
-        // Wait for all parent jobs to be created/updated
-        await Promise.all(parentJobPromises);
-        console.log(CYAN + `[Parent Jobs] All parent jobs initialized for task ${taskId}` + RESET);
-
-      } catch (error) {
-        console.error(RED + `[Preprocessing] Error during task preprocessing: ${error}` + RESET);
-        // Continue with normal flow even if preprocessing fails
-      }
+      // Preprocessing has been moved to the scheduled bid functions
+      // This ensures preprocessing happens on-demand and can be retried
     }
 
     // Calculate and store task-wide totals after parent job initialization
@@ -5559,7 +5311,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
                 jobId: `${task._id}-opensea-schedule`,
                 removeOnComplete: true,
                 removeOnFail: true,
-                attempts: 3,
+                attempts: 10,
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -5574,7 +5326,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
                 jobId: `${task._id}-blur-schedule`,
                 removeOnComplete: true,
                 removeOnFail: true,
-                attempts: 3,
+                attempts: 10,
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -5589,7 +5341,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
                 jobId: `${task._id}-magiceden-schedule`,
                 removeOnComplete: true,
                 removeOnFail: true,
-                attempts: 3,
+                attempts: 10,
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -8033,7 +7785,7 @@ function startConnectionMonitoring() {
         saveConnectionMetrics(); // Save metrics every hour
       }
     }
-  }, 10000); // Check every 10 seconds
+  }, STANDARD_INTERVAL);
 }
 
 
@@ -9926,6 +9678,239 @@ function getTraitCount(traitsJson: any, attribute: any) {
   }
 }
 
+/**
+ * Performs preprocessing for a specific task and marketplace
+ * @param task The task to preprocess
+ * @param marketplace The specific marketplace to preprocess for
+ * @param availableMarketplaces List of enabled marketplaces for the task
+ * @returns Preprocessing data for the specified marketplace
+ */
+async function performMarketplacePreprocessing(
+  task: ITask,
+  marketplace: string,
+  availableMarketplaces: string[]
+): Promise<TaskPreprocessing> {
+  const taskId = task._id;
+
+  // Initialize preprocessing result
+  const preprocessing: TaskPreprocessing = {
+    bidType: task.bidType as 'token' | 'trait' | 'collection',
+    opensea: { enabled: false, traits: [], tokens: [], jobCount: 0 },
+    blur: { enabled: false, traits: [], tokens: [], jobCount: 0 },
+    magiceden: { enabled: false, traits: [], tokens: [], jobCount: 0 }
+  };
+
+  // Process autoIds for token fetching
+  const autoIds = task.tokenIds
+    .filter(id => id.toString().toLowerCase().startsWith('bot'))
+    .map(id => {
+      const matches = id.toString().match(/\d+/);
+      return matches ? parseInt(matches[0]) : null;
+    })
+    .filter(id => id !== null);
+  const amount = autoIds[0];
+
+  // Fetch tokens if needed for token bid type
+  let openseaTokens: number[] = [];
+  let magicedenTokens: number[] = [];
+  let traitTokens: number[] = [];
+
+  if (task.bidType === "token") {
+    // First, fetch bottom listings if autoIds are present
+    if (amount) {
+      const [openseaListings, magicedenListings] = await Promise.all([
+        marketplace === "opensea" && availableMarketplaces.includes("opensea") ?
+          fetchOpenseaListings(taskId, task.contract.slug, amount).catch(() => []) :
+          Promise.resolve([]),
+        marketplace === "magiceden" && availableMarketplaces.includes("magiceden") ?
+          fetchMagicEdenTokens(taskId, task.contract.contractAddress, amount).catch(() => []) :
+          Promise.resolve([])
+      ]);
+
+      openseaTokens = [...(openseaListings || [])];
+      magicedenTokens = [...(magicedenListings || [])];
+    }
+
+    // Add manually specified token IDs
+    const manualTokenIds = task.tokenIds.filter(id => !isNaN(Number(id)) && !id.toString().toLowerCase().includes('bot')).map(id => Number(id));
+    openseaTokens = [...openseaTokens, ...manualTokenIds];
+    magicedenTokens = [...magicedenTokens, ...manualTokenIds];
+
+    // If traits are selected for token bid type, fetch trait-based tokens
+    // Fetch once and share between OpenSea and MagicEden
+    if ((marketplace === "opensea" || marketplace === "magiceden") && availableMarketplaces.includes("opensea")) {
+      const openseaFilteredTraits = Object.fromEntries(
+        Object.entries(task?.selectedTraits?.opensea || {}).filter(([_, traits]) => traits.length > 0)
+      );
+
+      if (Object.keys(openseaFilteredTraits).length > 0) {
+        const selectedTraits = transformNewTask(openseaFilteredTraits);
+        const attributes = transformSelectedTraitsToAttributes(selectedTraits);
+        const expandedAttributes = expandAttributes(attributes);
+
+        if (task.traitsOperator.value === "or") {
+          await pQueue.addAll(
+            expandedAttributes.map((attribute) => async () => {
+              const variable: CollectionItemsQueryVariables = {
+                collectionSlug: task.contract.slug,
+                filter: { attributes: [attribute] },
+                limit: 100,
+                sort: { by: 'PRICE', direction: 'ASC' },
+              };
+              const items = await fetchOpenSeaCollectionItems(variable);
+              traitTokens.push(...items);
+            })
+          );
+        } else if (task.traitsOperator.value === "and") {
+          const variable: CollectionItemsQueryVariables = {
+            collectionSlug: task.contract.slug,
+            filter: { attributes },
+            limit: 100,
+            sort: { by: 'PRICE', direction: 'ASC' },
+          };
+          const items = await fetchOpenSeaCollectionItems(variable);
+          traitTokens.push(...items);
+        }
+
+        // Add trait tokens to both OpenSea and MagicEden lists
+        openseaTokens = [...openseaTokens, ...traitTokens];
+        magicedenTokens = [...magicedenTokens, ...traitTokens];
+      }
+    }
+  }
+
+  // Process the specific marketplace
+  if (marketplace === "opensea") {
+    preprocessing.opensea.enabled = true;
+
+    // Transform OpenSea traits
+    const filteredTraits = Object.fromEntries(
+      Object.entries(task?.selectedTraits?.opensea || {}).filter(([_, traits]) => traits.length > 0)
+    );
+    const selectedTraits = transformNewTask(filteredTraits);
+    const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0;
+
+    if (task.bidType === "token" && openseaTokens.length > 0) {
+      // Token bid
+      preprocessing.opensea.tokens = [...new Set(openseaTokens)];
+      preprocessing.opensea.jobCount = preprocessing.opensea.tokens.length;
+    } else if (traitBid) {
+      // Trait bid - need to check if collection supports trait offers
+      const collectionDetails = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
+      if (collectionDetails.trait_offers_enabled) {
+        preprocessing.opensea.traits = transformOpenseaTraits(selectedTraits);
+        preprocessing.opensea.jobCount = preprocessing.opensea.traits.length;
+      } else {
+        preprocessing.opensea.skipReason = `Trait bidding not available for ${task.contract.slug}`;
+        preprocessing.opensea.jobCount = 0;
+      }
+    } else if (task.bidType === "collection") {
+      // Collection bid
+      preprocessing.opensea.jobCount = 1;
+    }
+  } else if (marketplace === "blur") {
+    preprocessing.blur.enabled = true;
+
+    // Check if Blur supports this bid type
+    if (task.bidType === "token") {
+      preprocessing.blur.skipReason = "Token bids not supported on Blur";
+      preprocessing.blur.jobCount = 0;
+    } else {
+      // Transform Blur traits
+      const filteredTraits = Object.fromEntries(
+        Object.entries(task?.selectedTraits?.blur || {}).filter(([_, traits]) => traits.length > 0)
+      );
+      const selectedTraits = transformNewTask(filteredTraits);
+      const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0;
+
+      if (traitBid) {
+        // Trait bid
+        preprocessing.blur.traits = transformBlurTraits(selectedTraits);
+        preprocessing.blur.jobCount = preprocessing.blur.traits.length;
+      } else if (task.bidType === "collection") {
+        // Collection bid
+        preprocessing.blur.jobCount = 1;
+      }
+    }
+  } else if (marketplace === "magiceden") {
+    preprocessing.magiceden.enabled = true;
+
+    // Transform MagicEden traits
+    const filteredTraits = Object.fromEntries(
+      Object.entries(task?.selectedTraits?.magiceden || {}).filter(([_, traits]) => traits.length > 0)
+    );
+    const selectedTraits = transformNewTask(filteredTraits);
+    const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0;
+
+    if (task.bidType === "token" && magicedenTokens.length > 0) {
+      // Token bid
+      preprocessing.magiceden.tokens = [...new Set(magicedenTokens)];
+      preprocessing.magiceden.jobCount = preprocessing.magiceden.tokens.length;
+    } else if (traitBid) {
+      // Trait bid
+      preprocessing.magiceden.traits = Object.entries(selectedTraits).flatMap(([key, values]) =>
+        values.map(value => ({ attributeKey: key, attributeValue: value }))
+      );
+      preprocessing.magiceden.jobCount = preprocessing.magiceden.traits.length;
+    } else if (task.bidType === "collection") {
+      // Collection bid
+      preprocessing.magiceden.jobCount = 1;
+    }
+  }
+
+  if (!currentTraits[taskId]) {
+    currentTraits[taskId] = {
+      opensea: {},
+      magiceden: {},
+      blur: {}
+    };
+  }
+
+  // Convert preprocessed traits back to the format expected by currentTraits
+  if (marketplace === "opensea" && preprocessing.opensea.traits.length > 0) {
+    const openseaTraitMap: Record<string, string[]> = {};
+    preprocessing.opensea.traits.forEach(trait => {
+      if (!openseaTraitMap[trait.type]) {
+        openseaTraitMap[trait.type] = [];
+      }
+      if (!openseaTraitMap[trait.type].includes(trait.value)) {
+        openseaTraitMap[trait.type].push(trait.value);
+      }
+    });
+    currentTraits[taskId].opensea = openseaTraitMap;
+  }
+
+  if (marketplace === "blur" && preprocessing.blur.traits.length > 0) {
+    const blurTraitMap: Record<string, string[]> = {};
+    preprocessing.blur.traits.forEach(trait => {
+      const key = Object.keys(trait)[0];
+      const value = trait[key];
+      if (!blurTraitMap[key]) {
+        blurTraitMap[key] = [];
+      }
+      if (!blurTraitMap[key].includes(value)) {
+        blurTraitMap[key].push(value);
+      }
+    });
+    currentTraits[taskId].blur = blurTraitMap;
+  }
+
+  if (marketplace === "magiceden" && preprocessing.magiceden.traits.length > 0) {
+    const magicedenTraitMap: Record<string, string[]> = {};
+    preprocessing.magiceden.traits.forEach(trait => {
+      if (!magicedenTraitMap[trait.attributeKey]) {
+        magicedenTraitMap[trait.attributeKey] = [];
+      }
+      if (!magicedenTraitMap[trait.attributeKey].includes(trait.attributeValue)) {
+        magicedenTraitMap[trait.attributeKey].push(trait.attributeValue);
+      }
+    });
+    currentTraits[taskId].magiceden = magicedenTraitMap;
+  }
+
+  return preprocessing;
+}
+
 async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
   console.log(`${BLUE}[processOpenseaScheduledBid] CALLED for task ${task._id}${RESET}`);
   try {
@@ -9942,11 +9927,29 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
     const taskId = task._id;
     // Processing OpenSea scheduled bid
 
-    // Get preprocessing data
-    const preprocessing = taskPreprocessing.get(taskId);
+    // Get preprocessing data - first check the Map, then perform if needed
+    let preprocessing = taskPreprocessing.get(taskId);
+
     if (!preprocessing || !preprocessing.opensea.enabled) {
-      // No preprocessing data found for OpenSea
-      return;
+      console.log(`${BLUE}[processOpenseaScheduledBid] No preprocessing data found, performing preprocessing now${RESET}`);
+
+      // Determine available marketplaces for this task
+      const validMarketplaces = ["opensea", "magiceden", "blur"];
+      const availableMarketplaces = currentTask.selectedMarketplaces
+        .map(m => m.toLowerCase())
+        .filter(m => enabledMarketplaces.map(em => em.toLowerCase()).includes(m))
+        .filter(m => validMarketplaces.includes(m));
+
+      // Perform preprocessing for OpenSea
+      preprocessing = await performMarketplacePreprocessing(currentTask, "opensea", availableMarketplaces);
+
+      // Store in Map for other marketplaces to use
+      taskPreprocessing.set(taskId, preprocessing);
+
+      // If preprocessing didn't enable OpenSea, it means something went wrong
+      if (!preprocessing.opensea.enabled) {
+        throw new Error(`Preprocessing failed to enable OpenSea for task ${taskId}`);
+      }
     }
 
     if (preprocessing.opensea.skipReason) {
@@ -10043,6 +10046,15 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
           opts: { priority: TOKEN_BID_PRIORITY.OPENSEA } as JobsOptions,
         })) as Job[]
 
+      // Ensure parent job exists with correct totalJobs BEFORE processing jobs
+      const parentJobId = `${taskId}-opensea`;
+      await ensureParentJobExists(taskId, 'opensea');
+      const parentJob = parentJobs.get(parentJobId);
+      if (parentJob) {
+        parentJob.totalJobs = preprocessing.opensea.tokens.length;
+        console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE processing jobs${RESET}`);
+      }
+      
       await processBulkJobs(jobs, true);
     } else if (preprocessing.opensea.traits.length > 0) {
       // Trait bid
@@ -10068,11 +10080,29 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
         };
       }) as Job[]
 
+      // Ensure parent job exists with correct totalJobs BEFORE processing jobs
+      const parentJobId = `${taskId}-opensea`;
+      await ensureParentJobExists(taskId, 'opensea');
+      const parentJob = parentJobs.get(parentJobId);
+      if (parentJob) {
+        parentJob.totalJobs = preprocessing.opensea.traits.length;
+        console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE processing jobs${RESET}`);
+      }
+      
       await processBulkJobs(traitJobs, true);
     } else if (preprocessing.opensea.jobCount === 1) {
       // Collection bid
       console.log(`${BLUE}[OPENSEA] Creating 1 collection bid job${RESET}`);
       const jobId = `bid-${taskId}-opensea-${currentTask.contract.slug}-collection`
+      
+      // Ensure parent job exists with correct totalJobs BEFORE adding job
+      const parentJobId = `${taskId}-opensea`;
+      await ensureParentJobExists(taskId, 'opensea');
+      const parentJob = parentJobs.get(parentJobId);
+      if (parentJob) {
+        parentJob.totalJobs = 1;
+        console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE adding job${RESET}`);
+      }
 
       await queue.add(
         OPENSEA_COLLECTION_BID,
@@ -10088,16 +10118,19 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
     }
   } catch (error) {
     console.error(RED + `Error processing OpenSea scheduled bid for task: ${task._id}` + RESET, error);
-    
+
     // Check if this is a Redis cluster failure
     if (isRedisClusterError(error)) {
       console.log(RED + '🚨 Redis cluster error detected in scheduled bid processor' + RESET);
       redisClusterFailures++;
-      
+
       if (redisClusterFailures >= REDIS_CLUSTER_FAILURE_THRESHOLD) {
         await handleRedisClusterFailure();
       }
     }
+
+    // Re-throw error to trigger job retry
+    throw error;
   }
 }
 
@@ -10378,11 +10411,29 @@ async function processBlurScheduledBid(task: ITask) {
     const taskId = task._id;
     // Processing Blur scheduled bid
 
-    // Get preprocessing data
-    const preprocessing = taskPreprocessing.get(taskId);
+    // Get preprocessing data - first check the Map, then perform if needed
+    let preprocessing = taskPreprocessing.get(taskId);
+
     if (!preprocessing || !preprocessing.blur.enabled) {
-      // No preprocessing data found for Blur
-      return;
+      console.log(`${GOLD}[processBlurScheduledBid] No preprocessing data found, performing preprocessing now${RESET}`);
+
+      // Determine available marketplaces for this task
+      const validMarketplaces = ["opensea", "magiceden", "blur"];
+      const availableMarketplaces = currentTask.selectedMarketplaces
+        .map(m => m.toLowerCase())
+        .filter(m => enabledMarketplaces.map(em => em.toLowerCase()).includes(m))
+        .filter(m => validMarketplaces.includes(m));
+
+      // Perform preprocessing for Blur
+      preprocessing = await performMarketplacePreprocessing(currentTask, "blur", availableMarketplaces);
+
+      // Store in Map for other marketplaces to use
+      taskPreprocessing.set(taskId, preprocessing);
+
+      // If preprocessing didn't enable Blur, it means something went wrong
+      if (!preprocessing.blur.enabled) {
+        throw new Error(`Preprocessing failed to enable Blur for task ${taskId}`);
+      }
     }
 
     if (preprocessing.blur.skipReason) {
@@ -10500,17 +10551,6 @@ async function processBlurScheduledBid(task: ITask) {
       // Check if error is due to authentication block
       if (authError.message && authError.message.includes('Authentication blocked until')) {
         console.log(RED + `[Blur Auth Block] Cannot create jobs for blocked wallet ${WALLET_ADDRESS}` + RESET);
-
-        // Update warning for UI
-        if (!warningBids[taskId]) {
-          warningBids[taskId] = { opensea: false, magiceden: false, blur: true };
-        }
-        if (!warningMessage[taskId]) {
-          warningMessage[taskId] = { opensea: "", magiceden: "", blur: "" };
-        }
-        warningBids[taskId].blur = true;
-        warningMessage[taskId].blur = `Authentication blocked - ${authError.message}`;
-
         return; // Skip creating jobs for this task
       }
       // Continue anyway - individual jobs will attempt auth if needed
@@ -10525,17 +10565,6 @@ async function processBlurScheduledBid(task: ITask) {
       if (pauseTime > Date.now()) {
         const waitTime = pauseTime - Date.now();
         console.log(YELLOW + `[Blur Job Creation] Wallet ${WALLET_ADDRESS.substring(0, 8)}... is paused for ${Math.round(waitTime / 1000)}s. Skipping job creation.` + RESET);
-
-        // Set warning for UI visibility
-        if (!warningBids[taskId]) {
-          warningBids[taskId] = { opensea: false, magiceden: false, blur: true };
-        }
-        if (!warningMessage[taskId]) {
-          warningMessage[taskId] = { opensea: "", magiceden: "", blur: "" };
-        }
-        warningBids[taskId].blur = true;
-        warningMessage[taskId].blur = `Blur API rate limited - waiting ${Math.round(waitTime / 1000)}s`;
-
         return;
       }
     }
@@ -10557,6 +10586,15 @@ async function processBlurScheduledBid(task: ITask) {
 
       console.log(`${GOLD}[BLUR] Processing ${totalTraits} trait bids in ${totalBatches} batches (${batchSize} per batch)${RESET}`);
       console.log(`${GOLD}[BLUR] Rate limit: ${BLUR_RATE_LIMIT.maxBidsPerWindow} bids per ${BLUR_RATE_LIMIT.windowDuration / 1000} seconds${RESET}`);
+      
+      // Ensure parent job exists with correct totalJobs BEFORE processing jobs
+      const parentJobId = `${taskId}-blur`;
+      await ensureParentJobExists(taskId, 'blur');
+      const parentJob = parentJobs.get(parentJobId);
+      if (parentJob) {
+        parentJob.totalJobs = preprocessing.blur.traits.length;
+        console.log(`${GOLD}[BLUR] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE processing jobs${RESET}`);
+      }
 
       // Process traits in smaller batches that respect the rate limit
       for (let i = 0; i < totalTraits; i += batchSize) {
@@ -10619,6 +10657,15 @@ async function processBlurScheduledBid(task: ITask) {
 
       const slug = removeChar(currentTask.contract.slug, "-")
       const jobId = `bid-${taskId}-blur-${slug}-collection-${WALLET_ADDRESS}`
+      
+      // Ensure parent job exists with correct totalJobs BEFORE adding job
+      const parentJobId = `${taskId}-blur`;
+      await ensureParentJobExists(taskId, 'blur');
+      const parentJob = parentJobs.get(parentJobId);
+      if (parentJob) {
+        parentJob.totalJobs = 1;
+        console.log(`${GOLD}[BLUR] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE adding job${RESET}`);
+      }
 
       await blurQueue.add(
         BLUR_COLLECTION_BID,
@@ -10634,6 +10681,9 @@ async function processBlurScheduledBid(task: ITask) {
     }
   } catch (error) {
     console.error(RED + `Error processing Blur scheduled bid for task: ${task._id}` + RESET, error);
+
+    // Re-throw error to trigger job retry
+    throw error;
   }
 }
 
@@ -12123,20 +12173,36 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
     }
 
     const taskId = task._id;
-
-    // Parallel operations for task and preprocessing data
-    const [currentTask, preprocessing] = await Promise.all([
-      Promise.resolve(activeTasks.get(taskId)),
-      Promise.resolve(taskPreprocessing.get(taskId))
-    ]);
+    const currentTask = activeTasks.get(taskId);
 
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) {
       console.log(`${YELLOW}[processMagicedenScheduledBid] Task not running or MagicEden not selected, returning${RESET}`);
       return;
     }
+
+    // Get preprocessing data - first check the Map, then perform if needed
+    let preprocessing = taskPreprocessing.get(taskId);
+
     if (!preprocessing || !preprocessing.magiceden.enabled) {
-      console.log(`${YELLOW}[processMagicedenScheduledBid] No preprocessing data or MagicEden not enabled, returning${RESET}`);
-      return;
+      console.log(`${MAGENTA}[processMagicedenScheduledBid] No preprocessing data found, performing preprocessing now${RESET}`);
+
+      // Determine available marketplaces for this task
+      const validMarketplaces = ["opensea", "magiceden", "blur"];
+      const availableMarketplaces = currentTask.selectedMarketplaces
+        .map(m => m.toLowerCase())
+        .filter(m => enabledMarketplaces.map(em => em.toLowerCase()).includes(m))
+        .filter(m => validMarketplaces.includes(m));
+
+      // Perform preprocessing for MagicEden
+      preprocessing = await performMarketplacePreprocessing(currentTask, "magiceden", availableMarketplaces);
+
+      // Store in Map for other marketplaces to use
+      taskPreprocessing.set(taskId, preprocessing);
+
+      // If preprocessing didn't enable MagicEden, it means something went wrong
+      if (!preprocessing.magiceden.enabled) {
+        throw new Error(`Preprocessing failed to enable MagicEden for task ${taskId}`);
+      }
     }
 
     if (preprocessing.magiceden.skipReason) {
@@ -12222,6 +12288,15 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
           } as JobsOptions
         })) as Job[]
 
+      // Ensure parent job exists with correct totalJobs BEFORE processing jobs
+      const parentJobId = `${taskId}-magiceden`;
+      await ensureParentJobExists(taskId, 'magiceden');
+      const parentJob = parentJobs.get(parentJobId);
+      if (parentJob) {
+        parentJob.totalJobs = preprocessing.magiceden.tokens.length;
+        console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE processing jobs${RESET}`);
+      }
+      
       await processBulkJobs(jobs, true);
     }
     else if (preprocessing.magiceden.traits.length > 0) {
@@ -12245,12 +12320,30 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
         opts: { priority: TRAIT_BID_PRIORITY.MAGICEDEN } as JobsOptions
       })) as Job[]
 
+      // Ensure parent job exists with correct totalJobs BEFORE processing jobs
+      const parentJobId = `${taskId}-magiceden`;
+      await ensureParentJobExists(taskId, 'magiceden');
+      const parentJob = parentJobs.get(parentJobId);
+      if (parentJob) {
+        parentJob.totalJobs = preprocessing.magiceden.traits.length;
+        console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE processing jobs${RESET}`);
+      }
+      
       await processBulkJobs(traitJobs, true);
     }
     else if (preprocessing.magiceden.jobCount === 1) {
       // Collection bid
       console.log(`${MAGENTA}[MAGICEDEN] Creating 1 collection bid job${RESET}`);
       const jobId = `bid-${taskId}-magiceden-${currentTask.contract.slug}-collection`
+      
+      // Ensure parent job exists with correct totalJobs BEFORE adding job
+      const parentJobId = `${taskId}-magiceden`;
+      await ensureParentJobExists(taskId, 'magiceden');
+      const parentJob = parentJobs.get(parentJobId);
+      if (parentJob) {
+        parentJob.totalJobs = 1;
+        console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE adding job${RESET}`);
+      }
 
       await queue.add(
         MAGICEDEN_COLLECTION_BID,
@@ -12269,6 +12362,9 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
     if (error instanceof Error && error.message.includes('timeout')) {
       console.error(RED + `[MAGICEDEN_SCHEDULE] Timeout details: ${error.message}` + RESET);
     }
+
+    // Re-throw error to trigger job retry
+    throw error;
   }
 }
 
@@ -13013,7 +13109,7 @@ async function validateBidCount() {
   }
 }
 
-validateBidCountInterval = setInterval(validateBidCount, 60000); // Run every minute
+validateBidCountInterval = setInterval(validateBidCount, STANDARD_INTERVAL);
 
 async function bulkCancelBlurBid(data: BlurCancelPayload) {
   const { orderKey, privateKey, taskId, payload } = data
@@ -16560,41 +16656,6 @@ function transformMagicEdenTraits(magicEdenTraits: MagicEdenTraits): Traits {
     return traits;
   }
 }
-
-
-const fetchTraitData = async (collectionSlug: string) => {
-  try {
-    const data = {
-      id: "TraitSelectorQuery",
-      query:
-        "query TraitSelectorQuery(\n  $collectionSlug: CollectionSlug\n  $withTraitFloor: Boolean\n) {\n  collection(collection: $collectionSlug) {\n    ...TraitSelector_data_4zPn1c\n    id\n  }\n}\n\nfragment TraitSelector_data_4zPn1c on CollectionType {\n  statsV2 {\n    totalSupply\n  }\n  stringTraits(withTraitFloor: $withTraitFloor) {\n    key\n    counts {\n      count\n      value\n      floor {\n        eth\n        unit\n        symbol\n        usd\n      }\n    }\n  }\n}\n",
-      variables: {
-        collectionSlug: collectionSlug,
-        withTraitFloor: true,
-      },
-    };
-
-    const { data: openseaTraits } = await limiter.schedule(() => axiosInstance.post<OpenseaTraits>(
-      `${BASE_URL}/opensea/__api/graphql/`,
-      data,
-      {
-        headers: {
-          "x-api-key": API_KEY,
-          "content-type": "application/json",
-          "x-signed-query":
-            "6ae240a98f748a2ecef0a71cb6424c3d47c9c62691ca07ebadf318bf7fcc9517",
-        },
-      }
-    ));
-
-    console.log({ openseaTraits: JSON.stringify(openseaTraits) });
-
-    return openseaTraits;
-  } catch (error: any) {
-    console.error("Error fetching trait data:", error.response.data);
-  }
-};
-
 interface OpenseaTraits {
   data: OpenseaData;
 }
@@ -17175,11 +17236,11 @@ async function recoverOrphanedJobs() {
 }
 
 // Schedule periodic job tracking status report
-setInterval(logJobTrackingStatus, 30000); // Every 30 seconds
+setInterval(logJobTrackingStatus, STANDARD_INTERVAL);
 
 // Schedule stuck task checker
-setInterval(checkStuckTasks, 10000); // Every 10 seconds
+setInterval(checkStuckTasks, STANDARD_INTERVAL);
 
 // Schedule orphaned job recovery
-setInterval(recoverOrphanedJobs, 60000); // Every 60 seconds
+setInterval(recoverOrphanedJobs, STANDARD_INTERVAL);
 

@@ -8,7 +8,8 @@
   [██████████████████████░░░░░░░░] 73.00%
 [Queue Event] Job completed: bid-68946a80493b1b45af82378e-opensea-642-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
 [Queue Event] Processing completion for task 68946a80493b1b45af82378e, marketplace opensea
-[Job Complete] 68946a80493b1b45af82378e-opensea: 731/1000 (Job: bid-68946a80493b1b45af82378e-opensea-642-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+[Job Complete] 68946a80493b1b45af82378e-opensea: 731/1000 (Job: bi
+  d-68946a80493b1b45af82378e-opensea-642-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
 
 [updateTaskRunningPercentage] TOTAL SUMMARY:
   Total Jobs: 1000 (Opensea: 1000)
@@ -218,3 +219,3179 @@ Error processing OpenSea scheduled bid for task: 68946a80493b1b45af82378e Error:
     at async bullmq_1.Worker.connection [as processFn] (/app/dist/src/index.js:1503:36)
     at async /app/node_modules/bullmq/dist/cjs/classes/worker.js:493:32
 [Queue Event] Skipping schedule job tracking: 68946a80493b1b45af82378e-opensea-schedule
+
+
+
+upgradeOrConnect: false,
+parser: null,
+maxHeadersCount: null,
+reusedSocket: false,
+host: 'nfttools.pro',
+protocol: 'https:',
+_redirectable: Writable {
+  _writableState: [WritableState],
+  _events: [Object: null prototype],
+  _eventsCount: 3,
+  _maxListeners: undefined,
+  _options: [Object],
+  _ended: true,
+  _ending: true,
+  _redirectCount: 0,
+  _redirects: [],
+  _requestBodyLength: 1329,
+  _requestBodyBuffers: [],
+  _onNativeResponse: [Function (anonymous)],
+  _currentRequest: [Circular *1],
+  _currentUrl: 'https://nfttools.pro/kong/blur/v1/collection-bids/submit',
+  _timeout: null,
+  [Symbol(kCapture)]: false
+},
+[Symbol(kCapture)]: false,
+[Symbol(kBytesWritten)]: 0,
+[Symbol(kNeedDrain)]: false,
+[Symbol(corked)]: 0,
+[Symbol(kOutHeaders)]: [Object: null prototype] {
+  accept: [Array],
+  'content-type': [Array],
+  authtoken: [Array],
+  walletaddress: [Array],
+  'x-api-key': [Array],
+  'user-agent': [Array],
+  'content-length': [Array],
+  'accept-encoding': [Array],
+  host: [Array]
+},
+[Symbol(errored)]: null,
+[Symbol(kHighWaterMark)]: 16384,
+[Symbol(kRejectNonStandardBodyWrites)]: false,
+[Symbol(kUniqueHeaders)]: null
+},
+response: {
+status: 400,
+statusText: 'Bad Request',
+headers: Object [AxiosHeaders] {
+  'content-type': 'application/json; charset=utf-8',
+  'content-length': '66',
+  'x-ratelimit-remaining-second': '99',
+  'x-ratelimit-limit-second': '100',
+  'ratelimit-limit': '100',
+  'ratelimit-remaining': '99',
+  'ratelimit-reset': '1',
+  'x-cache-key': '0f744befe08ee1d2459d2506f261c9710dd0511e25f1f6f25af808c546f2cebe',
+  'x-cache-status': 'Bypass',
+  'x-powered-by': 'Express',
+  date: 'Thu, 07 Aug 2025 14:40:33 GMT',
+  'cf-ray': '96b7879deda530ec-SEA',
+  etag: 'W/"44-McWaoNlzt3iglN2odEGCDEADErE"',
+  vary: 'Origin',
+  'retry-after': '58',
+  'cf-cache-status': 'DYNAMIC',
+  'set-cookie': [Array],
+  server: 'cloudflare',
+  'x-kong-upstream-latency': '400',
+  'x-kong-proxy-latency': '1',
+  via: '1.1 kong/3.8.0',
+  'x-kong-request-id': 'a4874d17197b6c2500b45d0c959ed97e',
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS, PATCH',
+  'access-control-allow-headers': '*',
+  'access-control-max-age': '3600',
+  'access-control-expose-headers': '*'
+},
+config: {
+  transitional: [Object],
+  adapter: [Array],
+  transformRequest: [Array],
+  transformResponse: [Array],
+  timeout: 30000,
+  xsrfCookieName: 'XSRF-TOKEN',
+  xsrfHeaderName: 'X-XSRF-TOKEN',
+  maxContentLength: -1,
+  maxBodyLength: -1,
+  env: [Object],
+  validateStatus: [Function: validateStatus],
+  headers: [Object [AxiosHeaders]],
+  method: 'post',
+  url: 'https://nfttools.pro/kong/blur/v1/collection-bids/submit',
+  data: '{"signature":"0xa4a8ab683d0b73796069a662a6e86b0090457d3cce7109097cccbf334dd90b362c2331214bfa3ac7f3a2b4a160410b3aa4bcbe5729df53bf285b8427866c82841b","marketplaceData":"[\\"vEUDIxqnG/oIpSKsHdeUtnyZBG1pPO+MStAPeyMTVX+7gYl31Qm65S0IWssvR+QPhRAKALBepT6uXCmrayqibz89aVIM5QMi/CTnsqvy/pcM/Kh99BkzLaImvUmYM+g4ymC0rshQvBbSKEcvY1UW85zwrtCeZgT7huF7mpEC8GVVsFv0fTnB8A5RnCjWAJlfjW0vNP4VKw7ofsh7dGQKHiQuo8M5KO3UWU2RN+6QDQps68ugRiuL2PYRqIzuYVSxSS4m665xfoE/yT751NLi3ylHExZtAjK7aDQBm/XhL+Hj9KaxAdlmGautnbhFidPJsYE+wOg9LSAkO8/fhRAuAAtLy9bAe+F1sQWh+1Wz+DrmkjXadWRGw29f1FpdeXiLSjQiRK/HH7/MxT3r81WZKe4aBI6iYEdGvfZmh03mxHYrXMgCe/ZFgbjO1fWrAcgwiwo1bMcAxJs5jKYB6D8zKj3vp+iAfHoCf7aG0fwMkahV3fzqwbTOJl7LVa2PMjF1WrrEU6aiv0ihlno8G6WbdxllzBp5RzIimZFlFjpo+yqURRhC5jsVt/9fy9WS9wSz4Qx9WJKiUW87ndJgGtP1Ucg6rt2hnQ3O3kVidzAOlOw+1d19K5aumpQF9qf37iE0VIh4qfq8vx8sW90Kk9uj+GHwx9y3Jw//TAmKBDcObELIn8nmJmWpsjxX6OPAZpMiHixhwt0TXEsbDDst2JAfXNk/UW3u0LHkUZSoHP0KAfqf1yPanQ5N6to5waHnNSLnMEbETFYp6B3v7nlSIGM3JWPFy1v8hklhyfZwTftFT0JbYeWMI5Re4CHwg9+Mc7C4zLfvaYAoOqtj8E/GLjnZMC4PLfcY7S5V9gXHxpc1KAW7E2g1dL5S+oyX5kpLVnhVBT4GcTZdqdr8MYKKwmb1Welp0JG0ppwX+SIK7sKYBSqKNe0sk1lxoQ8f8GMWNUuF/Ua/yO53FKTk/rwUyO1P9/Iez6wcAyzgzXlwHuo//3IqCgF8BoaNPvNHFSVlUL56GrIJAoj+p2wnKnZTpy6qYgfQn0Aj+FPFwU0vHbOXpSF6VWxgAnf0XmEDJ9ltwAB8wk17pO0N\\",\\"Kkq2ZV4Kw81fy0iEWZ43lw==\\",\\"A2II5DBjcdz1O5lcalkaJQ==\\"]"}',
+  signal: [AbortSignal],
+  allowAbsoluteUrls: true,
+  metadata: [Object],
+  'axios-retry': [Object]
+},
+request: <ref *1> ClientRequest {
+  _events: [Object: null prototype],
+  _eventsCount: 7,
+  _maxListeners: undefined,
+  outputData: [],
+  outputSize: 0,
+  writable: true,
+  destroyed: true,
+  _last: false,
+  chunkedEncoding: false,
+  shouldKeepAlive: true,
+  maxRequestsOnConnectionReached: false,
+  _defaultKeepAlive: true,
+  useChunkedEncodingByDefault: true,
+  sendDate: false,
+  _removedConnection: false,
+  _removedContLen: false,
+  _removedTE: false,
+  strictContentLength: false,
+  _contentLength: '1329',
+  _hasBody: true,
+  _trailer: '',
+  finished: true,
+  _headerSent: true,
+  _closed: true,
+  socket: [TLSSocket],
+  _header: 'POST /kong/blur/v1/collection-bids/submit HTTP/1.1\r\n' +
+    'Accept: application/json, text/plain, */*\r\n' +
+    'Content-Type: application/json\r\n' +
+    'authToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ3YWxsZXRBZGRyZXNzIjoiMHgxYjhhZmQwZGU4YTkzNjhjZTYzNWJlOGI5NTcyYzY1ZDhmNTkwYjIxIiwic2lnbmF0dXJlIjoiMHgwZWE3YzVkYzhmMzE5ZTNmMzM1ZmRiMDcyZDdkY2IxNWU3ZTI2MTEyY2JiN2ExZjk0N2E1NTVhODU1ZTM3OTRkNGU0YWE4ZTcwYTY3ZjJhYmYzNzc5ZWQyMGY5OTY0ZWNlMWQ3YzQwNDQ3NzVmMWZiODNjNzY4MzhlYTdhOTVkMTFjIiwiaWF0IjoxNzU0NTc3NDczLCJleHAiOjE3NTcxNjk0NzN9.9MiHR1V9_pRnw7Fdbpf7FMdrNEPV9wTQVtpnXV8eyCw\r\n' +
+    'walletAddress: 0x1b8afd0de8a9368ce635be8b9572c65d8f590b21\r\n' +
+    'x-api-key: 11e5f5808c0d472c9bd75e069f3139d6\r\n' +
+    'User-Agent: axios/1.9.0\r\n' +
+    'Content-Length: 1329\r\n' +
+    'Accept-Encoding: gzip, compress, deflate, br\r\n' +
+    'Host: nfttools.pro\r\n' +
+    'Connection: keep-alive\r\n' +
+    '\r\n',
+  _keepAliveTimeout: 0,
+  _onPendingData: [Function: nop],
+  agent: [Agent],
+  socketPath: undefined,
+  method: 'POST',
+  maxHeaderSize: undefined,
+  insecureHTTPParser: undefined,
+  joinDuplicateHeaders: undefined,
+  path: '/kong/blur/v1/collection-bids/submit',
+  _ended: true,
+  res: [IncomingMessage],
+  aborted: false,
+  timeoutCb: null,
+  upgradeOrConnect: false,
+  parser: null,
+  maxHeadersCount: null,
+  reusedSocket: false,
+  host: 'nfttools.pro',
+  protocol: 'https:',
+  _redirectable: [Writable],
+  [Symbol(kCapture)]: false,
+  [Symbol(kBytesWritten)]: 0,
+  [Symbol(kNeedDrain)]: false,
+  [Symbol(corked)]: 0,
+  [Symbol(kOutHeaders)]: [Object: null prototype],
+  [Symbol(errored)]: null,
+  [Symbol(kHighWaterMark)]: 16384,
+  [Symbol(kRejectNonStandardBodyWrites)]: false,
+  [Symbol(kUniqueHeaders)]: null
+},
+data: [
+  'Blur bidding rate limit exceeded. (max 40 bids per 10 seconds)'
+]
+},
+status: 400
+}
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BIDDING_AxiosError
+Failed to submit Blur bid for collection lilpudgys at price 0.01 BETH: Blur bidding rate limit exceeded. (max 40 bids per 10 seconds) AxiosError: Request failed with status code 400
+at settle (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/core/settle.js:19:12)
+at IncomingMessage.handleStreamEnd (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/adapters/http.js:599:11)
+at IncomingMessage.emit (node:events:526:35)
+at IncomingMessage.emit (node:domain:488:12)
+at endReadableNT (node:internal/streams/readable:1408:12)
+at processTicksAndRejections (node:internal/process/task_queues:82:21)
+at Axios.request (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/core/Axios.js:45:41)
+at processTicksAndRejections (node:internal/process/task_queues:95:5) {
+code: 'ERR_BAD_REQUEST',
+config: {
+transitional: {
+  silentJSONParsing: true,
+  forcedJSONParsing: true,
+  clarifyTimeoutError: false
+},
+adapter: [ 'xhr', 'http', 'fetch' ],
+transformRequest: [ [Function: transformRequest] ],
+transformResponse: [ [Function: transformResponse] ],
+timeout: 30000,
+xsrfCookieName: 'XSRF-TOKEN',
+xsrfHeaderName: 'X-XSRF-TOKEN',
+maxContentLength: -1,
+maxBodyLength: -1,
+env: { FormData: [Function [FormData]], Blob: [class Blob] },
+validateStatus: [Function: validateStatus],
+headers: Object [AxiosHeaders] {
+  Accept: 'application/json, text/plain, */*',
+  'Content-Type': 'application/json',
+  authToken: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ3YWxsZXRBZGRyZXNzIjoiMHgxYjhhZmQwZGU4YTkzNjhjZTYzNWJlOGI5NTcyYzY1ZDhmNTkwYjIxIiwic2lnbmF0dXJlIjoiMHgwZWE3YzVkYzhmMzE5ZTNmMzM1ZmRiMDcyZDdkY2IxNWU3ZTI2MTEyY2JiN2ExZjk0N2E1NTVhODU1ZTM3OTRkNGU0YWE4ZTcwYTY3ZjJhYmYzNzc5ZWQyMGY5OTY0ZWNlMWQ3YzQwNDQ3NzVmMWZiODNjNzY4MzhlYTdhOTVkMTFjIiwiaWF0IjoxNzU0NTc3NDczLCJleHAiOjE3NTcxNjk0NzN9.9MiHR1V9_pRnw7Fdbpf7FMdrNEPV9wTQVtpnXV8eyCw',
+  walletAddress: '0x1b8afd0de8a9368ce635be8b9572c65d8f590b21',
+  'x-api-key': '11e5f5808c0d472c9bd75e069f3139d6',
+  'User-Agent': 'axios/1.9.0',
+  'Content-Length': '1325',
+  'Accept-Encoding': 'gzip, compress, deflate, br'
+},
+method: 'post',
+url: 'https://nfttools.pro/kong/blur/v1/collection-bids/submit',
+data: '{"signature":"0x6a6e54c6a04544bfd80fb77a09b963c94b2325450de8168408c74f331029baaa17b3c822f5a998395a3f7d1b3abb19b277191412dfb62a45d5229b9a2dfa1bb41b","marketplaceData":"[\\"Z0IMybAGKyocFxYalVdKL02xEzUxCJKVTQpaDKmA/+kbw5tXA4qy80AvERL7EVPhPqibDbdICjNqVF2t9o4UtfqBF3/EaOx8YZAmfabPCW/D8Tr8qW8r0QYB/4jHSgkD7i3tr3ITEwH/BGzcMQEucyMiRNEuWt+c6VpvOEsQWW2B8fA74HVysspWrFQ05b0LDv1musX/S6NJgydTS0OMbHyNjyUJ3rYKmrA+gHiEmVS8wnktkU5vU+eQ9bhd996Llw5eGFDTj1PPDt6c7g5wTeDNFGQbm6RyygPHqlMsXaYqVl4HCWcqbU8VpoqAzK9h8lskjltqZg5BGDNqo2DkR0lUceK21oUGB4b6+MI9PDgD1MzNfuSdi/PqTaNd9eRT26zVE9+68u8E0gVWP7pTAcLPapwoLyni7o5PUj8ycEoGb8ZtrcF/WZ9V0vbcRQ3tzy2dsC0GhepyUxAWpcz07NmqlkMOoYmKGpKYOgYIlGtE+ka/aAnqmlGmdcYScCQjZBWCVQIR9o0+VWETSdy1UBBkj84l0xLvQwqrX/GWU9kKFkBX72wpBOPdFaeGr2vOBnyQzLSv27A4iMlt2KePJJBcWsp+Uyfv8bR6gDiFD9cbZa9eAarJwYD3roiEPkRclcAE0OTIJUdiXlwzRuH/9P6hpj1jzx3tKBByxohAv2NY6/Uijye5u3brymaFQicak8sL8jp1HPv+oWL54plKT25Vo3lyhwmSw4gPvBtTWkPodj2cKFrj5LEUq1MKSnV0SDw5cXBZDLoZp/mcU+ZBs3LTZ6mzLF0RULNMTQh8dfF58WYz5P13pTzdf6bTubDx6gWxMB+umlegGBDvuio8XY3IjbFjtQoYaoMnrCseTjSLcxBKg/JgePAIe+Mp4biuCmP75eWXCYOPbXriQ1YsbFrH9jQRQgSexTNySixwKAbtZbpBWnu1eClqxParNePpW8k9Uij/tUFBI+7ftP5/RLYmjQZyGw7u6KmyXl1lrx1lqZp0lfY6Mqs0xc6WyZMfs5XvBzqt2Z7oWHvTmjqJQwkiqkdQ7JEYi2K+DbNmA+6PYM20I6zkPTsSN51MOUd6/A==\\",\\"AvJzupnUVnPoQlCqoC3L5g==\\",\\"KPe6nxnXnp8alSO0qaJrqw==\\"]"}',
+signal: AbortSignal { aborted: false },
+allowAbsoluteUrls: true,
+metadata: { startTime: 1754577630272, jobId: undefined },
+'axios-retry': {
+  retries: 3,
+  retryCondition: [AsyncFunction: retryCondition],
+  retryDelay: [Function: retryDelay],
+  shouldResetTimeout: false,
+  onRetry: [Function: onRetry],
+  onMaxRetryTimesExceeded: [Function: onMaxRetryTimesExceeded],
+  validateResponse: null,
+  retryCount: 0,
+  lastRequestTime: 1754577630272
+}
+},
+request: <ref *1> ClientRequest {
+_events: [Object: null prototype] {
+  abort: [Function (anonymous)],
+  aborted: [Function (anonymous)],
+  connect: [Function (anonymous)],
+  error: [Function (anonymous)],
+  socket: [Function (anonymous)],
+  timeout: [Function (anonymous)],
+  finish: [Function: requestOnFinish]
+},
+_eventsCount: 7,
+_maxListeners: undefined,
+outputData: [],
+outputSize: 0,
+writable: true,
+destroyed: true,
+_last: false,
+chunkedEncoding: false,
+shouldKeepAlive: true,
+maxRequestsOnConnectionReached: false,
+_defaultKeepAlive: true,
+useChunkedEncodingByDefault: true,
+sendDate: false,
+_removedConnection: false,
+_removedContLen: false,
+_removedTE: false,
+strictContentLength: false,
+_contentLength: '1325',
+_hasBody: true,
+_trailer: '',
+finished: true,
+_headerSent: true,
+_closed: true,
+socket: TLSSocket {
+  _tlsOptions: [Object],
+  _secureEstablished: true,
+  _securePending: false,
+  _newSessionPending: false,
+  _controlReleased: true,
+  secureConnecting: false,
+  _SNICallback: null,
+  servername: 'nfttools.pro',
+  alpnProtocol: false,
+  authorized: true,
+  authorizationError: null,
+  encrypted: true,
+  _events: [Object: null prototype],
+  _eventsCount: 9,
+  connecting: false,
+  _hadError: false,
+  _parent: null,
+  _host: 'nfttools.pro',
+  _closeAfterHandlingError: false,
+  _readableState: [ReadableState],
+  _maxListeners: undefined,
+  _writableState: [WritableState],
+  allowHalfOpen: false,
+  _sockname: null,
+  _pendingData: null,
+  _pendingEncoding: '',
+  server: undefined,
+  _server: null,
+  ssl: [TLSWrap],
+  _requestCert: true,
+  _rejectUnauthorized: true,
+  timeout: 5000,
+  parser: null,
+  _httpMessage: null,
+  [Symbol(alpncallback)]: null,
+  [Symbol(res)]: [TLSWrap],
+  [Symbol(verified)]: true,
+  [Symbol(pendingSession)]: null,
+  [Symbol(async_id_symbol)]: -1,
+  [Symbol(kHandle)]: [TLSWrap],
+  [Symbol(lastWriteQueueSize)]: 0,
+  [Symbol(timeout)]: Timeout {
+    _idleTimeout: 5000,
+    _idlePrev: [Timeout],
+    _idleNext: [Timeout],
+    _idleStart: 422785,
+    _onTimeout: [Function: bound ],
+    _timerArgs: undefined,
+    _repeat: null,
+    _destroyed: false,
+    [Symbol(refed)]: false,
+    [Symbol(kHasPrimitive)]: false,
+    [Symbol(asyncId)]: 740521,
+    [Symbol(triggerId)]: 740519
+  },
+  [Symbol(kBuffer)]: null,
+  [Symbol(kBufferCb)]: null,
+  [Symbol(kBufferGen)]: null,
+  [Symbol(kCapture)]: false,
+  [Symbol(kSetNoDelay)]: false,
+  [Symbol(kSetKeepAlive)]: true,
+  [Symbol(kSetKeepAliveInitialDelay)]: 1,
+  [Symbol(kBytesRead)]: 0,
+  [Symbol(kBytesWritten)]: 0,
+  [Symbol(connect-options)]: [Object]
+},
+_header: 'POST /kong/blur/v1/collection-bids/submit HTTP/1.1\r\n' +
+  'Accept: application/json, text/plain, */*\r\n' +
+  'Content-Type: application/json\r\n' +
+  'authToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ3YWxsZXRBZGRyZXNzIjoiMHgxYjhhZmQwZGU4YTkzNjhjZTYzNWJlOGI5NTcyYzY1ZDhmNTkwYjIxIiwic2lnbmF0dXJlIjoiMHgwZWE3YzVkYzhmMzE5ZTNmMzM1ZmRiMDcyZDdkY2IxNWU3ZTI2MTEyY2JiN2ExZjk0N2E1NTVhODU1ZTM3OTRkNGU0YWE4ZTcwYTY3ZjJhYmYzNzc5ZWQyMGY5OTY0ZWNlMWQ3YzQwNDQ3NzVmMWZiODNjNzY4MzhlYTdhOTVkMTFjIiwiaWF0IjoxNzU0NTc3NDczLCJleHAiOjE3NTcxNjk0NzN9.9MiHR1V9_pRnw7Fdbpf7FMdrNEPV9wTQVtpnXV8eyCw\r\n' +
+  'walletAddress: 0x1b8afd0de8a9368ce635be8b9572c65d8f590b21\r\n' +
+  'x-api-key: 11e5f5808c0d472c9bd75e069f3139d6\r\n' +
+  'User-Agent: axios/1.9.0\r\n' +
+  'Content-Length: 1325\r\n' +
+  'Accept-Encoding: gzip, compress, deflate, br\r\n' +
+  'Host: nfttools.pro\r\n' +
+  'Connection: keep-alive\r\n' +
+  '\r\n',
+_keepAliveTimeout: 0,
+_onPendingData: [Function: nop],
+agent: Agent {
+  _events: [Object: null prototype],
+  _eventsCount: 2,
+  _maxListeners: undefined,
+  defaultPort: 443,
+  protocol: 'https:',
+  options: [Object: null prototype],
+  requests: [Object: null prototype] {},
+  sockets: [Object: null prototype],
+  freeSockets: [Object: null prototype],
+  keepAliveMsecs: 1000,
+  keepAlive: true,
+  maxSockets: Infinity,
+  maxFreeSockets: 256,
+  scheduling: 'lifo',
+  maxTotalSockets: Infinity,
+  totalSocketCount: 35,
+  maxCachedSessions: 100,
+  _sessionCache: [Object],
+  [Symbol(kCapture)]: false
+},
+socketPath: undefined,
+method: 'POST',
+maxHeaderSize: undefined,
+insecureHTTPParser: undefined,
+joinDuplicateHeaders: undefined,
+path: '/kong/blur/v1/collection-bids/submit',
+_ended: true,
+res: IncomingMessage {
+  _readableState: [ReadableState],
+  _events: [Object: null prototype],
+  _eventsCount: 4,
+  _maxListeners: undefined,
+  socket: null,
+  httpVersionMajor: 1,
+  httpVersionMinor: 1,
+  httpVersion: '1.1',
+  complete: true,
+  rawHeaders: [Array],
+  rawTrailers: [],
+  joinDuplicateHeaders: undefined,
+  aborted: false,
+  upgrade: false,
+  url: '',
+  method: null,
+  statusCode: 400,
+  statusMessage: 'Bad Request',
+  client: [TLSSocket],
+  _consuming: false,
+  _dumped: false,
+  req: [Circular *1],
+  responseUrl: 'https://nfttools.pro/kong/blur/v1/collection-bids/submit',
+  redirects: [],
+  [Symbol(kCapture)]: false,
+  [Symbol(kHeaders)]: [Object],
+  [Symbol(kHeadersCount)]: 56,
+  [Symbol(kTrailers)]: null,
+  [Symbol(kTrailersCount)]: 0
+},
+aborted: false,
+timeoutCb: null,
+upgradeOrConnect: false,
+parser: null,
+maxHeadersCount: null,
+reusedSocket: false,
+host: 'nfttools.pro',
+protocol: 'https:',
+_redirectable: Writable {
+  _writableState: [WritableState],
+  _events: [Object: null prototype],
+  _eventsCount: 3,
+  _maxListeners: undefined,
+  _options: [Object],
+  _ended: true,
+  _ending: true,
+  _redirectCount: 0,
+  _redirects: [],
+  _requestBodyLength: 1325,
+  _requestBodyBuffers: [],
+  _onNativeResponse: [Function (anonymous)],
+  _currentRequest: [Circular *1],
+  _currentUrl: 'https://nfttools.pro/kong/blur/v1/collection-bids/submit',
+  _timeout: null,
+  [Symbol(kCapture)]: false
+},
+[Symbol(kCapture)]: false,
+[Symbol(kBytesWritten)]: 0,
+[Symbol(kNeedDrain)]: false,
+[Symbol(corked)]: 0,
+[Symbol(kOutHeaders)]: [Object: null prototype] {
+  accept: [Array],
+  'content-type': [Array],
+  authtoken: [Array],
+  walletaddress: [Array],
+  'x-api-key': [Array],
+  'user-agent': [Array],
+  'content-length': [Array],
+  'accept-encoding': [Array],
+  host: [Array]
+},
+[Symbol(errored)]: null,
+[Symbol(kHighWaterMark)]: 16384,
+[Symbol(kRejectNonStandardBodyWrites)]: false,
+[Symbol(kUniqueHeaders)]: null
+},
+response: {
+status: 400,
+statusText: 'Bad Request',
+headers: Object [AxiosHeaders] {
+  'content-type': 'application/json; charset=utf-8',
+  'content-length': '66',
+  'x-ratelimit-remaining-second': '97',
+  'x-ratelimit-limit-second': '100',
+  'ratelimit-limit': '100',
+  'ratelimit-remaining': '97',
+  'ratelimit-reset': '1',
+  'x-cache-key': '0f744befe08ee1d2459d2506f261c9710dd0511e25f1f6f25af808c546f2cebe',
+  'x-cache-status': 'Bypass',
+  'x-powered-by': 'Express',
+  date: 'Thu, 07 Aug 2025 14:40:32 GMT',
+  'cf-ray': '96b7879c9c6641b2-EWR',
+  etag: 'W/"44-McWaoNlzt3iglN2odEGCDEADErE"',
+  vary: 'Origin',
+  'retry-after': '59',
+  'cf-cache-status': 'DYNAMIC',
+  'set-cookie': [Array],
+  server: 'cloudflare',
+  'x-kong-upstream-latency': '138',
+  'x-kong-proxy-latency': '1',
+  via: '1.1 kong/3.8.0',
+  'x-kong-request-id': '93b0c35c2f9c9757a5726107f2d50176',
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS, PATCH',
+  'access-control-allow-headers': '*',
+  'access-control-max-age': '3600',
+  'access-control-expose-headers': '*'
+},
+config: {
+  transitional: [Object],
+  adapter: [Array],
+  transformRequest: [Array],
+  transformResponse: [Array],
+  timeout: 30000,
+  xsrfCookieName: 'XSRF-TOKEN',
+  xsrfHeaderName: 'X-XSRF-TOKEN',
+  maxContentLength: -1,
+  maxBodyLength: -1,
+  env: [Object],
+  validateStatus: [Function: validateStatus],
+  headers: [Object [AxiosHeaders]],
+  method: 'post',
+  url: 'https://nfttools.pro/kong/blur/v1/collection-bids/submit',
+  data: '{"signature":"0x6a6e54c6a04544bfd80fb77a09b963c94b2325450de8168408c74f331029baaa17b3c822f5a998395a3f7d1b3abb19b277191412dfb62a45d5229b9a2dfa1bb41b","marketplaceData":"[\\"Z0IMybAGKyocFxYalVdKL02xEzUxCJKVTQpaDKmA/+kbw5tXA4qy80AvERL7EVPhPqibDbdICjNqVF2t9o4UtfqBF3/EaOx8YZAmfabPCW/D8Tr8qW8r0QYB/4jHSgkD7i3tr3ITEwH/BGzcMQEucyMiRNEuWt+c6VpvOEsQWW2B8fA74HVysspWrFQ05b0LDv1musX/S6NJgydTS0OMbHyNjyUJ3rYKmrA+gHiEmVS8wnktkU5vU+eQ9bhd996Llw5eGFDTj1PPDt6c7g5wTeDNFGQbm6RyygPHqlMsXaYqVl4HCWcqbU8VpoqAzK9h8lskjltqZg5BGDNqo2DkR0lUceK21oUGB4b6+MI9PDgD1MzNfuSdi/PqTaNd9eRT26zVE9+68u8E0gVWP7pTAcLPapwoLyni7o5PUj8ycEoGb8ZtrcF/WZ9V0vbcRQ3tzy2dsC0GhepyUxAWpcz07NmqlkMOoYmKGpKYOgYIlGtE+ka/aAnqmlGmdcYScCQjZBWCVQIR9o0+VWETSdy1UBBkj84l0xLvQwqrX/GWU9kKFkBX72wpBOPdFaeGr2vOBnyQzLSv27A4iMlt2KePJJBcWsp+Uyfv8bR6gDiFD9cbZa9eAarJwYD3roiEPkRclcAE0OTIJUdiXlwzRuH/9P6hpj1jzx3tKBByxohAv2NY6/Uijye5u3brymaFQicak8sL8jp1HPv+oWL54plKT25Vo3lyhwmSw4gPvBtTWkPodj2cKFrj5LEUq1MKSnV0SDw5cXBZDLoZp/mcU+ZBs3LTZ6mzLF0RULNMTQh8dfF58WYz5P13pTzdf6bTubDx6gWxMB+umlegGBDvuio8XY3IjbFjtQoYaoMnrCseTjSLcxBKg/JgePAIe+Mp4biuCmP75eWXCYOPbXriQ1YsbFrH9jQRQgSexTNySixwKAbtZbpBWnu1eClqxParNePpW8k9Uij/tUFBI+7ftP5/RLYmjQZyGw7u6KmyXl1lrx1lqZp0lfY6Mqs0xc6WyZMfs5XvBzqt2Z7oWHvTmjqJQwkiqkdQ7JEYi2K+DbNmA+6PYM20I6zkPTsSN51MOUd6/A==\\",\\"AvJzupnUVnPoQlCqoC3L5g==\\",\\"KPe6nxnXnp8alSO0qaJrqw==\\"]"}',
+  signal: [AbortSignal],
+  allowAbsoluteUrls: true,
+  metadata: [Object],
+  'axios-retry': [Object]
+},
+request: <ref *1> ClientRequest {
+  _events: [Object: null prototype],
+  _eventsCount: 7,
+  _maxListeners: undefined,
+  outputData: [],
+  outputSize: 0,
+  writable: true,
+  destroyed: true,
+  _last: false,
+  chunkedEncoding: false,
+  shouldKeepAlive: true,
+  maxRequestsOnConnectionReached: false,
+  _defaultKeepAlive: true,
+  useChunkedEncodingByDefault: true,
+  sendDate: false,
+  _removedConnection: false,
+  _removedContLen: false,
+  _removedTE: false,
+  strictContentLength: false,
+  _contentLength: '1325',
+  _hasBody: true,
+  _trailer: '',
+  finished: true,
+  _headerSent: true,
+  _closed: true,
+  socket: [TLSSocket],
+  _header: 'POST /kong/blur/v1/collection-bids/submit HTTP/1.1\r\n' +
+    'Accept: application/json, text/plain, */*\r\n' +
+    'Content-Type: application/json\r\n' +
+    'authToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ3YWxsZXRBZGRyZXNzIjoiMHgxYjhhZmQwZGU4YTkzNjhjZTYzNWJlOGI5NTcyYzY1ZDhmNTkwYjIxIiwic2lnbmF0dXJlIjoiMHgwZWE3YzVkYzhmMzE5ZTNmMzM1ZmRiMDcyZDdkY2IxNWU3ZTI2MTEyY2JiN2ExZjk0N2E1NTVhODU1ZTM3OTRkNGU0YWE4ZTcwYTY3ZjJhYmYzNzc5ZWQyMGY5OTY0ZWNlMWQ3YzQwNDQ3NzVmMWZiODNjNzY4MzhlYTdhOTVkMTFjIiwiaWF0IjoxNzU0NTc3NDczLCJleHAiOjE3NTcxNjk0NzN9.9MiHR1V9_pRnw7Fdbpf7FMdrNEPV9wTQVtpnXV8eyCw\r\n' +
+    'walletAddress: 0x1b8afd0de8a9368ce635be8b9572c65d8f590b21\r\n' +
+    'x-api-key: 11e5f5808c0d472c9bd75e069f3139d6\r\n' +
+    'User-Agent: axios/1.9.0\r\n' +
+    'Content-Length: 1325\r\n' +
+    'Accept-Encoding: gzip, compress, deflate, br\r\n' +
+    'Host: nfttools.pro\r\n' +
+    'Connection: keep-alive\r\n' +
+    '\r\n',
+  _keepAliveTimeout: 0,
+  _onPendingData: [Function: nop],
+  agent: [Agent],
+  socketPath: undefined,
+  method: 'POST',
+  maxHeaderSize: undefined,
+  insecureHTTPParser: undefined,
+  joinDuplicateHeaders: undefined,
+  path: '/kong/blur/v1/collection-bids/submit',
+  _ended: true,
+  res: [IncomingMessage],
+  aborted: false,
+  timeoutCb: null,
+  upgradeOrConnect: false,
+  parser: null,
+  maxHeadersCount: null,
+  reusedSocket: false,
+  host: 'nfttools.pro',
+  protocol: 'https:',
+  _redirectable: [Writable],
+  [Symbol(kCapture)]: false,
+  [Symbol(kBytesWritten)]: 0,
+  [Symbol(kNeedDrain)]: false,
+  [Symbol(corked)]: 0,
+  [Symbol(kOutHeaders)]: [Object: null prototype],
+  [Symbol(errored)]: null,
+  [Symbol(kHighWaterMark)]: 16384,
+  [Symbol(kRejectNonStandardBodyWrites)]: false,
+  [Symbol(kUniqueHeaders)]: null
+},
+data: [
+  'Blur bidding rate limit exceeded. (max 40 bids per 10 seconds)'
+]
+},
+status: 400
+}
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BIDDING_AxiosError
+Failed to submit Blur bid for collection lilpudgys at price 0.01 BETH: Blur bidding rate limit exceeded. (max 40 bids per 10 seconds) AxiosError: Request failed with status code 400
+at settle (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/core/settle.js:19:12)
+at IncomingMessage.handleStreamEnd (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/adapters/http.js:599:11)
+at IncomingMessage.emit (node:events:526:35)
+at IncomingMessage.emit (node:domain:488:12)
+at endReadableNT (node:internal/streams/readable:1408:12)
+at processTicksAndRejections (node:internal/process/task_queues:82:21)
+at Axios.request (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/core/Axios.js:45:41)
+at processTicksAndRejections (node:internal/process/task_queues:95:5) {
+code: 'ERR_BAD_REQUEST',
+config: {
+transitional: {
+  silentJSONParsing: true,
+  forcedJSONParsing: true,
+  clarifyTimeoutError: false
+},
+adapter: [ 'xhr', 'http', 'fetch' ],
+transformRequest: [ [Function: transformRequest] ],
+transformResponse: [ [Function: transformResponse] ],
+timeout: 30000,
+xsrfCookieName: 'XSRF-TOKEN',
+xsrfHeaderName: 'X-XSRF-TOKEN',
+maxContentLength: -1,
+maxBodyLength: -1,
+env: { FormData: [Function [FormData]], Blob: [class Blob] },
+validateStatus: [Function: validateStatus],
+headers: Object [AxiosHeaders] {
+  Accept: 'application/json, text/plain, */*',
+  'Content-Type': 'application/json',
+  authToken: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ3YWxsZXRBZGRyZXNzIjoiMHgxYjhhZmQwZGU4YTkzNjhjZTYzNWJlOGI5NTcyYzY1ZDhmNTkwYjIxIiwic2lnbmF0dXJlIjoiMHgwZWE3YzVkYzhmMzE5ZTNmMzM1ZmRiMDcyZDdkY2IxNWU3ZTI2MTEyY2JiN2ExZjk0N2E1NTVhODU1ZTM3OTRkNGU0YWE4ZTcwYTY3ZjJhYmYzNzc5ZWQyMGY5OTY0ZWNlMWQ3YzQwNDQ3NzVmMWZiODNjNzY4MzhlYTdhOTVkMTFjIiwiaWF0IjoxNzU0NTc3NDczLCJleHAiOjE3NTcxNjk0NzN9.9MiHR1V9_pRnw7Fdbpf7FMdrNEPV9wTQVtpnXV8eyCw',
+  walletAddress: '0x1b8afd0de8a9368ce635be8b9572c65d8f590b21',
+  'x-api-key': '11e5f5808c0d472c9bd75e069f3139d6',
+  'User-Agent': 'axios/1.9.0',
+  'Content-Length': '1341',
+  'Accept-Encoding': 'gzip, compress, deflate, br'
+},
+method: 'post',
+url: 'https://nfttools.pro/kong/blur/v1/collection-bids/submit',
+data: '{"signature":"0x8ed67a79157b310250ee09f75119459494f553f1efe12322e5c7662b13719cfd4dc55096edce4a0df22f60f8716ad01e70dc60eb578ee4b375a59b1777e1bb2e1c","marketplaceData":"[\\"g8lLTytd+7sbZA/F8V1vz/3Dhny7m1G1v+S9wvbAc1NRACBHC6M0fUriIJWdWiIz2gQP4prT6EEhOyVB0Xcl+Ue9vz1snFhK3oWlLmV045FRyIR1yiELFHV9kOipUK4NjoKZG9QvofUm1Y0XwjTwWxLv/NJpi83YXrQtkWUIqE3Juc/UaHoIJ7rzYs3whM05zhFf1qjz3Yide0N9DafBUtRfP1fNcx87ykl2x4l9QrLUkApijiln7FcNzM/WjIldCtvJSNedvvfeEpcLLCgzBE+tShv6FvgMO+pLS+HMfYNFn9Hfm5qou+ezgX1e6oKb8UYO4g5QqbH61qSbdGyRvur28+c7YliCM9wD8UcnSxKe6XGAukVX/Mib/6Gh6SpPu7SQWWClwUqTpp4rbTUd8n0fl+WNie6WovzhNyOX2Ap1Q9iw/VUyzu5tFmPI3pwzv3ZtwCz0ChkeP5f/q/wjrCYUkuTzA217TsTgikPNCWNvFM1GeMWz74/CPf1fTxqWALi2CQffqpIgIiRURxFQ+y0Z+WSpPCSRMIw4oQ1HkNFEJZhmskrUtUvfEWvzbBEEEVlI+ax3aMZt+fY41UjAPdErFXN8qawh0Mh/U7SxJ9j0Q7c+nHd5+xXM4pNKm7IRduuGH50Gw2nSahXmY8kR+PUK18AoKj9tMxT6hfy0l3bHH4hiIJkyMZilnjW7NM4OSDB9cP+KRoaXSn9Is7E88ZyyxOMC3NO+9JDYyBL0rSWXXCghbkSOoeB+7TUCKGzgCKiFqsGPC/SS3uQbbIiV/JQ0cThTJq1KCXhf0bTwtZesR8mfOe7QBx+rEpVI+06vw8rhDQ/7YtOt3JUdYsj6PWJnNUw4c/2D8CUynUlViiivhfMSxkbG5v1YAPmi7s2Dx7IIvTSRdSOozJ8EGa2EF5XBXbHaf7TMcs+O+LRoXpdWwD9DmZXiLrinFmri8u7OwuDVeFR7rCdNQtEwFeGAQCmaCnn10hRh/UCR9NjFlVT+fEBrjTJTs3l7qHqG1qKN6aAFONt5uzOOSPWOfjhvdf2N7HEJ78zTKxK+o6dLhyWoY1Gpo4GgF+qk2e2cu5XY5hI/YNC/QeoCYoD9nnHw\\",\\"MptPMapXz755Q6bbYLc05g==\\",\\"1jbSEq8pK5A7UcddCK5RDg==\\"]"}',
+signal: AbortSignal { aborted: false },
+allowAbsoluteUrls: true,
+metadata: { startTime: 1754577632276, jobId: undefined },
+'axios-retry': {
+  retries: 3,
+  retryCondition: [AsyncFunction: retryCondition],
+  retryDelay: [Function: retryDelay],
+  shouldResetTimeout: false,
+  onRetry: [Function: onRetry],
+  onMaxRetryTimesExceeded: [Function: onMaxRetryTimesExceeded],
+  validateResponse: null,
+  retryCount: 0,
+  lastRequestTime: 1754577632276
+}
+},
+request: <ref *1> ClientRequest {
+_events: [Object: null prototype] {
+  abort: [Function (anonymous)],
+  aborted: [Function (anonymous)],
+  connect: [Function (anonymous)],
+  error: [Function (anonymous)],
+  socket: [Function (anonymous)],
+  timeout: [Function (anonymous)],
+  finish: [Function: requestOnFinish]
+},
+_eventsCount: 7,
+_maxListeners: undefined,
+outputData: [],
+outputSize: 0,
+writable: true,
+destroyed: true,
+_last: false,
+chunkedEncoding: false,
+shouldKeepAlive: true,
+maxRequestsOnConnectionReached: false,
+_defaultKeepAlive: true,
+useChunkedEncodingByDefault: true,
+sendDate: false,
+_removedConnection: false,
+_removedContLen: false,
+_removedTE: false,
+strictContentLength: false,
+_contentLength: '1341',
+_hasBody: true,
+_trailer: '',
+finished: true,
+_headerSent: true,
+_closed: true,
+socket: TLSSocket {
+  _tlsOptions: [Object],
+  _secureEstablished: true,
+  _securePending: false,
+  _newSessionPending: false,
+  _controlReleased: true,
+  secureConnecting: false,
+  _SNICallback: null,
+  servername: 'nfttools.pro',
+  alpnProtocol: false,
+  authorized: true,
+  authorizationError: null,
+  encrypted: true,
+  _events: [Object: null prototype],
+  _eventsCount: 11,
+  connecting: false,
+  _hadError: false,
+  _parent: null,
+  _host: 'nfttools.pro',
+  _closeAfterHandlingError: false,
+  _readableState: [ReadableState],
+  _maxListeners: undefined,
+  _writableState: [WritableState],
+  allowHalfOpen: false,
+  _sockname: null,
+  _pendingData: null,
+  _pendingEncoding: '',
+  server: undefined,
+  _server: null,
+  ssl: [TLSWrap],
+  _requestCert: true,
+  _rejectUnauthorized: true,
+  timeout: 30000,
+  parser: [HTTPParser],
+  _httpMessage: [ClientRequest],
+  [Symbol(alpncallback)]: null,
+  [Symbol(res)]: [TLSWrap],
+  [Symbol(verified)]: true,
+  [Symbol(pendingSession)]: null,
+  [Symbol(async_id_symbol)]: 740580,
+  [Symbol(kHandle)]: [TLSWrap],
+  [Symbol(lastWriteQueueSize)]: 2125,
+  [Symbol(timeout)]: Timeout {
+    _idleTimeout: 30000,
+    _idlePrev: [TimersList],
+    _idleNext: [Timeout],
+    _idleStart: 422797,
+    _onTimeout: [Function: bound ],
+    _timerArgs: undefined,
+    _repeat: null,
+    _destroyed: false,
+    [Symbol(refed)]: false,
+    [Symbol(kHasPrimitive)]: false,
+    [Symbol(asyncId)]: 740585,
+    [Symbol(triggerId)]: 740581
+  },
+  [Symbol(kBuffer)]: null,
+  [Symbol(kBufferCb)]: null,
+  [Symbol(kBufferGen)]: null,
+  [Symbol(kCapture)]: false,
+  [Symbol(kSetNoDelay)]: false,
+  [Symbol(kSetKeepAlive)]: true,
+  [Symbol(kSetKeepAliveInitialDelay)]: 60,
+  [Symbol(kBytesRead)]: 0,
+  [Symbol(kBytesWritten)]: 0,
+  [Symbol(connect-options)]: [Object]
+},
+_header: 'POST /kong/blur/v1/collection-bids/submit HTTP/1.1\r\n' +
+  'Accept: application/json, text/plain, */*\r\n' +
+  'Content-Type: application/json\r\n' +
+  'authToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ3YWxsZXRBZGRyZXNzIjoiMHgxYjhhZmQwZGU4YTkzNjhjZTYzNWJlOGI5NTcyYzY1ZDhmNTkwYjIxIiwic2lnbmF0dXJlIjoiMHgwZWE3YzVkYzhmMzE5ZTNmMzM1ZmRiMDcyZDdkY2IxNWU3ZTI2MTEyY2JiN2ExZjk0N2E1NTVhODU1ZTM3OTRkNGU0YWE4ZTcwYTY3ZjJhYmYzNzc5ZWQyMGY5OTY0ZWNlMWQ3YzQwNDQ3NzVmMWZiODNjNzY4MzhlYTdhOTVkMTFjIiwiaWF0IjoxNzU0NTc3NDczLCJleHAiOjE3NTcxNjk0NzN9.9MiHR1V9_pRnw7Fdbpf7FMdrNEPV9wTQVtpnXV8eyCw\r\n' +
+  'walletAddress: 0x1b8afd0de8a9368ce635be8b9572c65d8f590b21\r\n' +
+  'x-api-key: 11e5f5808c0d472c9bd75e069f3139d6\r\n' +
+  'User-Agent: axios/1.9.0\r\n' +
+  'Content-Length: 1341\r\n' +
+  'Accept-Encoding: gzip, compress, deflate, br\r\n' +
+  'Host: nfttools.pro\r\n' +
+  'Connection: keep-alive\r\n' +
+  '\r\n',
+_keepAliveTimeout: 0,
+_onPendingData: [Function: nop],
+agent: Agent {
+  _events: [Object: null prototype],
+  _eventsCount: 2,
+  _maxListeners: undefined,
+  defaultPort: 443,
+  protocol: 'https:',
+  options: [Object: null prototype],
+  requests: [Object: null prototype] {},
+  sockets: [Object: null prototype],
+  freeSockets: [Object: null prototype],
+  keepAliveMsecs: 1000,
+  keepAlive: true,
+  maxSockets: Infinity,
+  maxFreeSockets: 256,
+  scheduling: 'lifo',
+  maxTotalSockets: Infinity,
+  totalSocketCount: 35,
+  maxCachedSessions: 100,
+  _sessionCache: [Object],
+  [Symbol(kCapture)]: false
+},
+socketPath: undefined,
+method: 'POST',
+maxHeaderSize: undefined,
+insecureHTTPParser: undefined,
+joinDuplicateHeaders: undefined,
+path: '/kong/blur/v1/collection-bids/submit',
+_ended: true,
+res: IncomingMessage {
+  _readableState: [ReadableState],
+  _events: [Object: null prototype],
+  _eventsCount: 4,
+  _maxListeners: undefined,
+  socket: null,
+  httpVersionMajor: 1,
+  httpVersionMinor: 1,
+  httpVersion: '1.1',
+  complete: true,
+  rawHeaders: [Array],
+  rawTrailers: [],
+  joinDuplicateHeaders: undefined,
+  aborted: false,
+  upgrade: false,
+  url: '',
+  method: null,
+  statusCode: 400,
+  statusMessage: 'Bad Request',
+  client: [TLSSocket],
+  _consuming: false,
+  _dumped: false,
+  req: [Circular *1],
+  responseUrl: 'https://nfttools.pro/kong/blur/v1/collection-bids/submit',
+  redirects: [],
+  [Symbol(kCapture)]: false,
+  [Symbol(kHeaders)]: [Object],
+  [Symbol(kHeadersCount)]: 56,
+  [Symbol(kTrailers)]: null,
+  [Symbol(kTrailersCount)]: 0
+},
+aborted: false,
+timeoutCb: null,
+upgradeOrConnect: false,
+parser: null,
+maxHeadersCount: null,
+reusedSocket: true,
+host: 'nfttools.pro',
+protocol: 'https:',
+_redirectable: Writable {
+  _writableState: [WritableState],
+  _events: [Object: null prototype],
+  _eventsCount: 3,
+  _maxListeners: undefined,
+  _options: [Object],
+  _ended: true,
+  _ending: true,
+  _redirectCount: 0,
+  _redirects: [],
+  _requestBodyLength: 1341,
+  _requestBodyBuffers: [],
+  _onNativeResponse: [Function (anonymous)],
+  _currentRequest: [Circular *1],
+  _currentUrl: 'https://nfttools.pro/kong/blur/v1/collection-bids/submit',
+  _timeout: null,
+  [Symbol(kCapture)]: false
+},
+[Symbol(kCapture)]: false,
+[Symbol(kBytesWritten)]: 0,
+[Symbol(kNeedDrain)]: false,
+[Symbol(corked)]: 0,
+[Symbol(kOutHeaders)]: [Object: null prototype] {
+  accept: [Array],
+  'content-type': [Array],
+  authtoken: [Array],
+  walletaddress: [Array],
+  'x-api-key': [Array],
+  'user-agent': [Array],
+  'content-length': [Array],
+  'accept-encoding': [Array],
+  host: [Array]
+},
+[Symbol(errored)]: null,
+[Symbol(kHighWaterMark)]: 16384,
+[Symbol(kRejectNonStandardBodyWrites)]: false,
+[Symbol(kUniqueHeaders)]: null
+},
+response: {
+status: 400,
+statusText: 'Bad Request',
+headers: Object [AxiosHeaders] {
+  'content-type': 'application/json; charset=utf-8',
+  'content-length': '66',
+  'x-ratelimit-remaining-second': '93',
+  'x-ratelimit-limit-second': '100',
+  'ratelimit-limit': '100',
+  'ratelimit-remaining': '93',
+  'ratelimit-reset': '1',
+  'x-cache-key': '0f744befe08ee1d2459d2506f261c9710dd0511e25f1f6f25af808c546f2cebe',
+  'x-cache-status': 'Bypass',
+  'x-powered-by': 'Express',
+  date: 'Thu, 07 Aug 2025 14:40:32 GMT',
+  'cf-ray': '96b7879cce444bbd-BUF',
+  etag: 'W/"44-McWaoNlzt3iglN2odEGCDEADErE"',
+  vary: 'Origin',
+  'retry-after': '59',
+  'cf-cache-status': 'DYNAMIC',
+  'set-cookie': [Array],
+  server: 'cloudflare',
+  'x-kong-upstream-latency': '94',
+  'x-kong-proxy-latency': '1',
+  via: '1.1 kong/3.8.0',
+  'x-kong-request-id': 'f6392d375435377c009a7775423c8e5b',
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS, PATCH',
+  'access-control-allow-headers': '*',
+  'access-control-max-age': '3600',
+  'access-control-expose-headers': '*'
+},
+config: {
+  transitional: [Object],
+  adapter: [Array],
+  transformRequest: [Array],
+  transformResponse: [Array],
+  timeout: 30000,
+  xsrfCookieName: 'XSRF-TOKEN',
+  xsrfHeaderName: 'X-XSRF-TOKEN',
+  maxContentLength: -1,
+  maxBodyLength: -1,
+  env: [Object],
+  validateStatus: [Function: validateStatus],
+  headers: [Object [AxiosHeaders]],
+  method: 'post',
+  url: 'https://nfttools.pro/kong/blur/v1/collection-bids/submit',
+  data: '{"signature":"0x8ed67a79157b310250ee09f75119459494f553f1efe12322e5c7662b13719cfd4dc55096edce4a0df22f60f8716ad01e70dc60eb578ee4b375a59b1777e1bb2e1c","marketplaceData":"[\\"g8lLTytd+7sbZA/F8V1vz/3Dhny7m1G1v+S9wvbAc1NRACBHC6M0fUriIJWdWiIz2gQP4prT6EEhOyVB0Xcl+Ue9vz1snFhK3oWlLmV045FRyIR1yiELFHV9kOipUK4NjoKZG9QvofUm1Y0XwjTwWxLv/NJpi83YXrQtkWUIqE3Juc/UaHoIJ7rzYs3whM05zhFf1qjz3Yide0N9DafBUtRfP1fNcx87ykl2x4l9QrLUkApijiln7FcNzM/WjIldCtvJSNedvvfeEpcLLCgzBE+tShv6FvgMO+pLS+HMfYNFn9Hfm5qou+ezgX1e6oKb8UYO4g5QqbH61qSbdGyRvur28+c7YliCM9wD8UcnSxKe6XGAukVX/Mib/6Gh6SpPu7SQWWClwUqTpp4rbTUd8n0fl+WNie6WovzhNyOX2Ap1Q9iw/VUyzu5tFmPI3pwzv3ZtwCz0ChkeP5f/q/wjrCYUkuTzA217TsTgikPNCWNvFM1GeMWz74/CPf1fTxqWALi2CQffqpIgIiRURxFQ+y0Z+WSpPCSRMIw4oQ1HkNFEJZhmskrUtUvfEWvzbBEEEVlI+ax3aMZt+fY41UjAPdErFXN8qawh0Mh/U7SxJ9j0Q7c+nHd5+xXM4pNKm7IRduuGH50Gw2nSahXmY8kR+PUK18AoKj9tMxT6hfy0l3bHH4hiIJkyMZilnjW7NM4OSDB9cP+KRoaXSn9Is7E88ZyyxOMC3NO+9JDYyBL0rSWXXCghbkSOoeB+7TUCKGzgCKiFqsGPC/SS3uQbbIiV/JQ0cThTJq1KCXhf0bTwtZesR8mfOe7QBx+rEpVI+06vw8rhDQ/7YtOt3JUdYsj6PWJnNUw4c/2D8CUynUlViiivhfMSxkbG5v1YAPmi7s2Dx7IIvTSRdSOozJ8EGa2EF5XBXbHaf7TMcs+O+LRoXpdWwD9DmZXiLrinFmri8u7OwuDVeFR7rCdNQtEwFeGAQCmaCnn10hRh/UCR9NjFlVT+fEBrjTJTs3l7qHqG1qKN6aAFONt5uzOOSPWOfjhvdf2N7HEJ78zTKxK+o6dLhyWoY1Gpo4GgF+qk2e2cu5XY5hI/YNC/QeoCYoD9nnHw\\",\\"MptPMapXz755Q6bbYLc05g==\\",\\"1jbSEq8pK5A7UcddCK5RDg==\\"]"}',
+  signal: [AbortSignal],
+  allowAbsoluteUrls: true,
+  metadata: [Object],
+  'axios-retry': [Object]
+},
+request: <ref *1> ClientRequest {
+  _events: [Object: null prototype],
+  _eventsCount: 7,
+  _maxListeners: undefined,
+  outputData: [],
+  outputSize: 0,
+  writable: true,
+  destroyed: true,
+  _last: false,
+  chunkedEncoding: false,
+  shouldKeepAlive: true,
+  maxRequestsOnConnectionReached: false,
+  _defaultKeepAlive: true,
+  useChunkedEncodingByDefault: true,
+  sendDate: false,
+  _removedConnection: false,
+  _removedContLen: false,
+  _removedTE: false,
+  strictContentLength: false,
+  _contentLength: '1341',
+  _hasBody: true,
+  _trailer: '',
+  finished: true,
+  _headerSent: true,
+  _closed: true,
+  socket: [TLSSocket],
+  _header: 'POST /kong/blur/v1/collection-bids/submit HTTP/1.1\r\n' +
+    'Accept: application/json, text/plain, */*\r\n' +
+    'Content-Type: application/json\r\n' +
+    'authToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ3YWxsZXRBZGRyZXNzIjoiMHgxYjhhZmQwZGU4YTkzNjhjZTYzNWJlOGI5NTcyYzY1ZDhmNTkwYjIxIiwic2lnbmF0dXJlIjoiMHgwZWE3YzVkYzhmMzE5ZTNmMzM1ZmRiMDcyZDdkY2IxNWU3ZTI2MTEyY2JiN2ExZjk0N2E1NTVhODU1ZTM3OTRkNGU0YWE4ZTcwYTY3ZjJhYmYzNzc5ZWQyMGY5OTY0ZWNlMWQ3YzQwNDQ3NzVmMWZiODNjNzY4MzhlYTdhOTVkMTFjIiwiaWF0IjoxNzU0NTc3NDczLCJleHAiOjE3NTcxNjk0NzN9.9MiHR1V9_pRnw7Fdbpf7FMdrNEPV9wTQVtpnXV8eyCw\r\n' +
+    'walletAddress: 0x1b8afd0de8a9368ce635be8b9572c65d8f590b21\r\n' +
+    'x-api-key: 11e5f5808c0d472c9bd75e069f3139d6\r\n' +
+    'User-Agent: axios/1.9.0\r\n' +
+    'Content-Length: 1341\r\n' +
+    'Accept-Encoding: gzip, compress, deflate, br\r\n' +
+    'Host: nfttools.pro\r\n' +
+    'Connection: keep-alive\r\n' +
+    '\r\n',
+  _keepAliveTimeout: 0,
+  _onPendingData: [Function: nop],
+  agent: [Agent],
+  socketPath: undefined,
+  method: 'POST',
+  maxHeaderSize: undefined,
+  insecureHTTPParser: undefined,
+  joinDuplicateHeaders: undefined,
+  path: '/kong/blur/v1/collection-bids/submit',
+  _ended: true,
+  res: [IncomingMessage],
+  aborted: false,
+  timeoutCb: null,
+  upgradeOrConnect: false,
+  parser: null,
+  maxHeadersCount: null,
+  reusedSocket: true,
+  host: 'nfttools.pro',
+  protocol: 'https:',
+  _redirectable: [Writable],
+  [Symbol(kCapture)]: false,
+  [Symbol(kBytesWritten)]: 0,
+  [Symbol(kNeedDrain)]: false,
+  [Symbol(corked)]: 0,
+  [Symbol(kOutHeaders)]: [Object: null prototype],
+  [Symbol(errored)]: null,
+  [Symbol(kHighWaterMark)]: 16384,
+  [Symbol(kRejectNonStandardBodyWrites)]: false,
+  [Symbol(kUniqueHeaders)]: null
+},
+data: [
+  'Blur bidding rate limit exceeded. (max 40 bids per 10 seconds)'
+]
+},
+status: 400
+}
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_BIDDING_AxiosError
+Blur trait bid error: Failed to submit Blur bid for collection lilpudgys at price 0.01 BETH: Blur bidding rate limit exceeded. (max 40 bids per 10 seconds)
+Blur trait bid error: Failed to submit Blur bid for collection lilpudgys at price 0.01 BETH: Blur bidding rate limit exceeded. (max 40 bids per 10 seconds)
+Blur trait bid error: Failed to submit Blur bid for collection lilpudgys at price 0.01 BETH: Blur bidding rate limit exceeded. (max 40 bids per 10 seconds)
+[Queue Event] Job completed: bid-6892b2a4024f36b1681fbf8c-magiceden-21222-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6892b2a4024f36b1681fbf8c, marketplace magiceden
+[Job Complete] 6892b2a4024f36b1681fbf8c-magiceden: 26/26 (Job: bid-6892b2a4024f36b1681fbf8c-magiceden-21222-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+Total Jobs: 52 (Magiceden: 26, Opensea: 26)
+Completed: 52
+Overall Progress: 100.00%
+[██████████████████████████████] 100.00%
+Blur rate limit: Waiting 68827ms for wallet 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 (attempt 1/3)
+-----------------------------------------------------------------------------------------------------------------------------------------
+[Blur API Rate Limit Detected]
+Wallet: 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+Remaining Requests: 98/100
+Reset In: 1 seconds
+Retry After: 58
+Collection: lilpudgys
+Response: Rate limit exceeded
+-----------------------------------------------------------------------------------------------------------------------------------------
+Current Limiter Stats: { RECEIVED: 1, QUEUED: 0, RUNNING: 1, EXECUTING: 1, DONE: 1244 }
+Average RPS: 13.00 Executing: 3.00 True RPS: 13.00
+[Blur Job Error] BLUR_TRAIT_BID: Error: Missing key for job bid-6892b2a4024f36b1681fbf8e-blur-FaceCurious-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21. updateProgress
+[Blur Job Error] BLUR_TRAIT_BID: Error: Missing key for job bid-6892b2a4024f36b1681fbf8e-blur-FaceCurious-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21. updateProgress
+[Blur Job Error] BLUR_TRAIT_BID: Error: Missing key for job bid-6892b2a4024f36b1681fbf8e-blur-FaceCircle Glasses-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21. updateProgress
+[Blur Job Error] BLUR_TRAIT_BID: Error: Missing key for job bid-6892b2a4024f36b1681fbf8e-blur-FaceWinking-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21. updateProgress
+[Blur Job Error] BLUR_TRAIT_BID: Error: Missing key for job bid-6892b2a4024f36b1681fbf8e-blur-FaceCross Eyed-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21. updateProgress
+
+
+
+
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 139/200 (Job: bid-6894965d3e5a1784d16754d7-blur-FaceRed Bandana-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 139
+  Overall Progress: 69.50%
+  [█████████████████████░░░░░░░░░] 69.50%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 140/200 (Job: bid-6894965d3e5a1784d16754d7-blur-FaceJi Eyeband-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 140
+  Overall Progress: 70.00%
+  [█████████████████████░░░░░░░░░] 70.00%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 141/200 (Job: bid-6894965d3e5a1784d16754d7-blur-EyesRelaxed-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 141
+  Overall Progress: 70.50%
+  [█████████████████████░░░░░░░░░] 70.50%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 142/200 (Job: bid-6894965d3e5a1784d16754d7-blur-EyesCurious-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 142
+  Overall Progress: 71.00%
+  [█████████████████████░░░░░░░░░] 71.00%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 143/200 (Job: bid-6894965d3e5a1784d16754d7-blur-FaceBlue Sunglasses-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 143
+  Overall Progress: 71.50%
+  [█████████████████████░░░░░░░░░] 71.50%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 144/200 (Job: bid-6894965d3e5a1784d16754d7-blur-FaceBlack Glasses-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 144
+  Overall Progress: 72.00%
+  [██████████████████████░░░░░░░░] 72.00%
+[Blur Worker] Worker error: Error: Missing key for job bid-6894965d3e5a1784d16754d7-blur-FaceBlue Sunglasses-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. moveToDelayed
+    at Scripts.finishedErrors (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:1100:24)
+    at Scripts.moveToDelayed (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:722:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async /app/node_modules/bullmq/dist/cjs/classes/job.js:521:30
+    at async Worker.handleFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:537:32)
+    at async /app/node_modules/bullmq/dist/cjs/classes/worker.js:497:32
+    at async Worker.retryIfFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:767:24)
+[Worker 1] Failure tracked: 17/3 in window
+[Worker 1] Error: Blur worker error: Missing key for job bid-6894965d3e5a1784d16754d7-blur-FaceBlue Sunglasses-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. moveToDelayed
+[ERROR] 0x_SERVER_GENERAL_Error
+  Error: Missing key for job bid-6894965d3e5a1784d16754d7-blur-FaceBlue Sunglasses-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. moveToDelayed
+[Blur Worker] Worker error: Error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceSleep Mask-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+    at Scripts.finishedErrors (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:1110:24)
+    at Scripts.moveToDelayed (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:722:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async /app/node_modules/bullmq/dist/cjs/classes/job.js:521:30
+    at async Worker.handleFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:537:32)
+    at async /app/node_modules/bullmq/dist/cjs/classes/worker.js:497:32
+    at async Worker.retryIfFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:767:24)
+[Worker 1] Failure tracked: 18/3 in window
+[Worker 1] Error: Blur worker error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceSleep Mask-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+[ERROR] 0x_SERVER_GENERAL_Error
+  Error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceSleep Mask-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+[Blur Worker] Worker error: Error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceBandaid-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+    at Scripts.finishedErrors (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:1110:24)
+    at Scripts.moveToDelayed (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:722:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async /app/node_modules/bullmq/dist/cjs/classes/job.js:521:30
+    at async Worker.handleFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:537:32)
+    at async /app/node_modules/bullmq/dist/cjs/classes/worker.js:497:32
+    at async Worker.retryIfFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:767:24)
+[Worker 1] Failure tracked: 19/3 in window
+[Worker 1] Error: Blur worker error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceBandaid-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+[ERROR] 0x_SERVER_GENERAL_Error
+  Error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceBandaid-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+[Blur Worker] Worker error: Error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceEye Scar-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+    at Scripts.finishedErrors (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:1110:24)
+    at Scripts.moveToDelayed (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:722:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async /app/node_modules/bullmq/dist/cjs/classes/job.js:521:30
+    at async Worker.handleFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:537:32)
+    at async /app/node_modules/bullmq/dist/cjs/classes/worker.js:497:32
+    at async Worker.retryIfFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:767:24)
+[Worker 1] Failure tracked: 20/3 in window
+[Worker 1] Error: Blur worker error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceEye Scar-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+[ERROR] 0x_SERVER_GENERAL_Error
+  Error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceEye Scar-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+[Blur Worker] Worker error: Error: Missing key for job bid-6894965d3e5a1784d16754d7-blur-FaceBlack Glasses-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. moveToDelayed
+    at Scripts.finishedErrors (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:1100:24)
+    at Scripts.moveToDelayed (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:722:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async /app/node_modules/bullmq/dist/cjs/classes/job.js:521:30
+    at async Worker.handleFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:537:32)
+    at async /app/node_modules/bullmq/dist/cjs/classes/worker.js:497:32
+    at async Worker.retryIfFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:767:24)
+[Worker 1] Failure tracked: 21/3 in window
+[Worker 1] Error: Blur worker error: Missing key for job bid-6894965d3e5a1784d16754d7-blur-FaceBlack Glasses-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. moveToDelayed
+[ERROR] 0x_SERVER_GENERAL_Error
+  Error: Missing key for job bid-6894965d3e5a1784d16754d7-blur-FaceBlack Glasses-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. moveToDelayed
+[Blur Worker] Worker error: Error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceEye Patch-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+    at Scripts.finishedErrors (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:1110:24)
+    at Scripts.moveToDelayed (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:722:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async /app/node_modules/bullmq/dist/cjs/classes/job.js:521:30
+    at async Worker.handleFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:537:32)
+    at async /app/node_modules/bullmq/dist/cjs/classes/worker.js:497:32
+    at async Worker.retryIfFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:767:24)
+[Worker 1] Failure tracked: 22/3 in window
+[Worker 1] Error: Blur worker error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceEye Patch-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+[ERROR] 0x_SERVER_GENERAL_Error
+  Error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceEye Patch-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+[Blur Worker] Worker error: Error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceReading Glasses-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+    at Scripts.finishedErrors (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:1110:24)
+    at Scripts.moveToDelayed (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:722:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async /app/node_modules/bullmq/dist/cjs/classes/job.js:521:30
+    at async Worker.handleFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:537:32)
+    at async /app/node_modules/bullmq/dist/cjs/classes/worker.js:497:32
+    at async Worker.retryIfFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:767:24)
+[Worker 1] Failure tracked: 23/3 in window
+[Worker 1] Error: Blur worker error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceReading Glasses-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+[ERROR] 0x_SERVER_GENERAL_Error
+  Error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceReading Glasses-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+[Blur Worker] Worker error: Error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceRound Blue Sunglasses-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+    at Scripts.finishedErrors (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:1110:24)
+    at Scripts.moveToDelayed (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:722:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async /app/node_modules/bullmq/dist/cjs/classes/job.js:521:30
+    at async Worker.handleFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:537:32)
+    at async /app/node_modules/bullmq/dist/cjs/classes/worker.js:497:32
+    at async Worker.retryIfFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:767:24)
+[Worker 1] Failure tracked: 24/3 in window
+[Worker 1] Error: Blur worker error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceRound Blue Sunglasses-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+[ERROR] 0x_SERVER_GENERAL_Error
+  Error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceRound Blue Sunglasses-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+[Blur Worker] Worker error: Error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceRed Fang Face Paint-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+    at Scripts.finishedErrors (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:1110:24)
+    at Scripts.moveToDelayed (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:722:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async /app/node_modules/bullmq/dist/cjs/classes/job.js:521:30
+    at async Worker.handleFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:537:32)
+    at async /app/node_modules/bullmq/dist/cjs/classes/worker.js:497:32
+    at async Worker.retryIfFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:767:24)
+[Worker 1] Failure tracked: 25/3 in window
+[Worker 1] Error: Blur worker error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceRed Fang Face Paint-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+[ERROR] 0x_SERVER_GENERAL_Error
+  Error: Lock mismatch for job bid-6894965d3e5a1784d16754d7-blur-FaceRed Fang Face Paint-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9. Cmd moveToDelayed from active
+Current Limiter Stats: { RECEIVED: 29, QUEUED: 0, RUNNING: 1, EXECUTING: 7, DONE: 205815 }
+Average RPS: 17.00 Executing: 37.00 True RPS: 37.00
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 145/200 (Job: bid-6894965d3e5a1784d16754d7-blur-FaceSleep Mask-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 145
+  Overall Progress: 72.50%
+  [██████████████████████░░░░░░░░] 72.50%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 146/200 (Job: bid-6894965d3e5a1784d16754d7-blur-FaceReading Glasses-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 146
+  Overall Progress: 73.00%
+  [██████████████████████░░░░░░░░] 73.00%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1110-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 840/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1110-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1736
+  Overall Progress: 17.36%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.36%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 147/200 (Job: bid-6894965d3e5a1784d16754d7-blur-FaceEye Patch-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 147
+  Overall Progress: 73.50%
+  [██████████████████████░░░░░░░░] 73.50%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 148/200 (Job: bid-6894965d3e5a1784d16754d7-blur-FaceRound Blue Sunglasses-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 148
+  Overall Progress: 74.00%
+  [██████████████████████░░░░░░░░] 74.00%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 149/200 (Job: bid-6894965d3e5a1784d16754d7-blur-FaceBandaid-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 149
+  Overall Progress: 74.50%
+  [██████████████████████░░░░░░░░] 74.50%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 150/200 (Job: bid-6894965d3e5a1784d16754d7-blur-FaceRed Fang Face Paint-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 150
+  Overall Progress: 75.00%
+  [███████████████████████░░░░░░░] 75.00%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 151/200 (Job: bid-6894965d3e5a1784d16754d7-blur-FaceEye Scar-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 151
+  Overall Progress: 75.50%
+  [███████████████████████░░░░░░░] 75.50%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1140-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 841/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1140-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1737
+  Overall Progress: 17.37%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.37%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1153-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 897/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1153-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1738
+  Overall Progress: 17.38%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.38%
+ 🎉 TOKEN OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: AZUKI TOKEN: 805 0.002 WETH 🎉 
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-805-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 842/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-805-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1739
+  Overall Progress: 17.39%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.39%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1158-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 898/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1158-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1740
+  Overall Progress: 17.40%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.40%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1154-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 899/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1154-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1741
+  Overall Progress: 17.41%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.41%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1121-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 843/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1121-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1742
+  Overall Progress: 17.42%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.42%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1150-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 844/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1150-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1743
+  Overall Progress: 17.43%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.43%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1149-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 845/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1149-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1744
+  Overall Progress: 17.44%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.44%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1136-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 846/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1136-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1745
+  Overall Progress: 17.45%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.45%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1151-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 847/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1151-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1746
+  Overall Progress: 17.46%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.46%
+🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: AZUKI 🎉 AMOUNT: 0.01 BETH 🎉 TRAIT: {"Ear":"Red Spiked Ring"}
+🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: AZUKI 🎉 AMOUNT: 0.01 BETH 🎉 TRAIT: {"Ear":"Dragon"}
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1137-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 848/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1137-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1747
+  Overall Progress: 17.47%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.47%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1125-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 849/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1125-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1748
+  Overall Progress: 17.48%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.48%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1132-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 850/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1132-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1749
+  Overall Progress: 17.49%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.49%
+ 🎉 TOKEN OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: AZUKI TOKEN: 773 0.002 WETH 🎉 
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1119-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 851/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1119-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1750
+  Overall Progress: 17.50%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.50%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1139-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 852/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1139-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1751
+  Overall Progress: 17.51%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.51%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1118-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 853/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1118-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1752
+  Overall Progress: 17.52%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.52%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1128-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 854/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1128-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1753
+  Overall Progress: 17.53%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.53%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1148-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 855/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1148-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1754
+  Overall Progress: 17.54%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.54%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1152-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 856/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1152-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1755
+  Overall Progress: 17.55%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.55%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1155-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 900/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1155-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1756
+  Overall Progress: 17.56%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.56%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1144-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 857/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1144-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1757
+  Overall Progress: 17.57%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.57%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1133-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 858/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1133-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1758
+  Overall Progress: 17.58%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.58%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1141-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 859/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1141-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1759
+  Overall Progress: 17.59%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.59%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1159-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 901/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1159-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1760
+  Overall Progress: 17.60%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.60%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1156-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 902/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1156-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1761
+  Overall Progress: 17.61%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.61%
+ 🎉 TOKEN OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: AZUKI TOKEN: 771 0.002 WETH 🎉 
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1134-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 860/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1134-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1762
+  Overall Progress: 17.62%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.62%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1157-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 903/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1157-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1763
+  Overall Progress: 17.63%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.63%
+ 🎉 TOKEN OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: AZUKI TOKEN: 775 0.002 WETH 🎉 
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1146-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 861/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1146-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1764
+  Overall Progress: 17.64%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.64%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-1122-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 862/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-1122-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1765
+  Overall Progress: 17.65%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.65%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-773-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 863/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-773-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1766
+  Overall Progress: 17.66%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.66%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 152/200 (Job: bid-6894965d3e5a1784d16754d7-blur-EarRed Spiked Ring-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 152
+  Overall Progress: 76.00%
+  [███████████████████████░░░░░░░] 76.00%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 153/200 (Job: bid-6894965d3e5a1784d16754d7-blur-EarDragon-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 153
+  Overall Progress: 76.50%
+  [███████████████████████░░░░░░░] 76.50%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1166-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 904/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1166-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1767
+  Overall Progress: 17.67%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.67%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-771-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 864/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-771-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1768
+  Overall Progress: 17.68%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.68%
+ 🎉 TOKEN OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: AZUKI TOKEN: 778 0.002 WETH 🎉 
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1176-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 905/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1176-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1769
+  Overall Progress: 17.69%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.69%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-775-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 865/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-775-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1770
+  Overall Progress: 17.70%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.70%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1163-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 906/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1163-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1771
+  Overall Progress: 17.71%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.71%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1160-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 907/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1160-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1772
+  Overall Progress: 17.72%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.72%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1165-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 908/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1165-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1773
+  Overall Progress: 17.73%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.73%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-778-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 866/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-778-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1774
+  Overall Progress: 17.74%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.74%
+🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: AZUKI 🎉 AMOUNT: 0.01 BETH 🎉 TRAIT: {"Eyes":"Glowing"}
+ 🎉 TOKEN OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: AZUKI TOKEN: 769 0.002 WETH 🎉 
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1164-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 909/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1164-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1775
+  Overall Progress: 17.75%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.75%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1174-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 910/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1174-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1776
+  Overall Progress: 17.76%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.76%
+🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: AZUKI 🎉 AMOUNT: 0.01 BETH 🎉 TRAIT: {"Ear":"Skull Ear Cuffs"}
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1172-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 911/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1172-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1777
+  Overall Progress: 17.77%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.77%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-769-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 867/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-769-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1778
+  Overall Progress: 17.78%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.78%
+🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: AZUKI 🎉 AMOUNT: 0.01 BETH 🎉 TRAIT: {"Eyes":"Fire"}
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1167-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 912/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1167-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1779
+  Overall Progress: 17.79%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.79%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1171-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 913/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1171-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1780
+  Overall Progress: 17.80%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.80%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1162-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 914/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1162-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1781
+  Overall Progress: 17.81%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.81%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1170-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 915/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1170-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1782
+  Overall Progress: 17.82%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.82%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1175-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 916/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1175-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1783
+  Overall Progress: 17.83%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.83%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1169-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 917/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1169-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1784
+  Overall Progress: 17.84%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.84%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1161-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 918/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1161-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1785
+  Overall Progress: 17.85%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.85%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 154/200 (Job: bid-6894965d3e5a1784d16754d7-blur-EarSkull Ear Cuffs-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 154
+  Overall Progress: 77.00%
+  [███████████████████████░░░░░░░] 77.00%
+🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: AZUKI 🎉 AMOUNT: 0.01 BETH 🎉 TRAIT: {"Ear":"Chiyogami"}
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1168-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 919/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1168-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1786
+  Overall Progress: 17.86%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.86%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 155/200 (Job: bid-6894965d3e5a1784d16754d7-blur-EyesFire-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 155
+  Overall Progress: 77.50%
+  [███████████████████████░░░░░░░] 77.50%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 156/200 (Job: bid-6894965d3e5a1784d16754d7-blur-EyesGlowing-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 156
+  Overall Progress: 78.00%
+  [███████████████████████░░░░░░░] 78.00%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1173-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 920/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1173-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1787
+  Overall Progress: 17.87%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.87%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1179-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 921/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1179-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1788
+  Overall Progress: 17.88%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.88%
+ 🎉 TOKEN OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: AZUKI TOKEN: 796 0.002 WETH 🎉 
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 157/200 (Job: bid-6894965d3e5a1784d16754d7-blur-EarChiyogami-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 157
+  Overall Progress: 78.50%
+  [████████████████████████░░░░░░] 78.50%
+🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: AZUKI 🎉 AMOUNT: 0.01 BETH 🎉 TRAIT: {"Ear":"Yin Yang"}
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-magiceden-796-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace magiceden
+[Job Complete] 6894977e3e5a1784d1675500-magiceden: 868/5000 (Job: bid-6894977e3e5a1784d1675500-magiceden-796-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1789
+  Overall Progress: 17.89%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.89%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 158/200 (Job: bid-6894965d3e5a1784d16754d7-blur-EarYin Yang-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 158
+  Overall Progress: 79.00%
+  [████████████████████████░░░░░░] 79.00%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1187-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 922/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1187-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1790
+  Overall Progress: 17.90%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.90%
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 37, DONE: 205839 }
+Average RPS: 20.50 Executing: 37.00 True RPS: 37.00
+🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: AZUKI 🎉 AMOUNT: 0.01 BETH 🎉 TRAIT: {"Eyes":"Pensive"}
+🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: AZUKI 🎉 AMOUNT: 0.01 BETH 🎉 TRAIT: {"Ear":"Sword"}
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1195-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 923/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1195-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1791
+  Overall Progress: 17.91%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.91%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1185-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 924/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1185-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1792
+  Overall Progress: 17.92%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.92%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1180-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 925/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1180-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1793
+  Overall Progress: 17.93%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.93%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1181-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 926/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1181-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1794
+  Overall Progress: 17.94%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.94%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1198-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 927/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1198-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1795
+  Overall Progress: 17.95%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.95%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 159/200 (Job: bid-6894965d3e5a1784d16754d7-blur-EyesPensive-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 159
+  Overall Progress: 79.50%
+  [████████████████████████░░░░░░] 79.50%
+[Job Complete] 6894965d3e5a1784d16754d7-blur: 160/200 (Job: bid-6894965d3e5a1784d16754d7-blur-EarSword-azuki-0x104297386b5Ff2d69420A2CbAddBd1469579cef9)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 200 (Blur: 200)
+  Completed: 160
+  Overall Progress: 80.00%
+  [████████████████████████░░░░░░] 80.00%
+🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: AZUKI 🎉 AMOUNT: 0.01 BETH 🎉 TRAIT: {"Ear":"Spiked Ring"}
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1189-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 928/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1189-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1796
+  Overall Progress: 17.96%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.96%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1182-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 929/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1182-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1797
+  Overall Progress: 17.97%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.97%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1190-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 930/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1190-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1798
+  Overall Progress: 17.98%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.98%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1197-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 931/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1197-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1799
+  Overall Progress: 17.99%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 17.99%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1209-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 932/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1209-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1800
+  Overall Progress: 18.00%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.00%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1191-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 933/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1191-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1801
+  Overall Progress: 18.01%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.01%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1196-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 934/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1196-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1802
+  Overall Progress: 18.02%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.02%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1207-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 935/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1207-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1803
+  Overall Progress: 18.03%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.03%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1177-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 936/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1177-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1804
+  Overall Progress: 18.04%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.04%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1188-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 937/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1188-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1805
+  Overall Progress: 18.05%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.05%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1193-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 938/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1193-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1806
+  Overall Progress: 18.06%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.06%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1206-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 939/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1206-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1807
+  Overall Progress: 18.07%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.07%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1184-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 940/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1184-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1808
+  Overall Progress: 18.08%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.08%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1200-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 941/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1200-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1809
+  Overall Progress: 18.09%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.09%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1194-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 942/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1194-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1810
+  Overall Progress: 18.10%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.10%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1183-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 943/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1183-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1811
+  Overall Progress: 18.11%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.11%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1186-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 944/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1186-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1812
+  Overall Progress: 18.12%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.12%
+ 🎉 TOKEN OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: AZUKI TOKEN: 1095 0.002 WETH 🎉 
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1208-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 945/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1208-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1813
+  Overall Progress: 18.13%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.13%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1178-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 946/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1178-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1814
+  Overall Progress: 18.14%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.14%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1202-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 947/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1202-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1815
+  Overall Progress: 18.15%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.15%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1211-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 948/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1211-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1816
+  Overall Progress: 18.16%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.16%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1210-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 949/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1210-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1817
+  Overall Progress: 18.17%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.17%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1203-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 950/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1203-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1818
+  Overall Progress: 18.18%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.18%
+[Queue Event] Job completed: bid-6894977e3e5a1784d1675500-opensea-1204-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 6894977e3e5a1784d1675500, marketplace opensea
+[Job Complete] 6894977e3e5a1784d1675500-opensea: 951/5000 (Job: bid-6894977e3e5a1784d1675500-opensea-1204-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 10000 (Magiceden: 5000, Opensea: 5000)
+  Completed: 1819
+  Overall Progress: 18.19%
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░] 18.19%
+[ERROR] 0x_SERVER_MARKETPLACE_MAGICEDEN_BIDDING_AxiosError
+       
+# ERROR 1
+
+config: {
+  transitional: {
+    silentJSONParsing: true,
+    forcedJSONParsing: true,
+    clarifyTimeoutError: false
+  },
+  adapter: [ 'xhr', 'http', 'fetch' ],
+  transformRequest: [ [Function: transformRequest] ],
+  transformResponse: [ [Function: transformResponse] ],
+  timeout: 60000,
+  xsrfCookieName: 'XSRF-TOKEN',
+  xsrfHeaderName: 'X-XSRF-TOKEN',
+  maxContentLength: -1,
+  maxBodyLength: -1,
+  env: { FormData: [Function [FormData]], Blob: [class Blob] },
+  validateStatus: [Function: validateStatus],
+  headers: Object [AxiosHeaders] {
+    Accept: 'application/json, text/plain, */*',
+    'Content-Type': undefined,
+    'x-api-key': '11e5f5808c0d472c9bd75e069f3139d6',
+    'User-Agent': 'axios/1.9.0',
+    'Accept-Encoding': 'gzip, compress, deflate, br'
+  },
+  params: {
+    includeQuantity: true,
+    includeLastSale: true,
+    excludeSpam: true,
+    excludeBurnt: true,
+    collection: '0xed5af388653567af2f388e6224dc7c4b3241c544',
+    sortBy: 'floorAskPrice',
+    sortDirection: 'asc',
+    limit: 1,
+    includeAttributes: false
+  },
+  method: 'get',
+  url: 'https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/tokens/v7',
+  allowAbsoluteUrls: true,
+  metadata: { startTime: 1754582654376, jobId: undefined },
+  'axios-retry': {
+    retries: 3,
+    retryCondition: [AsyncFunction: retryCondition],
+    retryDelay: [Function: retryDelay],
+    shouldResetTimeout: false,
+    onRetry: [Function: onRetry],
+    onMaxRetryTimesExceeded: [Function: onMaxRetryTimesExceeded],
+    validateResponse: null,
+    retryCount: 1,
+    lastRequestTime: 1754582654376
+  },
+  data: undefined
+},
+request: <ref *1> Writable {
+  _writableState: WritableState {
+    state: 802924,
+    highWaterMark: 16384,
+    defaultEncoding: 'utf8',
+    length: 0,
+    corked: 0,
+    onwrite: [Function: bound onwrite],
+    writecb: null,
+    writelen: 0,
+    afterWriteTickInfo: null,
+    buffered: [],
+    bufferedIndex: 0,
+    pendingcb: 0,
+    errored: null,
+    [Symbol(kOnFinished)]: []
+  },
+  _events: [Object: null prototype] {
+    response: [Function: handleResponse],
+    error: [Function: handleRequestError],
+    socket: [Array]
+  },
+  _eventsCount: 3,
+  _maxListeners: undefined,
+  _options: {
+    maxRedirects: 21,
+    maxBodyLength: Infinity,
+    protocol: 'https:',
+    path: '/kong/magiceden/v3/rtp/ethereum/tokens/v7?includeQuantity=true&includeLastSale=true&excludeSpam=true&excludeBurnt=true&collection=0xed5af388653567af2f388e6224dc7c4b3241c544&sortBy=floorAskPrice&sortDirection=asc&limit=1&includeAttributes=false',
+    method: 'GET',
+    headers: [Object: null prototype],
+    agents: [Object],
+    auth: undefined,
+    family: undefined,
+    beforeRedirect: [Function: dispatchBeforeRedirect],
+    beforeRedirects: [Object],
+    hostname: 'nfttools.pro',
+    port: '',
+    agent: undefined,
+    nativeProtocols: [Object],
+    pathname: '/kong/magiceden/v3/rtp/ethereum/tokens/v7',
+    search: '?includeQuantity=true&includeLastSale=true&excludeSpam=true&excludeBurnt=true&collection=0xed5af388653567af2f388e6224dc7c4b3241c544&sortBy=floorAskPrice&sortDirection=asc&limit=1&includeAttributes=false'
+  },
+  _ended: true,
+  _ending: true,
+  _redirectCount: 0,
+  _redirects: [],
+  _requestBodyLength: 0,
+  _requestBodyBuffers: [],
+  _onNativeResponse: [Function (anonymous)],
+  _currentRequest: ClientRequest {
+    _events: [Object: null prototype],
+    _eventsCount: 7,
+    _maxListeners: undefined,
+    outputData: [],
+    outputSize: 0,
+    writable: true,
+    destroyed: false,
+    _last: true,
+    chunkedEncoding: false,
+    shouldKeepAlive: true,
+    maxRequestsOnConnectionReached: false,
+    _defaultKeepAlive: true,
+    useChunkedEncodingByDefault: false,
+    sendDate: false,
+    _removedConnection: false,
+    _removedContLen: false,
+    _removedTE: false,
+    strictContentLength: false,
+    _contentLength: 0,
+    _hasBody: true,
+    _trailer: '',
+    finished: true,
+    _headerSent: true,
+    _closed: false,
+    socket: [TLSSocket],
+    _header: 'GET /kong/magiceden/v3/rtp/ethereum/tokens/v7?includeQuantity=true&includeLastSale=true&excludeSpam=true&excludeBurnt=true&collection=0xed5af388653567af2f388e6224dc7c4b3241c544&sortBy=floorAskPrice&sortDirection=asc&limit=1&includeAttributes=false HTTP/1.1\r\n' +
+      'Accept: application/json, text/plain, */*\r\n' +
+      'x-api-key: 11e5f5808c0d472c9bd75e069f3139d6\r\n' +
+      'User-Agent: axios/1.9.0\r\n' +
+      'Accept-Encoding: gzip, compress, deflate, br\r\n' +
+      'Host: nfttools.pro\r\n' +
+      'Connection: keep-alive\r\n' +
+      '\r\n',
+    _keepAliveTimeout: 0,
+    _onPendingData: [Function: nop],
+    agent: [Agent],
+    socketPath: undefined,
+    method: 'GET',
+    maxHeaderSize: undefined,
+    insecureHTTPParser: undefined,
+    joinDuplicateHeaders: undefined,
+    path: '/kong/magiceden/v3/rtp/ethereum/tokens/v7?includeQuantity=true&includeLastSale=true&excludeSpam=true&excludeBurnt=true&collection=0xed5af388653567af2f388e6224dc7c4b3241c544&sortBy=floorAskPrice&sortDirection=asc&limit=1&includeAttributes=false',
+    _ended: false,
+    res: null,
+    aborted: false,
+    timeoutCb: [Function: emitRequestTimeout],
+    upgradeOrConnect: false,
+    parser: [HTTPParser],
+    maxHeadersCount: null,
+    reusedSocket: false,
+    host: 'nfttools.pro',
+    protocol: 'https:',
+    _redirectable: [Circular *1],
+    [Symbol(kCapture)]: false,
+    [Symbol(kBytesWritten)]: 0,
+    [Symbol(kNeedDrain)]: false,
+    [Symbol(corked)]: 0,
+    [Symbol(kOutHeaders)]: [Object: null prototype],
+    [Symbol(errored)]: null,
+    [Symbol(kHighWaterMark)]: 16384,
+    [Symbol(kRejectNonStandardBodyWrites)]: false,
+    [Symbol(kUniqueHeaders)]: null
+  },
+  _currentUrl: 'https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/tokens/v7?includeQuantity=true&includeLastSale=true&excludeSpam=true&excludeBurnt=true&collection=0xed5af388653567af2f388e6224dc7c4b3241c544&sortBy=floorAskPrice&sortDirection=asc&limit=1&includeAttributes=false',
+  _timeout: null,
+  [Symbol(kCapture)]: false
+}
+}
+Failed to fetch Blur collection stats for lilpudgys: stream has been aborted
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_COLLECTION_AxiosError
+Error: stream has been aborted
+[Blur Job Error] BLUR_TRAIT_BID: Error: Missing key for job bid-6892b2a4024f36b1681fbf8e-blur-Left FlipperBalloon Gold-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21. updateProgress
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 9, DONE: 5023 }
+Average RPS: 5.67 Executing: 9.00 True RPS: 9.00
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 196839ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+[Parent Job Complete] 6894cd63b88d2e6304e70472-magiceden: All 997 jobs completed
+[All Jobs Complete] Task 6894cd63b88d2e6304e70472: All marketplace jobs complete, checking percentage...
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 196839ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 196839ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 196839ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 196839ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 196840ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 196840ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 196840ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 196840ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 196840ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 196840ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 196840ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 196840ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 196840ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+Clearing 0 cached ITEM_SOLD events
+
+📋 Queue Monitor: Waiting=0, Active=4, Stuck Jobs=0
+
+📊 ═══════ Health Monitor Stats ═══════ 📊
+
+💾 Memory Usage:
+rss:207MB
+heapTotal:159MB
+heapUsed:124MB
+external:27MB
+
+📋 Queue Status:
+🔓 Password is set
+▶️  QUEUE IS RUNNING
+active: 0
+completed: 0
+delayed: 0
+failed: 0
+paused: 0
+prioritized: 0
+waiting: 0
+waiting-children: 0
+Total Jobs: 0
+
+========== Job Tracking Status Report ==========
+
+[Task 6892b2a4024f36b1681fbf8e] Status: RUNNING
+TaskStatus: 493/497 (99.2%)
+ParentJobs: 493/497
+  opensea: 166/166 (100.0%)
+  magiceden: 166/166 (100.0%)
+  blur: 161/165 (97.6%)
+================================================
+
+
+========== Orphaned Job Recovery ==========
+No orphaned jobs found
+==========================================
+
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 9, DONE: 5023 }
+Average RPS: 5.67 Executing: 9.00 True RPS: 9.00
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 197840ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+
+📊 Worker Health Check Summary:
+Connections: 6/6 healthy
+Workers: 2/2 healthy
+Main Queue: 0 waiting, 0 active
+Blur Queue: 0 waiting, 4 active
+📊 MongoDB Status: connected | Max Pool: 50
+Failed to send logs to Axiom: {
+message: 'getaddrinfo ENOTFOUND api.axiom.co',
+status: undefined,
+data: undefined,
+headers: undefined
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 9, DONE: 5023 }
+Average RPS: 6.60 Executing: 9.00 True RPS: 9.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 9, DONE: 5023 }
+Average RPS: 8.00 Executing: 9.00 True RPS: 9.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 9, DONE: 5023 }
+Average RPS: 8.00 Executing: 9.00 True RPS: 9.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 9, DONE: 5023 }
+Average RPS: 10.00 Executing: 9.00 True RPS: 10.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 9, DONE: 5023 }
+Average RPS: 13.50 Executing: 9.00 True RPS: 13.50
+Health monitor detected disconnection
+WebSocket disconnected: {
+code: undefined,
+reason: 'unknown',
+connectionDuration: 540132,
+connectionDurationMinutes: 9,
+lastMessageAge: 19187,
+lastPongAge: 148139,
+missedPongs: 7,
+activeSubscriptions: 4,
+connectionQuality: 'disconnected',
+messagesReceived: 24657
+}
+WebSocket disconnected after 9m 0s (Code: undefined) - cleared subscription cache
+[INFO] 0x_SERVER_WEBSOCKET_WEBSOCKET
+Scheduling reconnection: {
+attempt: 1,
+maxRetries: 'unlimited',
+delayMs: 874,
+baseDelay: 1000,
+jitter: -126
+}
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 9, DONE: 5023 }
+Average RPS: 26.00 Executing: 9.00 True RPS: 26.00
+Executing scheduled reconnection
+Attempting WebSocket connection to: wss://nfttools-ws-proxy.nfttools.io
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 9, DONE: 5023 }
+Average RPS: 26.00 Executing: 9.00 True RPS: 26.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 9, DONE: 5023 }
+Average RPS: 26.00 Executing: 9.00 True RPS: 26.00
+[Blur Worker Error] Job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Gray-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 failed: Blur job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Gray-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 (ID: bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Gray-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21) timed out after 60000ms - aborted
+[Blur Worker] Job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Gray-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 failed: Blur job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Gray-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 (ID: bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Gray-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21) timed out after 60000ms - aborted
+[Blur Queue Event] Job failed: bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Gray-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 - Blur job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Gray-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 (ID: bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Gray-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21) timed out after 60000ms - aborted
+[Blur Queue Event] Processing failure for task 6892b2a4024f36b1681fbf8e
+[Job Complete] 6892b2a4024f36b1681fbf8e-blur: 162/165 (Job: bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Gray-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+Total Jobs: 497 (Blur: 165, Magiceden: 166, Opensea: 166)
+Completed: 494
+Overall Progress: 99.40%
+[██████████████████████████████] 99.40%
+[Blur Worker Error] Job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Lime-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 failed: Blur job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Lime-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 (ID: bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Lime-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21) timed out after 60000ms - aborted
+[Blur Worker] Job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Lime-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 failed: Blur job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Lime-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 (ID: bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Lime-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21) timed out after 60000ms - aborted
+[Blur Queue Event] Job failed: bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Lime-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 - Blur job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Lime-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 (ID: bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Lime-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21) timed out after 60000ms - aborted
+[Blur Queue Event] Processing failure for task 6892b2a4024f36b1681fbf8e
+[Job Complete] 6892b2a4024f36b1681fbf8e-blur: 163/165 (Job: bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Lime-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+Total Jobs: 497 (Blur: 165, Magiceden: 166, Opensea: 166)
+Completed: 495
+Overall Progress: 99.60%
+[██████████████████████████████] 99.60%
+Failed to fetch Blur collection stats for lilpudgys: timeout of 60000ms exceeded
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_COLLECTION_AxiosError
+Error: timeout of 60000ms exceeded
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 8, DONE: 5025 }
+Average RPS: 2.00 Executing: 8.00 True RPS: 8.00
+[Blur Worker Error] Job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 failed: Blur job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 (ID: bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21) timed out after 60000ms - aborted
+[Blur Job Error] BLUR_TRAIT_BID: Error: Missing key for job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard Lime-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21. updateProgress
+[Blur Worker] Job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 failed: Blur job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 (ID: bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21) timed out after 60000ms - aborted
+[Blur Queue Event] Job failed: bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 - Blur job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 (ID: bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21) timed out after 60000ms - aborted
+[Blur Queue Event] Processing failure for task 6892b2a4024f36b1681fbf8e
+[Job Complete] 6892b2a4024f36b1681fbf8e-blur: 164/165 (Job: bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+Total Jobs: 497 (Blur: 165, Magiceden: 166, Opensea: 166)
+Completed: 496
+Overall Progress: 99.80%
+[██████████████████████████████] 99.80%
+Failed to fetch Blur collection stats for lilpudgys: timeout of 60000ms exceeded
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_COLLECTION_AxiosError
+Error: timeout of 60000ms exceeded
+[Blur Job Error] BLUR_TRAIT_BID: Error: Missing key for job bid-6892b2a4024f36b1681fbf8e-blur-SkinLeopard-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21. updateProgress
+[ERROR] 0x_SERVER_DATABASE_UPDATE_AxiosError
+Error: stream has been aborted
+Error in withLock for key stats:0xed5af388653567af2f388e6224dc7c4b3241c544: AxiosError: stream has been aborted
+  at IncomingMessage.handlerStreamAborted (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/adapters/http.js:571:23)
+  at IncomingMessage.emit (node:events:514:28)
+  at IncomingMessage.emit (node:domain:488:12)
+  at IncomingMessage._destroy (node:_http_incoming:224:10)
+  at _destroy (node:internal/streams/destroy:109:10)
+  at IncomingMessage.destroy (node:internal/streams/destroy:71:5)
+  at TLSSocket.socketCloseListener (node:_http_client:455:11)
+  at TLSSocket.emit (node:events:526:35)
+  at TLSSocket.emit (node:domain:488:12)
+  at node:net:337:12
+  at Axios.request (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/core/Axios.js:45:41)
+  at processTicksAndRejections (node:internal/process/task_queues:95:5) {
+code: 'ERR_BAD_RESPONSE',
+config: {
+  transitional: {
+    silentJSONParsing: true,
+    forcedJSONParsing: true,
+    clarifyTimeoutError: false
+  },
+  adapter: [ 'xhr', 'http', 'fetch' ],
+  transformRequest: [ [Function: transformRequest] ],
+  transformResponse: [ [Function: transformResponse] ],
+  timeout: 60000,
+  xsrfCookieName: 'XSRF-TOKEN',
+  xsrfHeaderName: 'X-XSRF-TOKEN',
+  maxContentLength: -1,
+  maxBodyLength: -1,
+  env: { FormData: [Function [FormData]], Blob: [class Blob] },
+  validateStatus: [Function: validateStatus],
+  headers: Object [AxiosHeaders] {
+    Accept: 'application/json, text/plain, */*',
+    'Content-Type': undefined,
+    'x-api-key': '11e5f5808c0d472c9bd75e069f3139d6',
+    'User-Agent': 'axios/1.9.0',
+    'Accept-Encoding': 'gzip, compress, deflate, br'
+  },
+  params: {
+    includeQuantity: true,
+    includeLastSale: true,
+    excludeSpam: true,
+    excludeBurnt: true,
+    collection: '0xed5af388653567af2f388e6224dc7c4b3241c544',
+    sortBy: 'floorAskPrice',
+    sortDirection: 'asc',
+    limit: 1,
+    includeAttributes: false
+  },
+  method: 'get',
+  url: 'https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/tokens/v7',
+  allowAbsoluteUrls: true,
+  metadata: { startTime: 1754582654233, jobId: undefined },
+  'axios-retry': {
+    retries: 3,
+    retryCondition: [AsyncFunction: retryCondition],
+    retryDelay: [Function: retryDelay],
+    shouldResetTimeout: false,
+    onRetry: [Function: onRetry],
+    onMaxRetryTimesExceeded: [Function: onMaxRetryTimesExceeded],
+    validateResponse: null,
+    retryCount: 1,
+    lastRequestTime: 1754582654233
+  },
+  data: undefined
+},
+request: <ref *1> ClientRequest {
+  _events: [Object: null prototype] {
+    abort: [Function (anonymous)],
+    aborted: [Function (anonymous)],
+    connect: [Function (anonymous)],
+    error: [Function (anonymous)],
+    socket: [Function (anonymous)],
+    timeout: [Function (anonymous)],
+    finish: [Function: requestOnFinish]
+  },
+  _eventsCount: 7,
+  _maxListeners: undefined,
+  outputData: [],
+  outputSize: 0,
+  writable: true,
+  destroyed: true,
+  _last: true,
+  chunkedEncoding: false,
+  shouldKeepAlive: true,
+  maxRequestsOnConnectionReached: false,
+  _defaultKeepAlive: true,
+  useChunkedEncodingByDefault: false,
+  sendDate: false,
+  _removedConnection: false,
+  _removedContLen: false,
+  _removedTE: false,
+  strictContentLength: false,
+  _contentLength: 0,
+  _hasBody: true,
+  _trailer: '',
+  finished: true,
+  _headerSent: true,
+  _closed: true,
+  socket: TLSSocket {
+    _tlsOptions: [Object],
+    _secureEstablished: true,
+    _securePending: false,
+    _newSessionPending: false,
+    _controlReleased: true,
+    secureConnecting: false,
+    _SNICallback: null,
+    servername: 'nfttools.pro',
+    alpnProtocol: false,
+    authorized: true,
+    authorizationError: null,
+    encrypted: true,
+    _events: [Object: null prototype],
+    _eventsCount: 11,
+    connecting: false,
+    _hadError: false,
+    _parent: null,
+    _host: 'nfttools.pro',
+    _closeAfterHandlingError: false,
+    _readableState: [ReadableState],
+    _maxListeners: undefined,
+    _writableState: [WritableState],
+    allowHalfOpen: false,
+    _sockname: null,
+    _pendingData: null,
+    _pendingEncoding: '',
+    server: undefined,
+    _server: null,
+    ssl: null,
+    _requestCert: true,
+    _rejectUnauthorized: true,
+    timeout: 60000,
+    parser: null,
+    _httpMessage: [Circular *1],
+    [Symbol(alpncallback)]: null,
+    [Symbol(res)]: null,
+    [Symbol(verified)]: true,
+    [Symbol(pendingSession)]: null,
+    [Symbol(async_id_symbol)]: 1292874,
+    [Symbol(kHandle)]: null,
+    [Symbol(lastWriteQueueSize)]: 0,
+    [Symbol(timeout)]: Timeout {
+      _idleTimeout: -1,
+      _idlePrev: null,
+      _idleNext: null,
+      _idleStart: 493450,
+      _onTimeout: null,
+      _timerArgs: undefined,
+      _repeat: null,
+      _destroyed: true,
+      [Symbol(refed)]: false,
+      [Symbol(kHasPrimitive)]: false,
+      [Symbol(asyncId)]: 1292883,
+      [Symbol(triggerId)]: 1292878
+    },
+    [Symbol(kBuffer)]: null,
+    [Symbol(kBufferCb)]: null,
+    [Symbol(kBufferGen)]: null,
+    [Symbol(kCapture)]: false,
+    [Symbol(kSetNoDelay)]: false,
+    [Symbol(kSetKeepAlive)]: true,
+    [Symbol(kSetKeepAliveInitialDelay)]: 60,
+    [Symbol(kBytesRead)]: 1661,
+    [Symbol(kBytesWritten)]: 463,
+    [Symbol(connect-options)]: [Object]
+  },
+  _header: 'GET /kong/magiceden/v3/rtp/ethereum/tokens/v7?includeQuantity=true&includeLastSale=true&excludeSpam=true&excludeBurnt=true&collection=0xed5af388653567af2f388e6224dc7c4b3241c544&sortBy=floorAskPrice&sortDirection=asc&limit=1&includeAttributes=false HTTP/1.1\r\n' +
+    'Accept: application/json, text/plain, */*\r\n' +
+    'x-api-key: 11e5f5808c0d472c9bd75e069f3139d6\r\n' +
+    'User-Agent: axios/1.9.0\r\n' +
+    'Accept-Encoding: gzip, compress, deflate, br\r\n' +
+    'Host: nfttools.pro\r\n' +
+    'Connection: keep-alive\r\n' +
+    '\r\n',
+  _keepAliveTimeout: 0,
+  _onPendingData: [Function: nop],
+  agent: Agent {
+    _events: [Object: null prototype],
+    _eventsCount: 2,
+    _maxListeners: undefined,
+    defaultPort: 443,
+    protocol: 'https:',
+    options: [Object: null prototype],
+    requests: [Object: null prototype] {},
+    sockets: [Object: null prototype],
+    freeSockets: [Object: null prototype] {},
+    keepAliveMsecs: 1000,
+    keepAlive: true,
+    maxSockets: Infinity,
+    maxFreeSockets: 256,
+    scheduling: 'lifo',
+    maxTotalSockets: Infinity,
+    totalSocketCount: 14,
+    maxCachedSessions: 100,
+    _sessionCache: [Object],
+    [Symbol(kCapture)]: false
+  },
+  socketPath: undefined,
+  method: 'GET',
+  maxHeaderSize: undefined,
+  insecureHTTPParser: undefined,
+  joinDuplicateHeaders: undefined,
+  path: '/kong/magiceden/v3/rtp/ethereum/tokens/v7?includeQuantity=true&includeLastSale=true&excludeSpam=true&excludeBurnt=true&collection=0xed5af388653567af2f388e6224dc7c4b3241c544&sortBy=floorAskPrice&sortDirection=asc&limit=1&includeAttributes=false',
+  _ended: false,
+  res: IncomingMessage {
+    _readableState: [ReadableState],
+    _events: [Object: null prototype],
+    _eventsCount: 4,
+    _maxListeners: undefined,
+    socket: [TLSSocket],
+    httpVersionMajor: 1,
+    httpVersionMinor: 1,
+    httpVersion: '1.1',
+    complete: false,
+    rawHeaders: [Array],
+    rawTrailers: [],
+    joinDuplicateHeaders: undefined,
+    aborted: true,
+    upgrade: false,
+    url: '',
+    method: null,
+    statusCode: 200,
+    statusMessage: 'OK',
+    client: [TLSSocket],
+    _consuming: true,
+    _dumped: false,
+    req: [Circular *1],
+    responseUrl: 'https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/tokens/v7?includeQuantity=true&includeLastSale=true&excludeSpam=true&excludeBurnt=true&collection=0xed5af388653567af2f388e6224dc7c4b3241c544&sortBy=floorAskPrice&sortDirection=asc&limit=1&includeAttributes=false',
+    redirects: [],
+    [Symbol(kCapture)]: false,
+    [Symbol(kHeaders)]: [Object],
+    [Symbol(kHeadersCount)]: 66,
+    [Symbol(kTrailers)]: null,
+    [Symbol(kTrailersCount)]: 0
+  },
+  aborted: false,
+  timeoutCb: [Function: emitRequestTimeout],
+  upgradeOrConnect: false,
+  parser: null,
+  maxHeadersCount: null,
+  reusedSocket: false,
+  host: 'nfttools.pro',
+  protocol: 'https:',
+  _redirectable: Writable {
+    _writableState: [WritableState],
+    _events: [Object: null prototype],
+    _eventsCount: 3,
+    _maxListeners: undefined,
+    _options: [Object],
+    _ended: true,
+    _ending: true,
+    _redirectCount: 0,
+    _redirects: [],
+    _requestBodyLength: 0,
+    _requestBodyBuffers: [],
+    _onNativeResponse: [Function (anonymous)],
+    _currentRequest: [Circular *1],
+    _currentUrl: 'https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/tokens/v7?includeQuantity=true&includeLastSale=true&excludeSpam=true&excludeBurnt=true&collection=0xed5af388653567af2f388e6224dc7c4b3241c544&sortBy=floorAskPrice&sortDirection=asc&limit=1&includeAttributes=false',
+    _timeout: null,
+    [Symbol(kCapture)]: false
+  },
+  [Symbol(kCapture)]: false,
+  [Symbol(kBytesWritten)]: 0,
+  [Symbol(kNeedDrain)]: false,
+  [Symbol(corked)]: 0,
+  [Symbol(kOutHeaders)]: [Object: null prototype] {
+    accept: [Array],
+    'x-api-key': [Array],
+    'user-agent': [Array],
+    'accept-encoding': [Array],
+    host: [Array]
+  },
+  [Symbol(errored)]: null,
+  [Symbol(kHighWaterMark)]: 16384,
+  [Symbol(kRejectNonStandardBodyWrites)]: false,
+  [Symbol(kUniqueHeaders)]: null
+}
+}
+[Blur Worker Error] Job bid-6892b2a4024f36b1681fbf8e-blur-SkinTiger Red-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 failed: Blur job bid-6892b2a4024f36b1681fbf8e-blur-SkinTiger Red-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 (ID: bid-6892b2a4024f36b1681fbf8e-blur-SkinTiger Red-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21) timed out after 60000ms - aborted
+[Blur Worker] Job bid-6892b2a4024f36b1681fbf8e-blur-SkinTiger Red-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 failed: Blur job bid-6892b2a4024f36b1681fbf8e-blur-SkinTiger Red-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 (ID: bid-6892b2a4024f36b1681fbf8e-blur-SkinTiger Red-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21) timed out after 60000ms - aborted
+[Blur Queue Event] Job failed: bid-6892b2a4024f36b1681fbf8e-blur-SkinTiger Red-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 - Blur job bid-6892b2a4024f36b1681fbf8e-blur-SkinTiger Red-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21 (ID: bid-6892b2a4024f36b1681fbf8e-blur-SkinTiger Red-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21) timed out after 60000ms - aborted
+[Blur Queue Event] Processing failure for task 6892b2a4024f36b1681fbf8e
+[Job Complete] 6892b2a4024f36b1681fbf8e-blur: 165/165 (Job: bid-6892b2a4024f36b1681fbf8e-blur-SkinTiger Red-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+Total Jobs: 497 (Blur: 165, Magiceden: 166, Opensea: 166)
+Completed: 497
+Overall Progress: 100.00%
+[██████████████████████████████] 100.00%
+Failed to fetch Blur collection stats for lilpudgys: timeout of 60000ms exceeded
+[ERROR] 0x_SERVER_MARKETPLACE_BLUR_COLLECTION_AxiosError
+Error: timeout of 60000ms exceeded
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 5, DONE: 5031 }
+Average RPS: 4.00 Executing: 5.00 True RPS: 5.00
+[Blur Job Error] BLUR_TRAIT_BID: Error: Missing key for job bid-6892b2a4024f36b1681fbf8e-blur-SkinTiger Red-lilpudgys-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21. updateProgress
+CONNECTED TO MARKETPLACE EVENTS WEBSOCKET (ID: conn_1754582725940_mwtst7g92) at 2025-08-07T16:05:25.940Z
+[INFO] 0x_SERVER_WEBSOCKET_WEBSOCKET
+Cleared active subscriptions for fresh reconnect
+----------------------------------------------------------------------
+SUBSCRIBED TO COLLECTION: lilpudgys (ALL MARKETPLACES)
+----------------------------------------------------------------------
+----------------------------------------------------------------------
+SUBSCRIBED TO COLLECTION: azuki (ALL MARKETPLACES)
+----------------------------------------------------------------------
+Re-subscribing to listing collections after WebSocket reconnection...
+Found 0 active listings with instant price matching
+Listing re-subscription complete
+Checking if any listings were outbid during disconnection...
+Processing all active listings...
+Found 0 active listings to process
+All active listings have been queued for processing
+[ERROR] 0x_SERVER_DATABASE_UPDATE_AxiosError
+Error: stream has been aborted
+Error in withLock for key stats:0xed5af388653567af2f388e6224dc7c4b3241c544: AxiosError: stream has been aborted
+  at IncomingMessage.handlerStreamAborted (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/adapters/http.js:571:23)
+  at IncomingMessage.emit (node:events:514:28)
+  at IncomingMessage.emit (node:domain:488:12)
+  at IncomingMessage._destroy (node:_http_incoming:224:10)
+  at _destroy (node:internal/streams/destroy:109:10)
+  at IncomingMessage.destroy (node:internal/streams/destroy:71:5)
+  at TLSSocket.socketCloseListener (node:_http_client:455:11)
+  at TLSSocket.emit (node:events:526:35)
+  at TLSSocket.emit (node:domain:488:12)
+  at node:net:337:12
+  at Axios.request (/Users/titan/projects/nfttools/bidding-bot/server/node_modules/axios/lib/core/Axios.js:45:41)
+  at processTicksAndRejections (node:internal/process/task_queues:95:5) {
+code: 'ERR_BAD_RESPONSE',
+config: {
+  transitional: {
+    silentJSONParsing: true,
+    forcedJSONParsing: true,
+    clarifyTimeoutError: false
+  },
+  adapter: [ 'xhr', 'http', 'fetch' ],
+  transformRequest: [ [Function: transformRequest] ],
+  transformResponse: [ [Function: transformResponse] ],
+  timeout: 60000,
+  xsrfCookieName: 'XSRF-TOKEN',
+  xsrfHeaderName: 'X-XSRF-TOKEN',
+  maxContentLength: -1,
+  maxBodyLength: -1,
+  env: { FormData: [Function [FormData]], Blob: [class Blob] },
+  validateStatus: [Function: validateStatus],
+  headers: Object [AxiosHeaders] {
+    Accept: 'application/json, text/plain, */*',
+    'Content-Type': undefined,
+    'x-api-key': '11e5f5808c0d472c9bd75e069f3139d6',
+    'User-Agent': 'axios/1.9.0',
+    'Accept-Encoding': 'gzip, compress, deflate, br'
+  },
+  params: {
+    includeQuantity: true,
+    includeLastSale: true,
+    excludeSpam: true,
+    excludeBurnt: true,
+    collection: '0xed5af388653567af2f388e6224dc7c4b3241c544',
+    sortBy: 'floorAskPrice',
+    sortDirection: 'asc',
+    limit: 1,
+    includeAttributes: false
+  },
+  method: 'get',
+  url: 'https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/tokens/v7',
+  allowAbsoluteUrls: true,
+  metadata: { startTime: 1754582654044, jobId: undefined },
+  'axios-retry': {
+    retries: 3,
+    retryCondition: [AsyncFunction: retryCondition],
+    retryDelay: [Function: retryDelay],
+    shouldResetTimeout: false,
+    onRetry: [Function: onRetry],
+    onMaxRetryTimesExceeded: [Function: onMaxRetryTimesExceeded],
+    validateResponse: null,
+    retryCount: 1,
+    lastRequestTime: 1754582654044
+  },
+  data: undefined
+},
+request: <ref *1> ClientRequest {
+  _events: [Object: null prototype] {
+    abort: [Function (anonymous)],
+    aborted: [Function (anonymous)],
+    connect: [Function (anonymous)],
+    error: [Function (anonymous)],
+    socket: [Function (anonymous)],
+    timeout: [Function (anonymous)],
+    finish: [Function: requestOnFinish]
+  },
+  _eventsCount: 7,
+  _maxListeners: undefined,
+  outputData: [],
+  outputSize: 0,
+  writable: true,
+  destroyed: true,
+  _last: true,
+  chunkedEncoding: false,
+  shouldKeepAlive: true,
+  maxRequestsOnConnectionReached: false,
+  _defaultKeepAlive: true,
+  useChunkedEncodingByDefault: false,
+  sendDate: false,
+  _removedConnection: false,
+  _removedContLen: false,
+  _removedTE: false,
+  strictContentLength: false,
+  _contentLength: 0,
+  _hasBody: true,
+  _trailer: '',
+  finished: true,
+  _headerSent: true,
+  _closed: true,
+  socket: TLSSocket {
+    _tlsOptions: [Object],
+    _secureEstablished: true,
+    _securePending: false,
+    _newSessionPending: false,
+    _controlReleased: true,
+    secureConnecting: false,
+    _SNICallback: null,
+    servername: 'nfttools.pro',
+    alpnProtocol: false,
+    authorized: true,
+    authorizationError: null,
+    encrypted: true,
+    _events: [Object: null prototype],
+    _eventsCount: 11,
+    connecting: false,
+    _hadError: false,
+    _parent: null,
+    _host: 'nfttools.pro',
+    _closeAfterHandlingError: false,
+    _readableState: [ReadableState],
+    _maxListeners: undefined,
+    _writableState: [WritableState],
+    allowHalfOpen: false,
+    _sockname: null,
+    _pendingData: null,
+    _pendingEncoding: '',
+    server: undefined,
+    _server: null,
+    ssl: null,
+    _requestCert: true,
+    _rejectUnauthorized: true,
+    timeout: 60000,
+    parser: null,
+    _httpMessage: [Circular *1],
+    [Symbol(alpncallback)]: null,
+    [Symbol(res)]: null,
+    [Symbol(verified)]: true,
+    [Symbol(pendingSession)]: null,
+    [Symbol(async_id_symbol)]: 1292357,
+    [Symbol(kHandle)]: null,
+    [Symbol(lastWriteQueueSize)]: 0,
+    [Symbol(timeout)]: Timeout {
+      _idleTimeout: -1,
+      _idlePrev: null,
+      _idleNext: null,
+      _idleStart: 494412,
+      _onTimeout: null,
+      _timerArgs: undefined,
+      _repeat: null,
+      _destroyed: true,
+      [Symbol(refed)]: false,
+      [Symbol(kHasPrimitive)]: false,
+      [Symbol(asyncId)]: 1292366,
+      [Symbol(triggerId)]: 1292361
+    },
+    [Symbol(kBuffer)]: null,
+    [Symbol(kBufferCb)]: null,
+    [Symbol(kBufferGen)]: null,
+    [Symbol(kCapture)]: false,
+    [Symbol(kSetNoDelay)]: false,
+    [Symbol(kSetKeepAlive)]: true,
+    [Symbol(kSetKeepAliveInitialDelay)]: 60,
+    [Symbol(kBytesRead)]: 1666,
+    [Symbol(kBytesWritten)]: 463,
+    [Symbol(connect-options)]: [Object]
+  },
+  _header: 'GET /kong/magiceden/v3/rtp/ethereum/tokens/v7?includeQuantity=true&includeLastSale=true&excludeSpam=true&excludeBurnt=true&collection=0xed5af388653567af2f388e6224dc7c4b3241c544&sortBy=floorAskPrice&sortDirection=asc&limit=1&includeAttributes=false HTTP/1.1\r\n' +
+    'Accept: application/json, text/plain, */*\r\n' +
+    'x-api-key: 11e5f5808c0d472c9bd75e069f3139d6\r\n' +
+    'User-Agent: axios/1.9.0\r\n' +
+    'Accept-Encoding: gzip, compress, deflate, br\r\n' +
+    'Host: nfttools.pro\r\n' +
+    'Connection: keep-alive\r\n' +
+    '\r\n',
+  _keepAliveTimeout: 0,
+  _onPendingData: [Function: nop],
+  agent: Agent {
+    _events: [Object: null prototype],
+    _eventsCount: 2,
+    _maxListeners: undefined,
+    defaultPort: 443,
+    protocol: 'https:',
+    options: [Object: null prototype],
+    requests: [Object: null prototype] {},
+    sockets: [Object: null prototype],
+    freeSockets: [Object: null prototype] {},
+    keepAliveMsecs: 1000,
+    keepAlive: true,
+    maxSockets: Infinity,
+    maxFreeSockets: 256,
+    scheduling: 'lifo',
+    maxTotalSockets: Infinity,
+    totalSocketCount: 12,
+    maxCachedSessions: 100,
+    _sessionCache: [Object],
+    [Symbol(kCapture)]: false
+  },
+  socketPath: undefined,
+  method: 'GET',
+  maxHeaderSize: undefined,
+  insecureHTTPParser: undefined,
+  joinDuplicateHeaders: undefined,
+  path: '/kong/magiceden/v3/rtp/ethereum/tokens/v7?includeQuantity=true&includeLastSale=true&excludeSpam=true&excludeBurnt=true&collection=0xed5af388653567af2f388e6224dc7c4b3241c544&sortBy=floorAskPrice&sortDirection=asc&limit=1&includeAttributes=false',
+  _ended: false,
+  res: IncomingMessage {
+    _readableState: [ReadableState],
+    _events: [Object: null prototype],
+    _eventsCount: 4,
+    _maxListeners: undefined,
+    socket: [TLSSocket],
+    httpVersionMajor: 1,
+    httpVersionMinor: 1,
+    httpVersion: '1.1',
+    complete: false,
+    rawHeaders: [Array],
+    rawTrailers: [],
+    joinDuplicateHeaders: undefined,
+    aborted: true,
+    upgrade: false,
+    url: '',
+    method: null,
+    statusCode: 200,
+    statusMessage: 'OK',
+    client: [TLSSocket],
+    _consuming: true,
+    _dumped: false,
+    req: [Circular *1],
+    responseUrl: 'https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/tokens/v7?includeQuantity=true&includeLastSale=true&excludeSpam=true&excludeBurnt=true&collection=0xed5af388653567af2f388e6224dc7c4b3241c544&sortBy=floorAskPrice&sortDirection=asc&limit=1&includeAttributes=false',
+    redirects: [],
+    [Symbol(kCapture)]: false,
+    [Symbol(kHeaders)]: [Object],
+    [Symbol(kHeadersCount)]: 66,
+    [Symbol(kTrailers)]: null,
+    [Symbol(kTrailersCount)]: 0
+  },
+  aborted: false,
+  timeoutCb: [Function: emitRequestTimeout],
+  upgradeOrConnect: false,
+  parser: null,
+  maxHeadersCount: null,
+  reusedSocket: false,
+  host: 'nfttools.pro',
+  protocol: 'https:',
+  _redirectable: Writable {
+    _writableState: [WritableState],
+    _events: [Object: null prototype],
+    _eventsCount: 3,
+    _maxListeners: undefined,
+    _options: [Object],
+    _ended: true,
+    _ending: true,
+    _redirectCount: 0,
+    _redirects: [],
+    _requestBodyLength: 0,
+    _requestBodyBuffers: [],
+    _onNativeResponse: [Function (anonymous)],
+    _currentRequest: [Circular *1],
+    _currentUrl: 'https://nfttools.pro/kong/magiceden/v3/rtp/ethereum/tokens/v7?includeQuantity=true&includeLastSale=true&excludeSpam=true&excludeBurnt=true&collection=0xed5af388653567af2f388e6224dc7c4b3241c544&sortBy=floorAskPrice&sortDirection=asc&limit=1&includeAttributes=false',
+    _timeout: null,
+    [Symbol(kCapture)]: false
+  },
+  [Symbol(kCapture)]: false,
+  [Symbol(kBytesWritten)]: 0,
+  [Symbol(kNeedDrain)]: false,
+  [Symbol(corked)]: 0,
+  [Symbol(kOutHeaders)]: [Object: null prototype] {
+    accept: [Array],
+    'x-api-key': [Array],
+    'user-agent': [Array],
+    'accept-encoding': [Array],
+    host: [Array]
+  },
+  [Symbol(errored)]: null,
+  [Symbol(kHighWaterMark)]: 16384,
+  [Symbol(kRejectNonStandardBodyWrites)]: false,
+  [Symbol(kUniqueHeaders)]: null
+}
+}
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 208137ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+[Parent Job Complete] 6892b2a4024f36b1681fbf8e-blur: All 165 jobs completed
+[All Jobs Complete] Task 6892b2a4024f36b1681fbf8e: All marketplace jobs complete, checking percentage...
+Failed to send logs to Axiom: {
+message: 'getaddrinfo ENOTFOUND api.axiom.co',
+status: undefined,
+data: undefined,
+headers: undefined
+}
+Received subscription sync: { subscriptions: 2 }
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 4, DONE: 5033 }
+Average RPS: 3.33 Executing: 4.00 True RPS: 4.00
+Syncing subscriptions after reconnection: { activeSubscriptions: 4, persistentListings: 4 }
+Resubscribing to collection: {
+subscriptionId: 'say-gm:opensea:listing',
+slug: 'say-gm',
+eventName: 'join_listings',
+subscriptionType: 'listing',
+clientId: '11e5f5808c0d472c9bd75e069f3139d6'
+}
+Subscription sync complete: {
+biddingCollections: 0,
+listingCollections: 1,
+failed: 0,
+failedCollections: [],
+totalActiveAfterSync: 4
+}
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 209143ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 4, DONE: 5033 }
+Average RPS: 3.33 Executing: 4.00 True RPS: 4.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 4, DONE: 5033 }
+Average RPS: 3.33 Executing: 4.00 True RPS: 4.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 4, DONE: 5033 }
+Average RPS: 3.33 Executing: 4.00 True RPS: 4.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 4, DONE: 5033 }
+Average RPS: 3.33 Executing: 4.00 True RPS: 4.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 4, DONE: 5033 }
+Average RPS: 3.33 Executing: 4.00 True RPS: 4.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 4, DONE: 5033 }
+Average RPS: 3.33 Executing: 4.00 True RPS: 4.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 4, DONE: 5033 }
+Average RPS: 3.33 Executing: 4.00 True RPS: 4.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 4, DONE: 5033 }
+Average RPS: 4.00 Executing: 4.00 True RPS: 4.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 4, DONE: 5033 }
+Average RPS: 2.00 Executing: 4.00 True RPS: 4.00
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 4, DONE: 5033 }
+Average RPS: 0.00 Executing: 4.00 True RPS: 4.00
+
+
+
+# ERROR 2
+Error: Job 6894cd63b88d2e6304e70472-magiceden-schedule (ID: 6894cd63b88d2e6304e70472-magiceden-schedule) timed out after 60000ms - aborted
+    at Timeout._onTimeout (/Users/titan/projects/nfttools/bidding-bot/server/src/index.ts:1933:22)
+    at listOnTimeout (node:internal/timers:573:17)
+    at processTimers (node:internal/timers:514:7)
+[Worker 1] Job 6894cd63b88d2e6304e70472-magiceden-schedule failed: Job 6894cd63b88d2e6304e70472-magiceden-schedule (ID: 6894cd63b88d2e6304e70472-magiceden-schedule) timed out after 60000ms - aborted
+
+# ERROR 3
+schedule jobs retry
+
+# ERROR 4
+
+Analysis of Early Returns in Scheduled Bid Processing Functions
+
+processOpenseaScheduledBid (4 early returns)
+
+1. Line 9915 - Marketplace not enabled globally
+if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea"))
+  - Checks if OpenSea is in the global enabledMarketplaces array
+  - This is a system-wide setting
+2. Line 9920 - Task validation fails
+if (!currentTask || !currentTask.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea"))
+  - Task doesn't exist in activeTasks
+  - Task is not running (running: false)
+  - OpenSea is not in the task's selected marketplaces
+3. Line 9930 - No preprocessing data
+if (!preprocessing || !preprocessing.opensea.enabled)
+  - No preprocessing data exists for the task
+  - OpenSea is not enabled in preprocessing
+4. Line 9943 - Skip reason exists
+if (preprocessing.opensea.skipReason)
+  - Preprocessing has a skip reason (e.g., "Trait bidding not available for {slug}")
+  - Sets warning flags and messages before returning
+
+processBlurScheduledBid (7 early returns)
+
+1. Line 10359 - Task validation fails
+if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur") ||
+!enabledMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur"))
+  - Combined check for task existence, running status, marketplace selection, and global enablement
+2. Line 10369 - No preprocessing data
+if (!preprocessing || !preprocessing.blur.enabled)
+  - No preprocessing data or Blur not enabled
+3. Line 10383 - Skip reason exists
+if (preprocessing.blur.skipReason)
+  - Preprocessing has skip reason (e.g., "Token bids not supported on Blur")
+4. Line 10421 - Currency not WETH
+if (currencySymbol.toLowerCase() !== "weth")
+  - Blur only supports WETH currency
+  - Sets warning: "{currencySymbol} is not supported on Blur"
+5. Line 10464 - Wallet authentication blocked
+if (blockTime > Date.now())
+  - Wallet is blocked from authentication until a future time
+  - Sets warning: "Authentication blocked - retry in {waitSeconds}s"
+6. Line 10487 - Authentication error with block message
+if (authError.message && authError.message.includes('Authentication blocked until'))
+  - Pre-authentication failed with blocking error
+  - Inside catch block for authentication attempt
+7. Line 10501 - Wallet paused
+if (pauseTime > Date.now())
+  - Wallet is paused for rate limiting until a future time
+  - Logs: "Wallet is paused for {seconds}s. Skipping job creation."
+
+processMagicedenScheduledBid (4 early returns)
+
+1. Line 12087 - Marketplace not enabled globally
+if (!enabledMarketplaces.map(m => m.toLowerCase()).includes("magiceden"))
+  - MagicEden not in global enabled marketplaces
+2. Line 12100 - Task validation fails
+if (!currentTask?.running || !currentTask.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden"))
+  - Task not running or MagicEden not selected
+3. Line 12104 - No preprocessing data
+if (!preprocessing || !preprocessing.magiceden.enabled)
+  - No preprocessing data or MagicEden not enabled
+4. Line 12118 - Skip reason exists
+if (preprocessing.magiceden.skipReason)
+  - Preprocessing has skip reason (none currently set for MagicEden)
+
+Key Observations:
+
+1. Blur has the most complex validation with 7 early returns including:
+  - Currency validation (WETH only)
+  - Authentication blocking
+  - Wallet pause/rate limiting
+2. Common patterns across all three:
+  - Marketplace global enablement check
+  - Task existence and running status
+  - Preprocessing data validation
+  - Skip reason handling
+3. Temporary vs Permanent conditions:
+  - Permanent: Marketplace not enabled, task not selected, currency mismatch
+  - Temporary: Wallet blocked/paused (Blur only), which could benefit from retries
+4. Warning system:
+  - Most early returns set warning flags and messages for UI feedback
+  - Blur provides the most detailed temporary condition feedback
+5. Potential issues:
+  - Temporary conditions (auth block, wallet pause) are treated the same as permanent conditions
+  - No differentiation between retryable and non-retryable conditions
