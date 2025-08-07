@@ -50,7 +50,7 @@ const defaultConfig = {
   showFriendlyErrorStack: true,
   enableOfflineQueue: true,
   reconnectOnError: (err: Error) => {
-    const targetErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED'];
+    const targetErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'CLUSTERDOWN'];
     return targetErrors.some(errType => err.message.includes(errType));
   }
 };

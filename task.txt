@@ -1,0 +1,220 @@
+[Queue Event] Processing completion for task 68946a80493b1b45af82378e, marketplace opensea
+[Job Complete] 68946a80493b1b45af82378e-opensea: 730/1000 (Job: bid-68946a80493b1b45af82378e-opensea-665-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 1000 (Opensea: 1000)
+  Completed: 730
+  Overall Progress: 73.00%
+  [██████████████████████░░░░░░░░] 73.00%
+[Queue Event] Job completed: bid-68946a80493b1b45af82378e-opensea-642-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 68946a80493b1b45af82378e, marketplace opensea
+[Job Complete] 68946a80493b1b45af82378e-opensea: 731/1000 (Job: bid-68946a80493b1b45af82378e-opensea-642-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 1000 (Opensea: 1000)
+  Completed: 731
+  Overall Progress: 73.10%
+  [██████████████████████░░░░░░░░] 73.10%
+[Queue Event] Job completed: bid-68946a80493b1b45af82378e-opensea-997-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 68946a80493b1b45af82378e, marketplace opensea
+[Job Complete] 68946a80493b1b45af82378e-opensea: 732/1000 (Job: bid-68946a80493b1b45af82378e-opensea-997-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 1000 (Opensea: 1000)
+  Completed: 732
+  Overall Progress: 73.20%
+  [██████████████████████░░░░░░░░] 73.20%
+[Queue Event] Job completed: bid-68946a80493b1b45af82378e-opensea-671-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 68946a80493b1b45af82378e, marketplace opensea
+[Job Complete] 68946a80493b1b45af82378e-opensea: 733/1000 (Job: bid-68946a80493b1b45af82378e-opensea-671-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 1000 (Opensea: 1000)
+  Completed: 733
+  Overall Progress: 73.30%
+  [██████████████████████░░░░░░░░] 73.30%
+[Queue Event] Job completed: bid-68946a80493b1b45af82378e-opensea-985-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 68946a80493b1b45af82378e, marketplace opensea
+[Job Complete] 68946a80493b1b45af82378e-opensea: 734/1000 (Job: bid-68946a80493b1b45af82378e-opensea-985-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 1000 (Opensea: 1000)
+  Completed: 734
+  Overall Progress: 73.40%
+  [██████████████████████░░░░░░░░] 73.40%
+[Queue Event] Job completed: bid-68946a80493b1b45af82378e-opensea-964-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 68946a80493b1b45af82378e, marketplace opensea
+[Job Complete] 68946a80493b1b45af82378e-opensea: 735/1000 (Job: bid-68946a80493b1b45af82378e-opensea-964-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 1000 (Opensea: 1000)
+  Completed: 735
+  Overall Progress: 73.50%
+  [██████████████████████░░░░░░░░] 73.50%
+[Queue Event] Job completed: bid-68946a80493b1b45af82378e-opensea-986-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 68946a80493b1b45af82378e, marketplace opensea
+[Job Complete] 68946a80493b1b45af82378e-opensea: 736/1000 (Job: bid-68946a80493b1b45af82378e-opensea-986-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 1000 (Opensea: 1000)
+  Completed: 736
+  Overall Progress: 73.60%
+  [██████████████████████░░░░░░░░] 73.60%
+[Queue Event] Job completed: bid-68946a80493b1b45af82378e-opensea-981-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 68946a80493b1b45af82378e, marketplace opensea
+[Job Complete] 68946a80493b1b45af82378e-opensea: 737/1000 (Job: bid-68946a80493b1b45af82378e-opensea-981-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 1000 (Opensea: 1000)
+  Completed: 737
+  Overall Progress: 73.70%
+  [██████████████████████░░░░░░░░] 73.70%
+[Queue Event] Job completed: bid-68946a80493b1b45af82378e-opensea-984-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 68946a80493b1b45af82378e, marketplace opensea
+[Job Complete] 68946a80493b1b45af82378e-opensea: 738/1000 (Job: bid-68946a80493b1b45af82378e-opensea-984-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 1000 (Opensea: 1000)
+  Completed: 738
+  Overall Progress: 73.80%
+  [██████████████████████░░░░░░░░] 73.80%
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 3, DONE: 6733 }
+Average RPS: 0.00 Executing: 3.00 True RPS: 3.00
+[Worker 1] Worker error: Error: Missing lock for job 68946a80493b1b45af82378e-opensea-schedule. moveToDelayed
+    at Scripts.finishedErrors (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:1102:24)
+    at Scripts.moveToDelayed (/app/node_modules/bullmq/dist/cjs/classes/scripts.js:722:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async /app/node_modules/bullmq/dist/cjs/classes/job.js:521:30
+    at async Worker.handleFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:537:32)
+    at async /app/node_modules/bullmq/dist/cjs/classes/worker.js:497:32
+    at async Worker.retryIfFailed (/app/node_modules/bullmq/dist/cjs/classes/worker.js:767:24)
+[Worker 0] Failure tracked: 2/3 in window
+[Worker 0] Error: Worker error: Missing lock for job 68946a80493b1b45af82378e-opensea-schedule. moveToDelayed
+[ERROR] 0x_SERVER_GENERAL_Error
+  Error: Missing lock for job 68946a80493b1b45af82378e-opensea-schedule. moveToDelayed
+[ERROR] 0x_SERVER_OPENSEA_BID_OPENSEA_BIDDING_AxiosError
+  Error: Validation error: Trading is disabled for this item
+OpenSea token bid failed for 68946a80493b1b45af82378e token 674: Unknown OpenSea error
+[Queue Event] Job completed: bid-68946a80493b1b45af82378e-opensea-987-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 68946a80493b1b45af82378e, marketplace opensea
+[Job Complete] 68946a80493b1b45af82378e-opensea: 739/1000 (Job: bid-68946a80493b1b45af82378e-opensea-987-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 1000 (Opensea: 1000)
+  Completed: 739
+  Overall Progress: 73.90%
+  [██████████████████████░░░░░░░░] 73.90%
+[Queue Event] Job completed: bid-68946a80493b1b45af82378e-opensea-1000-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 68946a80493b1b45af82378e, marketplace opensea
+[Job Complete] 68946a80493b1b45af82378e-opensea: 740/1000 (Job: bid-68946a80493b1b45af82378e-opensea-1000-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 1000 (Opensea: 1000)
+  Completed: 740
+  Overall Progress: 74.00%
+  [██████████████████████░░░░░░░░] 74.00%
+[Queue Event] Job completed: bid-68946a80493b1b45af82378e-opensea-961-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 68946a80493b1b45af82378e, marketplace opensea
+[Job Complete] 68946a80493b1b45af82378e-opensea: 741/1000 (Job: bid-68946a80493b1b45af82378e-opensea-961-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 1000 (Opensea: 1000)
+  Completed: 741
+  Overall Progress: 74.10%
+  [██████████████████████░░░░░░░░] 74.10%
+[Queue Event] Job completed: bid-68946a80493b1b45af82378e-opensea-674-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 68946a80493b1b45af82378e, marketplace opensea
+[Job Complete] 68946a80493b1b45af82378e-opensea: 742/1000 (Job: bid-68946a80493b1b45af82378e-opensea-674-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 1000 (Opensea: 1000)
+  Completed: 742
+  Overall Progress: 74.20%
+  [██████████████████████░░░░░░░░] 74.20%
+[ERROR] 0x_SERVER_OPENSEA_BID_OPENSEA_BIDDING_AxiosError
+  Error: Validation error: Item has active enforcement restrictions
+OpenSea token bid failed for 68946a80493b1b45af82378e token 972: Unknown OpenSea error
+[Queue Event] Job completed: bid-68946a80493b1b45af82378e-opensea-972-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 68946a80493b1b45af82378e, marketplace opensea
+[Job Complete] 68946a80493b1b45af82378e-opensea: 743/1000 (Job: bid-68946a80493b1b45af82378e-opensea-972-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 1000 (Opensea: 1000)
+  Completed: 743
+  Overall Progress: 74.30%
+  [██████████████████████░░░░░░░░] 74.30%
+[ERROR] 0x_SERVER_OPENSEA_BID_OPENSEA_BIDDING_AxiosError
+  Error: Validation error: Item has active enforcement restrictions
+OpenSea token bid failed for 68946a80493b1b45af82378e token 699: Unknown OpenSea error
+[Queue Event] Job completed: bid-68946a80493b1b45af82378e-opensea-699-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21
+[Queue Event] Processing completion for task 68946a80493b1b45af82378e, marketplace opensea
+[Job Complete] 68946a80493b1b45af82378e-opensea: 744/1000 (Job: bid-68946a80493b1b45af82378e-opensea-699-azuki-0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21)
+
+[updateTaskRunningPercentage] TOTAL SUMMARY:
+  Total Jobs: 1000 (Opensea: 1000)
+  Completed: 744
+  Overall Progress: 74.40%
+  [██████████████████████░░░░░░░░] 74.40%
+[ERROR] 0x_SERVER_DATABASE_UPDATE_Error
+  Error: Too many Cluster redirections. Last error: ReplyError: CLUSTERDOWN The cluster is down
+Error in withLock for key {address_balances}_0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21: Error: Too many Cluster redirections. Last error: ReplyError: CLUSTERDOWN The cluster is down
+    at DistributedLockManager.acquireLock (/app/dist/src/utils/lock.js:43:43)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async DistributedLockManager.withLock (/app/dist/src/utils/lock.js:74:30)
+    at async fetchAddressBalances (/app/dist/src/index.js:12434:20)
+    at async /app/dist/src/index.js:11475:22
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 6736 }
+Average RPS: 3.00 Executing: 0.00 True RPS: 3.00
+----------------------------------------------------------------------------------------------------------------------------------------------
+[OpenSea Counterbid] Task: 68946a80493b1b45af82378e | Collection: azuki | Type: Token #5513 | Incoming: 4.61 WETH (4.61 WETH) | Quantity: 1 | Maker: 0xc19dc40f81aa9bfeda63f26ccd33aa465e7aa61a
+----------------------------------------------------------------------------------------------------------------------------------------------
+Failed to release lock for key {address_balances}_0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21: Error: Too many Cluster redirections. Last error: ReplyError: MOVED 11014 redis-node-3:6379
+    at DistributedLockManager.releaseLock (/app/dist/src/utils/lock.js:50:30)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async DistributedLockManager.withLock (/app/dist/src/utils/lock.js:102:17)
+    at async fetchAddressBalances (/app/dist/src/index.js:12434:20)
+    at async /app/dist/src/index.js:11475:22
+[ERROR] 0x_SERVER_API_Error
+  Error: Too many Cluster redirections. Last error: ReplyError: CLUSTERDOWN The cluster is down
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 6736 }
+Average RPS: 3.00 Executing: 0.00 True RPS: 3.00
+[processOpenseaScheduledBid] CALLED for task 68946a80493b1b45af82378e
+🔐 [decryptPrivateKey] Starting decryption...
+🔐 [decryptPrivateKey] Password available: true
+🔐 [decryptPrivateKey] Cache hit - age: 194794ms, TTL: 300000ms
+🔐 [decryptPrivateKey] Returning cached key
+----------------------------------------------------------------------------------------------------------------------------------------------
+[OpenSea Counterbid] Task: 68946a80493b1b45af82378e | Collection: azuki | Type: Token #6243 | Incoming: 2.03 WETH (2.03 WETH) | Quantity: 1 | Maker: 0x326dc65443ba10004503fe229589c20710577093
+----------------------------------------------------------------------------------------------------------------------------------------------
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 6736 }
+Average RPS: 3.00 Executing: 0.00 True RPS: 3.00
+----------------------------------------------------------------------------------------------------------------------------------------------
+[OpenSea Counterbid] Task: 68946a80493b1b45af82378e | Collection: azuki | Type: Token #5461 | Incoming: 5.25 WETH (5.25 WETH) | Quantity: 1 | Maker: 0xc19dc40f81aa9bfeda63f26ccd33aa465e7aa61a
+----------------------------------------------------------------------------------------------------------------------------------------------
+[ERROR] 0x_SERVER_DATABASE_UPDATE_Error
+  Error: Too many Cluster redirections. Last error: ReplyError: CLUSTERDOWN The cluster is down
+Error in withLock for key {erc20_0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21}_0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2: Error: Too many Cluster redirections. Last error: ReplyError: CLUSTERDOWN The cluster is down
+    at DistributedLockManager.acquireLock (/app/dist/src/utils/lock.js:43:43)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async DistributedLockManager.withLock (/app/dist/src/utils/lock.js:74:30)
+    at async fetchERC20BalanceFresh (/app/dist/src/utils/balance.js:178:24)
+    at async processOpenseaScheduledBid (/app/dist/src/index.js:8436:29)
+    at async /app/dist/src/index.js:3183:21
+    at async processJob (/app/dist/src/index.js:3139:24)
+    at async bullmq_1.Worker.connection [as processFn] (/app/dist/src/index.js:1503:36)
+    at async /app/node_modules/bullmq/dist/cjs/classes/worker.js:493:32
+Current Limiter Stats: { RECEIVED: 0, QUEUED: 0, RUNNING: 0, EXECUTING: 0, DONE: 6736 }
+Average RPS: 3.00 Executing: 0.00 True RPS: 3.00
+[WARN] 0x_SERVER_BLOCKCHAIN_FAILED
+Failed to fetch fresh balance for 0x1b8AfD0DE8a9368ce635Be8B9572c65d8F590B21/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2
+Error processing OpenSea scheduled bid for task: 68946a80493b1b45af82378e Error: Too many Cluster redirections. Last error: ReplyError: CLUSTERDOWN The cluster is down
+    at DistributedLockManager.acquireLock (/app/dist/src/utils/lock.js:43:43)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async DistributedLockManager.withLock (/app/dist/src/utils/lock.js:74:30)
+    at async fetchERC20BalanceFresh (/app/dist/src/utils/balance.js:178:24)
+    at async processOpenseaScheduledBid (/app/dist/src/index.js:8436:29)
+    at async /app/dist/src/index.js:3183:21
+    at async processJob (/app/dist/src/index.js:3139:24)
+    at async bullmq_1.Worker.connection [as processFn] (/app/dist/src/index.js:1503:36)
+    at async /app/node_modules/bullmq/dist/cjs/classes/worker.js:493:32
+[Queue Event] Skipping schedule job tracking: 68946a80493b1b45af82378e-opensea-schedule

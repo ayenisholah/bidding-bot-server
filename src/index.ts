@@ -2289,6 +2289,17 @@ async function startServer() {
 process.on('SIGINT', async () => {
   console.log('\nReceived SIGINT, cleaning up...');
 
+  // Update all running tasks to not running
+  try {
+    const result = await Task.updateMany(
+      { running: true },
+      { running: false }
+    );
+    console.log(`Updated ${result.modifiedCount} tasks to not running`);
+  } catch (error) {
+    console.error('Error updating task states:', error);
+  }
+
   // Stop connectivity monitoring
   stopConnectivityMonitoring();
 
@@ -2334,6 +2345,17 @@ process.on('SIGINT', async () => {
 
 process.on('SIGTERM', async () => {
   console.log('\nReceived SIGTERM, cleaning up...');
+
+  // Update all running tasks to not running
+  try {
+    const result = await Task.updateMany(
+      { running: true },
+      { running: false }
+    );
+    console.log(`Updated ${result.modifiedCount} tasks to not running`);
+  } catch (error) {
+    console.error('Error updating task states:', error);
+  }
 
   // Stop connectivity monitoring
   stopConnectivityMonitoring();

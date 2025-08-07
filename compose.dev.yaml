@@ -5,27 +5,11 @@ services:
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
-      --cluster-node-timeout 5000
-      --appendonly yes
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-1
-      --cluster-announce-port 6379
-      --cluster-announce-bus-port 16379
-      --maxmemory 4gb
       --maxmemory-policy noeviction
-      --save 900 1
-      --save 300 10
-      --save 60 10000
-      --appendfsync everysec
-      --no-appendfsync-on-rewrite yes
-      --auto-aof-rewrite-percentage 100
-      --auto-aof-rewrite-min-size 64mb
-      --maxmemory-samples 10
-      --active-defrag-threshold-lower 10
-      --active-defrag-threshold-upper 100
-      --active-defrag-ignore-bytes 100mb
-      --active-defrag-cycle-min 25
-      --active-defrag-cycle-max 75
+      --appendonly yes
+      --save ""
     ports:
       - "8001:6379"
       - "18001:16379"
@@ -40,27 +24,11 @@ services:
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
-      --cluster-node-timeout 5000
-      --appendonly yes
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-2
-      --cluster-announce-port 6379
-      --cluster-announce-bus-port 16379
-      --maxmemory 4gb
       --maxmemory-policy noeviction
-      --save 900 1
-      --save 300 10
-      --save 60 10000
-      --appendfsync everysec
-      --no-appendfsync-on-rewrite yes
-      --auto-aof-rewrite-percentage 100
-      --auto-aof-rewrite-min-size 64mb
-      --maxmemory-samples 10
-      --active-defrag-threshold-lower 10
-      --active-defrag-threshold-upper 100
-      --active-defrag-ignore-bytes 100mb
-      --active-defrag-cycle-min 25
-      --active-defrag-cycle-max 75
+      --appendonly yes
+      --save ""
     ports:
       - "8002:6379"
       - "18002:16379"
@@ -75,27 +43,11 @@ services:
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
-      --cluster-node-timeout 5000
-      --appendonly yes
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-3
-      --cluster-announce-port 6379
-      --cluster-announce-bus-port 16379
-      --maxmemory 4gb
       --maxmemory-policy noeviction
-      --save 900 1
-      --save 300 10
-      --save 60 10000
-      --appendfsync everysec
-      --no-appendfsync-on-rewrite yes
-      --auto-aof-rewrite-percentage 100
-      --auto-aof-rewrite-min-size 64mb
-      --maxmemory-samples 10
-      --active-defrag-threshold-lower 10
-      --active-defrag-threshold-upper 100
-      --active-defrag-ignore-bytes 100mb
-      --active-defrag-cycle-min 25
-      --active-defrag-cycle-max 75
+      --appendonly yes
+      --save ""
     ports:
       - "8003:6379"
       - "18003:16379"
@@ -110,27 +62,11 @@ services:
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
-      --cluster-node-timeout 5000
-      --appendonly yes
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-4
-      --cluster-announce-port 6379
-      --cluster-announce-bus-port 16379
-      --maxmemory 4gb
       --maxmemory-policy noeviction
-      --save 900 1
-      --save 300 10
-      --save 60 10000
-      --appendfsync everysec
-      --no-appendfsync-on-rewrite yes
-      --auto-aof-rewrite-percentage 100
-      --auto-aof-rewrite-min-size 64mb
-      --maxmemory-samples 10
-      --active-defrag-threshold-lower 10
-      --active-defrag-threshold-upper 100
-      --active-defrag-ignore-bytes 100mb
-      --active-defrag-cycle-min 25
-      --active-defrag-cycle-max 75
+      --appendonly yes
+      --save ""
     ports:
       - "8004:6379"
       - "18004:16379"
@@ -145,27 +81,11 @@ services:
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
-      --cluster-node-timeout 5000
-      --appendonly yes
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-5
-      --cluster-announce-port 6379
-      --cluster-announce-bus-port 16379
-      --maxmemory 4gb
       --maxmemory-policy noeviction
-      --save 900 1
-      --save 300 10
-      --save 60 10000
-      --appendfsync everysec
-      --no-appendfsync-on-rewrite yes
-      --auto-aof-rewrite-percentage 100
-      --auto-aof-rewrite-min-size 64mb
-      --maxmemory-samples 10
-      --active-defrag-threshold-lower 10
-      --active-defrag-threshold-upper 100
-      --active-defrag-ignore-bytes 100mb
-      --active-defrag-cycle-min 25
-      --active-defrag-cycle-max 75
+      --appendonly yes
+      --save ""
     ports:
       - "8005:6379"
       - "18005:16379"
@@ -180,27 +100,11 @@ services:
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
-      --cluster-node-timeout 5000
-      --appendonly yes
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-6
-      --cluster-announce-port 6379
-      --cluster-announce-bus-port 16379
-      --maxmemory 4gb
       --maxmemory-policy noeviction
-      --save 900 1
-      --save 300 10
-      --save 60 10000
-      --appendfsync everysec
-      --no-appendfsync-on-rewrite yes
-      --auto-aof-rewrite-percentage 100
-      --auto-aof-rewrite-min-size 64mb
-      --maxmemory-samples 10
-      --active-defrag-threshold-lower 10
-      --active-defrag-threshold-upper 100
-      --active-defrag-ignore-bytes 100mb
-      --active-defrag-cycle-min 25
-      --active-defrag-cycle-max 75
+      --appendonly yes
+      --save ""
     ports:
       - "8006:6379"
       - "18006:16379"
@@ -220,27 +124,36 @@ services:
         until redis-cli -h redis-node-4 ping; do sleep 1; done &&
         until redis-cli -h redis-node-5 ping; do sleep 1; done &&
         until redis-cli -h redis-node-6 ping; do sleep 1; done &&
-        echo "Flushing existing data..." &&
-        redis-cli -h redis-node-1 FLUSHALL &&
-        redis-cli -h redis-node-2 FLUSHALL &&
-        redis-cli -h redis-node-3 FLUSHALL &&
-        redis-cli -h redis-node-4 FLUSHALL &&
-        redis-cli -h redis-node-5 FLUSHALL &&
-        redis-cli -h redis-node-6 FLUSHALL &&
-        echo "All nodes are up. Resetting cluster state..." &&
-        redis-cli -h redis-node-1 CLUSTER RESET HARD &&
-        redis-cli -h redis-node-2 CLUSTER RESET HARD &&
-        redis-cli -h redis-node-3 CLUSTER RESET HARD &&
-        redis-cli -h redis-node-4 CLUSTER RESET HARD &&
-        redis-cli -h redis-node-5 CLUSTER RESET HARD &&
-        redis-cli -h redis-node-6 CLUSTER RESET HARD &&
-        echo "Creating cluster..." &&
-        redis-cli --cluster create \
-          redis-node-1:6379 redis-node-2:6379 redis-node-3:6379 \
-          redis-node-4:6379 redis-node-5:6379 redis-node-6:6379 \
-          --cluster-replicas 1 --cluster-yes &&
-        echo "Cluster initialization complete. Verifying..." &&
-        redis-cli -h redis-node-1 cluster nodes
+        echo "Checking cluster state..." &&
+        CLUSTER_STATE=$$(redis-cli -h redis-node-1 cluster info 2>/dev/null | grep cluster_state | cut -d: -f2 | tr -d "\r\n" || echo "unknown") &&
+        echo "Current cluster state: $$CLUSTER_STATE" &&
+        if [ "$$CLUSTER_STATE" = "ok" ]; then
+          echo "Cluster is healthy, skipping reset to preserve data" &&
+          redis-cli -h redis-node-1 cluster nodes &&
+          exit 0
+        else
+          echo "Cluster is not healthy or not initialized, proceeding with setup..." &&
+          echo "Flushing data on replica nodes only (nodes 4-6)..." &&
+          # Only flush replica nodes to preserve master data
+          redis-cli -h redis-node-4 FLUSHALL &&
+          redis-cli -h redis-node-5 FLUSHALL &&
+          redis-cli -h redis-node-6 FLUSHALL &&
+          echo "Resetting cluster state on all nodes..." &&
+          # Reset all nodes for clean cluster initialization
+          redis-cli -h redis-node-1 CLUSTER RESET HARD &&
+          redis-cli -h redis-node-2 CLUSTER RESET HARD &&
+          redis-cli -h redis-node-3 CLUSTER RESET HARD &&
+          redis-cli -h redis-node-4 CLUSTER RESET HARD &&
+          redis-cli -h redis-node-5 CLUSTER RESET HARD &&
+          redis-cli -h redis-node-6 CLUSTER RESET HARD &&
+          echo "Creating cluster with nodes 1-3 as masters, 4-6 as replicas..." &&
+          redis-cli --cluster create \
+            redis-node-1:6379 redis-node-2:6379 redis-node-3:6379 \
+            redis-node-4:6379 redis-node-5:6379 redis-node-6:6379 \
+            --cluster-replicas 1 --cluster-yes &&
+          echo "Cluster initialization complete. Verifying..." &&
+          redis-cli -h redis-node-1 cluster nodes
+        fi
       '
     depends_on:
       - redis-node-1
