@@ -1102,12 +1102,12 @@ export const getNetworkStatus = () => isConnected;
 
 async function checkInternetConnectivity(): Promise<boolean> {
   try {
-    // Try to ping a reliable endpoint
-    const response = await axios.get('https://api.etherscan.io/api?module=proxy&action=eth_blockNumber', {
-      timeout: 5000,
-      validateStatus: () => true
+    // Use Google's connectivity check endpoint - designed for this purpose
+    const response = await axios.get('http://connectivitycheck.gstatic.com/generate_204', {
+      timeout: 5000
     });
-    return response.status === 200;
+    // This endpoint returns 204 No Content when internet is available
+    return response.status === 204;
   } catch (error) {
     return false;
   }
@@ -1124,12 +1124,13 @@ async function handleConnectivityRestored() {
     console.log(YELLOW + `Connectivity was lost for ${downtimeMinutes} minutes ${Math.floor((downtime % 60000) / 1000)} seconds` + RESET);
   }
 
-  // Resume the queue first
+  // Resume both queues first
   try {
     await queue.resume();
-    console.log(GREEN + 'Queue resumed after network restoration' + RESET);
+    await blurQueue.resume();
+    console.log(GREEN + 'Queues resumed after network restoration' + RESET);
   } catch (err) {
-    console.error('Failed to resume queue:', err);
+    console.error('Failed to resume queues:', err);
   }
 
   // Only clear and restart jobs if connectivity was lost for more than 1 minute
@@ -1187,9 +1188,10 @@ function startConnectivityMonitoring() {
       // Pause queue operations during network outage
       try {
         await queue.pause();
-        console.log(YELLOW + 'Queue paused due to network loss' + RESET);
+        await blurQueue.pause();
+        console.log(YELLOW + 'Queues paused due to network loss' + RESET);
       } catch (err) {
-        console.error('Failed to pause queue:', err);
+        console.error('Failed to pause queues:', err);
       }
     }
   }, 30000); // Check every 30 seconds
@@ -2573,7 +2575,7 @@ async function updateTaskRunningPercentage(taskId: string) {
 
       totalJobs += mpTotal;
       completedJobs += mpCompleted;
-      
+
       // Additional safety check for individual marketplace overflow
       if (mpCompleted > mpTotal && mpTotal > 0) {
         console.log(RED + `[updateTaskRunningPercentage] MARKETPLACE OVERFLOW: ${marketplace} completed ${mpCompleted} exceeds total ${mpTotal}` + RESET);
@@ -2845,7 +2847,7 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
 
   // Increment completed jobs with hard cap protection
   parentJob.completedJobs++;
-  
+
   // Additional safety check to prevent overflow (should never happen with above logic)
   if (parentJob.completedJobs > parentJob.totalJobs) {
     console.log(RED + `[markJobAsProcessed] OVERFLOW DETECTED: ${parentJobId} completed ${parentJob.completedJobs} exceeds total ${parentJob.totalJobs}, capping to total` + RESET);
@@ -3200,7 +3202,7 @@ function initializeQueueEventHandlers() {
             console.log(CYAN + `[Queue Event] Numeric job ID ${jobId} completed - no task context available` + RESET);
             return; // Skip numeric job IDs as they don't relate to task tracking
           }
-          
+
           // Try to find task ID in the job ID
           const parts = jobId.split('-');
           if (parts.length >= 2) {
@@ -3249,9 +3251,6 @@ function initializeQueueEventHandlers() {
         return;
       }
 
-      // Log all job failures for debugging
-      console.log(RED + `[Queue Event] Job failed: ${jobId} - ${failedReason}` + RESET);
-
       // Check if this is a cancellation job
       const isCancellationJob = jobId.includes('CANCEL_OPENSEA_BID') ||
         jobId.includes('CANCEL_MAGICEDEN_BID') ||
@@ -3262,8 +3261,6 @@ function initializeQueueEventHandlers() {
       let marketplace: string | undefined;
 
       if (isCancellationJob) {
-        // Handle cancellation jobs (e.g., CANCEL_OPENSEA_BID-taskId-orderId)
-        console.log(MAGENTA + `[Queue Event] Processing cancellation job failure: ${jobId}` + RESET);
 
         const parts = jobId.split('-');
         if (parts.length >= 3) {
@@ -3284,11 +3281,8 @@ function initializeQueueEventHandlers() {
         if (taskId && marketplace) {
           const task = activeTasks.get(taskId);
           if (task) {
-            console.log(YELLOW + `[Queue Event] Processing cancellation failure for task ${taskId}, marketplace ${marketplace}` + RESET);
             await markCancellationJobAsProcessed(taskId, marketplace, jobId);
           }
-        } else {
-          console.log(YELLOW + `[Queue Event] Could not extract task/marketplace from failed cancellation job ID: ${jobId}` + RESET);
         }
       } else {
         // Handle bid jobs (e.g., bid-taskId-marketplace-...)
@@ -3319,11 +3313,8 @@ function initializeQueueEventHandlers() {
         if (taskId && marketplace) {
           const task = activeTasks.get(taskId);
           if (task && task.running) {
-            console.log(YELLOW + `[Queue Event] Processing failure for task ${taskId}, marketplace ${marketplace}` + RESET);
             await markJobAsProcessed(taskId, marketplace, jobId);
           }
-        } else {
-          console.log(YELLOW + `[Queue Event] Could not extract task/marketplace from failed job ID: ${jobId}` + RESET);
         }
       }
     } catch (error) {
@@ -3335,12 +3326,10 @@ function initializeQueueEventHandlers() {
     try {
       // Skip schedule jobs - they are orchestration jobs, not actual bid jobs
       if (jobId.includes('-schedule')) {
-        console.log(CYAN + `[Blur Queue Event] Skipping schedule job tracking: ${jobId}` + RESET);
         return;
       }
 
       // Log all job completions for debugging
-      console.log(BLUE + `[Blur Queue Event] Job completed: ${jobId}` + RESET);
 
       // Try to extract task and marketplace info from job ID
       let taskId: string | undefined;
@@ -3371,11 +3360,8 @@ function initializeQueueEventHandlers() {
       if (taskId) {
         const task = activeTasks.get(taskId);
         if (task && task.running) {
-          console.log(GREEN + `[Blur Queue Event] Processing completion for task ${taskId}` + RESET);
           await markJobAsProcessed(taskId, marketplace, jobId);
         }
-      } else {
-        console.log(YELLOW + `[Blur Queue Event] Could not extract task ID from job ID: ${jobId}` + RESET);
       }
     } catch (error) {
       console.error(RED + `[Blur Queue Event] Error handling job completion for ${jobId}:` + RESET, error);
@@ -8844,12 +8830,10 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 async function handleOpenseaCounterbid(data: any, task: ITask) {
   try {
     const currentTask = activeTasks.get(task._id)
-    console.log(CYAN + `[DEBUG][handleOpenseaCounterbid] Current task status - Running: ${currentTask?.running}, Selected marketplaces: ${currentTask?.selectedMarketplaces}, Enabled: ${enabledMarketplaces}` + RESET);
 
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces
       .map((m) => m.toLowerCase())
       .includes("opensea")) {
-      console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] Task validation failed, exiting` + RESET);
       return;
     }
 
@@ -8940,10 +8924,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
 
     if (!outbidOptions.counterbid) {
-      console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] Counterbid not enabled for task, exiting` + RESET);
       return;
     }
-    console.log(CYAN + `[DEBUG][handleOpenseaCounterbid] Counterbid enabled, proceeding...` + RESET);
     // Only decrypt private key after checking if it's our own bid
     const WALLET_PRIVATE_KEY = decryptPrivateKey(wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.toLowerCase())?.encryptedPrivateKey as string);
 
@@ -9395,17 +9377,10 @@ async function handleBlurCounterbid(data: any, task: ITask) {
   const incomingBid = data
 
   try {
-    // Include task ID in the hash to make it task-specific
     const bidHash = hashBid({ ...data, taskId: task._id });
-    console.log(CYAN + `[DEBUG][handleBlurCounterbid] Bid hash: ${bidHash}` + RESET);
-
-    console.log(CYAN + `[DEBUG][handleBlurCounterbid] Added bid to seen cache (atomic)` + RESET);
-
     const currentTask = activeTasks.get(task._id)
-    console.log(CYAN + `[DEBUG][handleBlurCounterbid] Current task status - Running: ${currentTask?.running}, Selected marketplaces: ${currentTask?.selectedMarketplaces}, Enabled: ${enabledMarketplaces}` + RESET);
 
     if (!currentTask || !currentTask?.running || !currentTask?.selectedMarketplaces?.map((marketplace) => marketplace?.toLowerCase())?.includes("blur") || !enabledMarketplaces?.map((marketplace) => marketplace?.toLowerCase())?.includes("blur")) {
-      console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Task validation failed, exiting` + RESET);
       return;
     }
     const expiry = getExpiry(currentTask?.bidDuration)
@@ -9430,11 +9405,8 @@ async function handleBlurCounterbid(data: any, task: ITask) {
     console.log(GOLD + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
     if (!currentTask?.outbidOptions?.counterbid) {
-      console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Counterbid not enabled for task, exiting` + RESET);
       return;
     }
-    console.log(CYAN + `[DEBUG][handleBlurCounterbid] Counterbid enabled, proceeding...` + RESET);
-
     if (traitBid) {
       console.log(CYAN + `[DEBUG][handleBlurCounterbid] Processing trait bid` + RESET);
       const isTraitBid = currentTask?.bidType === "collection" && selectedTraits && Object.keys(selectedTraits)?.length > 0
