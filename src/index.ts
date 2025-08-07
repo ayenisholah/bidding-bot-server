@@ -632,14 +632,94 @@ const clients = new Set<WebSocket>();
 const walletsArr: string[] = []
 const MIN_BID_DURATION = 60
 
+// Redis cluster health monitoring
+let redisClusterFailures = 0;
+let lastRedisClusterRecovery = 0;
+const REDIS_CLUSTER_FAILURE_THRESHOLD = 2; // Consecutive failures before recovery
+const REDIS_RECOVERY_COOLDOWN = 60000; // 1 minute cooldown between recovery attempts
+
+// Helper to detect Redis cluster errors
+function isRedisClusterError(error: any): boolean {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  return errorMessage.includes('CLUSTERDOWN') || 
+         errorMessage.includes('Too many Cluster redirections') ||
+         errorMessage.includes('MOVED') ||
+         errorMessage.includes('ASK');
+}
+
 function cleanupMemory() {
   if (global.gc) {
     global.gc();
   }
 }
 
+async function checkRedisClusterHealth(): Promise<boolean> {
+  try {
+    const redis = redisClient.getClient();
+    if (!redis) {
+      return false;
+    }
+    
+    // Check cluster info using proper command
+    const clusterInfo = await redis.cluster('INFO') as string;
+    const clusterState = clusterInfo.split('\n')
+      .find((line: string) => line.startsWith('cluster_state:'))
+      ?.split(':')[1]
+      ?.trim();
+    
+    return clusterState === 'ok';
+  } catch (error) {
+    // If we can't even check cluster info, it's definitely not healthy
+    return false;
+  }
+}
+
+async function handleRedisClusterFailure() {
+  const now = Date.now();
+  
+  // Check cooldown
+  if (now - lastRedisClusterRecovery < REDIS_RECOVERY_COOLDOWN) {
+    const cooldownRemaining = Math.ceil((REDIS_RECOVERY_COOLDOWN - (now - lastRedisClusterRecovery)) / 1000);
+    console.log(YELLOW + `Redis cluster recovery on cooldown (${cooldownRemaining}s remaining)` + RESET);
+    return;
+  }
+  
+  console.log(RED + '🚨 REDIS CLUSTER FAILURE DETECTED - Initiating recovery 🚨' + RESET);
+  console.log(RED + `Consecutive failures: ${redisClusterFailures}` + RESET);
+  
+  try {
+    lastRedisClusterRecovery = now;
+    await clearQueueAndRestartJobs();
+    
+    // Reset failure counter after successful recovery
+    redisClusterFailures = 0;
+    console.log(GREEN + '✅ Redis cluster recovery completed' + RESET);
+  } catch (error) {
+    console.error(RED + 'Failed to recover from Redis cluster failure:' + RESET, error);
+    // Don't reset failure counter if recovery fails
+  }
+}
+
 async function monitorHealth() {
   try {
+    // Check Redis cluster health first
+    const isRedisHealthy = await checkRedisClusterHealth();
+    if (!isRedisHealthy) {
+      redisClusterFailures++;
+      console.log(RED + `⚠️  Redis cluster unhealthy - failure count: ${redisClusterFailures}/${REDIS_CLUSTER_FAILURE_THRESHOLD}` + RESET);
+      
+      if (redisClusterFailures >= REDIS_CLUSTER_FAILURE_THRESHOLD) {
+        await handleRedisClusterFailure();
+      }
+      return; // Skip rest of health check if Redis is down
+    } else {
+      // Reset failure counter if Redis is healthy
+      if (redisClusterFailures > 0) {
+        console.log(GREEN + '✅ Redis cluster recovered - resetting failure counter' + RESET);
+        redisClusterFailures = 0;
+      }
+    }
+    
     const counts = await queue.getJobCounts();
     const used = process.memoryUsage();
     const memoryStats = {
@@ -1895,9 +1975,20 @@ async function startServer() {
       );
 
       // Add error handlers for main workers
-      worker.on('error', (error) => {
+      worker.on('error', async (error) => {
         console.error(RED + `[Worker ${i + 1}] Worker error:` + RESET, error);
         trackWorkerFailure(i, `Worker error: ${error.message || String(error)}`);
+        
+        // Check if this is a Redis cluster error
+        if (isRedisClusterError(error)) {
+          console.log(RED + '🚨 Redis cluster error detected in worker' + RESET);
+          redisClusterFailures++;
+          
+          if (redisClusterFailures >= REDIS_CLUSTER_FAILURE_THRESHOLD) {
+            await handleRedisClusterFailure();
+          }
+        }
+        
         logger.logGeneralError(`Main worker ${i + 1} error`, {
           error: error,
           errorMessage: error.message || String(error),
@@ -1970,10 +2061,21 @@ async function startServer() {
     workers.push(blurWorker);
 
     // Add error handlers for Blur queue components
-    blurWorker.on('error', (error) => {
+    blurWorker.on('error', async (error) => {
       console.error(RED + '[Blur Worker] Worker error:' + RESET, error);
       const blurWorkerIndex = workers.length - 1; // Blur worker is the last one
       trackWorkerFailure(blurWorkerIndex, `Blur worker error: ${error.message || String(error)}`);
+      
+      // Check if this is a Redis cluster error
+      if (isRedisClusterError(error)) {
+        console.log(RED + '🚨 Redis cluster error detected in blur worker' + RESET);
+        redisClusterFailures++;
+        
+        if (redisClusterFailures >= REDIS_CLUSTER_FAILURE_THRESHOLD) {
+          await handleRedisClusterFailure();
+        }
+      }
+      
       logger.logGeneralError('Blur worker error', {
         error: error,
         errorMessage: error.message || String(error),
@@ -9986,6 +10088,16 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
     }
   } catch (error) {
     console.error(RED + `Error processing OpenSea scheduled bid for task: ${task._id}` + RESET, error);
+    
+    // Check if this is a Redis cluster failure
+    if (isRedisClusterError(error)) {
+      console.log(RED + '🚨 Redis cluster error detected in scheduled bid processor' + RESET);
+      redisClusterFailures++;
+      
+      if (redisClusterFailures >= REDIS_CLUSTER_FAILURE_THRESHOLD) {
+        await handleRedisClusterFailure();
+      }
+    }
   }
 }
 
