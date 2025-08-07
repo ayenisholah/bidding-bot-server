@@ -2942,7 +2942,14 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
   // Skip if job already processed OR if parent job is already complete (prevents overflow)
   if (processedJobs.has(uniqueJobId) || parentJob.completedJobs >= parentJob.totalJobs) {
     if (processedJobs.has(uniqueJobId)) {
-      console.log(BLUE + `[markJobAsProcessed] Job ${uniqueJobId} already processed, skipping` + RESET);
+      console.log(RED + `[DUPLICATE JOB DETECTED] Job ${uniqueJobId} already processed!` + RESET);
+      console.log(RED + `  TaskId: ${taskId}` + RESET);
+      console.log(RED + `  Marketplace: ${marketplace}` + RESET);
+      console.log(RED + `  Original JobId: ${jobId}` + RESET);
+      console.log(RED + `  ParentJobId: ${parentJobId}` + RESET);
+      console.log(RED + `  ProcessedJobs size: ${processedJobs.size}` + RESET);
+      console.log(RED + `  Stack trace:` + RESET);
+      console.trace();
     } else {
       console.log(YELLOW + `[markJobAsProcessed] Parent job ${parentJobId} already complete (${parentJob.completedJobs}/${parentJob.totalJobs}), preventing overflow` + RESET);
     }
@@ -3338,7 +3345,7 @@ function initializeQueueEventHandlers() {
         if (taskId && marketplace) {
           const task = activeTasks.get(taskId);
           if (task && task.running) {
-            console.log(GREEN + `[Queue Event] Processing completion for task ${taskId}, marketplace ${marketplace}` + RESET);
+            console.log(GREEN + `[Queue Event - MAIN] Processing completion for task ${taskId}, marketplace ${marketplace}, jobId: ${jobId}` + RESET);
             await markJobAsProcessed(taskId, marketplace, jobId);
           }
         } else {
@@ -3420,6 +3427,7 @@ function initializeQueueEventHandlers() {
         if (taskId && marketplace) {
           const task = activeTasks.get(taskId);
           if (task && task.running) {
+            console.log(YELLOW + `[Queue Event - MAIN FAILED] Processing failure for task ${taskId}, marketplace ${marketplace}, jobId: ${jobId}` + RESET);
             await markJobAsProcessed(taskId, marketplace, jobId);
           }
         }
@@ -3467,6 +3475,7 @@ function initializeQueueEventHandlers() {
       if (taskId) {
         const task = activeTasks.get(taskId);
         if (task && task.running) {
+          console.log(GREEN + `[Blur Queue Event] Processing completion for task ${taskId}, marketplace ${marketplace}, jobId: ${jobId}` + RESET);
           await markJobAsProcessed(taskId, marketplace, jobId);
         }
       }
@@ -3515,7 +3524,7 @@ function initializeQueueEventHandlers() {
       if (taskId) {
         const task = activeTasks.get(taskId);
         if (task && task.running) {
-          console.log(YELLOW + `[Blur Queue Event] Processing failure for task ${taskId}` + RESET);
+          console.log(YELLOW + `[Blur Queue Event - FAILED] Processing failure for task ${taskId}, marketplace ${marketplace}, jobId: ${jobId}` + RESET);
           await markJobAsProcessed(taskId, marketplace, jobId);
         }
       } else {
