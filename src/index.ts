@@ -488,7 +488,7 @@ const CANCELLATION_JOB_RETRY_DELAY = 2000;
 function getCancellationJobOptions(taskId: string, orderId: string, jobType: string) {
   return {
     jobId: `${jobType}-${taskId}-${orderId}`,
-    attempts: CANCELLATION_JOB_RETRY_ATTEMPTS, // No retries
+  attempts: CANCELLATION_JOB_RETRY_ATTEMPTS, // No retries
     backoff: {
       type: 'exponential' as const,
       delay: CANCELLATION_JOB_RETRY_DELAY,
