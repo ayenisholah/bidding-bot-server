@@ -488,7 +488,7 @@ const CANCELLATION_JOB_RETRY_DELAY = 2000;
 function getCancellationJobOptions(taskId: string, orderId: string, jobType: string) {
   return {
     jobId: `${jobType}-${taskId}-${orderId}`,
-  attempts: CANCELLATION_JOB_RETRY_ATTEMPTS, // No retries
+    attempts: CANCELLATION_JOB_RETRY_ATTEMPTS, // No retries
     backoff: {
       type: 'exponential' as const,
       delay: CANCELLATION_JOB_RETRY_DELAY,
@@ -2900,19 +2900,12 @@ async function handleTaskCleanup(taskId: string) {
 }
 
 // Helper function to mark a job as processed regardless of outcome
-async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: string) {
-  // Generate a unique identifier for this job - use actual jobId when provided
-  const uniqueJobId = jobId || `${taskId}-${marketplace}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-
+async function markJobAsProcessed(taskId: string, marketplace: string, jobId: string) {
   // Validate task exists and is active
   const task = activeTasks.get(taskId);
   if (!task) {
     console.log(YELLOW + `[markJobAsProcessed] Task ${taskId} not found in activeTasks, skipping` + RESET);
     return;
-  }
-
-  if (taskStatus[taskId]) {
-    taskStatus[taskId].status = 'RUNNING';
   }
 
   // Get parent job
@@ -2940,9 +2933,9 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
   }
 
   // Skip if job already processed OR if parent job is already complete (prevents overflow)
-  if (processedJobs.has(uniqueJobId) || parentJob.completedJobs >= parentJob.totalJobs) {
-    if (processedJobs.has(uniqueJobId)) {
-      console.log(RED + `[DUPLICATE JOB DETECTED] Job ${uniqueJobId} already processed!` + RESET);
+  if (processedJobs.has(jobId) || parentJob.completedJobs >= parentJob.totalJobs) {
+    if (processedJobs.has(jobId)) {
+      console.log(RED + `[DUPLICATE JOB DETECTED] Job ${jobId} already processed!` + RESET);
       console.log(RED + `  TaskId: ${taskId}` + RESET);
       console.log(RED + `  Marketplace: ${marketplace}` + RESET);
       console.log(RED + `  Original JobId: ${jobId}` + RESET);
@@ -2961,7 +2954,7 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
   }
 
   // Add to processed jobs set
-  processedJobs.add(uniqueJobId);
+  processedJobs.add(jobId);
 
   // Increment completed jobs with hard cap protection
   parentJob.completedJobs++;
@@ -2978,7 +2971,7 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
     parentJob.totalJobs = 1;
   }
 
-  console.log(CYAN + `[Job Complete] ${parentJobId}: ${parentJob.completedJobs}/${parentJob.totalJobs} (Job: ${uniqueJobId})` + RESET);
+  console.log(CYAN + `[Job Complete] ${parentJobId}: ${parentJob.completedJobs}/${parentJob.totalJobs} (Job: ${jobId})` + RESET);
 
   // Update task running percentage
   await updateTaskRunningPercentage(taskId);
@@ -5077,6 +5070,17 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
         console.log(YELLOW + `[startTask] Clearing processed jobs for parent: ${parentJobId} (${processedJobs.size} entries)` + RESET);
         processedJobsPerParent.delete(parentJobId);
       }
+    }
+  } else {
+    // Marketplace-specific start - reset only that marketplace's stats
+    errorStatsManager.resetMarketplaceStats(taskId, marketplace.toLowerCase());
+    
+    // Clear processed jobs for this specific marketplace
+    const parentJobId = `${taskId}-${marketplace.toLowerCase()}`;
+    if (processedJobsPerParent.has(parentJobId)) {
+      const processedJobsCount = processedJobsPerParent.get(parentJobId)?.size || 0;
+      console.log(YELLOW + `[startTask] Clearing processed jobs for marketplace-specific parent: ${parentJobId} (${processedJobsCount} entries)` + RESET);
+      processedJobsPerParent.delete(parentJobId);
     }
   }
 
@@ -10932,8 +10936,6 @@ async function processOpenseaTraitBid(data: {
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) {
       return;
     }
-
-    const outbidEnabled = currentTask.outbidOptions?.outbid || false;
 
     // Initialize stats early
     if (!floorPrices[_id]) {

@@ -103,6 +103,44 @@ export class ErrorStatsManager {
   }
 
   /**
+   * Reset error stats for a specific marketplace
+   */
+  resetMarketplaceStats(taskId: string, marketplace: string): void {
+    // Initialize error stats if not exists
+    if (!this.errorStats[taskId]) {
+      this.errorStats[taskId] = {
+        opensea: 0,
+        magiceden: 0,
+        blur: 0
+      };
+    }
+
+    // Reset the specific marketplace count
+    const validMarketplaces = ['opensea', 'magiceden', 'blur'] as const;
+    if (validMarketplaces.includes(marketplace as any)) {
+      this.errorStats[taskId][marketplace as keyof BidCounts[string]] = 0;
+    }
+
+    // Clear seen jobIds for this marketplace
+    if (this.seenJobIds[taskId]) {
+      const marketplacePrefix = `${taskId}-${marketplace}`;
+      const jobIdsToRemove: string[] = [];
+      
+      // Find all jobIds for this marketplace
+      for (const jobId of this.seenJobIds[taskId]) {
+        if (jobId.startsWith(marketplacePrefix)) {
+          jobIdsToRemove.push(jobId);
+        }
+      }
+      
+      // Remove them
+      for (const jobId of jobIdsToRemove) {
+        this.seenJobIds[taskId].delete(jobId);
+      }
+    }
+  }
+
+  /**
    * Get error stats for a task
    */
   getErrorStats(taskId?: string): BidCounts | BidCounts[string] {
