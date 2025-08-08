@@ -482,13 +482,13 @@ const CANCEL_MAGICEDEN_BID = "CANCEL_MAGICEDEN_BID"
 const CANCEL_BLUR_BID = "CANCEL_BLUR_BID"
 
 // Retry configuration for cancellation jobs
-const CANCELLATION_JOB_RETRY_ATTEMPTS = 1; // No retries
+const CANCELLATION_JOB_RETRY_ATTEMPTS = 3; // 3 attempts total (1 initial + 2 retries)
 const CANCELLATION_JOB_RETRY_DELAY = 2000;
 // Helper function to create cancellation job options with retry configuration
 function getCancellationJobOptions(taskId: string, orderId: string, jobType: string) {
   return {
     jobId: `${jobType}-${taskId}-${orderId}`,
-    attempts: CANCELLATION_JOB_RETRY_ATTEMPTS, // No retries
+    attempts: CANCELLATION_JOB_RETRY_ATTEMPTS, // 3 attempts with exponential backoff
     backoff: {
       type: 'exponential' as const,
       delay: CANCELLATION_JOB_RETRY_DELAY,
