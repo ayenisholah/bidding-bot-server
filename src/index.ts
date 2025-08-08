@@ -1953,8 +1953,8 @@ async function startServer() {
           connection: workerConnection,
           prefix: '{bull}',
           concurrency: concurrencyPerWorker,
-          lockDuration: 30000, // 30 seconds lock
-          stalledInterval: 30000, // Check for stalled jobs every 30 seconds
+          lockDuration: 90000, // 90 seconds lock (1.5x job timeout)
+          stalledInterval: 90000, // Check for stalled jobs every 90 seconds
           maxStalledCount: 1 // Move to failed after 1 stall
         }
       );
@@ -2035,8 +2035,8 @@ async function startServer() {
         prefix: '{bull}',
         connection: blurWorkerConnection,
         concurrency: concurrencyPerWorker,
-        lockDuration: 30000, // 30 seconds lock
-        stalledInterval: 30000, // Check for stalled jobs every 30 seconds
+        lockDuration: 90000, // 90 seconds lock (1.5x job timeout)
+        stalledInterval: 90000, // Check for stalled jobs every 90 seconds
         maxStalledCount: 1 // Move to failed after 1 stall
       }
     );
@@ -2954,6 +2954,10 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId?: s
       console.log(YELLOW + `[markJobAsProcessed] Parent job ${parentJobId} already complete (${parentJob.completedJobs}/${parentJob.totalJobs}), preventing overflow` + RESET);
     }
     return;
+  }
+
+  if (taskStatus[taskId]) {
+    taskStatus[taskId].status = 'RUNNING';
   }
 
   // Add to processed jobs set
@@ -10005,7 +10009,7 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
         parentJob.totalJobs = preprocessing.opensea.tokens.length;
         console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE processing jobs${RESET}`);
       }
-      
+
       await processBulkJobs(jobs, true);
     } else if (preprocessing.opensea.traits.length > 0) {
       // Trait bid
@@ -10039,13 +10043,13 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
         parentJob.totalJobs = preprocessing.opensea.traits.length;
         console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE processing jobs${RESET}`);
       }
-      
+
       await processBulkJobs(traitJobs, true);
     } else if (preprocessing.opensea.jobCount === 1) {
       // Collection bid
       console.log(`${BLUE}[OPENSEA] Creating 1 collection bid job${RESET}`);
       const jobId = `bid-${taskId}-opensea-${currentTask.contract.slug}-collection`
-      
+
       // Ensure parent job exists with correct totalJobs BEFORE adding job
       const parentJobId = `${taskId}-opensea`;
       await ensureParentJobExists(taskId, 'opensea');
@@ -10537,7 +10541,7 @@ async function processBlurScheduledBid(task: ITask) {
 
       console.log(`${GOLD}[BLUR] Processing ${totalTraits} trait bids in ${totalBatches} batches (${batchSize} per batch)${RESET}`);
       console.log(`${GOLD}[BLUR] Rate limit: ${BLUR_RATE_LIMIT.maxBidsPerWindow} bids per ${BLUR_RATE_LIMIT.windowDuration / 1000} seconds${RESET}`);
-      
+
       // Ensure parent job exists with correct totalJobs BEFORE processing jobs
       const parentJobId = `${taskId}-blur`;
       await ensureParentJobExists(taskId, 'blur');
@@ -10608,7 +10612,7 @@ async function processBlurScheduledBid(task: ITask) {
 
       const slug = removeChar(currentTask.contract.slug, "-")
       const jobId = `bid-${taskId}-blur-${slug}-collection-${WALLET_ADDRESS}`
-      
+
       // Ensure parent job exists with correct totalJobs BEFORE adding job
       const parentJobId = `${taskId}-blur`;
       await ensureParentJobExists(taskId, 'blur');
@@ -12247,7 +12251,7 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
         parentJob.totalJobs = preprocessing.magiceden.tokens.length;
         console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE processing jobs${RESET}`);
       }
-      
+
       await processBulkJobs(jobs, true);
     }
     else if (preprocessing.magiceden.traits.length > 0) {
@@ -12279,14 +12283,14 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
         parentJob.totalJobs = preprocessing.magiceden.traits.length;
         console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE processing jobs${RESET}`);
       }
-      
+
       await processBulkJobs(traitJobs, true);
     }
     else if (preprocessing.magiceden.jobCount === 1) {
       // Collection bid
       console.log(`${MAGENTA}[MAGICEDEN] Creating 1 collection bid job${RESET}`);
       const jobId = `bid-${taskId}-magiceden-${currentTask.contract.slug}-collection`
-      
+
       // Ensure parent job exists with correct totalJobs BEFORE adding job
       const parentJobId = `${taskId}-magiceden`;
       await ensureParentJobExists(taskId, 'magiceden');
