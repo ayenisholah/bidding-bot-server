@@ -624,7 +624,8 @@ async function formatBidOnBlur(
           },
           data: JSON.stringify(buildPayload),
           signal: controller.signal,
-          timeout: 30000
+          timeout: 30000,
+          "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
         })
       );
 
@@ -773,7 +774,8 @@ async function submitBidToBlur(
             },
             data: JSON.stringify(submitPayload),
             signal: controller.signal,
-            timeout: 30000
+            timeout: 30000,
+            "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
           })
         );
         break; // Success, exit retry loop

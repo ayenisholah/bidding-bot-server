@@ -80,7 +80,10 @@ const retryConfig: IAxiosRetryConfig = {
     return status >= 500 || status === 429 || status === 408;
   },
   onRetry: (retryCount, error, requestConfig) => {
-    console.log(`Retry attempt ${retryCount} for ${requestConfig.url} - Status: ${error.response?.status || 'Network Error'}`);
+    // Only log retries in development mode or for specific debugging
+    if (process.env.DEBUG_AXIOS_RETRY === 'true') {
+      console.log(`[Axios Retry] Attempt ${retryCount} for ${requestConfig.url} - Status: ${error.response?.status || 'Network Error'}`);
+    }
   }
 };
 

@@ -392,7 +392,8 @@ async function createBidData(
               'x-api-key': API_KEY
             },
             signal: controller.signal,
-            timeout: 30000
+            timeout: 30000,
+            "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
           }
         ));
         clearTimeout(timeoutId);
@@ -523,7 +524,8 @@ async function sendSignedOrderData(
               'content-type': 'application/json',
               'x-api-key': API_KEY,
             },
-            signal: controller.signal
+            signal: controller.signal,
+            "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
           }
         )
       );
