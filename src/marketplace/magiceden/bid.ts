@@ -198,7 +198,7 @@ export async function bidOnMagiceden(
   trait?: Trait,
   tokenId?: number
 ) {
-  // Check if task is blacklisted (stopped)
+  try {
   if (isTaskBlacklisted(taskId, 'magiceden')) {
     const error = new Error(`Bid execution blocked - task ${taskId} is stopped for MagicEden`);
     console.log(`[MagicEden] Job execution blocked for stopped task: ${taskId}`);
@@ -300,6 +300,9 @@ export async function bidOnMagiceden(
   );
 
   return order;
+  } catch (error) {
+    throw error;
+  }
 }
 
 /**

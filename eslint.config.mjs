@@ -69,6 +69,7 @@ export default [
 			"no-console": "off",
 			"no-unused-vars": "off", // Use TypeScript version instead
 			"no-undef": "off", // TypeScript handles this
+			"no-useless-catch": "off", // Allow try/catch blocks that only re-throw
 			// Unexpected lexical declaration in case block.eslintno-case-declarations
 
 			// ...typescript.configs.recommended.rules,

@@ -359,6 +359,7 @@ export async function bidOnOpensea(
   opensea_traits?: string,
   asset?: { contractAddress: string, tokenId: number }
 ) {
+  try {
   // Initialize timing tracker
   const timer = new BidTimer();
   const bidType: 'collection' | 'trait' | 'token' = asset ? 'token' : opensea_traits ? 'trait' : 'collection';
@@ -711,6 +712,9 @@ export async function bidOnOpensea(
       errorMessage
     );
     logTimingData(timingData);
+  }
+  } catch (error) {
+    throw error;
   }
 }
 

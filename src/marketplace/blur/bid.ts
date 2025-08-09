@@ -167,6 +167,7 @@ export async function bidOnBlur(
   traits?: string,
   batchInfo?: { batchNumber: number; totalBatches: number; traitIndex: number; totalTraits: number; batchSize?: number }
 ) {
+  try {
   // === ENHANCED BID VALIDATION ===
   // Log batch information if provided
   if (batchInfo) {
@@ -301,6 +302,9 @@ export async function bidOnBlur(
     ]
   }
   await submitBidToBlur(taskId, bidCount, offer_price, BLUR_API_URL, accessToken, wallet_address, submitPayload, slug, cancelPayload, expiry, traits);
+  } catch (error) {
+    throw error;
+  }
 };
 
 /**
