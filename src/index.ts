@@ -80,6 +80,15 @@ export const warningBids: WarningBids = {};
 export const warningMessage: WarningMessage = {};
 export const errorStats: BidCounts = {};
 export const skipStats: BidCounts = {};
+
+// Track duplicate prevention statistics
+const duplicatePreventionStats = {
+  totalDuplicatesPrevented: 0,
+  totalJobsProcessed: 0,
+  totalDuplicateCheckTime: 0,
+  duplicateCheckCount: 0,
+  lastReset: Date.now()
+};
 // Blur rate limiting is now handled by BlurRateLimiter class
 const QUEUE_NAME = 'BIDDING_BOT';
 const BLUR_BIDDING_QUEUE = 'BLUR_BIDDING_QUEUE';
@@ -1393,6 +1402,9 @@ interface TaskPreprocessing {
 }
 
 const taskPreprocessing = new Map<string, TaskPreprocessing>();
+
+// Lock for scheduled job processing to prevent concurrent execution
+const scheduledJobLocks = new Map<string, boolean>();
 
 // Queue management for password-based security
 async function pauseQueueAndWorkers() {
@@ -4735,6 +4747,28 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
   const taskId = firstJob.data._id;
   const marketplace = (firstJob.name.split('_')[0] || 'UNKNOWN').toLowerCase();
   const bulkJobId = `${firstJob.data._id}-${marketplace}`;
+  
+  // Enhanced logging for duplicate prevention tracking
+  const duplicateStats = {
+    totalJobs: jobs.length,
+    duplicatesFound: 0,
+    duplicatesPrevented: 0,
+    jobsAdded: 0,
+    jobsFailed: 0,
+    retryAttempts: 0,
+    duplicateCheckTime: 0,
+    totalProcessingTime: 0,
+    startTime: Date.now()
+  };
+  
+  if (process.env.DEBUG_JOB_KEYS === 'true') {
+    console.log(`[processBulkJobs] Starting bulk job processing for task ${taskId}, marketplace: ${marketplace}`);
+    console.log(`[processBulkJobs] Total jobs to process: ${jobs.length}, createKey: ${createKey}`);
+  }
+  
+  // Log duplicate prevention start
+  console.log(CYAN + `[Duplicate Prevention] Starting bulk job processing: ${jobs.length} jobs for ${marketplace}` + RESET);
+  
   const task = activeTasks.get(taskId);
 
   // Ensure parent job exists before processing - this is critical for race condition prevention
@@ -4794,9 +4828,9 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
           if (prioritizedCount <= DRAIN_THRESHOLD) {
             break;
           }
-
+          const delay = (prioritizedCount / DRAIN_THRESHOLD);
           // Fixed 1 second delay instead of variable delay
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, delay * 1000));
         }
 
         // Check queue health
@@ -4862,31 +4896,30 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
         let retries = 3;
         const blurJobs = filteredJobs.filter((job): job is NonNullable<typeof job> => job !== null).filter(job => BLUR_JOBS.includes(job.name));
         const nonBlurJobs = filteredJobs.filter((job): job is NonNullable<typeof job> => job !== null).filter(job => !BLUR_JOBS.includes(job.name));
+        
+        // Track successfully added job IDs to avoid retrying them
+        const successfullyAddedJobs = new Set<string>();
+        const chunkDuplicateStats = {
+          totalChecked: 0,
+          duplicatesInChunk: 0,
+          newJobsAdded: 0
+        };
 
         while (retries > 0) {
           try {
             await rateLimiter.acquire();
             // Add non-Blur jobs first
-            const jobsToAdd = nonBlurJobs.map(job => {
-              const jobOpts = {
-                ...(job.jobKey ? { jobId: job.jobKey } : {}),
-                ...job?.opts,
-                removeOnComplete: true,
-                removeOnFail: true
-              };
-              return {
-                name: job.name,
-                data: job.data,
-                opts: jobOpts,
-              };
-            });
-
-
-            const addedJobs = await queue.addBulk(jobsToAdd);
-
-            // Add Blur jobs to Blur queue with staggered approach
-            if (blurJobs.length > 0) {
-              const blurJobsToAdd = blurJobs.map(job => {
+            const jobsToAdd = nonBlurJobs
+              .filter(job => {
+                // Skip jobs that were already successfully added
+                const jobId = job.jobKey;
+                const shouldSkip = jobId && successfullyAddedJobs.has(jobId);
+                if (shouldSkip) {
+                  console.log(YELLOW + `[processBulkJobs] Skipping already added job: ${jobId}` + RESET);
+                }
+                return !shouldSkip;
+              })
+              .map(job => {
                 const jobOpts = {
                   ...(job.jobKey ? { jobId: job.jobKey } : {}),
                   ...job?.opts,
@@ -4899,6 +4932,66 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
                   opts: jobOpts,
                 };
               });
+
+            // Check for duplicates before adding
+            const duplicateCheckStart = Date.now();
+            const nonDuplicateJobs = await checkForDuplicateJobs(queue, jobsToAdd);
+            const duplicateCheckTime = Date.now() - duplicateCheckStart;
+            duplicateStats.duplicateCheckTime += duplicateCheckTime;
+            
+            const duplicatesFound = jobsToAdd.length - nonDuplicateJobs.length;
+            if (duplicatesFound > 0) {
+              duplicateStats.duplicatesFound += duplicatesFound;
+              duplicateStats.duplicatesPrevented += duplicatesFound;
+              console.log(YELLOW + `[Duplicate Prevention] Found ${duplicatesFound} duplicate jobs in queue, preventing re-addition` + RESET);
+            }
+            
+            // Also check against already processed jobs
+            const parentJobId = `${taskId}-${marketplace}`;
+            const processedJobs = processedJobsPerParent.get(parentJobId);
+            let jobsNotProcessed = nonDuplicateJobs;
+            
+            if (processedJobs && processedJobs.size > 0) {
+              jobsNotProcessed = nonDuplicateJobs.filter(job => {
+                const jobId = job.opts?.jobId;
+                if (jobId && processedJobs.has(jobId)) {
+                  console.log(YELLOW + `[Duplicate Prevention] Job ${jobId} already processed, skipping` + RESET);
+                  duplicateStats.duplicatesPrevented++;
+                  return false;
+                }
+                return true;
+              });
+              
+              const processedDuplicates = nonDuplicateJobs.length - jobsNotProcessed.length;
+              if (processedDuplicates > 0) {
+                console.log(RED + `[Duplicate Prevention] Found ${processedDuplicates} already processed jobs! Parent job ${parentJobId} has ${processedJobs.size} processed jobs` + RESET);
+              }
+            }
+            
+            const addedJobs = await queue.addBulk(jobsNotProcessed);
+            chunkDuplicateStats.newJobsAdded += addedJobs.length;
+
+            // Add Blur jobs to Blur queue with staggered approach
+            if (blurJobs.length > 0) {
+              const blurJobsToAdd = blurJobs
+                .filter(job => {
+                  // Skip jobs that were already successfully added
+                  const jobId = job.jobKey;
+                  return !jobId || !successfullyAddedJobs.has(jobId);
+                })
+                .map(job => {
+                  const jobOpts = {
+                    ...(job.jobKey ? { jobId: job.jobKey } : {}),
+                    ...job?.opts,
+                    removeOnComplete: true,
+                    removeOnFail: true
+                  };
+                  return {
+                    name: job.name,
+                    data: job.data,
+                    opts: jobOpts,
+                  };
+                });
 
               // Stagger Blur job creation to prevent overwhelming the API
               const BLUR_BATCH_SIZE = 20; // Add 20 jobs at a time
@@ -4914,42 +5007,205 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
                   await new Promise(resolve => setTimeout(resolve, BLUR_BATCH_DELAY));
                 }
 
-                const addedBlurBatch = await blurQueue.addBulk(batch);
+                // Check for duplicates before adding
+                const blurDuplicateCheckStart = Date.now();
+                const nonDuplicateBatch = await checkForDuplicateJobs(blurQueue, batch);
+                const blurDuplicateCheckTime = Date.now() - blurDuplicateCheckStart;
+                duplicateStats.duplicateCheckTime += blurDuplicateCheckTime;
+                
+                const blurDuplicatesFound = batch.length - nonDuplicateBatch.length;
+                if (blurDuplicatesFound > 0) {
+                  duplicateStats.duplicatesFound += blurDuplicatesFound;
+                  duplicateStats.duplicatesPrevented += blurDuplicatesFound;
+                  console.log(YELLOW + `[Duplicate Prevention] Found ${blurDuplicatesFound} duplicate Blur jobs, preventing re-addition` + RESET);
+                }
+                
+                // Also check against already processed jobs for Blur
+                const blurParentJobId = `${taskId}-blur`;
+                const blurProcessedJobs = processedJobsPerParent.get(blurParentJobId);
+                let blurJobsNotProcessed = nonDuplicateBatch;
+                
+                if (blurProcessedJobs && blurProcessedJobs.size > 0) {
+                  blurJobsNotProcessed = nonDuplicateBatch.filter(job => {
+                    const jobId = job.opts?.jobId;
+                    if (jobId && blurProcessedJobs.has(jobId)) {
+                      console.log(YELLOW + `[Duplicate Prevention] Blur job ${jobId} already processed, skipping` + RESET);
+                      duplicateStats.duplicatesPrevented++;
+                      return false;
+                    }
+                    return true;
+                  });
+                  
+                  const blurProcessedDuplicates = nonDuplicateBatch.length - blurJobsNotProcessed.length;
+                  if (blurProcessedDuplicates > 0) {
+                    console.log(RED + `[Duplicate Prevention] Found ${blurProcessedDuplicates} already processed Blur jobs! Parent job ${blurParentJobId} has ${blurProcessedJobs.size} processed jobs` + RESET);
+                  }
+                }
+                
+                const addedBlurBatch = await blurQueue.addBulk(blurJobsNotProcessed);
+                
+                // Track successfully added jobs
+                addedBlurBatch.forEach(job => {
+                  if (job.opts?.jobId) {
+                    successfullyAddedJobs.add(job.opts.jobId);
+                  }
+                });
+                
                 totalBlurJobsAdded += addedBlurBatch.length;
                 console.log(GOLD + `[Blur Stagger] Added batch ${batchIndex + 1}/${blurBatches.length}: ${addedBlurBatch.length} jobs (total: ${totalBlurJobsAdded}/${blurJobsToAdd.length})` + RESET);
               }
 
+              // Track successfully added jobs
+              addedJobs.forEach(job => {
+                if (job.opts?.jobId) {
+                  successfullyAddedJobs.add(job.opts.jobId);
+                }
+              });
+              
               totalAdded += addedJobs.length + totalBlurJobsAdded;
+              duplicateStats.jobsAdded += addedJobs.length + totalBlurJobsAdded;
             } else {
+              // Track successfully added jobs
+              addedJobs.forEach(job => {
+                if (job.opts?.jobId) {
+                  successfullyAddedJobs.add(job.opts.jobId);
+                }
+              });
+              
               totalAdded += addedJobs.length;
+              duplicateStats.jobsAdded += addedJobs.length;
+            }
+            
+            // Log chunk statistics
+            if (chunkDuplicateStats.newJobsAdded > 0 || duplicatesFound > 0) {
+              console.log(GREEN + `[Duplicate Prevention] Chunk ${chunkIndex + 1}/${chunks.length}: Added ${chunkDuplicateStats.newJobsAdded} new jobs, prevented ${duplicatesFound} duplicates` + RESET);
             }
             break;
-          } catch (error) {
+          } catch (error: any) {
+            // Check if error is due to duplicate job IDs
+            const isDuplicateError = error?.message?.includes('duplicate') || 
+                                   error?.code === 'DUPLICATE_JOB_ID' ||
+                                   error?.message?.includes('already exists');
+            
+            if (isDuplicateError) {
+              // Don't retry for duplicate errors - jobs already exist
+              duplicateStats.duplicatesFound += filteredJobs.length;
+              console.log(YELLOW + `[Duplicate Prevention] Duplicate error in chunk ${chunkIndex + 1}, ${filteredJobs.length} jobs already exist` + RESET);
+              break;
+            }
+            
             retries--;
+            duplicateStats.retryAttempts++;
             totalFailed++;
+            duplicateStats.jobsFailed++;
             tracker.failedJobs = totalFailed;
             if (retries === 0) {
               throw error;
             }
-            console.log(YELLOW + `Retrying addBulk for chunk ${chunkIndex + 1}. Attempts remaining: ${retries}` + RESET);
+            console.log(YELLOW + `[Duplicate Prevention] Retrying chunk ${chunkIndex + 1}. Attempts remaining: ${retries}` + RESET);
+            console.log(YELLOW + `[Duplicate Prevention] Successfully added jobs so far: ${successfullyAddedJobs.size}` + RESET);
             await new Promise(resolve => setTimeout(resolve, 2000));
           }
         }
         await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Log chunk completion and cleanup
+        console.log(CYAN + `[processBulkJobs] Completed chunk ${chunkIndex + 1}/${chunks.length}, tracked ${successfullyAddedJobs.size} jobs in this chunk` + RESET);
       } catch (error) {
         tracker.status = 'failed';
         bulkJobTrackers.set(bulkJobId, tracker);
+        console.error(RED + `[processBulkJobs] Error in chunk ${chunkIndex + 1}/${chunks.length}: ${error}` + RESET);
       }
     }
     // Final status update
     tracker.status = 'completed';
     tracker.processedJobs = tracker.totalJobs;
     bulkJobTrackers.set(bulkJobId, tracker);
+    
+    // Calculate final statistics
+    duplicateStats.totalProcessingTime = Date.now() - duplicateStats.startTime;
+    
+    // Update global duplicate prevention statistics
+    updateDuplicatePreventionStats({
+      jobsProcessed: duplicateStats.totalJobs,
+      duplicatesPrevented: duplicateStats.duplicatesPrevented,
+      checkTime: duplicateStats.duplicateCheckTime,
+      checksPerformed: chunks.length * 2 // Regular checks + Blur checks
+    });
+    
+    // Log comprehensive duplicate prevention summary
+    console.log(CYAN + `\n[Duplicate Prevention Summary] Task: ${taskId}, Marketplace: ${marketplace}` + RESET);
+    console.log(CYAN + `├─ Total Jobs: ${duplicateStats.totalJobs}` + RESET);
+    console.log(CYAN + `├─ Jobs Added: ${duplicateStats.jobsAdded}` + RESET);
+    console.log(CYAN + `├─ Duplicates Prevented: ${duplicateStats.duplicatesPrevented}` + RESET);
+    console.log(CYAN + `├─ Jobs Failed: ${duplicateStats.jobsFailed}` + RESET);
+    console.log(CYAN + `├─ Retry Attempts: ${duplicateStats.retryAttempts}` + RESET);
+    console.log(CYAN + `├─ Duplicate Check Time: ${duplicateStats.duplicateCheckTime}ms` + RESET);
+    console.log(CYAN + `└─ Total Processing Time: ${duplicateStats.totalProcessingTime}ms` + RESET);
+    
+    // Log warning if high duplicate rate
+    const duplicateRate = (duplicateStats.duplicatesPrevented / duplicateStats.totalJobs) * 100;
+    if (duplicateRate > 20) {
+      console.log(YELLOW + `⚠️  [Duplicate Prevention] High duplicate rate detected: ${duplicateRate.toFixed(1)}%` + RESET);
+    }
 
   } catch (error) {
     tracker.status = 'failed';
     bulkJobTrackers.set(bulkJobId, tracker);
-    console.error(RED + `Failed to process bulk jobs for task ${taskId}: ${error}` + RESET);
+    duplicateStats.totalProcessingTime = Date.now() - duplicateStats.startTime;
+    console.error(RED + `[Duplicate Prevention] Failed to process bulk jobs for task ${taskId}: ${error}` + RESET);
+    console.error(RED + `[Duplicate Prevention] Stats at failure: Jobs added: ${duplicateStats.jobsAdded}, Duplicates prevented: ${duplicateStats.duplicatesPrevented}` + RESET);
+  } finally {
+    // Clean up successfullyAddedJobs Set to prevent memory leaks
+    console.log(CYAN + `[processBulkJobs] Cleaning up tracking data for task ${taskId}` + RESET);
+  }
+}
+
+// Helper function to check for duplicate jobs in queue
+async function checkForDuplicateJobs(queue: Queue, jobsToAdd: Array<{name: string, data: any, opts: any}>) {
+  try {
+    // Get all job IDs we're trying to add
+    const jobIdsToAdd = new Set(jobsToAdd.map(job => job.opts?.jobId).filter(Boolean));
+    
+    if (jobIdsToAdd.size === 0) {
+      // No jobIds to check, return all jobs
+      return jobsToAdd;
+    }
+    
+    // Check if these jobs already exist in the queue
+    const existingJobs = await Promise.all(
+      Array.from(jobIdsToAdd).map(jobId => queue.getJob(jobId as string))
+    );
+    
+    // Create a set of existing job IDs
+    const existingJobIds = new Set(
+      existingJobs
+        .filter(job => job !== null)
+        .map(job => job!.id)
+    );
+    
+    // Filter out jobs that already exist
+    const nonDuplicateJobs = jobsToAdd.filter(job => {
+      const jobId = job.opts?.jobId;
+      if (!jobId) return true; // Jobs without IDs can't be checked for duplicates
+      
+      const exists = existingJobIds.has(jobId);
+      if (exists && process.env.DEBUG_JOB_KEYS === 'true') {
+        console.log(`[checkForDuplicateJobs] Skipping duplicate job: ${jobId}`);
+      }
+      return !exists;
+    });
+    
+    const duplicatesFound = jobsToAdd.length - nonDuplicateJobs.length;
+    if (duplicatesFound > 0 || process.env.DEBUG_JOB_KEYS === 'true') {
+      console.log(GOLD + `[checkForDuplicateJobs] Checked ${jobsToAdd.length} jobs, found ${duplicatesFound} duplicates` + RESET);
+    }
+    
+    return nonDuplicateJobs;
+  } catch (error) {
+    // If checking fails, log the error but don't block job addition
+    console.error('[checkForDuplicateJobs] Error checking for duplicates:', error);
+    return jobsToAdd;
   }
 }
 
@@ -4982,42 +5238,91 @@ function chunk<T>(array: T[], size: number): T[][] {
   });
 }
 
+// Update duplicate prevention statistics
+function updateDuplicatePreventionStats(stats: {
+  jobsProcessed?: number;
+  duplicatesPrevented?: number;
+  checkTime?: number;
+  checksPerformed?: number;
+}) {
+  if (stats.jobsProcessed) duplicatePreventionStats.totalJobsProcessed += stats.jobsProcessed;
+  if (stats.duplicatesPrevented) duplicatePreventionStats.totalDuplicatesPrevented += stats.duplicatesPrevented;
+  if (stats.checkTime) duplicatePreventionStats.totalDuplicateCheckTime += stats.checkTime;
+  if (stats.checksPerformed) duplicatePreventionStats.duplicateCheckCount += stats.checksPerformed;
+}
+
 
 function createJobKey(job: Job) {
   let uniqueKey;
   let type, value, trait;
+  
+  // Extract marketplace from job name for collection jobs
+  const jobNameParts = job.name.split('_');
+  const marketplace = jobNameParts[0]?.toLowerCase() || 'unknown';
+  
+  // Log key creation start for debugging
+  if (process.env.DEBUG_JOB_KEYS === 'true') {
+    console.log(BLUE + `[createJobKey] Creating key for job type: ${job.name}` + RESET);
+  }
+  
   switch (job.name) {
     case 'OPENSEA_TRAIT_BID':
       trait = JSON.parse(job.data.trait)
-      type = trait.type
-      value = trait.value
-      uniqueKey = `opensea-${type}-${value}`
+      type = removeChar(trait.type, '-')
+      value = removeChar(trait.value, '-')
+      uniqueKey = `opensea-${type}_${value}`
       break;
     case 'BLUR_TRAIT_BID':
       const traitObj = JSON.parse(job.data.trait);
       const traitKey = Object.keys(traitObj)[0];
       const traitValue = traitObj[traitKey];
-      uniqueKey = `blur-${traitKey}${traitValue}`;
+      // Fix: Add separator between key and value
+      uniqueKey = `blur-${removeChar(traitKey, '-')}_${removeChar(String(traitValue), '-')}`;
       break;
     case 'MAGICEDEN_TRAIT_BID':
-      type = job.data.trait.attributeKey
-      value = job.data.trait.attributeValue
-      uniqueKey = `magiceden-${type}-${value}`
+      type = removeChar(job.data.trait.attributeKey, '-')
+      value = removeChar(job.data.trait.attributeValue, '-')
+      uniqueKey = `magiceden-${type}_${value}`
       break;
     case 'OPENSEA_TOKEN_BID':
-      uniqueKey = `opensea-${job.data.asset.tokenId}`
+      uniqueKey = `opensea-token_${job.data.asset.tokenId}`
       break;
     case 'MAGICEDEN_TOKEN_BID':
-      uniqueKey = `magiceden-${job.data.tokenId}`;
+      uniqueKey = `magiceden-token_${job.data.tokenId}`;
+      break;
+    case 'CANCEL_OPENSEA_BID':
+    case 'CANCEL_MAGICEDEN_BID':
+    case 'CANCEL_BLUR_BID':
+      // Cancellation jobs should not go through this function
+      // but handle them just in case
+      const cancelMarketplace = job.name.includes('OPENSEA') ? 'opensea' : 
+                                job.name.includes('MAGICEDEN') ? 'magiceden' : 'blur';
+      uniqueKey = `${cancelMarketplace}-cancel_${job.data.orderId || job.data.orderIds?.[0] || 'unknown'}`;
       break;
     default:
-      uniqueKey = 'collection';
+      // Fix: Include marketplace in collection jobs
+      uniqueKey = `${marketplace}-collection`;
+      if (process.env.DEBUG_JOB_KEYS === 'true') {
+        console.log(YELLOW + `[createJobKey] Warning: Using default case for job type: ${job.name}` + RESET);
+      }
   }
   const baseKey = `${job?.data?._id}`
 
-  const rawSlug = job?.data?.contract?.slug || job?.data?.slug
-  const slug = removeChar(rawSlug, "-")
-  const key = `bid-${baseKey}-${uniqueKey}-${slug}-${job?.data?.address}`
+  const rawSlug = job?.data?.contract?.slug || job?.data?.slug || ''
+  const slug = removeChar(rawSlug, '-')
+  const walletAddress = job?.data?.address || ''
+  const key = `bid-${baseKey}-${uniqueKey}-${slug}-${walletAddress}`
+  
+  // Enhanced debug logging for key generation
+  if (process.env.DEBUG_JOB_KEYS === 'true') {
+    console.log(BLUE + `[createJobKey] Generated key components:` + RESET);
+    console.log(BLUE + `  - Job Type: ${job.name}` + RESET);
+    console.log(BLUE + `  - Unique Key: ${uniqueKey}` + RESET);
+    console.log(BLUE + `  - Slug: ${slug}` + RESET);
+    console.log(BLUE + `  - Wallet: ${walletAddress.substring(0, 10)}...` + RESET);
+    console.log(BLUE + `  - Final Key: ${key}` + RESET);
+  }
+  
   return key
 }
 
@@ -5025,8 +5330,15 @@ function generateJobKey(job: any): string {
   const taskId = job?.data?._id || '';
   const contractSlug = job?.data?.contract?.slug || job?.data?.slug || '';
   const name = job?.name || '';
-
-  return `${taskId}-${contractSlug}-${name}`;
+  
+  const key = `${taskId}-${contractSlug}-${name}`;
+  
+  // Log generateJobKey usage
+  if (process.env.DEBUG_JOB_KEYS === 'true') {
+    console.log(CYAN + `[generateJobKey] Simple key generated: ${key}` + RESET);
+  }
+  
+  return key;
 }
 
 function removeChar(str: string, char: string): string {
@@ -9873,6 +10185,17 @@ async function performMarketplacePreprocessing(
 
 async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
   console.log(`${BLUE}[processOpenseaScheduledBid] CALLED for task ${task._id}${RESET}`);
+  
+  // Check if this scheduled job is already running to prevent duplicates
+  const lockKey = `${task._id}-opensea-scheduled`;
+  if (scheduledJobLocks.has(lockKey)) {
+    console.log(`${YELLOW}[processOpenseaScheduledBid] Already processing scheduled job for ${lockKey}, skipping to prevent duplicates${RESET}`);
+    return;
+  }
+  
+  // Acquire lock
+  scheduledJobLocks.set(lockKey, true);
+  
   try {
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) {
       console.log(`${YELLOW}[processOpenseaScheduledBid] OpenSea not in enabled marketplaces, returning${RESET}`);
@@ -10091,6 +10414,9 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
 
     // Re-throw error to trigger job retry
     throw error;
+  } finally {
+    // Always release the scheduled job lock
+    scheduledJobLocks.delete(lockKey);
   }
 }
 
@@ -10370,6 +10696,16 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
 }
 
 async function processBlurScheduledBid(task: ITask) {
+  // Check if this scheduled job is already running to prevent duplicates
+  const lockKey = `${task._id}-blur-scheduled`;
+  if (scheduledJobLocks.has(lockKey)) {
+    console.log(`${YELLOW}[processBlurScheduledBid] Already processing scheduled job for ${lockKey}, skipping to prevent duplicates${RESET}`);
+    return;
+  }
+  
+  // Acquire lock
+  scheduledJobLocks.set(lockKey, true);
+  
   try {
     const currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur") || !enabledMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur")) {
@@ -10652,6 +10988,9 @@ async function processBlurScheduledBid(task: ITask) {
 
     // Re-throw error to trigger job retry
     throw error;
+  } finally {
+    // Always release the scheduled job lock
+    scheduledJobLocks.delete(lockKey);
   }
 }
 
@@ -12146,6 +12485,16 @@ async function processBlurTraitBid(data: {
 async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
   const checkpointStart = Date.now();
 
+  // Check if this scheduled job is already running to prevent duplicates
+  const lockKey = `${task._id}-magiceden-scheduled`;
+  if (scheduledJobLocks.has(lockKey)) {
+    console.log(`${YELLOW}[processMagicedenScheduledBid] Already processing scheduled job for ${lockKey}, skipping to prevent duplicates${RESET}`);
+    return;
+  }
+  
+  // Acquire lock
+  scheduledJobLocks.set(lockKey, true);
+
   try {
     // Early return consolidation
     if (!enabledMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) {
@@ -12346,6 +12695,9 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
 
     // Re-throw error to trigger job retry
     throw error;
+  } finally {
+    // Always release the scheduled job lock
+    scheduledJobLocks.delete(lockKey);
   }
 }
 
@@ -17247,4 +17599,34 @@ setInterval(checkStuckTasks, STANDARD_INTERVAL);
 
 // Schedule orphaned job recovery
 setInterval(recoverOrphanedJobs, STANDARD_INTERVAL);
+
+// Schedule periodic duplicate prevention statistics logging
+setInterval(() => {
+  const timeSinceReset = Date.now() - duplicatePreventionStats.lastReset;
+  const hoursElapsed = timeSinceReset / (1000 * 60 * 60);
+  
+  if (duplicatePreventionStats.totalJobsProcessed > 0) {
+    const duplicateRate = (duplicatePreventionStats.totalDuplicatesPrevented / duplicatePreventionStats.totalJobsProcessed) * 100;
+    const avgCheckTime = duplicatePreventionStats.duplicateCheckCount > 0 
+      ? duplicatePreventionStats.totalDuplicateCheckTime / duplicatePreventionStats.duplicateCheckCount 
+      : 0;
+    
+    console.log(CYAN + '\n[Duplicate Prevention Stats] Last ' + hoursElapsed.toFixed(1) + ' hours:' + RESET);
+    console.log(CYAN + `├─ Total Jobs Processed: ${duplicatePreventionStats.totalJobsProcessed.toLocaleString()}` + RESET);
+    console.log(CYAN + `├─ Duplicates Prevented: ${duplicatePreventionStats.totalDuplicatesPrevented.toLocaleString()}` + RESET);
+    console.log(CYAN + `├─ Duplicate Rate: ${duplicateRate.toFixed(2)}%` + RESET);
+    console.log(CYAN + `├─ Checks Performed: ${duplicatePreventionStats.duplicateCheckCount.toLocaleString()}` + RESET);
+    console.log(CYAN + `└─ Avg Check Time: ${avgCheckTime.toFixed(2)}ms` + RESET);
+    
+    // Reset stats every 24 hours
+    if (hoursElapsed >= 24) {
+      console.log(YELLOW + '[Duplicate Prevention Stats] Resetting 24-hour statistics' + RESET);
+      duplicatePreventionStats.totalDuplicatesPrevented = 0;
+      duplicatePreventionStats.totalJobsProcessed = 0;
+      duplicatePreventionStats.totalDuplicateCheckTime = 0;
+      duplicatePreventionStats.duplicateCheckCount = 0;
+      duplicatePreventionStats.lastReset = Date.now();
+    }
+  }
+}, STANDARD_INTERVAL * 5); // Log every 5 minutes
 
