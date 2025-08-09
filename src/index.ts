@@ -4764,7 +4764,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
 
   if (!task || !task.running) return
   const rateLimiter = new RateLimiter(RATE_LIMIT);
-  const chunks = chunk(jobs, RATE_LIMIT);
+  const chunks = chunk(jobs, RATE_LIMIT );
 
   let totalProcessed = 0;
   let totalAdded = 0;
@@ -5075,7 +5075,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       errorStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
     }
     errorStats[taskId][marketplace.toLowerCase() as keyof typeof errorStats[typeof taskId]] = 0;
-    
+
     // Clear processed jobs for this specific marketplace
     const parentJobId = `${taskId}-${marketplace.toLowerCase()}`;
     if (processedJobsPerParent.has(parentJobId)) {
@@ -10361,9 +10361,9 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       errorStats[data.task._id] = { opensea: 0, magiceden: 0, blur: 0 };
     }
     errorStats[data.task._id].opensea++;
-    
+
     await logBidError(data.task._id, "OPENSEA COLLECTION BID ERROR", `Error processing OpenSea collection bid for task: ${data.task._id}: ${errorMessage}`, "error", "opensea");
-    
+
     // Throw the error
     throw error;
   }
@@ -10879,7 +10879,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
       errorStats[data.task._id] = { opensea: 0, magiceden: 0, blur: 0 };
     }
     errorStats[data.task._id].blur++;
-    
+
     // Handle transfer restriction errors
     if (error.code === 'TRANSFER_RESTRICTED') {
       console.log(`Skipping Blur bid for ${data.task.contract.slug} - transfer restricted collection`);
@@ -10890,7 +10890,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 
     console.error('Blur collection bid error:', error instanceof Error ? error.message : String(error));
     await logBidError(data.task._id, "BLUR COLLECTION BID ERROR", `Error processing Blur collection bid for task: ${data.task._id}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)}`, "error", "blur");
-    
+
     // Throw the error
     throw error;
   }
@@ -11176,12 +11176,12 @@ async function processOpenseaTraitBid(data: {
       errorStats[data.task._id] = { opensea: 0, magiceden: 0, blur: 0 };
     }
     errorStats[data.task._id].opensea++;
-    
+
     // Don't log bid errors for stopped/cancelled tasks
     if (errorMessage && !errorMessage.includes('Bid execution blocked - task') && !errorMessage.includes('is stopped')) {
       await logBidError(data.task._id, "OPENSEA TRAIT BID ERROR", `Error bidding on trait ${data.trait} in collection ${data.slug}: ${errorMessage}`, "error", "opensea");
     }
-    
+
     // Throw the error
     throw error;
   }
@@ -11485,10 +11485,8 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       errorStats[data._id] = { opensea: 0, magiceden: 0, blur: 0 };
     }
     errorStats[data._id].opensea++;
-    
+
     await logBidError(data._id, "OPENSEA TOKEN BID ERROR", `Error bidding on token ${data.asset.tokenId} in collection ${data.slug}: ${errorMessage}`, "error", "opensea");
-    
-    // Throw the error
     throw error;
   }
 }
@@ -12124,7 +12122,7 @@ async function processBlurTraitBid(data: {
       errorStats[data.task._id] = { opensea: 0, magiceden: 0, blur: 0 };
     }
     errorStats[data.task._id].blur++;
-    
+
     // Handle transfer restriction errors
     if (error.code === 'TRANSFER_RESTRICTED') {
       console.log(`Skipping Blur trait bid for ${data.slug} - transfer restricted collection`);
@@ -12139,7 +12137,7 @@ async function processBlurTraitBid(data: {
     if (!errorMessage.includes('Bid execution blocked - task') && !errorMessage.includes('is stopped')) {
       await logBidError(data.task._id, "BLUR TRAIT BID ERROR", `Error bidding on trait ${data.trait} in collection ${data.slug}: ${error?.response?.data?.message || error?.response?.data || errorMessage}`, "error", "blur");
     }
-    
+
     // Throw the error
     throw error;
   }
@@ -12541,9 +12539,9 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
       errorStats[data.task._id] = { opensea: 0, magiceden: 0, blur: 0 };
     }
     errorStats[data.task._id].magiceden++;
-    
+
     logBidError(data.task._id, "MAGICEDEN COLLECTION BID ERROR", `Error processing MagicEden collection bid for task: ${data.task._id}: ${error?.response?.data?.message || error?.message || String(error)}`, "error", "magiceden"); // Non-blocking
-    
+
     // Throw the error
     throw error;
   }
@@ -12729,9 +12727,9 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       errorStats[data.task._id] = { opensea: 0, magiceden: 0, blur: 0 };
     }
     errorStats[data.task._id].magiceden++;
-    
+
     logBidError(data._id, "MAGICEDEN TOKEN BID ERROR", `Error bidding on token ${data.tokenId} in collection ${data.slug}: ${error?.response?.data?.message || error?.message || String(error)}`, "error", "magiceden"); // Non-blocking
-    
+
     // Throw the error
     throw error;
   }
@@ -12960,9 +12958,9 @@ async function processMagicedenTraitBid(data: {
         errorStats[data._id] = { opensea: 0, magiceden: 0, blur: 0 };
       }
       errorStats[data._id].magiceden++;
-      
+
       logBidError(data._id, "MAGICEDEN TRAIT BID ERROR", `Error bidding on trait ${JSON.stringify(data.trait)} in collection ${data.slug}: ${error?.response?.data?.message || error?.response?.data || errorMessage}`, "error", "magiceden"); // Non-blocking
-      
+
       // Throw the error
       throw error;
     }
