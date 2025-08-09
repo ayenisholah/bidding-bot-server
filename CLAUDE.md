@@ -102,3 +102,6 @@ The server is optimized for 100+ queries per second with:
 - NEVER include Claude Code attribution or co-author lines in git commit messages
 - NEVER add "🤖 Generated with [Claude Code]" or "Co-Authored-By: Claude" to commits
 - NEVER commit changes without explicit user authorization - always ask for permission before running git commit
+
+## Development Tips
+- Instead of npm run dev after each implementation do npm run build

@@ -25,6 +25,7 @@ interface RateLimitEvent {
 export class BlurRateLimiter extends EventEmitter {
   private walletLimits: Map<string, WalletRateLimit>;
   private walletErrors: Map<string, WalletErrorTracking>;
+  private pendingRequests: Map<string, number>; // Track in-flight requests per wallet
   private readonly DEFAULT_LIMIT = 40; // Blur's actual limit
   private readonly DEFAULT_WINDOW = 10000; // 10 seconds
   private readonly SAFETY_THRESHOLD = 0.8; // Use 80% of rate limit for safety buffer
@@ -34,6 +35,7 @@ export class BlurRateLimiter extends EventEmitter {
     super();
     this.walletLimits = new Map();
     this.walletErrors = new Map();
+    this.pendingRequests = new Map();
   }
 
   private createWalletLimit(): WalletRateLimit {
@@ -75,9 +77,15 @@ export class BlurRateLimiter extends EventEmitter {
       wallet.isRateLimited = false;
     }
 
+    // Get pending requests count
+    const pendingCount = this.pendingRequests.get(walletAddress) || 0;
+    
+    // Calculate effective remaining slots (actual remaining minus pending)
+    const effectiveRemaining = wallet.remaining - pendingCount;
+    
     // Check against safety threshold to avoid hitting hard limits
     const safetyBuffer = Math.floor(wallet.limit * (1 - this.SAFETY_THRESHOLD));
-    return wallet.remaining > safetyBuffer && !wallet.isRateLimited;
+    return effectiveRemaining > safetyBuffer && !wallet.isRateLimited;
   }
 
 
@@ -171,14 +179,84 @@ export class BlurRateLimiter extends EventEmitter {
     return baseWaitTime + jitter;
   }
 
+  /**
+   * Atomically reserve a request slot for a wallet
+   * Returns true if reservation successful, false otherwise
+   */
+  reserveRequest(walletAddress: string): boolean {
+    this.cleanupOldEntries();
+    
+    // First check if we can make request
+    if (!this.canMakeRequest(walletAddress)) {
+      return false;
+    }
+    
+    // Get or create wallet limit
+    let wallet = this.walletLimits.get(walletAddress);
+    if (!wallet) {
+      wallet = this.createWalletLimit();
+      this.walletLimits.set(walletAddress, wallet);
+    }
+    
+    // Check again with current state
+    const pendingCount = this.pendingRequests.get(walletAddress) || 0;
+    const effectiveRemaining = wallet.remaining - pendingCount;
+    const safetyBuffer = Math.floor(wallet.limit * (1 - this.SAFETY_THRESHOLD));
+    
+    if (effectiveRemaining <= safetyBuffer || wallet.isRateLimited) {
+      return false;
+    }
+    
+    // Reserve the slot
+    this.pendingRequests.set(walletAddress, pendingCount + 1);
+    
+    this.emit('request-reserved', {
+      walletAddress,
+      remaining: wallet.remaining,
+      pending: pendingCount + 1,
+      effectiveRemaining: effectiveRemaining - 1
+    });
+    
+    return true;
+  }
+
+  /**
+   * Release a reserved request slot (call this in finally block)
+   */
+  releaseRequest(walletAddress: string, wasSuccessful: boolean = true): void {
+    const pendingCount = this.pendingRequests.get(walletAddress) || 0;
+    if (pendingCount > 0) {
+      this.pendingRequests.set(walletAddress, pendingCount - 1);
+    }
+    
+    // If request was successful, record it normally
+    if (wasSuccessful) {
+      this.recordRequest(walletAddress);
+    }
+    
+    // Clean up if no pending requests
+    if (pendingCount <= 1) {
+      this.pendingRequests.delete(walletAddress);
+    }
+    
+    this.emit('request-released', {
+      walletAddress,
+      wasSuccessful,
+      pendingRemaining: Math.max(0, pendingCount - 1)
+    });
+  }
+
   getStatus(walletAddress?: string): any {
     if (walletAddress) {
       const wallet = this.walletLimits.get(walletAddress);
+      const pendingCount = this.pendingRequests.get(walletAddress) || 0;
+      
       if (!wallet) {
         return {
           walletAddress,
           status: 'not_tracked',
-          canMakeRequest: true
+          canMakeRequest: true,
+          pendingRequests: pendingCount
         };
       }
 
@@ -189,13 +267,16 @@ export class BlurRateLimiter extends EventEmitter {
         limit: wallet.limit,
         isRateLimited: wallet.isRateLimited,
         canMakeRequest: this.canMakeRequest(walletAddress),
-        waitTime: this.getWaitTime(walletAddress)
+        waitTime: this.getWaitTime(walletAddress),
+        pendingRequests: pendingCount,
+        effectiveRemaining: wallet.remaining - pendingCount
       };
     }
 
     // Return status for all wallets
     const statuses: any[] = [];
     for (const [address, wallet] of this.walletLimits.entries()) {
+      const pendingCount = this.pendingRequests.get(address) || 0;
       statuses.push({
         walletAddress: address,
         remaining: wallet.remaining,
@@ -203,7 +284,9 @@ export class BlurRateLimiter extends EventEmitter {
         limit: wallet.limit,
         isRateLimited: wallet.isRateLimited,
         canMakeRequest: this.canMakeRequest(address),
-        waitTime: this.getWaitTime(address)
+        waitTime: this.getWaitTime(address),
+        pendingRequests: pendingCount,
+        effectiveRemaining: wallet.remaining - pendingCount
       });
     }
 
@@ -220,6 +303,9 @@ export class BlurRateLimiter extends EventEmitter {
       wallet.remaining = Math.floor(wallet.limit * this.SAFETY_THRESHOLD);
       wallet.resetTime = Date.now() + this.DEFAULT_WINDOW;
       wallet.isRateLimited = false;
+      
+      // Also clear pending requests on reset
+      this.pendingRequests.delete(walletAddress);
       
       this.emit('reset', {
         walletAddress,
