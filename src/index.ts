@@ -4620,7 +4620,7 @@ async function updateTaskData(task: ITask) {
 }
 
 const MAX_MEMORY_USAGE = 75;
-const DRAIN_THRESHOLD = RATE_LIMIT;
+const DRAIN_THRESHOLD = RATE_LIMIT * 2;
 
 const BLUR_JOBS = [
   'BLUR_COLLECTION_BID',
@@ -4764,7 +4764,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
 
   if (!task || !task.running) return
   const rateLimiter = new RateLimiter(RATE_LIMIT);
-  const chunks = chunk(jobs, RATE_LIMIT );
+  const chunks = chunk(jobs, RATE_LIMIT * 2);
 
   let totalProcessed = 0;
   let totalAdded = 0;
