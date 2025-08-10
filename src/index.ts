@@ -141,6 +141,7 @@ interface TaskStatus {
     nextLoopTime?: Date;
     waitingTime?: number;
     cancellationStartTime?: number;
+    lastUpdate?: number;
     previousState?: 'RUNNING' | 'WAITING' | 'CANCELLING' | 'SCHEDULED' | 'COMPLETED' | 'QUEUED' | 'QUEUEING' | 'STARTED' | "STOPPED" | "PROCESSING";
     cancellingMarketplace?: string;
   };
@@ -2736,6 +2737,7 @@ async function updateTaskRunningPercentage(taskId: string) {
   taskStatus[taskId].runningPercentage = Math.min(runningPercentage, 100);
   taskStatus[taskId].totalJobs = totalJobs;
   taskStatus[taskId].completedJobs = completedJobs;
+  taskStatus[taskId].lastUpdate = Date.now();
 
   // Summary section - Keep only TOTAL SUMMARY logs
   console.log(`\n${BLUE}[updateTaskRunningPercentage] TOTAL SUMMARY:${RESET}`);
@@ -2752,17 +2754,37 @@ async function updateTaskRunningPercentage(taskId: string) {
   const overallProgressBar = '█'.repeat(overallFilledLength) + '░'.repeat(Math.max(0, overallBarLength - overallFilledLength));
   console.log(MAGENTA + `  [${overallProgressBar}] ${runningPercentage.toFixed(2)}%` + RESET);
 
-  // Check if should trigger completion
-  if (taskStatus[taskId].runningPercentage >= 100) {
+  // Check if should trigger completion with lower threshold for floating-point precision issues
+  if (taskStatus[taskId].runningPercentage >= 99.5) {
+    console.log(GREEN + `[Completion] Task ${taskId} reached ${taskStatus[taskId].runningPercentage.toFixed(1)}% - triggering completion` + RESET);
+    taskStatus[taskId].runningPercentage = 100;
     await checkTaskCompletionAndScheduleNext(taskId);
   }
-  // Recovery mechanism: If we have high percentage and all parent jobs show complete, force completion
-  else if (taskStatus[taskId].runningPercentage >= 95) {
+  // Enhanced recovery mechanism for stuck tasks
+  else if (taskStatus[taskId].runningPercentage >= 90) {
     const allParentJobsComplete = checkAllParentJobsComplete(taskId);
+    const lastUpdate = taskStatus[taskId].lastUpdate || Date.now();
+    const stuckTime = Date.now() - lastUpdate;
+    const stuckMinutes = stuckTime / (1000 * 60);
+
     if (allParentJobsComplete) {
       console.log(YELLOW + `[Recovery] Task ${taskId} at ${taskStatus[taskId].runningPercentage.toFixed(1)}% but all parent jobs complete - forcing completion` + RESET);
       taskStatus[taskId].runningPercentage = 100;
       await checkTaskCompletionAndScheduleNext(taskId);
+    }
+    // Auto-recovery for tasks stuck for more than 5 minutes at high percentage
+    else if (stuckMinutes > 5 && taskStatus[taskId].runningPercentage >= 95) {
+      console.log(YELLOW + `[Auto-Recovery] Task ${taskId} stuck at ${taskStatus[taskId].runningPercentage.toFixed(1)}% for ${stuckMinutes.toFixed(1)} minutes - forcing completion` + RESET);
+      console.log(YELLOW + `  Total jobs: ${totalJobs}, Completed: ${completedJobs}` + RESET);
+      
+      // Force completion to unstick the task
+      taskStatus[taskId].runningPercentage = 100;
+      await checkTaskCompletionAndScheduleNext(taskId);
+    }
+    else if (stuckMinutes > 2) {
+      console.log(YELLOW + `[Stuck Detection] Task ${taskId} potentially stuck at ${taskStatus[taskId].runningPercentage.toFixed(1)}% for ${stuckMinutes.toFixed(1)} minutes` + RESET);
+      console.log(YELLOW + `  Jobs: ${completedJobs}/${totalJobs}, Missing: ${totalJobs - completedJobs}` + RESET);
+      console.log(YELLOW + `  Will auto-recover if still stuck in ${(5 - stuckMinutes).toFixed(1)} minutes` + RESET);
     }
   }
 }
@@ -2939,12 +2961,15 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
   // Validate task exists and is active
   const task = activeTasks.get(taskId);
   if (!task) {
-    console.log(YELLOW + `[markJobAsProcessed] Task ${taskId} not found in activeTasks, skipping` + RESET);
+    console.log(YELLOW + `[markJobAsProcessed] Task ${taskId} not found in activeTasks` + RESET);
     console.log(YELLOW + `  Active tasks count: ${activeTasks.size}` + RESET);
-    return;
+    console.log(YELLOW + `  This may be a late completion from a recently modified task - continuing with job tracking` + RESET);
+    
+    // Don't return early - still process the completion to prevent stuck tasks
+    // The job completion is legitimate even if task was modified
   }
 
-  // Get parent job
+  // Get parent job,
   const parentJobId = `${taskId}-${marketplace}`;
   let parentJob = parentJobs.get(parentJobId);
 
@@ -2980,23 +3005,38 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
     processedJobsPerParent.set(parentJobId, processedJobs);
   }
 
-  // Skip if job already processed OR if parent job is already complete (prevents overflow)
-  if (processedJobs.has(jobId) || parentJob.completedJobs >= parentJob.totalJobs) {
-    if (processedJobs.has(jobId)) {
-      console.log(RED + `[DUPLICATE JOB DETECTED] Job ${jobId} already processed!` + RESET);
-      console.log(RED + `  TaskId: ${taskId}` + RESET);
-      console.log(RED + `  Marketplace: ${marketplace}` + RESET);
-      console.log(RED + `  Original JobId: ${jobId}` + RESET);
-      console.log(RED + `  ParentJobId: ${parentJobId}` + RESET);
-      console.log(RED + `  ProcessedJobs size: ${processedJobs.size}` + RESET);
-      console.log(RED + `  Parent job state: ${parentJob.completedJobs}/${parentJob.totalJobs}` + RESET);
-      console.log(RED + `  Stack trace:` + RESET);
-      console.trace();
-    } else {
-      console.log(YELLOW + `[markJobAsProcessed] Parent job ${parentJobId} already complete (${parentJob.completedJobs}/${parentJob.totalJobs}), preventing overflow` + RESET);
-      console.log(YELLOW + `  Job would have been: ${jobId}` + RESET);
-    }
+  // Check for duplicate jobs (but be more permissive about completion)
+  if (processedJobs.has(jobId)) {
+    console.log(RED + `[DUPLICATE JOB DETECTED] Job ${jobId} already processed!` + RESET);
+    console.log(RED + `  TaskId: ${taskId}` + RESET);
+    console.log(RED + `  Marketplace: ${marketplace}` + RESET);
+    console.log(RED + `  Original JobId: ${jobId}` + RESET);
+    console.log(RED + `  ParentJobId: ${parentJobId}` + RESET);
+    console.log(RED + `  ProcessedJobs size: ${processedJobs.size}` + RESET);
+    console.log(RED + `  Parent job state: ${parentJob.completedJobs}/${parentJob.totalJobs}` + RESET);
+    console.log(RED + `  Stack trace:` + RESET);
+    console.trace();
     return;
+  }
+
+  // Check if parent job appears complete but allow some flexibility for stuck tasks
+  if (parentJob.completedJobs >= parentJob.totalJobs && parentJob.totalJobs > 0) {
+    console.log(YELLOW + `[markJobAsProcessed] Parent job ${parentJobId} appears complete (${parentJob.completedJobs}/${parentJob.totalJobs})` + RESET);
+    console.log(YELLOW + `  Job would have been: ${jobId}` + RESET);
+    
+    // Check if task is stuck (high percentage but not 100%) - if so, allow the completion
+    if (task && taskStatus[taskId] && taskStatus[taskId].runningPercentage >= 85 && taskStatus[taskId].runningPercentage < 100) {
+      console.log(YELLOW + `  Task stuck at ${taskStatus[taskId].runningPercentage.toFixed(1)}% - allowing completion to unstick` + RESET);
+      
+      // Adjust totalJobs to accommodate this completion if needed
+      if (parentJob.completedJobs >= parentJob.totalJobs) {
+        parentJob.totalJobs = parentJob.completedJobs + 1;
+        console.log(YELLOW + `  Adjusted totalJobs to ${parentJob.totalJobs} to accommodate completion` + RESET);
+      }
+    } else {
+      console.log(YELLOW + `  Preventing overflow - task not stuck or totalJobs accurate` + RESET);
+      return;
+    }
   }
 
   if (taskStatus[taskId]) {
@@ -3520,6 +3560,112 @@ function initializeQueueEventHandlers() {
       }
     } catch (error) {
       console.error(RED + `[Queue Event] Error handling job failure for ${jobId}:` + RESET, error);
+      console.error(RED + `[Queue Event] Stack trace:` + RESET);
+      console.error(error);
+
+      // Log error details for debugging
+      if (error instanceof Error) {
+        console.error(RED + `[Queue Event] Error name: ${error.name}` + RESET);
+        console.error(RED + `[Queue Event] Error message: ${error.message}` + RESET);
+      }
+
+      // Don't let errors in event handler crash the process
+      // This ensures other jobs can still be processed
+    }
+  });
+
+  // Handle stalled jobs - critical for preventing stuck tasks
+  queueEvents.on('stalled', async ({ jobId }) => {
+    try {
+      console.log(YELLOW + `[Queue Event] Job stalled: ${jobId}` + RESET);
+
+      // Skip schedule jobs - they are orchestration jobs, not actual bid jobs
+      if (jobId.includes('-schedule')) {
+        console.log(CYAN + `[Queue Event] Skipping schedule job tracking (stalled): ${jobId}` + RESET);
+        return;
+      }
+
+      // Check if this is a cancellation job
+      const isCancellationJob = jobId.includes('CANCEL_OPENSEA_BID') ||
+        jobId.includes('CANCEL_MAGICEDEN_BID') ||
+        jobId.includes('CANCEL_BLUR_BID');
+
+      // Try to extract task and marketplace info from job ID
+      let taskId: string | undefined;
+      let marketplace: string | undefined;
+
+      if (isCancellationJob) {
+        const parts = jobId.split('-');
+        if (parts.length >= 3) {
+          // Extract marketplace from job name
+          if (jobId.includes('CANCEL_OPENSEA_BID')) {
+            marketplace = 'opensea';
+          } else if (jobId.includes('CANCEL_MAGICEDEN_BID')) {
+            marketplace = 'magiceden';
+          } else if (jobId.includes('CANCEL_BLUR_BID')) {
+            marketplace = 'blur';
+          }
+
+          // Task ID is the second part
+          taskId = parts[1];
+        }
+
+        // Process stalled cancellation job (treat as processed to unblock)
+        if (taskId && marketplace) {
+          const task = activeTasks.get(taskId);
+          if (task) {
+            console.log(YELLOW + `[Queue Event] Processing stalled cancellation for task ${taskId}, marketplace ${marketplace}` + RESET);
+            await markCancellationJobAsProcessed(taskId, marketplace, jobId);
+          }
+        }
+      } else {
+        // Handle bid jobs (e.g., bid-taskId-marketplace-...)
+        if (jobId.startsWith('bid-')) {
+          const parts = jobId.split('-');
+          if (parts.length >= 3) {
+            taskId = parts[1];
+            marketplace = parts[2];
+          }
+        }
+        // Handle other job formats
+        else {
+          // Try to find task ID in the job ID
+          const parts = jobId.split('-');
+          if (parts.length >= 2) {
+            // Check if first part is a valid task ID
+            if (activeTasks.has(parts[0])) {
+              taskId = parts[0];
+              marketplace = parts[1] || 'unknown';
+            } else if (activeTasks.has(parts[1])) {
+              taskId = parts[1];
+              marketplace = parts[2] || parts[0] || 'unknown';
+            }
+            // Check if any part is a valid task ID
+            else {
+              for (let i = 0; i < parts.length; i++) {
+                if (activeTasks.has(parts[i])) {
+                  taskId = parts[i];
+                  marketplace = parts[i + 1] || parts[i - 1] || 'unknown';
+                  break;
+                }
+              }
+            }
+          }
+        }
+
+        // Process stalled bid job (treat as completed to unblock stuck tasks)
+        if (taskId && marketplace) {
+          const task = activeTasks.get(taskId);
+          if (task && task.running) {
+            console.log(YELLOW + `[Queue Event - STALLED] Processing stalled job as completed for task ${taskId}, marketplace ${marketplace}, jobId: ${jobId}` + RESET);
+            await markJobAsProcessed(taskId, marketplace, jobId);
+          }
+        } else {
+          console.log(RED + `[Queue Event] Could not extract task/marketplace from stalled job ID: ${jobId}` + RESET);
+        }
+      }
+    } catch (error) {
+      console.error(RED + `[Queue Event] Error handling stalled job ${jobId}:` + RESET, error);
       console.error(RED + `[Queue Event] Stack trace:` + RESET);
       console.error(error);
 
@@ -5284,8 +5430,80 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
     console.error(RED + `[Duplicate Prevention] Failed to process bulk jobs for task ${taskId}: ${error}` + RESET);
     console.error(RED + `[Duplicate Prevention] Stats at failure: Jobs added: ${duplicateStats.jobsAdded}, Duplicates prevented: ${duplicateStats.duplicatesPrevented}` + RESET);
   } finally {
+    // Job Count Reconciliation - ensure parent job totalJobs is accurate
+    try {
+      await reconcileParentJobCounts(taskId, marketplace, totalAdded);
+    } catch (error) {
+      console.error(RED + `[processBulkJobs] Error in job count reconciliation: ${error}` + RESET);
+    }
+
     // Clean up successfullyAddedJobs Set to prevent memory leaks
     console.log(CYAN + `[processBulkJobs] Cleaning up tracking data for task ${taskId}` + RESET);
+  }
+}
+
+// Job Count Reconciliation - ensure parent job totalJobs matches actual jobs added
+async function reconcileParentJobCounts(taskId: string, marketplace: string, actualJobsAdded: number): Promise<void> {
+  const parentJobId = `${taskId}-${marketplace}`;
+  const parentJob = parentJobs.get(parentJobId);
+
+  if (!parentJob) {
+    console.log(YELLOW + `[Reconciliation] Parent job ${parentJobId} not found - skipping reconciliation` + RESET);
+    return;
+  }
+
+  const originalTotalJobs = parentJob.totalJobs;
+  
+  console.log(BLUE + `[Reconciliation] Checking job counts for ${parentJobId}:` + RESET);
+  console.log(BLUE + `  Original totalJobs: ${originalTotalJobs}` + RESET);
+  console.log(BLUE + `  Actual jobs added: ${actualJobsAdded}` + RESET);
+  console.log(BLUE + `  Current completedJobs: ${parentJob.completedJobs}` + RESET);
+
+  // If actualJobsAdded is significantly different from originalTotalJobs, adjust
+  const discrepancy = Math.abs(originalTotalJobs - actualJobsAdded);
+  const discrepancyPercentage = originalTotalJobs > 0 ? (discrepancy / originalTotalJobs) * 100 : 0;
+
+  if (discrepancyPercentage > 5 && discrepancy > 5) { // Only adjust if discrepancy is significant
+    console.log(YELLOW + `[Reconciliation] Significant job count discrepancy detected: ${discrepancyPercentage.toFixed(1)}%` + RESET);
+    console.log(YELLOW + `  This could cause stuck tasks if totalJobs is inaccurate` + RESET);
+
+    // Use the higher of the two values to ensure tasks can complete
+    const adjustedTotalJobs = Math.max(originalTotalJobs, actualJobsAdded);
+    
+    // However, don't set it lower than current completed jobs to prevent issues
+    const finalTotalJobs = Math.max(adjustedTotalJobs, parentJob.completedJobs);
+
+    if (finalTotalJobs !== originalTotalJobs) {
+      parentJob.totalJobs = finalTotalJobs;
+      console.log(GREEN + `[Reconciliation] Adjusted totalJobs from ${originalTotalJobs} to ${finalTotalJobs}` + RESET);
+      
+      // Trigger a percentage update to reflect the new numbers
+      const task = activeTasks.get(taskId);
+      if (task && task.running) {
+        try {
+          await updateTaskRunningPercentage(taskId);
+        } catch (error) {
+          console.error(RED + `[Reconciliation] Error updating task percentage after reconciliation: ${error}` + RESET);
+        }
+      }
+    }
+  } else {
+    console.log(GREEN + `[Reconciliation] Job counts look accurate - no adjustment needed` + RESET);
+  }
+
+  // Additional check: if completed jobs exceed total jobs, adjust total
+  if (parentJob.completedJobs > parentJob.totalJobs) {
+    console.log(YELLOW + `[Reconciliation] Completed jobs (${parentJob.completedJobs}) exceed total jobs (${parentJob.totalJobs}) - adjusting` + RESET);
+    parentJob.totalJobs = parentJob.completedJobs;
+    
+    const task = activeTasks.get(taskId);
+    if (task && task.running) {
+      try {
+        await updateTaskRunningPercentage(taskId);
+      } catch (error) {
+        console.error(RED + `[Reconciliation] Error updating task percentage after overflow fix: ${error}` + RESET);
+      }
+    }
   }
 }
 

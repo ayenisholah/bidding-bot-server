@@ -20,7 +20,8 @@
 		"dc:push": "docker push nfttools/bidding-bot-server-production:latest",
 		"lint": "eslint 'src/**/*.{ts,tsx}'",
 		"lint:fix": "eslint 'src/**/*.{ts,tsx}' --fix",
-		"test:axiom": "ts-node scripts/test-axiom.ts"
+		"test:axiom": "ts-node scripts/test-axiom.ts",
+		"scripts:fix-stuck-tasks": "ts-node src/scripts/fix-stuck-tasks.ts"
 	},
 	"keywords": [],
 	"author": "",

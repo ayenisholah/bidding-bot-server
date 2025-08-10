@@ -10,7 +10,7 @@ The `startTask` function is the central orchestrator for initiating bidding task
 - **updateStatus()** - Called when toggling task status via WebSocket message 'toggle-status'
 - **updateMultipleTasksStatus()** - Batch operation for starting/stopping multiple tasks
 - **runScheduledLoop()** - Called during server startup to start all running tasks
-- **processImportedTasks()** - When tasks are imported via WebSocket
+- **processImportedTasks()** - When tasks are imported via WebSocketT
 - **Loop scheduling mechanism** - Self-referential calls for continuous execution
 
 ### Indirect Triggers:
