@@ -479,21 +479,27 @@ function hashData(data: any): string {
 
 export async function fetchOpenSeaCollectionItems(
   variables: CollectionItemsQueryVariables,
-  allTokenIds: number[] = [],
+  allTokenIds: string[] = [],
   cursor?: string
-): Promise<number[]> {
+): Promise<string[]> {
   const CACHE_TTL = 3600; // 1 hour cache
   const cacheKey = `{opensea}:collection-items:${hashData(variables)}`;
   const lockKey = `{opensea}:lock:collection-items:${variables.collectionSlug}:${hashData(variables)}`;
+
+  // Debug log the initial request
+  if (!cursor) {
+    console.log(`[DEBUG] Fetching OpenSea collection items for ${variables.collectionSlug} with filter:`, JSON.stringify(variables.filter));
+  }
 
   // Try to get from cache first (only for initial request)
   if (!cursor) {
     try {
       const cachedData = getRedis() ? await getRedis().get(cacheKey) : null;
       if (cachedData) {
-        console.log(`[Cache Hit] OpenSea collection items for ${variables.collectionSlug}`);
+        console.log(`[DEBUG] Cache hit for ${variables.collectionSlug}`);
         return JSON.parse(cachedData);
       }
+      console.log(`[DEBUG] Cache miss for ${variables.collectionSlug}`);
     } catch (error) {
       console.error('Error reading collection items from cache:', error);
     }
@@ -507,19 +513,17 @@ export async function fetchOpenSeaCollectionItems(
         // Double check cache after acquiring lock
         const cachedData = getRedis() ? await getRedis().get(cacheKey) : null;
         if (cachedData) {
-          console.log(`[Cache Hit] OpenSea collection items for ${variables.collectionSlug} (after lock)`);
           return JSON.parse(cachedData);
         }
 
         // Fetch data
-        return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor);
+        return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1);
       });
 
       if (result) {
         // Cache the final result
         if (getRedis() && result.length > 0) {
           await getRedis().set(cacheKey, JSON.stringify(result), 'EX', CACHE_TTL);
-          console.log(`[Cache Set] OpenSea collection items for ${variables.collectionSlug} (${result.length} items)`);
         }
         return result;
       }
@@ -533,9 +537,16 @@ export async function fetchOpenSeaCollectionItems(
       throw new Error('Failed to acquire lock for collection items fetch');
     } else {
       // For paginated requests, fetch directly without lock
-      return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor);
+      return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1);
     }
   } catch (error) {
+    // Enhanced error logging
+    console.error(`[ERROR] OpenSea API error for ${variables.collectionSlug}:`);
+    console.error(`  Status: ${(error as any)?.response?.status}`);
+    console.error(`  Data: ${JSON.stringify((error as any)?.response?.data)}`);
+    console.error(`  Headers: ${JSON.stringify((error as any)?.response?.headers)}`);
+    console.error(`  Message: ${error instanceof Error ? error.message : String(error)}`);
+
     await logger.logOpenseaCollectionError('Error fetching OpenSea collection items', {
       collectionSlug: variables.collectionSlug,
       operation: 'fetch_collection_items',
@@ -543,17 +554,19 @@ export async function fetchOpenSeaCollectionItems(
       errorCode: (error as any)?.response?.status,
       errorMessage: (error as any)?.response?.data || (error instanceof Error ? error.message : String(error))
     });
-    console.error('Error fetching OpenSea collection items:', error);
-    throw new Error(`Failed to fetch collection items`);
+    throw new Error(`Failed to fetch collection items for ${variables.collectionSlug}`);
   }
 }
 
 // Helper function for recursive fetching
 async function fetchCollectionItemsRecursive(
   variables: CollectionItemsQueryVariables,
-  allTokenIds: number[] = [],
-  cursor?: string
-): Promise<number[]> {
+  allTokenIds: string[] = [],
+  cursor?: string,
+  pageNumber: number = 1
+): Promise<string[]> {
+  console.log(`[DEBUG] Fetching page ${pageNumber} for ${variables.collectionSlug} with cursor: ${cursor || 'initial'}`);
+
   const queryVariables = {
     ...variables,
     cursor: cursor
@@ -564,25 +577,46 @@ async function fetchCollectionItemsRecursive(
     variables: queryVariables
   };
 
-  const { data } = await limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
-    headers: {
-      "x-api-key": API_KEY
-    },
-  }));
+  try {
+    const { data } = await limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
+      headers: {
+        "x-api-key": API_KEY
+      },
+    }));
 
-  // Extract token IDs from the current page
-  const tokenIds = data.data.collectionItems.items.map((item) => +item.tokenId);
-  // Add current page's token IDs to our accumulated list
-  const updatedTokenIds = [...allTokenIds, ...tokenIds];
-  // Get the next cursor
-  const nextCursor = data.data.collectionItems.nextPageCursor;
-  // If there's a next cursor, recursively fetch the next page
-  if (nextCursor) {
-    return fetchCollectionItemsRecursive(variables, updatedTokenIds, nextCursor);
+    // Check if collectionItems is null
+    if (!data?.data?.collectionItems) {
+      if (allTokenIds.length > 0) {
+        return [...new Set(allTokenIds)];
+      }
+      return [];
+    }
+    const tokenIds = data.data.collectionItems.items.map((item) => item.tokenId);
+
+    if (tokenIds.length === 0 && allTokenIds.length > 0) {
+      return [...new Set(allTokenIds)];
+    }
+
+    // Add current page's token IDs to our accumulated list
+    const updatedTokenIds = [...allTokenIds, ...tokenIds];
+
+    // Get the next cursor
+    const nextCursor = data.data.collectionItems.nextPageCursor;
+
+    if (nextCursor) {
+      return fetchCollectionItemsRecursive(variables, updatedTokenIds, nextCursor, pageNumber + 1);
+    }
+    const uniqueTokenIds = [...new Set(updatedTokenIds)];
+
+    return uniqueTokenIds;
+  } catch (error) {
+    // Return what we have so far instead of failing completely
+    if (allTokenIds.length > 0) {
+      console.log(`[WARN] Returning partial results (${allTokenIds.length} tokens) due to error`);
+      return [...new Set(allTokenIds)];
+    }
+    throw error;
   }
-
-  // No more pages, get unique token IDs
-  return [...new Set(updatedTokenIds)];
 }
 
 interface TraitValue {
@@ -622,7 +656,6 @@ export async function fetchOpenseaTraits(
   limit: number = 100,
   cursor?: string
 ): Promise<CollectionAttribute[]> {
-  const startTime = Date.now();
   const CACHE_TTL = 3600; // 1 hour cache
   const cacheKey = `{opensea}:traits:${slug}`;
   const lockKey = `{opensea}:lock:traits:${slug}`;
@@ -632,7 +665,6 @@ export async function fetchOpenseaTraits(
     try {
       const cachedTraits = getRedis() ? await getRedis().get(cacheKey) : null;
       if (cachedTraits) {
-        console.log(`[Cache Hit] OpenSea traits for ${slug} in ${Date.now() - startTime}ms`);
         return JSON.parse(cachedTraits);
       }
     } catch (error) {
@@ -655,7 +687,6 @@ export async function fetchOpenseaTraits(
         // Double check cache after acquiring lock
         const cachedTraits = getRedis() ? await getRedis().get(cacheKey) : null;
         if (cachedTraits) {
-          console.log(`[Cache Hit] OpenSea traits for ${slug} (after lock) in ${Date.now() - startTime}ms`);
           return JSON.parse(cachedTraits);
         }
 
@@ -667,7 +698,6 @@ export async function fetchOpenseaTraits(
         // Cache the final result
         if (getRedis() && result.length > 0) {
           await getRedis().set(cacheKey, JSON.stringify(result), 'EX', CACHE_TTL);
-          console.log(`[Cache Set] OpenSea traits for ${slug} (${result.length} traits) in ${Date.now() - startTime}ms`);
         }
         return result;
       }
@@ -797,7 +827,6 @@ export async function fetchOpenseaTraitFloors(
   try {
     const cachedData = getRedis() ? await getRedis().get(cacheKey) : null;
     if (cachedData) {
-      console.log(`[Cache Hit] OpenSea trait floors for ${slug}`);
       return JSON.parse(cachedData);
     }
   } catch (error) {
@@ -809,7 +838,6 @@ export async function fetchOpenseaTraitFloors(
     // Double check cache after acquiring lock
     const cachedData = getRedis() ? await getRedis().get(cacheKey) : null;
     if (cachedData) {
-      console.log(`[Cache Hit] OpenSea trait floors for ${slug} (after lock)`);
       return JSON.parse(cachedData);
     }
 
@@ -916,7 +944,6 @@ export async function fetchOpenseaTraitFloors(
       // Cache the result
       if (getRedis() && result.length > 0) {
         await getRedis().set(cacheKey, JSON.stringify(result), 'EX', CACHE_TTL);
-        console.log(`[Cache Set] OpenSea trait floors for ${slug} (${result.length} traits)`);
       }
 
       return result;

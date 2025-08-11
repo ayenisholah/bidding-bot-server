@@ -546,8 +546,6 @@ export async function bidOnOpensea(
       timer.endStep('token_database_save');
 
       trackBidRate('opensea', taskId);
-      const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()}  TOKEN: ${asset.tokenId} ${Number(offerPriceEthFinal)} ${currencySymbol} 🎉`
-      console.log(BLUE, successMessage, RESET);
       success = true;
     }
     else {
@@ -1798,7 +1796,7 @@ export async function fetchOpenseaListings(taskId: string, collectionSlug: strin
       const baseUrl = `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`;
       let allListings: OpenseaOrder[] = [];
       let nextCursor: string | null = null;
-      let uniqueTokenIds: number[] = [];
+      let uniqueTokenIds: string[] = [];
 
       while (uniqueTokenIds.length < limit) {
         const params: any = {
@@ -1815,7 +1813,7 @@ export async function fetchOpenseaListings(taskId: string, collectionSlug: strin
 
         allListings = [...allListings, ...data.listings];
         uniqueTokenIds = [...new Set(allListings.map((item) =>
-          +item.protocol_data.parameters.offer[0].identifierOrCriteria
+          item.protocol_data.parameters.offer[0].identifierOrCriteria
         ))];
 
         nextCursor = data.next;

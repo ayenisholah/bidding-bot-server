@@ -83,17 +83,10 @@ export const warningMessage: WarningMessage = {};
 export const errorStats: BidCounts = {};
 export const skipStats: BidCounts = {};
 
-// Track duplicate prevention statistics
-const duplicatePreventionStats = {
-  totalDuplicatesPrevented: 0,
-  totalJobsProcessed: 0,
-  totalDuplicateCheckTime: 0,
-  duplicateCheckCount: 0,
-  lastReset: Date.now()
-};
 // Blur rate limiting is now handled by BlurRateLimiter class
 const QUEUE_NAME = 'BIDDING_BOT';
 const BLUR_BIDDING_QUEUE = 'BLUR_BIDDING_QUEUE';
+const CLEAR_COOLDOWN = 5 * 60 * 1000; // 5 minutes cooldown between queue clears
 
 
 // Type definitions
@@ -117,7 +110,7 @@ interface WalletBalances {
 
 interface BottomListings {
   [key: string]: {
-    opensea: number[];
+    opensea: string[];
     magiceden: number[];
   }
 }
@@ -226,6 +219,12 @@ const TRAIT_BID_PRIORITY = {
 const lockManager = new DistributedLockManager({
   lockPrefix: '{marketplace}:',
   defaultTTLSeconds: 60
+});
+
+// Queue capacity lock manager for atomic queue operations
+const queueCapacityLock = new DistributedLockManager({
+  lockPrefix: '{queue-capacity}:',
+  defaultTTLSeconds: 60 // 1 minute timeout
 });
 
 // Create a getter for redis to ensure it's always current
@@ -356,11 +355,11 @@ let redis = redisClient.getClient();
 export const MAGENTA = '\x1b[35m';
 export const BLUE = '\x1b[34m';
 export const RESET = '\x1b[0m';
-const GREEN = '\x1b[32m';
-const YELLOW = '\x1b[33m';
+export const GREEN = '\x1b[32m';
+export const YELLOW = '\x1b[33m';
 export const RED = '\x1b[31m';
 export const GOLD = '\x1b[33m';
-const CYAN = '\x1b[36m';
+export const CYAN = '\x1b[36m';
 
 const OPENSEA = "OPENSEA";
 const MAGICEDEN = "MAGICEDEN";
@@ -708,7 +707,6 @@ async function handleRedisClusterFailure() {
 
 async function monitorHealth() {
   try {
-    // Check Redis cluster health first
     const isRedisHealthy = await checkRedisClusterHealth();
     if (!isRedisHealthy) {
       redisClusterFailures++;
@@ -748,17 +746,6 @@ async function monitorHealth() {
     // Check if queue is paused
     const isPaused = await queue.isPaused();
 
-    // Auto-recovery: If queue is paused but we have waiting jobs and conditions are good
-    if (isPaused && counts.waiting > 0 && heapPercentOfMax < 70 && counts.active < DRAIN_THRESHOLD) {
-      console.log(YELLOW + '⚡ Queue is paused with waiting jobs - attempting auto-recovery...' + RESET);
-      try {
-        await queue.resume();
-        console.log(GREEN + '✅ Queue auto-recovery successful' + RESET);
-      } catch (err) {
-        console.error(RED + '❌ Queue auto-recovery failed:' + RESET, err);
-      }
-    }
-
     // Log high memory usage but don't pause the queue
     if (heapPercentOfMax > 75) {
       console.log(RED + `⚠️  HIGH MEMORY USAGE: ${heapUsedMB.toFixed(0)}MB / ${MAX_HEAP_MB}MB (${heapPercentOfMax.toFixed(1)}% of max heap) ⚠️` + RESET);
@@ -766,10 +753,6 @@ async function monitorHealth() {
       cleanupMemory();
     }
 
-    // Log high active jobs but let queue handle backpressure naturally
-    if (counts.active > DRAIN_THRESHOLD) {
-      console.log(YELLOW + `[Queue Debug] High active jobs: ${counts.active} > ${DRAIN_THRESHOLD} (queue will handle backpressure)` + RESET);
-    }
 
     // Log rate limit status but let queue concurrency handle it
     if (counts.prioritized > RATE_LIMIT) {
@@ -846,211 +829,10 @@ async function monitorHealth() {
   }
 }
 
-
 setInterval(monitorHealth, HEALTH_CHECK_INTERVAL);
 
-// ===== ENHANCED QUEUE MONITORING WITH MANUAL STUCK JOB TRACKING =====
 
-// Data structures for tracking queue state
-interface QueueState {
-  timestamp: number;
-  waitingCount: number;
-  waitingJobIds: Set<string>;
-  activeCount: number;
-  completedCount: number;
-  failedCount: number;
-  prioritizedCount: number;
-}
-
-interface JobTrackingInfo {
-  jobId: string;
-  jobName: string;
-  firstSeenAt: number;
-  lastSeenAt: number;
-  data?: any;
-}
-
-// Queue monitoring state
-const queueStateHistory: Map<number, QueueState> = new Map();
-const stuckJobsTracker: Map<string, JobTrackingInfo> = new Map();
-let lastClearTime = 0;
-const CLEAR_COOLDOWN = 5 * 60 * 1000; // 5 minutes cooldown between clears
-const MAX_HISTORY_SIZE = 10; // Keep last 10 minutes of history
-const STUCK_JOB_THRESHOLD = 60 * 1000; // 1 minute in milliseconds
-
-// Queue monitoring function
-async function monitorQueueForStuckJobs() {
-  try {
-    // Check if queues are initialized
-    if (!queue || !blurQueue) {
-      console.log(YELLOW + '⚠️ Queues not initialized yet, skipping monitor check' + RESET);
-      return;
-    }
-
-    const currentTime = Date.now();
-
-    // Get current queue counts for both queues
-    const [counts, blurCounts] = await Promise.all([
-      queue.getJobCounts(),
-      blurQueue.getJobCounts()
-    ]);
-
-    // Get all waiting jobs from both queues
-    const [waitingJobs, blurWaitingJobs] = await Promise.all([
-      queue.getJobs(['waiting']),
-      blurQueue.getJobs(['waiting'])
-    ]);
-
-    // Combine jobs from both queues
-    const allWaitingJobs = [...waitingJobs, ...blurWaitingJobs];
-    const waitingJobIds = new Set(allWaitingJobs.map(job => job.id || ''));
-
-    // Create current state snapshot (combine both queues)
-    const currentState: QueueState = {
-      timestamp: currentTime,
-      waitingCount: (counts.waiting || 0) + (blurCounts.waiting || 0),
-      waitingJobIds,
-      activeCount: (counts.active || 0) + (blurCounts.active || 0),
-      completedCount: (counts.completed || 0) + (blurCounts.completed || 0),
-      failedCount: (counts.failed || 0) + (blurCounts.failed || 0),
-      prioritizedCount: (counts.prioritized || 0) + (blurCounts.prioritized || 0)
-    };
-
-    // Store current state
-    queueStateHistory.set(currentTime, currentState);
-
-    // Clean up old history (keep only last 10 minutes)
-    const cutoffTime = currentTime - (MAX_HISTORY_SIZE * 60 * 1000);
-    for (const [timestamp, _] of queueStateHistory) {
-      if (timestamp < cutoffTime) {
-        queueStateHistory.delete(timestamp);
-      }
-    }
-
-    // Track individual jobs
-    let stuckJobsFound = false;
-    const stuckJobsList: string[] = [];
-
-    for (const job of allWaitingJobs) {
-      if (!job.id) continue;
-
-      const jobInfo = stuckJobsTracker.get(job.id);
-
-      if (jobInfo) {
-        // Update existing job tracking
-        jobInfo.lastSeenAt = currentTime;
-
-        // Check if job has been stuck for more than threshold
-        const stuckDuration = currentTime - jobInfo.firstSeenAt;
-        if (stuckDuration >= STUCK_JOB_THRESHOLD) {
-          stuckJobsFound = true;
-          stuckJobsList.push(job.id);
-          const queueName = waitingJobs.includes(job) ? 'MAIN' : 'BLUR';
-          console.log(RED + `⚠️  STUCK JOB DETECTED [${queueName}]: ${job.name || 'unknown'} (ID: ${job.id}) - Waiting for ${Math.floor(stuckDuration / 1000)}s` + RESET);
-          console.log(RED + `⚠️  This job has exceeded the 60-second threshold - Queue will be cleared!` + RESET);
-        }
-      } else {
-        // New job, start tracking
-        stuckJobsTracker.set(job.id, {
-          jobId: job.id,
-          jobName: job.name || 'unknown',
-          firstSeenAt: currentTime,
-          lastSeenAt: currentTime,
-          data: job.data
-        });
-      }
-    }
-
-    // Clean up jobs that are no longer waiting
-    for (const [jobId, jobInfo] of stuckJobsTracker) {
-      if (!waitingJobIds.has(jobId)) {
-        stuckJobsTracker.delete(jobId);
-      }
-    }
-
-    // Check for stuck patterns
-    const previousStates = Array.from(queueStateHistory.values())
-      .filter(state => state.timestamp !== currentTime)
-      .sort((a, b) => b.timestamp - a.timestamp);
-
-    // Pattern 1: Same waiting count for multiple checks
-    let sameWaitingCount = 0;
-    for (const prevState of previousStates) {
-      if (prevState.waitingCount === currentState.waitingCount && currentState.waitingCount > 0) {
-        sameWaitingCount++;
-      } else {
-        break;
-      }
-    }
-
-    // Pattern 2: No progress (active = 0, waiting > 0)
-    const noProgress = currentState.activeCount === 0 && currentState.waitingCount > 0;
-
-    // Check if cancellation is in progress
-    const hasActiveCancellations = activeCancellationOperations.size > 0;
-
-    // Log monitoring status
-    console.log(CYAN + `\n📋 Queue Monitor: Waiting=${currentState.waitingCount}, Active=${currentState.activeCount}, Stuck Jobs=${stuckJobsList.length}` + RESET);
-
-    if (hasActiveCancellations) {
-      console.log(YELLOW + `⚠️  Cancellation in progress. Active operations: ${activeCancellationOperations.size}` + RESET);
-      // Log active cancellations
-      for (const [key, op] of activeCancellationOperations) {
-        const duration = (currentTime - op.startTime) / 1000;
-        console.log(YELLOW + `  - ${key}: ${op.completedJobs}/${op.totalJobs} jobs (${duration.toFixed(1)}s)` + RESET);
-      }
-    }
-
-    // Log stuck jobs details
-    if (stuckJobsFound) {
-      console.log(RED + `⚠️  ${stuckJobsList.length} job(s) stuck for more than 60 seconds - WILL CLEAR QUEUE` + RESET);
-    }
-
-    // Determine if we should clear the queue (skip if cancellation is active)
-    const shouldClear = !hasActiveCancellations && (
-      stuckJobsFound ||
-      (sameWaitingCount >= 2 && currentState.waitingCount > 0) ||
-      (noProgress && previousStates.length > 0)
-    );
-
-    if (shouldClear) {
-      // Check cooldown
-      if (currentTime - lastClearTime < CLEAR_COOLDOWN) {
-        const remainingCooldown = Math.ceil((CLEAR_COOLDOWN - (currentTime - lastClearTime)) / 1000);
-        console.log(YELLOW + `⏱️  Clear cooldown active. Waiting ${remainingCooldown}s before next clear.` + RESET);
-        return;
-      }
-
-      // Log detailed state before clearing
-      console.log(RED + '\n🚨 ═══════ STUCK QUEUE DETECTED - INITIATING CLEAR ═══════ 🚨' + RESET);
-      console.log(RED + `Reason: ${stuckJobsFound ? 'Stuck jobs detected' : sameWaitingCount >= 2 ? 'No progress in waiting count' : 'No active workers with waiting jobs'}` + RESET);
-      console.log(RED + `Stuck Jobs: ${stuckJobsList.join(', ') || 'N/A'}` + RESET);
-      console.log(RED + `Current State: Waiting=${currentState.waitingCount}, Active=${currentState.activeCount}` + RESET);
-      console.log(RED + `Same waiting count for: ${sameWaitingCount + 1} checks` + RESET);
-      console.log(RED + '═══════════════════════════════════════════════════════════' + RESET);
-
-      // Clear the queue
-      lastClearTime = currentTime;
-      await clearQueueAndRestartJobs();
-
-      // Clear tracking after queue clear
-      stuckJobsTracker.clear();
-      queueStateHistory.clear();
-    }
-
-  } catch (error) {
-    console.error(RED + 'Error in queue monitor:' + RESET, error);
-    await logger.logGeneralError('Queue monitoring failed', {
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
-  }
-}
-
-// Start queue monitoring - runs every minute
-const QUEUE_MONITOR_INTERVAL = STANDARD_INTERVAL;
-setInterval(monitorQueueForStuckJobs, QUEUE_MONITOR_INTERVAL);
-console.log(GREEN + '✅ Enhanced queue monitoring started (checking every 60s for stuck jobs)' + RESET);
+// Queue monitoring removed - using simple capacity-based throttling instead
 
 // Auto-resume checker - runs every 60 seconds to check for password availability
 const PASSWORD_CHECK_INTERVAL = STANDARD_INTERVAL;
@@ -1103,8 +885,6 @@ function getActiveTaskWithIdByIndex(index: number): { id: string, task: ITask } 
 // All other job removal should go through stopTask -> removeAllTaskJobsFromQueue
 async function clearQueueAndRestartJobs() {
   try {
-    console.log(YELLOW + 'Clearing queues and restarting jobs...' + RESET);
-
     // Pause both queues before obliterating
     await queue.pause();
     await blurQueue.pause();
@@ -1123,13 +903,8 @@ async function clearQueueAndRestartJobs() {
     await new Promise(resolve => setTimeout(resolve, 1000));
 
     // Obliterate both queues with force option
-    console.log(YELLOW + 'Obliterating main queue...' + RESET);
     await queue.obliterate({ force: true });
-    console.log(GREEN + 'Main queue obliterated successfully' + RESET);
-
-    console.log(YELLOW + 'Obliterating blur queue...' + RESET);
     await blurQueue.obliterate({ force: true });
-    console.log(GREEN + 'Blur queue obliterated successfully' + RESET);
 
     // Check if password is available before resuming queues
     const password = getPassword();
@@ -1137,9 +912,6 @@ async function clearQueueAndRestartJobs() {
       // Resume both queues only if password is available
       await queue.resume();
       await blurQueue.resume();
-      console.log(GREEN + 'Queues resumed successfully' + RESET);
-    } else {
-      console.log(YELLOW + 'Queues remain paused - no password available' + RESET);
     }
 
     // Clear any stored job states
@@ -1347,21 +1119,6 @@ async function fetchCurrentTasks() {
   }
 }
 
-interface BulkJobTracker {
-  taskId: string;
-  jobName: string;
-  marketplace: string; // Added marketplace field
-  totalJobs: number;
-  processedJobs: number;
-  completedJobs: number;
-  failedJobs: number;
-  startTime: number;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-  percentComplete: number;
-}
-
-// Add tracking map
-const bulkJobTrackers = new Map<string, BulkJobTracker>();
 interface BulkJobParent {
   parentId: string;
   totalJobs: number;
@@ -1372,6 +1129,10 @@ interface BulkJobParent {
   // Optional bid tracking fields (only used for cancellation jobs)
   totalBids?: number;        // Total number of bids to cancel
   completedBids?: number;    // Number of successfully cancelled bids
+  // Hybrid tracking fields for accurate job counting
+  expectedJobs?: number;      // Jobs expected from preprocessing
+  actualJobs?: number;        // Jobs actually added to queue
+  allJobsQueued?: boolean;    // Flag when queueing is complete
 }
 
 const parentJobs = new Map<string, BulkJobParent>();
@@ -1391,7 +1152,7 @@ interface TaskPreprocessing {
   opensea: {
     enabled: boolean;
     traits: { type: string; value: string }[];
-    tokens: number[];
+    tokens: string[];
     jobCount: number;
     skipReason?: string;
   };
@@ -1961,7 +1722,6 @@ async function startServer() {
             ]);
             return result || { success: true };
           } catch (error: any) {
-            console.log(error);
             // If it's a password error, throw it to fail the job properly
             if (error.code === 'NO_PASSWORD' || error.message?.includes('No password available')) {
               throw error;
@@ -2124,11 +1884,6 @@ async function startServer() {
     // Initialize worker health monitoring
     startWorkerHealthMonitoring();
 
-    // Initialize queue monitor after queues are created
-    setTimeout(() => {
-      console.log(CYAN + '🔍 Running initial queue monitor check...' + RESET);
-      monitorQueueForStuckJobs();
-    }, 5000); // Wait 5 seconds for system to stabilize
 
     // Add process-level error handler for uncaught BullMQ errors
     process.on('unhandledRejection', async (reason, promise) => {
@@ -2702,7 +2457,18 @@ async function updateTaskRunningPercentage(taskId: string) {
     const parentJob = parentJobs.get(parentJobId);
 
     if (parentJob) {
-      const mpTotal = parentJob.totalJobs || 0;
+      // Use hybrid tracking: expectedJobs while queueing, actualJobs after all queued
+      let mpTotal = parentJob.totalJobs || 0;
+      
+      // If we have actualJobs and allJobsQueued is true, use actualJobs as the accurate count
+      if (parentJob.allJobsQueued && parentJob.actualJobs !== undefined) {
+        mpTotal = parentJob.actualJobs;
+        // Log if there's a mismatch
+        if (mpTotal !== parentJob.totalJobs) {
+          console.log(CYAN + `[updateTaskRunningPercentage] ${parentJobId}: Using actualJobs (${mpTotal}) instead of totalJobs (${parentJob.totalJobs})` + RESET);
+        }
+      }
+      
       const mpCompleted = parentJob.completedJobs || 0;
       const mpPercentage = mpTotal > 0 ? (mpCompleted / mpTotal) * 100 : 0;
 
@@ -2956,35 +2722,20 @@ async function handleTaskCleanup(taskId: string) {
 async function markJobAsProcessed(taskId: string, marketplace: string, jobId: string) {
   const timestamp = new Date().toISOString();
 
-  // Enhanced logging for job lifecycle tracking
-  console.log(BLUE + `\n[markJobAsProcessed] START - ${timestamp}` + RESET);
-  console.log(BLUE + `  TaskId: ${taskId}` + RESET);
-  console.log(BLUE + `  Marketplace: ${marketplace}` + RESET);
-  console.log(BLUE + `  JobId: ${jobId}` + RESET);
-
   // Validate task exists and is active
   const task = activeTasks.get(taskId);
-  if (!task) {
-    console.log(YELLOW + `[markJobAsProcessed] Task ${taskId} not found in activeTasks` + RESET);
-    console.log(YELLOW + `  Active tasks count: ${activeTasks.size}` + RESET);
-    console.log(YELLOW + `  This may be a late completion from a recently modified task - continuing with job tracking` + RESET);
-
-    // Don't return early - still process the completion to prevent stuck tasks
-    // The job completion is legitimate even if task was modified
-  }
+  if (!task) return
 
   // Get parent job,
   const parentJobId = `${taskId}-${marketplace}`;
   let parentJob = parentJobs.get(parentJobId);
-
-  console.log(CYAN + `[markJobAsProcessed] Parent job lookup: ${parentJobId}` + RESET);
 
   // If parent job doesn't exist, create it (recovery mechanism)
   if (!parentJob) {
     console.log(YELLOW + `[markJobAsProcessed] Parent job ${parentJobId} not found, creating retroactively` + RESET);
     console.log(YELLOW + `  Total parent jobs: ${parentJobs.size}` + RESET);
 
-    await ensureParentJobExists(taskId, marketplace);
+    await performMarketplacePreprocessing(task, marketplace, task?.selectedMarketplaces)
     parentJob = parentJobs.get(parentJobId);
 
     if (!parentJob) {
@@ -2996,32 +2747,11 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
     console.log(GREEN + `[markJobAsProcessed] Parent job created successfully` + RESET);
   }
 
-  // Log parent job state before update
-  console.log(CYAN + `[markJobAsProcessed] Parent job state BEFORE:` + RESET);
   console.log(CYAN + `  Total jobs: ${parentJob.totalJobs}` + RESET);
   console.log(CYAN + `  Completed jobs: ${parentJob.completedJobs}` + RESET);
   console.log(CYAN + `  Percentage: ${parentJob.totalJobs > 0 ? ((parentJob.completedJobs / parentJob.totalJobs) * 100).toFixed(2) : 0}%` + RESET);
 
-  // Track processed jobs to prevent duplicates - but be more lenient for legitimate jobs
-  let processedJobs = processedJobsPerParent.get(parentJobId);
-  if (!processedJobs) {
-    processedJobs = new Set<string>();
-    processedJobsPerParent.set(parentJobId, processedJobs);
-  }
-
   // Check for duplicate jobs (but be more permissive about completion)
-  if (processedJobs.has(jobId)) {
-    console.log(RED + `[DUPLICATE JOB DETECTED] Job ${jobId} already processed!` + RESET);
-    console.log(RED + `  TaskId: ${taskId}` + RESET);
-    console.log(RED + `  Marketplace: ${marketplace}` + RESET);
-    console.log(RED + `  Original JobId: ${jobId}` + RESET);
-    console.log(RED + `  ParentJobId: ${parentJobId}` + RESET);
-    console.log(RED + `  ProcessedJobs size: ${processedJobs.size}` + RESET);
-    console.log(RED + `  Parent job state: ${parentJob.completedJobs}/${parentJob.totalJobs}` + RESET);
-    console.log(RED + `  Stack trace:` + RESET);
-    console.trace();
-    return;
-  }
 
   // Check if parent job appears complete but allow some flexibility for stuck tasks
   if (parentJob.completedJobs >= parentJob.totalJobs && parentJob.totalJobs > 0) {
@@ -3047,8 +2777,6 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
     taskStatus[taskId].status = 'RUNNING';
   }
 
-  // Add to processed jobs set
-  processedJobs.add(jobId);
 
   // Increment completed jobs with hard cap protection
   parentJob.completedJobs++;
@@ -3064,16 +2792,6 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
     console.log(YELLOW + `[markJobAsProcessed] Parent job ${parentJobId} had 0 total jobs, setting to 1` + RESET);
     parentJob.totalJobs = 1;
   }
-
-  console.log(CYAN + `[Job Complete] ${parentJobId}: ${parentJob.completedJobs}/${parentJob.totalJobs} (Job: ${jobId})` + RESET);
-
-  // Log parent job state after update
-  console.log(CYAN + `[markJobAsProcessed] Parent job state AFTER:` + RESET);
-  console.log(CYAN + `  Total jobs: ${parentJob.totalJobs}` + RESET);
-  console.log(CYAN + `  Completed jobs: ${parentJob.completedJobs}` + RESET);
-  console.log(CYAN + `  Percentage: ${parentJob.totalJobs > 0 ? ((parentJob.completedJobs / parentJob.totalJobs) * 100).toFixed(2) : 0}%` + RESET);
-  console.log(CYAN + `  Processed jobs set size: ${processedJobs.size}` + RESET);
-
   // Update task running percentage
   try {
     await updateTaskRunningPercentage(taskId);
@@ -3108,8 +2826,6 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
       }
     }
   }
-
-  console.log(BLUE + `[markJobAsProcessed] END - ${new Date().toISOString()}` + RESET);
 }
 
 // Helper function to mark a cancellation job as processed (similar to markJobAsProcessed)
@@ -3363,7 +3079,6 @@ function initializeQueueEventHandlers() {
     try {
       // Skip schedule jobs - they are orchestration jobs, not actual bid jobs
       if (jobId.includes('-schedule')) {
-        console.log(CYAN + `[Queue Event] Skipping schedule job tracking: ${jobId}` + RESET);
         return;
       }
 
@@ -3453,7 +3168,6 @@ function initializeQueueEventHandlers() {
         if (taskId && marketplace) {
           const task = activeTasks.get(taskId);
           if (task && task.running) {
-            console.log(GREEN + `[Queue Event - MAIN] Processing completion for task ${taskId}, marketplace ${marketplace}, jobId: ${jobId}` + RESET);
             await markJobAsProcessed(taskId, marketplace, jobId);
           }
         } else {
@@ -4689,7 +4403,7 @@ async function updateTaskData(task: ITask) {
 
     const traitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
     const tokenBid = task.bidType === "token"
-    const taskTokenIds = currentTask?.tokenIds ?? []
+    const taskTokenIds = (currentTask?.tokenIds ?? []).map(id => id.toString())
 
     const autoIds = existingTask.tokenIds
       .filter(id => id.toString().toLowerCase().startsWith('bot'))
@@ -4700,7 +4414,7 @@ async function updateTaskData(task: ITask) {
       .filter(id => id !== null);
 
     const amount = autoIds[0]
-    let openseaTokenIds: number[] = []
+    let openseaTokenIds: string[] = []
     let magicedenTokenIds: number[] = []
 
     if (!currentTokenIds[task._id]) {
@@ -4710,8 +4424,8 @@ async function updateTaskData(task: ITask) {
       }
     }
 
-    const previousOpenseaTokens = [...currentTokenIds[task._id]?.opensea, ...existingTask.tokenIds]
-    const previousMagicedenTokens = [...currentTokenIds[task._id]?.magiceden, ...existingTask.tokenIds]
+    const previousOpenseaTokens = [...currentTokenIds[task._id]?.opensea, ...existingTask.tokenIds.map(id => id.toString())]
+    const previousMagicedenTokens = [...currentTokenIds[task._id]?.magiceden, ...existingTask.tokenIds.map(id => Number(id))]
 
     const openseaBottonListings = autoIds ? await fetchOpenseaListings(task._id, task.contract.slug, amount) ?? [] : []
     const magicedenBottomListings = amount ? await fetchMagicEdenTokens(task._id, task.contract.contractAddress, amount) ?? [] : []
@@ -4720,7 +4434,7 @@ async function updateTaskData(task: ITask) {
       const attributes = transformSelectedTraitsToAttributes(selectedTraits)
       const expandedAttributes = expandAttributes(attributes)
       // Initialize tokens with bottomListings and taskTokenIds
-      let openseaTokens: number[] = [...openseaBottonListings, ...taskTokenIds.map((token) => +token)]
+      let openseaTokens: string[] = [...openseaBottonListings, ...taskTokenIds]
       let magicedenTokens: number[] = [...magicedenBottomListings, ...taskTokenIds.map((token) => +token)]
 
       if (currentTask.traitsOperator.value === "or") {
@@ -4740,7 +4454,7 @@ async function updateTaskData(task: ITask) {
 
             const items = await fetchOpenSeaCollectionItems(variable);
             openseaTokens.push(...items);
-            magicedenTokens.push(...items)
+            magicedenTokens.push(...items.map(id => Number(id)))
           })
         )
       } else if (currentTask.traitsOperator.value === "and") {
@@ -4758,21 +4472,21 @@ async function updateTaskData(task: ITask) {
         };
         const items = await fetchOpenSeaCollectionItems(variable);
         openseaTokens.push(...items);
-        magicedenTokens.push(...items)
+        magicedenTokens.push(...items.map(id => Number(id)))
       }
 
-      openseaTokens = [...openseaBottonListings, ...taskTokenIds.map((token) => +token), ...openseaTokens];
+      openseaTokens = [...openseaBottonListings, ...taskTokenIds, ...openseaTokens];
       openseaTokenIds = [...new Set(openseaTokens)];
 
       magicedenTokens = [...magicedenBottomListings, ...taskTokenIds.map((token) => +token), ...magicedenTokens]
       magicedenTokenIds = [...new Set(magicedenTokens)]
 
     } else if (task.bidType === "token") {
-      openseaTokenIds = [...new Set([...openseaBottonListings, ...taskTokenIds.map((token) => +token)])];
+      openseaTokenIds = [...new Set([...openseaBottonListings, ...taskTokenIds])];
       magicedenTokenIds = [...new Set([...magicedenBottomListings, ...taskTokenIds.map((token) => +token)])];
     }
 
-    const openseaTokensToRemove = previousOpenseaTokens.filter(token => !openseaTokenIds.includes(+token)).map((token) => token.toString())
+    const openseaTokensToRemove = previousOpenseaTokens.filter(token => !openseaTokenIds.includes(token.toString()))
     const magicedenTokensToRemove = previousMagicedenTokens.filter(token => !magicedenTokenIds.includes(+token)).map((token) => token.toString())
 
     const openseaTokensToAdd = openseaTokenIds.filter(token => !previousOpenseaTokens.includes(token));
@@ -4968,8 +4682,8 @@ async function updateTaskData(task: ITask) {
   }
 }
 
-const MAX_MEMORY_USAGE = 75;
-const DRAIN_THRESHOLD = RATE_LIMIT * 2;
+const MAX_QUEUE_JOBS = 10000; // Maximum jobs allowed in queue
+const QUEUE_RESUME_THRESHOLD = 5000; // Resume when queue drops to 50% (5000 jobs)
 
 const BLUR_JOBS = [
   'BLUR_COLLECTION_BID',
@@ -4978,541 +4692,227 @@ const BLUR_JOBS = [
   'BLUR_TRAIT_BID'
 ];
 
-async function processBulkCancellations(jobs: Job[]) {
-  if (!jobs?.length) return;
+// processBulkCancellations removed - using processBulkJobs for all bulk operations
 
-  const rateLimiter = new RateLimiter(RATE_LIMIT);
-  const chunks = chunk(jobs, RATE_LIMIT);
-
-  // Check if this is a cancellation operation
-  const isCancellation = jobs.length > 0 && (
-    jobs[0].name === CANCEL_OPENSEA_BID ||
-    jobs[0].name === CANCEL_MAGICEDEN_BID ||
-    jobs[0].name === CANCEL_BLUR_BID
-  );
-
-  // For cancellation jobs, ensure cancellation parent jobs exist
-  if (isCancellation && jobs.length > 0) {
-    const firstJob = jobs[0];
-    const taskId = firstJob.data?.taskId;
-    if (taskId) {
-      // Cancellation parent jobs have a different naming pattern
-      const parentJobId = `${taskId}-${firstJob.name}`;
-      if (!cancellationParentJobs.has(parentJobId)) {
-        console.log(YELLOW + `[processBulkCancellations] Creating missing cancellation parent job: ${parentJobId}` + RESET);
-      }
-    }
-  }
-
-  try {
-    for (const [chunkIndex, currentChunk] of chunks.entries()) {
-      try {
-        const memUsage = process.memoryUsage();
-        const memoryUsagePercent = (memUsage.heapUsed / os.totalmem()) * 100;
-
-        if (memoryUsagePercent > MAX_MEMORY_USAGE) {
-          console.log(YELLOW + `Memory usage high (${memoryUsagePercent.toFixed(1)}%). Waiting for GC...` + RESET);
-          await new Promise(resolve => setTimeout(resolve, 5000));
-          global.gc?.();
-          continue;
-        }
-
-        // Skip queue drain checks if this is a cancellation operation (queue is paused)
-        if (!isCancellation) {
-          while (true) {
-            const counts = await queue.getJobCounts();
-            const prioritizedCount = counts.prioritized || 0;
-
-            if (prioritizedCount <= DRAIN_THRESHOLD) {
-              break;
-            }
-            const delay = (prioritizedCount / DRAIN_THRESHOLD);
-            await new Promise(resolve => setTimeout(resolve, delay * 2000));
-          }
-
-          // Check queue health
-          const counts = await queue.getJobCounts();
-          const prioritizedprioritizedCount = counts.prioritized || 0;
-
-          if (prioritizedprioritizedCount > DRAIN_THRESHOLD) {
-            await waitForQueueDrain();
-          }
-        }
-
-        let retries = 3;
-        while (retries > 0) {
-          try {
-            await rateLimiter.acquire();
-            await queue.addBulk(
-              currentChunk
-                .filter((job): job is NonNullable<typeof job> => job !== null)
-                .map(job => ({
-                  name: job.name,
-                  data: job.data,
-                  opts: {
-                    ...job?.opts,
-                    removeOnComplete: true,
-                    removeOnFail: true, // Keep failed jobs for debugging
-                  },
-                }))
-            );
-
-            break;
-          } catch (error) {
-            retries--;
-            if (retries === 0) {
-              throw error;
-            }
-            console.log(YELLOW + `Retrying addBulk for chunk ${chunkIndex + 1}. Attempts remaining: ${retries}` + RESET);
-            await new Promise(resolve => setTimeout(resolve, 2000));
-          }
-        }
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      } catch (error) {
-        console.log(RED + `Error processing chunk ${chunkIndex + 1}:`, error, RESET);
-      }
-    }
-  } catch (error) {
-    console.log(RED + 'Error processing bulk jobs:', error, RESET);
-  }
+// Helper function to extract marketplace from job name
+function getMarketplaceFromJobName(jobName: string): string | null {
+  const name = jobName.toUpperCase();
+  if (name.includes('OPENSEA')) return 'opensea';
+  if (name.includes('MAGICEDEN')) return 'magiceden';
+  if (name.includes('BLUR')) return 'blur';
+  return null;
 }
 
 async function processBulkJobs(jobs: Job[], createKey = false) {
   if (!jobs?.length) return;
 
   const firstJob = jobs[0];
-  const taskId = firstJob.data._id;
-  const marketplace = (firstJob.name.split('_')[0] || 'UNKNOWN').toLowerCase();
-  const bulkJobId = `${firstJob.data._id}-${marketplace}`;
-
-  // Enhanced logging for duplicate prevention tracking
-  const duplicateStats = {
-    totalJobs: jobs.length,
-    duplicatesFound: 0,
-    duplicatesPrevented: 0,
-    jobsAdded: 0,
-    jobsFailed: 0,
-    retryAttempts: 0,
-    duplicateCheckTime: 0,
-    totalProcessingTime: 0,
-    startTime: Date.now()
-  };
-
-  if (process.env.DEBUG_JOB_KEYS === 'true') {
-    console.log(`[processBulkJobs] Starting bulk job processing for task ${taskId}, marketplace: ${marketplace}`);
-    console.log(`[processBulkJobs] Total jobs to process: ${jobs.length}, createKey: ${createKey}`);
-  }
-
-  // Log duplicate prevention start
-  console.log(CYAN + `[Duplicate Prevention] Starting bulk job processing: ${jobs.length} jobs for ${marketplace}` + RESET);
-
+  const taskId = firstJob.data._id || firstJob.data.taskId;
   const task = activeTasks.get(taskId);
 
-  // Ensure parent job exists before processing - this is critical for race condition prevention
-  await ensureParentJobExists(taskId, marketplace);
+  // For cancellation jobs, we should process them even if the task is not running
+  const isCancellationJob = firstJob.name.toLowerCase().includes('cancel');
 
-  // Verify parent job exists (should have been created in startTask or by ensureParentJobExists)
-  if (!parentJobs.has(bulkJobId)) {
-    console.error(RED + `[processBulkJobs] Parent job ${bulkJobId} not found even after ensureParentJobExists! This should not happen.` + RESET);
-    console.error(RED + `[processBulkJobs] Jobs will be processed but progress tracking may be incorrect.` + RESET);
-  }
-
-
-  const tracker: BulkJobTracker = {
-    taskId: firstJob.data._id,
-    jobName: firstJob.name,
-    totalJobs: jobs.length,
-    marketplace, // Added marketplace field
-    processedJobs: 0,
-    completedJobs: 0,
-    failedJobs: 0,
-    startTime: Date.now(),
-    status: 'processing',
-    percentComplete: 0
-  };
-
-  bulkJobTrackers.set(bulkJobId, tracker);
-
-  if (!task || !task.running) return
-  const rateLimiter = new RateLimiter(RATE_LIMIT);
-  const chunks = chunk(jobs, RATE_LIMIT * 2);
-
-  let totalProcessed = 0;
-  let totalAdded = 0;
-  let totalFailed = 0;
-
-  try {
-    for (const [chunkIndex, currentChunk] of chunks.entries()) {
-      try {
-        const memUsage = process.memoryUsage();
-        const memoryUsagePercent = (memUsage.heapUsed / os.totalmem()) * 100;
-
-        if (memoryUsagePercent > MAX_MEMORY_USAGE) {
-          console.log(YELLOW + `Memory usage high (${memoryUsagePercent.toFixed(1)}%). Waiting for GC...` + RESET);
-          await new Promise(resolve => setTimeout(resolve, 5000));
-          global.gc?.();
-          continue;
-        }
-
-        // Add timeout to prevent infinite waiting
-        const MAX_WAIT_TIME = 30000; // 30 seconds max wait
-        const startWait = Date.now();
-
-        while (Date.now() - startWait < MAX_WAIT_TIME) {
-          const counts = await queue.getJobCounts();
-          const prioritizedCount = counts.prioritized || 0;
-
-          if (prioritizedCount <= DRAIN_THRESHOLD) {
-            break;
-          }
-          const delay = (prioritizedCount / DRAIN_THRESHOLD);
-          // Fixed 1 second delay instead of variable delay
-          await new Promise(resolve => setTimeout(resolve, delay * 1000));
-        }
-
-        // Check queue health
-        const counts = await queue.getJobCounts();
-        const prioritizedCount = counts.prioritized || 0;
-
-        if (prioritizedCount > DRAIN_THRESHOLD) {
-          await waitForQueueDrain();
-        }
-
-        totalProcessed += currentChunk.length;
-        tracker.processedJobs = totalProcessed;
-        tracker.percentComplete = Math.round((totalProcessed / tracker.totalJobs) * 100);
-        bulkJobTrackers.set(bulkJobId, tracker);
-
-        const validJobs = await Promise.all(currentChunk.map(async (job) => {
-          if (!job?.name || !job?.data) return null;
-
-          const taskId = job?.data?._id;
-          if (taskId && !activeTasks.get(taskId)?.running) return null;
-
-          const isCancel = job.name.toLowerCase().includes('cancel');
-          if (isCancel) {
-            return {
-              ...job,
-              jobKey: undefined
-            };
-          }
-
-          const jobKey = createKey ? createJobKey(job) : generateJobKey(job);
-
-          return {
-            ...job,
-            jobKey
-          };
-        }));
-        const filteredJobs = validJobs.filter(Boolean);
-        if (!filteredJobs.length) {
-          continue;
-        }
-        // Filter out jobs for stopped tasks
-        const activeJobs = currentChunk.filter(job => {
-          const taskId = job?.data?._id;
-          if (!taskId) return true; // Keep jobs without taskId
-
-          const task = activeTasks.get(taskId);
-          if (task && !task?.running) {
-            return false;
-          }
-          return true;
-        });
-
-        if (!activeJobs.length) {
-          continue;
-        }
-        if (task && task.running) {
-          // Set status to QUEUEING when jobs are being queued
-          if (taskStatus[taskId].status !== "RUNNING") {
-            taskStatus[taskId].status = "QUEUEING";
-          }
-        }
-
-        let retries = 3;
-        const blurJobs = filteredJobs.filter((job): job is NonNullable<typeof job> => job !== null).filter(job => BLUR_JOBS.includes(job.name));
-        const nonBlurJobs = filteredJobs.filter((job): job is NonNullable<typeof job> => job !== null).filter(job => !BLUR_JOBS.includes(job.name));
-
-        // Track successfully added job IDs to avoid retrying them
-        const successfullyAddedJobs = new Set<string>();
-        const chunkDuplicateStats = {
-          totalChecked: 0,
-          duplicatesInChunk: 0,
-          newJobsAdded: 0
-        };
-
-        while (retries > 0) {
-          try {
-            await rateLimiter.acquire();
-            // Add non-Blur jobs first
-            const jobsToAdd = nonBlurJobs
-              .filter(job => {
-                // Skip jobs that were already successfully added
-                const jobId = job.jobKey;
-                const shouldSkip = jobId && successfullyAddedJobs.has(jobId);
-                if (shouldSkip) {
-                  console.log(YELLOW + `[processBulkJobs] Skipping already added job: ${jobId}` + RESET);
-                }
-                return !shouldSkip;
-              })
-              .map(job => {
-                const jobOpts = {
-                  ...(job.jobKey ? { jobId: job.jobKey } : {}),
-                  ...job?.opts,
-                  removeOnComplete: true,
-                  removeOnFail: true
-                };
-                return {
-                  name: job.name,
-                  data: job.data,
-                  opts: jobOpts,
-                };
-              });
-
-            // Check for duplicates before adding
-            const duplicateCheckStart = Date.now();
-            const nonDuplicateJobs = await checkForDuplicateJobs(queue, jobsToAdd);
-            const duplicateCheckTime = Date.now() - duplicateCheckStart;
-            duplicateStats.duplicateCheckTime += duplicateCheckTime;
-
-            const duplicatesFound = jobsToAdd.length - nonDuplicateJobs.length;
-            if (duplicatesFound > 0) {
-              duplicateStats.duplicatesFound += duplicatesFound;
-              duplicateStats.duplicatesPrevented += duplicatesFound;
-              console.log(YELLOW + `[Duplicate Prevention] Found ${duplicatesFound} duplicate jobs in queue, preventing re-addition` + RESET);
-            }
-
-            // Also check against already processed jobs
-            const parentJobId = `${taskId}-${marketplace}`;
-            const processedJobs = processedJobsPerParent.get(parentJobId);
-            let jobsNotProcessed = nonDuplicateJobs;
-
-            if (processedJobs && processedJobs.size > 0) {
-              jobsNotProcessed = nonDuplicateJobs.filter(job => {
-                const jobId = job.opts?.jobId;
-                if (jobId && processedJobs.has(jobId)) {
-                  console.log(YELLOW + `[Duplicate Prevention] Job ${jobId} already processed, skipping` + RESET);
-                  duplicateStats.duplicatesPrevented++;
-                  return false;
-                }
-                return true;
-              });
-
-              const processedDuplicates = nonDuplicateJobs.length - jobsNotProcessed.length;
-              if (processedDuplicates > 0) {
-                console.log(RED + `[Duplicate Prevention] Found ${processedDuplicates} already processed jobs! Parent job ${parentJobId} has ${processedJobs.size} processed jobs` + RESET);
-              }
-            }
-
-            const addedJobs = await queue.addBulk(jobsNotProcessed);
-            chunkDuplicateStats.newJobsAdded += addedJobs.length;
-
-            // Add Blur jobs using the coordinator to prevent rate limiting
-            if (blurJobs.length > 0) {
-              const blurJobsToAdd = blurJobs
-                .filter(job => {
-                  // Skip jobs that were already successfully added
-                  const jobId = job.jobKey;
-                  return !jobId || !successfullyAddedJobs.has(jobId);
-                })
-                .map(job => {
-                  const jobOpts = {
-                    ...(job.jobKey ? { jobId: job.jobKey } : {}),
-                    ...job?.opts,
-                    removeOnComplete: true,
-                    removeOnFail: true
-                  };
-                  return {
-                    name: job.name,
-                    data: job.data,
-                    opts: jobOpts,
-                  };
-                });
-
-              // Use the coordinator to manage Blur job scheduling
-              console.log(BLUE + `[Blur Coordinator] Queueing ${blurJobsToAdd.length} jobs for task ${taskId}` + RESET);
-              await blurJobCoordinator.addJobs(blurJobsToAdd, taskId);
-
-              // The coordinator will handle rate limiting and add jobs to the queue progressively
-              // So we just track that we've queued them
-              totalAdded += addedJobs.length + blurJobsToAdd.length;
-              duplicateStats.jobsAdded += addedJobs.length + blurJobsToAdd.length;
-
-              // Track successfully added non-Blur jobs
-              addedJobs.forEach(job => {
-                if (job.opts?.jobId) {
-                  successfullyAddedJobs.add(job.opts.jobId);
-                }
-              });
-            } else {
-              // Track successfully added jobs
-              addedJobs.forEach(job => {
-                if (job.opts?.jobId) {
-                  successfullyAddedJobs.add(job.opts.jobId);
-                }
-              });
-
-              totalAdded += addedJobs.length;
-              duplicateStats.jobsAdded += addedJobs.length;
-            }
-
-            // Log chunk statistics
-            if (chunkDuplicateStats.newJobsAdded > 0 || duplicatesFound > 0) {
-              console.log(GREEN + `[Duplicate Prevention] Chunk ${chunkIndex + 1}/${chunks.length}: Added ${chunkDuplicateStats.newJobsAdded} new jobs, prevented ${duplicatesFound} duplicates` + RESET);
-            }
-            break;
-          } catch (error: any) {
-            // Check if error is due to duplicate job IDs
-            const isDuplicateError = error?.message?.includes('duplicate') ||
-              error?.code === 'DUPLICATE_JOB_ID' ||
-              error?.message?.includes('already exists');
-
-            if (isDuplicateError) {
-              // Don't retry for duplicate errors - jobs already exist
-              duplicateStats.duplicatesFound += filteredJobs.length;
-              console.log(YELLOW + `[Duplicate Prevention] Duplicate error in chunk ${chunkIndex + 1}, ${filteredJobs.length} jobs already exist` + RESET);
-              break;
-            }
-
-            retries--;
-            duplicateStats.retryAttempts++;
-            totalFailed++;
-            duplicateStats.jobsFailed++;
-            tracker.failedJobs = totalFailed;
-            if (retries === 0) {
-              throw error;
-            }
-            console.log(YELLOW + `[Duplicate Prevention] Retrying chunk ${chunkIndex + 1}. Attempts remaining: ${retries}` + RESET);
-            console.log(YELLOW + `[Duplicate Prevention] Successfully added jobs so far: ${successfullyAddedJobs.size}` + RESET);
-            await new Promise(resolve => setTimeout(resolve, 2000));
-          }
-        }
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        // Log chunk completion and cleanup
-        console.log(CYAN + `[processBulkJobs] Completed chunk ${chunkIndex + 1}/${chunks.length}, tracked ${successfullyAddedJobs.size} jobs in this chunk` + RESET);
-      } catch (error) {
-        tracker.status = 'failed';
-        bulkJobTrackers.set(bulkJobId, tracker);
-        console.error(RED + `[processBulkJobs] Error in chunk ${chunkIndex + 1}/${chunks.length}: ${error}` + RESET);
-      }
-    }
-    // Final status update
-    tracker.status = 'completed';
-    tracker.processedJobs = tracker.totalJobs;
-    bulkJobTrackers.set(bulkJobId, tracker);
-
-    // Calculate final statistics
-    duplicateStats.totalProcessingTime = Date.now() - duplicateStats.startTime;
-
-    // Update global duplicate prevention statistics
-    updateDuplicatePreventionStats({
-      jobsProcessed: duplicateStats.totalJobs,
-      duplicatesPrevented: duplicateStats.duplicatesPrevented,
-      checkTime: duplicateStats.duplicateCheckTime,
-      checksPerformed: chunks.length * 2 // Regular checks + Blur checks
-    });
-
-    // Log comprehensive duplicate prevention summary
-    console.log(CYAN + `\n[Duplicate Prevention Summary] Task: ${taskId}, Marketplace: ${marketplace}` + RESET);
-    console.log(CYAN + `├─ Total Jobs: ${duplicateStats.totalJobs}` + RESET);
-    console.log(CYAN + `├─ Jobs Added: ${duplicateStats.jobsAdded}` + RESET);
-    console.log(CYAN + `├─ Duplicates Prevented: ${duplicateStats.duplicatesPrevented}` + RESET);
-    console.log(CYAN + `├─ Jobs Failed: ${duplicateStats.jobsFailed}` + RESET);
-    console.log(CYAN + `├─ Retry Attempts: ${duplicateStats.retryAttempts}` + RESET);
-    console.log(CYAN + `├─ Duplicate Check Time: ${duplicateStats.duplicateCheckTime}ms` + RESET);
-    console.log(CYAN + `└─ Total Processing Time: ${duplicateStats.totalProcessingTime}ms` + RESET);
-
-    // Log warning if high duplicate rate
-    const duplicateRate = (duplicateStats.duplicatesPrevented / duplicateStats.totalJobs) * 100;
-    if (duplicateRate > 20) {
-      console.log(YELLOW + `⚠️  [Duplicate Prevention] High duplicate rate detected: ${duplicateRate.toFixed(1)}%` + RESET);
-    }
-
-  } catch (error) {
-    tracker.status = 'failed';
-    bulkJobTrackers.set(bulkJobId, tracker);
-    duplicateStats.totalProcessingTime = Date.now() - duplicateStats.startTime;
-    console.error(RED + `[Duplicate Prevention] Failed to process bulk jobs for task ${taskId}: ${error}` + RESET);
-    console.error(RED + `[Duplicate Prevention] Stats at failure: Jobs added: ${duplicateStats.jobsAdded}, Duplicates prevented: ${duplicateStats.duplicatesPrevented}` + RESET);
-  } finally {
-    // Job Count Reconciliation - ensure parent job totalJobs is accurate
-    try {
-      await reconcileParentJobCounts(taskId, marketplace, totalAdded);
-    } catch (error) {
-      console.error(RED + `[processBulkJobs] Error in job count reconciliation: ${error}` + RESET);
-    }
-
-    // Clean up successfullyAddedJobs Set to prevent memory leaks
-    console.log(CYAN + `[processBulkJobs] Cleaning up tracking data for task ${taskId}` + RESET);
-  }
-}
-
-// Job Count Reconciliation - ensure parent job totalJobs matches actual jobs added
-async function reconcileParentJobCounts(taskId: string, marketplace: string, actualJobsAdded: number): Promise<void> {
-  const parentJobId = `${taskId}-${marketplace}`;
-  const parentJob = parentJobs.get(parentJobId);
-
-  if (!parentJob) {
-    console.log(YELLOW + `[Reconciliation] Parent job ${parentJobId} not found - skipping reconciliation` + RESET);
+  if (!task) {
     return;
   }
 
-  const originalTotalJobs = parentJob.totalJobs;
+  if (!task.running && !isCancellationJob) {
+    return;
+  }
 
-  console.log(BLUE + `[Reconciliation] Checking job counts for ${parentJobId}:` + RESET);
-  console.log(BLUE + `  Original totalJobs: ${originalTotalJobs}` + RESET);
-  console.log(BLUE + `  Actual jobs added: ${actualJobsAdded}` + RESET);
-  console.log(BLUE + `  Current completedJobs: ${parentJob.completedJobs}` + RESET);
+  const chunks = chunk(jobs, 100); // Process in smaller chunks
+  let retryChunkIndex = -1; // Track if we need to retry a chunk
+  
+  // Track total jobs actually added for each marketplace
+  const jobsAddedByMarketplace = new Map<string, number>();
 
-  // If actualJobsAdded is significantly different from originalTotalJobs, adjust
-  const discrepancy = Math.abs(originalTotalJobs - actualJobsAdded);
-  const discrepancyPercentage = originalTotalJobs > 0 ? (discrepancy / originalTotalJobs) * 100 : 0;
+  try {
+    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+      // Handle retry logic
+      if (retryChunkIndex >= 0) {
+        chunkIndex = retryChunkIndex;
+        retryChunkIndex = -1;
+      }
 
-  if (discrepancyPercentage > 5 && discrepancy > 5) { // Only adjust if discrepancy is significant
-    console.log(YELLOW + `[Reconciliation] Significant job count discrepancy detected: ${discrepancyPercentage.toFixed(1)}%` + RESET);
-    console.log(YELLOW + `  This could cause stuck tasks if totalJobs is inaccurate` + RESET);
+      const currentChunk = chunks[chunkIndex];
 
-    // Use the higher of the two values to ensure tasks can complete
-    const adjustedTotalJobs = Math.max(originalTotalJobs, actualJobsAdded);
+      try {
+        // Use distributed lock for atomic capacity check and job addition
+        const added = await queueCapacityLock.withLock('bulk-jobs', async () => {
+          // Check capacity inside the lock
+          const counts = await queue.getJobCounts();
+          const blurCounts = await blurQueue.getJobCounts();
 
-    // However, don't set it lower than current completed jobs to prevent issues
-    const finalTotalJobs = Math.max(adjustedTotalJobs, parentJob.completedJobs);
+          const totalJobs = (counts.waiting || 0) + (counts.active || 0) + (counts.prioritized || 0) +
+            (blurCounts.waiting || 0) + (blurCounts.active || 0) + (blurCounts.prioritized || 0);
 
-    if (finalTotalJobs !== originalTotalJobs) {
-      parentJob.totalJobs = finalTotalJobs;
-      console.log(GREEN + `[Reconciliation] Adjusted totalJobs from ${originalTotalJobs} to ${finalTotalJobs}` + RESET);
+          if (totalJobs >= MAX_QUEUE_JOBS) {
+            // Queue is at capacity, return false to indicate we couldn't add
+            console.log(YELLOW + `[processBulkJobs] Queue at capacity (${totalJobs}/${MAX_QUEUE_JOBS}) inside lock` + RESET);
+            return false;
+          }
 
-      // Trigger a percentage update to reflect the new numbers
-      const task = activeTasks.get(taskId);
-      if (task && task.running) {
-        try {
-          await updateTaskRunningPercentage(taskId);
-        } catch (error) {
-          console.error(RED + `[Reconciliation] Error updating task percentage after reconciliation: ${error}` + RESET);
+          // Calculate how many jobs we can actually add
+          const availableSpace = MAX_QUEUE_JOBS - totalJobs;
+
+          // Prepare jobs for queue (only process what we have space for)
+          const jobsToProcess = currentChunk.slice(0, availableSpace);
+
+          const validJobs = jobsToProcess.filter(job => {
+            if (!job?.name || !job?.data) return false;
+
+            // For cancellation jobs, taskId is in data.taskId, for others it's in data._id
+            const jobTaskId = job.data._id || job.data.taskId;
+            if (!jobTaskId) return false;
+
+            const jobTask = activeTasks.get(jobTaskId);
+            const isCancelJob = job.name.toLowerCase().includes('cancel');
+
+            // Allow cancellation jobs even if task is not running
+            if (isCancelJob) {
+              return !!jobTask; // Just check if task exists
+            }
+
+            return jobTask && jobTask.running;
+          });
+
+          if (!validJobs.length) {
+            return true; // No valid jobs, but we successfully processed the chunk
+          }
+
+          // Update task status to QUEUEING
+          if (taskStatus[taskId] && taskStatus[taskId].status !== "RUNNING") {
+            taskStatus[taskId].status = "QUEUEING";
+          }
+
+          // Separate Blur and non-Blur jobs
+          const blurJobs = validJobs.filter(job => BLUR_JOBS.includes(job.name));
+          const nonBlurJobs = validJobs.filter(job => !BLUR_JOBS.includes(job.name));
+
+          // Add non-Blur jobs to queue (inside the lock)
+          if (nonBlurJobs.length > 0) {
+            const jobsToAdd = nonBlurJobs.map(job => {
+              const jobKey = job.name.toLowerCase().includes('cancel') ? undefined :
+                (createKey ? createJobKey(job) : generateJobKey(job));
+
+              return {
+                name: job.name,
+                data: job.data,
+                opts: {
+                  ...(jobKey ? { jobId: jobKey } : {}),
+                  ...job.opts,
+                  removeOnComplete: true,
+                  removeOnFail: true
+                }
+              };
+            });
+
+            await queue.addBulk(jobsToAdd);
+            
+            // Track actual jobs added for each marketplace
+            for (const job of nonBlurJobs) {
+              const marketplace = getMarketplaceFromJobName(job.name);
+              if (marketplace) {
+                jobsAddedByMarketplace.set(marketplace, (jobsAddedByMarketplace.get(marketplace) || 0) + 1);
+              }
+            }
+          }
+
+          // Add Blur jobs using the coordinator (inside the lock)
+          if (blurJobs.length > 0) {
+            const blurJobsToAdd = blurJobs.map(job => {
+              const jobKey = job.name.toLowerCase().includes('cancel') ? undefined :
+                (createKey ? createJobKey(job) : generateJobKey(job));
+
+              return {
+                name: job.name,
+                data: job.data,
+                opts: {
+                  ...(jobKey ? { jobId: jobKey } : {}),
+                  ...job.opts,
+                  removeOnComplete: true,
+                  removeOnFail: true
+                }
+              };
+            });
+
+            console.log(BLUE + `[Blur Coordinator] Queueing ${blurJobsToAdd.length} jobs for task ${taskId}` + RESET);
+            await blurJobCoordinator.addJobs(blurJobsToAdd, taskId);
+            
+            // Track actual Blur jobs added
+            jobsAddedByMarketplace.set('blur', (jobsAddedByMarketplace.get('blur') || 0) + blurJobs.length);
+          }
+
+          // If we only processed part of the chunk, we need to handle the rest
+          if (jobsToProcess.length < currentChunk.length) {
+            console.log(YELLOW + `[processBulkJobs] Only processed ${jobsToProcess.length} of ${currentChunk.length} jobs due to capacity` + RESET);
+            // Create a new chunk with the remaining jobs
+            chunks[chunkIndex] = currentChunk.slice(jobsToProcess.length);
+            retryChunkIndex = chunkIndex; // Mark this chunk for retry
+            return false; // Indicate we need to wait
+          }
+
+          return true; // Successfully added all jobs in this chunk
+        });
+
+        // If we couldn't acquire lock or add jobs, wait
+        if (added === null) {
+          console.log(YELLOW + `[processBulkJobs] Couldn't acquire lock, retrying...` + RESET);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          retryChunkIndex = chunkIndex; // Retry this chunk
+          continue;
+        }
+
+        if (!added) {
+          console.log(YELLOW + `[processBulkJobs] Queue at capacity or partial processing. Waiting...` + RESET);
+
+          // Wait for queue to drain
+          while (true) {
+            await new Promise(resolve => setTimeout(resolve, 5000));
+
+            const counts = await queue.getJobCounts();
+            const blurCounts = await blurQueue.getJobCounts();
+            const newTotal = (counts.waiting || 0) + (counts.active || 0) + (counts.prioritized || 0) +
+              (blurCounts.waiting || 0) + (blurCounts.active || 0) + (blurCounts.prioritized || 0);
+
+            if (newTotal <= QUEUE_RESUME_THRESHOLD) {
+              console.log(GREEN + `[processBulkJobs] Queue dropped to ${newTotal} jobs. Retrying...` + RESET);
+              retryChunkIndex = chunkIndex; // Retry this chunk
+              break;
+            }
+          }
+        }
+      } catch (error) {
+        console.error(RED + `[processBulkJobs] Error in chunk ${chunkIndex + 1}/${chunks.length}: ${error}` + RESET);
+      }
+    }
+    
+    // After all chunks processed, update parent jobs with actual counts and mark as queued
+    for (const [marketplace, actualCount] of jobsAddedByMarketplace) {
+      const parentJobId = `${taskId}-${marketplace}`;
+      const parentJob = parentJobs.get(parentJobId);
+      if (parentJob) {
+        // Update actual jobs count
+        parentJob.actualJobs = (parentJob.actualJobs || 0) + actualCount;
+        parentJob.allJobsQueued = true;
+        
+        // Update totalJobs to match actualJobs now that queueing is complete
+        if (parentJob.totalJobs !== parentJob.actualJobs) {
+          console.log(YELLOW + `[processBulkJobs] ${parentJobId}: Adjusting totalJobs from ${parentJob.totalJobs} to ${parentJob.actualJobs} (actual queued)` + RESET);
+          parentJob.totalJobs = parentJob.actualJobs;
         }
       }
     }
-  } else {
-    console.log(GREEN + `[Reconciliation] Job counts look accurate - no adjustment needed` + RESET);
-  }
-
-  // Additional check: if completed jobs exceed total jobs, adjust total
-  if (parentJob.completedJobs > parentJob.totalJobs) {
-    console.log(YELLOW + `[Reconciliation] Completed jobs (${parentJob.completedJobs}) exceed total jobs (${parentJob.totalJobs}) - adjusting` + RESET);
-    parentJob.totalJobs = parentJob.completedJobs;
-
-    const task = activeTasks.get(taskId);
-    if (task && task.running) {
-      try {
-        await updateTaskRunningPercentage(taskId);
-      } catch (error) {
-        console.error(RED + `[Reconciliation] Error updating task percentage after overflow fix: ${error}` + RESET);
-      }
-    }
+    
+    // Trigger percentage update now that all jobs are queued
+    await updateTaskRunningPercentage(taskId);
+    
+  } catch (error) {
+    console.error(RED + `[processBulkJobs] Failed to process bulk jobs for task ${taskId}: ${error}` + RESET);
   }
 }
+
 
 // Helper function to check for duplicate jobs in queue
 async function checkForDuplicateJobs(queue: Queue, jobsToAdd: Array<{ name: string, data: any, opts: any }>) {
@@ -5563,19 +4963,6 @@ async function checkForDuplicateJobs(queue: Queue, jobsToAdd: Array<{ name: stri
   }
 }
 
-// Helper function to wait for queue drain
-async function waitForQueueDrain(): Promise<void> {
-  while (true) {
-    const counts = await queue.getJobCounts();
-    if ((counts.prioritized || 0) <= DRAIN_THRESHOLD) {
-      return;
-    }
-
-    const delay = counts.prioritized / RATE_LIMIT
-    await new Promise(resolve => setTimeout(resolve, delay * 1000));
-  }
-}
-
 // Helper function to chunk array
 /**
  * Splits an array into smaller arrays (chunks) of a specified size.
@@ -5591,20 +4978,6 @@ function chunk<T>(array: T[], size: number): T[][] {
     return array.slice(start, end); // Extract the chunk from the array
   });
 }
-
-// Update duplicate prevention statistics
-function updateDuplicatePreventionStats(stats: {
-  jobsProcessed?: number;
-  duplicatesPrevented?: number;
-  checkTime?: number;
-  checksPerformed?: number;
-}) {
-  if (stats.jobsProcessed) duplicatePreventionStats.totalJobsProcessed += stats.jobsProcessed;
-  if (stats.duplicatesPrevented) duplicatePreventionStats.totalDuplicatesPrevented += stats.duplicatesPrevented;
-  if (stats.checkTime) duplicatePreventionStats.totalDuplicateCheckTime += stats.checkTime;
-  if (stats.checksPerformed) duplicatePreventionStats.duplicateCheckCount += stats.checksPerformed;
-}
-
 
 function createJobKey(job: Job) {
   let uniqueKey;
@@ -5995,6 +5368,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       const blurJobs = jobs.filter(job => job.name === BLUR_SCHEDULE);
       const nonBlurJobs = jobs.filter(job => job.name !== BLUR_SCHEDULE);
 
+
       // For loop restarts (start=true), always add jobs without deduplication
       if (start === true) {
         if (nonBlurJobs.length > 0) {
@@ -6023,7 +5397,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
               }
             }
           } catch (err) {
-            console.log(RED + `[DEBUG][startTask] Error checking job ${targetJobId}: ${err}` + RESET);
+            console.log(RED + `[startTask] Error checking job ${targetJobId}: ${err}` + RESET);
           }
         }
 
@@ -7345,24 +6719,6 @@ async function fetchAndCancelOpenseaBids(
 
         // Process this batch immediately to avoid memory buildup
         if (batch.length > 0) {
-          // Set up or update parent job tracking
-          const parentJobId = `${taskId}-CANCEL_OPENSEA_BID`;
-          const existingParentJob = parentJobs.get(parentJobId);
-
-          if (!existingParentJob) {
-            parentJobs.set(parentJobId, {
-              parentId: parentJobId,
-              totalJobs: batch.length,
-              completedJobs: 0,
-              startTime: Date.now(),
-              taskId: taskId,
-              jobName: CANCEL_OPENSEA_BID
-            });
-          } else {
-            // Update total jobs count
-            existingParentJob.totalJobs += batch.length;
-          }
-
           // Queue cancellations for this batch
           await cancelOpenseaBids(batch, WALLET_PRIVATE_KEY, taskId, currencySymbol);
 
@@ -7519,24 +6875,6 @@ async function fetchAndCancelBlurBids(
 
         // Process this batch immediately to avoid memory buildup
         if (batch.length > 0) {
-          // Set up or update parent job tracking
-          const parentJobId = `${taskId}-CANCEL_BLUR_BID`;
-          const existingParentJob = parentJobs.get(parentJobId);
-
-          if (!existingParentJob) {
-            parentJobs.set(parentJobId, {
-              parentId: parentJobId,
-              totalJobs: batch.length,
-              completedJobs: 0,
-              startTime: Date.now(),
-              taskId: taskId,
-              jobName: CANCEL_BLUR_BID
-            });
-          } else {
-            // Update total jobs count
-            existingParentJob.totalJobs += batch.length;
-          }
-
           // Queue cancellations for this batch
           await cancelBlurBids(batch, WALLET_PRIVATE_KEY, taskId);
 
@@ -8044,20 +7382,28 @@ async function cancelMagicedenBids(orders: any[], privateKey: string, taskId: st
     taskStatus[taskId].status = 'CANCELLING';
   }
 
-  // Create parent job for tracking cancellation progress (totalJobs = number of batches)
-  const batchCount = Math.ceil(orders.length / 500);
+  // Check if parent job already exists and update it, or create new one
   const parentJobId = `${taskId}-CANCEL_MAGICEDEN_BID`;
-  // Always create a fresh parent job for each cancellation operation
-  cancellationParentJobs.set(parentJobId, {
-    parentId: parentJobId,
-    totalJobs: batchCount,
-    completedJobs: 0,
-    startTime: Date.now(),
-    taskId: taskId,
-    jobName: 'CANCEL_MAGICEDEN_BID',
-    totalBids: orders.length,
-    completedBids: 0,
-  });
+  const existingParentJob = cancellationParentJobs.get(parentJobId);
+  const batchCount = Math.ceil(orders.length / 500);
+
+  if (existingParentJob) {
+    // Update existing parent job
+    existingParentJob.totalBids = (existingParentJob.totalBids || 0) + orders.length;
+    existingParentJob.totalJobs = (existingParentJob.totalJobs || 0) + batchCount;
+  } else {
+    // Create new parent job
+    cancellationParentJobs.set(parentJobId, {
+      parentId: parentJobId,
+      totalJobs: batchCount,
+      completedJobs: 0,
+      startTime: Date.now(),
+      taskId: taskId,
+      jobName: 'CANCEL_MAGICEDEN_BID',
+      totalBids: orders.length,
+      completedBids: 0,
+    });
+  }
 
   for (let i = 0; i < orders.length; i += 500) {
     const batchOrders = orders.slice(i, i + 500);
@@ -8078,19 +7424,27 @@ async function cancelBlurBids(orders: any[], privateKey: string, taskId: string)
     taskStatus[taskId].status = 'CANCELLING';
   }
 
-  // Create parent job for tracking cancellation progress
+  // Check if parent job already exists and update it, or create new one
   const parentJobId = `${taskId}-CANCEL_BLUR_BID`;
-  // Always create a fresh parent job for each cancellation operation
-  cancellationParentJobs.set(parentJobId, {
-    parentId: parentJobId,
-    totalJobs: orders.length,
-    completedJobs: 0,
-    startTime: Date.now(),
-    taskId: taskId,
-    jobName: 'CANCEL_BLUR_BID',
-    totalBids: orders.length,
-    completedBids: 0,
-  });
+  const existingParentJob = cancellationParentJobs.get(parentJobId);
+
+  if (existingParentJob) {
+    // Update existing parent job
+    existingParentJob.totalBids = (existingParentJob.totalBids || 0) + orders.length;
+    existingParentJob.totalJobs = (existingParentJob.totalJobs || 0) + orders.length;
+  } else {
+    // Create new parent job
+    cancellationParentJobs.set(parentJobId, {
+      parentId: parentJobId,
+      totalJobs: orders.length,
+      completedJobs: 0,
+      startTime: Date.now(),
+      taskId: taskId,
+      jobName: 'CANCEL_BLUR_BID',
+      totalBids: orders.length,
+      completedBids: 0,
+    });
+  }
 
   const cancelData = orders.map((order, index) => {
     const payload = JSON.parse(order.orderHash)
@@ -8100,13 +7454,10 @@ async function cancelBlurBids(orders: any[], privateKey: string, taskId: string)
       opts: getCancellationJobOptions(taskId, order._id, CANCEL_BLUR_BID)
     }
   }) as Job[]
-  await processBulkCancellations(cancelData);
+  await processBulkJobs(cancelData);
 }
 
 async function cancelOpenseaBids(orders: any[], privateKey: string, taskId: string, currencySymbol: string) {
-  console.log(GOLD + `[cancelOpenseaBids] Starting cancellation for task ${taskId}` + RESET);
-  console.log(GOLD + `  Orders to cancel: ${orders.length}` + RESET);
-  console.log(GOLD + `  Currency: ${currencySymbol}` + RESET);
   if (!orders.length) return;
 
   // Set task status to CANCELLING
@@ -8114,22 +7465,27 @@ async function cancelOpenseaBids(orders: any[], privateKey: string, taskId: stri
     taskStatus[taskId].status = 'CANCELLING';
   }
 
-  // Create parent job for tracking cancellation progress
+  // Check if parent job already exists and update it, or create new one
   const parentJobId = `${taskId}-CANCEL_OPENSEA_BID`;
-  // Always create a fresh parent job for each cancellation operation
-  cancellationParentJobs.set(parentJobId, {
-    parentId: parentJobId,
-    totalJobs: orders.length,
-    completedJobs: 0,
-    startTime: Date.now(),
-    taskId: taskId,
-    jobName: 'CANCEL_OPENSEA_BID',
-    totalBids: orders.length,
-    completedBids: 0,
-  });
+  const existingParentJob = cancellationParentJobs.get(parentJobId);
 
-  console.log(GOLD + `[cancelOpenseaBids] Created parent job: ${parentJobId}` + RESET);
-  console.log(GOLD + `  Total bids to cancel: ${orders.length}` + RESET);
+  if (existingParentJob) {
+    // Update existing parent job
+    existingParentJob.totalBids = (existingParentJob.totalBids || 0) + orders.length;
+    existingParentJob.totalJobs = (existingParentJob.totalJobs || 0) + orders.length;
+  } else {
+    // Create new parent job
+    cancellationParentJobs.set(parentJobId, {
+      parentId: parentJobId,
+      totalJobs: orders.length,
+      completedJobs: 0,
+      startTime: Date.now(),
+      taskId: taskId,
+      jobName: 'CANCEL_OPENSEA_BID',
+      totalBids: orders.length,
+      completedBids: 0,
+    });
+  }
 
   const cancelData = orders.map((order, index) => {
     return {
@@ -8139,7 +7495,7 @@ async function cancelOpenseaBids(orders: any[], privateKey: string, taskId: stri
     }
   }) as Job[]
 
-  await processBulkCancellations(cancelData)
+  await processBulkJobs(cancelData)
 
   // Decrement the own bid counter by the number of cancelled orders
   decrementOwnBidCounter('opensea', orders.length);
@@ -8893,7 +8249,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces
       .map((m) => m.toLowerCase())
       .includes("magiceden")) {
-      console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] Task validation failed, exiting` + RESET);
       return;
     };
 
@@ -8931,10 +8286,8 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     }
 
     if (!currentTask.outbidOptions.counterbid) {
-      console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] Counterbid not enabled for task, exiting` + RESET);
       return;
     }
-    console.log(CYAN + `[DEBUG][handleMagicEdenCounterbid] Counterbid enabled, proceeding...` + RESET);
     // Comprehensive logging for MagicEden counterbid
     const makerFormatted = maker ? `${maker.slice(0, 6)}...${maker.slice(-4)}` : 'unknown';
     const bidTypeDisplay = bidType === 'token' ? `Token #${tokenId}` : 'Collection';
@@ -9472,17 +8825,14 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     }
 
     if (data.event === "item_received_bid") {
-      console.log(CYAN + `[DEBUG][handleOpenseaCounterbid] Processing token bid for token #${tokenId}` + RESET);
       let tokenOffer: bigint;
       let offerPrice: number;
 
       const currentTokens = currentTokenIds[task._id].opensea
       const tokenIds = [...task.tokenIds, ...currentTokens]
       const tokenBid = task.bidType === "token"
-      console.log(CYAN + `[DEBUG][handleOpenseaCounterbid] Token bid check - Is token bid: ${tokenBid}, Token in list: ${tokenIds.includes(+tokenId)}` + RESET);
 
       if (!tokenBid || !tokenIds.includes(+tokenId)) {
-        console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] Not a valid token bid, exiting` + RESET);
         return;
       }
 
@@ -9522,7 +8872,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
           if (orders.length > 0) {
-            console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] Cancelling ${orders.length} existing bids due to max price exceeded` + RESET);
             const cancelData = orders.map((order, index) => {
               return {
                 name: CANCEL_OPENSEA_BID,
@@ -9531,7 +8880,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               }
             })
             await queue.addBulk(cancelData)
-            console.log(GREEN + `[DEBUG][handleOpenseaCounterbid] Cancel jobs added successfully` + RESET);
           }
         }
 
@@ -9918,24 +9266,19 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       return;
     }
     if (traitBid) {
-      console.log(CYAN + `[DEBUG][handleBlurCounterbid] Processing trait bid` + RESET);
       const isTraitBid = currentTask?.bidType === "collection" && selectedTraits && Object.keys(selectedTraits)?.length > 0
       if (!isTraitBid) {
-        console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Not a trait bid, exiting trait section` + RESET);
         return;
       }
 
       const traits = transformBlurTraits(selectedTraits)
       const incomingTraitBids = incomingBid?.stats?.filter((item: any) => item?.criteriaType?.toLowerCase() === "trait") || incomingBid?.updates?.filter((item: any) => item?.criteriaType?.toLowerCase() === "trait")
-      console.log(CYAN + `[DEBUG][handleBlurCounterbid] Incoming trait bids count: ${incomingTraitBids?.length || 0}` + RESET);
 
       if (!incomingTraitBids) {
-        console.log(YELLOW + `[DEBUG][handleBlurCounterbid] No incoming trait bids found` + RESET);
         return;
       }
 
       const hasMatchingTraits = checkBlurTraits(incomingTraitBids, traits);
-      console.log(CYAN + `[DEBUG][handleBlurCounterbid] Matching traits found: ${hasMatchingTraits?.length || 0}` + RESET);
 
       if (!hasMatchingTraits?.length) return
       const transformedTraits = selectedTraits && Object.keys(selectedTraits)?.length > 0 ? transformOpenseaTraits(selectedTraits) : []
@@ -9991,7 +9334,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
           if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
             if (orders.length > 0) {
-              console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Cancelling ${orders.length} existing bids due to max price exceeded` + RESET);
               const cancelData = orders.map((order, index) => {
                 const payload = JSON.parse(order.orderHash)
                 return {
@@ -9999,9 +9341,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
                   data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order._id }
                 }
               })
-              console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Adding ${cancelData.length} cancel jobs to queue` + RESET);
               await queue.addBulk(cancelData)
-              console.log(GREEN + `[DEBUG][handleBlurCounterbid] Cancel jobs added successfully` + RESET);
             }
           }
 
@@ -10023,9 +9363,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
                 data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order._id }
               }
             })
-            console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Adding cancel jobs to queue...` + RESET);
             await queue.addBulk(cancelData)
-            console.log(GREEN + `[DEBUG][handleBlurCounterbid] Stop condition cancel jobs added successfully` + RESET);
           }
           return
         }
@@ -10326,10 +9664,11 @@ async function performMarketplacePreprocessing(
 ): Promise<TaskPreprocessing> {
   const taskId = task._id;
 
+
   // Initialize preprocessing result
   const preprocessing: TaskPreprocessing = {
     bidType: task.bidType as 'token' | 'trait' | 'collection',
-    opensea: { enabled: false, traits: [], tokens: [], jobCount: 0 },
+    opensea: { enabled: false, traits: [], tokens: [] as string[], jobCount: 0 },
     blur: { enabled: false, traits: [], tokens: [], jobCount: 0 },
     magiceden: { enabled: false, traits: [], tokens: [], jobCount: 0 }
   };
@@ -10345,9 +9684,9 @@ async function performMarketplacePreprocessing(
   const amount = autoIds[0];
 
   // Fetch tokens if needed for token bid type
-  let openseaTokens: number[] = [];
+  let openseaTokens: string[] = [];
   let magicedenTokens: number[] = [];
-  let traitTokens: number[] = [];
+  let traitTokens: string[] = [];
 
   if (task.bidType === "token") {
     // First, fetch bottom listings if autoIds are present
@@ -10366,12 +9705,13 @@ async function performMarketplacePreprocessing(
     }
 
     // Add manually specified token IDs
-    const manualTokenIds = task.tokenIds.filter(id => !isNaN(Number(id)) && !id.toString().toLowerCase().includes('bot')).map(id => Number(id));
+    const manualTokenIds = task.tokenIds.filter(id => !isNaN(Number(id)) && !id.toString().toLowerCase().includes('bot')).map(id => id.toString());
     openseaTokens = [...openseaTokens, ...manualTokenIds];
-    magicedenTokens = [...magicedenTokens, ...manualTokenIds];
+    magicedenTokens = [...magicedenTokens, ...manualTokenIds.map(id => Number(id))];
 
     // If traits are selected for token bid type, fetch trait-based tokens
     // Fetch once and share between OpenSea and MagicEden
+    console.log(CYAN + `[DEBUG] Task bidType: ${task.bidType}, marketplace: ${marketplace}` + RESET);
     if ((marketplace === "opensea" || marketplace === "magiceden") && availableMarketplaces.includes("opensea")) {
       const openseaFilteredTraits = Object.fromEntries(
         Object.entries(task?.selectedTraits?.opensea || {}).filter(([_, traits]) => traits.length > 0)
@@ -10391,8 +9731,18 @@ async function performMarketplacePreprocessing(
                 limit: 100,
                 sort: { by: 'PRICE', direction: 'ASC' },
               };
-              const items = await fetchOpenSeaCollectionItems(variable);
-              traitTokens.push(...items);
+              try {
+                const items = await fetchOpenSeaCollectionItems(variable);
+                if (items.length === 0) {
+                  console.log(YELLOW + `[WARN] No items returned for ${task.contract.slug} with traits. Collection may not support GraphQL.` + RESET);
+                } else if (items.length >= 2000) {
+                  console.log(YELLOW + `[INFO] Retrieved ${items.length} items for ${task.contract.slug} with traits (API limit may apply)` + RESET);
+                }
+                traitTokens.push(...items);
+              } catch (error) {
+                console.error(RED + `[ERROR] Failed to fetch trait items for ${task.contract.slug}: ${error}` + RESET);
+                // Continue without trait tokens rather than failing completely
+              }
             })
           );
         } else if (task.traitsOperator.value === "and") {
@@ -10402,13 +9752,27 @@ async function performMarketplacePreprocessing(
             limit: 100,
             sort: { by: 'PRICE', direction: 'ASC' },
           };
-          const items = await fetchOpenSeaCollectionItems(variable);
-          traitTokens.push(...items);
+          try {
+            const items = await fetchOpenSeaCollectionItems(variable);
+            if (items.length === 0) {
+              console.log(YELLOW + `[WARN] No items returned for ${task.contract.slug} with traits. Collection may not support GraphQL.` + RESET);
+            } else if (items.length >= 2000) {
+              console.log(YELLOW + `[INFO] Retrieved ${items.length} items for ${task.contract.slug} with traits (API limit may apply)` + RESET);
+            }
+            traitTokens.push(...items);
+          } catch (error) {
+            console.error(RED + `[ERROR] Failed to fetch trait items for ${task.contract.slug}: ${error}` + RESET);
+            // Continue without trait tokens rather than failing completely
+          }
         }
 
         // Add trait tokens to both OpenSea and MagicEden lists
         openseaTokens = [...openseaTokens, ...traitTokens];
-        magicedenTokens = [...magicedenTokens, ...traitTokens];
+        magicedenTokens = [...magicedenTokens, ...traitTokens.map(id => Number(id))];
+
+        if (traitTokens.length > 0) {
+          console.log(GREEN + `[DEBUG] Added ${traitTokens.length} trait tokens for ${task.contract.slug}` + RESET);
+        }
       }
     }
   }
@@ -10424,10 +9788,20 @@ async function performMarketplacePreprocessing(
     const selectedTraits = transformNewTask(filteredTraits);
     const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0;
 
-    if (task.bidType === "token" && openseaTokens.length > 0) {
-      // Token bid
-      preprocessing.opensea.tokens = [...new Set(openseaTokens)];
-      preprocessing.opensea.jobCount = preprocessing.opensea.tokens.length;
+    if (task.bidType === "token") {
+      console.log(CYAN + `[DEBUG] OpenSea tokens available: ${openseaTokens.length}` + RESET);
+      if (openseaTokens.length > 0) {
+        // Token bid
+        preprocessing.opensea.tokens = [...new Set(openseaTokens)];
+        preprocessing.opensea.jobCount = preprocessing.opensea.tokens.length;
+        if (preprocessing.opensea.jobCount >= 2000) {
+          console.log(YELLOW + `[INFO] Processing ${preprocessing.opensea.jobCount} tokens for ${task.contract.slug} (API limit may have been reached)` + RESET);
+        }
+      } else {
+        preprocessing.opensea.skipReason = `No tokens found for ${task.contract.slug}. Collection may not support GraphQL queries for traits.`;
+        preprocessing.opensea.jobCount = 0;
+        console.log(YELLOW + `[WARN] No tokens found for token bid on ${task.contract.slug}` + RESET);
+      }
     } else if (traitBid) {
       // Trait bid - need to check if collection supports trait offers
       const collectionDetails = await getCollectionDetails(task.contract.slug, task.contract.contractAddress);
@@ -10549,6 +9923,7 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
   const currentLoopCount = loopCounterStats[task._id.toString()] || 1;
   console.log(`${BLUE}[processOpenseaScheduledBid] CALLED for task ${task._id} - Loop #${currentLoopCount}${RESET}`);
 
+
   // Check if this scheduled job is already running to prevent duplicates
   const lockKey = `${task._id}-opensea-scheduled`;
   if (scheduledJobLocks.has(lockKey)) {
@@ -10561,12 +9936,10 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
 
   try {
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) {
-      console.log(`${YELLOW}[processOpenseaScheduledBid] OpenSea not in enabled marketplaces, returning${RESET}`);
       return;
     }
     const currentTask = activeTasks.get(task._id);
     if (!currentTask || !currentTask.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
-      console.log(`${YELLOW}[processOpenseaScheduledBid] Task not found, not running, or OpenSea not selected, returning${RESET}`);
       return;
     }
 
@@ -10692,13 +10065,14 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
           opts: { priority: TOKEN_BID_PRIORITY.OPENSEA } as JobsOptions,
         })) as Job[]
 
-      // Ensure parent job exists with correct totalJobs BEFORE processing jobs
+      // Ensure parent job exists BEFORE processing jobs
       const parentJobId = `${taskId}-opensea`;
       await ensureParentJobExists(taskId, 'opensea');
       const parentJob = parentJobs.get(parentJobId);
       if (parentJob) {
-        parentJob.totalJobs = preprocessing.opensea.tokens.length;
-        console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE processing jobs${RESET}`);
+        parentJob.expectedJobs = preprocessing.opensea.tokens.length;
+        parentJob.totalJobs = preprocessing.opensea.tokens.length; // Use expected count initially
+        console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
       }
 
       await processBulkJobs(jobs, true);
@@ -10726,13 +10100,14 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
         };
       }) as Job[]
 
-      // Ensure parent job exists with correct totalJobs BEFORE processing jobs
+      // Ensure parent job exists BEFORE processing jobs
       const parentJobId = `${taskId}-opensea`;
       await ensureParentJobExists(taskId, 'opensea');
       const parentJob = parentJobs.get(parentJobId);
       if (parentJob) {
-        parentJob.totalJobs = preprocessing.opensea.traits.length;
-        console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE processing jobs${RESET}`);
+        parentJob.expectedJobs = preprocessing.opensea.traits.length;
+        parentJob.totalJobs = preprocessing.opensea.traits.length; // Use expected count initially
+        console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
       }
 
       await processBulkJobs(traitJobs, true);
@@ -10741,13 +10116,16 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
       console.log(`${BLUE}[OPENSEA] Creating 1 collection bid job${RESET}`);
       const jobId = `bid-${taskId}-opensea-${currentTask.contract.slug}-collection`
 
-      // Ensure parent job exists with correct totalJobs BEFORE adding job
+      // Ensure parent job exists BEFORE adding job
       const parentJobId = `${taskId}-opensea`;
       await ensureParentJobExists(taskId, 'opensea');
       const parentJob = parentJobs.get(parentJobId);
       if (parentJob) {
+        parentJob.expectedJobs = 1;
         parentJob.totalJobs = 1;
-        console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE adding job${RESET}`);
+        parentJob.actualJobs = 1;
+        parentJob.allJobsQueued = true;
+        console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} for single collection bid${RESET}`);
       }
 
       await queue.add(
@@ -10755,6 +10133,9 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
         { task: newTask, collectionDetails, currency },
         { jobId }
       );
+      
+      // Trigger percentage update for single job
+      await updateTaskRunningPercentage(taskId);
 
       if (currentTask && currentTask.running) {
         if (taskStatus[taskId]) {
@@ -11245,13 +10626,14 @@ async function processBlurScheduledBid(task: ITask) {
       console.log(`${GOLD}[BLUR] Processing ${totalTraits} trait bids in ${totalBatches} batches (${batchSize} per batch)${RESET}`);
       console.log(`${GOLD}[BLUR] Rate limit: ${BLUR_RATE_LIMIT.maxBidsPerWindow} bids per ${BLUR_RATE_LIMIT.windowDuration / 1000} seconds${RESET}`);
 
-      // Ensure parent job exists with correct totalJobs BEFORE processing jobs
+      // Ensure parent job exists BEFORE processing jobs
       const parentJobId = `${taskId}-blur`;
       await ensureParentJobExists(taskId, 'blur');
       const parentJob = parentJobs.get(parentJobId);
       if (parentJob) {
-        parentJob.totalJobs = preprocessing.blur.traits.length;
-        console.log(`${GOLD}[BLUR] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE processing jobs${RESET}`);
+        parentJob.expectedJobs = preprocessing.blur.traits.length;
+        parentJob.totalJobs = preprocessing.blur.traits.length; // Use expected count initially
+        console.log(`${GOLD}[BLUR] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
       }
 
       // Process traits in smaller batches that respect the rate limit
@@ -11316,13 +10698,14 @@ async function processBlurScheduledBid(task: ITask) {
       const slug = removeChar(currentTask.contract.slug, "-")
       const jobId = `bid-${taskId}-blur-${slug}-collection-${WALLET_ADDRESS}`
 
-      // Ensure parent job exists with correct totalJobs BEFORE adding job
+      // Ensure parent job exists BEFORE adding job
       const parentJobId = `${taskId}-blur`;
       await ensureParentJobExists(taskId, 'blur');
       const parentJob = parentJobs.get(parentJobId);
       if (parentJob) {
-        parentJob.totalJobs = 1;
-        console.log(`${GOLD}[BLUR] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE adding job${RESET}`);
+        parentJob.expectedJobs = 1;
+        parentJob.totalJobs = 1; // Use expected count initially
+        console.log(`${GOLD}[BLUR] Set parent job ${parentJobId} expectedJobs: 1${RESET}`);
       }
 
       await blurQueue.add(
@@ -11330,12 +10713,22 @@ async function processBlurScheduledBid(task: ITask) {
         { task: newTask, contractAddress, expiry },
         { jobId }
       );
+      
+      // Update parent job count after successful job addition - mark as all queued for single job
+      if (parentJob) {
+        parentJob.actualJobs = 1;
+        parentJob.allJobsQueued = true;
+        console.log(GREEN + `[BLUR] Collection bid job added, marking ${parentJobId} as allJobsQueued` + RESET);
+      }
 
       if (currentTask && currentTask.running) {
         if (taskStatus[taskId]) {
           taskStatus[taskId].status = 'QUEUED';
         }
       }
+      
+      // Trigger percentage update now that the job is queued
+      await updateTaskRunningPercentage(taskId);
     }
   } catch (error) {
     console.error(RED + `Error processing Blur scheduled bid for task: ${task._id}` + RESET, error);
@@ -11881,7 +11274,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       return;
     }
     const { address, privateKey, slug, creatorFees, enforceCreatorFee, asset, _id } = data
-    if (!currentTokenIds[_id]?.opensea?.includes(+asset.tokenId)) {
+    if (!currentTokenIds[_id]?.opensea?.includes(asset.tokenId.toString())) {
       return;
     }
 
@@ -12107,7 +11500,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
           // Remove token from the list to avoid repeated attempts
           if (currentTokenIds[data._id]?.opensea) {
-            const tokenIndex = currentTokenIds[data._id].opensea.indexOf(+data.asset.tokenId);
+            const tokenIndex = currentTokenIds[data._id].opensea.indexOf(data.asset.tokenId.toString());
             if (tokenIndex > -1) {
               currentTokenIds[data._id].opensea.splice(tokenIndex, 1);
             }
@@ -12933,6 +12326,16 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
       // Token bid
       console.log(`${MAGENTA}[MAGICEDEN] Creating ${preprocessing.magiceden.tokens.length} token bid jobs${RESET}`);
 
+      // Ensure parent job exists BEFORE processing jobs
+      const parentJobId = `${taskId}-magiceden`;
+      await ensureParentJobExists(taskId, 'magiceden');
+      const parentJob = parentJobs.get(parentJobId);
+      if (parentJob) {
+        parentJob.expectedJobs = preprocessing.magiceden.tokens.length;
+        parentJob.totalJobs = preprocessing.magiceden.tokens.length; // Use expected count initially
+        console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
+      }
+
       const jobs = preprocessing.magiceden.tokens
         .map((token) => ({
           name: MAGICEDEN_TOKEN_BID,
@@ -12953,20 +12356,21 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
           } as JobsOptions
         })) as Job[]
 
-      // Ensure parent job exists with correct totalJobs BEFORE processing jobs
-      const parentJobId = `${taskId}-magiceden`;
-      await ensureParentJobExists(taskId, 'magiceden');
-      const parentJob = parentJobs.get(parentJobId);
-      if (parentJob) {
-        parentJob.totalJobs = preprocessing.magiceden.tokens.length;
-        console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE processing jobs${RESET}`);
-      }
-
       await processBulkJobs(jobs, true);
     }
     else if (preprocessing.magiceden.traits.length > 0) {
       // Trait bid
       console.log(`${MAGENTA}[MAGICEDEN] Creating ${preprocessing.magiceden.traits.length} trait bid jobs${RESET}`);
+
+      // Ensure parent job exists BEFORE processing jobs
+      const parentJobId = `${taskId}-magiceden`;
+      await ensureParentJobExists(taskId, 'magiceden');
+      const parentJob = parentJobs.get(parentJobId);
+      if (parentJob) {
+        parentJob.expectedJobs = preprocessing.magiceden.traits.length;
+        parentJob.totalJobs = preprocessing.magiceden.traits.length; // Use expected count initially
+        console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
+      }
 
       const traitJobs = preprocessing.magiceden.traits.map((trait) => ({
         name: MAGICEDEN_TRAIT_BID,
@@ -12985,15 +12389,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
         opts: { priority: TRAIT_BID_PRIORITY.MAGICEDEN } as JobsOptions
       })) as Job[]
 
-      // Ensure parent job exists with correct totalJobs BEFORE processing jobs
-      const parentJobId = `${taskId}-magiceden`;
-      await ensureParentJobExists(taskId, 'magiceden');
-      const parentJob = parentJobs.get(parentJobId);
-      if (parentJob) {
-        parentJob.totalJobs = preprocessing.magiceden.traits.length;
-        console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE processing jobs${RESET}`);
-      }
-
       await processBulkJobs(traitJobs, true);
     }
     else if (preprocessing.magiceden.jobCount === 1) {
@@ -13001,13 +12396,14 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
       console.log(`${MAGENTA}[MAGICEDEN] Creating 1 collection bid job${RESET}`);
       const jobId = `bid-${taskId}-magiceden-${currentTask.contract.slug}-collection`
 
-      // Ensure parent job exists with correct totalJobs BEFORE adding job
+      // Ensure parent job exists BEFORE adding job
       const parentJobId = `${taskId}-magiceden`;
       await ensureParentJobExists(taskId, 'magiceden');
       const parentJob = parentJobs.get(parentJobId);
       if (parentJob) {
-        parentJob.totalJobs = 1;
-        console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} totalJobs: ${parentJob.totalJobs} BEFORE adding job${RESET}`);
+        parentJob.expectedJobs = 1;
+        parentJob.totalJobs = 1; // Use expected count initially
+        console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} expectedJobs: 1${RESET}`);
       }
 
       await queue.add(
@@ -13015,11 +12411,22 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
         { task: newTask },
         { jobId }
       );
+      
+      // Update parent job count after successful job addition - mark as all queued for single job
+      if (parentJob) {
+        parentJob.actualJobs = 1;
+        parentJob.allJobsQueued = true;
+        console.log(GREEN + `[MAGICEDEN] Collection bid job added, marking ${parentJobId} as allJobsQueued` + RESET);
+      }
+      
       if (currentTask && currentTask.running) {
         if (taskStatus[taskId]) {
           taskStatus[taskId].status = 'QUEUED';
         }
       }
+      
+      // Trigger percentage update now that the job is queued
+      await updateTaskRunningPercentage(taskId);
     }
   } catch (error) {
     console.error(RED + `Error processing MagicEden scheduled bid for task: ${task._id} (${Date.now() - checkpointStart}ms)` + RESET, error);
@@ -13664,8 +13071,6 @@ async function bulkCancelOpenseaBid(data: { privateKey: string, orderId: string,
       updateTaskCancellationPercentage(taskId);
     }
   } catch (error) {
-    console.error(RED + `Error processing Opensea bid cancellation for task: ${taskId}` + RESET, error);
-
     // Update failure counter and percentage
     if (parentJob) {
       updateTaskCancellationPercentage(taskId);
@@ -15294,25 +14699,6 @@ app.get('/api/queue-monitor/status', async (req, res) => {
       blurQueue.getJobCounts()
     ]);
 
-    // Get stuck jobs info
-    const stuckJobs = Array.from(stuckJobsTracker.values()).map(job => ({
-      jobId: job.jobId,
-      jobName: job.jobName,
-      waitingTime: Math.floor((Date.now() - job.firstSeenAt) / 1000),
-      isStuck: (Date.now() - job.firstSeenAt) >= STUCK_JOB_THRESHOLD
-    }));
-
-    // Get queue state history
-    const history = Array.from(queueStateHistory.values())
-      .sort((a, b) => b.timestamp - a.timestamp)
-      .slice(0, 10)
-      .map(state => ({
-        timestamp: new Date(state.timestamp).toISOString(),
-        waitingCount: state.waitingCount,
-        activeCount: state.activeCount,
-        completedCount: state.completedCount,
-        failedCount: state.failedCount
-      }));
 
     const monitorStatus = {
       mainQueue: {
@@ -15330,18 +14716,7 @@ app.get('/api/queue-monitor/status', async (req, res) => {
         failed: blurCounts.failed || 0,
         delayed: blurCounts.delayed || 0,
         prioritized: blurCounts.prioritized || 0
-      },
-      stuckJobs: {
-        count: stuckJobs.filter(j => j.isStuck).length,
-        jobs: stuckJobs
-      },
-      monitoring: {
-        lastClearTime: lastClearTime ? new Date(lastClearTime).toISOString() : null,
-        clearCooldownRemaining: lastClearTime ? Math.max(0, CLEAR_COOLDOWN - (Date.now() - lastClearTime)) / 1000 : 0,
-        historySize: queueStateHistory.size,
-        trackedJobs: stuckJobsTracker.size
-      },
-      recentHistory: history
+      }
     };
 
     res.json(monitorStatus);
@@ -15354,26 +14729,10 @@ app.get('/api/queue-monitor/status', async (req, res) => {
 // Manual queue clear endpoint
 app.post('/api/queue-monitor/clear', async (req, res) => {
   try {
-    // Check if cooldown is active
-    if (lastClearTime && (Date.now() - lastClearTime) < CLEAR_COOLDOWN) {
-      const remainingCooldown = Math.ceil((CLEAR_COOLDOWN - (Date.now() - lastClearTime)) / 1000);
-      return res.status(429).json({
-        error: 'Clear cooldown active',
-        remainingSeconds: remainingCooldown
-      });
-    }
-
     console.log(YELLOW + '\n🔧 Manual queue clear requested via API' + RESET);
-
-    // Update last clear time
-    lastClearTime = Date.now();
 
     // Clear the queues
     await clearQueueAndRestartJobs();
-
-    // Clear tracking
-    stuckJobsTracker.clear();
-    queueStateHistory.clear();
 
     res.json({
       success: true,
@@ -17956,11 +17315,21 @@ function checkAllParentJobsComplete(taskId: string): boolean {
     const parentJobId = `${taskId}-${marketplace}`;
     const parentJob = parentJobs.get(parentJobId);
 
-    if (parentJob && parentJob.totalJobs > 0) {
-      hasAnyJobs = true;
-      if (parentJob.completedJobs < parentJob.totalJobs) {
-        allComplete = false;
-        break;
+    if (parentJob) {
+      // Use hybrid tracking: expectedJobs while queueing, actualJobs after all queued
+      let totalJobs = parentJob.totalJobs || 0;
+      
+      // If we have actualJobs and allJobsQueued is true, use actualJobs as the accurate count
+      if (parentJob.allJobsQueued && parentJob.actualJobs !== undefined) {
+        totalJobs = parentJob.actualJobs;
+      }
+      
+      if (totalJobs > 0) {
+        hasAnyJobs = true;
+        if (parentJob.completedJobs < totalJobs) {
+          allComplete = false;
+          break;
+        }
       }
     }
   }
@@ -18003,13 +17372,21 @@ async function reconcileTaskStatuses() {
         const parentJob = parentJobs.get(parentJobId);
 
         if (parentJob) {
-          actualTotalJobs += parentJob.totalJobs;
+          // Use hybrid tracking: expectedJobs while queueing, actualJobs after all queued
+          let totalJobs = parentJob.totalJobs || 0;
+          
+          // If we have actualJobs and allJobsQueued is true, use actualJobs as the accurate count
+          if (parentJob.allJobsQueued && parentJob.actualJobs !== undefined) {
+            totalJobs = parentJob.actualJobs;
+          }
+          
+          actualTotalJobs += totalJobs;
           actualCompletedJobs += parentJob.completedJobs;
 
           // Fix parent job inconsistencies
-          if (parentJob.completedJobs > parentJob.totalJobs) {
-            console.log(YELLOW + `[Reconciliation] Fixing parent job ${parentJobId}: completed ${parentJob.completedJobs} > total ${parentJob.totalJobs}` + RESET);
-            parentJob.completedJobs = parentJob.totalJobs;
+          if (parentJob.completedJobs > totalJobs) {
+            console.log(YELLOW + `[Reconciliation] Fixing parent job ${parentJobId}: completed ${parentJob.completedJobs} > total ${totalJobs}` + RESET);
+            parentJob.completedJobs = totalJobs;
             reconciled++;
           }
         }
@@ -18185,20 +17562,12 @@ async function ensureParentJobExists(taskId: string, marketplace: string): Promi
         if (!processedJobsPerParent.has(parentJobId)) {
           processedJobsPerParent.set(parentJobId, new Set<string>());
         }
-
-        console.log(GREEN + `[Parent Job] Successfully created: ${parentJobId}` + RESET);
-        console.log(GREEN + `[Parent Job] Current parent jobs count: ${parentJobs.size}` + RESET);
       } else {
         // Parent job already exists - validate its state
         const existingParentJob = parentJobs.get(parentJobId);
         if (existingParentJob) {
-          console.log(CYAN + `[Parent Job] Already exists: ${parentJobId}` + RESET);
-          console.log(CYAN + `  State: ${existingParentJob.completedJobs}/${existingParentJob.totalJobs}` + RESET);
-
           // Check for inconsistencies
           if (existingParentJob.completedJobs > existingParentJob.totalJobs) {
-            console.error(RED + `[Parent Job] INCONSISTENCY DETECTED: completed > total for ${parentJobId}` + RESET);
-            console.error(RED + `  Fixing by capping completed to total` + RESET);
             existingParentJob.completedJobs = existingParentJob.totalJobs;
           }
         }
@@ -18303,33 +17672,4 @@ setInterval(checkStuckTasks, STANDARD_INTERVAL);
 // Schedule orphaned job recovery
 setInterval(recoverOrphanedJobs, STANDARD_INTERVAL);
 
-// Schedule periodic duplicate prevention statistics logging
-setInterval(() => {
-  const timeSinceReset = Date.now() - duplicatePreventionStats.lastReset;
-  const hoursElapsed = timeSinceReset / (1000 * 60 * 60);
-
-  if (duplicatePreventionStats.totalJobsProcessed > 0) {
-    const duplicateRate = (duplicatePreventionStats.totalDuplicatesPrevented / duplicatePreventionStats.totalJobsProcessed) * 100;
-    const avgCheckTime = duplicatePreventionStats.duplicateCheckCount > 0
-      ? duplicatePreventionStats.totalDuplicateCheckTime / duplicatePreventionStats.duplicateCheckCount
-      : 0;
-
-    console.log(CYAN + '\n[Duplicate Prevention Stats] Last ' + hoursElapsed.toFixed(1) + ' hours:' + RESET);
-    console.log(CYAN + `├─ Total Jobs Processed: ${duplicatePreventionStats.totalJobsProcessed.toLocaleString()}` + RESET);
-    console.log(CYAN + `├─ Duplicates Prevented: ${duplicatePreventionStats.totalDuplicatesPrevented.toLocaleString()}` + RESET);
-    console.log(CYAN + `├─ Duplicate Rate: ${duplicateRate.toFixed(2)}%` + RESET);
-    console.log(CYAN + `├─ Checks Performed: ${duplicatePreventionStats.duplicateCheckCount.toLocaleString()}` + RESET);
-    console.log(CYAN + `└─ Avg Check Time: ${avgCheckTime.toFixed(2)}ms` + RESET);
-
-    // Reset stats every 24 hours
-    if (hoursElapsed >= 24) {
-      console.log(YELLOW + '[Duplicate Prevention Stats] Resetting 24-hour statistics' + RESET);
-      duplicatePreventionStats.totalDuplicatesPrevented = 0;
-      duplicatePreventionStats.totalJobsProcessed = 0;
-      duplicatePreventionStats.totalDuplicateCheckTime = 0;
-      duplicatePreventionStats.duplicateCheckCount = 0;
-      duplicatePreventionStats.lastReset = Date.now();
-    }
-  }
-}, STANDARD_INTERVAL * 5); // Log every 5 minutes
 
