@@ -10224,6 +10224,9 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
           taskStatus[taskId].status = 'QUEUED';
         }
       }
+    } else {
+      // No jobs to create - this is an error condition
+      throw new Error(`No jobs created for task ${taskId} - preprocessing returned no tokens, no traits, and no collection bid`);
     }
   } catch (error) {
     console.error(RED + `Error processing OpenSea scheduled bid for task: ${task._id}` + RESET, error);
@@ -10811,6 +10814,9 @@ async function processBlurScheduledBid(task: ITask) {
       
       // Trigger percentage update now that the job is queued
       await updateTaskRunningPercentage(taskId);
+    } else {
+      // No jobs to create - this is an error condition
+      throw new Error(`No jobs created for task ${taskId} - preprocessing returned no tokens, no traits, and no collection bid`);
     }
   } catch (error) {
     console.error(RED + `Error processing Blur scheduled bid for task: ${task._id}` + RESET, error);
@@ -12509,6 +12515,9 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
       
       // Trigger percentage update now that the job is queued
       await updateTaskRunningPercentage(taskId);
+    } else {
+      // No jobs to create - this is an error condition
+      throw new Error(`No jobs created for task ${taskId} - preprocessing returned no tokens, no traits, and no collection bid`);
     }
   } catch (error) {
     console.error(RED + `Error processing MagicEden scheduled bid for task: ${task._id} (${Date.now() - checkpointStart}ms)` + RESET, error);
