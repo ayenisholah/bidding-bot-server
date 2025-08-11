@@ -2139,6 +2139,41 @@ async function startServer() {
 
     await fetchCurrentTasks()
 
+    // Start all tasks that have running: true in database
+    // This handles server restarts where tasks were previously running
+    console.log(YELLOW + '🔄 Checking for tasks to restart...' + RESET);
+    let tasksToRestart = 0;
+    for (const [taskId, task] of activeTasks) {
+      if (task.running) {
+        tasksToRestart++;
+        // Initialize task status if not exists
+        if (!taskStatus[taskId]) {
+          taskStatus[taskId] = {
+            status: 'SCHEDULED',
+            runningPercentage: 0,
+            cancellationPercentage: 0,
+            processingPercentage: 0,
+            totalJobs: 0,
+            completedJobs: 0,
+            waitingTime: 0,
+            lastUpdate: Date.now()
+          };
+        }
+        
+        // Start the task with a small delay to ensure everything is initialized
+        setTimeout(() => {
+          console.log(GREEN + `✅ Restarting task ${taskId} (${task.contract?.slug || 'Unknown collection'})` + RESET);
+          startTask(task, true);
+        }, tasksToRestart * 1000); // Stagger task starts by 1 second each
+      }
+    }
+    
+    if (tasksToRestart > 0) {
+      console.log(GREEN + `✅ Found ${tasksToRestart} running tasks to restart` + RESET);
+    } else {
+      console.log(YELLOW + '⚠️  No running tasks found to restart' + RESET);
+    }
+
     // Start password auto-recovery checker now that Redis is connected
     setInterval(checkPasswordAndResume, PASSWORD_CHECK_INTERVAL);
     console.log(GREEN + '✅ Password auto-recovery checker started (checking every 30s)' + RESET);
