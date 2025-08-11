@@ -44,7 +44,7 @@ import Approval from "./models/approval.model";
 import Bottleneck from "bottleneck";
 import { USDC, WETH } from "./utils/currencies";
 import axios from "axios";
-import { decryptPrivateKey, setPassword, getPassword, decryptPassword, recoverPasswordFromRedis, renewPasswordTTL } from "./utils/crypto";
+import { decryptPrivateKey, setPassword, getPassword, decryptPassword, recoverPasswordFromRedis, renewPasswordTTL, reEncryptWallet, clearDecryptedKeyCache } from "./utils/crypto";
 import { fetchWalletNFTs } from "./utils/nft";
 import { logger, ErrorCategory } from "./utils/logger";
 import { MarketplaceError, InsufficientBalanceError, TransferRestrictedError, MinimumPriceError, isSoftError, isRetryableError } from "./marketplace/errors";
@@ -13928,6 +13928,97 @@ app.post('/api/auth/renew-password', async (req, res) => {
   }
 });
 
+// Change password and re-encrypt wallets
+app.post('/api/auth/change-password', async (req, res) => {
+  try {
+    const { encryptedOldPassword, encryptedNewPassword } = req.body;
+    
+    if (!encryptedOldPassword || !encryptedNewPassword) {
+      return res.status(400).json({ error: 'Both old and new passwords are required' });
+    }
+    
+    // Decrypt the passwords
+    const oldPassword = decryptPassword(encryptedOldPassword);
+    const newPassword = decryptPassword(encryptedNewPassword);
+    
+    // Verify old password matches current
+    const currentPassword = getPassword();
+    if (!currentPassword) {
+      return res.status(400).json({ error: 'No password is currently set' });
+    }
+    
+    if (currentPassword !== oldPassword) {
+      return res.status(401).json({ error: 'Old password is incorrect' });
+    }
+    
+    console.log(YELLOW + '🔐 Starting password change and wallet re-encryption...' + RESET);
+    
+    // Get all wallets from database
+    const wallets = await Wallet.find({ encryptedPrivateKey: { $exists: true, $ne: null } });
+    console.log(CYAN + `Found ${wallets.length} wallets to re-encrypt` + RESET);
+    
+    let successCount = 0;
+    let failedWallets: string[] = [];
+    
+    // Re-encrypt each wallet
+    for (const wallet of wallets) {
+      try {
+        console.log(CYAN + `Re-encrypting wallet ${wallet.address}...` + RESET);
+        const newEncryptedKey = await reEncryptWallet(
+          wallet.encryptedPrivateKey,
+          oldPassword,
+          newPassword
+        );
+        
+        // Update wallet in database
+        wallet.encryptedPrivateKey = newEncryptedKey;
+        await wallet.save();
+        successCount++;
+        
+      } catch (error) {
+        console.error(RED + `Failed to re-encrypt wallet ${wallet.address}:` + RESET, error);
+        failedWallets.push(wallet.address);
+      }
+    }
+    
+    // Clear the decrypted key cache
+    clearDecryptedKeyCache();
+    
+    // If all wallets were successfully re-encrypted, update the password
+    if (failedWallets.length === 0) {
+      await setPassword(newPassword);
+      console.log(GREEN + '✅ Password changed successfully and all wallets re-encrypted' + RESET);
+      
+      res.status(200).json({ 
+        success: true, 
+        message: 'Password changed successfully',
+        walletsReEncrypted: successCount
+      });
+    } else {
+      console.error(RED + `Failed to re-encrypt ${failedWallets.length} wallets` + RESET);
+      res.status(500).json({ 
+        error: 'Failed to re-encrypt some wallets',
+        failedWallets,
+        successCount
+      });
+    }
+    
+  } catch (error: any) {
+    console.error('Failed to change password:', error);
+    await logger.logAuthenticationError('Failed to change password', {
+      endpoint: '/api/auth/change-password',
+      method: 'POST',
+      error: error,
+      errorMessage: error?.message || 'Failed to change password',
+      statusCode: 500
+    });
+    res.status(500).json({
+      error: 'Failed to change password',
+      message: error.message
+    });
+  }
+});
+
 // Manual password recovery endpoint for debugging
 app.post('/api/auth/recover-password', async (req, res) => {
   try {
@@ -17286,6 +17377,30 @@ async function logJobTrackingStatus() {
           // Check if all jobs are complete but percentage is not 100
           if (totalTracked > 0 && completedTracked === totalTracked && status.runningPercentage < 100) {
             console.log(MAGENTA + '  🔍 All parent jobs complete but percentage < 100%' + RESET);
+          }
+          
+          // Check for stuck task - low percentage with no queue activity
+          const queueCounts = await queue.getJobCounts();
+          const blurCounts = await blurQueue.getJobCounts();
+          const totalQueueJobs = (queueCounts.waiting || 0) + (queueCounts.active || 0) + 
+                                (blurCounts.waiting || 0) + (blurCounts.active || 0);
+          
+          if (status.runningPercentage < 10 && totalQueueJobs === 0 && totalTracked > 0) {
+            console.log(RED + '  🚨 STUCK TASK DETECTED - Low percentage with empty queue!' + RESET);
+            console.log(YELLOW + '  Marking task as complete to allow restart...' + RESET);
+            
+            // Force mark all parent jobs as complete to unstick the task
+            for (const mp of marketplaces) {
+              const parentJobId = `${taskId}-${mp}`;
+              const parentJob = parentJobs.get(parentJobId);
+              if (parentJob && parentJob.completedJobs < parentJob.totalJobs) {
+                console.log(YELLOW + `  Force completing ${parentJobId}: ${parentJob.completedJobs}/${parentJob.totalJobs}` + RESET);
+                parentJob.completedJobs = parentJob.totalJobs;
+              }
+            }
+            
+            // Trigger task completion check
+            await checkTaskCompletionAndScheduleNext(taskId);
           }
         }
       }

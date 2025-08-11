@@ -266,6 +266,47 @@ export function decryptPrivateKey(encryptedData: string): string {
   }
 }
 
+// Re-encrypt a wallet's private key with a new password
+export async function reEncryptWallet(
+  encryptedPrivateKey: string, 
+  oldPassword: string, 
+  newPassword: string
+): Promise<string> {
+  console.log('🔐 [reEncryptWallet] Starting wallet re-encryption...');
+  
+  try {
+    // Temporarily set the old password to decrypt
+    const currentPassword = PASSWORD;
+    PASSWORD = oldPassword;
+    
+    // Decrypt with old password
+    const decryptedKey = await decryptPrivateKey(encryptedPrivateKey);
+    console.log('🔐 [reEncryptWallet] Successfully decrypted with old password');
+    
+    // Set new password and encrypt
+    PASSWORD = newPassword;
+    const newEncryptedKey = await encryptPrivateKey(decryptedKey);
+    console.log('🔐 [reEncryptWallet] Successfully encrypted with new password');
+    
+    // Restore the current password (will be the new one after change)
+    PASSWORD = currentPassword;
+    
+    return newEncryptedKey;
+  } catch (error) {
+    console.error('🔐 [reEncryptWallet] Re-encryption failed:', error);
+    // Restore the current password on error
+    PASSWORD = getPassword();
+    throw error;
+  }
+}
+
+// Clear the decrypted key cache (useful when changing passwords)
+export function clearDecryptedKeyCache(): void {
+  const previousSize = decryptedKeyCache.size;
+  decryptedKeyCache.clear();
+  console.log(`🔐 [clearDecryptedKeyCache] Cleared ${previousSize} cached keys`);
+}
+
 // Helper function to manage cache size and add new entries
 function cacheDecryptedKey(encryptedData: string, decryptedKey: string): void {
   // Check cache size and remove oldest entries if needed
