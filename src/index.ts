@@ -2174,6 +2174,53 @@ async function startServer() {
       console.log(YELLOW + '⚠️  No running tasks found to restart' + RESET);
     }
 
+    // Check for orphaned scheduled tasks (tasks stuck in SCHEDULED state without timers)
+    console.log(YELLOW + '🔍 Checking for orphaned scheduled tasks...' + RESET);
+    const orphanedScheduledTasks = Array.from(activeTasks.entries())
+      .filter(([taskId, task]) => {
+        const status = taskStatus[taskId];
+        const hasTimer = taskTimeouts.has(taskId);
+        return task.running && 
+               status?.status === 'SCHEDULED' && 
+               !hasTimer;
+      });
+
+    if (orphanedScheduledTasks.length > 0) {
+      console.log(YELLOW + `⚠️  Found ${orphanedScheduledTasks.length} orphaned scheduled tasks` + RESET);
+      
+      for (const [taskId, task] of orphanedScheduledTasks) {
+        const timeSinceLastUpdate = taskStatus[taskId]?.lastUpdate ? 
+          Date.now() - taskStatus[taskId].lastUpdate : 'unknown';
+        
+        console.log(YELLOW + `📌 Orphaned task ${taskId} (${task.contract?.slug || 'Unknown'})` + RESET);
+        console.log(YELLOW + `   - Status: ${taskStatus[taskId]?.status}` + RESET);
+        console.log(YELLOW + `   - Completed Jobs: ${taskStatus[taskId]?.completedJobs || 0}/${taskStatus[taskId]?.totalJobs || 0}` + RESET);
+        console.log(YELLOW + `   - Time since last update: ${timeSinceLastUpdate}ms` + RESET);
+        
+        // Initialize task status if needed
+        if (!taskStatus[taskId]) {
+          taskStatus[taskId] = {
+            status: 'SCHEDULED',
+            runningPercentage: 0,
+            cancellationPercentage: 0,
+            processingPercentage: 0,
+            totalJobs: 0,
+            completedJobs: 0,
+            waitingTime: 0,
+            lastUpdate: Date.now()
+          };
+        }
+        
+        // Restart the orphaned task immediately
+        console.log(GREEN + `✅ Restarting orphaned scheduled task ${taskId}` + RESET);
+        setTimeout(() => {
+          startTask(task, true);
+        }, 500); // Small delay to ensure system is ready
+      }
+    } else {
+      console.log(GREEN + '✅ No orphaned scheduled tasks found' + RESET);
+    }
+
     // Start password auto-recovery checker now that Redis is connected
     setInterval(checkPasswordAndResume, PASSWORD_CHECK_INTERVAL);
     console.log(GREEN + '✅ Password auto-recovery checker started (checking every 30s)' + RESET);
