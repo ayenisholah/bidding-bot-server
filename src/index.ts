@@ -2159,7 +2159,7 @@ async function startServer() {
             lastUpdate: Date.now()
           };
         }
-        
+
         // Start the task with a small delay to ensure everything is initialized
         setTimeout(() => {
           console.log(GREEN + `✅ Restarting task ${taskId} (${task.contract?.slug || 'Unknown collection'})` + RESET);
@@ -2167,7 +2167,7 @@ async function startServer() {
         }, tasksToRestart * 1000); // Stagger task starts by 1 second each
       }
     }
-    
+
     if (tasksToRestart > 0) {
       console.log(GREEN + `✅ Found ${tasksToRestart} running tasks to restart` + RESET);
     } else {
@@ -2180,23 +2180,23 @@ async function startServer() {
       .filter(([taskId, task]) => {
         const status = taskStatus[taskId];
         const hasTimer = taskTimeouts.has(taskId);
-        return task.running && 
-               status?.status === 'SCHEDULED' && 
-               !hasTimer;
+        return task.running &&
+          status?.status === 'SCHEDULED' &&
+          !hasTimer;
       });
 
     if (orphanedScheduledTasks.length > 0) {
       console.log(YELLOW + `⚠️  Found ${orphanedScheduledTasks.length} orphaned scheduled tasks` + RESET);
-      
+
       for (const [taskId, task] of orphanedScheduledTasks) {
-        const timeSinceLastUpdate = taskStatus[taskId]?.lastUpdate ? 
+        const timeSinceLastUpdate = taskStatus[taskId]?.lastUpdate ?
           Date.now() - taskStatus[taskId].lastUpdate : 'unknown';
-        
+
         console.log(YELLOW + `📌 Orphaned task ${taskId} (${task.contract?.slug || 'Unknown'})` + RESET);
         console.log(YELLOW + `   - Status: ${taskStatus[taskId]?.status}` + RESET);
         console.log(YELLOW + `   - Completed Jobs: ${taskStatus[taskId]?.completedJobs || 0}/${taskStatus[taskId]?.totalJobs || 0}` + RESET);
         console.log(YELLOW + `   - Time since last update: ${timeSinceLastUpdate}ms` + RESET);
-        
+
         // Initialize task status if needed
         if (!taskStatus[taskId]) {
           taskStatus[taskId] = {
@@ -2210,7 +2210,7 @@ async function startServer() {
             lastUpdate: Date.now()
           };
         }
-        
+
         // Restart the orphaned task immediately
         console.log(GREEN + `✅ Restarting orphaned scheduled task ${taskId}` + RESET);
         setTimeout(() => {
@@ -2541,7 +2541,7 @@ async function updateTaskRunningPercentage(taskId: string) {
     if (parentJob) {
       // Use hybrid tracking: expectedJobs while queueing, actualJobs after all queued
       let mpTotal = parentJob.totalJobs || 0;
-      
+
       // If we have actualJobs and allJobsQueued is true, use actualJobs as the accurate count
       if (parentJob.allJobsQueued && parentJob.actualJobs !== undefined) {
         mpTotal = parentJob.actualJobs;
@@ -2550,7 +2550,7 @@ async function updateTaskRunningPercentage(taskId: string) {
           console.log(CYAN + `[updateTaskRunningPercentage] ${parentJobId}: Using actualJobs (${mpTotal}) instead of totalJobs (${parentJob.totalJobs})` + RESET);
         }
       }
-      
+
       const mpCompleted = parentJob.completedJobs || 0;
       const mpPercentage = mpTotal > 0 ? (mpCompleted / mpTotal) * 100 : 0;
 
@@ -4765,7 +4765,7 @@ async function updateTaskData(task: ITask) {
 }
 
 const MAX_QUEUE_JOBS = 10000; // Maximum jobs allowed in queue
-const QUEUE_RESUME_THRESHOLD = 5000; // Resume when queue drops to 50% (5000 jobs)
+const QUEUE_RESUME_THRESHOLD = 9000; // Resume when queue drops to 50% (5000 jobs)
 
 const BLUR_JOBS = [
   'BLUR_COLLECTION_BID',
@@ -4805,7 +4805,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
 
   const chunks = chunk(jobs, 100); // Process in smaller chunks
   let retryChunkIndex = -1; // Track if we need to retry a chunk
-  
+
   // Track total jobs actually added for each marketplace
   const jobsAddedByMarketplace = new Map<string, number>();
 
@@ -4891,7 +4891,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
             });
 
             await queue.addBulk(jobsToAdd);
-            
+
             // Track actual jobs added for each marketplace
             for (const job of nonBlurJobs) {
               const marketplace = getMarketplaceFromJobName(job.name);
@@ -4921,7 +4921,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
 
             console.log(BLUE + `[Blur Coordinator] Queueing ${blurJobsToAdd.length} jobs for task ${taskId}` + RESET);
             await blurJobCoordinator.addJobs(blurJobsToAdd, taskId);
-            
+
             // Track actual Blur jobs added
             jobsAddedByMarketplace.set('blur', (jobsAddedByMarketplace.get('blur') || 0) + blurJobs.length);
           }
@@ -4962,7 +4962,9 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
               break;
             }
 
-            const dynamicWaitTime = Math.ceil((newTotal / RATE_LIMIT) * 1000);
+            const allowance = newTotal - QUEUE_RESUME_THRESHOLD
+
+            const dynamicWaitTime = Math.ceil((allowance / RATE_LIMIT) * 1000);
             await new Promise(resolve => setTimeout(resolve, dynamicWaitTime));
           }
         }
@@ -4970,7 +4972,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
         console.error(RED + `[processBulkJobs] Error in chunk ${chunkIndex + 1}/${chunks.length}: ${error}` + RESET);
       }
     }
-    
+
     // After all chunks processed, update parent jobs with actual counts and mark as queued
     for (const [marketplace, actualCount] of jobsAddedByMarketplace) {
       const parentJobId = `${taskId}-${marketplace}`;
@@ -4979,7 +4981,7 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
         // Update actual jobs count
         parentJob.actualJobs = (parentJob.actualJobs || 0) + actualCount;
         parentJob.allJobsQueued = true;
-        
+
         // Update totalJobs to match actualJobs now that queueing is complete
         if (parentJob.totalJobs !== parentJob.actualJobs) {
           console.log(YELLOW + `[processBulkJobs] ${parentJobId}: Adjusting totalJobs from ${parentJob.totalJobs} to ${parentJob.actualJobs} (actual queued)` + RESET);
@@ -4987,10 +4989,10 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
         }
       }
     }
-    
+
     // Trigger percentage update now that all jobs are queued
     await updateTaskRunningPercentage(taskId);
-    
+
   } catch (error) {
     console.error(RED + `[processBulkJobs] Failed to process bulk jobs for task ${taskId}: ${error}` + RESET);
   }
@@ -10205,7 +10207,7 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
         { task: newTask, collectionDetails, currency },
         { jobId }
       );
-      
+
       // Trigger percentage update for single job
       await updateTaskRunningPercentage(taskId);
 
@@ -10215,8 +10217,25 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
         }
       }
     } else {
-      // No jobs to create - this is an error condition
-      throw new Error(`No jobs created for task ${taskId} - preprocessing returned no tokens, no traits, and no collection bid`);
+      // No jobs to create - create empty parent job and schedule next loop
+      const parentJobId = `${taskId}-opensea`;
+      await ensureParentJobExists(taskId, 'opensea');
+      const parentJob = parentJobs.get(parentJobId);
+      if (parentJob) {
+        parentJob.expectedJobs = 0;
+        parentJob.totalJobs = 0;
+        parentJob.actualJobs = 0;
+        parentJob.completedJobs = 0;
+        parentJob.allJobsQueued = true;
+      }
+
+      // Update task status
+      taskStatus[taskId].status = 'COMPLETED';
+      await updateTaskRunningPercentage(taskId);
+
+      // Log the reason
+      console.log(YELLOW + `[OPENSEA] No jobs created for task ${taskId} - scheduling next loop` + RESET);
+      return;
     }
   } catch (error) {
     console.error(RED + `Error processing OpenSea scheduled bid for task: ${task._id}` + RESET, error);
@@ -10775,7 +10794,7 @@ async function processBlurScheduledBid(task: ITask) {
         { task: newTask, contractAddress, expiry },
         { jobId }
       );
-      
+
       // Update parent job count after successful job addition - mark as all queued for single job
       if (parentJob) {
         parentJob.actualJobs = 1;
@@ -10788,12 +10807,29 @@ async function processBlurScheduledBid(task: ITask) {
           taskStatus[taskId].status = 'QUEUED';
         }
       }
-      
+
       // Trigger percentage update now that the job is queued
       await updateTaskRunningPercentage(taskId);
     } else {
-      // No jobs to create - this is an error condition
-      throw new Error(`No jobs created for task ${taskId} - preprocessing returned no tokens, no traits, and no collection bid`);
+      // No jobs to create - create empty parent job and schedule next loop
+      const parentJobId = `${taskId}-blur`;
+      await ensureParentJobExists(taskId, 'blur');
+      const parentJob = parentJobs.get(parentJobId);
+      if (parentJob) {
+        parentJob.expectedJobs = 0;
+        parentJob.totalJobs = 0;
+        parentJob.actualJobs = 0;
+        parentJob.completedJobs = 0;
+        parentJob.allJobsQueued = true;
+      }
+
+      // Update task status
+      taskStatus[taskId].status = 'COMPLETED';
+      await updateTaskRunningPercentage(taskId);
+
+      // Log the reason
+      console.log(YELLOW + `[BLUR] No jobs created for task ${taskId} - scheduling next loop` + RESET);
+      return;
     }
   } catch (error) {
     console.error(RED + `Error processing Blur scheduled bid for task: ${task._id}` + RESET, error);
@@ -12463,25 +12499,42 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
         { task: newTask },
         { jobId }
       );
-      
+
       // Update parent job count after successful job addition - mark as all queued for single job
       if (parentJob) {
         parentJob.actualJobs = 1;
         parentJob.allJobsQueued = true;
         console.log(GREEN + `[MAGICEDEN] Collection bid job added, marking ${parentJobId} as allJobsQueued` + RESET);
       }
-      
+
       if (currentTask && currentTask.running) {
         if (taskStatus[taskId]) {
           taskStatus[taskId].status = 'QUEUED';
         }
       }
-      
+
       // Trigger percentage update now that the job is queued
       await updateTaskRunningPercentage(taskId);
     } else {
-      // No jobs to create - this is an error condition
-      throw new Error(`No jobs created for task ${taskId} - preprocessing returned no tokens, no traits, and no collection bid`);
+      // No jobs to create - create empty parent job and schedule next loop
+      const parentJobId = `${taskId}-magiceden`;
+      await ensureParentJobExists(taskId, 'magiceden');
+      const parentJob = parentJobs.get(parentJobId);
+      if (parentJob) {
+        parentJob.expectedJobs = 0;
+        parentJob.totalJobs = 0;
+        parentJob.actualJobs = 0;
+        parentJob.completedJobs = 0;
+        parentJob.allJobsQueued = true;
+      }
+
+      // Update task status
+      taskStatus[taskId].status = 'COMPLETED';
+      await updateTaskRunningPercentage(taskId);
+
+      // Log the reason
+      console.log(YELLOW + `[MAGICEDEN] No jobs created for task ${taskId} - scheduling next loop` + RESET);
+      return;
     }
   } catch (error) {
     console.error(RED + `Error processing MagicEden scheduled bid for task: ${task._id} (${Date.now() - checkpointStart}ms)` + RESET, error);
@@ -13984,34 +14037,34 @@ app.post('/api/auth/renew-password', async (req, res) => {
 app.post('/api/auth/change-password', async (req, res) => {
   try {
     const { encryptedOldPassword, encryptedNewPassword } = req.body;
-    
+
     if (!encryptedOldPassword || !encryptedNewPassword) {
       return res.status(400).json({ error: 'Both old and new passwords are required' });
     }
-    
+
     // Decrypt the passwords
     const oldPassword = decryptPassword(encryptedOldPassword);
     const newPassword = decryptPassword(encryptedNewPassword);
-    
+
     // Verify old password matches current
     const currentPassword = getPassword();
     if (!currentPassword) {
       return res.status(400).json({ error: 'No password is currently set' });
     }
-    
+
     if (currentPassword !== oldPassword) {
       return res.status(401).json({ error: 'Old password is incorrect' });
     }
-    
+
     console.log(YELLOW + '🔐 Starting password change and wallet re-encryption...' + RESET);
-    
+
     // Get all wallets from database
     const wallets = await Wallet.find({ encryptedPrivateKey: { $exists: true, $ne: null } });
     console.log(CYAN + `Found ${wallets.length} wallets to re-encrypt` + RESET);
-    
+
     let successCount = 0;
     let failedWallets: string[] = [];
-    
+
     // Re-encrypt each wallet
     for (const wallet of wallets) {
       try {
@@ -14021,40 +14074,40 @@ app.post('/api/auth/change-password', async (req, res) => {
           oldPassword,
           newPassword
         );
-        
+
         // Update wallet in database
         wallet.encryptedPrivateKey = newEncryptedKey;
         await wallet.save();
         successCount++;
-        
+
       } catch (error) {
         console.error(RED + `Failed to re-encrypt wallet ${wallet.address}:` + RESET, error);
         failedWallets.push(wallet.address);
       }
     }
-    
+
     // Clear the decrypted key cache
     clearDecryptedKeyCache();
-    
+
     // If all wallets were successfully re-encrypted, update the password
     if (failedWallets.length === 0) {
       await setPassword(newPassword);
       console.log(GREEN + '✅ Password changed successfully and all wallets re-encrypted' + RESET);
-      
-      res.status(200).json({ 
-        success: true, 
+
+      res.status(200).json({
+        success: true,
         message: 'Password changed successfully',
         walletsReEncrypted: successCount
       });
     } else {
       console.error(RED + `Failed to re-encrypt ${failedWallets.length} wallets` + RESET);
-      res.status(500).json({ 
+      res.status(500).json({
         error: 'Failed to re-encrypt some wallets',
         failedWallets,
         successCount
       });
     }
-    
+
   } catch (error: any) {
     console.error('Failed to change password:', error);
     await logger.logAuthenticationError('Failed to change password', {
@@ -17430,17 +17483,17 @@ async function logJobTrackingStatus() {
           if (totalTracked > 0 && completedTracked === totalTracked && status.runningPercentage < 100) {
             console.log(MAGENTA + '  🔍 All parent jobs complete but percentage < 100%' + RESET);
           }
-          
+
           // Check for stuck task - low percentage with no queue activity
           const queueCounts = await queue.getJobCounts();
           const blurCounts = await blurQueue.getJobCounts();
-          const totalQueueJobs = (queueCounts.waiting || 0) + (queueCounts.active || 0) + 
-                                (blurCounts.waiting || 0) + (blurCounts.active || 0);
-          
+          const totalQueueJobs = (queueCounts.waiting || 0) + (queueCounts.active || 0) +
+            (blurCounts.waiting || 0) + (blurCounts.active || 0);
+
           if (status.runningPercentage < 10 && totalQueueJobs === 0 && totalTracked > 0) {
             console.log(RED + '  🚨 STUCK TASK DETECTED - Low percentage with empty queue!' + RESET);
             console.log(YELLOW + '  Marking task as complete to allow restart...' + RESET);
-            
+
             // Force mark all parent jobs as complete to unstick the task
             for (const mp of marketplaces) {
               const parentJobId = `${taskId}-${mp}`;
@@ -17450,7 +17503,7 @@ async function logJobTrackingStatus() {
                 parentJob.completedJobs = parentJob.totalJobs;
               }
             }
-            
+
             // Trigger task completion check
             await checkTaskCompletionAndScheduleNext(taskId);
           }
@@ -17485,12 +17538,12 @@ function checkAllParentJobsComplete(taskId: string): boolean {
     if (parentJob) {
       // Use hybrid tracking: expectedJobs while queueing, actualJobs after all queued
       let totalJobs = parentJob.totalJobs || 0;
-      
+
       // If we have actualJobs and allJobsQueued is true, use actualJobs as the accurate count
       if (parentJob.allJobsQueued && parentJob.actualJobs !== undefined) {
         totalJobs = parentJob.actualJobs;
       }
-      
+
       if (totalJobs > 0) {
         hasAnyJobs = true;
         if (parentJob.completedJobs < totalJobs) {
@@ -17541,12 +17594,12 @@ async function reconcileTaskStatuses() {
         if (parentJob) {
           // Use hybrid tracking: expectedJobs while queueing, actualJobs after all queued
           let totalJobs = parentJob.totalJobs || 0;
-          
+
           // If we have actualJobs and allJobsQueued is true, use actualJobs as the accurate count
           if (parentJob.allJobsQueued && parentJob.actualJobs !== undefined) {
             totalJobs = parentJob.actualJobs;
           }
-          
+
           actualTotalJobs += totalJobs;
           actualCompletedJobs += parentJob.completedJobs;
 
