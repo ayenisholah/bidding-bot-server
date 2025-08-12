@@ -1705,7 +1705,7 @@ async function startServer() {
       const worker = new Worker(
         QUEUE_NAME,
         async (job) => {
-          const jobTimeout = 60000; // 15 seconds timeout for all jobs
+          const jobTimeout = job.name.endsWith('_SCHEDULE') ? 300000 : 60000; // 5 minutes for scheduled jobs, 60 seconds for others
           const abortController = new AbortController();
 
           const timeoutPromise = new Promise((_, reject) => {
@@ -1785,7 +1785,7 @@ async function startServer() {
     const blurWorker = new Worker(
       BLUR_BIDDING_QUEUE,
       async (job) => {
-        const jobTimeout = 60000; // 60 seconds timeout for Blur jobs
+        const jobTimeout = job.name === BLUR_SCHEDULE ? 300000 : 60000; // 5 minutes for scheduled jobs, 60 seconds for others
         const abortController = new AbortController();
 
         const timeoutPromise = new Promise((_, reject) => {
@@ -4951,8 +4951,6 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
 
           // Wait for queue to drain
           while (true) {
-            await new Promise(resolve => setTimeout(resolve, 5000));
-
             const counts = await queue.getJobCounts();
             const blurCounts = await blurQueue.getJobCounts();
             const newTotal = (counts.waiting || 0) + (counts.active || 0) + (counts.prioritized || 0) +
@@ -4963,6 +4961,9 @@ async function processBulkJobs(jobs: Job[], createKey = false) {
               retryChunkIndex = chunkIndex; // Retry this chunk
               break;
             }
+
+            const dynamicWaitTime = Math.ceil((newTotal / RATE_LIMIT) * 1000);
+            await new Promise(resolve => setTimeout(resolve, dynamicWaitTime));
           }
         }
       } catch (error) {
@@ -5400,7 +5401,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
                 jobId: `${task._id}-opensea-schedule`,
                 removeOnComplete: true,
                 removeOnFail: true,
-                attempts: 10,
+                attempts: -1,
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -5415,7 +5416,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
                 jobId: `${task._id}-blur-schedule`,
                 removeOnComplete: true,
                 removeOnFail: true,
-                attempts: 10,
+                attempts: -1,
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -5430,7 +5431,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
                 jobId: `${task._id}-magiceden-schedule`,
                 removeOnComplete: true,
                 removeOnFail: true,
-                attempts: 10,
+                attempts: -1,
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -10005,17 +10006,6 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
   const currentLoopCount = loopCounterStats[task._id.toString()] || 1;
   console.log(`${BLUE}[processOpenseaScheduledBid] CALLED for task ${task._id} - Loop #${currentLoopCount}${RESET}`);
 
-
-  // Check if this scheduled job is already running to prevent duplicates
-  const lockKey = `${task._id}-opensea-scheduled`;
-  if (scheduledJobLocks.has(lockKey)) {
-    console.log(`${YELLOW}[processOpenseaScheduledBid] Already processing scheduled job for ${lockKey}, skipping to prevent duplicates${RESET}`);
-    return;
-  }
-
-  // Acquire lock
-  scheduledJobLocks.set(lockKey, true);
-
   try {
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) {
       return;
@@ -10243,9 +10233,6 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
 
     // Re-throw error to trigger job retry
     throw error;
-  } finally {
-    // Always release the scheduled job lock
-    scheduledJobLocks.delete(lockKey);
   }
 }
 
@@ -10516,16 +10503,6 @@ async function processBlurScheduledBid(task: ITask) {
   const currentLoopCount = loopCounterStats[task._id.toString()] || 1;
   console.log(`${BLUE}[processBlurScheduledBid] CALLED for task ${task._id} - Loop #${currentLoopCount}${RESET}`);
 
-  // Check if this scheduled job is already running to prevent duplicates
-  const lockKey = `${task._id}-blur-scheduled`;
-  if (scheduledJobLocks.has(lockKey)) {
-    console.log(`${YELLOW}[processBlurScheduledBid] Already processing scheduled job for ${lockKey}, skipping to prevent duplicates${RESET}`);
-    return;
-  }
-
-  // Acquire lock
-  scheduledJobLocks.set(lockKey, true);
-
   try {
     const currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur") || !enabledMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur")) {
@@ -10652,7 +10629,7 @@ async function processBlurScheduledBid(task: ITask) {
           warningBids[taskId].blur = true;
           warningMessage[taskId].blur = `Authentication blocked - retry in ${waitSeconds}s`;
 
-          return; // Skip creating jobs for this task
+          throw new Error(`Authentication blocked - retry in ${waitSeconds}s`);
         }
       }
     }
@@ -10675,7 +10652,7 @@ async function processBlurScheduledBid(task: ITask) {
       // Check if error is due to authentication block
       if (authError.message && authError.message.includes('Authentication blocked until')) {
         console.log(RED + `[Blur Auth Block] Cannot create jobs for blocked wallet ${WALLET_ADDRESS}` + RESET);
-        return; // Skip creating jobs for this task
+        throw new Error(authError.message);
       }
       // Continue anyway - individual jobs will attempt auth if needed
     }
@@ -10689,7 +10666,7 @@ async function processBlurScheduledBid(task: ITask) {
       if (pauseTime > Date.now()) {
         const waitTime = pauseTime - Date.now();
         console.log(YELLOW + `[Blur Job Creation] Wallet ${WALLET_ADDRESS.substring(0, 8)}... is paused for ${Math.round(waitTime / 1000)}s. Skipping job creation.` + RESET);
-        return;
+        throw new Error(`Wallet paused for ${Math.round(waitTime / 1000)}s`);
       }
     }
 
@@ -10823,9 +10800,6 @@ async function processBlurScheduledBid(task: ITask) {
 
     // Re-throw error to trigger job retry
     throw error;
-  } finally {
-    // Always release the scheduled job lock
-    scheduledJobLocks.delete(lockKey);
   }
 }
 
@@ -12301,16 +12275,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
 
   const checkpointStart = Date.now();
 
-  // Check if this scheduled job is already running to prevent duplicates
-  const lockKey = `${task._id}-magiceden-scheduled`;
-  if (scheduledJobLocks.has(lockKey)) {
-    console.log(`${YELLOW}[processMagicedenScheduledBid] Already processing scheduled job for ${lockKey}, skipping to prevent duplicates${RESET}`);
-    return;
-  }
-
-  // Acquire lock
-  scheduledJobLocks.set(lockKey, true);
-
   try {
     // Early return consolidation
     if (!enabledMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) {
@@ -12528,9 +12492,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
 
     // Re-throw error to trigger job retry
     throw error;
-  } finally {
-    // Always release the scheduled job lock
-    scheduledJobLocks.delete(lockKey);
   }
 }
 
