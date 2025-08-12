@@ -2234,6 +2234,18 @@ async function startServer() {
     const STUCK_TASK_CHECK_INTERVAL = 30000; // 30 seconds
     setInterval(checkStuckTasks, STUCK_TASK_CHECK_INTERVAL);
     console.log(GREEN + '✅ Stuck task detection started (checking every 30s)' + RESET);
+    
+    // Clean up old entries from recentlyCompletedTasks map every 5 minutes
+    setInterval(() => {
+      const now = Date.now();
+      const CLEANUP_THRESHOLD = 5 * 60 * 1000; // 5 minutes
+      
+      for (const [taskId, completedTime] of recentlyCompletedTasks) {
+        if (now - completedTime > CLEANUP_THRESHOLD) {
+          recentlyCompletedTasks.delete(taskId);
+        }
+      }
+    }, 5 * 60 * 1000);
 
   } catch (error) {
     console.error(RED + 'Failed to start server:' + RESET, error);
@@ -2608,9 +2620,15 @@ async function updateTaskRunningPercentage(taskId: string) {
 
   // Check if should trigger completion with lower threshold for floating-point precision issues
   if (taskStatus[taskId].runningPercentage >= 99.5) {
-    console.log(GREEN + `[Completion] Task ${taskId} reached ${taskStatus[taskId].runningPercentage.toFixed(1)}% - triggering completion` + RESET);
-    taskStatus[taskId].runningPercentage = 100;
-    await checkTaskCompletionAndScheduleNext(taskId);
+    // Check if recently completed to prevent duplicate completion calls
+    const isRecentlyCompleted = recentlyCompletedTasks.has(taskId) && 
+      (Date.now() - (recentlyCompletedTasks.get(taskId) || 0)) < 5000; // 5 seconds
+    
+    if (!isRecentlyCompleted) {
+      console.log(GREEN + `[Completion] Task ${taskId} reached ${taskStatus[taskId].runningPercentage.toFixed(1)}% - triggering completion` + RESET);
+      taskStatus[taskId].runningPercentage = 100;
+      await checkTaskCompletionAndScheduleNext(taskId);
+    }
   }
   // Enhanced recovery mechanism for stuck tasks
   else if (taskStatus[taskId].runningPercentage >= 90) {
@@ -2746,6 +2764,9 @@ function updateTaskCancellationPercentage(taskId: string) {
 // Track last completion check time to prevent rapid checks
 const lastCompletionCheckTimes = new Map<string, number>();
 
+// Track recently completed tasks to prevent immediate restart
+const recentlyCompletedTasks = new Map<string, number>();
+
 // Helper function to check task completion and schedule next iteration
 async function checkTaskCompletionAndScheduleNext(taskId: string) {
 
@@ -2753,9 +2774,16 @@ async function checkTaskCompletionAndScheduleNext(taskId: string) {
   if (!task) return;
 
   try {
+    // Log completion transition
+    const currentLoopCount = loopCounterStats[taskId] || 1;
+    console.log(GREEN + `[Task Completion] Task ${taskId} - Loop #${currentLoopCount} completed successfully` + RESET);
+    
+    // Mark task as recently completed
+    recentlyCompletedTasks.set(taskId, Date.now());
+    
     taskStatus[taskId].status = 'COMPLETED';
-    // Add 1-second delay before transitioning to SCHEDULED
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // Add 0.5-second delay before transitioning to SCHEDULED
+    await new Promise(resolve => setTimeout(resolve, 500));
 
     // Handle task cleanup
     await handleTaskCleanup(taskId);
@@ -2763,6 +2791,16 @@ async function checkTaskCompletionAndScheduleNext(taskId: string) {
     // Clear removal trackingCON
     delete traitsToRemove[taskId];
     delete removedTokens[taskId];
+
+    // Clear parent jobs to ensure clean state for next loop
+    const marketplaces = ['opensea', 'magiceden', 'blur'];
+    for (const mp of marketplaces) {
+      const parentJobId = `${taskId}-${mp}`;
+      if (parentJobs.has(parentJobId)) {
+        console.log(CYAN + `[Task Completion] Clearing parent job ${parentJobId} after completion` + RESET);
+        parentJobs.delete(parentJobId);
+      }
+    }
 
     await scheduleNextLoop(taskId);
 
@@ -3069,6 +3107,13 @@ async function scheduleNextLoop(taskId: string): Promise<void> {
   if (loopInterval < 0) {
     loopInterval = 60;
   }
+  
+  // Enforce minimum loop interval to prevent rapid restarts
+  const MIN_LOOP_INTERVAL = 2; // 2 seconds minimum
+  if (loopInterval < MIN_LOOP_INTERVAL) {
+    console.log(YELLOW + `[scheduleNextLoop] Loop interval ${loopInterval}s is below minimum, setting to ${MIN_LOOP_INTERVAL}s` + RESET);
+    loopInterval = MIN_LOOP_INTERVAL;
+  }
 
   // Loop counter is now incremented in startTask when the next loop actually begins
 
@@ -3137,6 +3182,8 @@ async function scheduleNextLoop(taskId: string): Promise<void> {
         const currentTask = activeTasks.get(taskId);
 
         if (currentTask?.running) {
+          // Clear recently completed flag before starting next loop
+          recentlyCompletedTasks.delete(taskId);
           await startTask(currentTask, true);
         }
       } catch (error) {
@@ -4765,7 +4812,7 @@ async function updateTaskData(task: ITask) {
 }
 
 const MAX_QUEUE_JOBS = 10000; // Maximum jobs allowed in queue
-const QUEUE_RESUME_THRESHOLD = 9000; // Resume when queue drops to 50% (5000 jobs)
+const QUEUE_RESUME_THRESHOLD = 9000; // Resume when queue drops to 90% (9000 jobs)
 
 const BLUR_JOBS = [
   'BLUR_COLLECTION_BID',
@@ -5350,6 +5397,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       for (const mp of marketplacesToClear) {
         const parentId = `${taskId}-${mp}`.toLowerCase();
         if (parentJobs.has(parentId)) {
+          console.log(CYAN + `[startTask] Clearing parent job ${parentId} at loop start` + RESET);
           parentJobs.delete(parentId);
         }
       }
@@ -17578,6 +17626,15 @@ async function reconcileTaskStatuses() {
 
       const status = taskStatus[taskId];
       if (!status) continue;
+      
+      // Skip tasks that are in transition states or recently completed
+      const isRecentlyCompleted = recentlyCompletedTasks.has(taskId) && 
+        (Date.now() - (recentlyCompletedTasks.get(taskId) || 0)) < 10000; // Skip if completed within last 10 seconds
+      
+      if (isRecentlyCompleted) {
+        console.log(CYAN + `[Task Reconciliation] Skipping recently completed task ${taskId}` + RESET);
+        continue;
+      }
 
       // Get actual counts from parent jobs
       const selectedMarketplaces = task.selectedMarketplaces.map(m => m.toLowerCase());
@@ -17634,6 +17691,12 @@ async function reconcileTaskStatuses() {
 
       // Check if task should be complete
       if (actualTotalJobs > 0 && actualCompletedJobs >= actualTotalJobs && status.runningPercentage < 100) {
+        // Skip if task was recently completed or is already scheduled
+        if (status.status === 'COMPLETED' || status.status === 'SCHEDULED') {
+          console.log(YELLOW + `[Reconciliation] Task ${taskId} already ${status.status}, skipping forced completion` + RESET);
+          continue;
+        }
+        
         console.log(MAGENTA + `[Reconciliation] Task ${taskId} should be complete: ${actualCompletedJobs}/${actualTotalJobs}` + RESET);
         status.runningPercentage = 100;
 
