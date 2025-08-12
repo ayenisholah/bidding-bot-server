@@ -11,6 +11,8 @@
  */
 import express from "express";
 import { config } from "dotenv";
+import fs from 'fs';
+import path from 'path';
 
 config()
 
@@ -3321,9 +3323,35 @@ function initializeQueueEventHandlers() {
 
   queueEvents.on('failed', async ({ jobId, failedReason }) => {
     try {
-      // Skip schedule jobs - they are orchestration jobs, not actual bid jobs
+      // Handle schedule job failures specially - log to file
       if (jobId.includes('-schedule')) {
-        console.log(CYAN + `[Queue Event] Skipping schedule job tracking (failed): ${jobId}` + RESET);
+        // Log scheduled job failures to file
+        const logsDir = path.join(process.cwd(), 'logs');
+        if (!fs.existsSync(logsDir)) {
+          fs.mkdirSync(logsDir, { recursive: true });
+        }
+        
+        // Get the job details
+        const job = await queue.getJob(jobId);
+        const errorDetails = {
+          timestamp: new Date().toISOString(),
+          jobId,
+          jobName: job?.name,
+          taskId: job?.data?._id,
+          failedReason,
+          error: job?.failedReason,
+          stackTrace: job?.stacktrace,
+          attemptNumber: job?.attemptsMade,
+          data: job?.data
+        };
+        
+        console.log(RED + `[Queue Event] Scheduled job failed: ${jobId}` + RESET);
+        console.log(RED + `[Queue Event] Reason: ${failedReason}` + RESET);
+        
+        // Write to scheduled job failures log
+        const logPath = path.join(logsDir, 'scheduled-job-failures.log');
+        fs.appendFileSync(logPath, JSON.stringify(errorDetails, null, 2) + '\n---\n');
+        
         return;
       }
 
@@ -10287,6 +10315,31 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
     }
   } catch (error) {
     console.error(RED + `Error processing OpenSea scheduled bid for task: ${task._id}` + RESET, error);
+    
+    // Log to file
+    const logsDir = path.join(process.cwd(), 'logs');
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir, { recursive: true });
+    }
+    
+    const errorDetails = {
+      timestamp: new Date().toISOString(),
+      marketplace: 'opensea',
+      taskId: task._id,
+      error: error instanceof Error ? error.message : String(error),
+      stackTrace: error instanceof Error ? error.stack : undefined,
+      taskData: {
+        running: task.running,
+        selectedMarketplaces: task.selectedMarketplaces,
+        contract: task.contract,
+        selectedTraits: task.selectedTraits,
+        bidPrice: task.bidPrice,
+        loopInterval: task.loopInterval
+      }
+    };
+    
+    const logPath = path.join(logsDir, 'scheduled-job-failures.log');
+    fs.appendFileSync(logPath, JSON.stringify(errorDetails, null, 2) + '\n---\n');
 
     // Check if this is a Redis cluster failure
     if (isRedisClusterError(error)) {
@@ -10881,6 +10934,31 @@ async function processBlurScheduledBid(task: ITask) {
     }
   } catch (error) {
     console.error(RED + `Error processing Blur scheduled bid for task: ${task._id}` + RESET, error);
+    
+    // Log to file
+    const logsDir = path.join(process.cwd(), 'logs');
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir, { recursive: true });
+    }
+    
+    const errorDetails = {
+      timestamp: new Date().toISOString(),
+      marketplace: 'blur',
+      taskId: task._id,
+      error: error instanceof Error ? error.message : String(error),
+      stackTrace: error instanceof Error ? error.stack : undefined,
+      taskData: {
+        running: task.running,
+        selectedMarketplaces: task.selectedMarketplaces,
+        contract: task.contract,
+        selectedTraits: task.selectedTraits,
+        bidPrice: task.bidPrice,
+        loopInterval: task.loopInterval
+      }
+    };
+    
+    const logPath = path.join(logsDir, 'scheduled-job-failures.log');
+    fs.appendFileSync(logPath, JSON.stringify(errorDetails, null, 2) + '\n---\n');
 
     // Re-throw error to trigger job retry
     throw error;
@@ -12586,6 +12664,34 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
     }
   } catch (error) {
     console.error(RED + `Error processing MagicEden scheduled bid for task: ${task._id} (${Date.now() - checkpointStart}ms)` + RESET, error);
+    
+    // Log to file
+    const logsDir = path.join(process.cwd(), 'logs');
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir, { recursive: true });
+    }
+    
+    const errorDetails = {
+      timestamp: new Date().toISOString(),
+      marketplace: 'magiceden',
+      taskId: task._id,
+      processingTime: Date.now() - checkpointStart,
+      error: error instanceof Error ? error.message : String(error),
+      stackTrace: error instanceof Error ? error.stack : undefined,
+      isTimeout: error instanceof Error && error.message.includes('timeout'),
+      taskData: {
+        running: task.running,
+        selectedMarketplaces: task.selectedMarketplaces,
+        contract: task.contract,
+        selectedTraits: task.selectedTraits,
+        bidPrice: task.bidPrice,
+        loopInterval: task.loopInterval
+      }
+    };
+    
+    const logPath = path.join(logsDir, 'scheduled-job-failures.log');
+    fs.appendFileSync(logPath, JSON.stringify(errorDetails, null, 2) + '\n---\n');
+    
     // Log specific error details to help diagnose timeouts
     if (error instanceof Error && error.message.includes('timeout')) {
       console.error(RED + `[MAGICEDEN_SCHEDULE] Timeout details: ${error.message}` + RESET);
