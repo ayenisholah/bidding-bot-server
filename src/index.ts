@@ -346,7 +346,7 @@ function acquireScheduledBidLock(taskId: string, marketplace: string): void {
   const lockKey = `${taskId}-${marketplace}-scheduled`;
   const existingLock = taskLocks.get(lockKey);
   const now = Date.now();
-  
+
   if (existingLock && existingLock.locked) {
     // Check if lock is stale (expired)
     if (existingLock.lockUntil && now > existingLock.lockUntil) {
@@ -357,7 +357,7 @@ function acquireScheduledBidLock(taskId: string, marketplace: string): void {
     // Lock is held by another process - throw error to skip
     throw new Error(`Task ${taskId} is already being processed by ${marketplace} scheduled bid function`);
   }
-  
+
   // Acquire lock for 5 minutes
   taskLocks.set(lockKey, {
     locked: true,
@@ -2272,12 +2272,12 @@ async function startServer() {
     const STUCK_TASK_CHECK_INTERVAL = 30000; // 30 seconds
     setInterval(checkStuckTasks, STUCK_TASK_CHECK_INTERVAL);
     console.log(GREEN + '✅ Stuck task detection started (checking every 30s)' + RESET);
-    
+
     // Clean up old entries from recentlyCompletedTasks map every 5 minutes
     setInterval(() => {
       const now = Date.now();
       const CLEANUP_THRESHOLD = 5 * 60 * 1000; // 5 minutes
-      
+
       for (const [taskId, completedTime] of recentlyCompletedTasks) {
         if (now - completedTime > CLEANUP_THRESHOLD) {
           recentlyCompletedTasks.delete(taskId);
@@ -2453,18 +2453,6 @@ function setTaskCancellationComplete(taskId: string) {
   }
 }
 
-// Helper function to check if a task recently completed (within cooldown period)
-function isTaskInCompletionCooldown(taskId: string): boolean {
-  const COMPLETION_COOLDOWN = 5000; // 5 seconds cooldown after completion
-  
-  if (!taskStatus[taskId] || !taskStatus[taskId].completionTimestamp) {
-    return false;
-  }
-  
-  const timeSinceCompletion = Date.now() - taskStatus[taskId].completionTimestamp;
-  return timeSinceCompletion < COMPLETION_COOLDOWN;
-}
-
 // Helper function to safely set task status with regression protection
 function setTaskStatus(taskId: string, newStatus: string, context?: string): boolean {
   if (!taskStatus[taskId]) {
@@ -2481,7 +2469,7 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string): boo
   }
 
   const currentStatus = taskStatus[taskId].status;
-  
+
   // Status progression hierarchy (higher numbers are more final states)
   const statusHierarchy: { [key: string]: number } = {
     'PROCESSING': 1,
@@ -2527,12 +2515,12 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string): boo
   }
 
   taskStatus[taskId].status = newStatus as any;
-  
+
   // Set completion timestamp when task completes
   if (newStatus === 'COMPLETED') {
     taskStatus[taskId].completionTimestamp = Date.now();
   }
-  
+
   if (context) {
     console.log(CYAN + `[setTaskStatus] ${taskId}: ${currentStatus} -> ${newStatus} (${context})` + RESET);
   }
@@ -2743,9 +2731,9 @@ async function updateTaskRunningPercentage(taskId: string) {
   // Only trigger completion when we reach exactly 100%
   if (taskStatus[taskId].runningPercentage >= 100) {
     // Check if recently completed to prevent duplicate completion calls
-    const isRecentlyCompleted = recentlyCompletedTasks.has(taskId) && 
+    const isRecentlyCompleted = recentlyCompletedTasks.has(taskId) &&
       (Date.now() - (recentlyCompletedTasks.get(taskId) || 0)) < 5000; // 5 seconds
-    
+
     if (!isRecentlyCompleted) {
       console.log(GREEN + `[Completion] Task ${taskId} reached 100.0% - triggering completion` + RESET);
       taskStatus[taskId].runningPercentage = 100;
@@ -2884,10 +2872,10 @@ async function checkTaskCompletionAndScheduleNext(taskId: string) {
     // Log completion transition
     const currentLoopCount = loopCounterStats[taskId] || 1;
     console.log(GREEN + `[Task Completion] Task ${taskId} - Loop #${currentLoopCount} completed successfully` + RESET);
-    
+
     // Mark task as recently completed
     recentlyCompletedTasks.set(taskId, Date.now());
-    
+
     setTaskStatus(taskId, 'COMPLETED', 'task completion');
     // Add 0.5-second delay before transitioning to SCHEDULED
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -2904,7 +2892,7 @@ async function checkTaskCompletionAndScheduleNext(taskId: string) {
 
     // Mark as scheduled BEFORE clearing parent jobs
     setTaskStatus(taskId, 'SCHEDULED', 'next loop scheduled');
-    
+
     // Add delay to ensure scheduled processors see SCHEDULED status before parent jobs are cleared
     await new Promise(resolve => setTimeout(resolve, 100));
 
@@ -2993,7 +2981,7 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
   if (parentJob.completedJobs >= parentJob.totalJobs && parentJob.totalJobs > 0) {
     console.log(YELLOW + `[markJobAsProcessed] Parent job ${parentJobId} already complete (${parentJob.completedJobs}/${parentJob.totalJobs})` + RESET);
     console.log(YELLOW + `  Ignoring late job: ${jobId}` + RESET);
-    
+
     // Safety check: if allJobsQueued is false but we're already complete, something went wrong
     if (!parentJob.allJobsQueued) {
       console.log(RED + `  WARNING: Parent job complete but allJobsQueued=false - this indicates a tracking issue` + RESET);
@@ -3208,7 +3196,7 @@ async function scheduleNextLoop(taskId: string): Promise<void> {
   if (loopInterval < 0) {
     loopInterval = 60;
   }
-  
+
   // Enforce minimum loop interval to prevent rapid restarts
   const MIN_LOOP_INTERVAL = 2; // 2 seconds minimum
   if (loopInterval < MIN_LOOP_INTERVAL) {
@@ -3429,7 +3417,7 @@ function initializeQueueEventHandlers() {
         if (!fs.existsSync(logsDir)) {
           fs.mkdirSync(logsDir, { recursive: true });
         }
-        
+
         // Get the job details
         const job = await queue.getJob(jobId);
         const errorDetails = {
@@ -3443,14 +3431,14 @@ function initializeQueueEventHandlers() {
           attemptNumber: job?.attemptsMade,
           data: job?.data
         };
-        
+
         console.log(RED + `[Queue Event] Scheduled job failed: ${jobId}` + RESET);
         console.log(RED + `[Queue Event] Reason: ${failedReason}` + RESET);
-        
+
         // Write to scheduled job failures log
         const logPath = path.join(logsDir, 'scheduled-job-failures.log');
         fs.appendFileSync(logPath, JSON.stringify(errorDetails, null, 2) + '\n---\n');
-        
+
         return;
       }
 
@@ -4970,7 +4958,7 @@ async function processBulkJobs(jobs: Job[], createKey = false): Promise<void> {
   const firstJob = jobs[0];
   const taskId = firstJob.data._id || firstJob.data.taskId;
   const task = activeTasks.get(taskId);
-  
+
   // Check Redis health before attempting bulk operations
   const isRedisHealthy = await checkRedisClusterHealth();
   if (!isRedisHealthy) {
@@ -5172,7 +5160,7 @@ async function processBulkJobs(jobs: Job[], createKey = false): Promise<void> {
         // Always update totalJobs to match actualJobs now that queueing is complete
         const previousTotal = parentJob.totalJobs;
         parentJob.totalJobs = parentJob.actualJobs;
-        
+
         if (previousTotal !== parentJob.actualJobs) {
           console.log(YELLOW + `[processBulkJobs] ${parentJobId}: Adjusted totalJobs from ${previousTotal} to ${parentJob.actualJobs} (actual queued)` + RESET);
         } else {
@@ -5186,7 +5174,7 @@ async function processBulkJobs(jobs: Job[], createKey = false): Promise<void> {
 
   } catch (error) {
     console.error(RED + `[processBulkJobs] Failed to process bulk jobs for task ${taskId}: ${error}` + RESET);
-    
+
     // Log to file for debugging
     await logger.logGeneralError(
       `Failed to process bulk jobs for task ${taskId}`,
@@ -5198,12 +5186,12 @@ async function processBulkJobs(jobs: Job[], createKey = false): Promise<void> {
         error: error instanceof Error ? error : new Error(String(error))
       }
     );
-    
+
     // Reset task status to allow retry
     if (taskStatus[taskId]) {
       setTaskStatus(taskId, 'PROCESSING', 'job queueing failed - will retry');
     }
-    
+
     // Re-throw error to trigger job retry in scheduled bid processor
     throw new Error(`Job queueing failed for task ${taskId}: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -5615,7 +5603,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
                 jobId: `${task._id}-opensea-schedule`,
                 removeOnComplete: true,
                 removeOnFail: true,
-                attempts: -1,
+                attempts: 100,
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -5630,7 +5618,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
                 jobId: `${task._id}-blur-schedule`,
                 removeOnComplete: true,
                 removeOnFail: true,
-                attempts: -1,
+                attempts: 100,
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -5645,7 +5633,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
                 jobId: `${task._id}-magiceden-schedule`,
                 removeOnComplete: true,
                 removeOnFail: true,
-                attempts: -1,
+                attempts: 100,
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -10285,17 +10273,6 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
         completedJobs: 0,
         waitingTime: 0
       };
-    } else if (taskStatus[taskId].status === 'COMPLETED' || taskStatus[taskId].runningPercentage === 100) {
-      // Guard: Don't override COMPLETED status - task is finishing this loop
-      console.log(`${YELLOW}[processOpenseaScheduledBid] Task ${taskId} is completing (${taskStatus[taskId].status}), skipping processing${RESET}`);
-      return;
-    } else if (isTaskInCompletionCooldown(taskId)) {
-      // Guard: Don't process task that recently completed (within cooldown period)
-      const timeSinceCompletion = Date.now() - (taskStatus[taskId].completionTimestamp || 0);
-      console.log(`${YELLOW}[processOpenseaScheduledBid] Task ${taskId} in completion cooldown (${timeSinceCompletion}ms since completion), skipping processing${RESET}`);
-      return;
-    } else {
-      setTaskStatus(taskId, 'PROCESSING', 'processOpenseaScheduledBid');
     }
 
     // Acquire lock for this task - will throw if stale or already locked
@@ -10394,7 +10371,7 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
         await processBulkJobs(jobs, true);
       } catch (jobError) {
         console.error(RED + `[OPENSEA] Failed to queue token bid jobs: ${jobError}` + RESET);
-        
+
         // Mark parent job as complete with 0 actual jobs on failure
         const parentJobId = `${taskId}-opensea`;
         const parentJob = parentJobs.get(parentJobId);
@@ -10404,10 +10381,10 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
           parentJob.totalJobs = 0; // Adjust to match actual
           console.log(RED + `[OPENSEA] Marked parent job ${parentJobId} as complete with 0 jobs due to queueing failure` + RESET);
         }
-        
+
         // Update task status to reflect failure
         setTaskStatus(taskId, 'PROCESSING', 'job queueing failed');
-        
+
         // Re-throw to trigger retry
         throw jobError;
       }
@@ -10449,7 +10426,7 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
         await processBulkJobs(traitJobs, true);
       } catch (jobError) {
         console.error(RED + `[OPENSEA] Failed to queue trait bid jobs: ${jobError}` + RESET);
-        
+
         // Mark parent job as complete with 0 actual jobs on failure
         const parentJobId = `${taskId}-opensea`;
         const parentJob = parentJobs.get(parentJobId);
@@ -10459,10 +10436,10 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
           parentJob.totalJobs = 0; // Adjust to match actual
           console.log(RED + `[OPENSEA] Marked parent job ${parentJobId} as complete with 0 jobs due to queueing failure` + RESET);
         }
-        
+
         // Update task status to reflect failure
         setTaskStatus(taskId, 'PROCESSING', 'job queueing failed');
-        
+
         // Re-throw to trigger retry
         throw jobError;
       }
@@ -10514,19 +10491,19 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
       setTaskStatus(taskId, 'COMPLETED', 'opensea no jobs to create');
       await updateTaskRunningPercentage(taskId);
 
-      // Log the reason
-      console.log(YELLOW + `[OPENSEA] No jobs created for task ${taskId} - scheduling next loop` + RESET);
-      return;
+      // Log the reason and throw error to retry
+      console.log(YELLOW + `[OPENSEA] No jobs created for task ${taskId} - will retry later` + RESET);
+      throw new Error('No jobs to create - will retry later');
     }
   } catch (error) {
     console.error(RED + `Error processing OpenSea scheduled bid for task: ${task._id}` + RESET, error);
-    
+
     // Log to file
     const logsDir = path.join(process.cwd(), 'logs');
     if (!fs.existsSync(logsDir)) {
       fs.mkdirSync(logsDir, { recursive: true });
     }
-    
+
     const errorDetails = {
       timestamp: new Date().toISOString(),
       marketplace: 'opensea',
@@ -10542,14 +10519,14 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
         loopInterval: task.loopInterval
       }
     };
-    
+
     const logPath = path.join(logsDir, 'scheduled-job-failures.log');
     fs.appendFileSync(logPath, JSON.stringify(errorDetails, null, 2) + '\n---\n');
 
     // Check if this is a Redis cluster failure
     if (isRedisClusterError(error)) {
       console.log(RED + '🚨 Redis cluster error detected in OpenSea scheduled bid processor' + RESET);
-      
+
       // Add detailed error information
       await logger.logGeneralError(
         'Redis cluster failure in OpenSea scheduled bid',
@@ -11165,19 +11142,19 @@ async function processBlurScheduledBid(task: ITask) {
       taskStatus[taskId].status = 'COMPLETED';
       await updateTaskRunningPercentage(taskId);
 
-      // Log the reason
-      console.log(YELLOW + `[BLUR] No jobs created for task ${taskId} - scheduling next loop` + RESET);
-      return;
+      // Log the reason and throw error to retry
+      console.log(YELLOW + `[BLUR] No jobs created for task ${taskId} - will retry later` + RESET);
+      throw new Error('No jobs to create - will retry later');
     }
   } catch (error) {
     console.error(RED + `Error processing Blur scheduled bid for task: ${task._id}` + RESET, error);
-    
+
     // Log to file
     const logsDir = path.join(process.cwd(), 'logs');
     if (!fs.existsSync(logsDir)) {
       fs.mkdirSync(logsDir, { recursive: true });
     }
-    
+
     const errorDetails = {
       timestamp: new Date().toISOString(),
       marketplace: 'blur',
@@ -11193,7 +11170,7 @@ async function processBlurScheduledBid(task: ITask) {
         loopInterval: task.loopInterval
       }
     };
-    
+
     const logPath = path.join(logsDir, 'scheduled-job-failures.log');
     fs.appendFileSync(logPath, JSON.stringify(errorDetails, null, 2) + '\n---\n');
 
@@ -12746,17 +12723,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
         completedJobs: 0,
         waitingTime: 0
       };
-    } else if (taskStatus[taskId].status === 'COMPLETED' || taskStatus[taskId].runningPercentage === 100) {
-      // Guard: Don't override COMPLETED status - task is finishing this loop
-      console.log(`${YELLOW}[processMagicedenScheduledBid] Task ${taskId} is completing (${taskStatus[taskId].status}), skipping processing${RESET}`);
-      return;
-    } else if (isTaskInCompletionCooldown(taskId)) {
-      // Guard: Don't process task that recently completed (within cooldown period)
-      const timeSinceCompletion = Date.now() - (taskStatus[taskId].completionTimestamp || 0);
-      console.log(`${YELLOW}[processMagicedenScheduledBid] Task ${taskId} in completion cooldown (${timeSinceCompletion}ms since completion), skipping processing${RESET}`);
-      return;
-    } else {
-      setTaskStatus(taskId, 'PROCESSING', 'processMagicedenScheduledBid');
     }
 
     // Acquire lock for this task - will throw if stale or already locked
@@ -12841,7 +12807,7 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
         await processBulkJobs(jobs, true);
       } catch (jobError) {
         console.error(RED + `[MAGICEDEN] Failed to queue token bid jobs: ${jobError}` + RESET);
-        
+
         // Reset parent job on failure
         const parentJobId = `${taskId}-magiceden`;
         const parentJob = parentJobs.get(parentJobId);
@@ -12851,10 +12817,10 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
           parentJob.totalJobs = 0;
           console.log(RED + `[MAGICEDEN] Marked parent job ${parentJobId} as complete with 0 jobs due to queueing failure` + RESET);
         }
-        
+
         // Update task status to reflect failure
         setTaskStatus(taskId, 'PROCESSING', 'job queueing failed');
-        
+
         // Re-throw to trigger retry
         throw jobError;
       }
@@ -12894,7 +12860,7 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
         await processBulkJobs(traitJobs, true);
       } catch (jobError) {
         console.error(RED + `[MAGICEDEN] Failed to queue trait bid jobs: ${jobError}` + RESET);
-        
+
         // Reset parent job on failure
         const parentJobId = `${taskId}-magiceden`;
         const parentJob = parentJobs.get(parentJobId);
@@ -12904,10 +12870,10 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
           parentJob.totalJobs = 0;
           console.log(RED + `[MAGICEDEN] Marked parent job ${parentJobId} as complete with 0 jobs due to queueing failure` + RESET);
         }
-        
+
         // Update task status to reflect failure
         setTaskStatus(taskId, 'PROCESSING', 'job queueing failed');
-        
+
         // Re-throw to trigger retry
         throw jobError;
       }
@@ -12966,19 +12932,19 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
       setTaskStatus(taskId, 'COMPLETED', 'magiceden no jobs to create');
       await updateTaskRunningPercentage(taskId);
 
-      // Log the reason
-      console.log(YELLOW + `[MAGICEDEN] No jobs created for task ${taskId} - scheduling next loop` + RESET);
-      return;
+      // Log the reason and throw error to retry
+      console.log(YELLOW + `[MAGICEDEN] No jobs created for task ${taskId} - will retry later` + RESET);
+      throw new Error('No jobs to create - will retry later');
     }
   } catch (error) {
     console.error(RED + `Error processing MagicEden scheduled bid for task: ${task._id} (${Date.now() - checkpointStart}ms)` + RESET, error);
-    
+
     // Log to file
     const logsDir = path.join(process.cwd(), 'logs');
     if (!fs.existsSync(logsDir)) {
       fs.mkdirSync(logsDir, { recursive: true });
     }
-    
+
     const errorDetails = {
       timestamp: new Date().toISOString(),
       marketplace: 'magiceden',
@@ -12996,10 +12962,10 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
         loopInterval: task.loopInterval
       }
     };
-    
+
     const logPath = path.join(logsDir, 'scheduled-job-failures.log');
     fs.appendFileSync(logPath, JSON.stringify(errorDetails, null, 2) + '\n---\n');
-    
+
     // Log specific error details to help diagnose timeouts
     if (error instanceof Error && error.message.includes('timeout')) {
       console.error(RED + `[MAGICEDEN_SCHEDULE] Timeout details: ${error.message}` + RESET);
@@ -18046,11 +18012,11 @@ async function reconcileTaskStatuses() {
 
       const status = taskStatus[taskId];
       if (!status) continue;
-      
+
       // Skip tasks that are in transition states or recently completed
-      const isRecentlyCompleted = recentlyCompletedTasks.has(taskId) && 
+      const isRecentlyCompleted = recentlyCompletedTasks.has(taskId) &&
         (Date.now() - (recentlyCompletedTasks.get(taskId) || 0)) < 10000; // Skip if completed within last 10 seconds
-      
+
       if (isRecentlyCompleted) {
         console.log(CYAN + `[Task Reconciliation] Skipping recently completed task ${taskId}` + RESET);
         continue;
@@ -18116,7 +18082,7 @@ async function reconcileTaskStatuses() {
           console.log(YELLOW + `[Reconciliation] Task ${taskId} already ${status.status}, skipping forced completion` + RESET);
           continue;
         }
-        
+
         console.log(MAGENTA + `[Reconciliation] Task ${taskId} should be complete: ${actualCompletedJobs}/${actualTotalJobs}` + RESET);
         status.runningPercentage = 100;
 
