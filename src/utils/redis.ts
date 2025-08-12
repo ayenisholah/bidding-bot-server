@@ -24,11 +24,25 @@ const INITIAL_RETRY_DELAY = 2000;
 
 const defaultConfig = {
   maxRetriesPerRequest: null,
+  retryDelayOnMoved: 100,
+  retryDelayOnClusterDown: 300,
+  maxRedirections: 32, // Increase from default 16 to handle more complex topologies
   retryStrategy: (times: number) => {
     const delay = Math.min(times * INITIAL_RETRY_DELAY, 20000);
     return delay;
   },
-  clusterRetryStrategy: (times: number) => {
+  clusterRetryStrategy: (times: number, reason?: Error) => {
+    // Log the specific error for debugging
+    if (reason) {
+      console.log(`[Redis] Cluster retry ${times} due to: ${reason.message}`);
+      
+      // Handle "Too many Cluster redirections" specifically
+      if (reason.message.includes('Too many Cluster redirections')) {
+        console.error('[Redis] Cluster topology issue detected, forcing reconnect after delay');
+        return 5000; // Wait 5 seconds before reconnecting to allow cluster to stabilize
+      }
+    }
+    
     if (times > RETRY_MAX_ATTEMPTS) {
       return null;
     }
@@ -50,7 +64,7 @@ const defaultConfig = {
   showFriendlyErrorStack: true,
   enableOfflineQueue: true,
   reconnectOnError: (err: Error) => {
-    const targetErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'CLUSTERDOWN'];
+    const targetErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'CLUSTERDOWN', 'MOVED'];
     return targetErrors.some(errType => err.message.includes(errType));
   }
 };
@@ -97,8 +111,8 @@ class RedisClient {
           slotsRefreshTimeout: 30000,
           dnsLookup: (address, callback) => callback(null, address),
           natMap: REDIS_NET_MAP,
-          // Only use the nodes we explicitly provide
-          slotsRefreshInterval: -1,
+          // Enable automatic slot refresh to handle cluster topology changes
+          slotsRefreshInterval: 30000, // Refresh every 30 seconds
           // Prevent connection to default Redis
           lazyConnect: true,
         });
@@ -155,6 +169,21 @@ class RedisClient {
     this.client.on('error', async (err) => {
       console.error('Redis cluster error:', err);
 
+      // Handle MOVED errors by forcing a slot refresh
+      if (err.message.includes('MOVED') || err.message.includes('Too many Cluster redirections')) {
+        console.warn('[Redis] Detected MOVED/redirection error, forcing slot refresh...');
+        // Force refresh cluster slots
+        if (this.client) {
+          this.client.refreshSlotsCache((err) => {
+            if (err) {
+              console.error('[Redis] Failed to refresh cluster slots:', err);
+            } else {
+              console.log('[Redis] Cluster slots refreshed successfully');
+            }
+          });
+        }
+      }
+
       // Only log to Better Stack if it's not a connection refused error to localhost:6379
       // This prevents recursive logging attempts
       if (!err.message.includes('ECONNREFUSED') || !err.message.includes('127.0.0.1:6379')) {
@@ -164,7 +193,9 @@ class RedisClient {
             collection_name: 'redis_cluster',
             error: err,
             errorMessage: err.message,
-            connectionAttempts: this.connectionAttempts
+            connectionAttempts: this.connectionAttempts,
+            isMovedError: err.message.includes('MOVED'),
+            isRedirectionError: err.message.includes('Too many Cluster redirections')
           });
         } catch (logError) {
           console.error('Failed to log Redis error:', logError);
@@ -194,6 +225,17 @@ class RedisClient {
         });
       }
     }, 30000);
+
+    // Add periodic slot refresh to proactively handle cluster changes
+    setInterval(() => {
+      if (this.isConnected && this.client) {
+        this.client.refreshSlotsCache((err) => {
+          if (err) {
+            console.warn('[Redis] Periodic slot refresh failed:', err.message);
+          }
+        });
+      }
+    }, 60000); // Refresh every 60 seconds
   }
 
   public getClient(): Cluster {
@@ -206,6 +248,25 @@ class RedisClient {
   public isReady(): boolean {
     return this.isConnected;
   }
+
+  public async forceSlotRefresh(): Promise<void> {
+    if (!this.client) {
+      throw new Error('Redis client not initialized');
+    }
+    
+    return new Promise((resolve, reject) => {
+      console.log('[Redis] Forcing cluster slot refresh...');
+      this.client!.refreshSlotsCache((err) => {
+        if (err) {
+          console.error('[Redis] Failed to refresh cluster slots:', err);
+          reject(err);
+        } else {
+          console.log('[Redis] Cluster slots refreshed successfully');
+          resolve();
+        }
+      });
+    });
+  }
 }
 
 const redisClient = RedisClient.getInstance();
@@ -213,6 +274,7 @@ const redisClient = RedisClient.getInstance();
 // Export both the client instance and a getter for the actual Redis connection
 export default redisClient;
 export const getRedisConnection = () => redisClient.getClient();
+export const forceRedisSlotRefresh = () => redisClient.forceSlotRefresh();
 
 // Connection tracking for BullMQ
 const bullMQConnections = new Map<string, { cluster: Cluster; createdAt: number; lastHealthCheck: number }>();
@@ -300,11 +362,21 @@ export const createBullMQConnection = async (identifier?: string): Promise<Clust
     });
 
     // Set up event handlers before connecting
-    cluster.on('error', (err) => {
+    cluster.on('error', async (err) => {
       // Check if it's a timeout error
       const isTimeoutError = err.message.includes('Command timed out') || err.message.includes('ETIMEDOUT');
+      const isMovedError = err.message.includes('MOVED') || err.message.includes('Too many Cluster redirections');
 
-      if (isTimeoutError && needsBlockingConfig) {
+      if (isMovedError) {
+        console.warn(`[Redis] BullMQ connection ${connectionId} detected MOVED/redirection error, forcing slot refresh...`);
+        cluster.refreshSlotsCache((refreshErr) => {
+          if (refreshErr) {
+            console.error(`[Redis] BullMQ connection ${connectionId} failed to refresh slots:`, refreshErr);
+          } else {
+            console.log(`[Redis] BullMQ connection ${connectionId} slots refreshed successfully`);
+          }
+        });
+      } else if (isTimeoutError && needsBlockingConfig) {
         console.warn(`[Redis] BullMQ connection ${connectionId} timeout (expected for ${isQueueEvents ? 'queue events' : 'worker'}):`, err.message);
       } else {
         console.error(`[Redis] BullMQ connection ${connectionId} error:`, err.message);
@@ -317,7 +389,8 @@ export const createBullMQConnection = async (identifier?: string): Promise<Clust
           isTimeoutError,
           isQueueEvents,
           isWorker,
-          needsBlockingConfig
+          needsBlockingConfig,
+          isMovedError
         });
       }
     });
@@ -468,4 +541,38 @@ export const closeAllBullMQConnections = async () => {
   await Promise.all(promises);
   bullMQConnections.clear();
   console.log('[Redis] All BullMQ connections closed');
+};
+
+// Helper function to check if an error is a Redis cluster error
+export const isRedisClusterError = (error: unknown): boolean => {
+  if (!(error instanceof Error)) return false;
+  
+  const clusterErrorPatterns = [
+    'MOVED',
+    'ASK',
+    'CLUSTERDOWN',
+    'Too many Cluster redirections',
+    'CROSSSLOT',
+    'TRYAGAIN',
+    'Connection is closed',
+    'Connection lost',
+    'All sentinels are unreachable'
+  ];
+  
+  return clusterErrorPatterns.some(pattern => error.message.includes(pattern));
+};
+
+// Helper function to handle Redis cluster errors with automatic recovery
+export const handleRedisClusterError = async (error: unknown, context: string): Promise<void> => {
+  if (!isRedisClusterError(error)) return;
+  
+  console.error(`[Redis] Cluster error in ${context}:`, error);
+  
+  try {
+    // Force slot refresh to recover from topology changes
+    await forceRedisSlotRefresh();
+    console.log(`[Redis] Successfully refreshed slots after error in ${context}`);
+  } catch (refreshError) {
+    console.error(`[Redis] Failed to refresh slots after error in ${context}:`, refreshError);
+  }
 };
