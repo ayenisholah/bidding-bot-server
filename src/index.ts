@@ -66,7 +66,7 @@ import { taskCircuitBreaker } from "./utils/task-circuit-breaker";
 import { blurRateLimiter } from "./utils/blur-rate-limiter";
 import { approvalCache } from "./utils/approval-cache";
 import { blurCompletionTracker } from "./utils/blur-completion-tracker";
-import { blurJobCoordinator } from "./utils/blur-job-coordinator";
+// import { blurJobCoordinator } from "./utils/blur-job-coordinator";
 
 const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
 
@@ -224,12 +224,6 @@ const lockManager = new DistributedLockManager({
   defaultTTLSeconds: 60
 });
 
-// Queue capacity lock manager for atomic queue operations
-const queueCapacityLock = new DistributedLockManager({
-  lockPrefix: '{queue-capacity}:',
-  defaultTTLSeconds: 60 // 1 minute timeout
-});
-
 // Create a getter for redis to ensure it's always current
 
 // For internal use
@@ -370,21 +364,21 @@ function acquireScheduledBidLock(taskId: string, marketplace: string): void {
 function extendScheduledBidLock(taskId: string, marketplace: string, extensionMs: number = 5 * 60 * 1000): boolean {
   const lockKey = `${taskId}-${marketplace}-scheduled`;
   const lock = taskLocks.get(lockKey);
-  
+
   if (!lock || !lock.locked) {
     console.log(YELLOW + `[extendScheduledBidLock] No lock found for ${lockKey}` + RESET);
     return false;
   }
-  
+
   const now = Date.now();
-  
+
   // Only extend if lock is about to expire (within 2 minutes)
   if (lock.lockUntil && (lock.lockUntil - now) < (2 * 60 * 1000)) {
     lock.lockUntil = now + extensionMs;
-    console.log(GREEN + `[extendScheduledBidLock] Extended lock for ${lockKey} by ${extensionMs/1000}s` + RESET);
+    console.log(GREEN + `[extendScheduledBidLock] Extended lock for ${lockKey} by ${extensionMs / 1000}s` + RESET);
     return true;
   }
-  
+
   return false;
 }
 
@@ -3948,7 +3942,7 @@ async function processBlurJob(job: Job) {
 
   try {
     // Update progress to indicate job started
-    await job.updateProgress(5);
+    // Progress reporting removed - await job.updateProgress(5);
 
     // Check if password is available before processing
     if (!getPassword()) {
@@ -3958,7 +3952,7 @@ async function processBlurJob(job: Job) {
     }
 
     // Update progress after password check
-    await job.updateProgress(10);
+    // Progress reporting removed - await job.updateProgress(10);
 
     // Extract wallet address from job data first (more reliable than parsing jobId)
     walletAddress = job.data?.address || job.data?.wallet;
@@ -4011,7 +4005,7 @@ async function processBlurJob(job: Job) {
       }
 
       // Update progress before Redis checks
-      await job.updateProgress(15);
+      // Progress reporting removed - await job.updateProgress(15);
 
       // Check for authentication blocks first
       try {
@@ -4035,9 +4029,9 @@ async function processBlurJob(job: Job) {
               console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
               // Update progress periodically during wait
-              const updateInterval = setInterval(() => job.updateProgress(20), 10000);
+              // Progress reporting removed - was: const updateInterval = setInterval(() => job.updateProgress(20), 10000);
               await new Promise(resolve => setTimeout(resolve, waitTime + 2500));
-              clearInterval(updateInterval);
+              // Progress reporting removed - was: clearInterval(updateInterval);
 
               console.log(GREEN + `[Blur Auth Block] Resumed processing for wallet ${walletAddress.substring(0, 8)}...` + RESET);
             } else {
@@ -4048,7 +4042,7 @@ async function processBlurJob(job: Job) {
           }
 
           // Update progress after auth check
-          await job.updateProgress(25);
+          // Progress reporting removed - await job.updateProgress(25);
 
           // Then check rate limit pauses
           const pauseKey = `{blurWallet}:pause:${walletAddress}`;
@@ -4069,9 +4063,9 @@ async function processBlurJob(job: Job) {
               console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
               // Update progress periodically during wait
-              const updateInterval = setInterval(() => job.updateProgress(30), 10000);
+              // Progress reporting removed - was: const updateInterval = setInterval(() => job.updateProgress(30), 10000);
               await new Promise(resolve => setTimeout(resolve, waitTime + 2500));
-              clearInterval(updateInterval);
+              // Progress reporting removed - was: clearInterval(updateInterval);
 
               console.log(GREEN + `[Blur API Rate Limit] Resumed processing for wallet ${walletAddress.substring(0, 8)}...` + RESET);
             } else {
@@ -4087,34 +4081,34 @@ async function processBlurJob(job: Job) {
     }
 
     // Update progress before processing job
-    await job.updateProgress(40);
+    // Progress reporting removed - await job.updateProgress(40);
 
     // Process job based on type
     switch (job.name) {
       case BLUR_SCHEDULE:
-        await job.updateProgress(45);
+        // Progress reporting removed - await job.updateProgress(45);
         await processBlurScheduledBid(job.data);
-        await job.updateProgress(95);
+        // Progress reporting removed - await job.updateProgress(95);
         return { completed: true };
       case BLUR_COLLECTION_BID:
-        await job.updateProgress(45);
+        // Progress reporting removed - await job.updateProgress(45);
         await processBlurCollectionBid(job.data);
-        await job.updateProgress(95);
+        // Progress reporting removed - await job.updateProgress(95);
         return { completed: true };
       case BLUR_TRAIT_BID:
-        await job.updateProgress(45);
+        // Progress reporting removed - await job.updateProgress(45);
         await processBlurTraitBid(job.data);
-        await job.updateProgress(95);
+        // Progress reporting removed - await job.updateProgress(95);
         return { completed: true };
       case BLUR_COLLECTION_BID_COUNTERBID:
-        await job.updateProgress(45);
+        // Progress reporting removed - await job.updateProgress(45);
         await blurCollectionCounterBid(job.data);
-        await job.updateProgress(95);
+        // Progress reporting removed - await job.updateProgress(95);
         return { completed: true };
       case BLUR_TRAIT_BID_COUNTERBID:
-        await job.updateProgress(45);
+        // Progress reporting removed - await job.updateProgress(45);
         await blurTraitCounterBid(job.data);
-        await job.updateProgress(95);
+        // Progress reporting removed - await job.updateProgress(95);
         return { completed: true };
       default:
         throw new Error(`Unknown Blur job type: ${job.name}`);
@@ -4135,7 +4129,7 @@ async function processBlurJob(job: Job) {
     }
 
     // Always update to 100% if we haven't already
-    await job.updateProgress(100);
+    // Progress reporting removed - await job.updateProgress(100);
   }
 }
 
@@ -4143,7 +4137,7 @@ async function processJob(job: Job, signal?: AbortSignal) {
 
   try {
     // Update progress to indicate job started
-    await job.updateProgress(5);
+    // Progress reporting removed - await job.updateProgress(5);
 
     // Check if password is available before processing
     if (!getPassword()) {
@@ -4158,101 +4152,101 @@ async function processJob(job: Job, signal?: AbortSignal) {
     }
 
     // Update progress after initial checks
-    await job.updateProgress(10);
+    // Progress reporting removed - await job.updateProgress(10);
 
     const result = await (async () => {
       switch (job.name) {
         case OPENSEA_COLLECTION_BID:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await processOpenseaCollectionBid(job.data);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case MAGICEDEN_COLLECTION_BID:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await processMagicedenCollectionBid(job.data);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case OPENSEA_COLLECTION_BID_COUNTERBID:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await openseaCollectionCounterBid(job.data);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case MAGICEDEN_COLLECTION_BID_COUNTERBID:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await magicedenCollectionCounterBid(job.data);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case OPENSEA_TOKEN_BID_COUNTERBID:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await openseaTokenCounterBid(job.data);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case OPENSEA_TRAIT_BID_COUNTERBID:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await openseaTraitCounterBid(job.data);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case MAGICEDEN_TOKEN_BID_COUNTERBID:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await magicedenTokenCounterBid(job.data);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case MAGICEDEN_TRAIT_BID_COUNTERBID:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await magicedenTraitCounterBid(job.data);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case OPENSEA_SCHEDULE:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await processOpenseaScheduledBid(job.data, job.id as string);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case OPENSEA_TRAIT_BID:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await processOpenseaTraitBid(job.data);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case OPENSEA_TOKEN_BID:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await processOpenseaTokenBid(job.data);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case MAGICEDEN_SCHEDULE:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await processMagicedenScheduledBid(job.data, job.id as string);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case MAGICEDEN_TRAIT_BID:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await processMagicedenTraitBid(job.data);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case MAGICEDEN_TOKEN_BID:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await processMagicedenTokenBid(job.data);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case CANCEL_OPENSEA_BID:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await bulkCancelOpenseaBid(job.data);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case CANCEL_MAGICEDEN_BID:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await bulkCancelMagicedenBid(job.data);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case CANCEL_BLUR_BID:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           await bulkCancelBlurBid(job.data);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case PROCESS_LISTING:
           return await processListingJob(job);
         case PROCESS_LISTING_UPDATE:
-          await job.updateProgress(15);
+          // Progress reporting removed - await job.updateProgress(15);
           const updateResult = await processListingUpdateJob(job);
-          await job.updateProgress(95);
+          // Progress reporting removed - await job.updateProgress(95);
           return updateResult;
         default:
           return { completed: false, error: 'Unknown job type' };
@@ -4260,7 +4254,7 @@ async function processJob(job: Job, signal?: AbortSignal) {
     })();
 
     // Final progress update
-    await job.updateProgress(100);
+    // Progress reporting removed - await job.updateProgress(100);
     return result;
   } catch (error) {
     throw error;
@@ -4928,8 +4922,8 @@ async function updateTaskData(task: ITask) {
   }
 }
 
-const MAX_QUEUE_JOBS = 10000; // Maximum jobs allowed in queue
-const QUEUE_RESUME_THRESHOLD = 9000; // Resume when queue drops to 90% (9000 jobs)
+const DRAIN_THRESHOLD = 1000; // Queue drain threshold
+const MAX_MEMORY_USAGE = 80; // Maximum memory usage percentage
 
 const BLUR_JOBS = [
   'BLUR_COLLECTION_BID',
@@ -4949,9 +4943,65 @@ function getMarketplaceFromJobName(jobName: string): string | null {
   return null;
 }
 
+async function waitForQueueDrain(): Promise<void> {
+  while (true) {
+    const counts = await queue.getJobCounts();
+    const prioritizedCount = counts.prioritized || 0;
 
+    if (prioritizedCount <= DRAIN_THRESHOLD) {
+      break;
+    }
 
-async function processBulkJobs(jobs: Job[], createKey = false, scheduledJob?: Job): Promise<void> {
+    const delay = prioritizedCount / DRAIN_THRESHOLD;
+    await new Promise(resolve => setTimeout(resolve, delay * 1000));
+  }
+}
+
+const MAX_QUEUE_JOBS = 10000; // Maximum jobs allowed in queue
+const QUEUE_RESUME_THRESHOLD = 9000; // Resume when queue drops to 90% (9000 jobs)
+
+// Helper function to get total jobs in all queues
+async function getTotalJobsInQueues(): Promise<number> {
+  const [counts, blurCounts] = await Promise.all([
+    queue.getJobCounts(),
+    blurQueue.getJobCounts()
+  ]);
+  
+  return (counts.waiting || 0) + (counts.active || 0) + (counts.prioritized || 0) +
+    (blurCounts.waiting || 0) + (blurCounts.active || 0) + (blurCounts.prioritized || 0);
+}
+
+// Helper function to wait for queue capacity with dynamic polling
+// WARNING: This function should NOT be used for job counts > MAX_QUEUE_JOBS (10,000)
+// as the condition can never be satisfied. For large job sets, rely on processBulkJobs
+// to handle chunking and capacity management internally.
+async function waitForQueueCapacity(requiredSlots: number, maxWaitTime: number = 60000): Promise<boolean> {
+  const startTime = Date.now();
+  let attemptCount = 0;
+  
+  while (Date.now() - startTime < maxWaitTime) {
+    const totalJobs = await getTotalJobsInQueues();
+    const availableSpace = MAX_QUEUE_JOBS - totalJobs;
+    
+    if (availableSpace >= requiredSlots) {
+      console.log(`✅ Queue capacity available: ${availableSpace}/${requiredSlots} slots`);
+      return true;
+    }
+    
+    console.log(`⏳ Waiting for queue capacity: ${availableSpace}/${requiredSlots} slots available`);
+    
+    // Dynamic check interval with exponential backoff
+    const checkInterval = Math.min(5000 * Math.pow(1.5, attemptCount), 30000);
+    await new Promise(resolve => setTimeout(resolve, checkInterval));
+    attemptCount++;
+  }
+  
+  return false;
+}
+
+async function processBulkJobs(jobs: Job[], createKey = false): Promise<void> {
+  const processingStartTime = Date.now();
+
   if (!jobs?.length) {
     console.log(YELLOW + `[processBulkJobs] Called with empty job array - nothing to queue` + RESET);
     return;
@@ -4960,31 +5010,102 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduledJob?: Jo
   const firstJob = jobs[0];
   const taskId = firstJob.data._id || firstJob.data.taskId;
   const task = activeTasks.get(taskId);
-  const startTime = Date.now();
   let processedCount = 0;
-  const PROGRESS_INTERVAL = 500; // Report progress every 500 jobs
+  let actuallyQueuedCount = 0;
 
-  // Check Redis health before attempting bulk operations
-  const isRedisHealthy = await checkRedisClusterHealth();
-  if (!isRedisHealthy) {
-    const error = new Error('Redis cluster is not healthy - cannot queue jobs');
-    console.error(RED + `[processBulkJobs] ${error.message}` + RESET);
-    throw error;
+  console.log(CYAN + `[processBulkJobs] Starting with ${jobs.length} jobs for task ${taskId}` + RESET);
+  console.log(CYAN + `[processBulkJobs] Task ${taskId}: First job name: ${firstJob.name}` + RESET);
+  
+  // Create a rate limiter for queueing jobs at RATE_LIMIT per second
+  const queueRateLimiter = new Bottleneck({
+    minTime: 1000 / RATE_LIMIT, // Minimum time between each job
+    maxConcurrent: RATE_LIMIT,  // Maximum concurrent job additions
+    reservoir: RATE_LIMIT,      // Initial reservoir size
+    reservoirRefreshAmount: RATE_LIMIT, // Refill to RATE_LIMIT
+    reservoirRefreshInterval: 1000, // Refill every second
+  });
+  
+  console.log(CYAN + `[processBulkJobs] Created rate limiter: ${RATE_LIMIT} jobs/second` + RESET);
+  
+  // Calculate dynamic lock TTL based on job count and rate limit
+  const estimatedProcessingTime = Math.ceil(jobs.length / RATE_LIMIT); // in seconds
+  const bufferTime = 60; // 60 seconds buffer for safety
+  const lockTTL = estimatedProcessingTime + bufferTime;
+  
+  console.log(`🔒 Setting lock TTL to ${lockTTL}s for ${jobs.length} jobs (rate limit: ${RATE_LIMIT}/s)`);
+  
+  const lockKey = `bulk-jobs:${taskId}`;
+  const lockManager = new DistributedLockManager({
+    lockPrefix: '{task-lock}:',
+    defaultTTLSeconds: lockTTL
+  });
+  
+  let lockExtensionInterval: NodeJS.Timeout | undefined;
+  let lockAcquired = false;
+
+  // Try to acquire task-specific lock
+  try {
+    lockAcquired = await lockManager.acquireLock(lockKey, lockTTL);
+    
+    if (!lockAcquired) {
+      throw new Error(`Another job is already processing task ${taskId}`);
+    }
+    
+    console.log(GREEN + `🔒 Acquired lock for task ${taskId}` + RESET);
+    
+    // Set up lock extension for long-running jobs if TTL > 4 minutes
+    if (estimatedProcessingTime > 240) {
+      lockExtensionInterval = setInterval(async () => {
+        try {
+          const extended = await lockManager.extendLock(lockKey, 120); // Extend by 2 minutes
+          if (extended) {
+            console.log(`🔒 Extended lock for task ${taskId}`);
+          } else {
+            console.error(`Failed to extend lock for task ${taskId} - lock may have expired`);
+          }
+        } catch (error) {
+          console.error(`Failed to extend lock for task ${taskId}:`, error);
+        }
+      }, 180000); // Every 3 minutes
+    }
+  } catch (lockError) {
+    console.error(RED + `[processBulkJobs] Failed to acquire lock for task ${taskId}: ${lockError}` + RESET);
+    throw lockError;
   }
+  
+  try {
+    // Check Redis health before attempting bulk operations
+    console.log(CYAN + `[processBulkJobs] Task ${taskId}: Checking Redis health...` + RESET);
+    const healthCheckStart = Date.now();
+    const isRedisHealthy = await checkRedisClusterHealth();
+    console.log(CYAN + `[processBulkJobs] Task ${taskId}: Redis health check took ${Date.now() - healthCheckStart}ms, healthy: ${isRedisHealthy}` + RESET);
+    if (!isRedisHealthy) {
+      const error = new Error('Redis cluster is not healthy - cannot queue jobs');
+      console.error(RED + `[processBulkJobs] Task ${taskId}: ${error.message}` + RESET);
+      throw error;
+    }
 
-  // For cancellation jobs, we should process them even if the task is not running
-  const isCancellationJob = firstJob.name.toLowerCase().includes('cancel');
+    // For cancellation jobs, we should process them even if the task is not running
+    const isCancellationJob = firstJob.name.toLowerCase().includes('cancel');
+    console.log(CYAN + `[processBulkJobs] Task ${taskId}: Is cancellation job: ${isCancellationJob}` + RESET);
 
-  if (!task) {
-    return;
-  }
+    if (!task) {
+      console.log(YELLOW + `[processBulkJobs] Task ${taskId} not found in activeTasks, returning` + RESET);
+      return;
+    }
 
-  if (!task.running && !isCancellationJob) {
-    return;
-  }
+    if (!task.running && !isCancellationJob) {
+      console.log(YELLOW + `[processBulkJobs] Task ${taskId} not running and not cancellation job, returning` + RESET);
+      return;
+    }
 
-  const chunks = chunk(jobs, 100); // Process in smaller chunks
+  console.log(CYAN + `[processBulkJobs] Task ${taskId}: Task is valid, proceeding with job queueing` + RESET);
+
+  const CHUNK_SIZE = 50; // Reduced from 100 for better throughput
+  const chunks = chunk(jobs, CHUNK_SIZE);
   let retryChunkIndex = -1; // Track if we need to retry a chunk
+
+  console.log(CYAN + `[processBulkJobs] Task ${taskId}: Split ${jobs.length} jobs into ${chunks.length} chunks of size ${CHUNK_SIZE}` + RESET);
 
   // Track total jobs actually added for each marketplace
   const jobsAddedByMarketplace = new Map<string, number>();
@@ -4998,7 +5119,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduledJob?: Jo
         try {
           extendScheduledBidLock(taskId, marketplace);
         } catch (error) {
-          console.error(RED + `[processBulkJobs] Failed to extend lock: ${error}` + RESET);
+          console.error(RED + `[processBulkJobs] Task ${taskId}: Failed to extend lock: ${error}` + RESET);
         }
       }, 60000); // Check every minute
     }
@@ -5013,29 +5134,40 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduledJob?: Jo
       }
 
       const currentChunk = chunks[chunkIndex];
+      console.log(CYAN + `[processBulkJobs] Task ${taskId}: Processing chunk ${chunkIndex + 1}/${chunks.length} with ${currentChunk.length} jobs` + RESET);
 
       try {
-        // Use distributed lock for atomic capacity check and job addition
-        const added = await queueCapacityLock.withLock('bulk-jobs', async () => {
-          // Check capacity inside the lock
-          const counts = await queue.getJobCounts();
-          const blurCounts = await blurQueue.getJobCounts();
+        // Process chunk without distributed lock
+        let added = false;
 
-          const totalJobs = (counts.waiting || 0) + (counts.active || 0) + (counts.prioritized || 0) +
-            (blurCounts.waiting || 0) + (blurCounts.active || 0) + (blurCounts.prioritized || 0);
+        // Check capacity
+        console.log(CYAN + `[processBulkJobs] Task ${taskId}: Getting queue job counts...` + RESET);
+        const queueCountStart = Date.now();
+        const counts = await queue.getJobCounts();
+        const blurCounts = await blurQueue.getJobCounts();
+        console.log(CYAN + `[processBulkJobs] Task ${taskId}: Queue counts retrieved in ${Date.now() - queueCountStart}ms` + RESET);
 
-          if (totalJobs >= MAX_QUEUE_JOBS) {
-            // Queue is at capacity, return false to indicate we couldn't add
-            console.log(YELLOW + `[processBulkJobs] Queue at capacity (${totalJobs}/${MAX_QUEUE_JOBS}) inside lock` + RESET);
-            return false;
-          }
+        const totalJobs = (counts.waiting || 0) + (counts.active || 0) + (counts.prioritized || 0) +
+          (blurCounts.waiting || 0) + (blurCounts.active || 0) + (blurCounts.prioritized || 0);
+
+        console.log(CYAN + `[processBulkJobs] Task ${taskId}: Total jobs in queues: ${totalJobs}, MAX_QUEUE_JOBS: ${MAX_QUEUE_JOBS}` + RESET);
+
+        if (totalJobs >= MAX_QUEUE_JOBS) {
+          // Queue is at capacity
+          console.log(YELLOW + `[processBulkJobs] Task ${taskId}: Queue at capacity (${totalJobs}/${MAX_QUEUE_JOBS})` + RESET);
+          added = false;
+        } else {
 
           // Calculate how many jobs we can actually add
           const availableSpace = MAX_QUEUE_JOBS - totalJobs;
+          console.log(CYAN + `[processBulkJobs] Task ${taskId}: Available space: ${availableSpace} jobs` + RESET);
 
           // Prepare jobs for queue (only process what we have space for)
           const jobsToProcess = currentChunk.slice(0, availableSpace);
+          console.log(CYAN + `[processBulkJobs] Task ${taskId}: Will process ${jobsToProcess.length} jobs from chunk` + RESET);
 
+          console.log(CYAN + `[processBulkJobs] Task ${taskId}: Filtering valid jobs...` + RESET);
+          const filterStartTime = Date.now();
           const validJobs = jobsToProcess.filter(job => {
             if (!job?.name || !job?.data) return false;
 
@@ -5053,22 +5185,28 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduledJob?: Jo
 
             return jobTask && jobTask.running;
           });
+          console.log(CYAN + `[processBulkJobs] Task ${taskId}: Filtered jobs in ${Date.now() - filterStartTime}ms. Valid jobs: ${validJobs.length}` + RESET);
 
           if (!validJobs.length) {
-            return true; // No valid jobs, but we successfully processed the chunk
-          }
-
-          // Update task status to QUEUEING
+            console.log(YELLOW + `[processBulkJobs] Task ${taskId}: No valid jobs in chunk` + RESET);
+            added = true; // No valid jobs, but we successfully processed the chunk
+          } else {
+            // Update task status to QUEUEING
           if (taskStatus[taskId] && taskStatus[taskId].status !== "RUNNING") {
+            console.log(CYAN + `[processBulkJobs] Task ${taskId}: Setting task status to QUEUEING` + RESET);
             setTaskStatus(taskId, "QUEUEING", "jobs being queued");
           }
 
           // Separate Blur and non-Blur jobs
+          console.log(CYAN + `[processBulkJobs] Task ${taskId}: Separating Blur and non-Blur jobs...` + RESET);
           const blurJobs = validJobs.filter(job => BLUR_JOBS.includes(job.name));
           const nonBlurJobs = validJobs.filter(job => !BLUR_JOBS.includes(job.name));
+          console.log(CYAN + `[processBulkJobs] Task ${taskId}: Found ${blurJobs.length} Blur jobs and ${nonBlurJobs.length} non-Blur jobs` + RESET);
 
           // Add non-Blur jobs to queue (inside the lock)
           if (nonBlurJobs.length > 0) {
+            console.log(CYAN + `[processBulkJobs] Task ${taskId}: Preparing ${nonBlurJobs.length} non-Blur jobs for queue...` + RESET);
+            const prepareStartTime = Date.now();
             const jobsToAdd = nonBlurJobs.map(job => {
               const jobKey = job.name.toLowerCase().includes('cancel') ? undefined :
                 (createKey ? createJobKey(job) : generateJobKey(job));
@@ -5084,8 +5222,26 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduledJob?: Jo
                 }
               };
             });
+            console.log(CYAN + `[processBulkJobs] Task ${taskId}: Prepared jobs in ${Date.now() - prepareStartTime}ms` + RESET);
 
-            await queue.addBulk(jobsToAdd);
+            console.log(CYAN + `[processBulkJobs] Task ${taskId}: Adding ${jobsToAdd.length} jobs to queue with rate limiting...` + RESET);
+            const addBulkStartTime = Date.now();
+            
+            // Add jobs with rate limiting using chunked addBulk
+            const rateLimitChunks = chunk(jobsToAdd, RATE_LIMIT);
+            console.log(CYAN + `[processBulkJobs] Task ${taskId}: Split into ${rateLimitChunks.length} chunks of up to ${RATE_LIMIT} jobs each` + RESET);
+            
+            for (const [index, jobChunk] of rateLimitChunks.entries()) {
+              await queueRateLimiter.schedule(async () => {
+                const chunkStart = Date.now();
+                await queue.addBulk(jobChunk);
+                console.log(CYAN + `[processBulkJobs] Task ${taskId}: Added chunk ${index + 1}/${rateLimitChunks.length} (${jobChunk.length} jobs) in ${Date.now() - chunkStart}ms` + RESET);
+              });
+            }
+            
+            const totalTime = Date.now() - addBulkStartTime;
+            const effectiveRate = jobsToAdd.length / (totalTime / 1000);
+            console.log(CYAN + `[processBulkJobs] Task ${taskId}: Added ${jobsToAdd.length} jobs in ${totalTime}ms (${effectiveRate.toFixed(1)} jobs/sec)` + RESET);
 
             // Track actual jobs added for each marketplace
             for (const job of nonBlurJobs) {
@@ -5097,17 +5253,15 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduledJob?: Jo
 
             // Update progress
             processedCount += nonBlurJobs.length;
-            
-            // Report progress to prevent timeout
-            if (scheduledJob && processedCount % PROGRESS_INTERVAL === 0) {
-              const progress = Math.round((processedCount / jobs.length) * 100);
-              await scheduledJob.updateProgress(progress);
-              console.log(CYAN + `[processBulkJobs] Progress: ${processedCount}/${jobs.length} jobs (${progress}%)` + RESET);
-            }
+            actuallyQueuedCount += nonBlurJobs.length;
+
+            // Progress tracking removed - no longer needed
           }
 
           // Add Blur jobs using the coordinator (inside the lock)
           if (blurJobs.length > 0) {
+            console.log(CYAN + `[processBulkJobs] Task ${taskId}: Preparing ${blurJobs.length} Blur jobs for coordinator...` + RESET);
+            const blurPrepareStartTime = Date.now();
             const blurJobsToAdd = blurJobs.map(job => {
               const jobKey = job.name.toLowerCase().includes('cancel') ? undefined :
                 (createKey ? createJobKey(job) : generateJobKey(job));
@@ -5123,46 +5277,56 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduledJob?: Jo
                 }
               };
             });
+            console.log(CYAN + `[processBulkJobs] Task ${taskId}: Prepared Blur jobs in ${Date.now() - blurPrepareStartTime}ms` + RESET);
 
-            console.log(BLUE + `[Blur Coordinator] Queueing ${blurJobsToAdd.length} jobs for task ${taskId}` + RESET);
-            await blurJobCoordinator.addJobs(blurJobsToAdd, taskId);
+            console.log(CYAN + `[processBulkJobs] Task ${taskId}: Adding ${blurJobsToAdd.length} Blur jobs to queue with rate limiting...` + RESET);
+            const blurAddStartTime = Date.now();
+            
+            // Add Blur jobs with rate limiting using chunked addBulk
+            const blurRateLimitChunks = chunk(blurJobsToAdd, RATE_LIMIT);
+            console.log(CYAN + `[processBulkJobs] Task ${taskId}: Split Blur jobs into ${blurRateLimitChunks.length} chunks of up to ${RATE_LIMIT} jobs each` + RESET);
+            
+            for (const [index, jobChunk] of blurRateLimitChunks.entries()) {
+              await queueRateLimiter.schedule(async () => {
+                const chunkStart = Date.now();
+                await blurQueue.addBulk(jobChunk);
+                console.log(CYAN + `[processBulkJobs] Task ${taskId}: Added Blur chunk ${index + 1}/${blurRateLimitChunks.length} (${jobChunk.length} jobs) in ${Date.now() - chunkStart}ms` + RESET);
+              });
+            }
+            
+            const blurTotalTime = Date.now() - blurAddStartTime;
+            const blurEffectiveRate = blurJobsToAdd.length / (blurTotalTime / 1000);
+            console.log(CYAN + `[processBulkJobs] Task ${taskId}: Added ${blurJobsToAdd.length} Blur jobs in ${blurTotalTime}ms (${blurEffectiveRate.toFixed(1)} jobs/sec)` + RESET);
 
             // Track actual Blur jobs added
             jobsAddedByMarketplace.set('blur', (jobsAddedByMarketplace.get('blur') || 0) + blurJobs.length);
 
             // Update progress
             processedCount += blurJobs.length;
-            
-            // Report progress to prevent timeout
-            if (scheduledJob && processedCount % PROGRESS_INTERVAL === 0) {
-              const progress = Math.round((processedCount / jobs.length) * 100);
-              await scheduledJob.updateProgress(progress);
-              console.log(CYAN + `[processBulkJobs] Progress: ${processedCount}/${jobs.length} jobs (${progress}%)` + RESET);
+            actuallyQueuedCount += blurJobs.length;
+
+            // Progress tracking removed - no longer needed
+          }
+
+            // If we only processed part of the chunk, we need to handle the rest
+            if (jobsToProcess.length < currentChunk.length) {
+              console.log(YELLOW + `[processBulkJobs] Task ${taskId}: Only processed ${jobsToProcess.length} of ${currentChunk.length} jobs due to capacity` + RESET);
+              // Create a new chunk with the remaining jobs
+              chunks[chunkIndex] = currentChunk.slice(jobsToProcess.length);
+              retryChunkIndex = chunkIndex; // Mark this chunk for retry
+              added = false; // Indicate we need to wait
+            } else {
+              added = true; // Successfully added all jobs in this chunk
             }
           }
-
-          // If we only processed part of the chunk, we need to handle the rest
-          if (jobsToProcess.length < currentChunk.length) {
-            console.log(YELLOW + `[processBulkJobs] Only processed ${jobsToProcess.length} of ${currentChunk.length} jobs due to capacity` + RESET);
-            // Create a new chunk with the remaining jobs
-            chunks[chunkIndex] = currentChunk.slice(jobsToProcess.length);
-            retryChunkIndex = chunkIndex; // Mark this chunk for retry
-            return false; // Indicate we need to wait
-          }
-
-          return true; // Successfully added all jobs in this chunk
-        });
-
-        // If we couldn't acquire lock or add jobs, wait
-        if (added === null) {
-          console.log(YELLOW + `[processBulkJobs] Couldn't acquire lock, retrying...` + RESET);
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          retryChunkIndex = chunkIndex; // Retry this chunk
-          continue;
         }
 
+        console.log(CYAN + `[processBulkJobs] Task ${taskId}: Chunk processing completed` + RESET);
+
+        // No lock acquisition needed anymore
+
         if (!added) {
-          console.log(YELLOW + `[processBulkJobs] Queue at capacity or partial processing. Waiting...` + RESET);
+          console.log(YELLOW + `[processBulkJobs] Task ${taskId}: Queue at capacity or partial processing. Waiting...` + RESET);
 
           // Wait for queue to drain
           while (true) {
@@ -5172,7 +5336,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduledJob?: Jo
               (blurCounts.waiting || 0) + (blurCounts.active || 0) + (blurCounts.prioritized || 0);
 
             if (newTotal <= QUEUE_RESUME_THRESHOLD) {
-              console.log(GREEN + `[processBulkJobs] Queue dropped to ${newTotal} jobs. Retrying...` + RESET);
+              console.log(GREEN + `[processBulkJobs] Task ${taskId}: Queue dropped to ${newTotal} jobs. Retrying...` + RESET);
               retryChunkIndex = chunkIndex; // Retry this chunk
               break;
             }
@@ -5184,7 +5348,39 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduledJob?: Jo
           }
         }
       } catch (error) {
-        console.error(RED + `[processBulkJobs] Error in chunk ${chunkIndex + 1}/${chunks.length}: ${error}` + RESET);
+        // Check if it's a timeout error
+        if (error instanceof Error && error.message?.includes('Command timed out')) {
+          console.error(RED + `[processBulkJobs] Task ${taskId}: Timeout in chunk ${chunkIndex + 1}/${chunks.length}: ${error.message}` + RESET);
+
+          // Implement per-chunk retry with exponential backoff
+          const MAX_CHUNK_RETRIES = 3;
+          let chunkRetryCount = 0;
+          let retrySuccess = false;
+
+          while (chunkRetryCount < MAX_CHUNK_RETRIES && !retrySuccess) {
+            chunkRetryCount++;
+            const retryDelay = chunkRetryCount * 2000; // 2s, 4s, 6s
+
+            console.log(YELLOW + `[processBulkJobs] Task ${taskId}: Chunk ${chunkIndex + 1} timeout, retry ${chunkRetryCount}/${MAX_CHUNK_RETRIES} after ${retryDelay}ms` + RESET);
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
+
+            try {
+              // Set retry flag to re-process this chunk
+              retryChunkIndex = chunkIndex;
+              chunkIndex--; // Decrement to retry the same chunk
+              retrySuccess = true;
+            } catch (retryError) {
+              console.error(RED + `[processBulkJobs] Task ${taskId}: Retry ${chunkRetryCount} failed: ${retryError}` + RESET);
+            }
+          }
+
+          if (!retrySuccess) {
+            console.error(RED + `[processBulkJobs] Task ${taskId}: Chunk ${chunkIndex + 1} failed after ${MAX_CHUNK_RETRIES} retries - continuing with next chunk` + RESET);
+          }
+        } else {
+          // Non-timeout error, log and continue
+          console.error(RED + `[processBulkJobs] Task ${taskId}: Error in chunk ${chunkIndex + 1}/${chunks.length}: ${error}` + RESET);
+        }
       }
     }
 
@@ -5209,8 +5405,30 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduledJob?: Jo
       }
     }
 
+    // Check if we queued all requested jobs
+    if (actuallyQueuedCount < jobs.length) {
+      const error = new Error(`Partial job queueing failure: only ${actuallyQueuedCount}/${jobs.length} jobs queued for task ${taskId}`);
+      
+      // Log the partial failure details
+      await logger.logQueueError('Partial job queueing', {
+        taskId: taskId,
+        marketplace: getMarketplaceFromJobName(firstJob.name) || 'unknown',
+        requested: jobs.length,
+        queued: actuallyQueuedCount,
+        skipped: jobs.length - actuallyQueuedCount,
+        queueCapacity: MAX_QUEUE_JOBS - await getTotalJobsInQueues(),
+        error
+      });
+      
+      // Don't update task status or parent job - let the retry handle it
+      throw error;
+    }
+
     // Trigger percentage update now that all jobs are queued
     await updateTaskRunningPercentage(taskId);
+
+    const processingTime = Date.now() - processingStartTime;
+    console.log(GREEN + `[processBulkJobs] Completed successfully for task ${taskId}. Processed ${jobs.length} jobs in ${processingTime}ms (${processedCount} actually queued)` + RESET);
 
   } catch (error) {
     console.error(RED + `[processBulkJobs] Failed to process bulk jobs for task ${taskId}: ${error}` + RESET);
@@ -5240,8 +5458,24 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduledJob?: Jo
       clearInterval(lockExtensionInterval);
       console.log(YELLOW + `[processBulkJobs] Cleared lock extension interval for task ${taskId}` + RESET);
     }
+    
+    // Stop the rate limiter
+    await queueRateLimiter.stop();
+    console.log(CYAN + `[processBulkJobs] Stopped rate limiter for task ${taskId}` + RESET);
+  }
+  } finally {
+    // Always release the task lock
+    if (lockAcquired) {
+      try {
+        await lockManager.releaseLock(lockKey);
+        console.log(GREEN + `🔓 Released lock for task ${taskId}` + RESET);
+      } catch (releaseError) {
+        console.error(`Failed to release lock for task ${taskId}:`, releaseError);
+      }
+    }
   }
 }
+
 
 
 // Helper function to check for duplicate jobs in queue
@@ -5403,12 +5637,42 @@ function removeChar(str: string, char: string): string {
 }
 
 
+// Wrapper function with retry logic for Redis timeouts
 async function startTask(task: ITask, start: boolean, marketplace?: string) {
+  const MAX_RETRIES = 3;
+  const RETRY_DELAYS = [2000, 4000, 8000]; // 2s, 4s, 8s
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      await startTaskInternal(task, start, marketplace);
+      return; // Success
+    } catch (error) {
+      // Check if it's a timeout error and we have retries left
+      if (error instanceof Error &&
+        error.message?.includes('Command timed out') &&
+        attempt < MAX_RETRIES - 1) {
+        console.log(YELLOW + `[startTask] Redis timeout for task ${task._id}, retry ${attempt + 1}/${MAX_RETRIES} after ${RETRY_DELAYS[attempt]}ms` + RESET);
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
+        continue; // Retry
+      }
+
+      // If not a timeout or no retries left, re-throw the error
+      throw error;
+    }
+  }
+}
+
+// Original startTask function implementation
+async function startTaskInternal(task: ITask, start: boolean, marketplace?: string) {
   const startTime = Date.now();
   const taskId = task._id.toString();
 
+  console.log(GREEN + `[startTask] Called for task ${taskId}, start=${start}, marketplace=${marketplace}` + RESET);
 
-  if (!start) return
+  if (!start) {
+    console.log(YELLOW + `[startTask] Not starting task ${taskId} - start=false` + RESET);
+    return;
+  }
 
   clearTaskTimers(taskId)
 
@@ -5422,6 +5686,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
     errorStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
 
     // Check if we're transitioning from SCHEDULED status
+    const previousStatus = taskStatus[taskId]?.status || 'NONE';
     taskStatus[taskId] = {
       status: 'STARTED',
       runningPercentage: 0,
@@ -5431,6 +5696,7 @@ async function startTask(task: ITask, start: boolean, marketplace?: string) {
       completedJobs: 0,
       waitingTime: 0
     };
+    console.log(MAGENTA + `[startTask] Task ${taskId} status: ${previousStatus} -> STARTED` + RESET);
 
     // Simple loop counter: initialize to 0, then increment each time startTask is called
     if (!loopCounterStats[taskId]) {
@@ -10021,16 +10287,37 @@ async function performMarketplacePreprocessing(
   let openseaTokens: string[] = [];
   let magicedenTokens: number[] = [];
   let traitTokens: string[] = [];
+  
+  // Track whether API was called and returned empty
+  let openseaApiCalled = false;
+  let openseaApiReturnedEmpty = false;
+  let magicedenApiCalled = false;
+  let magicedenApiReturnedEmpty = false;
+  
+  // Extract manual token IDs (needed for error checking)
+  const manualTokenIds = task.tokenIds.filter(id => !isNaN(Number(id)) && !id.toString().toLowerCase().includes('bot')).map(id => id.toString());
 
   if (task.bidType === "token") {
     // First, fetch bottom listings if autoIds are present
     if (amount) {
       const [openseaListings, magicedenListings] = await Promise.all([
         marketplace === "opensea" && availableMarketplaces.includes("opensea") ?
-          fetchOpenseaListings(taskId, task.contract.slug, amount).catch(() => []) :
+          fetchOpenseaListings(taskId, task.contract.slug, amount)
+            .then(result => {
+              openseaApiCalled = true;
+              openseaApiReturnedEmpty = result ? result.length === 0 : true;
+              return result || [];
+            })
+            .catch(() => []) :
           Promise.resolve([]),
         marketplace === "magiceden" && availableMarketplaces.includes("magiceden") ?
-          fetchMagicEdenTokens(taskId, task.contract.contractAddress, amount).catch(() => []) :
+          fetchMagicEdenTokens(taskId, task.contract.contractAddress, amount)
+            .then(result => {
+              magicedenApiCalled = true;
+              magicedenApiReturnedEmpty = result ? result.length === 0 : true;
+              return result || [];
+            })
+            .catch(() => []) :
           Promise.resolve([])
       ]);
 
@@ -10039,7 +10326,6 @@ async function performMarketplacePreprocessing(
     }
 
     // Add manually specified token IDs
-    const manualTokenIds = task.tokenIds.filter(id => !isNaN(Number(id)) && !id.toString().toLowerCase().includes('bot')).map(id => id.toString());
     openseaTokens = [...openseaTokens, ...manualTokenIds];
     magicedenTokens = [...magicedenTokens, ...manualTokenIds.map(id => Number(id))];
 
@@ -10125,14 +10411,16 @@ async function performMarketplacePreprocessing(
     if (task.bidType === "token") {
       console.log(CYAN + `[DEBUG] OpenSea tokens available: ${openseaTokens.length}` + RESET);
       if (openseaTokens.length > 0) {
-        // Token bid
         preprocessing.opensea.tokens = [...new Set(openseaTokens)];
         preprocessing.opensea.jobCount = preprocessing.opensea.tokens.length;
-        if (preprocessing.opensea.jobCount >= 2000) {
-          console.log(YELLOW + `[INFO] Processing ${preprocessing.opensea.jobCount} tokens for ${task.contract.slug} (API limit may have been reached)` + RESET);
-        }
       } else {
-        preprocessing.opensea.skipReason = `No tokens found for ${task.contract.slug}. Collection may not support GraphQL queries for traits.`;
+        // Only throw error if API was called and returned empty (scenario 6)
+        if (openseaApiCalled && openseaApiReturnedEmpty && !manualTokenIds.length && !traitTokens.length) {
+          console.log(RED + `[ERROR] OpenSea API returned no listings for ${task.contract.slug}` + RESET);
+          throw new Error(`No listings found on OpenSea for ${task.contract.slug}. Collection may have no active listings.`);
+        }
+        // Otherwise, just skip without error
+        preprocessing.opensea.skipReason = `No tokens found for ${task.contract.slug}`;
         preprocessing.opensea.jobCount = 0;
         console.log(YELLOW + `[WARN] No tokens found for token bid on ${task.contract.slug}` + RESET);
       }
@@ -10184,10 +10472,22 @@ async function performMarketplacePreprocessing(
     const selectedTraits = transformNewTask(filteredTraits);
     const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0;
 
-    if (task.bidType === "token" && magicedenTokens.length > 0) {
-      // Token bid
-      preprocessing.magiceden.tokens = [...new Set(magicedenTokens)];
-      preprocessing.magiceden.jobCount = preprocessing.magiceden.tokens.length;
+    if (task.bidType === "token") {
+      if (magicedenTokens.length > 0) {
+        // Token bid
+        preprocessing.magiceden.tokens = [...new Set(magicedenTokens)];
+        preprocessing.magiceden.jobCount = preprocessing.magiceden.tokens.length;
+      } else {
+        // Only throw error if API was called and returned empty (scenario 6)
+        if (magicedenApiCalled && magicedenApiReturnedEmpty && !manualTokenIds.length) {
+          console.log(RED + `[ERROR] MagicEden API returned no tokens for ${task.contract.slug}` + RESET);
+          throw new Error(`No tokens found on MagicEden for ${task.contract.slug}. Collection may have no active listings.`);
+        }
+        // Otherwise, just skip without error
+        preprocessing.magiceden.skipReason = `No tokens found for ${task.contract.slug}`;
+        preprocessing.magiceden.jobCount = 0;
+        console.log(YELLOW + `[WARN] No tokens found for token bid on ${task.contract.slug} for MagicEden` + RESET);
+      }
     } else if (traitBid) {
       // Trait bid
       preprocessing.magiceden.traits = Object.entries(selectedTraits).flatMap(([key, values]) =>
@@ -10253,7 +10553,7 @@ async function performMarketplacePreprocessing(
   return preprocessing;
 }
 
-async function processOpenseaScheduledBid(task: ITask, jobId?: string, job?: Job) {
+async function processOpenseaScheduledBid(task: ITask, jobId?: string) {
   const currentLoopCount = loopCounterStats[task._id.toString()] || 1;
   console.log(`${BLUE}[processOpenseaScheduledBid] CALLED for task ${task._id} - Loop #${currentLoopCount}${RESET}`);
 
@@ -10365,17 +10665,34 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, job?: Job
     const wallets = await walletCache.getWalletById(currentTask.walletId);
     const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
-    // Fetch fresh WETH balance
-    const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const { WETH } = await import('./utils/currencies');
-    const wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, WETH);
-    console.log(`${BLUE}[OpenSea] Fresh WETH balance for ${WALLET_ADDRESS}: ${wethBalance}${RESET}`);
+    // Fetch fresh WETH balance with timeout protection
+    console.log(`${BLUE}[OpenSea] Fetching WETH balance for ${WALLET_ADDRESS}...${RESET}`);
+    let wethBalance = 0;
+    try {
+      const { fetchERC20BalanceFresh } = await import('./utils/balance');
+      const { WETH } = await import('./utils/currencies');
+      wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, WETH);
+      console.log(`${BLUE}[OpenSea] Fresh WETH balance for ${WALLET_ADDRESS}: ${wethBalance}${RESET}`);
+    } catch (error) {
+      console.error(`${RED}[OpenSea] Failed to fetch WETH balance: ${error}${RESET}`);
+      console.log(`${YELLOW}[OpenSea] Continuing with balance: 0.00${RESET}`);
+    }
 
+    console.log(`${BLUE}[OpenSea] Getting collection details for ${currentTask.contract.slug}...${RESET}`);
     // Get collection details for creator fees
-    const [{ currency }, collectionDetails] = await Promise.all([
-      calculateBidPrice(currentTask, 0, "opensea"),
-      getCollectionDetails(currentTask.contract.slug, currentTask.contract.contractAddress)
-    ]);
+    let currency, collectionDetails;
+    try {
+      const results = await Promise.all([
+        calculateBidPrice(currentTask, 0, "opensea"),
+        getCollectionDetails(currentTask.contract.slug, currentTask.contract.contractAddress)
+      ]);
+      currency = results[0].currency;
+      collectionDetails = results[1];
+      console.log(`${BLUE}[OpenSea] Successfully got collection details${RESET}`);
+    } catch (error) {
+      console.error(`${RED}[OpenSea] Failed to get collection details: ${error}${RESET}`);
+      throw error;
+    }
 
     const creatorFees: IFee = collectionDetails.creator_fees.null !== undefined
       ? { null: collectionDetails.creator_fees.null }
@@ -10384,10 +10701,16 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, job?: Job
     // Note: Status will be set to appropriate state after job creation is determined
     const newTask = { ...currentTask, traits: {} } as ITask
 
+    console.log(`${BLUE}[OpenSea] Checking preprocessing results:${RESET}`);
+    console.log(`${BLUE}[OpenSea] - tokens.length: ${preprocessing.opensea.tokens.length}${RESET}`);
+    console.log(`${BLUE}[OpenSea] - traits.length: ${preprocessing.opensea.traits.length}${RESET}`);
+    console.log(`${BLUE}[OpenSea] - jobCount: ${preprocessing.opensea.jobCount}${RESET}`);
+
     // Create jobs based on preprocessing results
     if (preprocessing.opensea.tokens.length > 0) {
       // Token bid
       console.log(`${BLUE}[OPENSEA] Creating ${preprocessing.opensea.tokens.length} token bid jobs${RESET}`);
+      console.log(`${BLUE}[OPENSEA] Current loop count: ${loopCounterStats[taskId] || 1}${RESET}`);
 
       const jobs = preprocessing.opensea.tokens
         .map((token) => ({
@@ -10417,7 +10740,7 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, job?: Job
       }
 
       try {
-        await processBulkJobs(jobs, true, job);
+        await processBulkJobs(jobs, true);
       } catch (jobError) {
         console.error(RED + `[OPENSEA] Failed to queue token bid jobs: ${jobError}` + RESET);
 
@@ -10472,7 +10795,7 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, job?: Job
       }
 
       try {
-        await processBulkJobs(traitJobs, true, job);
+        await processBulkJobs(traitJobs, true);
       } catch (jobError) {
         console.error(RED + `[OPENSEA] Failed to queue trait bid jobs: ${jobError}` + RESET);
 
@@ -10977,12 +11300,20 @@ async function processBlurScheduledBid(task: ITask) {
     const wallets = await walletCache.getWalletById(task.walletId)
     const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
-    // Fetch fresh BETH balance
-    const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const { BETH } = await import('./utils/currencies');
-    const bethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, BETH);
-    console.log(`${CYAN}[Blur] Fresh BETH balance for ${WALLET_ADDRESS}: ${bethBalance}${RESET}`);
+    // Fetch fresh BETH balance with timeout protection
+    console.log(`${CYAN}[Blur] Fetching BETH balance for ${WALLET_ADDRESS}...${RESET}`);
+    let bethBalance = 0;
+    try {
+      const { fetchERC20BalanceFresh } = await import('./utils/balance');
+      const { BETH } = await import('./utils/currencies');
+      bethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, BETH);
+      console.log(`${CYAN}[Blur] Fresh BETH balance for ${WALLET_ADDRESS}: ${bethBalance}${RESET}`);
+    } catch (error) {
+      console.error(`${RED}[Blur] Failed to fetch BETH balance: ${error}${RESET}`);
+      console.log(`${YELLOW}[Blur] Continuing with balance: 0.00${RESET}`);
+    }
 
+    console.log(`${CYAN}[Blur] Processing for collection ${currentTask.contract.slug}...${RESET}`);
     const contractAddress = currentTask.contract.contractAddress
     const newTask = { ...currentTask, traits: {} } as ITask
 
@@ -12805,17 +13136,30 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string) {
     const wallets = await walletCache.getWalletById(currentTask.walletId);
     const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
-    // Fetch fresh WETH balance
-    const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const { WETH } = await import('./utils/currencies');
-    const wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, WETH);
-    console.log(`${MAGENTA}[MagicEden] Fresh WETH balance for ${WALLET_ADDRESS}: ${wethBalance}${RESET}`);
+    // Fetch fresh WETH balance with timeout protection
+    console.log(`${MAGENTA}[MagicEden] Fetching WETH balance for ${WALLET_ADDRESS}...${RESET}`);
+    let wethBalance = 0;
+    try {
+      const { fetchERC20BalanceFresh } = await import('./utils/balance');
+      const { WETH } = await import('./utils/currencies');
+      wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, WETH);
+      console.log(`${MAGENTA}[MagicEden] Fresh WETH balance for ${WALLET_ADDRESS}: ${wethBalance}${RESET}`);
+    } catch (error) {
+      console.error(`${RED}[MagicEden] Failed to fetch WETH balance: ${error}${RESET}`);
+      console.log(`${YELLOW}[MagicEden] Continuing with balance: 0.00${RESET}`);
+    }
 
+    console.log(`${MAGENTA}[MagicEden] Processing for collection ${currentTask.contract.slug}...${RESET}`);
     const contractAddress = currentTask.contract.contractAddress
     const expiration = getExpiry(currentTask.bidDuration)
     const newTask = { ...currentTask, traits: {} } as ITask
 
     // Note: Status will be set to appropriate state after job creation is determined
+
+    console.log(`${MAGENTA}[MagicEden] Checking preprocessing results:${RESET}`);
+    console.log(`${MAGENTA}[MagicEden] - tokens.length: ${preprocessing.magiceden.tokens.length}${RESET}`);
+    console.log(`${MAGENTA}[MagicEden] - traits.length: ${preprocessing.magiceden.traits.length}${RESET}`);
+    console.log(`${MAGENTA}[MagicEden] - jobCount: ${preprocessing.magiceden.jobCount}${RESET}`);
 
     // Create jobs based on preprocessing results
     if (preprocessing.magiceden.tokens.length > 0) {

@@ -156,11 +156,11 @@ export async function processListingJob(job: Job): Promise<boolean> {
   try {
     console.log('Step 1: Updating progress to 10...');
     // Update progress to prevent stalling
-    await job.updateProgress(10);
+    // Progress reporting removed - await job.updateProgress(10);
 
     console.log('Step 3: Updating progress to 20...');
     // Update progress
-    await job.updateProgress(20);
+    // Progress reporting removed - await job.updateProgress(20);
 
     console.log('Step 4: Fetching listing from database...');
     // Fetch latest listing data
@@ -192,7 +192,7 @@ export async function processListingJob(job: Job): Promise<boolean> {
 
     console.log('About to update progress to 50...');
     // Update progress before long operation
-    await job.updateProgress(50);
+    // Progress reporting removed - await job.updateProgress(50);
     console.log('Progress updated to 50');
 
     // Fetch fresh listing data again after cleanup to ensure we have the latest state
@@ -217,7 +217,7 @@ export async function processListingJob(job: Job): Promise<boolean> {
     console.log('=== CREATE LISTING RETURNED ===');
 
     // Update progress
-    await job.updateProgress(80);
+    // Progress reporting removed - await job.updateProgress(80);
 
     // Update last processed time
     await Listing.findByIdAndUpdate(listingId, {
@@ -227,7 +227,7 @@ export async function processListingJob(job: Job): Promise<boolean> {
     });
 
     // Update progress to completion
-    await job.updateProgress(100);
+    // Progress reporting removed - await job.updateProgress(100);
 
     return true
 

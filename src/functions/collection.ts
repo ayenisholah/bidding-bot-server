@@ -565,8 +565,6 @@ async function fetchCollectionItemsRecursive(
   cursor?: string,
   pageNumber: number = 1
 ): Promise<string[]> {
-  console.log(`[DEBUG] Fetching page ${pageNumber} for ${variables.collectionSlug} with cursor: ${cursor || 'initial'}`);
-
   const queryVariables = {
     ...variables,
     cursor: cursor

@@ -66,6 +66,25 @@ export class DistributedLockManager {
     }
   }
 
+  async extendLock(key: string, additionalTTLSeconds: number): Promise<boolean> {
+    await this.ensureConnection();
+    const lockKey = this.getLockKey(key);
+    
+    if (!this.redis) {
+      throw new Error('Redis connection not available');
+    }
+    
+    // Check if lock exists first
+    const exists = await this.redis.exists(lockKey);
+    if (exists === 0) {
+      return false;
+    }
+    
+    // Extend the TTL
+    const result = await this.redis.expire(lockKey, additionalTTLSeconds);
+    return result === 1;
+  }
+
   async checkExistLock(key: string): Promise<Boolean> {
     try {
       await this.ensureConnection();

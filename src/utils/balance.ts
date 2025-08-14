@@ -148,94 +148,132 @@ export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress
   const STALE_CACHE_EXPIRY_SECONDS = 3600; // Keep stale cache for 1 hour as fallback
   const cacheKey = `{erc20_balance:${walletAddress}}:${tokenAddress}`;
   const staleCacheKey = `{erc20_balance_stale:${walletAddress}}:${tokenAddress}`;
+  const startTime = Date.now();
 
-  const lockManager = new DistributedLockManager({
-    lockPrefix: '{erc20_balance}:lock:',
-    defaultTTLSeconds: CACHE_EXPIRY_SECONDS
+  console.log(`[fetchERC20BalanceFresh] Starting balance fetch for ${walletAddress}/${tokenAddress}`);
+
+  // First try to get cached value
+  try {
+    const redis = getRedis();
+    if (redis) {
+      const cachedBalance = await redis.get(cacheKey);
+      if (cachedBalance) {
+        console.log(`[fetchERC20BalanceFresh] Using cached balance: ${cachedBalance}`);
+        return Number(cachedBalance);
+      }
+    }
+  } catch (error) {
+    console.warn('[fetchERC20BalanceFresh] Redis error when checking cache:', error);
+  }
+
+  // Create promise with timeout
+  const timeoutPromise = new Promise<number>((_, reject) => {
+    setTimeout(() => reject(new Error('Balance fetch timeout after 5 seconds')), 5000);
   });
 
-  const lockKey = `{erc20_${walletAddress}}_${tokenAddress}`;
+  const fetchPromise = async (): Promise<number> => {
+    const lockManager = new DistributedLockManager({
+      lockPrefix: '{erc20_balance}:lock:',
+      defaultTTLSeconds: CACHE_EXPIRY_SECONDS
+    });
 
-  try {
-    const result = await lockManager.withLock(
-      lockKey,
-      async () => {
-        try {
-          // Use Alchemy provider with API key
-          const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY;
-          if (!ALCHEMY_API_KEY) {
-            throw new Error('ALCHEMY_API_KEY environment variable is not set');
-          }
+    const lockKey = `{erc20_${walletAddress}}_${tokenAddress}`;
 
-          const { AlchemyProvider } = await import('ethers');
-          const provider = new AlchemyProvider('mainnet', ALCHEMY_API_KEY);
+    try {
+      const result = await lockManager.withLock(
+        lockKey,
+        async () => {
+          try {
+            // Use Alchemy provider with API key
+            const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY;
+            if (!ALCHEMY_API_KEY) {
+              throw new Error('ALCHEMY_API_KEY environment variable is not set');
+            }
 
-          const tokenContract = new Contract(
-            tokenAddress,
-            ['function balanceOf(address) view returns (uint256)'],
-            provider
-          );
-          const maxRetries = 3;
-          let lastError;
+            const { AlchemyProvider } = await import('ethers');
+            const provider = new AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 
-          for (let attempt = 0; attempt <= maxRetries; attempt++) {
-            try {
-              const balance = await tokenContract.balanceOf(walletAddress);
-              const formattedBalance = Number(formatEther(balance));
+            const tokenContract = new Contract(
+              tokenAddress,
+              ['function balanceOf(address) view returns (uint256)'],
+              provider
+            );
+            const maxRetries = 3;
+            let lastError;
 
-              // Store in both fresh and stale cache
+            for (let attempt = 0; attempt <= maxRetries; attempt++) {
               try {
-                const redis = getRedis();
-                if (redis) {
-                  await redis.set(cacheKey, formattedBalance.toString(), 'EX', CACHE_EXPIRY_SECONDS);
-                  await redis.set(staleCacheKey, formattedBalance.toString(), 'EX', STALE_CACHE_EXPIRY_SECONDS);
+                const balance = await tokenContract.balanceOf(walletAddress);
+                const formattedBalance = Number(formatEther(balance));
+
+                // Store in both fresh and stale cache
+                try {
+                  const redis = getRedis();
+                  if (redis) {
+                    await redis.set(cacheKey, formattedBalance.toString(), 'EX', CACHE_EXPIRY_SECONDS);
+                    await redis.set(staleCacheKey, formattedBalance.toString(), 'EX', STALE_CACHE_EXPIRY_SECONDS);
+                  }
+                } catch (error) {
+                  console.warn('Failed to cache balance:', error);
                 }
-              } catch (error) {
-                console.warn('Failed to cache balance:', error);
-              }
 
-              console.log(`[fetchERC20BalanceFresh] Fresh balance for ${walletAddress}/${tokenAddress}: ${formattedBalance}`);
-              return formattedBalance;
-            } catch (error: any) {
-              lastError = error;
+                const elapsed = Date.now() - startTime;
+                console.log(`[fetchERC20BalanceFresh] Fresh balance for ${walletAddress}/${tokenAddress}: ${formattedBalance} (took ${elapsed}ms)`);
+                return formattedBalance;
+              } catch (error: any) {
+                lastError = error;
 
-              // Check if it's a network error
-              if (error.code === 'NETWORK_ERROR' || error.message?.includes('could not detect network')) {
-                console.warn(`Network error for ${walletAddress}/${tokenAddress}, attempt ${attempt + 1}/${maxRetries + 1}`);
-              }
+                // Check if it's a network error
+                if (error.code === 'NETWORK_ERROR' || error.message?.includes('could not detect network')) {
+                  console.warn(`Network error for ${walletAddress}/${tokenAddress}, attempt ${attempt + 1}/${maxRetries + 1}`);
+                }
 
-              if (attempt < maxRetries) {
-                const backoffTime = Math.pow(2, attempt) * 1000;
-                await new Promise(resolve => setTimeout(resolve, backoffTime));
+                if (attempt < maxRetries) {
+                  const backoffTime = Math.pow(2, attempt) * 1000;
+                  await new Promise(resolve => setTimeout(resolve, backoffTime));
+                }
               }
             }
-          }
 
-          throw lastError;
-        } catch (error) {
-          await logger.logBlockchainError(`Error fetching fresh ERC20 balance for token ${tokenAddress}`, {
-            walletAddress,
-            tokenAddress,
-            operation: 'fetch_erc20_balance_fresh',
-            error: error as Error,
-            errorMessage: error instanceof Error ? error.message : String(error)
-          });
-          console.error(RED + `Error fetching fresh ERC20 balance for token ${tokenAddress}:` + RESET, error);
-          throw error;
+            throw lastError;
+          } catch (error) {
+            console.error(RED + `Error fetching fresh ERC20 balance for token ${tokenAddress}:` + RESET, error);
+            throw error;
+          }
+        }
+      );
+
+      return result || 0;
+    } catch (error: any) {
+      console.error(RED + `Lock/fetch error for ${walletAddress}/${tokenAddress}: ${error.message}` + RESET);
+      throw error;
+    }
+  };
+
+  try {
+    // Race between fetch and timeout
+    const balance = await Promise.race([fetchPromise(), timeoutPromise]);
+    return balance;
+  } catch (error: any) {
+    const elapsed = Date.now() - startTime;
+    console.warn(`[fetchERC20BalanceFresh] Failed to fetch fresh balance after ${elapsed}ms, checking stale cache...`);
+    
+    // Try stale cache
+    try {
+      const redis = getRedis();
+      if (redis) {
+        const staleBalance = await redis.get(staleCacheKey);
+        if (staleBalance) {
+          console.log(`[fetchERC20BalanceFresh] Using stale cached balance: ${staleBalance}`);
+          return Number(staleBalance);
         }
       }
-    );
-
-    return result || 0;
-  } catch (error: any) {
-    // For fresh balance, we don't fall back to stale cache
-    await logger.logWarning(ErrorCategory.BLOCKCHAIN, `Failed to fetch fresh balance for ${walletAddress}/${tokenAddress}`, {
-      walletAddress,
-      tokenAddress,
-      operation: 'fetch_erc20_balance_fresh_fallback',
-      error: error.message || error
-    });
-    console.error(RED + `Failed to fetch fresh balance for ${walletAddress}/${tokenAddress}` + RESET);
-    throw error; // Throw error instead of returning 0 for fresh balance
+    } catch (cacheError) {
+      console.warn('[fetchERC20BalanceFresh] Failed to get stale cache:', cacheError);
+    }
+    
+    // Return 0 as final fallback
+    console.warn(`[fetchERC20BalanceFresh] No cached balance available, returning 0.00`);
+    return 0;
   }
 }

@@ -35,14 +35,14 @@ const defaultConfig = {
     // Log the specific error for debugging
     if (reason) {
       console.log(`[Redis] Cluster retry ${times} due to: ${reason.message}`);
-      
+
       // Handle "Too many Cluster redirections" specifically
       if (reason.message.includes('Too many Cluster redirections')) {
         console.error('[Redis] Cluster topology issue detected, forcing reconnect after delay');
         return 5000; // Wait 5 seconds before reconnecting to allow cluster to stabilize
       }
     }
-    
+
     if (times > RETRY_MAX_ATTEMPTS) {
       return null;
     }
@@ -253,7 +253,7 @@ class RedisClient {
     if (!this.client) {
       throw new Error('Redis client not initialized');
     }
-    
+
     return new Promise((resolve, reject) => {
       console.log('[Redis] Forcing cluster slot refresh...');
       this.client!.refreshSlotsCache((err) => {
@@ -328,9 +328,8 @@ export const createBullMQConnection = async (identifier?: string): Promise<Clust
         // Connection settings
         // Blocking connections don't need ready check as they use blocking operations
         enableReadyCheck: !needsBlockingConfig,
-        connectTimeout: 10000, // 10 second connection timeout
-        // Don't set commandTimeout for blocking connections - let ioredis handle blocking commands automatically
-        ...(needsBlockingConfig ? {} : { commandTimeout: 5000 }), // Only set timeout for non-blocking connections
+        connectTimeout: 10000,
+        ...(needsBlockingConfig ? {} : { commandTimeout: 60000 }), // 60 second timeout for non-blocking connections
 
         // Retry configuration - BullMQ requires null for blocking operations
         maxRetriesPerRequest: null,
@@ -546,7 +545,7 @@ export const closeAllBullMQConnections = async () => {
 // Helper function to check if an error is a Redis cluster error
 export const isRedisClusterError = (error: unknown): boolean => {
   if (!(error instanceof Error)) return false;
-  
+
   const clusterErrorPatterns = [
     'MOVED',
     'ASK',
@@ -558,16 +557,16 @@ export const isRedisClusterError = (error: unknown): boolean => {
     'Connection lost',
     'All sentinels are unreachable'
   ];
-  
+
   return clusterErrorPatterns.some(pattern => error.message.includes(pattern));
 };
 
 // Helper function to handle Redis cluster errors with automatic recovery
 export const handleRedisClusterError = async (error: unknown, context: string): Promise<void> => {
   if (!isRedisClusterError(error)) return;
-  
+
   console.error(`[Redis] Cluster error in ${context}:`, error);
-  
+
   try {
     // Force slot refresh to recover from topology changes
     await forceRedisSlotRefresh();

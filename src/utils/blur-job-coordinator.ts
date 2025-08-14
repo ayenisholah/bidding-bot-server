@@ -1,4 +1,3 @@
-import { Job } from 'bullmq';
 import { blurRateLimiter } from './blur-rate-limiter';
 import { blurCompletionTracker } from './blur-completion-tracker';
 
