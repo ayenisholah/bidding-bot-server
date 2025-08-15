@@ -1,6 +1,6 @@
 import { ethers, Wallet, formatUnits } from "ethers";
 import { limiter, isTaskBlacklisted, axiosInstance } from "../../init";
-import { activeTasks, API_KEY, currentTasks, decrementBidCount, pQueue, RESET, RED, trackBidRate, GOLD } from "../..";
+import { activeTasks, API_KEY, currentTasks, decrementBidCount, pQueue, RESET, RED, trackBidRate, GOLD, updateTaskCancellationPercentage } from "../..";
 import { config } from "dotenv";
 import { DistributedLockManager } from "../../utils/lock";
 import Order from '../../models/order.model';
@@ -13,6 +13,7 @@ import { convertBigNumbers } from "../../utils/bigNumberConverter";
 import { logger, ErrorCategory, MarketplaceSubCategory, DatabaseOperation } from "../../utils/logger";
 import { InsufficientBalanceError, TransferRestrictedError, MinimumPriceError, InvalidRequestError } from "../errors";
 import { blurRateLimiter } from "../../utils/blur-rate-limiter";
+import { cancellationTracker } from "../../utils/cancellation-tracker";
 
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
 
@@ -1003,6 +1004,12 @@ export async function cancelBlurBid(data: BlurCancelPayload) {
     if (cancelResponse) {
       console.log(JSON.stringify(cancelResponse));
     }
+    
+    // Track cancellation completion
+    cancellationTracker.recordCompletion(taskId, 1, 'blur');
+    
+    // Update cancellation percentage using centralized function
+    await updateTaskCancellationPercentage(taskId);
   } catch (error: any) {
     if (error.response?.data?.message?.message !== 'No bids found') {
       const errorDetails = error?.response?.data || error?.response || error?.code || error.message;

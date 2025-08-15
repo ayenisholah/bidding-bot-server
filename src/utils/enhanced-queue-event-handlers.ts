@@ -408,10 +408,25 @@ export class EnhancedQueueEventHandlerManager {
 
     console.log(YELLOW + `Starting cancellation for task ${taskId}` + (marketplace ? ` (${marketplace})` : '') + RESET);
 
+    // Get initial order counts before starting cancellation
+    const [openSeaCount, magicEdenCount, blurCount] = await Promise.all([
+      Order.countDocuments({ taskId, marketplace: 'opensea' }),
+      Order.countDocuments({ taskId, marketplace: 'magiceden' }),
+      Order.countDocuments({ taskId, marketplace: 'blur' })
+    ]);
+    
+    const totalInitialOrders = openSeaCount + magicEdenCount + blurCount;
+    console.log(YELLOW + `[StartCancellation] Task ${taskId} initial order counts - OpenSea: ${openSeaCount}, MagicEden: ${magicEdenCount}, Blur: ${blurCount}, Total: ${totalInitialOrders}` + RESET);
+    
     // Transition to cancelling state
     await this.stateManager.transitionState(taskId, 'CANCELLING', (state) => {
       state.cancellationPercentage = 0;
       state.cancellationStartTime = Date.now();
+      state.initialOrderCounts = {
+        opensea: openSeaCount,
+        magiceden: magicEdenCount,
+        blur: blurCount
+      };
     });
 
     // Get orders to cancel
@@ -432,6 +447,9 @@ export class EnhancedQueueEventHandlerManager {
       
       // Start cancellation process
       await cancelAllRelatedBids(task, private_key, marketplace);
+      
+      // Wait for cancellation jobs to complete and verify
+      await this.waitForCancellationCompletion(taskId, marketplace);
     } else {
       // Handle completion based on whether it's marketplace-specific or full cancellation
       if (marketplace) {
@@ -498,5 +516,107 @@ export class EnhancedQueueEventHandlerManager {
 
   getRemovedTokens(taskId: string): any {
     return this.removedTokens[taskId] || {};
+  }
+
+  /**
+   * Wait for cancellation jobs to complete and verify all orders are cancelled
+   */
+  private async waitForCancellationCompletion(taskId: string, marketplace?: string): Promise<void> {
+    const maxWaitTime = 60000; // 60 seconds max wait
+    const checkInterval = 1000; // Check every second
+    const startTime = Date.now();
+    
+    // Import the verification function
+    const { verifyCancellationComplete } = await import('../index');
+    
+    while (Date.now() - startTime < maxWaitTime) {
+      // Check if all cancellation jobs are complete
+      const state = this.stateManager.getTaskState(taskId);
+      if (!state || state.status !== 'CANCELLING') break;
+      
+      // Verify no orders remain
+      const verification = await verifyCancellationComplete(taskId, marketplace);
+      
+      if (verification.complete) {
+        console.log(GREEN + `All orders cancelled for task ${taskId}${marketplace ? ` (${marketplace})` : ''}` + RESET);
+        
+        // Force completion
+        await this.handleCancellationComplete(taskId, marketplace);
+        return;
+      }
+      
+      // Check cancellation percentage
+      if (state.cancellationPercentage >= 99) {
+        // If we're at 99% but orders remain, force check again
+        console.log(YELLOW + `Cancellation at ${state.cancellationPercentage}% but ${verification.remainingOrders} orders remain` + RESET);
+        
+        if (verification.marketplaceBreakdown) {
+          console.log(`Remaining orders - OpenSea: ${verification.marketplaceBreakdown.opensea}, MagicEden: ${verification.marketplaceBreakdown.magiceden}, Blur: ${verification.marketplaceBreakdown.blur}`);
+        }
+      }
+      
+      // Wait before next check
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+    }
+    
+    // Timeout reached - force completion anyway
+    console.log(YELLOW + `Cancellation timeout reached for task ${taskId}, forcing completion` + RESET);
+    await this.handleCancellationComplete(taskId, marketplace);
+  }
+
+  /**
+   * Handle cancellation completion
+   */
+  private async handleCancellationComplete(taskId: string, marketplace?: string): Promise<void> {
+    const state = this.stateManager.getTaskState(taskId);
+    const task = this.stateManager.getActiveTasks().get(taskId);
+    
+    if (!state || !task) return;
+    
+    console.log(GREEN + `[CancellationComplete] Forcing completion for task ${taskId}${marketplace ? ` (${marketplace})` : ''}` + RESET);
+    
+    if (marketplace) {
+      // Marketplace-specific cancellation completed
+      await this.stateManager.updateTaskProgress(taskId, {
+        cancellationPercentage: 100,
+        marketplaceProgress: {
+          ...state.marketplaceProgress,
+          [marketplace as keyof typeof state.marketplaceProgress]: {
+            ...state.marketplaceProgress[marketplace as keyof typeof state.marketplaceProgress],
+            completed: false,
+            running: false,
+            totalJobs: 0,
+            queuedJobs: 0,
+            completedJobs: 0,
+            failedJobs: 0
+          }
+        }
+      });
+      
+      // Return to appropriate state
+      if (task.running && state.status === 'CANCELLING') {
+        await this.stateManager.transitionState(taskId, 'RUNNING');
+      }
+    } else {
+      // Full task cancellation - force 100% and cleanup
+      await this.stateManager.updateTaskProgress(taskId, {
+        cancellationPercentage: 100
+      });
+      
+      // Clean up parent jobs
+      const marketplaces = ['OPENSEA', 'MAGICEDEN', 'BLUR'];
+      for (const mp of marketplaces) {
+        const parentJobId = `${taskId}-CANCEL_${mp}_BID`;
+        // Access parentJobs from stateManager
+        (this.stateManager as any).parentJobs.delete(parentJobId);
+      }
+      
+      // Transition to STOPPED
+      await this.stateManager.transitionState(taskId, 'STOPPED', (state) => {
+        state.cancellationPercentage = 100;
+        delete state.nextLoopTime;
+        state.waitingTime = 0;
+      });
+    }
   }
 }

@@ -480,7 +480,9 @@ function hashData(data: any): string {
 export async function fetchOpenSeaCollectionItems(
   variables: CollectionItemsQueryVariables,
   allTokenIds: string[] = [],
-  cursor?: string
+  cursor?: string,
+  taskId?: string,
+  expectedCount?: number
 ): Promise<string[]> {
   const CACHE_TTL = 3600; // 1 hour cache
   const cacheKey = `{opensea}:collection-items:${hashData(variables)}`;
@@ -517,7 +519,7 @@ export async function fetchOpenSeaCollectionItems(
         }
 
         // Fetch data
-        return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1);
+        return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount);
       });
 
       if (result) {
@@ -537,7 +539,7 @@ export async function fetchOpenSeaCollectionItems(
       throw new Error('Failed to acquire lock for collection items fetch');
     } else {
       // For paginated requests, fetch directly without lock
-      return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1);
+      return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount);
     }
   } catch (error) {
     // Enhanced error logging
@@ -563,7 +565,9 @@ async function fetchCollectionItemsRecursive(
   variables: CollectionItemsQueryVariables,
   allTokenIds: string[] = [],
   cursor?: string,
-  pageNumber: number = 1
+  pageNumber: number = 1,
+  taskId?: string,
+  expectedCount?: number
 ): Promise<string[]> {
   const queryVariables = {
     ...variables,
@@ -598,12 +602,53 @@ async function fetchCollectionItemsRecursive(
     // Add current page's token IDs to our accumulated list
     const updatedTokenIds = [...allTokenIds, ...tokenIds];
 
+    // Update processing percentage if taskId is provided
+    if (taskId) {
+      // Import taskStatus from main module - need to handle this differently
+      // For now, we'll use a callback approach or direct module access
+      try {
+        // Calculate percentage based on tokens fetched vs expected
+        let percentage = 0;
+        if (expectedCount && expectedCount > 0) {
+          percentage = Math.min(95, (updatedTokenIds.length / expectedCount) * 100);
+        } else {
+          // If no expected count, use a more conservative progress estimate
+          // Assuming average collection size and 100 items per page
+          // Use a logarithmic scale that approaches but never reaches 95%
+          percentage = Math.min(95, Math.log10(pageNumber + 1) * 30);
+        }
+
+        // Update task status - we'll need to export a function from index.ts
+        const { updateTaskProcessingPercentage } = require('..');
+        if (updateTaskProcessingPercentage) {
+          updateTaskProcessingPercentage(taskId, percentage);
+        }
+
+        console.log(`[fetchCollectionItems] Task ${taskId}: Page ${pageNumber}, ${updatedTokenIds.length} tokens, ${percentage.toFixed(1)}% complete`);
+      } catch {
+        // Silently continue if update fails
+      }
+    }
+
     // Get the next cursor
     const nextCursor = data.data.collectionItems.nextPageCursor;
 
     if (nextCursor) {
-      return fetchCollectionItemsRecursive(variables, updatedTokenIds, nextCursor, pageNumber + 1);
+      return fetchCollectionItemsRecursive(variables, updatedTokenIds, nextCursor, pageNumber + 1, taskId, expectedCount);
     }
+
+    // Reset processing percentage when done
+    if (taskId) {
+      try {
+        const { updateTaskProcessingPercentage } = require('..');
+        if (updateTaskProcessingPercentage) {
+          updateTaskProcessingPercentage(taskId, 0);
+        }
+      } catch {
+        // Silently continue
+      }
+    }
+
     const uniqueTokenIds = [...new Set(updatedTokenIds)];
 
     return uniqueTokenIds;

@@ -3,7 +3,7 @@
 import { ethers, Wallet } from "ethers";
 import { BASE_URL, SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
-import { activeTasks, API_KEY, BLUE, decrementBidCount, pQueue, trackBidRate } from "../..";
+import { activeTasks, API_KEY, BLUE, decrementBidCount, pQueue, trackBidRate, updateTaskCancellationPercentage } from "../..";
 import { config } from "dotenv";
 import axios from "axios";
 import Order from '../../models/order.model';
@@ -15,6 +15,7 @@ import { fetchERC20Balance } from "../../utils/balance";
 import { logger, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
 import { InsufficientBalanceError } from "../errors";
 import { getCachedOrFetch, CACHE_TTL, CACHE_KEYS } from "../../utils/opensea-cache";
+import { cancellationTracker } from "../../utils/cancellation-tracker";
 import fs from 'fs';
 import path from 'path';
 
@@ -546,6 +547,11 @@ export async function bidOnOpensea(
       timer.endStep('token_database_save');
 
       trackBidRate('opensea', taskId);
+      
+      // Log successful token bid
+      const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()} TOKEN: ${asset.tokenId} ${offerPriceEthFinal} ${currencySymbol} 🎉`;
+      console.log(BLUE, successMessage, RESET);
+      
       success = true;
     }
     else {
@@ -890,6 +896,13 @@ export async function cancelOrder(orderHash: string, protocolAddress: string, pr
     const response = await limiter.schedule(() => axiosInstance.post(url, body, { headers }))
     console.log(JSON.stringify({ cancelled: true }));
     decrementBidCount('opensea', taskId)
+    
+    // Track cancellation completion
+    cancellationTracker.recordCompletion(taskId, 1, 'opensea');
+    
+    // Update cancellation percentage using centralized function
+    await updateTaskCancellationPercentage(taskId);
+    
     return response.data;
   } catch (error) {
     if (error) {

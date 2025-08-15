@@ -3,7 +3,7 @@
 import { ethers, Wallet } from "ethers";
 import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
 import { config } from "dotenv";
-import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, trackBidRate } from "../..";
+import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, trackBidRate, updateTaskCancellationPercentage } from "../..";
 import { DistributedLockManager } from '../../utils/lock';
 import Order from '../../models/order.model';
 import { withRetry } from '../../utils/db-retry';
@@ -15,6 +15,7 @@ import { fetchERC20Balance } from "../../utils/balance";
 import { convertBigNumbers } from "../../utils/bigNumberConverter";
 import { logger, DatabaseOperation, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
 import { InsufficientBalanceError, MinimumPriceError, RateLimitError, InvalidRequestError } from "../errors";
+import { cancellationTracker } from "../../utils/cancellation-tracker";
 
 // Helper function to extract meaningful error messages from MagicEden API responses
 function extractMagicEdenErrorMessage(error: any): string {
@@ -853,6 +854,12 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
     orderIds.forEach(() => {
       decrementBidCount('magiceden', taskId);
     });
+    
+    // Track cancellation completion - MagicEden cancels multiple orders at once
+    cancellationTracker.recordCompletion(taskId, orderIds.length, 'magiceden');
+    
+    // Update cancellation percentage using centralized function
+    await updateTaskCancellationPercentage(taskId);
 
   } catch (error: any) {
     const message = `Error cancelling MagicEden bid: ${error?.response?.data?.message || error?.message || error}`

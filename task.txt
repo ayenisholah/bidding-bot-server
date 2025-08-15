@@ -1,1 +1,5 @@
-console.log(`[DEBUG] Fetching page ${pageNumber} for ${variables.collectionSlug} with cursor: ${cursor || 'initial'}`);
+632 Retroactive Parent Job Creation Attempts:
+3. Orphaned job recovery recreates parent jobs: When an old job is found without a parent, it creates a new parent job with expectedJobs=1 and immediately completes it
+4. Race condition: The completion of old orphaned jobs triggers task completion for the wrong loop
+
+what if we remove the Retroactive parent job and orphaned job recovery mechanism, i think i have fixed the issues they were both created to solve

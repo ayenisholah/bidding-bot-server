@@ -37,6 +37,12 @@ export interface EnhancedTaskStatusInfo {
     magiceden: MarketplaceProgress;
     blur: MarketplaceProgress;
   };
+  // Cancellation tracking
+  initialOrderCounts?: {
+    opensea: number;
+    magiceden: number;
+    blur: number;
+  };
 }
 
 export interface MarketplaceProgress {
@@ -412,62 +418,107 @@ export class EnhancedTaskStateManager {
 
     await this.updateTaskProgress(taskId, { cancellationPercentage });
 
-    // Complete cancellation if 100%
-    if (cancellationPercentage >= 100) {
-      await this.transitionState(taskId, 'STOPPED', (state) => {
-        state.cancellationPercentage = 100;
-        delete state.nextLoopTime;
-        state.waitingTime = 0;
-      });
-    }
+    // Don't auto-complete here - let the verification mechanism handle it
+    // This prevents premature completion when jobs are still processing
   }
 
   /**
    * Calculate weighted cancellation percentage considering MagicEden batching
    */
   private async calculateWeightedCancellationPercentage(taskId: string): Promise<number> {
-    // Get actual order counts from database
+    // Get current order counts first to check if all are cancelled
     const Order = await import('../models/order.model');
-    const [openSeaCount, magicEdenCount, blurCount] = await Promise.all([
+    const [currentOpenSeaCount, currentMagicEdenCount, currentBlurCount] = await Promise.all([
       Order.default.countDocuments({ taskId, marketplace: 'opensea' }),
       Order.default.countDocuments({ taskId, marketplace: 'magiceden' }),
       Order.default.countDocuments({ taskId, marketplace: 'blur' })
     ]);
 
-    const totalOrderCount = openSeaCount + magicEdenCount + blurCount;
-    if (totalOrderCount === 0) return 100;
+    const currentTotalCount = currentOpenSeaCount + currentMagicEdenCount + currentBlurCount;
+    
+    // If no orders remain, return 100% immediately
+    if (currentTotalCount === 0) {
+      console.log(`[CancellationCalc] Task ${taskId}: No orders remaining, returning 100%`);
+      return 100;
+    }
 
-    let weightedPercentage = 0;
+    // Get initial order counts (what we started with)
+    const initialCounts = await this.getInitialOrderCounts(taskId);
+    const totalInitialCount = initialCounts.opensea + initialCounts.magiceden + initialCounts.blur;
+    
+    // Log for debugging
+    console.log(`[CancellationCalc] Task ${taskId}: Initial counts - OpenSea: ${initialCounts.opensea}, MagicEden: ${initialCounts.magiceden}, Blur: ${initialCounts.blur}`);
+    console.log(`[CancellationCalc] Task ${taskId}: Current counts - OpenSea: ${currentOpenSeaCount}, MagicEden: ${currentMagicEdenCount}, Blur: ${currentBlurCount}`);
+    
+    if (totalInitialCount === 0) {
+      console.log(`[CancellationCalc] Task ${taskId}: No initial orders, returning 100%`);
+      return 100;
+    }
+    
+    // Calculate based on actual orders cancelled
+    const ordersCancelled = totalInitialCount - currentTotalCount;
+    const actualPercentage = (ordersCancelled / totalInitialCount) * 100;
+    
+    console.log(`[CancellationCalc] Task ${taskId}: Orders cancelled: ${ordersCancelled}/${totalInitialCount} = ${actualPercentage.toFixed(2)}%`);
 
-    // Calculate for each marketplace with proper batching consideration
+    // Also check parent job progress as a secondary metric
+    let parentJobPercentage = 0;
     const marketplaces = [
-      { name: 'opensea', count: openSeaCount, batchSize: this.MARKETPLACE_CONFIG.opensea.batchSize },
-      { name: 'magiceden', count: magicEdenCount, batchSize: this.MARKETPLACE_CONFIG.magiceden.batchSize },
-      { name: 'blur', count: blurCount, batchSize: this.MARKETPLACE_CONFIG.blur.batchSize }
+      { name: 'opensea', initialCount: initialCounts.opensea },
+      { name: 'magiceden', initialCount: initialCounts.magiceden },
+      { name: 'blur', initialCount: initialCounts.blur }
     ];
 
-    for (const { name, count, batchSize } of marketplaces) {
-      if (count > 0) {
+    for (const { name, initialCount } of marketplaces) {
+      if (initialCount > 0) {
         const parentJobId = `${taskId}-CANCEL_${name.toUpperCase()}_BID`;
         const parentJob = this.parentJobs.get(parentJobId);
         
-        if (parentJob) {
-          // For MagicEden, account for batching
-          const expectedBatches = Math.ceil(count / batchSize);
-          const actualBatches = parentJob.totalJobs;
-          
+        if (parentJob && parentJob.totalJobs > 0) {
           const progress = parentJob.completedJobs + parentJob.failedJobs;
-          const percentage = actualBatches > 0 ? (progress / actualBatches) * 100 : 100;
+          const percentage = (progress / parentJob.totalJobs) * 100;
+          const weight = initialCount / totalInitialCount;
+          parentJobPercentage += weight * percentage;
           
-          // Weight by actual order count, not batch count
-          weightedPercentage += (count * percentage);
+          console.log(`[CancellationCalc] Task ${taskId}: ${name} - ${progress}/${parentJob.totalJobs} jobs (${percentage.toFixed(2)}%), weight: ${weight.toFixed(2)}`);
         } else {
-          weightedPercentage += (count * 100);
+          console.log(`[CancellationCalc] Task ${taskId}: ${name} - No parent job found`);
         }
       }
     }
+    
+    console.log(`[CancellationCalc] Task ${taskId}: Parent job percentage: ${parentJobPercentage.toFixed(2)}%`);
 
-    return Math.min(weightedPercentage / totalOrderCount, 100);
+    // Use the higher of the two percentages (actual orders cancelled vs job progress)
+    // This ensures we show progress even if orders haven't been deleted yet
+    const finalPercentage = Math.min(Math.max(actualPercentage, parentJobPercentage), 100);
+    console.log(`[CancellationCalc] Task ${taskId}: Final percentage: ${finalPercentage.toFixed(2)}%`);
+    
+    return finalPercentage;
+  }
+
+  /**
+   * Get initial order counts when cancellation started
+   */
+  private async getInitialOrderCounts(taskId: string): Promise<{ opensea: number; magiceden: number; blur: number }> {
+    // Check if we have stored initial counts
+    const state = this.taskStatus.get(taskId);
+    if (state && state.cancellationStartTime) {
+      // If we have cancellation start time, check if we stored initial counts
+      if (state.initialOrderCounts) {
+        return state.initialOrderCounts;
+      }
+    }
+
+    // Otherwise, get current counts (this is for backward compatibility)
+    const Order = await import('../models/order.model');
+    const [opensea, magiceden, blur] = await Promise.all([
+      Order.default.countDocuments({ taskId, marketplace: 'opensea' }),
+      Order.default.countDocuments({ taskId, marketplace: 'magiceden' }),
+      Order.default.countDocuments({ taskId, marketplace: 'blur' })
+    ]);
+
+    return { opensea, magiceden, blur };
   }
 
   /**
@@ -619,6 +670,34 @@ export class EnhancedTaskStateManager {
    */
   getTaskState(taskId: string): EnhancedTaskStatusInfo | null {
     return this.taskStatus.get(taskId) || null;
+  }
+
+  /**
+   * Force recalculation of cancellation percentage
+   * Use this when percentage seems stuck
+   */
+  async recalculateCancellationPercentage(taskId: string): Promise<void> {
+    const state = this.taskStatus.get(taskId);
+    if (!state || state.status !== 'CANCELLING') return;
+    
+    console.log(`[RecalculateCancellation] Forcing recalculation for task ${taskId}`);
+    
+    // Recalculate and update
+    await this.handleCancellationProgress(taskId);
+    
+    // Check if we should force completion
+    const Order = await import('../models/order.model');
+    const remainingOrders = await Order.default.countDocuments({ taskId });
+    
+    if (remainingOrders === 0) {
+      console.log(`[RecalculateCancellation] No orders remaining for task ${taskId}, forcing completion`);
+      await this.updateTaskProgress(taskId, { cancellationPercentage: 100 });
+      await this.transitionState(taskId, 'STOPPED', (state) => {
+        state.cancellationPercentage = 100;
+        delete state.nextLoopTime;
+        state.waitingTime = 0;
+      });
+    }
   }
 
   /**

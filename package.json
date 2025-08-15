@@ -21,7 +21,8 @@
 		"lint": "eslint 'src/**/*.{ts,tsx}'",
 		"lint:fix": "eslint 'src/**/*.{ts,tsx}' --fix",
 		"test:axiom": "ts-node scripts/test-axiom.ts",
-		"scripts:fix-stuck-tasks": "ts-node src/scripts/fix-stuck-tasks.ts"
+		"scripts:fix-stuck-tasks": "ts-node src/scripts/fix-stuck-tasks.ts",
+		"scripts:fixCancellationPercentage": "ts-node src/scripts/fix-cancellation-percentage.ts"
 	},
 	"keywords": [],
 	"author": "",
