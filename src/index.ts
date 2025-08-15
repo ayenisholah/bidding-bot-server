@@ -3275,6 +3275,45 @@ function initializeQueueEventHandlers() {
         const logPath = path.join(logsDir, 'scheduled-job-failures.log');
         fs.appendFileSync(logPath, JSON.stringify(errorDetails, null, 2) + '\n---\n');
 
+        // Check if this is the final failure (after all retries)
+        if (job && job.attemptsMade >= (job.opts?.attempts || 1)) {
+          const taskId = job.data?._id;
+          if (taskId && taskStatus[taskId]) {
+            console.log(RED + `[Queue Event] Scheduled job ${jobId} exhausted all retries - recovering task ${taskId}` + RESET);
+            
+            // Extract marketplace from job ID (e.g., "taskId-opensea-schedule")
+            let marketplace = 'unknown';
+            if (jobId.includes('-opensea-schedule')) marketplace = 'opensea';
+            else if (jobId.includes('-magiceden-schedule')) marketplace = 'magiceden';
+            else if (jobId.includes('-blur-schedule')) marketplace = 'blur';
+            
+            // Create empty parent job to complete the loop
+            await ensureParentJobExists(taskId, marketplace);
+            const parentJobId = getParentJobId(taskId, marketplace);
+            const parentJob = parentJobs.get(parentJobId);
+            if (parentJob) {
+              parentJob.expectedJobs = 0;
+              parentJob.totalJobs = 0;
+              parentJob.actualJobs = 0;
+              parentJob.completedJobs = 0;
+              parentJob.allJobsQueued = true;
+              console.log(YELLOW + `[Queue Event] Created empty parent job for failed scheduled job: ${parentJobId}` + RESET);
+            }
+            
+            // Transition task out of stuck QUEUEING status
+            if (taskStatus[taskId].status === 'QUEUEING') {
+              setTaskStatus(taskId, 'RUNNING', 'scheduled job failed - recovering');
+              
+              // Check if all parent jobs are complete to trigger next loop
+              const allComplete = checkAllParentJobsComplete(taskId);
+              if (allComplete) {
+                console.log(GREEN + `[Queue Event] All parent jobs complete for task ${taskId}, triggering completion after scheduled job failure` + RESET);
+                await checkTaskCompletionAndScheduleNext(taskId);
+              }
+            }
+          }
+        }
+
         return;
       }
 
@@ -4923,16 +4962,18 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
     const CHUNK_SIZE = 50; // Reduced from 100 for better throughput
     const chunks = chunk(jobs, CHUNK_SIZE);
     let retryChunkIndex = -1; // Track if we need to retry a chunk
+    let chunkRetryCount = 0; // Track retries for the same chunk
+    const MAX_CHUNK_RETRIES = 5; // Maximum retries for a stuck chunk
 
     // Track total jobs actually added for each marketplace
     const jobsAddedByMarketplace = new Map<string, number>();
 
-    // Setup lock extension interval if we have a large batch
-    let lockExtensionInterval: NodeJS.Timeout | undefined;
+    // Setup scheduled bid lock extension if we have a large batch
+    let scheduledBidLockInterval: NodeJS.Timeout | undefined;
     if (jobs.length > 1000 && firstJob.name) {
       const marketplace = getMarketplaceFromJobName(firstJob.name)?.toLowerCase() || '';
       if (marketplace) {
-        lockExtensionInterval = setInterval(() => {
+        scheduledBidLockInterval = setInterval(() => {
           try {
             extendScheduledBidLock(taskId, marketplace);
           } catch (error) {
@@ -4948,6 +4989,10 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
         if (retryChunkIndex >= 0) {
           chunkIndex = retryChunkIndex;
           retryChunkIndex = -1;
+          // Don't reset retry count here - we want to track retries for same chunk
+        } else {
+          // Reset retry count when moving to a new chunk
+          chunkRetryCount = 0;
         }
 
         const currentChunk = chunks[chunkIndex];
@@ -5039,6 +5084,17 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
                 processedCount += nonBlurJobs.length;
                 actuallyQueuedCount += nonBlurJobs.length;
 
+                // Update actualJobs incrementally for each marketplace
+                for (const [marketplace, count] of jobsAddedByMarketplace) {
+                  const parentJobId = getParentJobId(taskId, marketplace);
+                  const parentJob = parentJobs.get(parentJobId);
+                  if (parentJob && count > 0) {
+                    parentJob.actualJobs = (parentJob.actualJobs || 0) + count;
+                    // Clear the count after updating
+                    jobsAddedByMarketplace.set(marketplace, 0);
+                  }
+                }
+
                 // Update schedule job progress if needed
                 if (scheduleJob && Date.now() - lastProgressUpdate > progressUpdateInterval) {
                   const percentComplete = Math.round((processedCount / jobs.length) * 100);
@@ -5084,6 +5140,15 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
                 processedCount += blurJobs.length;
                 actuallyQueuedCount += blurJobs.length;
 
+                // Update actualJobs incrementally for Blur
+                const blurParentJobId = getParentJobId(taskId, 'blur');
+                const blurParentJob = parentJobs.get(blurParentJobId);
+                if (blurParentJob && blurJobs.length > 0) {
+                  blurParentJob.actualJobs = (blurParentJob.actualJobs || 0) + blurJobs.length;
+                  // Clear the count after updating
+                  jobsAddedByMarketplace.set('blur', 0);
+                }
+
                 // Update schedule job progress if needed
                 if (scheduleJob && Date.now() - lastProgressUpdate > progressUpdateInterval) {
                   const percentComplete = Math.round((processedCount / jobs.length) * 100);
@@ -5112,7 +5177,36 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
           // No lock acquisition needed anymore
 
           if (!added) {
-            console.log(YELLOW + `[processBulkJobs] Task ${taskId}: Queue at capacity or partial processing. Waiting...` + RESET);
+            chunkRetryCount++;
+            
+            // Check if we've exceeded retry limit for this chunk
+            if (chunkRetryCount >= MAX_CHUNK_RETRIES) {
+              console.log(YELLOW + `[processBulkJobs] Task ${taskId}: Exceeded retry limit (${MAX_CHUNK_RETRIES}) for chunk ${chunkIndex}. Skipping remaining ${currentChunk.length} jobs.` + RESET);
+              
+              // Update parent jobs to reflect that we're done trying to queue
+              const marketplaces = new Set<string>();
+              for (const job of currentChunk) {
+                const marketplace = getMarketplaceFromJobName(job.name);
+                if (marketplace) marketplaces.add(marketplace);
+              }
+              
+              // Mark these marketplaces as having completed queueing
+              for (const marketplace of marketplaces) {
+                const parentJobId = getParentJobId(taskId, marketplace);
+                const parentJob = parentJobs.get(parentJobId);
+                if (parentJob) {
+                  // Set totalJobs to match actualJobs since we can't queue more
+                  parentJob.totalJobs = parentJob.actualJobs || 0;
+                  parentJob.allJobsQueued = true;
+                  console.log(YELLOW + `[processBulkJobs] Marked ${parentJobId} as complete with ${parentJob.totalJobs} jobs (capacity limit reached)` + RESET);
+                }
+              }
+              
+              // Continue with next chunk instead of getting stuck
+              continue;
+            }
+            
+            console.log(YELLOW + `[processBulkJobs] Task ${taskId}: Queue at capacity or partial processing. Waiting... (retry ${chunkRetryCount}/${MAX_CHUNK_RETRIES})` + RESET);
 
             // Wait for queue to drain
             while (true) {
@@ -5161,12 +5255,13 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
         }
       }
 
-      // After all chunks processed, update parent jobs with actual counts and mark as queued
+      // After all chunks processed, finalize parent jobs that haven't been marked complete
       for (const [marketplace, actualCount] of jobsAddedByMarketplace) {
         const parentJobId = getParentJobId(taskId, marketplace);
         const parentJob = parentJobs.get(parentJobId);
-        if (parentJob) {
-          // Update actual jobs count
+        if (parentJob && !parentJob.allJobsQueued) {
+          // Only update if not already marked as complete (by retry limit logic)
+          // Update actual jobs count (should already be updated incrementally)
           parentJob.actualJobs = (parentJob.actualJobs || 0) + actualCount;
           parentJob.allJobsQueued = true;
 
@@ -5174,13 +5269,33 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
           const previousTotal = parentJob.totalJobs;
           parentJob.totalJobs = parentJob.actualJobs;
 
-          // Silent update
+          console.log(GREEN + `[processBulkJobs] Finalized ${parentJobId}: totalJobs=${parentJob.totalJobs} (was ${previousTotal})` + RESET);
+        }
+      }
+
+      // Ensure all marketplaces are marked as queued complete
+      const allMarketplaces = new Set<string>();
+      for (const job of jobs) {
+        const marketplace = getMarketplaceFromJobName(job.name);
+        if (marketplace) allMarketplaces.add(marketplace);
+      }
+      
+      for (const marketplace of allMarketplaces) {
+        const parentJobId = getParentJobId(taskId, marketplace);
+        const parentJob = parentJobs.get(parentJobId);
+        if (parentJob && !parentJob.allJobsQueued) {
+          // This marketplace didn't get updated above, meaning no jobs were queued
+          parentJob.actualJobs = parentJob.actualJobs || 0;
+          parentJob.totalJobs = parentJob.actualJobs;
+          parentJob.allJobsQueued = true;
+          console.log(YELLOW + `[processBulkJobs] Marked ${parentJobId} as complete with 0 new jobs queued` + RESET);
         }
       }
 
       // Check if we queued all requested jobs
       if (actuallyQueuedCount < jobs.length) {
-        const error = new Error(`Partial job queueing failure: only ${actuallyQueuedCount}/${jobs.length} jobs queued for task ${taskId}`);
+        const skippedCount = jobs.length - actuallyQueuedCount;
+        console.log(YELLOW + `[processBulkJobs] Partial job queueing: ${actuallyQueuedCount}/${jobs.length} jobs queued for task ${taskId} (${skippedCount} skipped due to capacity)` + RESET);
 
         // Log the partial failure details
         await logger.logQueueError('Partial job queueing', {
@@ -5188,13 +5303,27 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
           marketplace: getMarketplaceFromJobName(firstJob.name) || 'unknown',
           requested: jobs.length,
           queued: actuallyQueuedCount,
-          skipped: jobs.length - actuallyQueuedCount,
+          skipped: skippedCount,
           queueCapacity: MAX_QUEUE_JOBS - await getTotalJobsInQueues(),
-          error
+          isCapacityIssue: true
         });
 
-        // Don't update task status or parent job - let the retry handle it
-        throw error;
+        // Special handling when NO jobs were queued at all
+        if (actuallyQueuedCount === 0) {
+          console.log(RED + `[processBulkJobs] CRITICAL: 0 jobs were queued for task ${taskId} - completing loop to prevent stuck status` + RESET);
+          
+          // Transition task status to prevent getting stuck in QUEUEING
+          setTaskStatus(taskId, 'RUNNING', 'no jobs queued - completing loop');
+          
+          // Check if all parent jobs are complete to trigger next loop
+          const allComplete = checkAllParentJobsComplete(taskId);
+          if (allComplete) {
+            console.log(GREEN + `[processBulkJobs] All parent jobs complete for task ${taskId}, triggering completion` + RESET);
+            await checkTaskCompletionAndScheduleNext(taskId);
+          }
+        }
+        
+        // Don't throw error - we've handled the partial queueing gracefully
       }
 
       // Trigger percentage update now that all jobs are queued
@@ -5233,6 +5362,11 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
       // Clear lock extension interval if set
       if (lockExtensionInterval) {
         clearInterval(lockExtensionInterval);
+      }
+
+      // Clear scheduled bid lock extension interval if set
+      if (scheduledBidLockInterval) {
+        clearInterval(scheduledBidLockInterval);
       }
 
       // Stop the rate limiter
@@ -5470,10 +5604,14 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
     console.log(MAGENTA + `[startTask] Task ${taskId} status: ${previousStatus} -> STARTED` + RESET);
 
     // Simple loop counter: initialize to 0, then increment each time startTask is called
+    const previousLoopCount = loopCounterStats[taskId] || 0;
     if (!loopCounterStats[taskId]) {
       loopCounterStats[taskId] = 0;
     }
     loopCounterStats[taskId]++;
+    const newLoopCount = loopCounterStats[taskId];
+    
+    console.log(CYAN + `[startTask] Starting new loop #${newLoopCount} for task ${taskId} (previous: #${previousLoopCount})` + RESET);
 
     // Clear all processed jobs for this task to ensure fresh tracking
     for (const [parentJobId, processedJobs] of processedJobsPerParent.entries()) {
@@ -5481,6 +5619,46 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
         console.log(YELLOW + `[startTask] Clearing processed jobs for parent: ${parentJobId} (${processedJobs.size} entries)` + RESET);
         processedJobsPerParent.delete(parentJobId);
       }
+    }
+    
+    // Clear ALL parent jobs for this task from previous loops
+    console.log(YELLOW + `[startTask] Clearing parent jobs from previous loops for task ${taskId}` + RESET);
+    let clearedParentJobs = 0;
+    for (const [parentJobId, parentJob] of parentJobs.entries()) {
+      if (parentJobId.includes(taskId)) {
+        // Delete all parent jobs for this task, regardless of loop number
+        // They will be recreated fresh for the new loop
+        console.log(YELLOW + `  - Clearing parent job ${parentJobId} (loop #${parentJob.loopNumber})` + RESET);
+        parentJobs.delete(parentJobId);
+        clearedParentJobs++;
+      }
+    }
+    if (clearedParentJobs > 0) {
+      console.log(GREEN + `[startTask] Cleared ${clearedParentJobs} parent jobs from previous loops` + RESET);
+    }
+    
+    // Clear pending job creation promises for this task
+    console.log(YELLOW + `[startTask] Clearing pending job creation promises for task ${taskId}` + RESET);
+    let clearedPromises = 0;
+    for (const [promiseKey] of pendingJobCreation.entries()) {
+      if (promiseKey.includes(taskId)) {
+        console.log(YELLOW + `  - Clearing pending promise: ${promiseKey}` + RESET);
+        pendingJobCreation.delete(promiseKey);
+        clearedPromises++;
+      }
+    }
+    if (clearedPromises > 0) {
+      console.log(GREEN + `[startTask] Cleared ${clearedPromises} pending job creation promises` + RESET);
+    }
+    
+    // Clear any task-specific state in warningBids and warningMessage
+    if (warningBids[taskId]) {
+      console.log(YELLOW + `[startTask] Clearing warning bids for task ${taskId}` + RESET);
+      delete warningBids[taskId];
+    }
+    if (warningMessage[taskId]) {
+      console.log(YELLOW + `[startTask] Clearing warning messages for task ${taskId}` + RESET);
+      delete warningMessage[taskId];
     }
   } else {
     // Marketplace-specific start - reset only that marketplace's stats
@@ -11021,7 +11199,9 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, scheduleJ
         }
       }
     } else {
-      // No jobs to create - create empty parent job and schedule next loop
+      // No jobs to create - create empty parent job and complete the loop
+      console.log(YELLOW + `[OPENSEA] No jobs to create for task ${taskId} - completing loop with 0 jobs` + RESET);
+      
       await ensureParentJobExists(taskId, 'opensea');
       const parentJobId = getParentJobId(taskId, 'opensea');
       const parentJob = parentJobs.get(parentJobId);
@@ -11031,15 +11211,22 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, scheduleJ
         parentJob.actualJobs = 0;
         parentJob.completedJobs = 0;
         parentJob.allJobsQueued = true;
+        console.log(GREEN + `[OPENSEA] Marked parent job ${parentJobId} as complete with 0 jobs` + RESET);
       }
 
-      // Update task status
-      setTaskStatus(taskId, 'COMPLETED', 'opensea no jobs to create');
+      // Update task status to trigger completion flow
+      setTaskStatus(taskId, 'RUNNING', 'opensea no jobs - completing loop');
       await updateTaskRunningPercentage(taskId);
-
-      // Log the reason and throw error to retry
-      console.log(YELLOW + `[OPENSEA] No jobs created for task ${taskId} - will retry later` + RESET);
-      throw new Error('No jobs to create - will retry later');
+      
+      // Check if all parent jobs are complete to trigger next loop
+      const allComplete = checkAllParentJobsComplete(taskId);
+      if (allComplete) {
+        console.log(GREEN + `[OPENSEA] All parent jobs complete for task ${taskId}, triggering completion` + RESET);
+        await checkTaskCompletionAndScheduleNext(taskId);
+      }
+      
+      // Don't throw error - let the loop complete normally
+      console.log(YELLOW + `[OPENSEA] Loop will complete with 0 jobs and retry in next cycle` + RESET);
     }
   } catch (error) {
     console.error(RED + `Error processing OpenSea scheduled bid for task: ${task._id}` + RESET, error);
@@ -11680,7 +11867,9 @@ async function processBlurScheduledBid(task: ITask) {
       // Trigger percentage update now that the job is queued
       await updateTaskRunningPercentage(taskId);
     } else {
-      // No jobs to create - create empty parent job and schedule next loop
+      // No jobs to create - create empty parent job and complete the loop
+      console.log(YELLOW + `[BLUR] No jobs to create for task ${taskId} - completing loop with 0 jobs` + RESET);
+      
       const parentJobId = `${taskId}-blur`;
       await ensureParentJobExists(taskId, 'blur');
       const parentJob = parentJobs.get(parentJobId);
@@ -11690,15 +11879,22 @@ async function processBlurScheduledBid(task: ITask) {
         parentJob.actualJobs = 0;
         parentJob.completedJobs = 0;
         parentJob.allJobsQueued = true;
+        console.log(GREEN + `[BLUR] Marked parent job ${parentJobId} as complete with 0 jobs` + RESET);
       }
 
-      // Update task status
-      taskStatus[taskId].status = 'COMPLETED';
+      // Update task status to trigger completion flow
+      setTaskStatus(taskId, 'RUNNING', 'blur no jobs - completing loop');
       await updateTaskRunningPercentage(taskId);
-
-      // Log the reason and throw error to retry
-      console.log(YELLOW + `[BLUR] No jobs created for task ${taskId} - will retry later` + RESET);
-      throw new Error('No jobs to create - will retry later');
+      
+      // Check if all parent jobs are complete to trigger next loop
+      const allComplete = checkAllParentJobsComplete(taskId);
+      if (allComplete) {
+        console.log(GREEN + `[BLUR] All parent jobs complete for task ${taskId}, triggering completion` + RESET);
+        await checkTaskCompletionAndScheduleNext(taskId);
+      }
+      
+      // Don't throw error - let the loop complete normally
+      console.log(YELLOW + `[BLUR] Loop will complete with 0 jobs and retry in next cycle` + RESET);
     }
   } catch (error) {
     console.error(RED + `Error processing Blur scheduled bid for task: ${task._id}` + RESET, error);
@@ -13483,7 +13679,9 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
       // Trigger percentage update now that the job is queued
       await updateTaskRunningPercentage(taskId);
     } else {
-      // No jobs to create - create empty parent job and schedule next loop
+      // No jobs to create - create empty parent job and complete the loop
+      console.log(YELLOW + `[MAGICEDEN] No jobs to create for task ${taskId} - completing loop with 0 jobs` + RESET);
+      
       await ensureParentJobExists(taskId, 'magiceden');
       const parentJobId = getParentJobId(taskId, 'magiceden');
       const parentJob = parentJobs.get(parentJobId);
@@ -13493,15 +13691,22 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
         parentJob.actualJobs = 0;
         parentJob.completedJobs = 0;
         parentJob.allJobsQueued = true;
+        console.log(GREEN + `[MAGICEDEN] Marked parent job ${parentJobId} as complete with 0 jobs` + RESET);
       }
 
-      // Update task status
-      setTaskStatus(taskId, 'COMPLETED', 'magiceden no jobs to create');
+      // Update task status to trigger completion flow
+      setTaskStatus(taskId, 'RUNNING', 'magiceden no jobs - completing loop');
       await updateTaskRunningPercentage(taskId);
-
-      // Log the reason and throw error to retry
-      console.log(YELLOW + `[MAGICEDEN] No jobs created for task ${taskId} - will retry later` + RESET);
-      throw new Error('No jobs to create - will retry later');
+      
+      // Check if all parent jobs are complete to trigger next loop
+      const allComplete = checkAllParentJobsComplete(taskId);
+      if (allComplete) {
+        console.log(GREEN + `[MAGICEDEN] All parent jobs complete for task ${taskId}, triggering completion` + RESET);
+        await checkTaskCompletionAndScheduleNext(taskId);
+      }
+      
+      // Don't throw error - let the loop complete normally
+      console.log(YELLOW + `[MAGICEDEN] Loop will complete with 0 jobs and retry in next cycle` + RESET);
     }
   } catch (error) {
     console.error(RED + `Error processing MagicEden scheduled bid for task: ${task._id} (${Date.now() - checkpointStart}ms)` + RESET, error);
