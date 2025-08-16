@@ -43,7 +43,6 @@ import BidLogs from "./models/logs.model";
 import PQueue from "p-queue";
 import Order from "./models/order.model";
 import Approval from "./models/approval.model";
-import Bottleneck from "bottleneck";
 import { USDC, WETH } from "./utils/currencies";
 import axios from "axios";
 import { decryptPrivateKey, setPassword, getPassword, decryptPassword, recoverPasswordFromRedis, renewPasswordTTL, reEncryptWallet, clearDecryptedKeyCache } from "./utils/crypto";
@@ -288,6 +287,9 @@ const LOCK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const tasksBeingScheduled = new Map<string, boolean>();
 // Add a Map to track tasks being stopped to prevent double triggering
 const tasksBeingStopped = new Map<string, boolean>();
+
+// Track tasks being restarted to prevent duplicate restart attempts
+const tasksBeingRestarted = new Set<string>();
 
 // Track active cancellation operations
 interface CancellationOperation {
@@ -1753,7 +1755,7 @@ async function startServer() {
       const worker = new Worker(
         QUEUE_NAME,
         async (job) => {
-          const jobTimeout = job.name.endsWith('_SCHEDULE') ? 300000 : 60000; // 5 minutes for scheduled jobs, 60 seconds for others
+          const jobTimeout = job.name.endsWith('_SCHEDULE') ? 900000 : 60000; // 15 minutes for scheduled jobs, 60 seconds for others
           const abortController = new AbortController();
 
           const timeoutPromise = new Promise((_, reject) => {
@@ -1833,7 +1835,7 @@ async function startServer() {
     const blurWorker = new Worker(
       BLUR_BIDDING_QUEUE,
       async (job) => {
-        const jobTimeout = job.name === BLUR_SCHEDULE ? 300000 : 60000; // 5 minutes for scheduled jobs, 60 seconds for others
+        const jobTimeout = job.name === BLUR_SCHEDULE ? 900000 : 60000; // 15 minutes for scheduled jobs, 60 seconds for others
         const abortController = new AbortController();
 
         const timeoutPromise = new Promise((_, reject) => {
@@ -2756,6 +2758,35 @@ async function updateTaskRunningPercentage(taskId: string) {
       // Log the values being used for transparency
       if (parentJob.allJobsQueued) {
         console.log(CYAN + `[updateTaskRunningPercentage] ${parentJobId}: Using totalJobs=${mpTotal} (actualJobs=${parentJob.actualJobs}, expectedJobs=${parentJob.expectedJobs}, allJobsQueued=true)` + RESET);
+        
+        // Log partial queueing warning
+        if (parentJob.actualJobs !== undefined && parentJob.expectedJobs !== undefined && 
+            parentJob.actualJobs < parentJob.expectedJobs) {
+          console.log(YELLOW + `    ⚠️  Partial queueing detected: ${parentJob.completedJobs}/${parentJob.actualJobs} completed (${parentJob.expectedJobs} expected)` + RESET);
+        }
+        
+        // Detect stuck condition: allJobsQueued=true, totalJobs=0, but expectedJobs > 0
+        if (mpTotal === 0 && parentJob.expectedJobs && parentJob.expectedJobs > 0) {
+          console.log(RED + `[updateTaskRunningPercentage] STUCK CONDITION DETECTED: ${parentJobId} has 0 totalJobs but expectedJobs=${parentJob.expectedJobs}` + RESET);
+          
+          // Check if we haven't already scheduled a restart for this task
+          const restartKey = `restart-scheduled:${taskId}`;
+          if (!tasksBeingRestarted.has(restartKey)) {
+            tasksBeingRestarted.add(restartKey);
+            
+            // Schedule a restart after a brief delay to avoid race conditions
+            setTimeout(async () => {
+              try {
+                await triggerTaskRestart(taskId);
+              } finally {
+                // Clear the restart flag after attempting restart
+                tasksBeingRestarted.delete(restartKey);
+              }
+            }, 2000);
+            
+            console.log(YELLOW + `[updateTaskRunningPercentage] Scheduled restart for stuck task ${taskId} in 2 seconds` + RESET);
+          }
+        }
       } else {
         console.log(CYAN + `[updateTaskRunningPercentage] ${parentJobId}: Using totalJobs=${mpTotal} (expectedJobs=${parentJob.expectedJobs}, allJobsQueued=false - still queueing)` + RESET);
       }
@@ -2782,6 +2813,34 @@ async function updateTaskRunningPercentage(taskId: string) {
         completed: 0,
         percentage: 0
       };
+    }
+  }
+
+  // Check if we have partial queueing and if all actual jobs are complete
+  let allActualJobsComplete = true;
+  let hasPartialQueueing = false;
+  let expectedTotal = 0;
+  let actualTotal = 0;
+  
+  for (const marketplace of marketplacesToCheck) {
+    const parentJobId = getParentJobId(taskId, marketplace);
+    const parentJob = parentJobs.get(parentJobId);
+    
+    if (parentJob && parentJob.allJobsQueued) {
+      expectedTotal += parentJob.expectedJobs || 0;
+      actualTotal += parentJob.actualJobs || 0;
+      
+      // Check for partial queueing
+      if (parentJob.actualJobs !== undefined && parentJob.expectedJobs !== undefined &&
+          parentJob.actualJobs < parentJob.expectedJobs) {
+        hasPartialQueueing = true;
+      }
+      
+      // Check if all actual jobs for this marketplace are complete
+      if (parentJob.actualJobs !== undefined && 
+          parentJob.completedJobs < parentJob.actualJobs) {
+        allActualJobsComplete = false;
+      }
     }
   }
 
@@ -2815,13 +2874,26 @@ async function updateTaskRunningPercentage(taskId: string) {
   const overallProgressBar = '█'.repeat(overallFilledLength) + '░'.repeat(Math.max(0, overallBarLength - overallFilledLength));
   console.log(MAGENTA + `  [${overallProgressBar}] ${runningPercentage.toFixed(2)}%` + RESET);
 
-  // Only trigger completion when we reach exactly 100%
-  if (taskStatus[taskId].runningPercentage >= 100) {
+  // Trigger completion when:
+  // 1. We reach 100% normally, OR
+  // 2. We have partial queueing AND all actual jobs are complete
+  const shouldTriggerCompletion = 
+    taskStatus[taskId].runningPercentage >= 100 ||
+    (hasPartialQueueing && allActualJobsComplete && completedJobs === actualTotal && actualTotal > 0);
+  
+  if (shouldTriggerCompletion) {
     // Check if recently completed to prevent duplicate completion calls
     const isRecentlyCompleted = false;
 
     if (!isRecentlyCompleted) {
-      console.log(GREEN + `[Completion] Task ${taskId} reached 100.0% - triggering completion` + RESET);
+      if (hasPartialQueueing && taskStatus[taskId].runningPercentage < 100) {
+        console.log(YELLOW + `[Partial Completion] Task ${taskId} completed all ${completedJobs}/${actualTotal} actual jobs (${expectedTotal} were expected)` + RESET);
+        console.log(YELLOW + `  Triggering completion at ${runningPercentage.toFixed(2)}% due to partial queueing` + RESET);
+      } else {
+        console.log(GREEN + `[Completion] Task ${taskId} reached ${runningPercentage.toFixed(2)}% - triggering completion` + RESET);
+      }
+      
+      // Force to 100% for UI consistency
       taskStatus[taskId].runningPercentage = 100;
       await checkTaskCompletionAndScheduleNext(taskId);
     }
@@ -2976,14 +3048,60 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
     setTaskStatus(taskId, 'RUNNING', 'job marked as processed');
   }
 
+  // CRITICAL: Use a mutex lock to prevent race conditions during counter increment
+  const counterLockKey = `counter-lock:${parentJobId}`;
+  const lockManager = new DistributedLockManager({
+    lockPrefix: '{counter}:',
+    defaultTTLSeconds: 5
+  });
 
-  // Increment completed jobs with hard cap protection
-  parentJob.completedJobs++;
+  let lockAcquired = false;
+  try {
+    // Acquire lock with short timeout to prevent deadlocks
+    lockAcquired = await lockManager.acquireLock(counterLockKey, 5);
+    
+    if (!lockAcquired) {
+      console.log(RED + `[markJobAsProcessed] Failed to acquire counter lock for ${parentJobId}, retrying...` + RESET);
+      // Wait a bit and retry once
+      await new Promise(resolve => setTimeout(resolve, 50));
+      lockAcquired = await lockManager.acquireLock(counterLockKey, 5);
+      
+      if (!lockAcquired) {
+        console.error(RED + `[markJobAsProcessed] CRITICAL: Could not acquire lock for counter increment! Job ${jobId} may not be counted.` + RESET);
+        // Continue anyway to prevent job from being stuck
+      }
+    }
 
-  // Additional safety check to prevent overflow (should never happen with above logic)
-  if (parentJob.completedJobs > parentJob.totalJobs) {
-    console.log(RED + `[markJobAsProcessed] OVERFLOW DETECTED: ${parentJobId} completed ${parentJob.completedJobs} exceeds total ${parentJob.totalJobs}, capping to total` + RESET);
-    parentJob.completedJobs = parentJob.totalJobs;
+    // Re-fetch parent job inside the lock to get latest values
+    parentJob = parentJobs.get(parentJobId);
+    if (!parentJob) {
+      console.error(RED + `[markJobAsProcessed] Parent job disappeared during lock acquisition!` + RESET);
+      return;
+    }
+
+    // Log before increment for debugging
+    const beforeCount = parentJob.completedJobs;
+    
+    // Increment completed jobs with hard cap protection
+    parentJob.completedJobs++;
+    
+    // Log after increment
+    console.log(CYAN + `[markJobAsProcessed] Counter incremented for ${parentJobId}: ${beforeCount} -> ${parentJob.completedJobs}` + RESET);
+
+    // Additional safety check to prevent overflow (should never happen with above logic)
+    if (parentJob.completedJobs > parentJob.totalJobs) {
+      console.log(RED + `[markJobAsProcessed] OVERFLOW DETECTED: ${parentJobId} completed ${parentJob.completedJobs} exceeds total ${parentJob.totalJobs}, capping to total` + RESET);
+      parentJob.completedJobs = parentJob.totalJobs;
+    }
+  } finally {
+    // Always release the lock
+    if (lockAcquired) {
+      try {
+        await lockManager.releaseLock(counterLockKey);
+      } catch (error) {
+        console.error(RED + `[markJobAsProcessed] Error releasing counter lock: ${error}` + RESET);
+      }
+    }
   }
 
   // If this was the first job and totalJobs is 0, set it to 1
@@ -3274,6 +3392,79 @@ function initializeQueueEventHandlers() {
         // Write to scheduled job failures log
         const logPath = path.join(logsDir, 'scheduled-job-failures.log');
         fs.appendFileSync(logPath, JSON.stringify(errorDetails, null, 2) + '\n---\n');
+
+        // Handle timeout failures by restarting the task
+        if (failedReason?.includes('timed out after') && jobId.includes('-schedule')) {
+          const taskId = jobId.split('-')[0];
+          
+          // Use a distributed lock to prevent multiple restarts
+          const restartLockKey = `schedule-timeout-restart:${taskId}`;
+          const lockManager = new DistributedLockManager({
+            lockPrefix: '{task-restart}:',
+            defaultTTLSeconds: 60
+          });
+          
+          try {
+            const lockAcquired = await lockManager.acquireLock(restartLockKey, 60);
+            if (lockAcquired) {
+              try {
+                console.log(YELLOW + `[Queue Event] Schedule job timeout detected for task ${taskId}, triggering restart` + RESET);
+                
+                // Get the task
+                const task = await Task.findById(taskId);
+                if (task) {
+                  // Clear stuck parent jobs for all marketplaces
+                  const marketplaces = ['opensea', 'magiceden', 'blur'];
+                  for (const mp of marketplaces) {
+                    const parentJobId = getParentJobId(taskId, mp);
+                    if (parentJobs.has(parentJobId)) {
+                      console.log(YELLOW + `[Queue Event] Clearing stuck parent job ${parentJobId}` + RESET);
+                      parentJobs.delete(parentJobId);
+                      processedJobsPerParent.delete(parentJobId);
+                    }
+                  }
+                  
+                  // Clear preprocessing data to force fresh preprocessing
+                  taskPreprocessing.delete(taskId);
+                  
+                  // Clear any scheduled bid locks for all marketplaces
+                  for (const mp of marketplaces) {
+                    try {
+                      releaseScheduledBidLock(taskId, mp);
+                    } catch (error) {
+                      // Ignore errors - lock may not exist
+                    }
+                  }
+                  
+                  // Reset task status and restart
+                  console.log(GREEN + `[Queue Event] Restarting task ${taskId} after schedule job timeout` + RESET);
+                  setTaskStatus(taskId, 'SCHEDULED', 'restarting after timeout');
+                  await startTask(task, true);
+                  
+                  // Log the restart
+                  const restartLogPath = path.join(logsDir, 'task-restarts.log');
+                  const restartDetails = {
+                    timestamp: new Date().toISOString(),
+                    taskId,
+                    reason: 'schedule_job_timeout',
+                    failedJobId: jobId,
+                    failedReason
+                  };
+                  fs.appendFileSync(restartLogPath, JSON.stringify(restartDetails, null, 2) + '\n---\n');
+                }
+              } finally {
+                await lockManager.releaseLock(restartLockKey);
+              }
+            } else {
+              console.log(YELLOW + `[Queue Event] Another process is already restarting task ${taskId}` + RESET);
+            }
+          } catch (lockError) {
+            console.error(RED + `[Queue Event] Error acquiring restart lock for task ${taskId}: ${lockError}` + RESET);
+          }
+          
+          // Don't continue with the normal retry exhaustion logic
+          return;
+        }
 
         // Check if this is the final failure (after all retries)
         if (job && job.attemptsMade >= (job.opts?.attempts || 1)) {
@@ -4889,14 +5080,8 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
   let lastProgressUpdate = Date.now();
   const progressUpdateInterval = 10000; // Update every 10 seconds
 
-  // Create a rate limiter for queueing jobs at RATE_LIMIT per second
-  const queueRateLimiter = new Bottleneck({
-    minTime: 1000 / RATE_LIMIT, // Minimum time between each job
-    maxConcurrent: RATE_LIMIT,  // Maximum concurrent job additions
-    reservoir: RATE_LIMIT,      // Initial reservoir size
-    reservoirRefreshAmount: RATE_LIMIT, // Refill to RATE_LIMIT
-    reservoirRefreshInterval: 1000, // Refill every second
-  });
+  // Create a simple rate limiter for queueing jobs at RATE_LIMIT per second
+  const rateLimiter = new RateLimiter(RATE_LIMIT);
 
   // Calculate dynamic lock TTL based on job count and rate limit
   const estimatedProcessingTime = Math.ceil(jobs.length / RATE_LIMIT); // in seconds
@@ -4957,6 +5142,28 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
     // Don't override CANCELLING status for cancellation jobs
     if (taskStatus[taskId] && taskStatus[taskId].status !== "RUNNING" && !isCancellationJob) {
       setTaskStatus(taskId, "QUEUEING", "jobs being queued");
+    }
+
+    // Wait for queue to drain before starting bulk operations
+    const counts = await queue.getJobCounts();
+    const blurCounts = await blurQueue.getJobCounts();
+    const prioritizedCount = (counts.prioritized || 0) + (blurCounts.prioritized || 0);
+    
+    if (prioritizedCount > DRAIN_THRESHOLD) {
+      console.log(YELLOW + `[processBulkJobs] Waiting for queue to drain. Current prioritized: ${prioritizedCount}, threshold: ${DRAIN_THRESHOLD}` + RESET);
+      while (true) {
+        const newCounts = await queue.getJobCounts();
+        const newBlurCounts = await blurQueue.getJobCounts();
+        const newPrioritizedCount = (newCounts.prioritized || 0) + (newBlurCounts.prioritized || 0);
+        
+        if (newPrioritizedCount <= DRAIN_THRESHOLD) {
+          console.log(GREEN + `[processBulkJobs] Queue drained to ${newPrioritizedCount}. Proceeding with job queueing.` + RESET);
+          break;
+        }
+        
+        const delay = (newPrioritizedCount / DRAIN_THRESHOLD) * 1000;
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
     }
 
     const CHUNK_SIZE = 50; // Reduced from 100 for better throughput
@@ -5066,10 +5273,9 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
                 // Add jobs with rate limiting using chunked addBulk
                 const rateLimitChunks = chunk(jobsToAdd, RATE_LIMIT);
 
-                for (const [index, jobChunk] of rateLimitChunks.entries()) {
-                  await queueRateLimiter.schedule(async () => {
-                    await queue.addBulk(jobChunk);
-                  });
+                for (const jobChunk of rateLimitChunks) {
+                  await rateLimiter.acquire();
+                  await queue.addBulk(jobChunk);
                 }
 
                 // Track actual jobs added for each marketplace
@@ -5127,10 +5333,9 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
                 // Add Blur jobs with rate limiting using chunked addBulk
                 const blurRateLimitChunks = chunk(blurJobsToAdd, RATE_LIMIT);
-                for (const [index, jobChunk] of blurRateLimitChunks.entries()) {
-                  await queueRateLimiter.schedule(async () => {
-                    await blurQueue.addBulk(jobChunk);
-                  });
+                for (const jobChunk of blurRateLimitChunks) {
+                  await rateLimiter.acquire();
+                  await blurQueue.addBulk(jobChunk);
                 }
 
                 // Track actual Blur jobs added
@@ -5310,17 +5515,16 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
         // Special handling when NO jobs were queued at all
         if (actuallyQueuedCount === 0) {
-          console.log(RED + `[processBulkJobs] CRITICAL: 0 jobs were queued for task ${taskId} - completing loop to prevent stuck status` + RESET);
+          console.log(RED + `[processBulkJobs] CRITICAL: 0 jobs were queued for task ${taskId} - triggering task restart` + RESET);
           
           // Transition task status to prevent getting stuck in QUEUEING
-          setTaskStatus(taskId, 'RUNNING', 'no jobs queued - completing loop');
+          setTaskStatus(taskId, 'RUNNING', 'no jobs queued - restarting task');
           
-          // Check if all parent jobs are complete to trigger next loop
-          const allComplete = checkAllParentJobsComplete(taskId);
-          if (allComplete) {
-            console.log(GREEN + `[processBulkJobs] All parent jobs complete for task ${taskId}, triggering completion` + RESET);
-            await checkTaskCompletionAndScheduleNext(taskId);
-          }
+          // Trigger a task restart to recover from the stuck state
+          setTimeout(async () => {
+            console.log(YELLOW + `[processBulkJobs] Triggering restart for task ${taskId} due to 0 jobs queued` + RESET);
+            await triggerTaskRestart(taskId);
+          }, 1000); // Small delay to allow current operations to complete
         }
         
         // Don't throw error - we've handled the partial queueing gracefully
@@ -5368,9 +5572,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
       if (scheduledBidLockInterval) {
         clearInterval(scheduledBidLockInterval);
       }
-
-      // Stop the rate limiter
-      await queueRateLimiter.stop();
     }
   } finally {
     // Always release the task lock
@@ -5541,6 +5742,53 @@ function removeChar(str: string, char: string): string {
   return str.split(char).join('');
 }
 
+// Function to trigger task restart when stuck at 0% due to queue capacity issues
+async function triggerTaskRestart(taskId: string) {
+  const task = activeTasks.get(taskId);
+  if (!task) {
+    console.log(YELLOW + `[triggerTaskRestart] Task ${taskId} not found in activeTasks` + RESET);
+    return;
+  }
+  
+  console.log(RED + `[triggerTaskRestart] Restarting stuck task ${taskId} due to queue capacity issue` + RESET);
+  
+  // Clear any stuck parent jobs for all marketplaces
+  const marketplaces = ['opensea', 'magiceden', 'blur'];
+  for (const marketplace of marketplaces) {
+    const parentJobId = getParentJobId(taskId, marketplace);
+    if (parentJobs.has(parentJobId)) {
+      console.log(YELLOW + `[triggerTaskRestart] Clearing stuck parent job: ${parentJobId}` + RESET);
+      parentJobs.delete(parentJobId);
+    }
+  }
+  
+  // Clear processed jobs tracking
+  marketplaces.forEach(marketplace => {
+    const parentJobId = getParentJobId(taskId, marketplace);
+    processedJobsPerParent.delete(parentJobId);
+  });
+  
+  // Reset task status to SCHEDULED to allow restart
+  setTaskStatus(taskId, 'SCHEDULED', 'restarting stuck task');
+  
+  // Clear any preprocessing data
+  taskPreprocessing.delete(taskId);
+  
+  console.log(GREEN + `[triggerTaskRestart] Triggering restart for task ${taskId}` + RESET);
+  
+  try {
+    // Restart the task
+    await startTask(task, true);
+    console.log(GREEN + `[triggerTaskRestart] Successfully restarted task ${taskId}` + RESET);
+  } catch (error) {
+    console.error(RED + `[triggerTaskRestart] Failed to restart task ${taskId}:` + RESET, error);
+    // Log the error but don't throw - we want to attempt recovery
+    await logger.logGeneralError('Failed to restart stuck task', {
+      taskId,
+      error: error instanceof Error ? error : new Error(String(error))
+    });
+  }
+}
 
 // Wrapper function with retry logic for Redis timeouts
 async function startTask(task: ITask, start: boolean, marketplace?: string) {
@@ -5904,6 +6152,7 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
                 removeOnFail: true,
                 attempts: 100,
                 timeout: 900000, // 15 minutes instead of default 5
+                priority: 1, // Higher priority than default jobs
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -18771,7 +19020,125 @@ async function checkStuckTasks() {
       if (!task.running) continue;
 
       const status = taskStatus[taskId];
-      if (!status || (status.status !== 'RUNNING' && status.status !== 'QUEUED')) continue;
+      if (!status || (status.status !== 'RUNNING' && status.status !== 'QUEUED' && status.status !== 'QUEUEING')) continue;
+
+      // Check for stuck QUEUEING status
+      if (status.status === 'QUEUEING') {
+        const firstSeenQueueing = taskCompletionTracking.get(`${taskId}-queueing`);
+        
+        if (!firstSeenQueueing) {
+          // First time seeing this task in QUEUEING
+          taskCompletionTracking.set(`${taskId}-queueing`, now);
+          console.log(YELLOW + `[Stuck Task Monitor] Task ${taskId} in QUEUEING status, monitoring...` + RESET);
+        } else {
+          // Check if stuck in QUEUEING for too long
+          const stuckDuration = now - firstSeenQueueing;
+          
+          if (stuckDuration > 600000) { // 10 minutes in QUEUEING
+            console.log(RED + `[Stuck Task] Task ${taskId} stuck in QUEUEING for ${(stuckDuration / 1000).toFixed(1)}s` + RESET);
+            
+            // Check parent jobs
+            const marketplaces = ['opensea', 'magiceden', 'blur'];
+            let hasEmptyParentJobs = false;
+            
+            for (const mp of marketplaces) {
+              const parentJobId = getParentJobId(taskId, mp);
+              const parentJob = parentJobs.get(parentJobId);
+              if (parentJob && parentJob.totalJobs === 0) {
+                console.log(RED + `  ${mp}: Parent job exists with 0 totalJobs (failed job creation)` + RESET);
+                hasEmptyParentJobs = true;
+              }
+            }
+            
+            if (hasEmptyParentJobs) {
+              console.log(YELLOW + `[Stuck Task] Task ${taskId} has empty parent jobs, likely due to timeout. Restart should be triggered by schedule job timeout handler.` + RESET);
+            }
+            
+            // Clean up tracking after logging
+            taskCompletionTracking.delete(`${taskId}-queueing`);
+          }
+        }
+      } else {
+        // Task is not in QUEUEING, remove from tracking
+        if (taskCompletionTracking.has(`${taskId}-queueing`)) {
+          taskCompletionTracking.delete(`${taskId}-queueing`);
+        }
+      }
+
+      // Check for 99% stuck condition
+      if (status.runningPercentage >= 99 && status.runningPercentage < 100) {
+        const firstSeen99 = taskCompletionTracking.get(`${taskId}-99`);
+        
+        if (!firstSeen99) {
+          // First time seeing this task at 99%
+          taskCompletionTracking.set(`${taskId}-99`, now);
+          console.log(YELLOW + `[Stuck Task Monitor] Task ${taskId} at ${status.runningPercentage.toFixed(2)}%, monitoring...` + RESET);
+          
+          // Log detailed parent job status
+          const marketplaces = ['opensea', 'magiceden', 'blur'];
+          for (const mp of marketplaces) {
+            const parentJobId = getParentJobId(taskId, mp);
+            const parentJob = parentJobs.get(parentJobId);
+            if (parentJob) {
+              console.log(YELLOW + `  ${mp}: ${parentJob.completedJobs}/${parentJob.totalJobs} (${((parentJob.completedJobs / parentJob.totalJobs) * 100).toFixed(2)}%)` + RESET);
+            }
+          }
+        } else {
+          // Check if stuck at 99% for too long
+          const stuckDuration = now - firstSeen99;
+          
+          if (stuckDuration > 120000) { // 2 minutes at 99%
+            console.log(RED + `[Stuck Task] Task ${taskId} stuck at ${status.runningPercentage.toFixed(2)}% for ${(stuckDuration / 1000).toFixed(1)}s` + RESET);
+            
+            // Reconcile actual job counts
+            let totalExpected = 0;
+            let totalCompleted = 0;
+            const marketplaces = ['opensea', 'magiceden', 'blur'];
+            
+            for (const mp of marketplaces) {
+              const parentJobId = getParentJobId(taskId, mp);
+              const parentJob = parentJobs.get(parentJobId);
+              if (parentJob) {
+                totalExpected += parentJob.totalJobs;
+                totalCompleted += parentJob.completedJobs;
+                console.log(RED + `  ${mp}: ${parentJob.completedJobs}/${parentJob.totalJobs} jobs` + RESET);
+              }
+            }
+            
+            const actualPercentage = totalExpected > 0 ? (totalCompleted / totalExpected) * 100 : 0;
+            console.log(RED + `  Actual completion: ${totalCompleted}/${totalExpected} = ${actualPercentage.toFixed(2)}%` + RESET);
+            
+            // If we're actually very close to 100%, force completion
+            if (actualPercentage >= 99.5) {
+              console.log(GREEN + `[Stuck Task] Forcing completion for task ${taskId} (${actualPercentage.toFixed(2)}% complete)` + RESET);
+              
+              // Force all parent jobs to be marked as complete
+              for (const mp of marketplaces) {
+                const parentJobId = getParentJobId(taskId, mp);
+                const parentJob = parentJobs.get(parentJobId);
+                if (parentJob && parentJob.completedJobs < parentJob.totalJobs) {
+                  console.log(GREEN + `  Adjusting ${mp}: ${parentJob.completedJobs} -> ${parentJob.totalJobs}` + RESET);
+                  parentJob.completedJobs = parentJob.totalJobs;
+                }
+              }
+              
+              // Force percentage to 100
+              status.runningPercentage = 100;
+              
+              // Trigger completion
+              await checkTaskCompletionAndScheduleNext(taskId);
+              
+              // Clean up tracking
+              taskCompletionTracking.delete(`${taskId}-99`);
+            }
+          }
+        }
+      } else {
+        // Task is not at 99%, remove from tracking
+        if (taskCompletionTracking.has(`${taskId}-99`)) {
+          taskCompletionTracking.delete(`${taskId}-99`);
+        }
+      }
 
       const allComplete = checkAllParentJobsComplete(taskId);
 
@@ -18797,7 +19164,7 @@ async function checkStuckTasks() {
               // Log the force completion
               const marketplaces = ['opensea', 'magiceden', 'blur'];
               for (const mp of marketplaces) {
-                const parentJobId = `${taskId}-${mp}`;
+                const parentJobId = getParentJobId(taskId, mp);
                 const parentJob = parentJobs.get(parentJobId);
                 if (parentJob) {
                   console.log(`  ${mp}: ${parentJob.completedJobs}/${parentJob.totalJobs}`);

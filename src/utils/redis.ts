@@ -26,7 +26,7 @@ const defaultConfig = {
   maxRetriesPerRequest: null,
   retryDelayOnMoved: 100,
   retryDelayOnClusterDown: 300,
-  maxRedirections: 32, // Increase from default 16 to handle more complex topologies
+  maxRedirections: 16, // Reduced to force earlier slot refresh
   retryStrategy: (times: number) => {
     const delay = Math.min(times * INITIAL_RETRY_DELAY, 20000);
     return delay;
@@ -37,9 +37,17 @@ const defaultConfig = {
       console.log(`[Redis] Cluster retry ${times} due to: ${reason.message}`);
 
       // Handle "Too many Cluster redirections" specifically
-      if (reason.message.includes('Too many Cluster redirections')) {
-        console.error('[Redis] Cluster topology issue detected, forcing reconnect after delay');
-        return 5000; // Wait 5 seconds before reconnecting to allow cluster to stabilize
+      if (reason.message.includes('Too many Cluster redirections') || reason.message.includes('MOVED')) {
+        console.error('[Redis] Cluster topology issue detected, forcing immediate slot refresh');
+        // Force immediate slot refresh on the singleton instance
+        if (RedisClient.instance) {
+          RedisClient.instance.forceSlotRefresh().catch(err => 
+            console.error('[Redis] Failed to force slot refresh during retry:', err)
+          );
+        }
+        // Use exponential backoff for MOVED errors
+        const backoffDelay = Math.min(1000 * Math.pow(2, times - 1), 10000);
+        return backoffDelay;
       }
     }
 
@@ -70,22 +78,27 @@ const defaultConfig = {
 };
 
 class RedisClient {
-  private static instance: RedisClient;
+  private static _instance: RedisClient;
   private client: Cluster | null = null;
   private isConnected: boolean = false;
   private connectionAttempts: number = 0;
   private readonly maxConnectionAttempts = 10;
   private connecting: boolean = false;
 
+  // Getter for instance to allow access in clusterRetryStrategy
+  static get instance(): RedisClient | undefined {
+    return RedisClient._instance;
+  }
+
   private constructor() {
     this.connect();
   }
 
   public static getInstance(): RedisClient {
-    if (!RedisClient.instance) {
-      RedisClient.instance = new RedisClient();
+    if (!RedisClient._instance) {
+      RedisClient._instance = new RedisClient();
     }
-    return RedisClient.instance;
+    return RedisClient._instance;
   }
 
   private async connect() {
@@ -574,4 +587,54 @@ export const handleRedisClusterError = async (error: unknown, context: string): 
   } catch (refreshError) {
     console.error(`[Redis] Failed to refresh slots after error in ${context}:`, refreshError);
   }
+};
+
+// Retry wrapper for Redis operations with exponential backoff
+export const withRedisRetry = async <T>(
+  operation: () => Promise<T>,
+  context: string,
+  maxRetries: number = 3
+): Promise<T | null> => {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error: any) {
+      lastError = error;
+      
+      // Check if it's a cluster error
+      if (isRedisClusterError(error)) {
+        console.warn(`[Redis] Cluster error in ${context} (attempt ${attempt}/${maxRetries}):`, error.message);
+        
+        // Force slot refresh on MOVED errors
+        if (error.message.includes('MOVED') || error.message.includes('Too many Cluster redirections')) {
+          try {
+            await forceRedisSlotRefresh();
+            console.log(`[Redis] Forced slot refresh after MOVED error in ${context}`);
+          } catch (refreshError) {
+            console.error(`[Redis] Failed to refresh slots:`, refreshError);
+          }
+        }
+        
+        // Don't retry if we've exhausted attempts
+        if (attempt === maxRetries) {
+          console.error(`[Redis] Max retries reached for ${context}`);
+          return null;
+        }
+        
+        // Exponential backoff
+        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+        console.log(`[Redis] Retrying ${context} after ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        // Non-cluster errors, don't retry
+        throw error;
+      }
+    }
+  }
+  
+  // If we get here, all retries failed
+  console.error(`[Redis] All retries exhausted for ${context}:`, lastError);
+  return null;
 };

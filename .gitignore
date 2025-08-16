@@ -153,5 +153,4 @@ SERVER_SECURITY_AUDIT_REPORT.md
 .listing-subscriptions.json
 
 # Additional log files
-logs.txt
 message*.txt
