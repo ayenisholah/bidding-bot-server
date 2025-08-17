@@ -5529,8 +5529,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
     const CHUNK_SIZE = RATE_LIMIT * 2; // Reduced from 100 for better throughput
     const chunks = chunk(jobs, CHUNK_SIZE);
     let retryChunkIndex = -1; // Track if we need to retry a chunk
-    let chunkRetryCount = 0; // Track retries for the same chunk
-    const MAX_CHUNK_RETRIES = 5; // Maximum retries for a stuck chunk
 
     // Track total jobs actually added for each marketplace
     const jobsAddedByMarketplace = new Map<string, number>();
@@ -5556,10 +5554,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
         if (retryChunkIndex >= 0) {
           chunkIndex = retryChunkIndex;
           retryChunkIndex = -1;
-          // Don't reset retry count here - we want to track retries for same chunk
-        } else {
-          // Reset retry count when moving to a new chunk
-          chunkRetryCount = 0;
         }
 
         const currentChunk = chunks[chunkIndex];
@@ -5776,34 +5770,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
           // No lock acquisition needed anymore
 
           if (!added) {
-            chunkRetryCount++;
-
-            // Check if we've exceeded retry limit for this chunk
-            if (chunkRetryCount >= MAX_CHUNK_RETRIES) {
-              console.log(YELLOW + `[processBulkJobs] Task ${taskId}: Exceeded retry limit (${MAX_CHUNK_RETRIES}) for chunk ${chunkIndex}. Skipping remaining ${currentChunk.length} jobs.` + RESET);
-
-              // Update parent jobs to reflect that we're done trying to queue
-              const marketplaces = new Set<string>();
-              for (const job of currentChunk) {
-                const marketplace = getMarketplaceFromJobName(job.name);
-                if (marketplace) marketplaces.add(marketplace);
-              }
-
-              // Mark these marketplaces as having completed queueing
-              for (const marketplace of marketplaces) {
-                const parentJobId = getParentJobId(taskId, marketplace);
-                const parentJob = parentJobs.get(parentJobId);
-                if (parentJob) {
-                  // Set totalJobs to match actualJobs since we can't queue more
-                  parentJob.totalJobs = parentJob.actualJobs || 0;
-                  parentJob.allJobsQueued = true;
-                  console.log(YELLOW + `[processBulkJobs] Marked ${parentJobId} as complete with ${parentJob.totalJobs} jobs (capacity limit reached)` + RESET);
-                }
-              }
-
-              // Continue with next chunk instead of getting stuck
-              continue;
-            }
 
             // Optimize wait logic to maintain target range
             const currentCounts = await queue.getJobCounts();
@@ -5812,24 +5778,17 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
             
             // Only wait if we're above the drain threshold
             if (currentPrioritized >= DRAIN_THRESHOLD) {
-              console.log(YELLOW + `[processBulkJobs] Task ${taskId}: Prioritized count (${currentPrioritized}) above threshold. Waiting... (retry ${chunkRetryCount}/${MAX_CHUNK_RETRIES})` + RESET);
+              // Calculate wait time based on queue processing rate
+              const waitTimeSeconds = Math.ceil(currentPrioritized / RATE_LIMIT);
+              const waitTimeMs = waitTimeSeconds * 1000;
               
-              // Wait for prioritized count to drop below threshold
-              while (true) {
-                const counts = await queue.getJobCounts();
-                const blurCounts = await blurQueue.getJobCounts();
-                const newPrioritized = (counts.prioritized || 0) + (blurCounts.prioritized || 0);
-
-                // Continue once we're below threshold
-                if (newPrioritized < DRAIN_THRESHOLD) {
-                  console.log(GREEN + `[processBulkJobs] Task ${taskId}: Prioritized count dropped to ${newPrioritized}. Retrying...` + RESET);
-                  retryChunkIndex = chunkIndex; // Retry this chunk
-                  break;
-                }
-
-                // Minimal wait - just check queue state frequently
-                await new Promise(resolve => setTimeout(resolve, 100));
-              }
+              console.log(YELLOW + `[processBulkJobs] Task ${taskId}: Prioritized count (${currentPrioritized}) above threshold. Waiting ${waitTimeSeconds}s...` + RESET);
+              
+              // Wait for calculated time to allow queue to drain
+              await new Promise(resolve => setTimeout(resolve, waitTimeMs));
+              
+              // After waiting, retry this chunk
+              retryChunkIndex = chunkIndex;
             } else {
               // We're within acceptable range, retry immediately
               console.log(CYAN + `[processBulkJobs] Task ${taskId}: Within target range (${currentPrioritized}), retrying chunk immediately` + RESET);
@@ -5844,13 +5803,19 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
             const blurCounts = await blurQueue.getJobCounts();
             const currentPrioritized = (counts.prioritized || 0) + (blurCounts.prioritized || 0);
             
-            if (currentPrioritized < DRAIN_THRESHOLD && chunkRetryCount < MAX_CHUNK_RETRIES) {
+            if (currentPrioritized < DRAIN_THRESHOLD) {
               // Within target range, retry immediately
               console.log(YELLOW + `[processBulkJobs] Timeout error but within range (${currentPrioritized}), retrying chunk immediately` + RESET);
               retryChunkIndex = chunkIndex;
               chunkIndex--; // Decrement to retry the same chunk
             } else {
-              console.log(RED + `[processBulkJobs] Timeout error and queue full or retry limit reached, skipping chunk` + RESET);
+              console.log(RED + `[processBulkJobs] Timeout error and queue full, waiting before retry` + RESET);
+              // Calculate wait time based on queue processing rate
+              const waitTimeSeconds = Math.ceil(currentPrioritized / RATE_LIMIT);
+              const waitTimeMs = waitTimeSeconds * 1000;
+              await new Promise(resolve => setTimeout(resolve, waitTimeMs));
+              retryChunkIndex = chunkIndex;
+              chunkIndex--; // Decrement to retry the same chunk
             }
           }
           // Continue with next chunk on any error
