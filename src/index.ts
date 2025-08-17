@@ -5560,7 +5560,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
         try {
           // Process chunk
-          let added = false;
 
           // Check capacity and prioritized count
           const counts = await queue.getJobCounts();
@@ -5570,17 +5569,28 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
             (blurCounts.waiting || 0) + (blurCounts.active || 0) + (blurCounts.prioritized || 0);
           const prioritizedJobs = (counts.prioritized || 0) + (blurCounts.prioritized || 0);
 
-          // Skip processing if we're at max capacity OR above drain threshold
-          if (totalJobs >= MAX_QUEUE_JOBS || prioritizedJobs >= DRAIN_THRESHOLD) {
-            // Queue is at capacity or above threshold
-            added = false;
-          } else {
+          // Check if we need to wait for capacity BEFORE processing any jobs
+          if (totalJobs + currentChunk.length > MAX_QUEUE_JOBS || prioritizedJobs >= DRAIN_THRESHOLD) {
+            // Calculate wait time based on queue processing rate
+            const waitTimeSeconds = Math.ceil(prioritizedJobs / RATE_LIMIT);
+            const waitTimeMs = waitTimeSeconds * 1000;
+            
+            console.log(YELLOW + `[processBulkJobs] Task ${taskId}: Queue near capacity (${totalJobs}/${MAX_QUEUE_JOBS}, prioritized: ${prioritizedJobs}). Waiting ${waitTimeSeconds}s before processing chunk of ${currentChunk.length} jobs...` + RESET);
+            
+            // Wait for calculated time to allow queue to drain
+            await new Promise(resolve => setTimeout(resolve, waitTimeMs));
+            
+            // After waiting, retry this chunk from the beginning
+            retryChunkIndex = chunkIndex;
+            chunkIndex--; // Decrement so the loop will process this chunk again
+            continue; // Skip to next iteration
+          }
 
-            // Calculate how many jobs we can actually add
-            const availableSpace = MAX_QUEUE_JOBS - totalJobs;
+          // If we reach here, we have capacity to process the full chunk
+          {
 
-            // Prepare jobs for queue (only process what we have space for)
-            const jobsToProcess = currentChunk.slice(0, availableSpace);
+            // Process the full chunk since we verified we have capacity
+            const jobsToProcess = currentChunk;
 
             const validJobs = jobsToProcess.filter(job => {
               if (!job?.name || !job?.data) return false;
@@ -5602,7 +5612,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
             if (!validJobs.length) {
               console.log(YELLOW + `[processBulkJobs] Task ${taskId}: No valid jobs in chunk` + RESET);
-              added = true; // No valid jobs, but we successfully processed the chunk
+              // No valid jobs, but we successfully processed the chunk
             } else {
               // Separate Blur and non-Blur jobs
               const blurJobs = validJobs.filter(job => BLUR_JOBS.includes(job.name));
@@ -5754,47 +5764,12 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
                 }
               }
 
-              // If we only processed part of the chunk, we need to handle the rest
-              if (jobsToProcess.length < currentChunk.length) {
-                console.log(YELLOW + `[processBulkJobs] Task ${taskId}: Only processed ${jobsToProcess.length} of ${currentChunk.length} jobs due to capacity` + RESET);
-                // Create a new chunk with the remaining jobs
-                chunks[chunkIndex] = currentChunk.slice(jobsToProcess.length);
-                retryChunkIndex = chunkIndex; // Mark this chunk for retry
-                added = false; // Indicate we need to wait
-              } else {
-                added = true; // Successfully added all jobs in this chunk
-              }
+              // We always process the full chunk now
             }
           }
 
           // No lock acquisition needed anymore
-
-          if (!added) {
-
-            // Optimize wait logic to maintain target range
-            const currentCounts = await queue.getJobCounts();
-            const currentBlurCounts = await blurQueue.getJobCounts();
-            const currentPrioritized = (currentCounts.prioritized || 0) + (currentBlurCounts.prioritized || 0);
-            
-            // Only wait if we're above the drain threshold
-            if (currentPrioritized >= DRAIN_THRESHOLD) {
-              // Calculate wait time based on queue processing rate
-              const waitTimeSeconds = Math.ceil(currentPrioritized / RATE_LIMIT);
-              const waitTimeMs = waitTimeSeconds * 1000;
-              
-              console.log(YELLOW + `[processBulkJobs] Task ${taskId}: Prioritized count (${currentPrioritized}) above threshold. Waiting ${waitTimeSeconds}s...` + RESET);
-              
-              // Wait for calculated time to allow queue to drain
-              await new Promise(resolve => setTimeout(resolve, waitTimeMs));
-              
-              // After waiting, retry this chunk
-              retryChunkIndex = chunkIndex;
-            } else {
-              // We're within acceptable range, retry immediately
-              console.log(CYAN + `[processBulkJobs] Task ${taskId}: Within target range (${currentPrioritized}), retrying chunk immediately` + RESET);
-              retryChunkIndex = chunkIndex;
-            }
-          }
+          // Since we wait before processing, added is always true now
         } catch (error) {
           // Check if it's a timeout error
           if (error instanceof Error && error.message?.includes('Command timed out')) {
