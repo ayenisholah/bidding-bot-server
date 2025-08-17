@@ -3343,18 +3343,40 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
   if (!task) return
 
   // Get parent job with current loop number
-  const parentJobId = getParentJobId(taskId, marketplace);
+  let parentJobId = getParentJobId(taskId, marketplace);
   let parentJob = parentJobs.get(parentJobId);
 
-  // If parent job doesn't exist, it's from an old loop - ignore it
+  // If parent job doesn't exist, check if it's from a different loop
   if (!parentJob) {
-    console.log(YELLOW + `[markJobAsProcessed] Ignoring job ${jobId} - no parent job found for ${parentJobId}` + RESET);
-    console.log(YELLOW + `  Current loop: ${currentLoopCount}` + RESET);
-    return;
+    // Try to extract loop number from job ID
+    const jobLoopMatch = jobId.match(/loop(\d+)/);
+    const jobLoop = jobLoopMatch ? parseInt(jobLoopMatch[1]) : 0;
+    
+    if (jobLoop > 0 && jobLoop !== currentLoopCount) {
+      // Job is from a different loop - try to find its parent job
+      const oldParentJobId = `${taskId}-${marketplace}-loop${jobLoop}`.toLowerCase();
+      const oldParentJob = parentJobs.get(oldParentJobId);
+      
+      if (oldParentJob) {
+        console.log(YELLOW + `[markJobAsProcessed] Job ${jobId} is from loop ${jobLoop}, current loop is ${currentLoopCount}` + RESET);
+        // Process it with the old parent job
+        parentJob = oldParentJob;
+        parentJobId = oldParentJobId;
+      } else {
+        console.log(YELLOW + `[markJobAsProcessed] Ignoring job ${jobId} - no parent job found for ${parentJobId} or ${oldParentJobId}` + RESET);
+        console.log(YELLOW + `  Current loop: ${currentLoopCount}, Job loop: ${jobLoop}` + RESET);
+        return;
+      }
+    } else {
+      console.log(YELLOW + `[markJobAsProcessed] Ignoring job ${jobId} - no parent job found for ${parentJobId}` + RESET);
+      console.log(YELLOW + `  Current loop: ${currentLoopCount}` + RESET);
+      return;
+    }
   }
 
-  // Validate the job belongs to the current loop
-  if (parentJob.loopNumber !== currentLoopCount) {
+  // If we found an old parent job, skip loop validation
+  // Otherwise validate the job belongs to the current loop
+  if (parentJob.loopNumber !== currentLoopCount && parentJobId.includes(`loop${currentLoopCount}`)) {
     console.log(YELLOW + `[markJobAsProcessed] Job ${jobId} from loop ${parentJob.loopNumber} doesn't match current loop ${currentLoopCount}, ignoring` + RESET);
     return;
   }
@@ -3471,6 +3493,29 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
 
 // Helper function to mark a cancellation job as processed (similar to markJobAsProcessed)
 // Removed markCancellationJobAsProcessed and checkAllCancellationJobsComplete - now using cancellationTracker
+
+// Helper function to clean up old parent jobs
+function cleanupOldParentJobs(taskId: string, currentLoop: number, keepLoops: number = 2) {
+  const parentJobsToRemove: string[] = [];
+  
+  // Iterate through all parent jobs and find old ones for this task
+  for (const [parentJobId, parentJob] of parentJobs.entries()) {
+    if (parentJob.taskId === taskId && parentJob.loopNumber < currentLoop - keepLoops) {
+      parentJobsToRemove.push(parentJobId);
+    }
+  }
+  
+  // Remove old parent jobs
+  for (const parentJobId of parentJobsToRemove) {
+    parentJobs.delete(parentJobId);
+    processedJobsPerParent.delete(parentJobId);
+    console.log(YELLOW + `[cleanupOldParentJobs] Removed old parent job: ${parentJobId}` + RESET);
+  }
+  
+  if (parentJobsToRemove.length > 0) {
+    console.log(GREEN + `[cleanupOldParentJobs] Cleaned up ${parentJobsToRemove.length} old parent jobs for task ${taskId}` + RESET);
+  }
+}
 
 // Helper function to clear task timers
 function clearTaskTimers(taskId: string) {
@@ -5520,7 +5565,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
         const currentChunk = chunks[chunkIndex];
 
         try {
-          // Process chunk without distributed lock
+          // Process chunk
           let added = false;
 
           // Check capacity and prioritized count
@@ -5569,7 +5614,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
               const blurJobs = validJobs.filter(job => BLUR_JOBS.includes(job.name));
               const nonBlurJobs = validJobs.filter(job => !BLUR_JOBS.includes(job.name));
 
-              // Add non-Blur jobs to queue (inside the lock)
+              // Add non-Blur jobs to queue
               if (nonBlurJobs.length > 0) {
                 const jobsToAdd = nonBlurJobs.map(job => {
                   const jobKey = job.name.toLowerCase().includes('cancel') ? undefined :
@@ -5625,12 +5670,16 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
                 // Update actualJobs incrementally for each marketplace
                 for (const [marketplace, count] of jobsAddedByMarketplace) {
-                  const parentJobId = getParentJobId(taskId, marketplace);
-                  const parentJob = parentJobs.get(parentJobId);
-                  if (parentJob && count > 0) {
-                    parentJob.actualJobs = (parentJob.actualJobs || 0) + count;
-                    // Clear the count after updating
-                    jobsAddedByMarketplace.set(marketplace, 0);
+                  try {
+                    const parentJobId = getParentJobId(taskId, marketplace);
+                    const parentJob = parentJobs.get(parentJobId);
+                    if (parentJob && count > 0) {
+                      parentJob.actualJobs = (parentJob.actualJobs || 0) + count;
+                      // Clear the count after updating
+                      jobsAddedByMarketplace.set(marketplace, 0);
+                    }
+                  } catch (error) {
+                    console.error(RED + `[processBulkJobs] Error updating parent job for ${marketplace}: ${error}` + RESET);
                   }
                 }
 
@@ -5646,7 +5695,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
                 }
               }
 
-              // Add Blur jobs using the coordinator (inside the lock)
+              // Add Blur jobs using the coordinator
               if (blurJobs.length > 0) {
                 const blurJobsToAdd = blurJobs.map(job => {
                   const jobKey = job.name.toLowerCase().includes('cancel') ? undefined :
@@ -5687,12 +5736,16 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
                 actuallyQueuedCount += uniqueBlurJobs.length;
 
                 // Update actualJobs incrementally for Blur
-                const blurParentJobId = getParentJobId(taskId, 'blur');
-                const blurParentJob = parentJobs.get(blurParentJobId);
-                if (blurParentJob && blurJobs.length > 0) {
-                  blurParentJob.actualJobs = (blurParentJob.actualJobs || 0) + blurJobs.length;
-                  // Clear the count after updating
-                  jobsAddedByMarketplace.set('blur', 0);
+                try {
+                  const blurParentJobId = getParentJobId(taskId, 'blur');
+                  const blurParentJob = parentJobs.get(blurParentJobId);
+                  if (blurParentJob && uniqueBlurJobs.length > 0) {
+                    blurParentJob.actualJobs = (blurParentJob.actualJobs || 0) + uniqueBlurJobs.length;
+                    // Clear the count after updating
+                    jobsAddedByMarketplace.set('blur', 0);
+                  }
+                } catch (error) {
+                  console.error(RED + `[processBulkJobs] Error updating Blur parent job: ${error}` + RESET);
                 }
 
                 // Update schedule job progress if needed
@@ -6243,6 +6296,9 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
       loopCounterStats[taskId]++;
       newLoopCount = loopCounterStats[taskId];
       console.log(CYAN + `[startTask] Starting new loop #${newLoopCount} for task ${taskId} (previous: #${previousLoopCount})` + RESET);
+      
+      // Clean up old parent jobs when starting a new loop
+      cleanupOldParentJobs(taskId, newLoopCount);
     } else {
       // For restarts, keep the same loop count
       newLoopCount = loopCounterStats[taskId] || 1;
@@ -11743,7 +11799,7 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, scheduleJ
         if (lockAcquired) {
           timedLockManager.extendLock(taskId, 'opensea');
         }
-        await processBulkJobs(jobs, true, scheduleJob);
+        processBulkJobs(jobs, true, scheduleJob);
       } catch (jobError) {
         console.error(RED + `[OPENSEA] Failed to queue token bid jobs: ${jobError}` + RESET);
 
@@ -11802,7 +11858,7 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, scheduleJ
         if (lockAcquired) {
           timedLockManager.extendLock(taskId, 'opensea');
         }
-        await processBulkJobs(traitJobs, true, scheduleJob);
+        processBulkJobs(traitJobs, true, scheduleJob);
       } catch (jobError) {
         console.error(RED + `[OPENSEA] Failed to queue trait bid jobs: ${jobError}` + RESET);
 
@@ -14237,7 +14293,7 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
         if (lockAcquired) {
           timedLockManager.extendLock(taskId, 'magiceden');
         }
-        await processBulkJobs(jobs, true, scheduleJob);
+        processBulkJobs(jobs, true, scheduleJob);
       } catch (jobError) {
         console.error(RED + `[MAGICEDEN] Failed to queue token bid jobs: ${jobError}` + RESET);
 
@@ -14294,7 +14350,7 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
         if (lockAcquired) {
           timedLockManager.extendLock(taskId, 'magiceden');
         }
-        await processBulkJobs(traitJobs, true, scheduleJob);
+        processBulkJobs(traitJobs, true, scheduleJob);
       } catch (jobError) {
         console.error(RED + `[MAGICEDEN] Failed to queue trait bid jobs: ${jobError}` + RESET);
 
