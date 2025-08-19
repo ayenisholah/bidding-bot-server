@@ -244,7 +244,7 @@ const TaskSchema: Schema = new Schema(
       magicEdenListingPrice: { type: String },
       minListingPrice: { type: String },
       minimumProfit: { type: String },
-      underCutMargin: { type: String },
+      underCutMargin: { type: String, default: "0.0000" },
       dynamicPricingBasis: {
         type: String,
         enum: [

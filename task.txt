@@ -1,0 +1,8 @@
+db.updates.insertOne({
+  version: '3.5.0',
+  releaseDate: ISODate('2025-08-18T08:15:04.501Z'),
+  changes: [ 'stable beta' ],
+  criticalUpdate: false,
+  minimumVersion: '1.0.0',
+  downloadUrl: 'https://gist.githubusercontent.com/ayenisholah/4767c3e4aac92af7c1a1a717c829183b/raw/44cfff4d53a289ab724b7a0210466a08037a5990/install-production.sh'
+})

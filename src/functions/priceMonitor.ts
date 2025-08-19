@@ -132,7 +132,7 @@ async function processListingUpdate(
 
     if (shouldAdjust) {
       // Calculate the new undercut price
-      const undercutMargin = parseFloat(listing.underCutMargin) || 0.0001;
+      const undercutMargin = parseFloat(listing.underCutMargin) || 0.0000;
       const newPrice = price - undercutMargin;
 
       // Create a unique job ID based on listing ID and marketplace
@@ -213,8 +213,8 @@ async function shouldAdjustPrice(
     // Check if competitor is undercutting us (or matching our price)
     if (competitorPrice > ourPrice) return false;
 
-    // Get undercut margin (default to 0.0001 ETH if not specified)
-    const undercutMargin = parseFloat(listing.underCutMargin) || 0.0001;
+    // Get undercut margin (default to 0.0000 ETH if not specified)
+    const undercutMargin = parseFloat(listing.underCutMargin) || 0.0000;
 
     // Check minimum listing price - always enforce this constraint
     const minPrice = parseFloat(listing.minListingPrice) || 0;

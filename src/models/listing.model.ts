@@ -36,7 +36,7 @@ const ListingSchema: Schema = new Schema(
     },
     instantPriceMatching: { type: Boolean, default: false },
     basePrice: { type: String, default: "" },
-    underCutMargin: { type: String, default: "" },
+    underCutMargin: { type: String, default: "0.0000" },
     openseaListingPrice: { type: String, default: "" },
     blurListingPrice: { type: String, default: "" },
     magicEdenListingPrice: { type: String, default: "" },
