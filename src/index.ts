@@ -259,10 +259,10 @@ function extractDetailedOpenSeaError(error: any): string {
     const status = error.response.status;
     const statusText = error.response.statusText;
     const dataStr = JSON.stringify(error.response.data);
-    
+
     return `[HTTP ${status}${statusText ? ` ${statusText}` : ''}] ${dataStr}`;
   }
-  
+
   // Fallback - stringify the entire error object
   return JSON.stringify(error);
 }
@@ -2098,7 +2098,7 @@ async function startServer() {
         {
           connection: workerConnection,
           prefix: '{bull}',
-          concurrency: concurrencyPerWorker ,
+          concurrency: concurrencyPerWorker,
           lockDuration: 90000, // 90 seconds lock (1.5x job timeout)
           stalledInterval: 90000, // Check for stalled jobs every 90 seconds
           maxStalledCount: 1 // Move to failed after 1 stall
@@ -3981,7 +3981,7 @@ function initializeQueueEventHandlers() {
           extractedTaskId = parts[1];
         }
       }
-      
+
       console.error(RED + `[ERROR - Queue Event - Task: ${extractedTaskId}] Error handling job completion for ${jobId}:` + RESET, error);
       console.error(RED + `[ERROR - Queue Event - Task: ${extractedTaskId}] Stack trace:` + RESET);
       console.error(error);
@@ -4236,7 +4236,7 @@ function initializeQueueEventHandlers() {
           extractedTaskId = parts[1];
         }
       }
-      
+
       console.error(RED + `[ERROR - Queue Event - Task: ${extractedTaskId}] Error handling job failure for ${jobId}:` + RESET, error);
       console.error(RED + `[ERROR - Queue Event - Task: ${extractedTaskId}] Stack trace:` + RESET);
       console.error(error);
@@ -5668,7 +5668,7 @@ async function updateTaskData(task: ITask) {
   }
 }
 
-const DRAIN_THRESHOLD = 1000; // Queue drain threshold
+const DRAIN_THRESHOLD = 9000; // Queue drain threshold
 
 const BLUR_JOBS = [
   'BLUR_COLLECTION_BID',
@@ -5752,7 +5752,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
   const progressUpdateInterval = 10000; // Update every 10 seconds
 
   // Create a simple rate limiter for queueing jobs at RATE_LIMIT per second
-  const rateLimiter = new RateLimiter(RATE_LIMIT * 2);
+  const rateLimiter = new RateLimiter(500);
 
   try {
     // Check Redis health before attempting bulk operations
@@ -5787,7 +5787,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
     // Log current state but proceed immediately
     console.log(CYAN + `[processBulkJobs] Current prioritized count: ${prioritizedCount}, target range: [${2 * RATE_LIMIT}, ${DRAIN_THRESHOLD}]` + RESET);
 
-    const CHUNK_SIZE = RATE_LIMIT * 2; // Reduced from 100 for better throughput
+    const CHUNK_SIZE = 500
     const chunks = chunk(jobs, CHUNK_SIZE);
     let retryChunkIndex = -1; // Track if we need to retry a chunk
 
@@ -5944,7 +5944,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
               for (const jobChunk of rateLimitChunks) {
                 await rateLimiter.acquire();
                 const addedJobs = await queue.addBulk(jobChunk);
-                
+
                 // Log successful addition of cancellation jobs
                 const addedCancellationCount = addedJobs.filter(job => job.name.toLowerCase().includes('cancel')).length;
                 if (addedCancellationCount > 0) {
@@ -12633,7 +12633,8 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
         creatorFees,
         collectionDetails.enforceCreatorFee,
         expiry,
-        currency
+        currency,
+        task.contract.contractAddress
       )
     } catch (bidError) {
       console.error(RED + `OpenSea collection bid failed:`, bidError instanceof Error ? bidError.message : String(bidError) + RESET);
@@ -13517,6 +13518,7 @@ async function processOpenseaTraitBid(data: {
         enforceCreatorFee,
         expiry,
         currency,
+        task.contract.contractAddress,
         trait
       )
 
@@ -13753,10 +13755,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       queue.addBulk(cancelData); // Non-blocking
     }
 
-    // Get parent job for tracking
-    const parentId = `${_id}-opensea`.toLowerCase();
-    const parentJob = parentJobs.get(parentId);
-
     try {
       await bidOnOpensea(
         _id,
@@ -13769,6 +13767,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         enforceCreatorFee,
         expiry,
         currency,
+        currentTask.contract.contractAddress,
         undefined,
         asset
       )
@@ -13904,7 +13903,8 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
       creatorFees,
       enforceCreatorFee,
       expiry,
-      currency
+      currency,
+      currentTask.contract.contractAddress
     )
   } catch (error: any) {
     const errorMessage = extractDetailedOpenSeaError(error);
@@ -14178,6 +14178,7 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
       enforceCreatorFee,
       expiry,
       currency,
+      currentTask.contract.contractAddress,
       undefined,
       asset
     )
@@ -14230,6 +14231,7 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
       enforceCreatorFee,
       expiry,
       currency,
+      currentTask.contract.contractAddress,
       trait
     )
   } catch (error: any) {
@@ -15506,7 +15508,7 @@ async function bulkCancelOpenseaBid(data: { privateKey: string, orderId: string,
     // Log detailed error information
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error(RED + `[ERROR - bulkCancelOpenseaBid - Task: ${taskId}] Failed to cancel OpenSea order ${orderId}: ${errorMessage}` + RESET);
-    
+
     // Log additional error details if available
     if (error instanceof Error && 'response' in error) {
       const responseError = error as any;
@@ -15514,7 +15516,7 @@ async function bulkCancelOpenseaBid(data: { privateKey: string, orderId: string,
         console.error(RED + `[ERROR - bulkCancelOpenseaBid - Task: ${taskId}] Response data: ${JSON.stringify(responseError.response.data)}` + RESET);
       }
     }
-    
+
     throw error; // Re-throw to maintain existing behavior
   }
 }
@@ -20849,7 +20851,7 @@ async function checkCancellationJobStatus(taskId: string): Promise<{
 }> {
   try {
     console.log(CYAN + `[checkCancellationJobStatus] Checking cancellation status for task ${taskId}` + RESET);
-    
+
     // Find cancellation jobs for this task
     let totalCancellationJobs = 0;
     let completedCancellationJobs = 0;
@@ -20857,17 +20859,17 @@ async function checkCancellationJobStatus(taskId: string): Promise<{
     let activeCancellationJobs = 0;
     let waitingCancellationJobs = 0;
     let stalledCancellationJobs = 0;
-    
+
     // Check each job state
     const states: JobType[] = ['completed', 'failed', 'active', 'waiting'];
-    
+
     for (const state of states) {
       const jobs = await queue.getJobs([state], 0, -1);
-      
+
       for (const job of jobs) {
         if (job.name.includes('CANCEL_') && job.data?.taskId === taskId) {
           totalCancellationJobs++;
-          
+
           switch (state) {
             case 'completed':
               completedCancellationJobs++;
@@ -20886,11 +20888,11 @@ async function checkCancellationJobStatus(taskId: string): Promise<{
         }
       }
     }
-    
+
     // Get cancellation progress from tracker
-    const cancellationProgress = cancellationTracker.getAggregatedPercentage(taskId) || 
-                                cancellationTracker.getPercentage(taskId);
-    
+    const cancellationProgress = cancellationTracker.getAggregatedPercentage(taskId) ||
+      cancellationTracker.getPercentage(taskId);
+
     const result = {
       totalJobs: totalCancellationJobs,
       completedJobs: completedCancellationJobs,
@@ -20905,7 +20907,7 @@ async function checkCancellationJobStatus(taskId: string): Promise<{
         queueCounts: await queue.getJobCounts()
       }
     };
-    
+
     console.log(GREEN + `[checkCancellationJobStatus] Summary:` + RESET);
     console.log(`  Total: ${totalCancellationJobs}`);
     console.log(`  Completed: ${completedCancellationJobs}`);
@@ -20914,7 +20916,7 @@ async function checkCancellationJobStatus(taskId: string): Promise<{
     console.log(`  Waiting: ${waitingCancellationJobs}`);
     console.log(`  Stalled: ${stalledCancellationJobs}`);
     console.log(`  Progress: ${cancellationProgress}%`);
-    
+
     return result;
   } catch (error) {
     console.error(RED + `[ERROR - checkCancellationJobStatus - Task: ${taskId}] Error checking cancellation status:` + RESET, error);
