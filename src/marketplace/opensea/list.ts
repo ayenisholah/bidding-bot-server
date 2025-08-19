@@ -3,6 +3,9 @@ import { approveNFT } from "../../functions/approve";
 import { IFee } from "../../types/listing.types";
 import { axiosInstance, limiter } from "../../init";
 import { config } from "dotenv";
+
+const BLUE = '\x1b[34m';
+const RESET = '\x1b[0m';
 import { BASE_URL, domain, minABI, NETWORK } from "../../constants";
 import Listing from "../../models/listing.model";
 import { logger } from "../../utils/logger";
@@ -207,14 +210,14 @@ export const listOnOpensea = async (
   // Payload data
   // Convert duration to seconds using OpenSea-specific converter
   const durationInSeconds = convertDurationForOpenSea(listDuration);
-  console.log(`[OPENSEA] Duration: ${listDuration.value} ${listDuration.unit} = ${durationInSeconds} seconds`);
+  console.log(`${BLUE}[OPENSEA] Duration: ${listDuration.value} ${listDuration.unit} = ${durationInSeconds} seconds${RESET}`);
   
   const currentTime = Math.floor(Date.now() / 1000);
   const endTime = Math.floor(Date.now() / 1000 + durationInSeconds);
   
-  console.log(`[OPENSEA] Start time: ${currentTime} (${new Date(currentTime * 1000).toISOString()})`);
-  console.log(`[OPENSEA] End time: ${endTime} (${new Date(endTime * 1000).toISOString()})`);
-  console.log(`[OPENSEA] Difference: ${endTime - currentTime} seconds`);
+  console.log(`${BLUE}[OPENSEA] Start time: ${currentTime} (${new Date(currentTime * 1000).toISOString()})${RESET}`);
+  console.log(`${BLUE}[OPENSEA] End time: ${endTime} (${new Date(endTime * 1000).toISOString()})${RESET}`);
+  console.log(`${BLUE}[OPENSEA] Difference: ${endTime - currentTime} seconds${RESET}`);
   
   listingPayload.parameters.startTime = BigInt(currentTime).toString();
   listingPayload.parameters.endTime = BigInt(
@@ -338,7 +341,7 @@ export const listOnOpensea = async (
       
       // Check if it's a timeout error
       if (err.code === 'ECONNABORTED' && retryCount < maxRetries) {
-        console.log(`OpenSea listing timeout (attempt ${retryCount}/${maxRetries}), retrying in ${retryCount * 5} seconds...`);
+        console.log(`${BLUE}[OPENSEA] Listing timeout (attempt ${retryCount}/${maxRetries}), retrying in ${retryCount * 5} seconds...${RESET}`);
         await new Promise(resolve => setTimeout(resolve, retryCount * 5000));
         continue;
       }
@@ -391,20 +394,20 @@ export const listOnOpensea = async (
     // Check if the error is because user no longer owns the NFT
     const errorMessage = errorString.toLowerCase();
     if (errorMessage.includes('not owned') || errorMessage.includes('ownership') || errorMessage.includes('not the owner')) {
-      console.log(`User no longer owns NFT ${nftAddress}/${tokenId}, deleting listing...`);
+      console.log(`${BLUE}[OPENSEA] User no longer owns NFT ${nftAddress}/${tokenId}, deleting listing...${RESET}`);
       
       try {
         await Listing.findOneAndDelete({
           "contract.contractAddress": nftAddress,
           tokenId: tokenId
         });
-        console.log(`Deleted listing for ${nftAddress}/${tokenId} as user no longer owns it`);
+        console.log(`${BLUE}[OPENSEA] Deleted listing for ${nftAddress}/${tokenId} as user no longer owns it${RESET}`);
       } catch (deleteError) {
-        console.error('Error deleting listing:', deleteError);
+        console.error(`${BLUE}[OPENSEA] Error deleting listing:${RESET}`, deleteError);
       }
     }
   } else {
-    console.log('NFT listed successfully on opensea');
+    console.log(`${BLUE}[OPENSEA - LISTING] ✅ Successfully listed ${nftAddress} #${tokenId} for ${roundedPrice} ETH${RESET}`);
 
     // Update finalListingPrice.opensea and expiration in the database
     try {
@@ -444,12 +447,12 @@ export const listOnOpensea = async (
       );
 
       if (updatedListing) {
-        console.log(`Updated listing ${nftAddress} #${tokenId} with opensea price: ${roundedPrice} ETH, expires at: ${expirationTime.toISOString()}`);
+        console.log(`${BLUE}[OPENSEA - LISTING] Updated DB: ${nftAddress} #${tokenId} | Price: ${roundedPrice} ETH | Expires: ${expirationTime.toISOString()}${RESET}`);
         if (updatedListing.instantPriceOverride && updatedListing.instantPriceMatchingActiveUntil) {
-          console.log(`Extended instant price matching until: ${updatedListing.instantPriceMatchingActiveUntil.toISOString()}`);
+          console.log(`${BLUE}[OPENSEA - LISTING] Extended instant price matching until: ${updatedListing.instantPriceMatchingActiveUntil.toISOString()}${RESET}`);
         }
       } else {
-        console.log(`No listing found for ${nftAddress} #${tokenId}`);
+        console.log(`${BLUE}[OPENSEA - LISTING] ⚠️  No listing found in DB for ${nftAddress} #${tokenId}${RESET}`);
       }
     } catch (updateError) {
       await logger.logOpenseaListingError('Error updating listing in database', {

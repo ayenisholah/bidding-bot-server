@@ -1,6 +1,6 @@
 import { IListing } from "../types/listing.types";
 import Listing from "../models/listing.model";
-import { getAllFloorPrices } from "./collection";
+import { getAllFloorPrices, getOpenseaFloor } from "./collection";
 import { PROCESS_LISTING_UPDATE, queue } from "../index";
 
 // Store current best prices for listings we're monitoring
@@ -98,6 +98,7 @@ async function processListingUpdate(
   }
 ): Promise<void> {
   const { contractAddress, tokenId, marketplace, price, seller } = data;
+  console.log({ seller });
 
   // Find all active listings for this token with instant price matching enabled
   const activeListings = await Listing.find({
@@ -109,10 +110,10 @@ async function processListingUpdate(
 
   for (const listing of activeListings) {
     // Skip if this is our own listing
-    if (seller && seller === listing.wallet.toLowerCase()) {
-      console.log(`Skipping our own listing from ${seller}`);
-      continue;
-    }
+    // if (seller && seller === listing.wallet.toLowerCase()) {
+    //   console.log(`Skipping our own listing from ${seller}`);
+    //   continue;
+    // }
 
     // Get the key for price tracking
     const priceKey = `${contractAddress}-${tokenId}`;
@@ -191,7 +192,6 @@ async function processListingUpdate(
 
       } catch (error) {
         console.error(`Failed to enqueue instant price match job for ${tokenId}:`, error);
-
       }
     }
   }
@@ -222,18 +222,22 @@ async function shouldAdjustPrice(
     const minPrice = parseFloat(listing.minListingPrice) || 0;
     const newPrice = competitorPrice - undercutMargin;
 
-    if (newPrice < minPrice) {
-
-      return false;
-    }
+    if (newPrice < minPrice) return false;
 
     // Check if we're still profitable
     if (listing.buyPrice) {
       const minimumProfit = parseFloat(listing.minimumProfit) || 0;
       const profit = newPrice - listing.buyPrice;
 
-      if (profit < minimumProfit && minimumProfit > 0) {
+      if (profit < minimumProfit && minimumProfit > 0) return false;
+    }
 
+    // Check floor price constraint if enabled
+    const doNotListBelowFloor = listing.doNotListBelowFloor !== false; // Default to true
+    if (doNotListBelowFloor) {
+      const floorPrice = await getOpenseaFloor(listing.contract.slug);
+      if (newPrice < floorPrice) {
+        console.log(`New price ${newPrice} would be below floor price ${floorPrice}, skipping adjustment`);
         return false;
       }
     }
@@ -274,9 +278,7 @@ export function clearListingPriceCache(contractAddress: string, tokenId: string)
  */
 export async function extendInstantPriceMatchingSession(listingId: string, durationMinutes: number = 10): Promise<void> {
   const newExpiration = new Date(Date.now() + durationMinutes * 60 * 1000);
-
   await Listing.findByIdAndUpdate(listingId, {
     instantPriceMatchingActiveUntil: newExpiration,
   });
-
 }

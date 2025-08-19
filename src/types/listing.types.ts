@@ -65,6 +65,7 @@ export interface IListingBase {
   pricingStrategy: "FIXED_PRICING" | "DYNAMIC_PRICING";
   floorPrice: number;
   buyPrice: number;
+  doNotListBelowFloor?: boolean;
   dynamicPricingBasis?:
   | "HIGHEST_TRAIT_FLOOR"
   | "SPECIFIC_TRAIT"

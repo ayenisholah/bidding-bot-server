@@ -2,11 +2,10 @@ import { config } from "dotenv";
 import { IFee, IListing } from "../types/listing.types";
 import { ICollectionDetails } from "../types/collection.types";
 import { NETWORK } from "../constants";
-import Wallet from "../models/wallet.model";
 import { decryptPrivateKey } from "../utils/crypto";
 import { AlchemyProvider, Wallet as Web3Wallet } from "ethers";
-import { getCollectionDetails } from "./collection";
-import { logger, ErrorCategory } from "../utils/logger";
+import { getCollectionDetails, getOpenseaFloor } from "./collection";
+import { logger } from "../utils/logger";
 import { getAccessToken } from "../marketplace/blur";
 import { updateListingExpiration } from "./relistExpired";
 import Listing from "../models/listing.model";
@@ -28,10 +27,8 @@ export async function createListing(data: IListing) {
 
   try {
     // Only process if listing is running
-    if (!data.running) {
+    if (!data.running) return;
 
-      return;
-    }
 
     // Fetch fresh data if we have an _id
     let freshData = data;
@@ -157,12 +154,18 @@ export async function createListing(data: IListing) {
           }
         }
 
+        // Enforce floor price constraint if enabled
+        const doNotListBelowFloor = freshData.doNotListBelowFloor !== false; // Default to true
+        if (doNotListBelowFloor) {
+          const floorPrice = await getOpenseaFloor(freshData.contract.slug);
+          if (listingPrice < floorPrice) {
+            console.log(`Instant price ${listingPrice} is below floor price ${floorPrice}, adjusting to floor price`);
+            listingPrice = floorPrice;
+          }
+        }
+
         // Round to 4 decimal places after adjustments
         listingPrice = parseFloat(listingPrice.toFixed(6));
-
-        if (listingPrice !== freshData.instantPriceOverride) {
-
-        }
 
         if (freshData.finalListingPrice && freshData.listingExpiration) {
           const currentPrice = freshData.finalListingPrice[marketplaceLower];
@@ -200,7 +203,7 @@ export async function createListing(data: IListing) {
           console.log('No finalListingPrice or listingExpiration data');
         }
       } else {
-        const calculatedPrice = calculateListingPrice(freshData, marketplaceLower);
+        const calculatedPrice = await calculateListingPrice(freshData, marketplaceLower);
         listingPrice = parseFloat(calculatedPrice.toFixed(6));
       }
 
@@ -264,7 +267,7 @@ export async function createListing(data: IListing) {
     });
 
     // Execute all listings concurrently
-    const results = await Promise.allSettled(listingPromises);
+    await Promise.allSettled(listingPromises);
 
     // Results are already logged gracefully in marketplace-specific functions
     // No need for additional error logging here
@@ -305,27 +308,44 @@ function convertToSeconds(value: number, unit: string): number {
  * @param marketplace - The marketplace to calculate price for ('opensea', 'blur', or 'magiceden')
  * @returns The calculated listing price in ETH
  */
-function calculateListingPrice(data: IListing, marketplace: 'opensea' | 'blur' | 'magiceden'): number {
+async function calculateListingPrice(data: IListing, marketplace: 'opensea' | 'blur' | 'magiceden'): Promise<number> {
   console.log(`\n--- Calculating price for ${marketplace} ---`);
   console.log('Pricing Strategy:', data.pricingStrategy);
   console.log('Listing Price Type:', data.listingPriceType);
 
-  // If DYNAMIC_PRICING is set, handle it elsewhere (not implemented here)
-  if (data.pricingStrategy === 'DYNAMIC_PRICING') {
-    // For now, return the general listing price as fallback
-    if (+data.minimumProfit <= 0) return +data.basePrice
-    const dynamicPrice = +data.basePrice + +data.minimumProfit || 0;
-    console.log('Dynamic pricing calculation:', `${data.basePrice} + ${data.minimumProfit} = ${dynamicPrice}`);
-    return dynamicPrice;
-  }
+  let calculatedPrice: number;
 
+  // DYNAMIC_PRICING strategy with strict constraint enforcement
+  if (data.pricingStrategy === 'DYNAMIC_PRICING') {
+    // Start with base calculation
+    let dynamicPrice: number;
+    
+    // If buyPrice exists, use it for profit calculation
+    if (data.buyPrice && +data.minimumProfit > 0) {
+      dynamicPrice = +data.buyPrice + +data.minimumProfit;
+      console.log('Dynamic pricing from buyPrice:', `${data.buyPrice} + ${data.minimumProfit} = ${dynamicPrice}`);
+    } else {
+      // Fallback to basePrice + minimumProfit
+      dynamicPrice = +data.basePrice + +data.minimumProfit;
+      console.log('Dynamic pricing from basePrice:', `${data.basePrice} + ${data.minimumProfit} = ${dynamicPrice}`);
+    }
+    
+    // Apply minListingPrice constraint - never go below this
+    const minPrice = parseFloat(data.minListingPrice) || 0;
+    if (minPrice > 0 && dynamicPrice < minPrice) {
+      console.log(`Dynamic price ${dynamicPrice} is below minimum ${minPrice}, adjusting to minimum`);
+      dynamicPrice = minPrice;
+    }
+    
+    calculatedPrice = dynamicPrice;
+  }
   // FIXED_PRICING strategy
-  if (data.pricingStrategy === 'FIXED_PRICING') {
+  else if (data.pricingStrategy === 'FIXED_PRICING') {
     if (data.listingPriceType === 'GENERAL_LISTING_PRICE') {
       // Use the general listing price for all marketplaces
       const generalPrice = Number(data.basePrice) || 0;
       console.log('Using general listing price:', data.basePrice, '→', generalPrice);
-      return generalPrice;
+      calculatedPrice = generalPrice;
     } else if (data.listingPriceType === 'MARKETPLACE_LISTING_PRICE') {
       // Use marketplace-specific prices
       let marketplacePrice = 0;
@@ -346,12 +366,26 @@ function calculateListingPrice(data: IListing, marketplace: 'opensea' | 'blur' |
           marketplacePrice = Number(data.basePrice) || 0;
           console.log('Unknown marketplace, using base price:', data.basePrice, '→', marketplacePrice);
       }
-      return marketplacePrice;
+      calculatedPrice = marketplacePrice;
+    } else {
+      // Default fallback
+      calculatedPrice = Number(data.basePrice) || 0;
+    }
+  } else {
+    // Default fallback
+    calculatedPrice = Number(data.basePrice) || 0;
+  }
+
+  // Apply floor price constraint if enabled
+  const doNotListBelowFloor = data.doNotListBelowFloor !== false; // Default to true if not specified
+  if (doNotListBelowFloor) {
+    const floorPrice = await getOpenseaFloor(data.contract.slug);
+    if (calculatedPrice < floorPrice) {
+      console.log(`Price ${calculatedPrice} is below floor price ${floorPrice}, adjusting to floor price`);
+      calculatedPrice = floorPrice;
     }
   }
 
-  // Default fallback
-  const fallbackPrice = Number(data.basePrice) || 0;
-  console.log('Using fallback price:', data.basePrice, '→', fallbackPrice);
-  return fallbackPrice;
+  console.log('Final price after all constraints:', calculatedPrice);
+  return calculatedPrice;
 }

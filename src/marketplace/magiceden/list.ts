@@ -6,6 +6,9 @@ import Listing from "../../models/listing.model";
 import { logger } from "../../utils/logger";
 import Bottleneck from "bottleneck";
 
+const MAGENTA = '\x1b[35m';
+const RESET = '\x1b[0m';
+
 // Helper function to extract meaningful error messages from MagicEden API responses
 function extractMagicEdenErrorMessage(error: any): string {
   if (error?.response?.data) {
@@ -105,7 +108,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
 
   // Convert duration to seconds using Magic Eden-specific converter
   const durationInSeconds = convertDurationForMagicEden(listDuration);
-  console.log(`[MAGICEDEN] Duration: ${listDuration.value} ${listDuration.unit} = ${durationInSeconds} seconds`);
+  console.log(`${MAGENTA}[MAGICEDEN] Duration: ${listDuration.value} ${listDuration.unit} = ${durationInSeconds} seconds${RESET}`);
 
   const expirationTime = (
     Math.floor(Date.now() / 1000) + durationInSeconds
@@ -160,8 +163,8 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
         availableSteps: listResponse.data.steps?.map((s: any) => s.id),
         errorCode: 'MISSING_SIGNATURE_STEP'
       });
-      console.error('No order-signature step found in response');
-      console.error('Available steps:', listResponse.data.steps);
+      console.error(`${MAGENTA}[MAGICEDEN] No order-signature step found in response${RESET}`);
+      console.error(`${MAGENTA}[MAGICEDEN] Available steps:${RESET}`, listResponse.data.steps);
       throw new Error('No order-signature step found');
     }
 
@@ -179,7 +182,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
     const correctMarketplace = "0xca9337244b5f04cb946391bc8b8a980e988f9a6a";
 
     if (marketplace && marketplace !== correctMarketplace) {
-      console.log(`Overriding marketplace address from ${marketplace} to ${correctMarketplace}`);
+      console.log(`${MAGENTA}[MAGICEDEN] Overriding marketplace address from ${marketplace} to ${correctMarketplace}${RESET}`);
     }
 
     const order = {
@@ -211,7 +214,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
       )
     );
 
-    console.log("NFT listed successfully on Magic Eden");
+    console.log(`${MAGENTA}[MAGICEDEN - LISTING] ✅ Successfully listed ${contract} #${tokenId} for ${roundedPrice} ETH${RESET}`);
 
     // Update finalListingPrice.magiceden and expiration in the database
     try {
@@ -251,10 +254,12 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
       );
 
       if (updatedListing) {
-        console.log(`Updated listing ${contract} #${tokenId} with magiceden price: ${roundedPrice} ETH, expires at: ${expirationTime.toISOString()}`);
+        console.log(`${MAGENTA}[MAGICEDEN - LISTING] Updated DB: ${contract} #${tokenId} | Price: ${roundedPrice} ETH | Expires: ${expirationTime.toISOString()}${RESET}`);
         if (updatedListing.instantPriceOverride && updatedListing.instantPriceMatchingActiveUntil) {
-          console.log(`Extended instant price matching until: ${updatedListing.instantPriceMatchingActiveUntil.toISOString()}`);
+          console.log(`${MAGENTA}[MAGICEDEN - LISTING] Extended instant price matching until: ${updatedListing.instantPriceMatchingActiveUntil.toISOString()}${RESET}`);
         }
+      } else {
+        console.log(`${MAGENTA}[MAGICEDEN - LISTING] ⚠️  No listing found in DB for ${contract} #${tokenId}${RESET}`);
       }
     } catch (updateError) {
       await logger.logMagicEdenListingError('Error updating listing in database', {
@@ -265,7 +270,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
         error: updateError as Error,
         errorMessage: updateError instanceof Error ? updateError.message : String(updateError)
       });
-      console.error('Error updating listing in database:', updateError);
+      console.error(`${MAGENTA}[MAGICEDEN] Error updating listing in database:${RESET}`, updateError);
     }
 
     return finalListingResponse.data;
@@ -314,16 +319,16 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
     // Check if the error is because user no longer owns the NFT
     const errorMessage = JSON.stringify(error?.response?.data || error?.message || '').toLowerCase();
     if (errorMessage.includes('not owned') || errorMessage.includes('ownership') || errorMessage.includes('not the owner') || errorMessage.includes('unauthorized')) {
-      console.log(`User no longer owns NFT ${contract}/${tokenId}, deleting listing...`);
+      console.log(`${MAGENTA}[MAGICEDEN] User no longer owns NFT ${contract}/${tokenId}, deleting listing...${RESET}`);
 
       try {
         await Listing.findOneAndDelete({
           "contract.contractAddress": contract,
           tokenId: tokenId
         });
-        console.log(`Deleted listing for ${contract}/${tokenId} as user no longer owns it`);
+        console.log(`${MAGENTA}[MAGICEDEN] Deleted listing for ${contract}/${tokenId} as user no longer owns it${RESET}`);
       } catch (deleteError) {
-        console.error('Error deleting listing:', deleteError);
+        console.error(`${MAGENTA}[MAGICEDEN] Error deleting listing:${RESET}`, deleteError);
       }
     }
 

@@ -190,7 +190,9 @@ export async function bidOnBlur(
   }
 
   const bethBalance = await fetchERC20Balance(wallet_address, BLUR_POOL_ADDRESS);
-  let offerPriceEth: string = (Math.round(Number(offer_price) / 1e18 * 100) / 100).toFixed(2)
+  // Round to 6 decimal places first to avoid floating-point precision issues
+  const offerPriceNumber = Math.round(Number(offer_price) / 1e18 * 1000000) / 1000000;
+  let offerPriceEth: string = (Math.round(offerPriceNumber * 100) / 100).toFixed(2)
 
   if (Number(offerPriceEth) > bethBalance) {
     const error = new InsufficientBalanceError(
@@ -216,7 +218,9 @@ export async function bidOnBlur(
   const offerPrice = BigInt(offer_price.toString());
   const accessToken = await getAccessToken(private_key);
 
-  offerPriceEth = (Math.round(Number(formatUnits(offerPrice.toString(), 18)) * 100) / 100).toFixed(2);
+  // Round to 6 decimal places first to avoid floating-point precision issues
+  const formattedPrice = Math.round(Number(formatUnits(offerPrice.toString(), 18)) * 1000000) / 1000000;
+  offerPriceEth = (Math.round(formattedPrice * 100) / 100).toFixed(2);
 
   if (Number(offerPriceEth) === 0) {
     const error = new MinimumPriceError(

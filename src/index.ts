@@ -9853,22 +9853,17 @@ async function updateBalancesForItemSold(message: any) {
     // Add to the set to prevent future duplicates
     recentItemSoldEvents.add(eventKey);
 
-    const allWallets = await walletCache.getAllWallets();
-    const testWallet = allWallets[0] as IWallet;
-    if (testWallet) {
-      await triggerAutoListingForPurchase(testWallet, contractAddress, tokenId, price, marketplace);
-    } else {
-      console.log(YELLOW + `No wallets available for auto-listing` + RESET);
-    }
-
-
     // Check if the toAddress belongs to one of our wallets (case-insensitive)
     const wallet: IWallet | null = await walletCache.getWallet(toAddress);
 
     if (!wallet) {
       // Not one of our wallets, ignore
+      console.log(YELLOW + `Wallet ${toAddress} not found in our system, skipping auto-listing` + RESET);
       return;
     }
+
+    // Trigger auto-listing for the purchased item
+    await triggerAutoListingForPurchase(wallet, contractAddress, tokenId, price, marketplace);
 
     const walletAddressKey = wallet.address.toLowerCase();
 
@@ -13189,7 +13184,8 @@ async function processBlurCollectionBid(data: { task: ITask }) {
       }
     }
 
-    const collectionOfferEth = Number((Number(colletionOffer) / 1e18).toFixed(2));
+    // Round to avoid floating-point precision issues
+    const collectionOfferEth = Math.round(Number(colletionOffer) / 1e18 * 100) / 100;
 
     if (collectionOfferEth < minBidPriceEth) {
       colletionOffer = BigInt(Math.round(minBidPriceEth * 1e18))
@@ -13208,7 +13204,10 @@ async function processBlurCollectionBid(data: { task: ITask }) {
       queue.addBulk(cancelData);
     }
 
-    if (currentTask.outbidOptions.outbid && collectionOfferEth > maxBidPriceEth) {
+    // Add tolerance for floating-point comparison (0.000001 = 1e-6)
+    const PRICE_TOLERANCE = 0.000001;
+    
+    if (currentTask.outbidOptions.outbid && collectionOfferEth > maxBidPriceEth + PRICE_TOLERANCE) {
       if (!skipStats[task._id]) {
         skipStats[task._id] = {
           opensea: 0,
@@ -14419,7 +14418,8 @@ async function processBlurTraitBid(data: {
       }
     }
 
-    const offerEth = Number(traitOffer) / 1e18;
+    // Round to avoid floating-point precision issues
+    const offerEth = Math.round(Number(traitOffer) / 1e18 * 1000000) / 1000000;
 
     const bidCount = getIncrementedBidCount(BLUR, slug, _id)
     if (orders.length > 0) {
@@ -14434,7 +14434,10 @@ async function processBlurTraitBid(data: {
       queue.addBulk(cancelData);
     }
 
-    if (outbidOptions.outbid && offerEth > maxBidPriceEth) {
+    // Add tolerance for floating-point comparison (0.000001 = 1e-6)
+    const PRICE_TOLERANCE = 0.000001;
+    
+    if (outbidOptions.outbid && offerEth > maxBidPriceEth + PRICE_TOLERANCE) {
       if (!skipStats[_id]) {
         skipStats[_id] = {
           opensea: 0,
@@ -17870,9 +17873,11 @@ async function calculateBidPrice(task: ITask, floorPrice: number, marketplaceNam
 
 
   if (marketplaceName.toLowerCase() === "blur") {
-    offerPriceEth = Math.floor(offerPriceEth * 100) / 100;
-    maxBidPriceEth = Math.floor(maxBidPriceEth * 100) / 100;
-    minBidPriceEth = Math.floor(minBidPriceEth * 100) / 100;
+    // Use proper rounding to avoid floating-point precision issues
+    // Round to 6 decimal places first, then to 2 decimal places
+    offerPriceEth = Math.round(Math.round(offerPriceEth * 1000000) / 1000000 * 100) / 100;
+    maxBidPriceEth = Math.round(Math.round(maxBidPriceEth * 1000000) / 1000000 * 100) / 100;
+    minBidPriceEth = Math.round(Math.round(minBidPriceEth * 1000000) / 1000000 * 100) / 100;
   }
   const currencyType = bidPrice.minType === "percentage" ? "eth" : bidPrice.minType
   const currency = currencyType === "usdc" ? USDC : WETH
