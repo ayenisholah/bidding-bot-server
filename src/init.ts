@@ -91,8 +91,10 @@ async function initialize(rateLimit: number) {
   axiosInstance = axios.create({ timeout: 60000 });
 
   limiter = new Bottleneck({
-    minTime: 1000 / rateLimit,
-    maxConcurrent: rateLimit,
+    minTime: 1000 / rateLimit,           // Minimum time between job starts
+    reservoir: rateLimit,                // Initial tokens available
+    reservoirRefreshAmount: rateLimit,  // Refill to rateLimit tokens
+    reservoirRefreshInterval: 500,     // Refill every second
     trackDoneStatus: true,
   });
 
