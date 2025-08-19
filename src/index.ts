@@ -241,6 +241,17 @@ export { queue };
 export const getRedis = () => redis;
 // Removed netEnabled - using isConnected from connectivity monitoring instead
 
+// Helper function to extract taskId from various contexts for logging
+function getTaskIdForLog(context: any): string {
+  // Check various possible locations for taskId
+  return context?.taskId ||
+    context?.data?.taskId ||
+    context?.data?._id ||
+    context?._id ||
+    context?.id ||
+    'N/A';
+}
+
 class RateLimiter {
   private tokens: number;
   private lastRefill: number;
@@ -462,12 +473,12 @@ class TimedLockManager {
               await triggerTaskRestart(extractedTaskId);
               console.log(GREEN + `[TimedLockManager] Successfully triggered restart for task ${extractedTaskId}` + RESET);
             } catch (error) {
-              console.error(RED + `[TimedLockManager] Failed to trigger task restart for ${extractedTaskId}: ${error}` + RESET);
+              console.error(RED + `[ERROR - TimedLockManager - Task: ${extractedTaskId}] Failed to trigger task restart: ${error}` + RESET);
             }
           });
         }
       } catch (error) {
-        console.error(RED + `[TimedLockManager] Error in timeout handler: ${error}` + RESET);
+        console.error(RED + `[ERROR - TimedLockManager - Task: N/A] Error in timeout handler: ${error}` + RESET);
       }
     }, this.MAX_LOCK_DURATION);
 
@@ -557,12 +568,12 @@ class TimedLockManager {
               await triggerTaskRestart(extractedTaskId);
               console.log(GREEN + `[TimedLockManager] Successfully triggered restart for task ${extractedTaskId}` + RESET);
             } catch (error) {
-              console.error(RED + `[TimedLockManager] Failed to trigger task restart for ${extractedTaskId}: ${error}` + RESET);
+              console.error(RED + `[ERROR - TimedLockManager - Task: ${extractedTaskId}] Failed to trigger task restart: ${error}` + RESET);
             }
           });
         }
       } catch (error) {
-        console.error(RED + `[TimedLockManager] Error in extended timeout handler: ${error}` + RESET);
+        console.error(RED + `[ERROR - TimedLockManager - Task: N/A] Error in extended timeout handler: ${error}` + RESET);
       }
     }, this.MAX_LOCK_DURATION);
 
@@ -613,7 +624,7 @@ class TaskStatusManager {
         const transitioned = setTaskStatus(taskId, toStatus, 'forced progression timeout');
 
         if (!transitioned) {
-          console.error(RED + `[StatusManager] Failed to transition ${taskId} from ${fromStatus} to ${toStatus}` + RESET);
+          console.error(RED + `[ERROR - StatusManager - Task: ${taskId}] Failed to transition from ${fromStatus} to ${toStatus}` + RESET);
 
           // If it's stuck in STARTED, we may need to check parent jobs
           if (fromStatus === 'STARTED' && toStatus === 'RUNNING') {
@@ -1050,7 +1061,7 @@ async function handleRedisClusterFailure() {
     redisClusterFailures = 0;
     console.log(GREEN + '✅ Redis cluster recovery completed' + RESET);
   } catch (error) {
-    console.error(RED + 'Failed to recover from Redis cluster failure:' + RESET, error);
+    console.error(RED + '[ERROR - Redis Cluster Recovery - Task: N/A] Failed to recover from Redis cluster failure:' + RESET, error);
     // Don't reset failure counter if recovery fails
   }
 }
@@ -1199,7 +1210,7 @@ async function checkPasswordAndResume() {
       await resumeQueueAndWorkers();
     }
   } catch (error) {
-    console.error('Error checking password:', error);
+    console.error(RED + '[ERROR - Password Check - Task: N/A] Error checking password:' + RESET, error);
   } finally {
     isCheckingPassword = false;
   }
@@ -1287,7 +1298,7 @@ async function clearQueueAndRestartJobs() {
     }
 
   } catch (error) {
-    console.error(RED + `Error during clearQueueAndRestartJobs: ${error}` + RESET);
+    console.error(RED + `[ERROR - Queue Clear - Task: N/A] Error during clearQueueAndRestartJobs: ${error}` + RESET);
     throw error;
   }
 }
@@ -1329,7 +1340,7 @@ async function handleConnectivityRestored() {
     await blurQueue.resume();
     console.log(GREEN + 'Queues resumed after network restoration' + RESET);
   } catch (err) {
-    console.error('Failed to resume queues:', err);
+    console.error(RED + '[ERROR - Queue Resume - Task: N/A] Failed to resume queues:' + RESET, err);
   }
 
   // Only clear and restart jobs if connectivity was lost for more than 1 minute
@@ -1382,7 +1393,7 @@ function startConnectivityMonitoring() {
       // Connection lost
       isConnected = false;
       connectivityLostAt = Date.now();
-      console.error(RED + '\n⚠️  Internet connectivity lost!' + RESET);
+      console.error(RED + '[ERROR - Connectivity Monitor - Task: N/A] \n⚠️  Internet connectivity lost!' + RESET);
 
       // Pause queue operations during network outage
       try {
@@ -1390,7 +1401,7 @@ function startConnectivityMonitoring() {
         await blurQueue.pause();
         console.log(YELLOW + 'Queues paused due to network loss' + RESET);
       } catch (err) {
-        console.error('Failed to pause queues:', err);
+        console.error(RED + '[ERROR - Queue Pause - Task: N/A] Failed to pause queues:' + RESET, err);
       }
     }
   }, STANDARD_INTERVAL);
@@ -1531,7 +1542,7 @@ async function pauseQueueAndWorkers() {
 
     console.log(YELLOW + 'All queues and workers paused. Waiting for password...' + RESET);
   } catch (error) {
-    console.error(RED + 'Error pausing queues and workers:' + RESET, error);
+    console.error(RED + '[ERROR - Queue Pause - Task: N/A] Error pausing queues and workers:' + RESET, error);
   }
 }
 
@@ -1574,10 +1585,10 @@ async function resumeQueueAndWorkers() {
         await Promise.all(blurPasswordFailedJobs.map(job => job.retry()));
       }
     } catch (retryError) {
-      console.error('Error retrying failed jobs:', retryError);
+      console.error(RED + '[ERROR - Job Retry - Task: N/A] Error retrying failed jobs:' + RESET, retryError);
     }
   } catch (error) {
-    console.error(RED + 'Error resuming queues and workers:' + RESET, error);
+    console.error(RED + '[ERROR - Queue Resume - Task: N/A] Error resuming queues and workers:' + RESET, error);
   }
 }
 
@@ -1636,9 +1647,9 @@ async function checkWorkerHealth() {
       .filter(([_, status]) => !status.healthy);
 
     if (unhealthyConnections.length > 0) {
-      console.error(RED + `❌ Unhealthy Redis connections detected: ${unhealthyConnections.length}` + RESET);
+      console.error(RED + `[ERROR - Health Check - Task: N/A] ❌ Unhealthy Redis connections detected: ${unhealthyConnections.length}` + RESET);
       unhealthyConnections.forEach(([id, status]) => {
-        console.error(RED + `  - ${id}: ${status.error}` + RESET);
+        console.error(RED + `[ERROR - Health Check - Task: N/A]   - ${id}: ${status.error}` + RESET);
       });
     }
 
@@ -1671,14 +1682,14 @@ async function checkWorkerHealth() {
     const unhealthyWorkers = workerStatuses.filter(status => !status.healthy);
 
     if (unhealthyWorkers.length > 0) {
-      console.error(RED + `❌ Unhealthy workers detected: ${unhealthyWorkers.length}/${workers.length}` + RESET);
+      console.error(RED + `[ERROR - Health Check - Task: N/A] ❌ Unhealthy workers detected: ${unhealthyWorkers.length}/${workers.length}` + RESET);
 
       let shouldRestartAll = false;
 
       // Attempt to restart unhealthy workers
       for (const workerStatus of unhealthyWorkers) {
         if ('error' in workerStatus && workerStatus.error) {
-          console.error(RED + `  Worker ${workerStatus.index}: ${workerStatus.error}` + RESET);
+          console.error(RED + `[ERROR - Health Check - Task: N/A]   Worker ${workerStatus.index}: ${workerStatus.error}` + RESET);
 
           // Track the failure
           const thresholdExceeded = trackWorkerFailure(workerStatus.index, workerStatus.error);
@@ -1691,7 +1702,7 @@ async function checkWorkerHealth() {
             await workers[workerStatus.index].resume();
             console.log(GREEN + `  ✅ Worker ${workerStatus.index} resumed successfully` + RESET);
           } catch (error) {
-            console.error(RED + `  Failed to resume worker ${workerStatus.index}: ${error}` + RESET);
+            console.error(RED + `[ERROR - Health Check - Task: N/A]   Failed to resume worker ${workerStatus.index}: ${error}` + RESET);
 
             // Track resume failure
             const thresholdExceeded = trackWorkerFailure(workerStatus.index, `Resume failed: ${error}`);
@@ -1701,7 +1712,7 @@ async function checkWorkerHealth() {
           }
         } else if (!workerStatus.running) {
           // Worker is not running at all
-          console.error(RED + `  Worker ${workerStatus.index} is not running` + RESET);
+          console.error(RED + `[ERROR - Health Check - Task: N/A]   Worker ${workerStatus.index} is not running` + RESET);
           const thresholdExceeded = trackWorkerFailure(workerStatus.index, 'Worker not running');
           if (thresholdExceeded) {
             shouldRestartAll = true;
@@ -1805,7 +1816,7 @@ async function checkWorkerHealth() {
     });
 
   } catch (error) {
-    console.error(RED + 'Error during worker health check:' + RESET, error);
+    console.error(RED + '[ERROR - Worker Health Check - Task: N/A] Error during worker health check:' + RESET, error);
   }
 }
 
@@ -1844,8 +1855,8 @@ function trackWorkerFailure(workerIndex: number, error: string) {
 
   workerFailures.set(workerIndex, failure);
 
-  console.error(RED + `[Worker ${workerIndex}] Failure tracked: ${failure.count}/${WORKER_FAILURE_THRESHOLD} in window` + RESET);
-  console.error(RED + `[Worker ${workerIndex}] Error: ${error}` + RESET);
+  console.error(RED + `[ERROR - Worker ${workerIndex} - Task: N/A] Failure tracked: ${failure.count}/${WORKER_FAILURE_THRESHOLD} in window` + RESET);
+  console.error(RED + `[ERROR - Worker ${workerIndex} - Task: N/A] Error: ${error}` + RESET);
 
   return failure.count >= WORKER_FAILURE_THRESHOLD;
 }
@@ -1937,7 +1948,7 @@ async function monitorQueueDrain() {
     }
 
   } catch (error) {
-    console.error(RED + 'Error in queue drain monitoring:' + RESET, error);
+    console.error(RED + '[ERROR - Queue Drain Monitor - Task: N/A] Error in queue drain monitoring:' + RESET, error);
   }
 }
 
@@ -1989,16 +2000,16 @@ async function startServer() {
       const unhealthyConnections = Object.entries(healthCheck).filter(([_, status]) => !status.healthy);
 
       if (unhealthyConnections.length > 0) {
-        console.error(RED + 'Unhealthy Redis connections detected:' + RESET);
+        console.error(RED + '[ERROR - BullMQ Init - Task: N/A] Unhealthy Redis connections detected:' + RESET);
         unhealthyConnections.forEach(([id, status]) => {
-          console.error(RED + `  - ${id}: ${status.error}` + RESET);
+          console.error(RED + `[ERROR - Health Check - Task: N/A]   - ${id}: ${status.error}` + RESET);
         });
         throw new Error('One or more Redis connections are unhealthy');
       }
 
       console.log(GREEN + '✅ All Redis connections verified healthy' + RESET);
     } catch (error) {
-      console.error(RED + 'Failed to create BullMQ connections:' + RESET, error);
+      console.error(RED + '[ERROR - BullMQ Init - Task: N/A] Failed to create BullMQ connections:' + RESET, error);
       // Close any connections that were created
       await closeAllBullMQConnections();
       throw new Error('Failed to initialize BullMQ connections');
@@ -2072,7 +2083,7 @@ async function startServer() {
         {
           connection: workerConnection,
           prefix: '{bull}',
-          concurrency: concurrencyPerWorker,
+          concurrency: concurrencyPerWorker ,
           lockDuration: 90000, // 90 seconds lock (1.5x job timeout)
           stalledInterval: 90000, // Check for stalled jobs every 90 seconds
           maxStalledCount: 1 // Move to failed after 1 stall
@@ -2081,7 +2092,7 @@ async function startServer() {
 
       // Add error handlers for main workers
       worker.on('error', async (error) => {
-        console.error(RED + `[Worker ${i + 1}] Worker error:` + RESET, error);
+        console.error(RED + `[ERROR - Worker ${i + 1} - Task: N/A] Worker error:` + RESET, error);
         trackWorkerFailure(i, `Worker error: ${error.message || String(error)}`);
 
         // Check if this is a Redis cluster error
@@ -2103,7 +2114,8 @@ async function startServer() {
       });
 
       worker.on('failed', (job, error) => {
-        console.error(RED + `[Worker ${i + 1}] Job ${job?.id} failed:` + RESET, error.message || error);
+        const taskId = getTaskIdForLog(job);
+        console.error(RED + `[ERROR - Worker ${i + 1} - Task: ${taskId}] Job ${job?.id} failed:` + RESET, error.message || error);
 
         // Handle failed cancellation jobs - track them as completed
         if (job && job.name && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_MAGICEDEN_BID || job.name === CANCEL_BLUR_BID)) {
@@ -2115,19 +2127,22 @@ async function startServer() {
 
           // Record the failed cancellation as a completion to ensure we reach 100%
           cancellationTracker.recordCompletion(taskId, 1, marketplace);
-          updateTaskCancellationPercentage(taskId).catch(err =>
-            console.error(RED + `Failed to update cancellation percentage after job failure: ${err}` + RESET)
-          );
+          updateTaskCancellationPercentage(taskId).catch(err => {
+            const failedTaskId = getTaskIdForLog(job);
+            console.error(RED + `[ERROR - Cancellation Tracking - Task: ${failedTaskId}] Failed to update cancellation percentage after job failure: ${err}` + RESET);
+          });
 
           // Delete the order from database anyway to clean up
           if (job.data.orderKey) {
-            Order.deleteOne({ _id: job.data.orderKey }).catch(err =>
-              console.error(RED + `Failed to delete order after cancellation failure: ${err}` + RESET)
-            );
+            Order.deleteOne({ _id: job.data.orderKey }).catch(err => {
+              const orderTaskId = getTaskIdForLog(job);
+              console.error(RED + `[ERROR - Order Cleanup - Task: ${orderTaskId}] Failed to delete order after cancellation failure: ${err}` + RESET);
+            });
           } else if (job.data.orderKeys) {
-            Order.deleteMany({ _id: { $in: job.data.orderKeys } }).catch(err =>
-              console.error(RED + `Failed to delete orders after cancellation failure: ${err}` + RESET)
-            );
+            Order.deleteMany({ _id: { $in: job.data.orderKeys } }).catch(err => {
+              const ordersTaskId = getTaskIdForLog(job);
+              console.error(RED + `[ERROR - Order Cleanup - Task: ${ordersTaskId}] Failed to delete orders after cancellation failure: ${err}` + RESET);
+            });
           }
         }
 
@@ -2170,7 +2185,8 @@ async function startServer() {
 
           return result || { success: true };
         } catch (error: any) {
-          console.error(RED + `[Blur Worker Error] Job ${job.id} failed:` + RESET, error.message || error);
+          const blurJobTaskId = getTaskIdForLog(job);
+          console.error(RED + `[ERROR - Blur Worker - Task: ${blurJobTaskId}] Job ${job.id} failed:` + RESET, error.message || error);
           // If it's a password error, throw it to fail the job properly
           if (error.code === 'NO_PASSWORD' || error.message?.includes('No password available')) {
             throw error;
@@ -2182,7 +2198,7 @@ async function startServer() {
       {
         prefix: '{bull}',
         connection: blurWorkerConnection,
-        concurrency: Math.max(1, Math.floor(concurrencyPerWorker / 2)), // Reduce concurrency for Blur to prevent rate limit issues
+        concurrency: concurrencyPerWorker * 1.5, // Reduce concurrency for Blur to prevent rate limit issues
         lockDuration: 90000, // 90 seconds lock (1.5x job timeout)
         stalledInterval: 90000, // Check for stalled jobs every 90 seconds
         maxStalledCount: 1 // Move to failed after 1 stall
@@ -2195,7 +2211,7 @@ async function startServer() {
 
     // Add error handlers for Blur queue components
     blurWorker.on('error', async (error) => {
-      console.error(RED + '[Blur Worker] Worker error:' + RESET, error);
+      console.error(RED + '[ERROR - Blur Worker - Task: N/A] Worker error:' + RESET, error);
       const blurWorkerIndex = workers.length - 1; // Blur worker is the last one
       trackWorkerFailure(blurWorkerIndex, `Blur worker error: ${error.message || String(error)}`);
 
@@ -2217,7 +2233,8 @@ async function startServer() {
     });
 
     blurWorker.on('failed', (job, error) => {
-      console.error(RED + `[Blur Worker] Job ${job?.id} failed:` + RESET, error.message || error);
+      const blurFailedTaskId = getTaskIdForLog(job);
+      console.error(RED + `[ERROR - Blur Worker - Task: ${blurFailedTaskId}] Job ${job?.id} failed:` + RESET, error.message || error);
 
       // Handle failed Blur cancellation jobs - track them as completed
       if (job && job.name === CANCEL_BLUR_BID) {
@@ -2227,19 +2244,22 @@ async function startServer() {
 
         // Record the failed cancellation as a completion to ensure we reach 100%
         cancellationTracker.recordCompletion(taskId, 1, 'blur');
-        updateTaskCancellationPercentage(taskId).catch(err =>
-          console.error(RED + `Failed to update cancellation percentage after Blur job failure: ${err}` + RESET)
-        );
+        updateTaskCancellationPercentage(taskId).catch(err => {
+          const blurCancelTaskId = getTaskIdForLog(job);
+          console.error(RED + `[ERROR - Cancellation Tracking - Task: ${blurCancelTaskId}] Failed to update cancellation percentage after Blur job failure: ${err}` + RESET);
+        });
 
         // Delete the order from database anyway to clean up
         if (job.data.orderKey) {
-          Order.deleteOne({ _id: job.data.orderKey }).catch(err =>
-            console.error(RED + `Failed to delete Blur order after cancellation failure: ${err}` + RESET)
-          );
+          Order.deleteOne({ _id: job.data.orderKey }).catch(err => {
+            const blurOrderTaskId = getTaskIdForLog(job);
+            console.error(RED + `[ERROR - Order Cleanup - Task: ${blurOrderTaskId}] Failed to delete Blur order after cancellation failure: ${err}` + RESET);
+          });
         } else if (job.data.orderKeys) {
-          Order.deleteMany({ _id: { $in: job.data.orderKeys } }).catch(err =>
-            console.error(RED + `Failed to delete Blur orders after cancellation failure: ${err}` + RESET)
-          );
+          Order.deleteMany({ _id: { $in: job.data.orderKeys } }).catch(err => {
+            const blurOrdersTaskId = getTaskIdForLog(job);
+            console.error(RED + `[ERROR - Order Cleanup - Task: ${blurOrdersTaskId}] Failed to delete Blur orders after cancellation failure: ${err}` + RESET);
+          });
         }
       }
 
@@ -2253,7 +2273,7 @@ async function startServer() {
     });
 
     blurQueue.on('error', (error) => {
-      console.error(RED + '[Blur Queue] Queue error:' + RESET, error);
+      console.error(RED + '[ERROR - Blur Queue - Task: N/A] Queue error:' + RESET, error);
       logger.logGeneralError('Blur queue error', {
         error: error,
         errorMessage: error.message || String(error),
@@ -2453,7 +2473,7 @@ async function startServer() {
       if (finalUnhealthy.length > 0) {
         console.error(RED + '⚠️  Some Redis connections are still unhealthy:' + RESET);
         finalUnhealthy.forEach(([id, status]) => {
-          console.error(RED + `  - ${id}: ${status.error}` + RESET);
+          console.error(RED + `[ERROR - Health Check - Task: N/A]   - ${id}: ${status.error}` + RESET);
         });
       } else {
         console.log(GREEN + '✅ All Redis connections are healthy' + RESET);
@@ -5883,6 +5903,8 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
                 const jobKey = isCancelJob ? undefined :
                   (createKey ? createJobKey(job) : generateJobKey(job));
 
+                const priority = isCancelJob ? 0 : loopCounterStats[taskId] + 1
+
                 return {
                   name: job.name,
                   data: job.data,
@@ -5890,7 +5912,8 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
                     ...(jobKey ? { jobId: jobKey } : {}),
                     ...job.opts,
                     removeOnComplete: true,
-                    removeOnFail: isCancelJob ? false : true  // Keep failed cancellation jobs for retry
+                    removeOnFail: isCancelJob ? false : true,  // Keep failed cancellation jobs for retry
+                    priority
                   }
                 };
               });
@@ -5959,13 +5982,14 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
                 const isCancelJob = job.name.toLowerCase().includes('cancel');
                 const jobKey = isCancelJob ? undefined :
                   (createKey ? createJobKey(job) : generateJobKey(job));
-
+                const priority = isCancelJob ? 0 : loopCounterStats[taskId] + 1
                 return {
                   name: job.name,
                   data: job.data,
                   opts: {
                     ...(jobKey ? { jobId: jobKey } : {}),
                     ...job.opts,
+                    priority,
                     removeOnComplete: true,
                     removeOnFail: isCancelJob ? false : true  // Keep failed cancellation jobs for retry
                   }
