@@ -98,8 +98,6 @@ async function processListingUpdate(
   }
 ): Promise<void> {
   const { contractAddress, tokenId, marketplace, price, seller } = data;
-  console.log({ seller });
-
   // Find all active listings for this token with instant price matching enabled
   const activeListings = await Listing.find({
     'contract.contractAddress': new RegExp(`^${contractAddress}$`, 'i'),
@@ -110,10 +108,10 @@ async function processListingUpdate(
 
   for (const listing of activeListings) {
     // Skip if this is our own listing
-    // if (seller && seller === listing.wallet.toLowerCase()) {
-    //   console.log(`Skipping our own listing from ${seller}`);
-    //   continue;
-    // }
+    if (seller && seller.toLowerCase() === listing.wallet.toLowerCase()) {
+      console.log(`Skipping our own listing from ${seller}`);
+      continue;
+    }
 
     // Get the key for price tracking
     const priceKey = `${contractAddress}-${tokenId}`;
