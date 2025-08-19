@@ -94,7 +94,7 @@ async function initialize(rateLimit: number) {
     minTime: 1000 / rateLimit,           // Minimum time between job starts
     reservoir: rateLimit,                // Initial tokens available
     reservoirRefreshAmount: rateLimit,  // Refill to rateLimit tokens
-    reservoirRefreshInterval: 500,     // Refill every second
+    reservoirRefreshInterval: 1000,     // Refill every second
     trackDoneStatus: true,
   });
 

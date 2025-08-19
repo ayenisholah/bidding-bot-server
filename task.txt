@@ -39,3 +39,6 @@
 2025-08-19T05:34:24.829059854Z   "expectedCancellationJobs": 27655
 2025-08-19T05:34:24.829128601Z }
 2025-08-19T05:34:24.834596103Z [Queue Event] Job completed: CANCEL_OPENSEA_BID-68a40b75488ef6fba680b9c7-68a40bb529ead81934f15033
+
+🚨 QUEUE BACKLOG DETECTED 🚨
+Reason: Extreme backlog detected: 3198 waiting jobs

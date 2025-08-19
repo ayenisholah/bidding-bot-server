@@ -252,6 +252,21 @@ function getTaskIdForLog(context: any): string {
     'N/A';
 }
 
+// Helper function to extract detailed OpenSea error messages
+function extractDetailedOpenSeaError(error: any): string {
+  // If we have response data, stringify it completely for debugging
+  if (error?.response?.data) {
+    const status = error.response.status;
+    const statusText = error.response.statusText;
+    const dataStr = JSON.stringify(error.response.data);
+    
+    return `[HTTP ${status}${statusText ? ` ${statusText}` : ''}] ${dataStr}`;
+  }
+  
+  // Fallback - stringify the entire error object
+  return JSON.stringify(error);
+}
+
 class RateLimiter {
   private tokens: number;
   private lastRefill: number;
@@ -1894,10 +1909,10 @@ async function monitorQueueDrain() {
     let clearReason = '';
 
     // Condition 1: High waiting count with no active workers
-    if (totalWaiting > QUEUE_BACKLOG_THRESHOLD && totalActive === 0) {
-      shouldClearQueue = true;
-      clearReason = `High waiting jobs (${totalWaiting}) with no active workers`;
-    }
+    // if (totalWaiting > QUEUE_BACKLOG_THRESHOLD && totalActive === 0) {
+    //   shouldClearQueue = true;
+    //   clearReason = `High waiting jobs (${totalWaiting}) with no active workers`;
+    // }
 
     // Condition 2: Check for stagnation (no progress in processing)
     const historyEntries = Array.from(queueProcessingHistory.entries()).sort((a, b) => a[0] - b[0]);
@@ -1909,20 +1924,20 @@ async function monitorQueueDrain() {
         return entry[1].processed === prevEntry[1].processed && entry[1].waiting > 0;
       });
 
-      if (noProgress && totalWaiting > 0) {
-        const stagnationTime = now - recentHistory[0][0];
-        if (stagnationTime > QUEUE_STAGNATION_TIME) {
-          shouldClearQueue = true;
-          clearReason = `Queue stagnation detected - no progress for ${Math.round(stagnationTime / 1000)}s`;
-        }
-      }
+      // if (noProgress && totalWaiting > 0) {
+      //   const stagnationTime = now - recentHistory[0][0];
+      //   if (stagnationTime > QUEUE_STAGNATION_TIME) {
+      //     shouldClearQueue = true;
+      //     clearReason = `Queue stagnation detected - no progress for ${Math.round(stagnationTime / 1000)}s`;
+      //   }
+      // }
     }
 
     // Condition 3: Extreme backlog
-    if (totalWaiting > QUEUE_BACKLOG_THRESHOLD * 3) {
-      shouldClearQueue = true;
-      clearReason = `Extreme backlog detected: ${totalWaiting} waiting jobs`;
-    }
+    // if (totalWaiting > QUEUE_BACKLOG_THRESHOLD * 3) {
+    //   shouldClearQueue = true;
+    //   clearReason = `Extreme backlog detected: ${totalWaiting} waiting jobs`;
+    // }
 
     // Check cooldown before clearing
     if (shouldClearQueue && (now - lastQueueClearForBacklog) > CLEAR_COOLDOWN) {
@@ -2134,12 +2149,12 @@ async function startServer() {
 
           // Delete the order from database anyway to clean up
           if (job.data.orderKey) {
-            Order.deleteOne({ _id: job.data.orderKey }).catch(err => {
+            Order.deleteOne({ _id: job.data.orderKey }).catch((err) => {
               const orderTaskId = getTaskIdForLog(job);
               console.error(RED + `[ERROR - Order Cleanup - Task: ${orderTaskId}] Failed to delete order after cancellation failure: ${err}` + RESET);
             });
           } else if (job.data.orderKeys) {
-            Order.deleteMany({ _id: { $in: job.data.orderKeys } }).catch(err => {
+            Order.deleteMany({ _id: { $in: job.data.orderKeys } }).catch((err) => {
               const ordersTaskId = getTaskIdForLog(job);
               console.error(RED + `[ERROR - Order Cleanup - Task: ${ordersTaskId}] Failed to delete orders after cancellation failure: ${err}` + RESET);
             });
@@ -2198,7 +2213,7 @@ async function startServer() {
       {
         prefix: '{bull}',
         connection: blurWorkerConnection,
-        concurrency: concurrencyPerWorker * 1.5, // Reduce concurrency for Blur to prevent rate limit issues
+        concurrency: concurrencyPerWorker, // Reduce concurrency for Blur to prevent rate limit issues
         lockDuration: 90000, // 90 seconds lock (1.5x job timeout)
         stalledInterval: 90000, // Check for stalled jobs every 90 seconds
         maxStalledCount: 1 // Move to failed after 1 stall
@@ -2244,19 +2259,19 @@ async function startServer() {
 
         // Record the failed cancellation as a completion to ensure we reach 100%
         cancellationTracker.recordCompletion(taskId, 1, 'blur');
-        updateTaskCancellationPercentage(taskId).catch(err => {
+        updateTaskCancellationPercentage(taskId).catch((err) => {
           const blurCancelTaskId = getTaskIdForLog(job);
           console.error(RED + `[ERROR - Cancellation Tracking - Task: ${blurCancelTaskId}] Failed to update cancellation percentage after Blur job failure: ${err}` + RESET);
         });
 
         // Delete the order from database anyway to clean up
         if (job.data.orderKey) {
-          Order.deleteOne({ _id: job.data.orderKey }).catch(err => {
+          Order.deleteOne({ _id: job.data.orderKey }).catch((err) => {
             const blurOrderTaskId = getTaskIdForLog(job);
             console.error(RED + `[ERROR - Order Cleanup - Task: ${blurOrderTaskId}] Failed to delete Blur order after cancellation failure: ${err}` + RESET);
           });
         } else if (job.data.orderKeys) {
-          Order.deleteMany({ _id: { $in: job.data.orderKeys } }).catch(err => {
+          Order.deleteMany({ _id: { $in: job.data.orderKeys } }).catch((err) => {
             const blurOrdersTaskId = getTaskIdForLog(job);
             console.error(RED + `[ERROR - Order Cleanup - Task: ${blurOrdersTaskId}] Failed to delete Blur orders after cancellation failure: ${err}` + RESET);
           });
@@ -2282,7 +2297,7 @@ async function startServer() {
     });
 
     blurQueueEvents.on('error', (error) => {
-      console.error(RED + '[Blur Queue Events] Events error:' + RESET, error);
+      console.error(RED + '[ERROR - Blur Queue Events - Task: N/A] Events error:' + RESET, error);
       logger.logGeneralError('Blur queue events error', {
         error: error,
         errorMessage: error.message || String(error),
@@ -2301,7 +2316,7 @@ async function startServer() {
       if (reason instanceof Error && reason.message.includes('could not renew lock')) {
         await BullMQErrorFormatter.formatError(reason);
       } else {
-        console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+        console.error(RED + '[ERROR - Unhandled Rejection - Task: N/A] Unhandled Rejection at:' + RESET, promise, 'reason:', reason);
       }
     });
 
@@ -2349,7 +2364,7 @@ async function startServer() {
       });
 
       mongoose.connection.on('error', (err) => {
-        console.error('🔴 MongoDB connection error:', err);
+        console.error(RED + '[ERROR - MongoDB Connection - Task: N/A] 🔴 MongoDB connection error:' + RESET, err);
       });
 
       // Log connection pool stats in development
@@ -2375,7 +2390,7 @@ async function startServer() {
       await Listing.updateMany({ running: true }, { running: false });
       // Tasks updated silently
     } catch (error) {
-      console.error(RED + 'Failed to update tasks:' + RESET, error);
+      console.error(RED + '[ERROR - Task Update - Task: N/A] Failed to update tasks:' + RESET, error);
     }
 
     // Try to recover password from Redis BEFORE starting jobs
@@ -2446,9 +2461,9 @@ async function startServer() {
 
       const unhealthyWorkers = workerStatuses.filter(s => !s.healthy);
       if (unhealthyWorkers.length > 0) {
-        console.error(RED + `⚠️  ${unhealthyWorkers.length} workers are not ready:` + RESET);
+        console.error(RED + `[ERROR - Worker Health - Task: N/A] ⚠️  ${unhealthyWorkers.length} workers are not ready:` + RESET);
         unhealthyWorkers.forEach(w => {
-          console.error(RED + `  - Worker ${w.index}: running=${w.running}, paused=${w.paused}` + RESET);
+          console.error(RED + `[ERROR - Worker Health - Task: N/A]   - Worker ${w.index}: running=${w.running}, paused=${w.paused}` + RESET);
         });
 
         // Try to resume paused workers
@@ -2458,7 +2473,7 @@ async function startServer() {
               await workers[workerStatus.index].resume();
               console.log(GREEN + `  ✅ Worker ${workerStatus.index} resumed` + RESET);
             } catch (error) {
-              console.error(RED + `  Failed to resume worker ${workerStatus.index}:` + RESET, error);
+              console.error(RED + `[ERROR - Worker Resume - Task: N/A]   Failed to resume worker ${workerStatus.index}:` + RESET, error);
             }
           }
         }
@@ -2471,7 +2486,7 @@ async function startServer() {
       const finalUnhealthy = Object.entries(finalHealthCheck).filter(([_, status]) => !status.healthy);
 
       if (finalUnhealthy.length > 0) {
-        console.error(RED + '⚠️  Some Redis connections are still unhealthy:' + RESET);
+        console.error(RED + '[ERROR - Redis Health - Task: N/A] ⚠️  Some Redis connections are still unhealthy:' + RESET);
         finalUnhealthy.forEach(([id, status]) => {
           console.error(RED + `[ERROR - Health Check - Task: N/A]   - ${id}: ${status.error}` + RESET);
         });
@@ -2488,7 +2503,7 @@ async function startServer() {
         await walletCache.initialize(password);
       }
     } catch (redisError) {
-      console.error('Redis operation failed:', redisError);
+      console.error(RED + '[ERROR - Redis Operation - Task: N/A] Redis operation failed:' + RESET, redisError);
     }
 
     server.listen(port, async () => {
@@ -2500,7 +2515,7 @@ async function startServer() {
         startRedisClusterMonitoring(clearQueueAndRestartJobs);
         console.log('Redis cluster monitoring started with recovery callback');
       } catch (error) {
-        console.error('Failed to start Redis cluster monitoring:', error);
+        console.error(RED + '[ERROR - Redis Monitor - Task: N/A] Failed to start Redis cluster monitoring:' + RESET, error);
       }
     });
 
@@ -2528,7 +2543,7 @@ async function startServer() {
         url: MARKETPLACE_WS_URL,
         errorMessage: error instanceof Error ? error.message : String(error)
       });
-      console.error('WebSocket connection failed:', error);
+      console.error(RED + '[ERROR - WebSocket - Task: N/A] WebSocket connection failed:' + RESET, error);
     }
 
     // Initialize listing scheduler with WebSocket manager
@@ -2664,7 +2679,7 @@ async function startServer() {
 
 
   } catch (error) {
-    console.error(RED + 'Failed to start server:' + RESET, error);
+    console.error(RED + '[ERROR - Server Startup - Task: N/A] Failed to start server:' + RESET, error);
     process.exit(1);
   }
 }
@@ -2681,7 +2696,7 @@ process.on('SIGINT', async () => {
     );
     console.log(`Updated ${result.modifiedCount} tasks to not running`);
   } catch (error) {
-    console.error('Error updating task states:', error);
+    console.error(RED + '[ERROR - Task State Update - Task: N/A] Error updating task states:' + RESET, error);
   }
 
   // Stop connectivity monitoring
@@ -2723,7 +2738,7 @@ process.on('SIGINT', async () => {
     try {
       await connection.quit();
     } catch (error) {
-      console.error('Error closing connection:', error);
+      console.error(RED + '[ERROR - Connection Close - Task: N/A] Error closing connection:' + RESET, error);
     }
   }
   console.log('All BullMQ connections closed');
@@ -2746,7 +2761,7 @@ process.on('SIGTERM', async () => {
     );
     console.log(`Updated ${result.modifiedCount} tasks to not running`);
   } catch (error) {
-    console.error('Error updating task states:', error);
+    console.error(RED + '[ERROR - Task State Update - Task: N/A] Error updating task states:' + RESET, error);
   }
 
   // Stop connectivity monitoring
@@ -2788,7 +2803,7 @@ process.on('SIGTERM', async () => {
     try {
       await connection.quit();
     } catch (error) {
-      console.error('Error closing connection:', error);
+      console.error(RED + '[ERROR - Connection Close - Task: N/A] Error closing connection:' + RESET, error);
     }
   }
   console.log('All BullMQ connections closed');
@@ -2804,7 +2819,7 @@ startServer()
       error: error as Error,
       errorMessage: error instanceof Error ? error.message : String(error)
     });
-    console.error('Failed to start server:', error);
+    console.error(RED + '[ERROR - Server Startup - Task: N/A] Failed to start server:' + RESET, error);
   });
 
 export const rps = {
@@ -2848,7 +2863,7 @@ async function shouldTaskBeStopped(taskId: string): Promise<boolean> {
         return false;
       }
     } catch (error) {
-      console.error(`[shouldTaskBeStopped] Error checking active orders for task ${taskId}:`, error);
+      console.error(RED + `[ERROR - Task Status Check - Task: ${taskId}] Error checking active orders:` + RESET, error);
       // If we can't verify, don't transition to STOPPED
       return false;
     }
@@ -3057,7 +3072,7 @@ async function setMarketplaceCancellationComplete(taskId: string, marketplace?: 
           return;
         }
       } catch (error) {
-        console.error(`[setMarketplaceCancellationComplete] Error checking active orders for task ${taskId}/${marketplace}:`, error);
+        console.error(RED + `[ERROR - Marketplace Cancellation - Task: ${taskId}] Error checking active orders for marketplace ${marketplace}:` + RESET, error);
         // If we can't verify, don't mark as complete
         return;
       }
@@ -3431,7 +3446,7 @@ async function updateTaskRunningPercentage(taskId: string) {
             console.log(MAGENTA + `\n[RECOVERY] Triggering task restart for ${taskId}` + RESET);
             await triggerTaskRestart(taskId);
           } catch (error) {
-            console.error(RED + `[RECOVERY] Failed to restart task ${taskId}: ${error}` + RESET);
+            console.error(RED + `[ERROR - Task Recovery - Task: ${taskId}] Failed to restart task: ${error}` + RESET);
           } finally {
             tasksBeingRestarted.delete(restartKey);
           }
@@ -3508,7 +3523,7 @@ async function checkTaskCompletionAndScheduleNext(taskId: string) {
       }
     }
   } catch (error) {
-    console.error(RED + `[Task Completion] Error during completion process for task ${taskId}: ${error}` + RESET);
+    console.error(RED + `[ERROR - Task Completion - Task: ${taskId}] Error during completion process: ${error}` + RESET);
     // Remove from completion process on error
     tasksInCompletionProcess.delete(taskId);
     throw error;
@@ -3635,7 +3650,8 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
       lockAcquired = await lockManager.acquireLock(counterLockKey, 5);
 
       if (!lockAcquired) {
-        console.error(RED + `[markJobAsProcessed] CRITICAL: Could not acquire lock for counter increment! Job ${jobId} may not be counted.` + RESET);
+        const lockTaskId = getTaskIdForLog({ data: { taskId, _id: taskId } });
+        console.error(RED + `[ERROR - Job Processing - Task: ${lockTaskId}] CRITICAL: Could not acquire lock for counter increment! Job ${jobId} may not be counted.` + RESET);
         // Continue anyway to prevent job from being stuck
       }
     }
@@ -3643,7 +3659,8 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
     // Re-fetch parent job inside the lock to get latest values
     parentJob = parentJobs.get(parentJobId);
     if (!parentJob) {
-      console.error(RED + `[markJobAsProcessed] Parent job disappeared during lock acquisition!` + RESET);
+      const missingTaskId = getTaskIdForLog({ data: { taskId, _id: taskId } });
+      console.error(RED + `[ERROR - Job Processing - Task: ${missingTaskId}] Parent job disappeared during lock acquisition!` + RESET);
       return;
     }
 
@@ -3674,7 +3691,8 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
       try {
         await lockManager.releaseLock(counterLockKey);
       } catch (error) {
-        console.error(RED + `[markJobAsProcessed] Error releasing counter lock: ${error}` + RESET);
+        const releaseTaskId = getTaskIdForLog({ data: { taskId, _id: taskId } });
+        console.error(RED + `[ERROR - Lock Release - Task: ${releaseTaskId}] Error releasing counter lock: ${error}` + RESET);
       }
     }
   }
@@ -3688,8 +3706,9 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
   try {
     await updateTaskRunningPercentage(taskId);
   } catch (error) {
-    console.error(RED + `[markJobAsProcessed] Error updating task percentage: ${error}` + RESET);
-    console.error(RED + `  This may cause stuck percentage!` + RESET);
+    const percentTaskId = getTaskIdForLog({ data: { taskId, _id: taskId } });
+    console.error(RED + `[ERROR - Job Processing - Task: ${percentTaskId}] Error updating task percentage: ${error}` + RESET);
+    console.error(RED + `[ERROR - Job Processing - Task: ${percentTaskId}]   This may cause stuck percentage!` + RESET);
   }
 
   // Check if all jobs are complete for this parent job
@@ -3866,7 +3885,7 @@ async function scheduleNextLoop(taskId: string): Promise<void> {
           await startTask(currentTask, true);
         }
       } catch (error) {
-        console.error(RED + `[scheduleNextLoop] Error in loop execution for task ${taskId}: ` + RESET, error);
+        console.error(RED + `[ERROR - Task Scheduler - Task: ${taskId}] Error in loop execution: ` + RESET, error);
       } finally {
         // Always release the lock after execution
         releaseLoopSchedulingLock(taskId);
@@ -3954,14 +3973,23 @@ function initializeQueueEventHandlers() {
         console.log(YELLOW + `[Queue Event] Could not extract task/marketplace from job ID: ${jobId}` + RESET);
       }
     } catch (error) {
-      console.error(RED + `[Queue Event] Error handling job completion for ${jobId}:` + RESET, error);
-      console.error(RED + `[Queue Event] Stack trace:` + RESET);
+      // Extract taskId from jobId if possible
+      let extractedTaskId = 'N/A';
+      if (jobId.startsWith('bid-')) {
+        const parts = jobId.split('-');
+        if (parts.length >= 2) {
+          extractedTaskId = parts[1];
+        }
+      }
+      
+      console.error(RED + `[ERROR - Queue Event - Task: ${extractedTaskId}] Error handling job completion for ${jobId}:` + RESET, error);
+      console.error(RED + `[ERROR - Queue Event - Task: ${extractedTaskId}] Stack trace:` + RESET);
       console.error(error);
 
       // Log error details for debugging
       if (error instanceof Error) {
-        console.error(RED + `[Queue Event] Error name: ${error.name}` + RESET);
-        console.error(RED + `[Queue Event] Error message: ${error.message}` + RESET);
+        console.error(RED + `[ERROR - Queue Event - Task: ${extractedTaskId}] Error name: ${error.name}` + RESET);
+        console.error(RED + `[ERROR - Queue Event - Task: ${extractedTaskId}] Error message: ${error.message}` + RESET);
       }
 
       // Don't let errors in event handler crash the process
@@ -4200,14 +4228,23 @@ function initializeQueueEventHandlers() {
         }
       }
     } catch (error) {
-      console.error(RED + `[Queue Event] Error handling job failure for ${jobId}:` + RESET, error);
-      console.error(RED + `[Queue Event] Stack trace:` + RESET);
+      // Extract taskId from jobId if possible
+      let extractedTaskId = 'N/A';
+      if (jobId.startsWith('bid-')) {
+        const parts = jobId.split('-');
+        if (parts.length >= 2) {
+          extractedTaskId = parts[1];
+        }
+      }
+      
+      console.error(RED + `[ERROR - Queue Event - Task: ${extractedTaskId}] Error handling job failure for ${jobId}:` + RESET, error);
+      console.error(RED + `[ERROR - Queue Event - Task: ${extractedTaskId}] Stack trace:` + RESET);
       console.error(error);
 
       // Log error details for debugging
       if (error instanceof Error) {
-        console.error(RED + `[Queue Event] Error name: ${error.name}` + RESET);
-        console.error(RED + `[Queue Event] Error message: ${error.message}` + RESET);
+        console.error(RED + `[ERROR - Queue Event - Task: ${extractedTaskId}] Error name: ${error.name}` + RESET);
+        console.error(RED + `[ERROR - Queue Event - Task: ${extractedTaskId}] Error message: ${error.message}` + RESET);
       }
 
       // Don't let errors in event handler crash the process
@@ -4311,14 +4348,17 @@ function initializeQueueEventHandlers() {
         }
       }
     } catch (error) {
-      console.error(RED + `[Queue Event] Error handling stalled job ${jobId}:` + RESET, error);
+      // Extract taskId from jobId when job is not in scope
+      const parts = jobId.split('-');
+      const stalledTaskId = (parts.length >= 3 && parts[0] === 'BID' && parts[2]) ? parts[2] : 'N/A';
+      console.error(RED + `[ERROR - Queue Event - Task: ${stalledTaskId}] Error handling stalled job ${jobId}:` + RESET, error);
       console.error(RED + `[Queue Event] Stack trace:` + RESET);
       console.error(error);
 
       // Log error details for debugging
       if (error instanceof Error) {
-        console.error(RED + `[Queue Event] Error name: ${error.name}` + RESET);
-        console.error(RED + `[Queue Event] Error message: ${error.message}` + RESET);
+        console.error(RED + `[ERROR - Queue Event - Task: ${stalledTaskId}] Error name: ${error.name}` + RESET);
+        console.error(RED + `[ERROR - Queue Event - Task: ${stalledTaskId}] Error message: ${error.message}` + RESET);
       }
 
       // Don't let errors in event handler crash the process
@@ -5661,8 +5701,6 @@ async function waitForQueueDrain(): Promise<void> {
 }
 
 const MAX_QUEUE_JOBS = 10000; // Maximum jobs allowed in queue
-const QUEUE_RESUME_THRESHOLD = 9000; // Resume when queue drops to 90% (9000 jobs)
-
 // Helper function to get total jobs in all queues
 async function getTotalJobsInQueues(): Promise<number> {
   const [counts, blurCounts] = await Promise.all([
@@ -5674,33 +5712,6 @@ async function getTotalJobsInQueues(): Promise<number> {
     (blurCounts.waiting || 0) + (blurCounts.active || 0) + (blurCounts.prioritized || 0);
 }
 
-// Helper function to wait for queue capacity with dynamic polling
-// WARNING: This function should NOT be used for job counts > MAX_QUEUE_JOBS (10,000)
-// as the condition can never be satisfied. For large job sets, rely on processBulkJobs
-// to handle chunking and capacity management internally.
-async function waitForQueueCapacity(requiredSlots: number, maxWaitTime: number = 60000): Promise<boolean> {
-  const startTime = Date.now();
-  let attemptCount = 0;
-
-  while (Date.now() - startTime < maxWaitTime) {
-    const totalJobs = await getTotalJobsInQueues();
-    const availableSpace = MAX_QUEUE_JOBS - totalJobs;
-
-    if (availableSpace >= requiredSlots) {
-      console.log(`✅ Queue capacity available: ${availableSpace}/${requiredSlots} slots`);
-      return true;
-    }
-
-    console.log(`⏳ Waiting for queue capacity: ${availableSpace}/${requiredSlots} slots available`);
-
-    // Dynamic check interval with exponential backoff
-    const checkInterval = Math.min(5000 * Math.pow(1.5, attemptCount), 30000);
-    await new Promise(resolve => setTimeout(resolve, checkInterval));
-    attemptCount++;
-  }
-
-  return false;
-}
 
 async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job): Promise<void> {
   if (!jobs?.length) {
@@ -5924,9 +5935,21 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
               // Add jobs with rate limiting using chunked addBulk
               const rateLimitChunks = chunk(uniqueJobs, RATE_LIMIT);
 
+              // Track cancellation jobs specifically
+              const cancellationJobCount = uniqueJobs.filter(job => job.name.toLowerCase().includes('cancel')).length;
+              if (cancellationJobCount > 0) {
+                console.log(GOLD + `[processBulkJobs] Adding ${cancellationJobCount} cancellation jobs to queue for task ${taskId}` + RESET);
+              }
+
               for (const jobChunk of rateLimitChunks) {
                 await rateLimiter.acquire();
-                await queue.addBulk(jobChunk);
+                const addedJobs = await queue.addBulk(jobChunk);
+                
+                // Log successful addition of cancellation jobs
+                const addedCancellationCount = addedJobs.filter(job => job.name.toLowerCase().includes('cancel')).length;
+                if (addedCancellationCount > 0) {
+                  console.log(GREEN + `[processBulkJobs] Successfully queued ${addedCancellationCount} cancellation jobs` + RESET);
+                }
 
                 // Log current prioritized count to track target range
                 if (Math.random() < 0.1) { // Log 10% of the time to avoid spam
@@ -6145,7 +6168,13 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
         throw new Error(errorMsg);
       }
 
-      console.log(GREEN + `[processBulkJobs] Successfully queued all ${actuallyQueuedCount} jobs for task ${taskId}` + RESET);
+      // Log summary with special attention to cancellation jobs
+      const totalCancellationJobs = jobs.filter(job => job.name.toLowerCase().includes('cancel')).length;
+      if (totalCancellationJobs > 0) {
+        console.log(GREEN + `[processBulkJobs] Successfully queued all ${actuallyQueuedCount} jobs for task ${taskId} (including ${totalCancellationJobs} cancellation jobs)` + RESET);
+      } else {
+        console.log(GREEN + `[processBulkJobs] Successfully queued all ${actuallyQueuedCount} jobs for task ${taskId}` + RESET);
+      }
 
       // Trigger percentage update now that all jobs are queued
       await updateTaskRunningPercentage(taskId);
@@ -12613,14 +12642,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
 
   } catch (error: any) {
     // Format OpenSea error message for better readability
-    let errorMessage = '';
-    if (error?.response?.data?.errors && Array.isArray(error.response.data.errors)) {
-      // Extract the first error message from OpenSea API errors
-      errorMessage = error.response.data.errors[0]?.message || 'Unknown OpenSea error';
-    } else {
-      errorMessage = error?.message || String(error);
-    }
-
+    const errorMessage = extractDetailedOpenSeaError(error);
 
     await logBidError(data.task._id, "OPENSEA COLLECTION BID ERROR", `Error processing OpenSea collection bid for task: ${data.task._id}: ${errorMessage}`, "error", "opensea");
 
@@ -13500,12 +13522,7 @@ async function processOpenseaTraitBid(data: {
 
     } catch (bidError: any) {
       // Format OpenSea error message for better readability
-      if (bidError?.response?.data?.errors && Array.isArray(bidError.response.data.errors)) {
-        // Extract the first error message from OpenSea API errors
-        errorMessage = bidError.response.data.errors[0]?.message || 'Unknown OpenSea error';
-      } else {
-        errorMessage = bidError?.message || String(bidError);
-      }
+      errorMessage = extractDetailedOpenSeaError(bidError);
 
       console.error(RED + `OpenSea trait bid failed for ${_id} ${trait}:`, errorMessage + RESET);
 
@@ -13516,13 +13533,8 @@ async function processOpenseaTraitBid(data: {
   } catch (error: any) {
 
     if (!errorMessage) {
-      // Format OpenSea error message for better readability
-      if (error?.response?.data?.errors && Array.isArray(error.response.data.errors)) {
-        // Extract the first error message from OpenSea API errors
-        errorMessage = error.response.data.errors[0]?.message || 'Unknown OpenSea error';
-      } else {
-        errorMessage = error?.message || String(error);
-      }
+      // Use the new detailed error extraction function
+      errorMessage = extractDetailedOpenSeaError(error);
     }
 
 
@@ -13818,15 +13830,8 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     }
 
     if (!errorMessage) {
-      // Format OpenSea error message for better readability
-      let errorMsg = '';
-      if (error?.response?.data?.errors && Array.isArray(error.response.data.errors)) {
-        // Extract the first error message from OpenSea API errors
-        errorMsg = error.response.data.errors[0]?.message || 'Unknown OpenSea error';
-      } else {
-        errorMsg = error?.message || String(error);
-      }
-      errorMessage = errorMsg;
+      // Use the new detailed error extraction function
+      errorMessage = extractDetailedOpenSeaError(error);
     }
 
     // Record error stats
@@ -13902,7 +13907,8 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
       currency
     )
   } catch (error: any) {
-    await logBidError(data.taskId, "OPENSEA COLLECTION COUNTER BID ERROR", `Error processing OpenSea collection counter bid for task: ${data.slug}: ${error?.response?.data?.errors?.[0] || error?.response?.data || error?.message || String(error)}`, "error", "opensea");
+    const errorMessage = extractDetailedOpenSeaError(error);
+    await logBidError(data.taskId, "OPENSEA COLLECTION COUNTER BID ERROR", `Error processing OpenSea collection counter bid for task: ${data.slug}: ${errorMessage}`, "error", "opensea");
   }
 }
 
@@ -14177,7 +14183,8 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
     )
 
   } catch (error: any) {
-    await logBidError(data.task._id, "OPENSEA TOKEN COUNTER BID ERROR", `Error bidding on token ${data.asset.tokenId} in collection ${data.slug}: ${error?.response?.data?.errors?.[0] || error?.response?.data || error?.message || String(error)}`, "error", "opensea");
+    const errorMessage = extractDetailedOpenSeaError(error);
+    await logBidError(data.task._id, "OPENSEA TOKEN COUNTER BID ERROR", `Error bidding on token ${data.asset.tokenId} in collection ${data.slug}: ${errorMessage}`, "error", "opensea");
   }
 }
 
@@ -15496,6 +15503,18 @@ async function bulkCancelOpenseaBid(data: { privateKey: string, orderId: string,
 
     // Cancellation tracking is now handled in cancelOrder directly
   } catch (error) {
+    // Log detailed error information
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(RED + `[ERROR - bulkCancelOpenseaBid - Task: ${taskId}] Failed to cancel OpenSea order ${orderId}: ${errorMessage}` + RESET);
+    
+    // Log additional error details if available
+    if (error instanceof Error && 'response' in error) {
+      const responseError = error as any;
+      if (responseError.response?.data) {
+        console.error(RED + `[ERROR - bulkCancelOpenseaBid - Task: ${taskId}] Response data: ${JSON.stringify(responseError.response.data)}` + RESET);
+      }
+    }
+    
     throw error; // Re-throw to maintain existing behavior
   }
 }
@@ -20813,6 +20832,94 @@ async function fixStuckTask(taskId: string) {
   await updateTaskRunningPercentage(taskId);
 
   console.log(GREEN + `[fixStuckTask] Recovery attempt completed for task ${taskId}` + RESET);
+}
+
+/**
+ * Diagnostic function to check cancellation job status in queue
+ */
+async function checkCancellationJobStatus(taskId: string): Promise<{
+  totalJobs: number;
+  completedJobs: number;
+  failedJobs: number;
+  activeJobs: number;
+  waitingJobs: number;
+  stalledJobs: number;
+  cancellationProgress: number | null;
+  details: any;
+}> {
+  try {
+    console.log(CYAN + `[checkCancellationJobStatus] Checking cancellation status for task ${taskId}` + RESET);
+    
+    // Find cancellation jobs for this task
+    let totalCancellationJobs = 0;
+    let completedCancellationJobs = 0;
+    let failedCancellationJobs = 0;
+    let activeCancellationJobs = 0;
+    let waitingCancellationJobs = 0;
+    let stalledCancellationJobs = 0;
+    
+    // Check each job state
+    const states: JobType[] = ['completed', 'failed', 'active', 'waiting'];
+    
+    for (const state of states) {
+      const jobs = await queue.getJobs([state], 0, -1);
+      
+      for (const job of jobs) {
+        if (job.name.includes('CANCEL_') && job.data?.taskId === taskId) {
+          totalCancellationJobs++;
+          
+          switch (state) {
+            case 'completed':
+              completedCancellationJobs++;
+              break;
+            case 'failed':
+              failedCancellationJobs++;
+              console.log(RED + `[checkCancellationJobStatus] Failed job: ${job.id}, attempts: ${job.attemptsMade}/${job.opts.attempts}, error: ${job.failedReason}` + RESET);
+              break;
+            case 'active':
+              activeCancellationJobs++;
+              break;
+            case 'waiting':
+              waitingCancellationJobs++;
+              break;
+          }
+        }
+      }
+    }
+    
+    // Get cancellation progress from tracker
+    const cancellationProgress = cancellationTracker.getAggregatedPercentage(taskId) || 
+                                cancellationTracker.getPercentage(taskId);
+    
+    const result = {
+      totalJobs: totalCancellationJobs,
+      completedJobs: completedCancellationJobs,
+      failedJobs: failedCancellationJobs,
+      activeJobs: activeCancellationJobs,
+      waitingJobs: waitingCancellationJobs,
+      stalledJobs: stalledCancellationJobs,
+      cancellationProgress,
+      details: {
+        taskStatus: taskStatus[taskId],
+        trackerStatus: cancellationTracker.getStatus(taskId),
+        queueCounts: await queue.getJobCounts()
+      }
+    };
+    
+    console.log(GREEN + `[checkCancellationJobStatus] Summary:` + RESET);
+    console.log(`  Total: ${totalCancellationJobs}`);
+    console.log(`  Completed: ${completedCancellationJobs}`);
+    console.log(`  Failed: ${failedCancellationJobs}`);
+    console.log(`  Active: ${activeCancellationJobs}`);
+    console.log(`  Waiting: ${waitingCancellationJobs}`);
+    console.log(`  Stalled: ${stalledCancellationJobs}`);
+    console.log(`  Progress: ${cancellationProgress}%`);
+    
+    return result;
+  } catch (error) {
+    console.error(RED + `[ERROR - checkCancellationJobStatus - Task: ${taskId}] Error checking cancellation status:` + RESET, error);
+    throw error;
+  }
 }
 
 /**
