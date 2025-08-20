@@ -134,13 +134,14 @@ class WebSocketManager extends EventEmitter {
               const wsToCleanup = this.ws;
               // Set to null immediately to prevent further operations
               this.ws = null;
-              
+
               // Set up cleanup when the connection eventually completes or fails
               wsToCleanup.once('open', () => {
                 try {
                   wsToCleanup.close();
                 } catch (e) {
                   // Ignore errors during cleanup
+                  console.log(e);
                 }
               });
               wsToCleanup.once('error', () => {
@@ -1085,9 +1086,9 @@ class WebSocketManager extends EventEmitter {
 
   private safeCloseWebSocket(): void {
     if (!this.ws) return;
-    
+
     this.ws.removeAllListeners();
-    
+
     try {
       switch (this.ws.readyState) {
         case WebSocket.CONNECTING:
@@ -1097,13 +1098,14 @@ class WebSocketManager extends EventEmitter {
           const wsToCleanup = this.ws;
           // Set to null to prevent further operations
           this.ws = null;
-          
+
           // Set up cleanup when the connection eventually completes or fails
           wsToCleanup.once('open', () => {
             try {
               wsToCleanup.close();
             } catch (e) {
               // Ignore errors during cleanup
+              console.log(e);
             }
           });
           wsToCleanup.once('error', () => {

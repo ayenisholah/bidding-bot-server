@@ -69,6 +69,7 @@ import { approvalCache } from "./utils/approval-cache";
 import { blurCompletionTracker } from "./utils/blur-completion-tracker";
 import { cancellationTracker } from "./utils/cancellation-tracker";
 // import { blurJobCoordinator } from "./utils/blur-job-coordinator";
+import { listingPriceCache } from "./utils/listing-price-cache";
 
 const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
 
@@ -237,6 +238,7 @@ const lockManager = new DistributedLockManager({
 // Export redis as a getter property
 export { lockManager };
 export { queue };
+export { listingPriceCache };
 // Export redis getter to ensure it always returns current connection
 export const getRedis = () => redis;
 // Removed netEnabled - using isConnected from connectivity monitoring instead
@@ -971,7 +973,7 @@ app.use(cors({
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
-let wsManager: WebSocketManager;
+export let wsManager: WebSocketManager;
 let retryCount: number = 0;
 
 // WebSocket Connection Metrics
@@ -3084,7 +3086,6 @@ async function setMarketplaceCancellationComplete(taskId: string, marketplace?: 
     const task = activeTasks.get(taskId);
     if (task && task.running) {
       console.log(GREEN + `Setting task ${taskId} to SCHEDULED (was: ${taskStatus[taskId].previousState})` + RESET);
-      setTaskStatus(taskId, 'SCHEDULED', 'marketplace-specific cancellation complete');
       delete taskStatus[taskId].previousState;
       delete taskStatus[taskId].cancellingMarketplace;
       // Reset cancellation percentage after setting to SCHEDULED
@@ -7278,12 +7279,8 @@ async function fetchOrdersForCancellation(taskId: string, marketplace?: string):
 
 async function stopTask(task: ITask, start: boolean, marketplace?: string) {
   const taskId = task._id.toString();
-
-
   try {
-
     let WALLET_PRIVATE_KEY: string | undefined;
-
     try {
       const wallet = await walletCache.getWalletById(task.walletId);
       if (wallet?.encryptedPrivateKey) {
@@ -7297,7 +7294,6 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
     let totalOperations = 0;
     let completedOperations = 0;
     let completionHandled = false; // Track if completion has been handled
-
 
     // Initialize or update task status to CANCELLING
     if (!taskStatus[taskId]) {
@@ -7446,6 +7442,11 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
         taskId: taskId,
         expiresAt: { $gt: new Date() }
       });
+
+      if (totalBids === 0) {
+        taskStatus[taskId].status = 'STOPPED'
+        return
+      }
 
       // Get marketplace-specific counts for global cancellation
       const [openSeaCount, magicEdenCount, blurCount] = await Promise.all([
@@ -7829,11 +7830,6 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
         if (countdownTimer) {
           clearInterval(countdownTimer);
           taskCountdownTimers.delete(taskId);
-        }
-      } else {
-        // Task is still running but has no orders
-        if (taskStatus[taskId]) {
-          taskStatus[taskId].status = 'SCHEDULED';
         }
       }
     }
@@ -13206,7 +13202,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 
     // Add tolerance for floating-point comparison (0.000001 = 1e-6)
     const PRICE_TOLERANCE = 0.000001;
-    
+
     if (currentTask.outbidOptions.outbid && collectionOfferEth > maxBidPriceEth + PRICE_TOLERANCE) {
       if (!skipStats[task._id]) {
         skipStats[task._id] = {
@@ -14436,7 +14432,7 @@ async function processBlurTraitBid(data: {
 
     // Add tolerance for floating-point comparison (0.000001 = 1e-6)
     const PRICE_TOLERANCE = 0.000001;
-    
+
     if (outbidOptions.outbid && offerEth > maxBidPriceEth + PRICE_TOLERANCE) {
       if (!skipStats[_id]) {
         skipStats[_id] = {
@@ -19597,8 +19593,16 @@ async function handleStartListing(data: { _id: string }, ws: WebSocket) {
     listing.running = true;
     await listing.save();
 
+    console.log('handleStartListing Step 2: Calling createListing directly...');
+    const createListingStart = Date.now();
     // Schedule the listing
+    await createListing(listing)
+    console.log(`handleStartListing Step 2.1: createListing completed in ${Date.now() - createListingStart}ms`);
+    
+    console.log('handleStartListing Step 3: Calling scheduleListing...');
+    const scheduleStart = Date.now();
     await scheduleListing(listing);
+    console.log(`handleStartListing Step 3.1: scheduleListing completed in ${Date.now() - scheduleStart}ms`);
 
     // Subscribe to WebSocket events if instant price matching is enabled
     console.log(`\n🔍 Checking WebSocket subscription conditions:`);

@@ -8,6 +8,11 @@ import { axiosInstance, limiter } from "../../init";
 import { Wallet } from "ethers";
 import Listing from "../../models/listing.model";
 import { convertDurationForBlur } from "../../utils/duration";
+import { listingPriceCache } from "../../utils/listing-price-cache";
+import { roundToNineDecimals } from "../../utils/decimal-precision";
+import { getAccessToken } from "./bid";
+import { getCollectionDetails } from "../../functions/collection";
+import { IFee } from "../../types/listing.types";
 
 config()
 const API_KEY = process.env.API_KEY;
@@ -19,9 +24,9 @@ const API_KEY = process.env.API_KEY;
  * @param tokenId - The token ID of the NFT to list
  * @param price - The listing price as a string in ETH (e.g., "1.5" for 1.5 ETH)
  * @param wallet - The wallet instance used for signing the listing transaction
- * @param authToken - Blur authentication token for API access
+ * @param privateKey - Private key for fetching Blur auth token
+ * @param contractSlug - The collection slug for fetching collection details
  * @param listDuration - Duration object containing value and unit
- * @param feeRate - Creator fee rate as a decimal (e.g., 0.025 for 2.5% creator fee)
  * @returns Promise<void> - Resolves when the listing is successfully created or throws an error
  * 
  * @example
@@ -31,30 +36,61 @@ const API_KEY = process.env.API_KEY;
  *   "1234",
  *   "1.5", // 1.5 ETH as string
  *   wallet,
- *   "blur_auth_token_xyz",
- *   { value: 24, unit: "hours" },
- *   0.025 // 2.5% creator fee
+ *   privateKey,
+ *   "cool-cats-nft",
+ *   { value: 24, unit: "hours" }
  * );
  * ```
  * 
  * @description
  * This function handles the complete Blur listing process:
- * 1. Approves the NFT for Blur's contract
- * 2. Formats the order via Blur API
- * 3. Signs the typed data with the wallet
- * 4. Submits the signed order to Blur
- * 5. Updates the database with listing details
+ * 1. Fetches Blur access token
+ * 2. Fetches collection details for creator fees
+ * 3. Approves the NFT for Blur's contract
+ * 4. Formats the order via Blur API
+ * 5. Signs the typed data with the wallet
+ * 6. Submits the signed order to Blur
+ * 7. Updates the database with listing details
  */
 export async function listOnBlur(
   nftAddress: string,
   tokenId: string,
   price: string,
   wallet: Wallet,
-  authToken: string,
-  listDuration: { value: number; unit: string },
-  feeRate: number) {
+  privateKey: string,
+  contractSlug: string,
+  listDuration: { value: number; unit: string }) {
 
   try {
+    // Fetch Blur access token
+    console.log(`${GOLD}[BLUR] Fetching access token...${RESET}`);
+    let authToken: string;
+    try {
+      const token = await getAccessToken(privateKey);
+      if (!token) {
+        throw new Error('Failed to get Blur access token');
+      }
+      authToken = token;
+      console.log(`${GOLD}[BLUR] Access token fetched successfully${RESET}`);
+    } catch (tokenError) {
+      console.error(`${GOLD}[BLUR] Failed to fetch access token${RESET}`, tokenError);
+      throw new Error(`Blur access token fetch failed: ${tokenError instanceof Error ? tokenError.message : 'Unknown error'}`);
+    }
+    
+    // Fetch collection details for creator fees
+    console.log(`${GOLD}[BLUR] Fetching collection details for ${contractSlug}...${RESET}`);
+    let feeRate = 0;
+    try {
+      const collectionData = await getCollectionDetails(contractSlug, nftAddress);
+      const creatorFees = collectionData?.creator_fees as IFee;
+      const enforceCreatorFee = collectionData?.enforceCreatorFee as boolean;
+      const totalCreatorFee = enforceCreatorFee && creatorFees ? Object.values(creatorFees).reduce((sum, fee) => sum + fee, 0) : 0;
+      feeRate = totalCreatorFee / 10000; // Convert basis points to decimal
+      console.log(`${GOLD}[BLUR] Collection details fetched - Total creator fee: ${totalCreatorFee} (${feeRate * 100}%)${RESET}`);
+    } catch (error) {
+      console.error(`${GOLD}[BLUR] Error fetching collection details, proceeding without creator fees${RESET}`);
+    }
+    
     await approveNFT(
       nftAddress,
       wallet,
@@ -268,10 +304,19 @@ export async function listOnBlur(
       } else {
         console.log(`${GOLD}[BLUR - LISTING] ✅ Successfully listed ${nftAddress} #${tokenId} for ${price} ETH${RESET}`);
 
+        // Update listing price cache
+        const priceNumber = parseFloat(price);
+        await listingPriceCache.updatePrice(
+          nftAddress.toLowerCase(),
+          tokenId,
+          priceNumber,
+          wallet.address.toLowerCase()
+        );
+
         // Update finalListingPrice.blur and expiration in the database
         try {
-          // Convert price string to number for database storage
-          const priceInEth = parseFloat(price);
+          // Convert price string to number for database storage and round to 9 decimal places
+          const priceInEth = roundToNineDecimals(parseFloat(price));
           // Use the same expiration timestamp that was sent to Blur
           const dbExpirationTime = new Date(requestExpirationTimestamp);
 

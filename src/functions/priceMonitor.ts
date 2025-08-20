@@ -2,13 +2,8 @@ import { IListing } from "../types/listing.types";
 import Listing from "../models/listing.model";
 import { getAllFloorPrices, getOpenseaFloor } from "./collection";
 import { PROCESS_LISTING_UPDATE, queue } from "../index";
-
-// Store current best prices for listings we're monitoring
-const currentListingPrices: Map<string, {
-  opensea?: number;
-  blur?: number;
-  magiceden?: number;
-}> = new Map();
+import { listingPriceCache } from "../utils/listing-price-cache";
+import { roundToNineDecimals } from "../utils/decimal-precision";
 
 // Store processed message IDs to prevent duplicate processing
 const processedMessageIds = new Set<string>();
@@ -24,8 +19,8 @@ setInterval(() => {
 
 // Log statistics every minute for debugging
 setInterval(() => {
-  if (currentListingPrices.size > 0) {
-    console.log(`[Price Monitor Stats] Active price tracking: ${currentListingPrices.size} listings, Processed messages: ${processedMessageIds.size}`);
+  if (processedMessageIds.size > 0) {
+    console.log(`[Price Monitor Stats] Processed messages: ${processedMessageIds.size}`);
   }
 }, 60 * 1000);
 
@@ -74,7 +69,7 @@ export async function handleListingPriceUpdate(message: any): Promise<void> {
         tokenId,
         marketplace,
         price,
-        seller
+        seller,
       });
       return;
     }
@@ -112,59 +107,16 @@ async function processListingUpdate(
       console.log(`Skipping our own listing from ${seller}`);
       continue;
     }
-
-    // Get the key for price tracking
-    const priceKey = `${contractAddress}-${tokenId}`;
-
-    // Initialize price tracking if needed
-    if (!currentListingPrices.has(priceKey)) {
-      currentListingPrices.set(priceKey, {});
-    }
-
-    const prices = currentListingPrices.get(priceKey)!;
-    const marketplaceLower = marketplace.toLowerCase() as 'opensea' | 'blur' | 'magiceden';
-
-    // Update the current price for this marketplace
-    prices[marketplaceLower] = price;
-
-    // Check if we need to adjust our price
-    const shouldAdjust = await shouldAdjustPrice(listing, marketplaceLower, price);
+    const shouldAdjust = await shouldAdjustPrice(listing, price);
 
     if (shouldAdjust) {
       // Calculate the new undercut price
       const undercutMargin = parseFloat(listing.underCutMargin) || 0.0000;
-      const newPrice = price - undercutMargin;
-
+      const newPrice = roundToNineDecimals(price - undercutMargin);
       // Create a unique job ID based on listing ID and marketplace
       const jobId = `listing-update-${listing._id}-${marketplace}`;
 
       try {
-        // Check if a job already exists for this listing/marketplace combination
-        const existingJob = await queue.getJob(jobId);
-
-        if (existingJob) {
-          // Get the existing job's price
-          const existingPrice = existingJob.data.newPrice;
-
-          // If the new price is lower than existing, skip this update
-          // The existing job will handle the better price
-          if (newPrice >= existingPrice) {
-            // Skip adding this job as the existing one has a better price
-            console.log(`Skipping price update for ${tokenId} - existing job has better price (${existingPrice} vs ${newPrice})`);
-            continue;
-          }
-
-          // Check if job is being processed
-          const jobState = await existingJob.getState();
-          if (jobState === 'active') {
-            console.log(`Skipping price update for ${tokenId} - existing job is being processed`);
-            continue;
-          }
-
-          // Job exists but new price is better - let it complete naturally
-          // The job processor should check current market conditions
-          console.log(`Existing job for ${tokenId} will be superseded by market conditions`);
-        }
 
         // Add the job to the queue
         await queue.add(
@@ -200,17 +152,19 @@ async function processListingUpdate(
  */
 async function shouldAdjustPrice(
   listing: IListing,
-  marketplace: 'opensea' | 'blur' | 'magiceden',
   competitorPrice: number
 ): Promise<boolean> {
   try {
-    // Get our current listing price
-    const ourPrice = listing.finalListingPrice?.[marketplace] || 0;
+    // Get our current listing price from cache
+    const ourPrice = await listingPriceCache.getLowestPrice(
+      listing.contract.contractAddress,
+      listing.tokenId
+    ) || 0;
 
     // If we don't have a price listed, don't adjust
     if (!ourPrice) return false;
 
-    // Check if competitor is undercutting us (or matching our price)
+    // Check if competitor price is higher than ours (no need to adjust)
     if (competitorPrice > ourPrice) return false;
 
     // Get undercut margin (default to 0.0000 ETH if not specified)
@@ -218,7 +172,7 @@ async function shouldAdjustPrice(
 
     // Check minimum listing price - always enforce this constraint
     const minPrice = parseFloat(listing.minListingPrice) || 0;
-    const newPrice = competitorPrice - undercutMargin;
+    const newPrice = roundToNineDecimals(competitorPrice - undercutMargin);
 
     if (newPrice < minPrice) return false;
 
@@ -263,13 +217,6 @@ export async function getFloorPrices(collectionSlug: string): Promise<{
   }
 }
 
-/**
- * Clear price cache for a specific listing
- */
-export function clearListingPriceCache(contractAddress: string, tokenId: string): void {
-  const priceKey = `${contractAddress.toLowerCase()}-${tokenId}`;
-  currentListingPrices.delete(priceKey);
-}
 
 /**
  * Extend instant price matching session for a listing

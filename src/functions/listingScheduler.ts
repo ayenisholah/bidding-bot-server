@@ -1,7 +1,7 @@
 import { Queue, Job } from 'bullmq';
 import Listing, { IListing } from '../models/listing.model';
 import { createListing } from './list';
-import { logger, ErrorCategory } from '../utils/logger';
+import { logger } from '../utils/logger';
 import WebSocketManager from '../utils/websocket-manager';
 import { PROCESS_LISTING, queue } from '..';
 
@@ -27,22 +27,31 @@ const activeJobs = new Map<string, string>();
  * Schedule a listing to run at specified intervals
  */
 export async function scheduleListing(listing: IListing): Promise<void> {
+  console.log(`\n=== SCHEDULE LISTING CALLED ===`);
+  console.log(`Listing ID: ${listing._id}`);
+  console.log(`Token ID: ${listing.tokenId}`);
+  console.log(`Timestamp: ${new Date().toISOString()}`);
+
   try {
+    console.log('Schedule Step 1: Getting main queue...');
     const queue = await getMainQueue();
     const listingId = listing._id.toString();
-    const jobId = `listing-${listingId}`;
 
+    console.log('Schedule Step 2: Cancelling existing jobs...');
     // Cancel existing job if any
     await cancelListingJob(listingId);
 
     if (!listing.running) {
-
+      console.log('Schedule Step 3: Listing not running, returning early');
       return;
     }
 
+    console.log('Schedule Step 3: Calculating delay...');
     // Calculate delay in milliseconds
     const delayMs = convertToSeconds(listing.loopInterval.value, listing.loopInterval.unit) * 1000;
+    console.log(`Schedule Step 3.1: Delay in ms: ${delayMs}`);
 
+    console.log('Schedule Step 4: Adding job to queue...');
     // Add a single repeating job with immediate execution
     const job = await queue.add(
       PROCESS_LISTING,
@@ -64,7 +73,9 @@ export async function scheduleListing(listing: IListing): Promise<void> {
       }
     );
 
+    console.log(`Schedule Step 5: Job added with ID: ${job.id}`);
     activeJobs.set(listingId, job.id!);
+    console.log('Schedule Step 6: scheduleListing completed successfully');
 
   } catch (error) {
     await logger.logQueueError('Failed to schedule listing', {
@@ -126,7 +137,7 @@ export async function cancelListingJob(listingId: string): Promise<void> {
     activeJobs.delete(listingId);
 
     if (!removedRepeatable && !jobId) {
-
+      console.log(`No active job found for listing ${listingId}`);
     }
   } catch (error) {
     await logger.logQueueError('Failed to cancel listing job', {

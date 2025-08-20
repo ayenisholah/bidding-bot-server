@@ -3,6 +3,7 @@ import { approveNFT } from "../../functions/approve";
 import { IFee } from "../../types/listing.types";
 import { axiosInstance, limiter } from "../../init";
 import { config } from "dotenv";
+import { getCollectionDetails } from "../../functions/collection";
 
 const BLUE = '\x1b[34m';
 const RESET = '\x1b[0m';
@@ -10,6 +11,8 @@ import { BASE_URL, domain, minABI, NETWORK } from "../../constants";
 import Listing from "../../models/listing.model";
 import { logger } from "../../utils/logger";
 import { convertDurationForOpenSea } from "../../utils/duration";
+import { listingPriceCache } from "../../utils/listing-price-cache";
+import { roundToNineDecimals } from "../../utils/decimal-precision";
 
 config()
 
@@ -122,9 +125,8 @@ const provider = new AlchemyProvider(NETWORK, ALCHEMY_API_KEY)
  * @param tokenId - The token ID of the NFT to list
  * @param price - The listing price in ETH (e.g., 1.5 for 1.5 ETH)
  * @param wallet - The wallet instance used for signing the listing transaction
- * @param enforceCreatorFee - Whether to enforce creator royalties on the listing
+ * @param contractSlug - The collection slug for fetching collection details
  * @param listDuration - Duration object containing value and unit
- * @param creatorFees - Object containing creator fee addresses and their respective fee percentages (in basis points)
  * @returns Promise<void> - Resolves when the listing is successfully created or throws an error
  * 
  * @example
@@ -134,9 +136,8 @@ const provider = new AlchemyProvider(NETWORK, ALCHEMY_API_KEY)
  *   "1234",
  *   1.5, // 1.5 ETH
  *   wallet,
- *   true,
- *   { value: 24, unit: "hours" },
- *   { "0x123...": 250 } // 2.5% creator fee
+ *   "cool-cats-nft",
+ *   { value: 24, unit: "hours" }
  * );
  * ```
  */
@@ -145,11 +146,31 @@ export const listOnOpensea = async (
   tokenId: string,
   price: number,
   wallet: Wallet,
-  enforceCreatorFee: boolean,
+  contractSlug: string,
   listDuration: { value: number; unit: string },
-  creatorFees: IFee | undefined,
 ) => {
 
+  // Fetch collection details for creator fees
+  let creatorFees: IFee | undefined;
+  let enforceCreatorFee = false;
+  
+  try {
+    console.log(`${BLUE}[OPENSEA] Fetching collection details for ${contractSlug}...${RESET}`);
+    const collectionData = await getCollectionDetails(contractSlug, nftAddress);
+    creatorFees = collectionData?.creator_fees as IFee;
+    enforceCreatorFee = collectionData?.enforceCreatorFee as boolean;
+    console.log(`${BLUE}[OPENSEA] Collection details fetched - Enforce creator fee: ${enforceCreatorFee}${RESET}`);
+  } catch (error) {
+    console.error(`${BLUE}[OPENSEA] Error fetching collection details, proceeding without creator fees${RESET}`);
+    await logger.logOpenseaListingError('Error fetching collection details', {
+      contractAddress: nftAddress,
+      walletAddress: wallet.address,
+      operation: 'fetch_collection_details',
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
+  }
+  
   try {
     await approveNFT(
       nftAddress,
@@ -203,8 +224,8 @@ export const listOnOpensea = async (
 
   listingPayload.parameters = listingPayload.protocol_data.parameters;
 
-  // Round price to 4 decimal places to avoid floating point precision errors
-  const roundedPrice = Math.round(price * 10000) / 10000;
+  // Round price to 9 decimal places to avoid floating point precision errors
+  const roundedPrice = roundToNineDecimals(price);
   const offerPrice = parseEther(roundedPrice.toString());
 
   // Payload data
@@ -408,6 +429,14 @@ export const listOnOpensea = async (
     }
   } else {
     console.log(`${BLUE}[OPENSEA - LISTING] ✅ Successfully listed ${nftAddress} #${tokenId} for ${roundedPrice} ETH${RESET}`);
+
+    // Update listing price cache
+    await listingPriceCache.updatePrice(
+      nftAddress.toLowerCase(),
+      tokenId,
+      roundedPrice,
+      wallet.address.toLowerCase()
+    );
 
     // Update finalListingPrice.opensea and expiration in the database
     try {

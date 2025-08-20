@@ -1,5 +1,5 @@
 db.updates.insertOne({
-  version: '3.5.0',
+  version: '4.0.0',
   releaseDate: ISODate('2025-08-18T08:15:04.501Z'),
   changes: [ 'stable beta' ],
   criticalUpdate: false,
