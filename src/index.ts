@@ -3141,7 +3141,7 @@ async function setMarketplaceCancellationComplete(taskId: string, marketplace?: 
 const loopCounterStats: LoopCount = {};
 
 // Helper function to clean up task resources
-function cleanupTaskResources(taskId: string): void {
+function cleanupTaskResources(taskId: string, preserveWarnings = false): void {
   const timestamp = new Date().toISOString();
   console.log(CYAN + `[cleanupTaskResources] ${timestamp} - Cleaning up resources for task ${taskId}` + RESET);
 
@@ -3183,8 +3183,16 @@ function cleanupTaskResources(taskId: string): void {
   delete skipStats[taskId];
   delete errorStats[taskId];
   delete floorPrices[taskId];
-  delete warningBids[taskId];
-  delete warningMessage[taskId];
+  
+  // Only clear warnings if not preserving them
+  if (!preserveWarnings) {
+    console.log(YELLOW + `[cleanupTaskResources] Clearing warnings for task ${taskId}` + RESET);
+    delete warningBids[taskId];
+    delete warningMessage[taskId];
+  } else {
+    console.log(YELLOW + `[cleanupTaskResources] Preserving warnings for task ${taskId}` + RESET);
+  }
+  
   delete bestOffers[taskId];
 
   // Clear scheduling tracking
@@ -4527,6 +4535,13 @@ setInterval(broadcastBidRates, BROADCAST_INTERVAL);
 async function broadcastBidRates() {
   bidRates = getAllBidRates();
 
+  // Log warning state for debugging
+  const tasksWithWarnings = Object.keys(warningBids).filter(taskId => 
+    Object.values(warningBids[taskId]).some(hasWarning => hasWarning)
+  );
+  if (tasksWithWarnings.length > 0) {
+    console.log(YELLOW + `[broadcastBidRates] Tasks with warnings: ${tasksWithWarnings.join(', ')}` + RESET);
+  }
 
   const message = JSON.stringify({
     type: 'bidRatesUpdate',
@@ -5166,10 +5181,6 @@ async function processGlobalMarketplaces(incomingMarketplaces: string[]) {
 
     // Only process if there are NEW marketplaces being added
     if (newMarketplaces.length === 0) {
-      console.log(YELLOW + `[processGlobalMarketplaces] No new marketplaces to add. Skipping processing.` + RESET);
-      if (removedMarketplaces.length > 0) {
-        console.log(YELLOW + `[processGlobalMarketplaces] Removed marketplaces: ${removedMarketplaces.join(', ')}` + RESET);
-      }
       return;
     }
 
@@ -5326,11 +5337,17 @@ async function updateTaskData(task: ITask) {
   try {
     const existingTaskIndex = currentTasks.findIndex(t => t._id === task._id);
     const existingTask = getActiveTaskWithIdByIndex(existingTaskIndex)?.task
+    
+    // Clear both warningBids and warningMessage when task is updated
     warningBids[task._id] = {
       opensea: false,
       magiceden: false,
       blur: false
     };
+    
+    if (warningMessage[task._id]) {
+      delete warningMessage[task._id];
+    }
 
     if (existingTaskIndex === -1 || !existingTask) return
 
@@ -5522,9 +5539,23 @@ async function updateTaskData(task: ITask) {
       );
     }
 
-    const creatorFees: IFee = collectionDetails.creator_fees.null !== undefined
-      ? { null: collectionDetails.creator_fees.null }
-      : Object.fromEntries(Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)]));
+    // Log full collection details for trait bid
+    console.log(`[Trait Bid - Full Collection Details Retrieved] ${task.contract.slug}:`, JSON.stringify(collectionDetails, null, 2));
+    
+    console.log(`[Trait Bid - CreatorFees Construction] Before transformation:`, {
+      creator_fees: JSON.stringify(collectionDetails.creator_fees),
+      has_null: collectionDetails.creator_fees.null !== undefined,
+      null_value: collectionDetails.creator_fees.null,
+      keys: Object.keys(collectionDetails.creator_fees)
+    });
+
+    // Convert all creator fees to the IFee format (ensuring values are numbers)
+    const creatorFees: IFee = Object.fromEntries(
+      Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)])
+    );
+    
+    console.log(`[Trait Bid - CreatorFees Construction] After transformation:`, JSON.stringify(creatorFees));
+    console.log(`[Trait Bid - CreatorFees Construction] enforceCreatorFee:`, collectionDetails.enforceCreatorFee);
 
     const bidDuration = currentTask && currentTask.bidDuration ? currentTask.bidDuration : task.bidDuration
     const expiration = getExpiry(bidDuration)
@@ -7277,7 +7308,7 @@ async function fetchOrdersForCancellation(taskId: string, marketplace?: string):
   }
 }
 
-async function stopTask(task: ITask, start: boolean, marketplace?: string) {
+async function stopTask(task: ITask, start: boolean, marketplace?: string, stoppedByWarning = false) {
   const taskId = task._id.toString();
   try {
     let WALLET_PRIVATE_KEY: string | undefined;
@@ -7369,8 +7400,8 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
       // Remove task from indexes
       removeTaskFromIndexes(task);
 
-      // Clean up all task resources
-      cleanupTaskResources(taskId);
+      // Clean up all task resources - preserve warnings if stopped by warning
+      cleanupTaskResources(taskId, stoppedByWarning);
 
       // Clear preprocessing data
       taskPreprocessing.delete(taskId);
@@ -7386,7 +7417,8 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string) {
       };
     }
 
-    if (!marketplace) {
+    if (!marketplace && !stoppedByWarning) {
+      // Only clear warningBids if NOT stopped by warning
       warningBids[taskId] = {
         opensea: false,
         magiceden: false,
@@ -9324,9 +9356,27 @@ async function cancelOpenseaBids(orders: any[], privateKey: string, taskId: stri
   decrementOwnBidCounter('opensea', orders.length);
 }
 
-async function updateStatus(task: ITask) {
+async function updateStatus(task: ITask & { stoppedByWarning?: boolean }) {
   try {
-    const { _id: taskId, running } = task;
+    const { _id: taskId, running, stoppedByWarning } = task;
+    
+    // If stopped by warning, ensure task is stopped but keep warning state
+    if (stoppedByWarning) {
+      console.log(YELLOW + `Task ${taskId} stopped due to floor price warning` + RESET);
+      console.log(YELLOW + `Warning will persist until task is updated` + RESET);
+      
+      // DO NOT clear warning state - let it persist until task is updated
+      
+      // Update activeTasks Map
+      const updatedTask = { ...task, running: false };
+      activeTasks.set(taskId, updatedTask);
+      
+      // Stop the task - pass stoppedByWarning flag
+      await stopTask(task, false, undefined, true);
+      return; // Don't restart the task
+    }
+    
+    // Normal toggle logic
     const start = !running;
 
     if (start) {
@@ -10650,9 +10700,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       );
     }
 
-    const creatorFees: IFee = collectionDetails.creator_fees.null !== undefined
-      ? { null: collectionDetails.creator_fees.null }
-      : Object.fromEntries(Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)]));
+    // Convert all creator fees to the IFee format (ensuring values are numbers)
+    const creatorFees: IFee = Object.fromEntries(
+      Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)])
+    );
 
     let offerPrice: number;
     let colletionOffer: bigint;
@@ -11478,7 +11529,7 @@ function roundToValidPrecision(priceEth: number): number {
 }
 
 export const pQueue = new PQueue({
-  concurrency: RATE_LIMIT,
+  concurrency: RATE_LIMIT * 2,
 })
 
 function getTraitCount(traitsJson: any, attribute: any) {
@@ -12125,14 +12176,28 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, scheduleJ
       currency = results[0].currency;
       collectionDetails = results[1];
       console.log(`${BLUE}[OpenSea] Successfully got collection details${RESET}`);
+      
+      // Log full collection details object
+      console.log(`[Full Collection Details Retrieved] ${currentTask.contract.slug}:`, JSON.stringify(collectionDetails, null, 2));
     } catch (error) {
       console.error(`${RED}[OpenSea] Failed to get collection details: ${error}${RESET}`);
       throw error;
     }
 
-    const creatorFees: IFee = collectionDetails.creator_fees.null !== undefined
-      ? { null: collectionDetails.creator_fees.null }
-      : Object.fromEntries(Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)]));
+    console.log(`[CreatorFees Construction] Before transformation:`, {
+      creator_fees: JSON.stringify(collectionDetails.creator_fees),
+      has_null: collectionDetails.creator_fees.null !== undefined,
+      null_value: collectionDetails.creator_fees.null,
+      keys: Object.keys(collectionDetails.creator_fees)
+    });
+    
+    // Convert all creator fees to the IFee format (ensuring values are numbers)
+    const creatorFees: IFee = Object.fromEntries(
+      Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)])
+    );
+
+    console.log(`[CreatorFees Construction] After transformation:`, JSON.stringify(creatorFees));
+    console.log(`[CreatorFees Construction] enforceCreatorFee:`, collectionDetails.enforceCreatorFee);
 
     // Note: Status will be set to appropriate state after job creation is determined
     const newTask = { ...currentTask, traits: {} } as ITask
@@ -12569,16 +12634,16 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       queue.addBulk(cancelData); // Non-blocking
     }
 
-    const creatorFees: IFee = collectionDetails.creator_fees.null !== undefined
-      ? { null: collectionDetails.creator_fees.null }
-      : Object.fromEntries(Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)]));
-
+    // Convert all creator fees to the IFee format (ensuring values are numbers)
+    const creatorFees: IFee = Object.fromEntries(
+      Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)])
+    );
 
     const offerEth = Number(colletionOffer) / Math.pow(10, decimal);
 
     // Check if offer exceeds floor price (only for WETH)
     if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
-      const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA.Stopping bid...`.toUpperCase();
+      const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA. Task stopped - Update task configuration to continue.`.toUpperCase();
 
       warningBids[task._id] = { opensea: true, magiceden: true, blur: true };
       warningMessage[task._id] = { opensea: message, magiceden: message, blur: message }
@@ -12613,6 +12678,14 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       colletionOffer = BigInt(Math.round(minBidPriceEth * Math.pow(10, decimal)));
     }
 
+    console.log(`[processOpenseaScheduledBid] Calling bidOnOpensea for ${task.contract.slug}:`, {
+      creatorFees: JSON.stringify(creatorFees),
+      enforceCreatorFee: collectionDetails.enforceCreatorFee,
+      collectionDetailsCreatorFees: JSON.stringify(collectionDetails.creator_fees),
+      offerPrice: Number(colletionOffer),
+      currency
+    });
+    
     try {
       await bidOnOpensea(
         task._id,
@@ -17957,7 +18030,9 @@ async function stopOption(
         console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
         warningBids[task._id][marketplace] = true;
-        warningMessage[task._id][marketplace] = `Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${minFloorPrice} ETH - ${maxFloorPrice} ETH).`;
+        warningMessage[task._id][marketplace] = `Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${minFloorPrice} ETH - ${maxFloorPrice} ETH). Task stopped - Update task configuration to continue.`;
+        console.log(RED + `[stopOption] Setting warning for task ${task._id} on ${marketplace}` + RESET);
+        console.log(RED + `[stopOption] Warning message: ${warningMessage[task._id][marketplace]}` + RESET);
         return true;
       }
     }
@@ -17984,9 +18059,15 @@ async function stopOption(
       return true;
     }
 
-    // Clear warnings if all checks pass
-    warningBids[task._id][marketplace] = false;
-    warningMessage[task._id][marketplace] = '';
+    // Clear warnings if all checks pass AND task is still running
+    const taskStatus = activeTasks.get(task._id);
+    if (taskStatus?.running) {
+      warningBids[task._id][marketplace] = false;
+      warningMessage[task._id][marketplace] = '';
+    } else {
+      // Task is stopped, preserve warnings
+      console.log(YELLOW + `[stopOption] Task ${task._id} is stopped, preserving warning state` + RESET);
+    }
     return false;
 
   } catch (error) {
@@ -19598,7 +19679,7 @@ async function handleStartListing(data: { _id: string }, ws: WebSocket) {
     // Schedule the listing
     await createListing(listing)
     console.log(`handleStartListing Step 2.1: createListing completed in ${Date.now() - createListingStart}ms`);
-    
+
     console.log('handleStartListing Step 3: Calling scheduleListing...');
     const scheduleStart = Date.now();
     await scheduleListing(listing);
