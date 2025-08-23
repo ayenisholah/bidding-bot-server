@@ -268,18 +268,6 @@ export async function bidOnOpensea(
   opensea_traits?: string,
   asset?: { contractAddress: string, tokenId: number }
 ) {
-  // Log incoming parameters
-  console.log(`[bidOnOpensea] Starting bid for ${slug}:`, {
-    taskId,
-    slug,
-    creator_fees: JSON.stringify(creator_fees),
-    enforceCreatorFee,
-    feesCount: Object.keys(creator_fees).length,
-    offerPrice: offer_price,
-    currency,
-    hasAsset: !!asset,
-    hasTraits: !!opensea_traits
-  });
 
   try {
     // Initialize timing tracker
@@ -353,9 +341,6 @@ export async function bidOnOpensea(
         throw error;
       }
 
-      console.log({ opensea_traits, contractAddress });
-
-
       if (asset) {
         const offer = await buildItemOffer(task._id, {
           assetContractAddress: asset.contractAddress,
@@ -381,20 +366,20 @@ export async function bidOnOpensea(
 
         offer.consideration.push(opensea_consideration);
         offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
-        
+
         console.log(`[Token Bid - Fee Loop] Processing ${Object.keys(creator_fees).length} creator fees for token ${asset.tokenId}`);
         for (const address in creator_fees) {
           let fee: bigint | number = creator_fees[address];
           fee = BigInt(Math.round(fee).toString());
-          
+
           // Skip null address or zero fees
           if (address === 'null' || address.toLowerCase() === '0x0000000000000000000000000000000000000000' || fee === 0n) {
             console.log(`[Token Bid - Fee Item] Skipping: Address: ${address}, Fee: ${fee}`);
             continue;
           }
-          
+
           console.log(`[Token Bid - Fee Item] Processing: Address: ${address}, Fee: ${fee} basis points`);
-          
+
           // Add all creator fees (OpenSea requires all fees marked as required=true)
           const consideration_item = {
             itemType: 1,
@@ -406,11 +391,7 @@ export async function bidOnOpensea(
           };
           offer.consideration.push(consideration_item);
           offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
-          console.log(`[Token Bid - Fee Item] Added consideration item for ${address} with amount ${((offerPrice * fee) / DIVIDER).toString()}`);
         }
-        
-        console.log(`[Token Bid - Consideration Array] Final consideration items:`, JSON.stringify(offer.consideration, null, 2));
-        console.log(`[Token Bid - Consideration Count] Total: ${offer.totalOriginalConsiderationItems}`);
 
         const itemSignature = await signOffer(wallet, offer)
 
@@ -493,7 +474,6 @@ export async function bidOnOpensea(
         if (opensea_traits && typeof opensea_traits !== "undefined") {
           const parsedTraits = JSON.parse(opensea_traits);
           payload.criteria.trait = parsedTraits;
-          console.log(`[Trait Bid] Processing trait bid with traits:`, JSON.stringify(parsedTraits));
         } else {
           delete payload.criteria.trait
         }
@@ -510,8 +490,6 @@ export async function bidOnOpensea(
           buildOffer(taskId, buildPayload),
           SEAPORT_CONTRACT.getCounter(wallet_address)
         ]);
-
-        console.log(`[Trait Bid - buildOffer Response] Full response:`, JSON.stringify(data, null, 2));
 
         if (!data || !data.partialParameters) {
           console.log(`[Trait Bid - buildOffer] No data or partialParameters returned`);
@@ -536,19 +514,15 @@ export async function bidOnOpensea(
         };
         payload.protocol_data.parameters.consideration.push(opensea_consideration);
 
-        console.log(`[Bid - Fee Loop] Processing ${Object.keys(creator_fees).length} creator fees`);
         for (const address in creator_fees) {
           let fee: bigint | number = creator_fees[address];
           fee = BigInt(Math.round(fee).toString());
-          
+
           // Skip null address or zero fees
           if (address === 'null' || address.toLowerCase() === '0x0000000000000000000000000000000000000000' || fee === 0n) {
-            console.log(`[Bid - Fee Item] Skipping: Address: ${address}, Fee: ${fee}`);
             continue;
           }
-          
-          console.log(`[Bid - Fee Item] Processing: Address: ${address}, Fee: ${fee} basis points`);
-          
+
           // Add all creator fees (OpenSea requires all fees marked as required=true)
           const consideration_item = {
             itemType: 1,
@@ -561,11 +535,8 @@ export async function bidOnOpensea(
 
           payload.protocol_data.parameters.consideration.push(consideration_item);
           payload.protocol_data.parameters.totalOriginalConsiderationItems += 1;
-          console.log(`[Bid - Fee Item] Added consideration item for ${address} with amount ${((offerPrice * fee) / DIVIDER).toString()}`);
         }
-        
-        console.log(`[Bid - Consideration Array] Final consideration items:`, JSON.stringify(payload.protocol_data.parameters.consideration, null, 2));
-        console.log(`[Bid - Consideration Count] Total: ${payload.protocol_data.parameters.totalOriginalConsiderationItems}`);
+
 
         payload.protocol_data.parameters.zone = data.partialParameters.zone;
         payload.protocol_data.parameters.zoneHash = data.partialParameters.zoneHash;
@@ -629,14 +600,11 @@ export async function bidOnOpensea(
         payload.criteria.collection.slug = slug;
 
         delete payload.criteria.trait
-        
-        console.log(`[Collection Bid] Processing collection bid for ${slug} (no traits)`)
+
 
         const counter = await SEAPORT_CONTRACT.getCounter(wallet_address)
-        
+
         // Note: For collection bids without traits, we're using hardcoded data instead of calling buildOffer
-        console.log(`[Collection Bid] Using hardcoded partialParameters instead of buildOffer API`);
-        
         const data = {
           partialParameters: {
             consideration: [{
@@ -653,7 +621,6 @@ export async function bidOnOpensea(
           encodedTokenIds: ""
         }
 
-        console.log(`[Collection Bid - Hardcoded Data] Using data:`, JSON.stringify(data, null, 2));
 
         if (!data || !data.partialParameters) {
           console.log(`[Collection Bid] No data or partialParameters`);
@@ -678,19 +645,15 @@ export async function bidOnOpensea(
         };
         payload.protocol_data.parameters.consideration.push(opensea_consideration);
 
-        console.log(`[Bid - Fee Loop] Processing ${Object.keys(creator_fees).length} creator fees`);
         for (const address in creator_fees) {
           let fee: bigint | number = creator_fees[address];
           fee = BigInt(Math.round(fee).toString());
-          
+
           // Skip null address or zero fees
           if (address === 'null' || address.toLowerCase() === '0x0000000000000000000000000000000000000000' || fee === 0n) {
-            console.log(`[Bid - Fee Item] Skipping: Address: ${address}, Fee: ${fee}`);
             continue;
           }
-          
-          console.log(`[Bid - Fee Item] Processing: Address: ${address}, Fee: ${fee} basis points`);
-          
+
           // Add all creator fees (OpenSea requires all fees marked as required=true)
           const consideration_item = {
             itemType: 1,
@@ -703,11 +666,7 @@ export async function bidOnOpensea(
 
           payload.protocol_data.parameters.consideration.push(consideration_item);
           payload.protocol_data.parameters.totalOriginalConsiderationItems += 1;
-          console.log(`[Bid - Fee Item] Added consideration item for ${address} with amount ${((offerPrice * fee) / DIVIDER).toString()}`);
         }
-        
-        console.log(`[Bid - Consideration Array] Final consideration items:`, JSON.stringify(payload.protocol_data.parameters.consideration, null, 2));
-        console.log(`[Bid - Consideration Count] Total: ${payload.protocol_data.parameters.totalOriginalConsiderationItems}`);
 
         payload.protocol_data.parameters.zone = data.partialParameters.zone;
         payload.protocol_data.parameters.zoneHash = data.partialParameters.zoneHash;
@@ -725,7 +684,6 @@ export async function bidOnOpensea(
         if (isTaskBlacklisted(taskId, 'opensea') || !task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
           return
         }
-        console.log(JSON.stringify(payload));
         await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry, opensea_traits)
       }
 

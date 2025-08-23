@@ -3183,7 +3183,7 @@ function cleanupTaskResources(taskId: string, preserveWarnings = false): void {
   delete skipStats[taskId];
   delete errorStats[taskId];
   delete floorPrices[taskId];
-  
+
   // Only clear warnings if not preserving them
   if (!preserveWarnings) {
     console.log(YELLOW + `[cleanupTaskResources] Clearing warnings for task ${taskId}` + RESET);
@@ -3192,7 +3192,7 @@ function cleanupTaskResources(taskId: string, preserveWarnings = false): void {
   } else {
     console.log(YELLOW + `[cleanupTaskResources] Preserving warnings for task ${taskId}` + RESET);
   }
-  
+
   delete bestOffers[taskId];
 
   // Clear scheduling tracking
@@ -4536,7 +4536,7 @@ async function broadcastBidRates() {
   bidRates = getAllBidRates();
 
   // Log warning state for debugging
-  const tasksWithWarnings = Object.keys(warningBids).filter(taskId => 
+  const tasksWithWarnings = Object.keys(warningBids).filter(taskId =>
     Object.values(warningBids[taskId]).some(hasWarning => hasWarning)
   );
   if (tasksWithWarnings.length > 0) {
@@ -5337,14 +5337,14 @@ async function updateTaskData(task: ITask) {
   try {
     const existingTaskIndex = currentTasks.findIndex(t => t._id === task._id);
     const existingTask = getActiveTaskWithIdByIndex(existingTaskIndex)?.task
-    
+
     // Clear both warningBids and warningMessage when task is updated
     warningBids[task._id] = {
       opensea: false,
       magiceden: false,
       blur: false
     };
-    
+
     if (warningMessage[task._id]) {
       delete warningMessage[task._id];
     }
@@ -5541,7 +5541,7 @@ async function updateTaskData(task: ITask) {
 
     // Log full collection details for trait bid
     console.log(`[Trait Bid - Full Collection Details Retrieved] ${task.contract.slug}:`, JSON.stringify(collectionDetails, null, 2));
-    
+
     console.log(`[Trait Bid - CreatorFees Construction] Before transformation:`, {
       creator_fees: JSON.stringify(collectionDetails.creator_fees),
       has_null: collectionDetails.creator_fees.null !== undefined,
@@ -5553,7 +5553,7 @@ async function updateTaskData(task: ITask) {
     const creatorFees: IFee = Object.fromEntries(
       Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)])
     );
-    
+
     console.log(`[Trait Bid - CreatorFees Construction] After transformation:`, JSON.stringify(creatorFees));
     console.log(`[Trait Bid - CreatorFees Construction] enforceCreatorFee:`, collectionDetails.enforceCreatorFee);
 
@@ -9359,23 +9359,23 @@ async function cancelOpenseaBids(orders: any[], privateKey: string, taskId: stri
 async function updateStatus(task: ITask & { stoppedByWarning?: boolean }) {
   try {
     const { _id: taskId, running, stoppedByWarning } = task;
-    
+
     // If stopped by warning, ensure task is stopped but keep warning state
     if (stoppedByWarning) {
       console.log(YELLOW + `Task ${taskId} stopped due to floor price warning` + RESET);
       console.log(YELLOW + `Warning will persist until task is updated` + RESET);
-      
+
       // DO NOT clear warning state - let it persist until task is updated
-      
+
       // Update activeTasks Map
       const updatedTask = { ...task, running: false };
       activeTasks.set(taskId, updatedTask);
-      
+
       // Stop the task - pass stoppedByWarning flag
       await stopTask(task, false, undefined, true);
       return; // Don't restart the task
     }
-    
+
     // Normal toggle logic
     const start = !running;
 
@@ -10147,7 +10147,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     const expiration = getExpiry(currentTask.bidDuration)
     const orderHash = data?.data?.id
     // Include task ID in the hash to make it task-specific
-    const taskSpecificHash = orderHash;
+    const taskSpecificHash = `${orderHash}-${task._id}`;
     if (hasSeenItem(seenOrderHashes, taskSpecificHash)) return;
     addSeenItem(seenOrderHashes, taskSpecificHash)
     const maker = data?.data?.maker?.toLowerCase()
@@ -10350,14 +10350,13 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     }
     else if (bidType === "attribute") {
 
-      const traitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
       const trait = {
         attributeKey: data?.data?.criteria?.data?.attribute?.key,
         attributeValue: data?.data?.criteria?.data?.attribute?.value,
       }
 
       const hasTraits = checkMagicEdenTrait(selectedTraits, trait)
-      if (!hasTraits || !traitBid || !trait.attributeKey || !trait.attributeValue) return
+      if (!hasTraits || !trait.attributeKey || !trait.attributeValue) return
 
 
       // Check cache first
@@ -10434,30 +10433,85 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         return;
       }
 
-      const bidData: IMagicedenTraitBidData = {
-        taskId: task._id,
-        bidCount: getIncrementedBidCount(MAGICEDEN, task.contract.slug, task._id),
-        address: task.wallet,
-        contractAddress: task.contract.contractAddress,
-        quantity: 1,
-        offerPrice: offerPrice,
-        expiration: expiration,
-        privateKey: WALLET_PRIVATE_KEY,
-        slug: task.contract.slug,
-        trait: JSON.stringify(trait),
+      // Handle token bids with traits
+      if (task.bidType === "token") {
+        // Convert MagicEden trait format to OpenSea format for fetching
+        const variable: CollectionItemsQueryVariables = {
+          collectionSlug: task.contract.slug,
+          filter: {
+            attributes: [{
+              traitType: trait.attributeKey,
+              values: [trait.attributeValue]
+            }]
+          },
+          limit: 100,
+          sort: {
+            by: 'PRICE',
+            direction: 'ASC'
+          }
+        };
+
+        console.log(CYAN + `[MagicEden Trait Token Bid] Fetching tokens with trait ${identifier} for task ${task._id}...` + RESET);
+        const matchingTokenIds = await fetchOpenSeaCollectionItems(variable);
+        console.log(CYAN + `[MagicEden Trait Token Bid] Found ${matchingTokenIds.length} tokens with trait ${identifier}` + RESET);
+
+        if (matchingTokenIds.length > 0) {
+          // Create token bids for each matching token
+          const bidJobs = matchingTokenIds.map(tokenId => ({
+            name: MAGICEDEN_TOKEN_BID_COUNTERBID,
+            data: {
+              _id: task._id,
+              address: task.wallet,
+              contractAddress: task.contract.contractAddress,
+              quantity: 1,
+              offerPrice: offerPrice,
+              tokenId: Number(tokenId),
+              expiration: expiration,
+              privateKey: WALLET_PRIVATE_KEY,
+              slug: task.contract.slug,
+              outbidOptions: task.outbidOptions,
+              maxBidPriceEth,
+              minBidPriceEth,
+              task: currentTask,
+            },
+            opts: { jobId: `${orderHash}-token-${tokenId}` }
+          }));
+
+          await queue.addBulk(bidJobs);
+
+          console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+          console.log(GREEN + `[MagicEden Trait Token Counterbid SUCCESS] Task: ${task._id} | Placing ${matchingTokenIds.length} token bids at ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier}` + RESET);
+          console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        }
       }
 
-      await queue.add(
-        MAGICEDEN_TRAIT_BID_COUNTERBID,
-        bidData,
-        { jobId: orderHash }
-      );
+      // Handle collection bids with traits
+      if (task.bidType === "collection") {
+        const bidData: IMagicedenTraitBidData = {
+          taskId: task._id,
+          bidCount: getIncrementedBidCount(MAGICEDEN, task.contract.slug, task._id),
+          address: task.wallet,
+          contractAddress: task.contract.contractAddress,
+          quantity: 1,
+          offerPrice: offerPrice,
+          expiration: expiration,
+          privateKey: WALLET_PRIVATE_KEY,
+          slug: task.contract.slug,
+          trait: JSON.stringify(trait),
+        }
 
-      console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${traitDisplay} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-      console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        await queue.add(
+          MAGICEDEN_TRAIT_BID_COUNTERBID,
+          bidData,
+          { jobId: orderHash }
+        );
 
-      seenOrderHashes.delete(orderHash);
+        console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        console.log(GREEN + `[MagicEden Trait Collection Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${traitDisplay} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
+        console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      }
+
+      seenOrderHashes.delete(taskSpecificHash);
 
       if (orders.length > 0) {
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
@@ -10466,8 +10520,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
     }
     else if (bidType === "collection") {
-      const isTraitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
-      const tokenBid = task.bidType === "token"
       const collectionBid = task.bidType.toLowerCase() === "collection" && Object.keys(task?.selectedTraits?.magiceden || {}).length === 0
 
       if (!collectionBid) return
@@ -10568,7 +10620,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Collection${traitDisplay} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
-      seenOrderHashes.delete(orderHash);
+      seenOrderHashes.delete(taskSpecificHash);
 
 
       if (orders.length > 0) {
@@ -10662,7 +10714,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     }
 
     // Include task ID in the hash to make it task-specific
-    const taskSpecificHash = orderHash
+    const taskSpecificHash = `${orderHash}-${task._id}`
     if (hasSeenItem(seenOrderHashes, taskSpecificHash)) return;
     addSeenItem(seenOrderHashes, taskSpecificHash)
 
@@ -10853,16 +10905,25 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Token: #${tokenId} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
-      seenOrderHashes.delete(orderHash);
+      seenOrderHashes.delete(taskSpecificHash);
     }
 
     if (data.event === "trait_offer") {
-      if (!trait) return
+      if (!trait) {
+        console.log(YELLOW + `[OpenSea trait_offer] Skipping - No trait data found` + RESET);
+        return
+      }
+
+      // Debug logging for trait offer
+      console.log(CYAN + `[OpenSea trait_offer DEBUG] Task ${task._id} - bidType: ${task.bidType}, selectedTraits: ${JSON.stringify(selectedTraits)}` + RESET);
+
       let traitOffer = BigInt(incomingBidAmount)
-      const traitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
       const hasTraits = checkOpenseaTrait(selectedTraits, data.payload.payload.trait_criteria)
 
-      if (!hasTraits || !traitBid) return
+      if (!hasTraits) {
+        console.log(YELLOW + `[OpenSea trait_offer] Task ${task._id} - Skipping - Trait ${trait.type}:${trait.value} not in selectedTraits` + RESET);
+        return
+      }
       const identifier = `${trait.type}:${trait.value}`
 
       const traitFloor = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices ? await openseaTraitFloor(currentTask.contract.slug, { traitType: trait.type, values: [trait.value] }) : undefined
@@ -10881,7 +10942,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           }
         );
       }
-      if (!floor_price) return
+      if (!floor_price) {
+        console.log(YELLOW + `[OpenSea trait_offer] Task ${task._id} - Skipping - No floor price available` + RESET);
+        return
+      }
 
       const { maxBidPriceEth, minBidPriceEth, currency } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
       const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal)
@@ -10897,6 +10961,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         const reason = `is less than min bid price ${minBidPriceEth} ${currencySymbol}`
         const message = `incoming bid ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: ${identifier} ${reason}.Skipping ...`.toUpperCase()
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
+        console.log(YELLOW + `[OpenSea trait_offer] Task ${task._id} - Skipping collection bid - Below min price` + RESET);
         return
       } else if (incomingBidAmountEth > maxBidPriceEth) {
         const reason = `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
@@ -10914,12 +10979,14 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             queue.addBulk(cancelData)
           }
         }
+        console.log(YELLOW + `[OpenSea trait_offer] Task ${task._id} - Skipping collection bid - Above max price` + RESET);
         return
       }
 
       const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true, traitFloor, identifier)
 
       if (stopBid) {
+        console.log(YELLOW + `[OpenSea trait_offer] Task ${task._id} - Skipping collection bid - Stop option triggered` + RESET);
         if (orders.length > 0) {
           const cancelData = orders.map((order, index) => {
             return {
@@ -10935,7 +11002,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       const offers = orders.map((order: any) => order.offerPrice)
       const currentBidPrice = offers.length > 0 ? Math.max(...offers.map((offer) => Number(offer))) : 0
 
-      if (incomingBidAmount < currentBidPrice) return
+      if (incomingBidAmount < currentBidPrice) {
+        console.log(YELLOW + `[OpenSea trait_offer] Task ${task._id} - Skipping - Current bid (${currentBidPrice}) is higher than incoming (${incomingBidAmount})` + RESET);
+        return
+      }
 
       const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth, currency)
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
@@ -10956,37 +11026,95 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             queue.addBulk(cancelData)
           }
         }
+        console.log(YELLOW + `[OpenSea trait_offer] Task ${task._id} - Skipping collection bid - Exceeds max price after margin` + RESET);
         return;
       }
 
       traitOffer = BigInt(offerPrice)
-      const bidCount = getIncrementedBidCount(OPENSEA, task.contract.slug, task._id)
 
-      const counterbidData: IProcessOpenseaTraitBidData = {
-        _id: task._id,
-        bidCount,
-        address: task.wallet,
-        privateKey: WALLET_PRIVATE_KEY,
-        slug: task.contract.slug,
-        offerPrice: Number(traitOffer),
-        creatorFees,
-        enforceCreatorFee: collectionDetails.enforceCreatorFee,
-        expiry,
-        trait: JSON.stringify(trait)
+      // Handle token bids with traits
+      if (task.bidType.toLowerCase() === "token") {
+        // Fetch all tokens with the matching trait
+        const variable: CollectionItemsQueryVariables = {
+          collectionSlug: task.contract.slug,
+          filter: {
+            attributes: [{
+              traitType: trait.type,
+              values: [trait.value]
+            }]
+          },
+          limit: 100,
+          sort: {
+            by: 'PRICE',
+            direction: 'ASC'
+          }
+        };
+
+        console.log(CYAN + `[OpenSea Trait Token Bid] Fetching tokens with trait ${identifier} for task ${task._id}...` + RESET);
+        const matchingTokenIds = await fetchOpenSeaCollectionItems(variable);
+        console.log(CYAN + `[OpenSea Trait Token Bid] Found ${matchingTokenIds.length} tokens with trait ${identifier}` + RESET);
+
+        if (matchingTokenIds.length > 0) {
+          // Create token bids for each matching token
+          const bidJobs = matchingTokenIds.map(tokenId => ({
+            name: OPENSEA_TOKEN_BID_COUNTERBID,
+            data: {
+              _id: task._id,
+              address: task.wallet,
+              privateKey: WALLET_PRIVATE_KEY,
+              slug: task.contract.slug,
+              offerPrice: Number(traitOffer),
+              creatorFees,
+              enforceCreatorFee: collectionDetails.enforceCreatorFee,
+              asset: {
+                contractAddress: task.contract.contractAddress,
+                tokenId: Number(tokenId)
+              },
+              outbidOptions: outbidOptions,
+              task
+            },
+            opts: { jobId: `${orderHash}-token-${tokenId}` }
+          }));
+
+          await queue.addBulk(bidJobs);
+
+          console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+          console.log(GREEN + `[OpenSea Trait Token Counterbid SUCCESS] Task: ${task._id} | Placing ${matchingTokenIds.length} token bids at ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier}` + RESET);
+          console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        }
       }
 
-      await queue.add(
-        OPENSEA_TRAIT_BID_COUNTERBID,
-        counterbidData,
-        { jobId: orderHash }
-      );
+      // Handle collection bids with traits
+      if (task.bidType.toLowerCase() === "collection") {
+        console.log(CYAN + `[OpenSea trait_offer] Task ${task._id} - Processing collection trait bid for ${identifier}` + RESET);
+        const bidCount = getIncrementedBidCount(OPENSEA, task.contract.slug, task._id)
 
-      // Log successful trait counterbid preparation
-      console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-      console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        const counterbidData: IProcessOpenseaTraitBidData = {
+          _id: task._id,
+          bidCount,
+          address: task.wallet,
+          privateKey: WALLET_PRIVATE_KEY,
+          slug: task.contract.slug,
+          offerPrice: Number(traitOffer),
+          creatorFees,
+          enforceCreatorFee: collectionDetails.enforceCreatorFee,
+          expiry,
+          trait: JSON.stringify(trait)
+        }
 
-      seenOrderHashes.delete(orderHash);
+        await queue.add(
+          OPENSEA_TRAIT_BID_COUNTERBID,
+          counterbidData,
+          { jobId: orderHash }
+        );
+
+        // Log successful trait counterbid preparation
+        console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        console.log(GREEN + `[OpenSea Trait Collection Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
+        console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      }
+
+      seenOrderHashes.delete(taskSpecificHash);
     }
     if (data.event === "collection_offer") {
       const collectionBid = task.bidType.toLowerCase() === "collection" && Object.keys(task?.selectedTraits?.opensea || {}).length === 0
@@ -11115,9 +11243,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Collection${traitDisplay} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
       console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      seenOrderHashes.delete(orderHash);
+      seenOrderHashes.delete(taskSpecificHash);
     }
-    seenOrderHashes.delete(orderHash);
+    seenOrderHashes.delete(taskSpecificHash);
   } catch (error) {
     console.log("Error handling opensea counterbid: ", error);
   }
@@ -12176,9 +12304,8 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, scheduleJ
       currency = results[0].currency;
       collectionDetails = results[1];
       console.log(`${BLUE}[OpenSea] Successfully got collection details${RESET}`);
-      
+
       // Log full collection details object
-      console.log(`[Full Collection Details Retrieved] ${currentTask.contract.slug}:`, JSON.stringify(collectionDetails, null, 2));
     } catch (error) {
       console.error(`${RED}[OpenSea] Failed to get collection details: ${error}${RESET}`);
       throw error;
@@ -12190,7 +12317,7 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, scheduleJ
       null_value: collectionDetails.creator_fees.null,
       keys: Object.keys(collectionDetails.creator_fees)
     });
-    
+
     // Convert all creator fees to the IFee format (ensuring values are numbers)
     const creatorFees: IFee = Object.fromEntries(
       Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)])
@@ -12678,14 +12805,6 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       colletionOffer = BigInt(Math.round(minBidPriceEth * Math.pow(10, decimal)));
     }
 
-    console.log(`[processOpenseaScheduledBid] Calling bidOnOpensea for ${task.contract.slug}:`, {
-      creatorFees: JSON.stringify(creatorFees),
-      enforceCreatorFee: collectionDetails.enforceCreatorFee,
-      collectionDetailsCreatorFees: JSON.stringify(collectionDetails.creator_fees),
-      offerPrice: Number(colletionOffer),
-      currency
-    });
-    
     try {
       await bidOnOpensea(
         task._id,
@@ -14221,6 +14340,18 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
       marketplace: OPENSEA.toLowerCase(),
       identifier: asset.tokenId.toString()
     })
+
+    // Check if current offer in database is greater than incoming offer price
+    if (orders.length > 0) {
+      const mostRecentOrder = orders.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+      const currentOfferWei = BigInt(mostRecentOrder.offerPrice);
+      const incomingOfferWei = BigInt(offerPrice);
+
+      if (currentOfferWei >= incomingOfferWei) {
+        console.log(YELLOW + `[openseaTokenCounterBid] Current offer ${currentOfferWei} wei >= incoming offer ${incomingOfferWei} wei for token ${asset.tokenId}. Skipping...` + RESET);
+        return;
+      }
+    }
     if (orders.length > 0) {
       console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] Cancelling ${orders.length} existing bids due to max price exceeded` + RESET);
       const cancelData = orders.map((order, index) => {
@@ -14313,6 +14444,25 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
     const { _id, address, contractAddress, quantity, offerPrice, privateKey, slug, tokenId, expiration } = data
     const currentTask = activeTasks.get(_id)
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return
+
+    // Check if current offer in database is greater than incoming offer price
+    const orders = await Order.find({
+      slug: slug,
+      taskId: _id,
+      marketplace: MAGICEDEN.toLowerCase(),
+      identifier: tokenId.toString()
+    });
+
+    if (orders.length > 0 && offerPrice !== undefined) {
+      const mostRecentOrder = orders.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+      const currentOfferWei = BigInt(mostRecentOrder.offerPrice);
+      const incomingOfferWei = BigInt(offerPrice);
+
+      if (currentOfferWei >= incomingOfferWei) {
+        console.log(YELLOW + `[magicedenTokenCounterBid] Current offer ${currentOfferWei} wei >= incoming offer ${incomingOfferWei} wei for token ${tokenId}. Skipping...` + RESET);
+        return;
+      }
+    }
 
     const { currency } = await calculateBidPrice(currentTask, 0, "magiceden")
 
