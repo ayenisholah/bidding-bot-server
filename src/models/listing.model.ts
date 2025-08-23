@@ -72,7 +72,7 @@ const ListingSchema: Schema = new Schema(
       ],
       default: "COLLECTION_FLOOR",
     },
-    doNotListBelowFloor: { type: Boolean, default: true },
+    doNotListBelowFloor: { type: Boolean, default: false },
     selectedTrait: {
       trait_type: { type: String },
       value: { type: Schema.Types.Mixed },

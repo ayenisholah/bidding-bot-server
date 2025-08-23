@@ -83,16 +83,65 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
           `OpenSea API call for ${slug}`
         );
 
-        let creator_fees;
+        // Log FULL API response
+        console.log(`[Collection API Full Response] ${slug}:`, JSON.stringify(collection, null, 2));
+        
+        // Log raw API response fees
+        console.log(`[Collection API Response] ${slug} - Raw fees:`, JSON.stringify(collection?.fees, null, 2));
+
+        let creator_fees: { [key: string]: number } = {};
         let enforceCreatorFee = false;
-        if (collection?.fees?.length > 1) {
-          creator_fees = {
-            [collection.fees[1].recipient]: collection.fees[1].fee * 100
-          };
-          enforceCreatorFee = collection.fees[1].required;
+        
+        // OpenSea platform fee address
+        const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1F0DF003000390027140000fAa719";
+        
+        if (collection?.fees && Array.isArray(collection.fees)) {
+          console.log(`[Fee Processing] ${slug} - Starting to process ${collection.fees.length} fees`);
+          
+          // Process all fees except the OpenSea platform fee
+          for (const fee of collection.fees) {
+            const isOpenSeaFee = fee.recipient.toLowerCase() === OPENSEA_FEE_ADDRESS.toLowerCase();
+            
+            console.log(`[Fee Processing] ${slug} - Processing fee:`, {
+              recipient: fee.recipient,
+              amount: fee.fee,
+              required: fee.required,
+              isOpenSeaFee: isOpenSeaFee
+            });
+            
+            // Skip OpenSea platform fee
+            if (isOpenSeaFee) {
+              console.log(`[Fee Processing] ${slug} - Skipping OpenSea platform fee`);
+              continue;
+            }
+            
+            // Add creator fee (multiply by 100 to convert from decimal to basis points)
+            creator_fees[fee.recipient] = fee.fee * 100;
+            console.log(`[Fee Processing] ${slug} - Added creator fee: ${fee.recipient} = ${fee.fee * 100} basis points`);
+            
+            // If any creator fee is required, set enforceCreatorFee to true
+            if (fee.required) {
+              enforceCreatorFee = true;
+              console.log(`[Fee Processing] ${slug} - Fee is required, setting enforceCreatorFee = true`);
+            }
+          }
         } else {
-          creator_fees = { null: 0 }
+          console.log(`[Fee Processing] ${slug} - No fees found in API response`);
         }
+        
+        // If no creator fees found, use default
+        if (Object.keys(creator_fees).length === 0) {
+          console.log(`[Fee Processing] ${slug} - No creator fees found, using default {null: 0}`);
+          creator_fees = { null: 0 };
+        }
+        
+        // Log final fee information
+        console.log(`[Collection Fees] ${slug} - Final summary:`, {
+          totalFeesFromAPI: collection?.fees?.length || 0,
+          creatorFeesCount: Object.keys(creator_fees).length,
+          creatorFees: JSON.stringify(creator_fees),
+          enforceCreatorFee: enforceCreatorFee
+        });
 
         if (Object.keys(collectionCache).length >= MAX_CACHE_ITEMS) {
           delete collectionCache[Object.keys(collectionCache)[0]];
@@ -103,6 +152,9 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
           creator_fees: creator_fees,
           enforceCreatorFee: enforceCreatorFee
         };
+
+        // Log the complete result object
+        console.log(`[Collection Details - Full Result] ${slug}:`, JSON.stringify(result, null, 2));
 
         collectionCache[slug] = result;
 

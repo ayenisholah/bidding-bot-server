@@ -1,6 +1,6 @@
 import { config } from "dotenv";
 import { IListing } from "../types/listing.types";
-import { NETWORK } from "../constants";
+import { NETWORK, BASE_URL } from "../constants";
 import { decryptPrivateKey } from "../utils/crypto";
 import { AlchemyProvider, Wallet as Web3Wallet } from "ethers";
 import { getOpenseaFloor } from "./collection";
@@ -12,6 +12,8 @@ import { listOnBlur } from "../marketplace/blur/list";
 import { listOnMagicEden } from "../marketplace/magiceden/list";
 import { walletCache } from "../utils/wallet-cache";
 import { roundToNineDecimals } from "../utils/decimal-precision";
+import { axiosInstance, limiter } from "../init";
+import { API_KEY } from "..";
 
 config()
 
@@ -39,18 +41,18 @@ export async function createListing(data: IListing) {
     if (data._id && typeof data._id === 'object') {
       console.log(`Step 1.1: Querying database for listing ${data._id}...`);
       const queryStartTime = Date.now();
-      
+
       try {
         const freshListing = await Promise.race([
           Listing.findById(data._id),
-          new Promise<any>((_, reject) => 
+          new Promise<any>((_, reject) =>
             setTimeout(() => reject(new Error('Database query timeout')), 30000)
           )
         ]);
-        
+
         const queryTime = Date.now() - queryStartTime;
         console.log(`Step 1.2: Database query completed in ${queryTime}ms`);
-        
+
         if (freshListing) {
           // Use the complete fresh listing data and merge with any passed data
           freshData = {
@@ -106,16 +108,16 @@ export async function createListing(data: IListing) {
     const walletFetchStart = Date.now();
     const wallet = await walletCache.getWalletById(walletId.toString());
     console.log(`Step 3.2: Wallet fetched in ${Date.now() - walletFetchStart}ms`);
-    
+
     console.log('Step 3.3: Decrypting private key...');
     const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
     const web3Wallet = new Web3Wallet(private_key, provider)
     console.log('Step 3.4: Wallet initialized');
-    
+
     // Move collection details fetching to individual marketplace functions
     // This prevents unnecessary API calls when marketplaces don't need the data
     console.log('Step 4: Preparing marketplace-specific data...');
-    
+
     const walletAddress = freshData.wallet
     const durationInSeconds = convertToSeconds(freshData.listDuration.value, freshData.listDuration.unit);
     const selectedMarketplaces = freshData.selectedMarketplaces
@@ -181,7 +183,7 @@ export async function createListing(data: IListing) {
         }
 
         // Enforce floor price constraint if enabled
-        const doNotListBelowFloor = freshData.doNotListBelowFloor !== false; // Default to true
+        const doNotListBelowFloor = freshData.doNotListBelowFloor === true; // Default to false
         if (doNotListBelowFloor) {
           const floorPrice = await getOpenseaFloor(freshData.contract.slug);
           if (listingPrice < floorPrice) {
@@ -213,6 +215,30 @@ export async function createListing(data: IListing) {
         const propName = marketplaceLower === 'magiceden' ? 'magicEdenListingPrice' : `${marketplaceLower}ListingPrice`;
         console.log('- marketplace specific price:', freshData[propName as keyof IListing]);
         return;
+      }
+
+      // Check if we have the best listing
+      const isOurListingAtFloor = await checkIfWalletHasBestListing(freshData.contract.slug, walletAddress);
+      
+      if (isOurListingAtFloor) {
+        // We have the best listing, check expiration time
+        const marketplaceExpiration = freshData.listingExpiration?.[marketplaceLower];
+        if (marketplaceExpiration) {
+          const expirationTime = new Date(marketplaceExpiration).getTime();
+          const now = Date.now();
+          const timeUntilExpiration = expirationTime - now;
+          
+          if (timeUntilExpiration > 60000) { // More than 1 minute remaining
+            const minutesRemaining = Math.floor(timeUntilExpiration / 60000);
+            console.log(`[LISTING - SKIPPED] Already have the best listing on ${marketplace} with ${minutesRemaining} minutes remaining`);
+            return;
+          } else {
+            // Less than 1 minute remaining, set price to floor
+            const floorPrice = await getOpenseaFloor(freshData.contract.slug);
+            listingPrice = roundToNineDecimals(floorPrice);
+            console.log(`[LISTING - FLOOR MATCH] Best listing expiring soon on ${marketplace}, relisting at floor price: ${listingPrice} ETH`);
+          }
+        }
       }
 
       try {
@@ -258,10 +284,10 @@ export async function createListing(data: IListing) {
 
     console.log('Step 7: Executing all marketplace listings concurrently...');
     console.log(`Step 7.1: Total marketplaces to list on: ${listingPromises.length}`);
-    
+
     const allSettledStart = Date.now();
     const results = await Promise.allSettled(listingPromises);
-    
+
     console.log(`Step 7.2: All marketplace listings completed in ${Date.now() - allSettledStart}ms`);
     console.log('Step 7.3: Results summary:');
     results.forEach((result, index) => {
@@ -382,7 +408,7 @@ async function calculateListingPrice(data: IListing, marketplace: 'opensea' | 'b
   }
 
   // Apply floor price constraint if enabled
-  const doNotListBelowFloor = data.doNotListBelowFloor !== false; // Default to true if not specified
+  const doNotListBelowFloor = data.doNotListBelowFloor === true; // Default to false if not specified
   if (doNotListBelowFloor) {
     const floorPrice = await getOpenseaFloor(data.contract.slug);
     if (calculatedPrice < floorPrice) {
@@ -393,4 +419,97 @@ async function calculateListingPrice(data: IListing, marketplace: 'opensea' | 'b
 
   console.log('Final price after all constraints:', calculatedPrice);
   return calculatedPrice;
+}
+
+// Interface definitions for OpenSea API response
+interface ProtocolParameters {
+  offerer: string;
+  offer: any[];
+  consideration: any[];
+}
+
+interface ProtocolData {
+  parameters: ProtocolParameters;
+  signature: string | null;
+}
+
+interface Price {
+  current: {
+    currency: string;
+    decimals: number;
+    value: string;
+  };
+}
+
+interface OpenseaListing {
+  order_hash: string;
+  chain: string;
+  type: string;
+  price: Price;
+  protocol_data: ProtocolData;
+  protocol_address: string;
+}
+
+interface ListingsResponse {
+  listings: OpenseaListing[];
+  next: string;
+}
+
+/**
+ * Checks if the given wallet address has the best (floor) listing for a collection
+ * 
+ * @param collectionSlug - The OpenSea collection slug
+ * @param walletAddress - The wallet address to check against the best listing's offerer
+ * @returns True if the wallet has the best listing, false otherwise
+ */
+export async function checkIfWalletHasBestListing(collectionSlug: string, walletAddress: string): Promise<boolean> {
+  try {
+    const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
+      `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
+      {
+        headers: { 'x-api-key': API_KEY }
+      }
+    ));
+
+    // Check if listings exist and extract offerer
+    const offerer = data?.listings?.[0]?.protocol_data?.parameters?.offerer;
+
+    if (!offerer) {
+      return false;
+    }
+
+    // Case-insensitive comparison
+    return offerer.toLowerCase() === walletAddress.toLowerCase();
+  } catch (error: any) {
+    // Handle 404 errors specifically
+    if (error?.response?.status === 404) {
+      await logger.logOpenseaCollectionError('Collection not found on OpenSea', {
+        collection: collectionSlug,
+        collectionSlug: collectionSlug,
+        endpoint: `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`,
+        method: 'GET',
+        statusCode: 404,
+        operation: 'check_offerer',
+        errorCode: 'COLLECTION_NOT_FOUND',
+        errorMessage: error?.response?.data?.errors?.[0]?.message || 'Collection not found',
+        error: new Error(`OpenSea collection not found: ${collectionSlug}`)
+      });
+      return false;
+    }
+
+    // For other errors, log as API error
+    await logger.logApiError('Failed to check offerer', {
+      collection: collectionSlug,
+      collectionSlug: collectionSlug,
+      endpoint: `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`,
+      method: 'GET',
+      statusCode: error?.response?.status,
+      operation: 'check_offerer',
+      errorCode: error?.code || 'API_ERROR',
+      errorMessage: error?.response?.data?.errors?.[0]?.message || error?.message || 'Unknown error',
+      error: error
+    });
+
+    return false;
+  }
 }

@@ -185,7 +185,7 @@ async function shouldAdjustPrice(
     }
 
     // Check floor price constraint if enabled
-    const doNotListBelowFloor = listing.doNotListBelowFloor !== false; // Default to true
+    const doNotListBelowFloor = listing.doNotListBelowFloor === true; // Default to false
     if (doNotListBelowFloor) {
       const floorPrice = await getOpenseaFloor(listing.contract.slug);
       if (newPrice < floorPrice) {
