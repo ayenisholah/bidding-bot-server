@@ -10322,7 +10322,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         outbidOptions: task.outbidOptions,
         maxBidPriceEth,
         minBidPriceEth,
-        task: currentTask,
       }
 
       await queue.add(
@@ -10684,8 +10683,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               tokenId: parseInt(tokenId),
               outbidOptions: currentTask.outbidOptions,
               maxBidPriceEth,
-              minBidPriceEth,
-              task
+              minBidPriceEth
             }
 
             await queue.add(
@@ -10980,8 +10978,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         creatorFees,
         enforceCreatorFee: collectionDetails.enforceCreatorFee,
         asset,
-        outbidOptions: outbidOptions,
-        task
+        outbidOptions: outbidOptions
       }
 
       await queue.add(
@@ -11386,8 +11383,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                 contractAddress: task.contract.contractAddress,
                 tokenId: parseInt(tokenId)
               },
-              outbidOptions: outbidOptions,
-              task
+              outbidOptions: outbidOptions
             }
 
             await queue.add(
@@ -13527,7 +13523,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 
       const bidderAddressesSample = topOffer?.bidderAddressesSample || []
       const numberBidders = topOffer?.numberBidders || 0
-      const isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(task.wallet.toLowerCase())
+      const isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(currentTask.wallet.toLowerCase())
       const blurOutbidMargin = task.outbidOptions.blurOutbidMargin || 0.01
 
       console.log({ isTopBid, topOfferAmount, secondOfferAmount, bidderAddressesSample, numberBidders });
@@ -13663,7 +13659,6 @@ async function processOpenseaTraitBid(data: {
     magicedenOutbidMargin: number | null;
     counterbid: boolean;
   }
-  task: ITask;
 }) {
   let errorMessage: string | undefined;
 
@@ -13889,7 +13884,7 @@ async function processOpenseaTraitBid(data: {
 
     // Don't log bid errors for stopped/cancelled tasks
     if (errorMessage && !errorMessage.includes('Bid execution blocked - task') && !errorMessage.includes('is stopped')) {
-      await logBidError(data.task._id, "OPENSEA TRAIT BID ERROR", `Error bidding on trait ${data.trait} in collection ${data.slug}: ${errorMessage}`, "error", "opensea");
+      await logBidError(data._id, "OPENSEA TRAIT BID ERROR", `Error bidding on trait ${data.trait} in collection ${data.slug}: ${errorMessage}`, "error", "opensea");
     }
 
     // Throw the error
@@ -14523,7 +14518,7 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
 
   } catch (error: any) {
     const errorMessage = extractDetailedOpenSeaError(error);
-    await logBidError(data.task._id, "OPENSEA TOKEN COUNTER BID ERROR", `Error bidding on token ${data.asset.tokenId} in collection ${data.slug}: ${errorMessage}`, "error", "opensea");
+    await logBidError(data._id, "OPENSEA TOKEN COUNTER BID ERROR", `Error bidding on token ${data.asset.tokenId} in collection ${data.slug}: ${errorMessage}`, "error", "opensea");
   }
 }
 
@@ -14628,7 +14623,6 @@ async function processBlurTraitBid(data: {
     magicedenOutbidMargin: number | null;
     counterbid: boolean;
   };
-  task: ITask;
   batchInfo?: {
     batchNumber: number;
     totalBatches: number;
@@ -14643,7 +14637,7 @@ async function processBlurTraitBid(data: {
     if (!enabledMarketplaces.length) {
       return;
     }
-    const { address, privateKey, contractAddress, slug, trait, _id, task } = data;
+    const { address, privateKey, contractAddress, slug, trait, _id } = data;
 
     // Skip trait validation - preprocessing already determined valid traits
     // The trait passed in the job data is already validated
@@ -14655,7 +14649,7 @@ async function processBlurTraitBid(data: {
       return;
     }
     const outbidOptions = currentTask.outbidOptions
-    const floor_price: number = Number(await fetchBlurCollectionStats(task.contract.slug));
+    const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
     const traitsObj = JSON.parse(trait);
     const [traitType, traitValue] = Object.entries(traitsObj)[0];
     const identifier = `${traitType}:${traitValue}`
@@ -14731,7 +14725,7 @@ async function processBlurTraitBid(data: {
       const numberBidders = topOffer?.numberBidders || 0
       const blurOutbidMargin = outbidOptions.blurOutbidMargin || 0.01
 
-      const isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(task.wallet.toLowerCase())
+      const isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(currentTask.wallet.toLowerCase())
 
       if (isTopBid) {
         const spread = (Number(topOfferAmount) - Number(secondOfferAmount));
@@ -14818,7 +14812,7 @@ async function processBlurTraitBid(data: {
     // Handle transfer restriction errors
     if (error.code === 'TRANSFER_RESTRICTED') {
       console.log(`Skipping Blur trait bid for ${data.slug} - transfer restricted collection`);
-      await logBidError(data.task._id, "BLUR TRANSFER RESTRICTION", error.message, "warning", "blur");
+      await logBidError(data._id, "BLUR TRANSFER RESTRICTION", error.message, "warning", "blur");
       return;
     }
 
@@ -14827,7 +14821,7 @@ async function processBlurTraitBid(data: {
     // Don't log bid errors for stopped/cancelled tasks
     const errorMessage = error?.message || String(error);
     if (!errorMessage.includes('Bid execution blocked - task') && !errorMessage.includes('is stopped')) {
-      await logBidError(data.task._id, "BLUR TRAIT BID ERROR", `Error bidding on trait ${data.trait} in collection ${data.slug}: ${error?.response?.data?.message || error?.response?.data || errorMessage}`, "error", "blur");
+      await logBidError(data._id, "BLUR TRAIT BID ERROR", `Error bidding on trait ${data.trait} in collection ${data.slug}: ${error?.response?.data?.message || error?.response?.data || errorMessage}`, "error", "blur");
     }
 
     // Throw the error
@@ -15408,7 +15402,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
 
 async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
   try {
-    const { contractAddress, address, quantity, privateKey, slug, tokenId, task, _id } = data
+    const { contractAddress, address, quantity, privateKey, slug, tokenId, _id } = data
     if (!enabledMarketplaces.length) return
 
     // Early return for token validation
@@ -15423,7 +15417,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
     // Parallel operations for floor price and orders
     const [floor_price, orders] = await Promise.all([
-      fetchMagicEdenCollectionStats(task.contract.contractAddress).then(Number),
+      fetchMagicEdenCollectionStats(currentTask.contract.contractAddress).then(Number),
       Order.find({
         slug,
         taskId: _id,
@@ -15436,8 +15430,8 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       return
     }
 
-    if (!floorPrices[task._id]) {
-      floorPrices[task._id] = {
+    if (!floorPrices[_id]) {
+      floorPrices[_id] = {
         opensea: 0,
         magiceden: floor_price,
         blur: 0
@@ -15452,7 +15446,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       }
     }
 
-    floorPrices[task._id].magiceden = floor_price;
+    floorPrices[_id].magiceden = floor_price;
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
     const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), false)
@@ -19072,7 +19066,6 @@ interface IProcessOpenseaTokenBidData {
     magicedenOutbidMargin: number | null;
     counterbid: boolean;
   };
-  task: ITask;
 }
 
 interface IMagicedenTokenBidData {
@@ -19094,7 +19087,6 @@ interface IMagicedenTokenBidData {
   };
   maxBidPriceEth?: number;
   minBidPriceEth?: number;
-  task: ITask;
 }
 
 // Create separate bid rate states for each marketplace
