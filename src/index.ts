@@ -10542,7 +10542,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       if (!floor_price) return
 
       const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
-      
+
       // Check if incoming bid is within valid range
       if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
         const reason = incomingBidAmountEth < minBidPriceEth
@@ -10550,7 +10550,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           : `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
         const message = `incoming bid ${incomingBidAmountEth} ${currencySymbol} for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "magiceden");
-        
+
         // Cancel all orders if configured and price exceeds max
         if (incomingBidAmountEth > maxBidPriceEth && currentTask.outbidOptions.cancelMaxWhenOutbid) {
           const allOrders = await Order.find({
@@ -10614,12 +10614,12 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         // Only counterbid orders that are <= incoming collection offer
         if (Number(order.offerPrice) <= incomingBidAmount) {
           const bidCount = getIncrementedBidCount(MAGICEDEN, task.contract.slug, task._id)
-          
+
           if (order.identifier.includes(':')) {
             // This is a trait offer
             const [attributeKey, attributeValue] = order.identifier.split(':');
             const trait = { attributeKey, attributeValue };
-            
+
             const counterbidData: IMagicedenTraitBidData = {
               taskId: task._id,
               bidCount,
@@ -10638,11 +10638,11 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               counterbidData,
               { jobId: `${orderHash}-trait-${order.identifier}` }
             );
-            
+
             console.log(GREEN + `[MagicEden collection] Queued trait counterbid for ${order.identifier} - Existing: ${(Number(order.offerPrice) / Math.pow(10, decimal)).toFixed(4)} ${currencySymbol} <= Incoming: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
             counterbidsQueued++;
             ordersToCancel.push(order);
-            
+
           } else if (order.identifier === 'collection') {
             // This is a collection offer
             const bidData: IMagicedenCollectionBidData = {
@@ -10663,15 +10663,15 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               bidData,
               { jobId: `${orderHash}-collection` }
             );
-            
+
             console.log(GREEN + `[MagicEden collection] Queued collection counterbid - Existing: ${(Number(order.offerPrice) / Math.pow(10, decimal)).toFixed(4)} ${currencySymbol} <= Incoming: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
             counterbidsQueued++;
             ordersToCancel.push(order);
-            
+
           } else {
             // This is a token offer
             const tokenId = order.identifier;
-            
+
             const bidData: IMagicedenTokenBidData = {
               _id: task._id,
               address: task.wallet,
@@ -10693,7 +10693,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               bidData,
               { jobId: `${orderHash}-token-${tokenId}` }
             );
-            
+
             console.log(GREEN + `[MagicEden collection] Queued token counterbid for #${tokenId} - Existing: ${(Number(order.offerPrice) / Math.pow(10, decimal)).toFixed(4)} ${currencySymbol} <= Incoming: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
             counterbidsQueued++;
             ordersToCancel.push(order);
@@ -10707,7 +10707,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
         console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | New offer: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
         console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-        
+
         // Cancel the orders that we're counterbidding
         if (ordersToCancel.length > 0) {
           const orderKeys = ordersToCancel.map((order: any) => order._id)
@@ -11312,17 +11312,17 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       // Process each existing order
       let counterbidsQueued = 0;
-      
+
       for (const order of allTaskOrders) {
         // Only counterbid orders that are <= incoming collection offer
         if (Number(order.offerPrice) <= incomingBidAmount) {
           const bidCount = getIncrementedBidCount(OPENSEA, task.contract.slug, task._id)
-          
+
           if (order.identifier.includes(':')) {
             // This is a trait offer
             const [traitType, traitValue] = order.identifier.split(':');
             const trait = { type: traitType, value: traitValue };
-            
+
             const counterbidData: IProcessOpenseaTraitBidData = {
               _id: task._id,
               bidCount,
@@ -11341,14 +11341,14 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               counterbidData,
               { jobId: `${orderHash}-trait-${order.identifier}` }
             );
-            
+
             console.log(GREEN + `[OpenSea collection_offer] Queued trait counterbid for ${order.identifier} - Existing: ${(Number(order.offerPrice) / Math.pow(10, decimal)).toFixed(4)} ${currencySymbol} <= Incoming: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
             counterbidsQueued++;
-            
+
           } else if (order.identifier === 'collection') {
             // This is a collection offer
             colletionOffer = BigInt(offerPrice)
-            
+
             const bidData: IOpenseaBidParams = {
               taskId: task._id,
               bidCount,
@@ -11366,14 +11366,14 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               bidData,
               { jobId: `${orderHash}-collection` }
             );
-            
+
             console.log(GREEN + `[OpenSea collection_offer] Queued collection counterbid - Existing: ${(Number(order.offerPrice) / Math.pow(10, decimal)).toFixed(4)} ${currencySymbol} <= Incoming: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
             counterbidsQueued++;
-            
+
           } else {
             // This is a token offer
             const tokenId = order.identifier;
-            
+
             const bidData: IProcessOpenseaTokenBidData = {
               _id: task._id,
               address: task.wallet,
@@ -11395,7 +11395,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               bidData,
               { jobId: `${orderHash}-token-${tokenId}` }
             );
-            
+
             console.log(GREEN + `[OpenSea collection_offer] Queued token counterbid for #${tokenId} - Existing: ${(Number(order.offerPrice) / Math.pow(10, decimal)).toFixed(4)} ${currencySymbol} <= Incoming: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
             counterbidsQueued++;
           }
@@ -11411,7 +11411,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       } else {
         console.log(YELLOW + `[OpenSea collection_offer] Task ${task._id} - No offers to counterbid (all existing offers > incoming offer)` + RESET);
       }
-      
+
       seenOrderHashes.delete(taskSpecificHash);
     }
     seenOrderHashes.delete(taskSpecificHash);
@@ -11709,12 +11709,12 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         // Only counterbid orders that are <= incoming collection offer
         if (Number(order.offerPrice) <= incomingPriceWei) {
           const bidCount = getIncrementedBidCount(BLUR, task.contract.slug, task._id)
-          
+
           if (order.identifier.includes(':')) {
             // This is a trait offer
             const [traitType, traitValue] = order.identifier.split(':');
             const traits = JSON.stringify({ [traitType]: traitValue });
-            
+
             const counterbidData: IBlurBidData = {
               taskId: task._id,
               bidCount,
@@ -11732,10 +11732,10 @@ async function handleBlurCounterbid(data: any, task: ITask) {
               counterbidData,
               { jobId: `${bidHash}-trait-${order.identifier}` }
             );
-            
+
             console.log(GREEN + `[Blur collection] Queued trait counterbid for ${order.identifier} - Existing: ${(Number(order.offerPrice) / 1e18).toFixed(4)} ETH <= Incoming: ${bestPrice} ETH` + RESET);
             counterbidsQueued++;
-            
+
           } else if (order.identifier === 'collection') {
             // This is a collection offer
             const bidData: IBlurBidData = {
@@ -11754,10 +11754,10 @@ async function handleBlurCounterbid(data: any, task: ITask) {
               bidData,
               { jobId: `${bidHash}-collection` }
             );
-            
+
             console.log(GREEN + `[Blur collection] Queued collection counterbid - Existing: ${(Number(order.offerPrice) / 1e18).toFixed(4)} ETH <= Incoming: ${bestPrice} ETH` + RESET);
             counterbidsQueued++;
-            
+
           } else {
             // This is a token offer - Blur doesn't support individual token bids
             // but we'll log it for completeness
@@ -12902,16 +12902,6 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
 
     const currentPrice = Number(order ? order.offerPrice : colletionOffer)
 
-    if (remainingOrders.length > 0) {
-      const cancelData = remainingOrders.map((order, index) => {
-        return {
-          name: CANCEL_OPENSEA_BID,
-          data: { privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
-        }
-      })
-      queue.addBulk(cancelData); // Non-blocking
-    }
-
     const createdAt = new Date(order?.createdAt).getTime()
     const expiredAt = new Date(order?.expiresAt).getTime()
     const orderExpiration = order ? Math.round((expiredAt - createdAt) / 1000) : expiry
@@ -12943,15 +12933,6 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
         const spread = Math.round((Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal));
         // Check for overbidding
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0) {
-          if (orders.length > 0) {
-            const cancelData = orders.map((order) => {
-              return {
-                name: CANCEL_OPENSEA_BID,
-                data: { privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
-              }
-            })
-            queue.addBulk(cancelData)
-          }
           // Place new bid at optimal level
           colletionOffer = BigInt(Math.round(secondTopBidAmount + (outbidMargin * Math.pow(10, decimal))));
         }
@@ -13527,17 +13508,6 @@ async function processBlurCollectionBid(data: { task: ITask }) {
     const [order, ...remainingOrders] = orders
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
     const currentPrice = Number(order ? order.offerPrice : colletionOffer)
-
-    if (remainingOrders.length > 0) {
-      const cancelData = remainingOrders.map((order) => {
-        const payload = JSON.parse(order.orderHash)
-        return {
-          name: CANCEL_BLUR_BID,
-          data: { privateKey, payload, taskId: task._id, orderKey: order._id }
-        }
-      })
-      queue.addBulk(cancelData);
-    }
     const expiry = getExpiry(currentTask.bidDuration)
 
     const createdAt = new Date(order?.createdAt).getTime()
@@ -13566,16 +13536,6 @@ async function processBlurCollectionBid(data: { task: ITask }) {
       if (isTopBid) {
         const spread = (Number(topOfferAmount) - Number(secondOfferAmount));
         if (+spread.toFixed(2) > blurOutbidMargin && Number(secondOfferAmount) > 0) {
-          if (orders.length > 0) {
-            const cancelData = orders.map((order) => {
-              const payload = JSON.parse(order.orderHash)
-              return {
-                name: CANCEL_BLUR_BID,
-                data: { privateKey, payload, taskId: task._id, orderKey: order._id }
-              }
-            })
-            queue.addBulk(cancelData);
-          }
           const bidPrice = secondOfferAmount + blurOutbidMargin
           colletionOffer = BigInt(Math.round(bidPrice * 1e18));
         } else if (ttl > MIN_BID_DURATION) {
@@ -13808,16 +13768,6 @@ async function processOpenseaTraitBid(data: {
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
     const currentPrice = Number(order ? order.offerPrice : traitOffer)
 
-    if (remainingOrders.length > 0) {
-      const cancelData = remainingOrders.map((order, index) => {
-        return {
-          name: CANCEL_OPENSEA_BID,
-          data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order._id },
-        }
-      })
-      queue.addBulk(cancelData); // Non-blocking
-    }
-
     const createdAt = new Date(order?.createdAt).getTime()
     const expiredAt = new Date(order?.expiresAt).getTime()
     const orderExpiration = order ? Math.round((expiredAt - createdAt) / 1000) : expiry
@@ -13847,15 +13797,6 @@ async function processOpenseaTraitBid(data: {
       if (isOwnBid) {
         const spread = Math.round((Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal));
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0) {
-          if (orders.length > 0) {
-            const cancelData = orders.map((order, index) => {
-              return {
-                name: CANCEL_OPENSEA_BID,
-                data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order._id },
-              }
-            })
-            queue.addBulk(cancelData); // Non-blocking
-          }
           traitOffer = BigInt(Math.round(+secondTopBidAmount + (outbidMargin * Math.pow(10, decimal))));
         }
         else if (ttl > MIN_BID_DURATION) {
@@ -13999,8 +13940,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       return;
     }
 
-    const outbidEnabled = currentTask.outbidOptions?.outbid || false;
-
     // Initialize stats early
     if (!floorPrices[_id]) {
       floorPrices[_id] = {
@@ -14056,19 +13995,9 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       return
     }
 
-    const [order, ...remainingOrders] = orders
+    const [order] = orders
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
     const currentPrice = Number(order ? order.offerPrice : tokenOffer)
-
-    if (remainingOrders.length > 0) {
-      const cancelData = remainingOrders.map((order, index) => {
-        return {
-          name: CANCEL_OPENSEA_BID,
-          data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order._id },
-        }
-      })
-      queue.addBulk(cancelData); // Non-blocking
-    }
 
     const createdAt = new Date(order?.createdAt).getTime()
     const expiredAt = new Date(order?.expiresAt).getTime()
@@ -14100,15 +14029,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       if (isOwnBid) {
         const spread = Math.round((Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal));
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0) {
-          if (orders.length > 0) {
-            const cancelData = orders.map((order, index) => {
-              return {
-                name: CANCEL_OPENSEA_BID,
-                data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order._id },
-              }
-            })
-            queue.addBulk(cancelData)
-          }
           tokenOffer = BigInt(Math.round(+secondTopBidAmount + (outbidMargin * Math.pow(10, decimal))));
         }
         else if (ttl > MIN_BID_DURATION) {
@@ -14785,17 +14705,6 @@ async function processBlurTraitBid(data: {
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
     const currentPrice = Number(order ? order.offerPrice : traitOffer)
 
-    if (remainingOrders.length > 0) {
-      const cancelData = remainingOrders.map((order) => {
-        const payload = JSON.parse(order.orderHash)
-        return {
-          name: CANCEL_BLUR_BID,
-          data: { privateKey, payload, taskId: _id, orderKey: order._id }
-        }
-      })
-      queue.addBulk(cancelData);
-    }
-
     const createdAt = new Date(order?.createdAt).getTime()
     const expiredAt = new Date(order?.expiresAt).getTime()
     const orderExpiration = order ? Math.round((expiredAt - createdAt) / 1000) : expiry
@@ -14827,17 +14736,6 @@ async function processBlurTraitBid(data: {
       if (isTopBid) {
         const spread = (Number(topOfferAmount) - Number(secondOfferAmount));
         if (+spread.toFixed(2) > blurOutbidMargin && Number(secondOfferAmount) > 0) {
-          if (orders.length > 0) {
-            const cancelData = orders.map((order) => {
-              const payload = JSON.parse(order.orderHash)
-
-              return {
-                name: CANCEL_BLUR_BID,
-                data: { privateKey, payload, taskId: _id, orderKey: order._id }
-              }
-            })
-            queue.addBulk(cancelData);
-          }
           const bidPrice = secondOfferAmount + blurOutbidMargin
 
           traitOffer = BigInt(Math.round((bidPrice * 1e18) / 1e16) * 1e16);
@@ -15393,12 +15291,6 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
     const currentPrice = Number(order ? order.offerPrice : offerPrice)
 
-    if (remainingOrders.length > 0) {
-      const orderIds = remainingOrders.map(order => order._id)
-      const extractedOrderIds = await extractMagicedenOrderHash(remainingOrders)
-      queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys: orderIds, taskId: task._id }); // Non-blocking
-    }
-
     const createdAt = new Date(order?.createdAt).getTime()
     const expiredAt = new Date(order?.expiresAt).getTime()
     const orderExpiration = order ? Math.round((expiredAt - createdAt) / 1000) : expiration
@@ -15429,11 +15321,6 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
       if (isOwnBid) {
         const spread = Math.round((Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal));
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0) {
-          if (orders.length > 0) {
-            const orderKeys = orders.map((order: any) => order._id)
-            const extractedOrderIds = await extractMagicedenOrderHash(orders)
-            queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: task._id });
-          }
           colletionOffer = Number(secondTopBidAmount) + (outbidMargin * Math.pow(10, decimal))
         }
         else if (ttl > MIN_BID_DURATION) {
@@ -15588,12 +15475,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
     const currentPrice = Number(order ? order.offerPrice : tokenOffer)
 
-    if (remainingOrders.length > 0) {
-      const extractedOrderIds = await extractMagicedenOrderHash(remainingOrders)
-      const orderKeys = remainingOrders.map((order: any) => order._id)
-      queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: task._id }); // Non-blocking
-    }
-
     const createdAt = new Date(order?.createdAt).getTime()
     const expiredAt = new Date(order?.expiresAt).getTime()
     const orderExpiration = order ? Math.round((expiredAt - createdAt) / 1000) : expiration
@@ -15620,11 +15501,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       if (isOwnBid) {
         const spread = Math.round((Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal));
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0) {
-          if (orders.length > 0) {
-            const orderKeys = orders.map((order: any) => order._id)
-            const extractedOrderIds = await extractMagicedenOrderHash(orders)
-            queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: _id }); // Non-blocking
-          }
           tokenOffer = Number(secondTopBidAmount) + (outbidMargin * Math.pow(10, decimal))
         } else if (ttl > MIN_BID_DURATION) {
           console.log(YELLOW + `Skipping magiceden token bid for ${slug} ${tokenId} - we have top bid(${highestBidAmount / Math.pow(10, decimal)} ETH) with ${(ttl / 60).toFixed(2)} minutes remaining`.toUpperCase() + RESET);
@@ -15637,16 +15513,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       else if (isTopBid) {
         const spread = Math.round((Number(order.offerPrice) - Number(highestBidAmount)) / Math.pow(10, decimal));
         if (spread > outbidMargin && Number(highestBidAmount) > 0) {
-          if (orders.length > 0) {
-            const orderKeys = orders.map((order: any) => order._id)
-            const extractedOrderIds = await extractMagicedenOrderHash(orders)
-            queue.add(CANCEL_MAGICEDEN_BID, {
-              orderIds: extractedOrderIds,
-              privateKey,
-              orderKeys,
-              taskId: _id
-            }); // Non-blocking
-          }
           tokenOffer = Number(highestBidAmount) + (outbidMargin * Math.pow(10, decimal));
         } else if (ttl > MIN_BID_DURATION) {
           console.log(YELLOW + `Skipping magiceden token bid for ${slug} ${tokenId} - we have top bid(${+ order.offerPrice / Math.pow(10, decimal)} ETH) with ${(ttl / 60).toFixed(2)} minutes remaining`.toUpperCase() + RESET);
@@ -15796,12 +15662,6 @@ async function processMagicedenTraitBid(data: {
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
     const currrentPrice = Number(order ? order.offerPrice : traitOffer)
 
-    if (remainingOrders.length > 0) {
-      const orderKeys = remainingOrders.map((order: any) => order._id)
-      const extractedOrderIds = await extractMagicedenOrderHash(remainingOrders)
-      queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: currentTask._id }); // Non-blocking
-    }
-
     const createdAt = new Date(order?.createdAt).getTime()
     const expiredAt = new Date(order?.expiresAt).getTime()
     const orderExpiration = order ? Math.round((expiredAt - createdAt) / 1000) : expiration
@@ -15825,16 +15685,6 @@ async function processMagicedenTraitBid(data: {
       if (isOwnBid) {
         const spread = Math.round((Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal));
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0) {
-          if (orders.length > 0) {
-            const orderKeys = orders.map((order: any) => order._id)
-            const extractedOrderIds = await extractMagicedenOrderHash(orders)
-            queue.add(CANCEL_MAGICEDEN_BID, {
-              orderIds: extractedOrderIds,
-              privateKey,
-              orderKeys,
-              taskId: _id
-            }); // Non-blocking
-          }
           traitOffer = Number(secondTopBidAmount) + (outbidMargin * Math.pow(10, decimal));
         } else if (ttl > MIN_BID_DURATION) {
           console.log(YELLOW + `Skipping magiceden token bid for ${slug} ${JSON.stringify(trait)} - we have top bid(${highestBidAmount / Math.pow(10, decimal)} ETH) with ${(ttl / 60).toFixed(2)} minutes remaining`.toUpperCase() + RESET);
@@ -15846,16 +15696,6 @@ async function processMagicedenTraitBid(data: {
       else if (isTopBid) {
         const spread = Math.round((Number(order.offerPrice) - Number(highestBidAmount)) / Math.pow(10, decimal));
         if (spread > outbidMargin && Number(highestBidAmount) > 0) {
-          if (orders.length > 0) {
-            const orderKeys = orders.map((order: any) => order._id)
-            const extractedOrderIds = await extractMagicedenOrderHash(orders)
-            queue.add(CANCEL_MAGICEDEN_BID, {
-              orderIds: extractedOrderIds,
-              privateKey,
-              orderKeys,
-              taskId: _id
-            }); // Non-blocking
-          }
           traitOffer = Number(highestBidAmount) + (outbidMargin * Math.pow(10, decimal));
         } else if (ttl > MIN_BID_DURATION) {
           console.log(YELLOW + `Skipping magiceden token bid for ${slug} ${JSON.stringify(trait)} - we have top bid(${+ order.offerPrice / Math.pow(10, decimal)} ETH) with ${(ttl / 60).toFixed(2)} minutes remaining`.toUpperCase() + RESET);
