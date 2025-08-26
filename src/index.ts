@@ -5849,6 +5849,11 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
       setTaskStatus(taskId, "QUEUEING", "jobs being queued");
     }
 
+    // Set task status to CANCELLING when cancellation jobs are being queued
+    if (taskStatus[taskId] && isCancellationJob && taskStatus[taskId].status !== "CANCELLING") {
+      setTaskStatus(taskId, "CANCELLING", "cancellation jobs being queued");
+    }
+
     // Check current queue state but don't wait for initial drain
     const counts = await queue.getJobCounts();
     const blurCounts = await blurQueue.getJobCounts();
@@ -7388,6 +7393,7 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string, stopp
         taskStatus[taskId].waitingTime = 0;
         taskStatus[taskId].cancellingMarketplace = undefined;
         taskStatus[taskId].previousState = undefined;
+        taskStatus[taskId].status = "STOPPED";
       }
     }
     // Step 1: Blacklist task to prevent new jobs (immediate)
@@ -7462,18 +7468,21 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string, stopp
       orders.opensea.slice(0, 3).forEach(order => {
         console.log(YELLOW + `    - ${order.tokenId || 'collection'} | ${order.price} | expires: ${new Date(order.expiresAt).toISOString()}` + RESET);
       });
+      taskStatus[taskId].status = "CANCELLING";
     }
     if (orders.magiceden.length > 0) {
       console.log(YELLOW + `  MagicEden order samples (first 3):` + RESET);
       orders.magiceden.slice(0, 3).forEach(order => {
         console.log(YELLOW + `    - ${order.tokenId || 'collection'} | ${order.price} | expires: ${new Date(order.expiresAt).toISOString()}` + RESET);
       });
+      taskStatus[taskId].status = "CANCELLING";
     }
     if (orders.blur.length > 0) {
       console.log(YELLOW + `  Blur order samples (first 3):` + RESET);
       orders.blur.slice(0, 3).forEach(order => {
         console.log(YELLOW + `    - ${order.tokenId || 'collection'} | ${order.price} | expires: ${new Date(order.expiresAt).toISOString()}` + RESET);
       });
+      taskStatus[taskId].status = "CANCELLING";
     }
 
     // Count total active orders from database
@@ -7497,11 +7506,6 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string, stopp
         taskId: taskId,
         expiresAt: { $gt: new Date() }
       });
-
-      if (totalBids === 0) {
-        taskStatus[taskId].status = 'STOPPED'
-        return
-      }
 
       // Get marketplace-specific counts for global cancellation
       const [openSeaCount, magicEdenCount, blurCount] = await Promise.all([
@@ -9807,7 +9811,7 @@ async function _doConnect(): Promise<void> {
             data: clientData
           };
           wsManager.sendMessage(initialDataMessage);
-        return;
+          return;
         }
         // All messages use the queue
         pQueue.add(() => handleMarketplaceMessage(message))
