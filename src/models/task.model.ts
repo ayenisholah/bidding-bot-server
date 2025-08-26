@@ -96,6 +96,7 @@ export interface ITask {
   openseaValid: boolean;
   traitsOperator: { value: string; label: string };
   autoList?: boolean;
+  note?: string;
   listingConfig?: {
     selectedMarketplaces: string[];
     pricingStrategy: "FIXED_PRICING" | "DYNAMIC_PRICING";
@@ -228,6 +229,7 @@ const TaskSchema: Schema = new Schema(
       label: { type: String, default: "OR" }
     },
     autoList: { type: Boolean, default: false },
+    note: { type: String, default: "" },
     listingConfig: {
       selectedMarketplaces: { type: [String] },
       pricingStrategy: {

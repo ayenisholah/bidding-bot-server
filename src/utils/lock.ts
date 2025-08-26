@@ -14,6 +14,20 @@ export class DistributedLockManager {
     this.defaultTTLSeconds = options?.defaultTTLSeconds ?? 30;
   }
 
+  private formatError(error: any): string {
+    // Check if it's an axios error with response
+    if (error?.response) {
+      const status = error.response.status;
+      const statusText = error.response.statusText;
+      const url = error.config?.url || 'Unknown URL';
+      
+      return `[HTTP ${status}${statusText ? ` ${statusText}` : ''}] URL: ${url}`;
+    }
+    
+    // For non-axios errors, just return the message
+    return error instanceof Error ? error.message : String(error);
+  }
+
   private get redis(): Cluster | null {
     try {
       return RedisClient.getClient();
@@ -123,7 +137,7 @@ export class DistributedLockManager {
         await this.releaseLock(key);
       } catch (releaseError) {
         // Log but don't throw if we can't release the lock
-        console.error(`Failed to release lock for key ${key}:`, releaseError);
+        console.error(`Failed to release lock for key ${key}: ${this.formatError(releaseError)}`);
       }
       }
     } catch (error) {
@@ -135,12 +149,12 @@ export class DistributedLockManager {
         error: error as Error,
         errorMessage: error instanceof Error ? error.message : String(error)
       });
-      console.error(`Error in withLock for key ${key}:`, error);
+      console.error(`Error in withLock for key ${key}: ${this.formatError(error)}`);
       try {
         await this.releaseLock(key);
       } catch (releaseError) {
         // Log but don't throw if we can't release the lock
-        console.error(`Failed to release lock for key ${key}:`, releaseError);
+        console.error(`Failed to release lock for key ${key}: ${this.formatError(releaseError)}`);
       }
       throw error;
     }

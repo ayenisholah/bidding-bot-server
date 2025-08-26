@@ -367,18 +367,14 @@ export async function bidOnOpensea(
         offer.consideration.push(opensea_consideration);
         offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
 
-        console.log(`[Token Bid - Fee Loop] Processing ${Object.keys(creator_fees).length} creator fees for token ${asset.tokenId}`);
         for (const address in creator_fees) {
           let fee: bigint | number = creator_fees[address];
           fee = BigInt(Math.round(fee).toString());
 
           // Skip null address or zero fees
           if (address === 'null' || address.toLowerCase() === '0x0000000000000000000000000000000000000000' || fee === 0n) {
-            console.log(`[Token Bid - Fee Item] Skipping: Address: ${address}, Fee: ${fee}`);
             continue;
           }
-
-          console.log(`[Token Bid - Fee Item] Processing: Address: ${address}, Fee: ${fee} basis points`);
 
           // Add all creator fees (OpenSea requires all fees marked as required=true)
           const consideration_item = {

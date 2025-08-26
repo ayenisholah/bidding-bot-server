@@ -2061,6 +2061,8 @@ async function startServer() {
 
     // Initialize queue event handlers
     initializeQueueEventHandlers();
+
+
     const concurrencyPerWorker = Number(RATE_LIMIT) / WORKER_COUNT;
 
     for (let i = 0; i < WORKER_COUNT; i++) {
@@ -2134,6 +2136,23 @@ async function startServer() {
         const taskId = getTaskIdForLog(job);
         console.error(RED + `[ERROR - Worker ${i + 1} - Task: ${taskId}] Job ${job?.id} failed:` + RESET, error.message || error);
 
+        // Handle failed bid jobs - immediately mark as processed
+        if (job && job.id && typeof job.id === 'string' && job.id.startsWith('bid-')) {
+          console.log(YELLOW + `[Worker ${i + 1}] Bid job ${job.id} failed - marking as processed immediately` + RESET);
+          
+          // Extract task and marketplace from job ID (format: bid-taskId-marketplace-...)
+          const parts = job.id.split('-');
+          if (parts.length >= 3) {
+            const taskId = parts[1];
+            const marketplace = parts[2].toLowerCase();
+            
+            // Mark job as processed to allow loop completion
+            markJobAsProcessed(taskId, marketplace, job.id, false).catch(err => {
+              console.error(RED + `[ERROR - Worker ${i + 1}] Failed to mark failed bid job as processed: ${err}` + RESET);
+            });
+          }
+        }
+        
         // Handle failed cancellation jobs - track them as completed
         if (job && job.name && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_MAGICEDEN_BID || job.name === CANCEL_BLUR_BID)) {
           const { taskId } = job.data;
@@ -2252,6 +2271,23 @@ async function startServer() {
     blurWorker.on('failed', (job, error) => {
       const blurFailedTaskId = getTaskIdForLog(job);
       console.error(RED + `[ERROR - Blur Worker - Task: ${blurFailedTaskId}] Job ${job?.id} failed:` + RESET, error.message || error);
+
+      // Handle failed bid jobs - immediately mark as processed
+      if (job && job.id && typeof job.id === 'string' && job.id.startsWith('bid-')) {
+        console.log(YELLOW + `[Blur Worker] Bid job ${job.id} failed - marking as processed immediately` + RESET);
+        
+        // Extract task and marketplace from job ID (format: bid-taskId-marketplace-...)
+        const parts = job.id.split('-');
+        if (parts.length >= 3) {
+          const taskId = parts[1];
+          const marketplace = parts[2].toLowerCase();
+          
+          // Mark job as processed to allow loop completion
+          markJobAsProcessed(taskId, marketplace, job.id, false).catch(err => {
+            console.error(RED + `[ERROR - Blur Worker] Failed to mark failed bid job as processed: ${err}` + RESET);
+          });
+        }
+      }
 
       // Handle failed Blur cancellation jobs - track them as completed
       if (job && job.name === CANCEL_BLUR_BID) {
@@ -2717,6 +2753,8 @@ process.on('SIGINT', async () => {
   // Stop orphaned job recovery
   orphanedJobRecovery.stopRecovery();
   console.log('Orphaned job recovery stopped');
+
+  // Stop job reconciliation service
 
   // Stop Redis cluster monitoring
   stopRedisClusterMonitoring();
@@ -5575,7 +5613,7 @@ async function updateTaskData(task: ITask) {
           outbidOptions: task.outbidOptions,
           task: newTask
         },
-        opts: { priority: TRAIT_BID_PRIORITY.OPENSEA } as JobsOptions
+        opts: { priority: TRAIT_BID_PRIORITY.OPENSEA, attempts: 1 } as JobsOptions
       })) as Job[] : [] as Job[]
 
       const magicedenTraits = addedTraits.map((trait) => ({ attributeKey: trait.type, attributeValue: trait.value }))
@@ -5594,7 +5632,7 @@ async function updateTaskData(task: ITask) {
             outbidOptions: task.outbidOptions,
             task: newTask,
           },
-          opts: { priority: TRAIT_BID_PRIORITY.MAGICEDEN } as JobsOptions
+          opts: { priority: TRAIT_BID_PRIORITY.MAGICEDEN, attempts: 1 } as JobsOptions
         })) as Job[] : [] as Job[]
 
 
@@ -5616,7 +5654,7 @@ async function updateTaskData(task: ITask) {
           outbidOptions: task.outbidOptions,
           task: newTask
         },
-        opts: { priority: TRAIT_BID_PRIORITY.BLUR } as JobsOptions
+        opts: { priority: TRAIT_BID_PRIORITY.BLUR, attempts: 1 } as JobsOptions
       })) as Job[] : [] as Job[]
 
 
@@ -5641,7 +5679,7 @@ async function updateTaskData(task: ITask) {
             outbidOptions: task.outbidOptions,
             task: newTask
           },
-          opts: { priority: TOKEN_BID_PRIORITY.OPENSEA } as JobsOptions,
+          opts: { priority: TOKEN_BID_PRIORITY.OPENSEA, attempts: 1 } as JobsOptions,
         })) as Job[] : [] as Job[]
 
 
@@ -5663,7 +5701,7 @@ async function updateTaskData(task: ITask) {
               outbidOptions: task.outbidOptions,
               task: newTask,
             },
-            opts: { priority: TOKEN_BID_PRIORITY.MAGICEDEN } as JobsOptions
+            opts: { priority: TOKEN_BID_PRIORITY.MAGICEDEN, attempts: 1 } as JobsOptions
           })) as Job[] : [] as Job[]
 
 
@@ -5700,7 +5738,7 @@ async function updateTaskData(task: ITask) {
   }
 }
 
-const DRAIN_THRESHOLD = 9000; // Queue drain threshold
+const DRAIN_THRESHOLD = 4500; // Queue drain threshold
 
 const BLUR_JOBS = [
   'BLUR_COLLECTION_BID',
@@ -5732,7 +5770,7 @@ async function waitForQueueDrain(): Promise<void> {
   }
 }
 
-const MAX_QUEUE_JOBS = 10000; // Maximum jobs allowed in queue
+const MAX_QUEUE_JOBS = 5000; // Maximum jobs allowed in queue
 // Helper function to get total jobs in all queues
 async function getTotalJobsInQueues(): Promise<number> {
   const [counts, blurCounts] = await Promise.all([
@@ -5784,7 +5822,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
   const progressUpdateInterval = 10000; // Update every 10 seconds
 
   // Create a simple rate limiter for queueing jobs at RATE_LIMIT per second
-  const rateLimiter = new RateLimiter(500);
+  const rateLimiter = new RateLimiter(250);
 
   try {
     // Check Redis health before attempting bulk operations
@@ -5819,7 +5857,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
     // Log current state but proceed immediately
     console.log(CYAN + `[processBulkJobs] Current prioritized count: ${prioritizedCount}, target range: [${2 * RATE_LIMIT}, ${DRAIN_THRESHOLD}]` + RESET);
 
-    const CHUNK_SIZE = 500
+    const CHUNK_SIZE = 250
     const chunks = chunk(jobs, CHUNK_SIZE);
     let retryChunkIndex = -1; // Track if we need to retry a chunk
 
@@ -5975,6 +6013,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
               for (const jobChunk of rateLimitChunks) {
                 await rateLimiter.acquire();
+                
                 const addedJobs = await queue.addBulk(jobChunk);
 
                 // Log successful addition of cancellation jobs
@@ -6058,7 +6097,8 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
               const blurRateLimitChunks = chunk(uniqueBlurJobs, RATE_LIMIT);
               for (const jobChunk of blurRateLimitChunks) {
                 await rateLimiter.acquire();
-                await blurQueue.addBulk(jobChunk);
+                
+                const addedJobs = await blurQueue.addBulk(jobChunk);
               }
 
               // Track actual Blur jobs added (use unique jobs count)
@@ -7141,8 +7181,16 @@ async function cancelMarketplaceRateLimiterJobs(taskId: string, marketplace?: st
 // Centralized function to update task cancellation percentage - single source of truth
 export async function updateTaskCancellationPercentage(taskId: string, forcePercentage?: number) {
   if (!taskStatus[taskId]) {
-    console.log(YELLOW + `[updateTaskCancellationPercentage] Task status not found for ${taskId}` + RESET);
-    return;
+    taskStatus[taskId] = {
+      status: 'CANCELLING',
+      runningPercentage: 0,
+      cancellationPercentage: 0,
+      processingPercentage: 0,
+      totalJobs: 0,
+      completedJobs: 0,
+      waitingTime: 0
+    };
+    console.log(CYAN + `[updateTaskCancellationPercentage] Initialized taskStatus for ${taskId} with CANCELLING status` + RESET);
   }
 
   let percentage: number;
@@ -7325,31 +7373,6 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string, stopp
     let totalOperations = 0;
     let completedOperations = 0;
     let completionHandled = false; // Track if completion has been handled
-
-    // Initialize or update task status to CANCELLING
-    if (!taskStatus[taskId]) {
-      taskStatus[taskId] = {
-        status: 'CANCELLING',
-        runningPercentage: 0,
-        cancellationPercentage: 0,
-        processingPercentage: 0,
-        totalJobs: 0,
-        completedJobs: 0,
-        cancellationStartTime: Date.now()
-      };
-      console.log(CYAN + `[stopTask] Created new taskStatus for ${taskId} with CANCELLING status` + RESET);
-    } else {
-      const previousStatus = taskStatus[taskId].status;
-      taskStatus[taskId].status = 'CANCELLING';
-      taskStatus[taskId].cancellationStartTime = Date.now();
-      console.log(CYAN + `[stopTask] Updated taskStatus for ${taskId} from ${previousStatus} to CANCELLING` + RESET);
-
-      // Log warning if task was already STOPPED
-      if (previousStatus === 'STOPPED') {
-        console.log(RED + `[stopTask] WARNING: Task ${taskId} was already in STOPPED status but stopTask was called again!` + RESET);
-        console.log(RED + `[stopTask] Current cancellationPercentage: ${taskStatus[taskId].cancellationPercentage}%` + RESET);
-      }
-    }
 
     if (marketplace) {
       const currentStatus = taskStatus[taskId];
@@ -9263,10 +9286,6 @@ async function extractMagicedenOrderHash(orders: any[]): Promise<string[]> {
 async function cancelMagicedenBids(orders: any[], privateKey: string, taskId: string) {
   if (!orders.length) return;
 
-  // Set task status to CANCELLING
-  if (taskStatus[taskId]) {
-    taskStatus[taskId].status = 'CANCELLING';
-  }
 
   // Parent job tracking removed - now using cancellationTracker
 
@@ -9298,10 +9317,6 @@ async function cancelMagicedenBids(orders: any[], privateKey: string, taskId: st
 async function cancelBlurBids(orders: any[], privateKey: string, taskId: string) {
   if (!orders.length) return
 
-  // Set task status to CANCELLING
-  if (taskStatus[taskId]) {
-    taskStatus[taskId].status = 'CANCELLING';
-  }
 
   // Parent job tracking removed - now using cancellationTracker
 
@@ -9324,10 +9339,6 @@ async function cancelBlurBids(orders: any[], privateKey: string, taskId: string)
 async function cancelOpenseaBids(orders: any[], privateKey: string, taskId: string, currencySymbol: string) {
   if (!orders.length) return;
 
-  // Set task status to CANCELLING
-  if (taskStatus[taskId]) {
-    taskStatus[taskId].status = 'CANCELLING';
-  }
 
   // Parent job tracking removed - now using cancellationTracker
 
@@ -10473,7 +10484,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               minBidPriceEth,
               task: currentTask,
             },
-            opts: { jobId: `${orderHash}-token-${tokenId}` }
+            opts: { jobId: `${orderHash}-token-${tokenId}`, attempts: 1 }
           }));
 
           await queue.addBulk(bidJobs);
@@ -10660,7 +10671,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
             await queue.add(
               MAGICEDEN_COLLECTION_BID_COUNTERBID,
               bidData,
-              { jobId: `${orderHash}-collection` }
+              { jobId: `${orderHash}-collection`, attempts: 1 }
             );
 
             console.log(GREEN + `[MagicEden collection] Queued collection counterbid - Existing: ${(Number(order.offerPrice) / Math.pow(10, decimal)).toFixed(4)} ${currencySymbol} <= Incoming: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
@@ -10689,7 +10700,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
             await queue.add(
               MAGICEDEN_TOKEN_BID_COUNTERBID,
               bidData,
-              { jobId: `${orderHash}-token-${tokenId}` }
+              { jobId: `${orderHash}-token-${tokenId}`, attempts: 1 }
             );
 
             console.log(GREEN + `[MagicEden collection] Queued token counterbid for #${tokenId} - Existing: ${(Number(order.offerPrice) / Math.pow(10, decimal)).toFixed(4)} ${currencySymbol} <= Incoming: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
@@ -11160,7 +11171,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               outbidOptions: outbidOptions,
               task
             },
-            opts: { jobId: `${orderHash}-token-${tokenId}` }
+            opts: { jobId: `${orderHash}-token-${tokenId}`, attempts: 1 }
           }));
 
           await queue.addBulk(bidJobs);
@@ -11361,7 +11372,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             await queue.add(
               OPENSEA_COLLECTION_BID_COUNTERBID,
               bidData,
-              { jobId: `${orderHash}-collection` }
+              { jobId: `${orderHash}-collection`, attempts: 1 }
             );
 
             console.log(GREEN + `[OpenSea collection_offer] Queued collection counterbid - Existing: ${(Number(order.offerPrice) / Math.pow(10, decimal)).toFixed(4)} ${currencySymbol} <= Incoming: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
@@ -11389,7 +11400,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             await queue.add(
               OPENSEA_TOKEN_BID_COUNTERBID,
               bidData,
-              { jobId: `${orderHash}-token-${tokenId}` }
+              { jobId: `${orderHash}-token-${tokenId}`, attempts: 1 }
             );
 
             console.log(GREEN + `[OpenSea collection_offer] Queued token counterbid for #${tokenId} - Existing: ${(Number(order.offerPrice) / Math.pow(10, decimal)).toFixed(4)} ${currencySymbol} <= Incoming: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
@@ -11748,7 +11759,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
             await blurQueue.add(
               BLUR_COLLECTION_BID_COUNTERBID,
               bidData,
-              { jobId: `${bidHash}-collection` }
+              { jobId: `${bidHash}-collection`, attempts: 1 }
             );
 
             console.log(GREEN + `[Blur collection] Queued collection counterbid - Existing: ${(Number(order.offerPrice) / 1e18).toFixed(4)} ETH <= Incoming: ${bestPrice} ETH` + RESET);
@@ -12396,339 +12407,451 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, scheduleJ
   const taskId = task._id.toString();
   let lockAcquired = false;
 
+  // Timeout protection wrapper - 120 seconds max processing time
+  const TIMEOUT_DURATION = 120000; // 2 minutes
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => {
+      reject(new Error(`OpenSea scheduled bid timeout after ${TIMEOUT_DURATION}ms for task ${taskId}`));
+    }, TIMEOUT_DURATION);
+  });
+
   try {
-    if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) {
-      return;
-    }
-    const currentTask = activeTasks.get(task._id);
-    if (!currentTask || !currentTask.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
-      return;
-    }
+    // Wrap the main processing logic in a timeout
+    await Promise.race([
+      (async () => {
+        if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) {
+          return;
+        }
+        const currentTask = activeTasks.get(task._id);
+        if (!currentTask || !currentTask.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
+          return;
+        }
 
-    const taskId = task._id;
-    // Processing OpenSea scheduled bid
+        const taskId = task._id;
+        // Processing OpenSea scheduled bid
 
-    // Get preprocessing data - first check the Map, then perform if needed
-    let preprocessing = taskPreprocessing.get(taskId);
+        // Get preprocessing data - first check the Map, then perform if needed
+        let preprocessing = taskPreprocessing.get(taskId);
 
-    if (!preprocessing || !preprocessing.opensea.enabled) {
-      console.log(`${BLUE}[processOpenseaScheduledBid] No preprocessing data found, performing preprocessing now${RESET}`);
+        if (!preprocessing || !preprocessing.opensea.enabled) {
+          console.log(`${BLUE}[processOpenseaScheduledBid] No preprocessing data found, performing preprocessing now${RESET}`);
 
-      // Determine available marketplaces for this task
-      const validMarketplaces = ["opensea", "magiceden", "blur"];
-      const availableMarketplaces = currentTask.selectedMarketplaces
-        .map(m => m.toLowerCase())
-        .filter(m => enabledMarketplaces.map(em => em.toLowerCase()).includes(m))
-        .filter(m => validMarketplaces.includes(m));
+          // Determine available marketplaces for this task
+          const validMarketplaces = ["opensea", "magiceden", "blur"];
+          const availableMarketplaces = currentTask.selectedMarketplaces
+            .map(m => m.toLowerCase())
+            .filter(m => enabledMarketplaces.map(em => em.toLowerCase()).includes(m))
+            .filter(m => validMarketplaces.includes(m));
 
-      // Perform preprocessing for OpenSea
-      preprocessing = await performMarketplacePreprocessing(currentTask, "opensea", availableMarketplaces);
+          // Perform preprocessing for OpenSea
+          preprocessing = await performMarketplacePreprocessing(currentTask, "opensea", availableMarketplaces);
 
-      // Store in Map for other marketplaces to use
-      taskPreprocessing.set(taskId, preprocessing);
+          // Store in Map for other marketplaces to use
+          taskPreprocessing.set(taskId, preprocessing);
 
-      // If preprocessing didn't enable OpenSea, it means something went wrong
-      if (!preprocessing.opensea.enabled) {
-        throw new Error(`Preprocessing failed to enable OpenSea for task ${taskId}`);
-      }
-    }
+          // If preprocessing didn't enable OpenSea, it means something went wrong
+          if (!preprocessing.opensea.enabled) {
+            throw new Error(`Preprocessing failed to enable OpenSea for task ${taskId}`);
+          }
+        }
 
-    if (preprocessing.opensea.skipReason) {
-      console.log(`${YELLOW}[OPENSEA] Skipped: ${preprocessing.opensea.skipReason}${RESET}`);
-      if (!warningBids[taskId]) {
-        warningBids[taskId] = { opensea: false, magiceden: false, blur: false };
-      }
-      if (!warningMessage[taskId]) {
-        warningMessage[taskId] = { opensea: "", magiceden: "", blur: "" };
-      }
-      warningBids[taskId].opensea = true;
-      warningMessage[taskId].opensea = preprocessing.opensea.skipReason;
-      return;
-    }
+        if (preprocessing.opensea.skipReason) {
+          console.log(`${YELLOW}[OPENSEA] Skipped: ${preprocessing.opensea.skipReason}${RESET}`);
+          if (!warningBids[taskId]) {
+            warningBids[taskId] = { opensea: false, magiceden: false, blur: false };
+          }
+          if (!warningMessage[taskId]) {
+            warningMessage[taskId] = { opensea: "", magiceden: "", blur: "" };
+          }
+          warningBids[taskId].opensea = true;
+          warningMessage[taskId].opensea = preprocessing.opensea.skipReason;
+          return;
+        }
 
-    // Ensure task status exists in centralized state manager
-    // Initialize task status if it doesn't exist or check for completion state
-    if (!taskStatus[taskId]) {
-      taskStatus[taskId] = {
-        status: 'PROCESSING',
-        runningPercentage: 0,
-        cancellationPercentage: 0,
-        processingPercentage: 0,
-        totalJobs: 0,
-        completedJobs: 0,
-        waitingTime: 0
-      };
-    }
+        // Ensure task status exists in centralized state manager
+        // Initialize task status if it doesn't exist or check for completion state
+        if (!taskStatus[taskId]) {
+          taskStatus[taskId] = {
+            status: 'PROCESSING',
+            runningPercentage: 0,
+            cancellationPercentage: 0,
+            processingPercentage: 0,
+            totalJobs: 0,
+            completedJobs: 0,
+            waitingTime: 0
+          };
+        }
 
-    // Use timed lock manager for better timeout handling
-    lockAcquired = timedLockManager.acquireLock(taskId, 'opensea');
-    if (!lockAcquired) {
-      console.log(`${YELLOW}[LOCK] Task ${taskId} is already being processed by OpenSea scheduled bid - skipping${RESET}`);
-      return;
-    }
-    console.log(`${GREEN}[LOCK] Acquired lock for task ${taskId} in OpenSea scheduled bid${RESET}`);
+        // Use timed lock manager for better timeout handling with BullMQ lock validation
+        try {
+          // Validate BullMQ lock before acquiring our custom lock
+          if (scheduleJob && scheduleJob.id) {
+            const lockKey = `bull:BIDDING_BOT:${scheduleJob.id}:lock`;
+            const redis = redisClient.getClient();
+            if (redis) {
+              const lockExists = await redis.get(lockKey);
+              if (!lockExists) {
+                console.warn(`${YELLOW}[LOCK WARNING] BullMQ lock missing for job ${scheduleJob.id}, proceeding with recovery${RESET}`);
+                // Continue processing but add monitoring
+                await logger.logError(ErrorCategory.QUEUE, 'Missing BullMQ lock detected in OpenSea scheduled bid', {
+                  taskId,
+                  jobId: scheduleJob.id,
+                  lockKey
+                });
+              }
+            }
+          }
 
-    // Update currentTokenIds if we have token data
-    if (!currentTokenIds[taskId]) {
-      currentTokenIds[taskId] = {
-        opensea: [],
-        magiceden: [],
-      }
-    }
-    currentTokenIds[taskId].opensea = preprocessing.opensea.tokens
+          lockAcquired = timedLockManager.acquireLock(taskId, 'opensea');
+          if (!lockAcquired) {
+            console.log(`${YELLOW}[LOCK] Task ${taskId} is already being processed by OpenSea scheduled bid - skipping${RESET}`);
+            return;
+          }
+          console.log(`${GREEN}[LOCK] Acquired lock for task ${taskId} in OpenSea scheduled bid${RESET}`);
+        } catch (lockError) {
+          console.error(`${RED}[LOCK ERROR] Failed to acquire lock for task ${taskId}: ${lockError}${RESET}`);
 
-    // Initialize warningBids early
-    if (!warningBids[taskId]) {
-      warningBids[taskId] = {
-        opensea: false,
-        magiceden: false,
-        blur: false
-      }
-    }
+          // If lock acquisition fails due to corruption, attempt cleanup
+          if (lockError instanceof Error && lockError.message.includes('Missing lock')) {
+            console.log(`${YELLOW}[LOCK RECOVERY] Attempting to clean up corrupted lock for task ${taskId}${RESET}`);
+            try {
+              // Clean up any stale locks
+              timedLockManager.releaseLock(taskId, 'opensea');
+              // Try once more
+              lockAcquired = timedLockManager.acquireLock(taskId, 'opensea');
+              if (lockAcquired) {
+                console.log(`${GREEN}[LOCK RECOVERY] Successfully recovered lock for task ${taskId}${RESET}`);
+              } else {
+                throw new Error('Lock recovery failed');
+              }
+            } catch (recoveryError) {
+              console.error(`${RED}[LOCK RECOVERY] Failed to recover lock for task ${taskId}: ${recoveryError}${RESET}`);
+              throw lockError; // Re-throw original error
+            }
+          } else {
+            throw lockError;
+          }
+        }
 
-    const WALLET_ADDRESS: string = currentTask.wallet;
-    const wallets = await walletCache.getWalletById(currentTask.walletId);
-    const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+        // Update currentTokenIds if we have token data
+        if (!currentTokenIds[taskId]) {
+          currentTokenIds[taskId] = {
+            opensea: [],
+            magiceden: [],
+          }
+        }
+        currentTokenIds[taskId].opensea = preprocessing.opensea.tokens
 
-    // Extend lock before fetching balances
-    if (lockAcquired) {
-      timedLockManager.extendLock(taskId, 'opensea');
-    }
+        // Initialize warningBids early
+        if (!warningBids[taskId]) {
+          warningBids[taskId] = {
+            opensea: false,
+            magiceden: false,
+            blur: false
+          }
+        }
 
-    // Fetch fresh WETH balance with timeout protection
-    console.log(`${BLUE}[OpenSea] Fetching WETH balance for ${WALLET_ADDRESS}...${RESET}`);
-    let wethBalance = 0;
-    try {
-      const { fetchERC20BalanceFresh } = await import('./utils/balance');
-      const { WETH } = await import('./utils/currencies');
-      wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, WETH);
-      console.log(`${BLUE}[OpenSea] Fresh WETH balance for ${WALLET_ADDRESS}: ${wethBalance}${RESET}`);
-    } catch (error) {
-      console.error(`${RED}[OpenSea] Failed to fetch WETH balance: ${error}${RESET}`);
-      console.log(`${YELLOW}[OpenSea] Continuing with balance: 0.00${RESET}`);
-    }
+        const WALLET_ADDRESS: string = currentTask.wallet;
+        const wallets = await walletCache.getWalletById(currentTask.walletId);
+        const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
-    console.log(`${BLUE}[OpenSea] Getting collection details for ${currentTask.contract.slug}...${RESET}`);
-    // Get collection details for creator fees
-    let currency, collectionDetails;
-    try {
-      const results = await Promise.all([
-        calculateBidPrice(currentTask, 0, "opensea"),
-        getCollectionDetails(currentTask.contract.slug, currentTask.contract.contractAddress)
-      ]);
-      currency = results[0].currency;
-      collectionDetails = results[1];
-      console.log(`${BLUE}[OpenSea] Successfully got collection details${RESET}`);
-
-      // Log full collection details object
-    } catch (error) {
-      console.error(`${RED}[OpenSea] Failed to get collection details: ${error}${RESET}`);
-      throw error;
-    }
-
-    console.log(`[CreatorFees Construction] Before transformation:`, {
-      creator_fees: JSON.stringify(collectionDetails.creator_fees),
-      has_null: collectionDetails.creator_fees.null !== undefined,
-      null_value: collectionDetails.creator_fees.null,
-      keys: Object.keys(collectionDetails.creator_fees)
-    });
-
-    // Convert all creator fees to the IFee format (ensuring values are numbers)
-    const creatorFees: IFee = Object.fromEntries(
-      Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)])
-    );
-
-    console.log(`[CreatorFees Construction] After transformation:`, JSON.stringify(creatorFees));
-    console.log(`[CreatorFees Construction] enforceCreatorFee:`, collectionDetails.enforceCreatorFee);
-
-    // Note: Status will be set to appropriate state after job creation is determined
-    const newTask = { ...currentTask, traits: {} } as ITask
-
-    console.log(`${BLUE}[OpenSea] Checking preprocessing results:${RESET}`);
-    console.log(`${BLUE}[OpenSea] - tokens.length: ${preprocessing.opensea.tokens.length}${RESET}`);
-    console.log(`${BLUE}[OpenSea] - traits.length: ${preprocessing.opensea.traits.length}${RESET}`);
-    console.log(`${BLUE}[OpenSea] - jobCount: ${preprocessing.opensea.jobCount}${RESET}`);
-
-    // Create jobs based on preprocessing results
-    if (preprocessing.opensea.tokens.length > 0) {
-      // Token bid
-      console.log(`${BLUE}[OPENSEA] Creating ${preprocessing.opensea.tokens.length} token bid jobs${RESET}`);
-      console.log(`${BLUE}[OPENSEA] Current loop count: ${loopCounterStats[taskId] || 1}${RESET}`);
-
-      const jobs = preprocessing.opensea.tokens
-        .map((token) => ({
-          name: OPENSEA_TOKEN_BID,
-          data: {
-            _id: taskId,
-            address: WALLET_ADDRESS,
-            privateKey: WALLET_PRIVATE_KEY,
-            slug: currentTask.contract.slug,
-            creatorFees,
-            enforceCreatorFee: collectionDetails.enforceCreatorFee,
-            asset: { contractAddress: currentTask.contract.contractAddress, tokenId: token },
-            outbidOptions: currentTask.outbidOptions,
-            task: newTask,
-          },
-          opts: { priority: TOKEN_BID_PRIORITY.OPENSEA } as JobsOptions,
-        })) as Job[]
-
-      // Ensure parent job exists BEFORE processing jobs
-      await ensureParentJobExists(taskId, 'opensea');
-      const parentJobId = getParentJobId(taskId, 'opensea');
-      const parentJob = parentJobs.get(parentJobId);
-      if (parentJob) {
-        parentJob.expectedJobs = preprocessing.opensea.tokens.length;
-        parentJob.totalJobs = preprocessing.opensea.tokens.length; // Use expected count initially
-        console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
-      }
-
-      try {
-        // Extend lock before processing bulk jobs
+        // Extend lock before fetching balances
         if (lockAcquired) {
           timedLockManager.extendLock(taskId, 'opensea');
         }
 
-        // Transition to QUEUEING state before creating jobs
-        setTaskStatus(taskId, 'QUEUEING', 'queueing opensea token bid jobs');
-
-        // Fire-and-forget: processBulkJobs runs asynchronously to prevent timeout
-        processBulkJobs(jobs, true, scheduleJob);
-
-        // Register for job creation verification
-        registerJobCreationVerification(taskId, 'opensea', preprocessing.opensea.tokens.length);
-
-        console.log(BLUE + `[OPENSEA] Started queueing ${preprocessing.opensea.tokens.length} token bid jobs` + RESET);
-
-        // The task will transition to RUNNING when jobs start processing
-
-      } catch (jobError) {
-        console.error(RED + `[OPENSEA] Failed to queue token bid jobs: ${jobError}` + RESET);
-        // Re-throw to trigger retry
-        throw jobError;
-      }
-    } else if (preprocessing.opensea.traits.length > 0) {
-      // Trait bid
-      console.log(`${BLUE}[OPENSEA] Creating ${preprocessing.opensea.traits.length} trait bid jobs${RESET}`);
-
-      const traitJobs = preprocessing.opensea.traits.map((trait) => {
-        const jobData = {
-          _id: taskId,
-          address: WALLET_ADDRESS,
-          privateKey: WALLET_PRIVATE_KEY,
-          slug: currentTask.contract.slug,
-          contractAddress: currentTask.contract.contractAddress,
-          creatorFees,
-          enforceCreatorFee: collectionDetails.enforceCreatorFee,
-          trait: JSON.stringify(trait),
-          outbidOptions: currentTask.outbidOptions,
-          task: newTask,
-        };
-        return {
-          name: OPENSEA_TRAIT_BID,
-          data: jobData,
-          opts: { priority: TRAIT_BID_PRIORITY.OPENSEA } as JobsOptions
-        };
-      }) as Job[]
-
-      // Ensure parent job exists BEFORE processing jobs
-      await ensureParentJobExists(taskId, 'opensea');
-      const parentJobId = getParentJobId(taskId, 'opensea');
-      const parentJob = parentJobs.get(parentJobId);
-      if (parentJob) {
-        parentJob.expectedJobs = preprocessing.opensea.traits.length;
-        parentJob.totalJobs = preprocessing.opensea.traits.length; // Use expected count initially
-        console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
-      }
-
-      try {
-        // Extend lock before processing bulk trait jobs
-        if (lockAcquired) {
-          timedLockManager.extendLock(taskId, 'opensea');
+        // Fetch fresh WETH balance with timeout protection
+        console.log(`${BLUE}[OpenSea] Fetching WETH balance for ${WALLET_ADDRESS}...${RESET}`);
+        let wethBalance = 0;
+        try {
+          const { fetchERC20BalanceFresh } = await import('./utils/balance');
+          const { WETH } = await import('./utils/currencies');
+          wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, WETH);
+          console.log(`${BLUE}[OpenSea] Fresh WETH balance for ${WALLET_ADDRESS}: ${wethBalance}${RESET}`);
+        } catch (error) {
+          console.error(`${RED}[OpenSea] Failed to fetch WETH balance: ${error}${RESET}`);
+          console.log(`${YELLOW}[OpenSea] Continuing with balance: 0.00${RESET}`);
         }
 
-        // Transition to QUEUEING state before creating jobs
-        setTaskStatus(taskId, 'QUEUEING', 'queueing opensea trait bid jobs');
+        console.log(`${BLUE}[OpenSea] Getting collection details for ${currentTask.contract.slug}...${RESET}`);
+        // Get collection details for creator fees
+        let currency, collectionDetails;
+        try {
+          const results = await Promise.all([
+            calculateBidPrice(currentTask, 0, "opensea"),
+            getCollectionDetails(currentTask.contract.slug, currentTask.contract.contractAddress)
+          ]);
+          currency = results[0].currency;
+          collectionDetails = results[1];
+          console.log(`${BLUE}[OpenSea] Successfully got collection details${RESET}`);
 
-        // Fire-and-forget: processBulkJobs runs asynchronously to prevent timeout
-        processBulkJobs(traitJobs, true, scheduleJob);
+          // Log full collection details object
+        } catch (error) {
+          console.error(`${RED}[OpenSea] Failed to get collection details: ${error}${RESET}`);
+          throw error;
+        }
 
-        // Register for job creation verification
-        registerJobCreationVerification(taskId, 'opensea', preprocessing.opensea.traits.length);
+        console.log(`[CreatorFees Construction] Before transformation:`, {
+          creator_fees: JSON.stringify(collectionDetails.creator_fees),
+          has_null: collectionDetails.creator_fees.null !== undefined,
+          null_value: collectionDetails.creator_fees.null,
+          keys: Object.keys(collectionDetails.creator_fees)
+        });
 
-        console.log(BLUE + `[OPENSEA] Started queueing ${preprocessing.opensea.traits.length} trait bid jobs` + RESET);
+        // Convert all creator fees to the IFee format (ensuring values are numbers)
+        const creatorFees: IFee = Object.fromEntries(
+          Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)])
+        );
 
-        // The task will transition to RUNNING when jobs start processing
+        console.log(`[CreatorFees Construction] After transformation:`, JSON.stringify(creatorFees));
+        console.log(`[CreatorFees Construction] enforceCreatorFee:`, collectionDetails.enforceCreatorFee);
 
-      } catch (jobError) {
-        console.error(RED + `[OPENSEA] Failed to queue trait bid jobs: ${jobError}` + RESET);
-        // Re-throw to trigger retry
-        throw jobError;
-      }
-    } else if (preprocessing.opensea.jobCount === 1) {
-      // Collection bid
-      console.log(`${BLUE}[OPENSEA] Creating 1 collection bid job${RESET}`);
-      const jobId = `bid-${taskId}-opensea-${currentTask.contract.slug}-collection`
+        // Note: Status will be set to appropriate state after job creation is determined
+        const newTask = { ...currentTask, traits: {} } as ITask
 
-      // Ensure parent job exists BEFORE adding job
-      await ensureParentJobExists(taskId, 'opensea');
-      const parentJobId = getParentJobId(taskId, 'opensea');
-      const parentJob = parentJobs.get(parentJobId);
-      if (parentJob) {
-        parentJob.expectedJobs = 1;
-        parentJob.totalJobs = 1;
-        parentJob.actualJobs = 1;
-        parentJob.allJobsQueued = true;
-        console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} for single collection bid${RESET}`);
-      }
+        console.log(`${BLUE}[OpenSea] Checking preprocessing results:${RESET}`);
+        console.log(`${BLUE}[OpenSea] - tokens.length: ${preprocessing.opensea.tokens.length}${RESET}`);
+        console.log(`${BLUE}[OpenSea] - traits.length: ${preprocessing.opensea.traits.length}${RESET}`);
+        console.log(`${BLUE}[OpenSea] - jobCount: ${preprocessing.opensea.jobCount}${RESET}`);
 
-      // Transition to QUEUEING state before creating job
-      setTaskStatus(taskId, 'QUEUEING', 'queueing opensea collection bid job');
+        // Create jobs based on preprocessing results
+        if (preprocessing.opensea.tokens.length > 0) {
+          // Token bid
+          console.log(`${BLUE}[OPENSEA] Creating ${preprocessing.opensea.tokens.length} token bid jobs${RESET}`);
+          console.log(`${BLUE}[OPENSEA] Current loop count: ${loopCounterStats[taskId] || 1}${RESET}`);
 
-      await queue.add(
-        OPENSEA_COLLECTION_BID,
-        { task: newTask, collectionDetails, currency },
-        { jobId }
-      );
+          const jobs = preprocessing.opensea.tokens
+            .map((token) => ({
+              name: OPENSEA_TOKEN_BID,
+              data: {
+                _id: taskId,
+                address: WALLET_ADDRESS,
+                privateKey: WALLET_PRIVATE_KEY,
+                slug: currentTask.contract.slug,
+                creatorFees,
+                enforceCreatorFee: collectionDetails.enforceCreatorFee,
+                asset: { contractAddress: currentTask.contract.contractAddress, tokenId: token },
+                outbidOptions: currentTask.outbidOptions,
+                task: newTask,
+              },
+              opts: { priority: TOKEN_BID_PRIORITY.OPENSEA, attempts: 1 } as JobsOptions,
+            })) as Job[]
 
-      console.log(GREEN + `[OPENSEA] Successfully queued 1 collection bid job` + RESET);
+          // Ensure parent job exists BEFORE processing jobs
+          await ensureParentJobExists(taskId, 'opensea');
+          const parentJobId = getParentJobId(taskId, 'opensea');
+          const parentJob = parentJobs.get(parentJobId);
+          if (parentJob) {
+            parentJob.expectedJobs = preprocessing.opensea.tokens.length;
+            parentJob.totalJobs = preprocessing.opensea.tokens.length; // Use expected count initially
+            console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
+          }
 
-      // Transition to RUNNING after job is queued
-      setTaskStatus(taskId, 'RUNNING', 'opensea collection bid job queued');
+          try {
+            // Extend lock before processing bulk jobs
+            if (lockAcquired) {
+              timedLockManager.extendLock(taskId, 'opensea');
+            }
 
-      // Trigger percentage update for single job
-      await updateTaskRunningPercentage(taskId);
-    } else {
-      // No jobs to create - create empty parent job and complete the loop
-      console.log(YELLOW + `[OPENSEA] No jobs to create for task ${taskId} - completing loop with 0 jobs` + RESET);
+            // Transition to QUEUEING state before creating jobs
+            setTaskStatus(taskId, 'QUEUEING', 'queueing opensea token bid jobs');
 
-      await ensureParentJobExists(taskId, 'opensea');
-      const parentJobId = getParentJobId(taskId, 'opensea');
-      const parentJob = parentJobs.get(parentJobId);
-      if (parentJob) {
-        parentJob.expectedJobs = 0;
-        parentJob.totalJobs = 0;
-        parentJob.actualJobs = 0;
-        parentJob.completedJobs = 0;
-        parentJob.allJobsQueued = true;
-        console.log(GREEN + `[OPENSEA] Marked parent job ${parentJobId} as complete with 0 jobs` + RESET);
-      }
+            // Fire-and-forget: processBulkJobs runs asynchronously to prevent timeout
+            processBulkJobs(jobs, true, scheduleJob);
 
-      // Update task status to trigger completion flow
-      setTaskStatus(taskId, 'RUNNING', 'opensea no jobs - completing loop');
-      await updateTaskRunningPercentage(taskId);
+            // Register for job creation verification
+            registerJobCreationVerification(taskId, 'opensea', preprocessing.opensea.tokens.length);
 
-      // Check if all parent jobs are complete to trigger next loop
-      const allComplete = checkAllParentJobsComplete(taskId);
-      if (allComplete) {
-        console.log(GREEN + `[OPENSEA] All parent jobs complete for task ${taskId}, triggering completion` + RESET);
-        await checkTaskCompletionAndScheduleNext(taskId);
-      }
+            console.log(BLUE + `[OPENSEA] Started queueing ${preprocessing.opensea.tokens.length} token bid jobs` + RESET);
 
-      // Don't throw error - let the loop complete normally
-      console.log(YELLOW + `[OPENSEA] Loop will complete with 0 jobs and retry in next cycle` + RESET);
-    }
+            // The task will transition to RUNNING when jobs start processing
+
+          } catch (jobError) {
+            console.error(RED + `[OPENSEA] Failed to queue token bid jobs: ${jobError}` + RESET);
+            // Re-throw to trigger retry
+            throw jobError;
+          }
+        } else if (preprocessing.opensea.traits.length > 0) {
+          // Trait bid
+          console.log(`${BLUE}[OPENSEA] Creating ${preprocessing.opensea.traits.length} trait bid jobs${RESET}`);
+
+          const traitJobs = preprocessing.opensea.traits.map((trait) => {
+            const jobData = {
+              _id: taskId,
+              address: WALLET_ADDRESS,
+              privateKey: WALLET_PRIVATE_KEY,
+              slug: currentTask.contract.slug,
+              contractAddress: currentTask.contract.contractAddress,
+              creatorFees,
+              enforceCreatorFee: collectionDetails.enforceCreatorFee,
+              trait: JSON.stringify(trait),
+              outbidOptions: currentTask.outbidOptions,
+              task: newTask,
+            };
+            return {
+              name: OPENSEA_TRAIT_BID,
+              data: jobData,
+              opts: { priority: TRAIT_BID_PRIORITY.OPENSEA, attempts: 1 } as JobsOptions
+            };
+          }) as Job[]
+
+          // Ensure parent job exists BEFORE processing jobs
+          await ensureParentJobExists(taskId, 'opensea');
+          const parentJobId = getParentJobId(taskId, 'opensea');
+          const parentJob = parentJobs.get(parentJobId);
+          if (parentJob) {
+            parentJob.expectedJobs = preprocessing.opensea.traits.length;
+            parentJob.totalJobs = preprocessing.opensea.traits.length; // Use expected count initially
+            console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
+          }
+
+          try {
+            // Extend lock before processing bulk trait jobs
+            if (lockAcquired) {
+              timedLockManager.extendLock(taskId, 'opensea');
+            }
+
+            // Transition to QUEUEING state before creating jobs
+            setTaskStatus(taskId, 'QUEUEING', 'queueing opensea trait bid jobs');
+
+            // Fire-and-forget: processBulkJobs runs asynchronously to prevent timeout
+            processBulkJobs(traitJobs, true, scheduleJob);
+
+            // Register for job creation verification
+            registerJobCreationVerification(taskId, 'opensea', preprocessing.opensea.traits.length);
+
+            console.log(BLUE + `[OPENSEA] Started queueing ${preprocessing.opensea.traits.length} trait bid jobs` + RESET);
+
+            // The task will transition to RUNNING when jobs start processing
+
+          } catch (jobError) {
+            console.error(RED + `[OPENSEA] Failed to queue trait bid jobs: ${jobError}` + RESET);
+            // Re-throw to trigger retry
+            throw jobError;
+          }
+        } else if (preprocessing.opensea.jobCount === 1) {
+          // Collection bid
+          console.log(`${BLUE}[OPENSEA] Creating 1 collection bid job${RESET}`);
+          const jobId = `bid-${taskId}-opensea-${currentTask.contract.slug}-collection`
+
+          // Ensure parent job exists BEFORE adding job
+          await ensureParentJobExists(taskId, 'opensea');
+          const parentJobId = getParentJobId(taskId, 'opensea');
+          const parentJob = parentJobs.get(parentJobId);
+          if (parentJob) {
+            parentJob.expectedJobs = 1;
+            parentJob.totalJobs = 1;
+            parentJob.actualJobs = 1;
+            parentJob.allJobsQueued = true;
+            console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} for single collection bid${RESET}`);
+          }
+
+          // Transition to QUEUEING state before creating job
+          setTaskStatus(taskId, 'QUEUEING', 'queueing opensea collection bid job');
+
+          await queue.add(
+            OPENSEA_COLLECTION_BID,
+            { task: newTask, collectionDetails, currency },
+            { jobId, attempts: 1 }
+          );
+
+          console.log(GREEN + `[OPENSEA] Successfully queued 1 collection bid job` + RESET);
+
+          // Transition to RUNNING after job is queued
+          setTaskStatus(taskId, 'RUNNING', 'opensea collection bid job queued');
+
+          // Trigger percentage update for single job
+          await updateTaskRunningPercentage(taskId);
+        } else {
+          // No jobs to create - create empty parent job and complete the loop
+          console.log(YELLOW + `[OPENSEA] No jobs to create for task ${taskId} - completing loop with 0 jobs` + RESET);
+
+          await ensureParentJobExists(taskId, 'opensea');
+          const parentJobId = getParentJobId(taskId, 'opensea');
+          const parentJob = parentJobs.get(parentJobId);
+          if (parentJob) {
+            parentJob.expectedJobs = 0;
+            parentJob.totalJobs = 0;
+            parentJob.actualJobs = 0;
+            parentJob.completedJobs = 0;
+            parentJob.allJobsQueued = true;
+            console.log(GREEN + `[OPENSEA] Marked parent job ${parentJobId} as complete with 0 jobs` + RESET);
+          }
+
+          // Update task status to trigger completion flow
+          setTaskStatus(taskId, 'RUNNING', 'opensea no jobs - completing loop');
+          await updateTaskRunningPercentage(taskId);
+
+          // Check if all parent jobs are complete to trigger next loop
+          const allComplete = checkAllParentJobsComplete(taskId);
+          if (allComplete) {
+            console.log(GREEN + `[OPENSEA] All parent jobs complete for task ${taskId}, triggering completion` + RESET);
+            await checkTaskCompletionAndScheduleNext(taskId);
+          }
+
+          // Don't throw error - let the loop complete normally
+          console.log(YELLOW + `[OPENSEA] Loop will complete with 0 jobs and retry in next cycle` + RESET);
+        }
+      })(), // End of main processing logic
+      timeoutPromise
+    ]);
   } catch (error) {
     console.error(RED + `Error processing OpenSea scheduled bid for task: ${task._id}` + RESET, error);
+
+    // Enhanced error handling for timeout and lock issues
+    const isTimeout = error instanceof Error && error.message.includes('timeout');
+    const isLockError = error instanceof Error && (
+      error.message.includes('Missing lock') ||
+      error.message.includes('Lock acquisition failed') ||
+      error.message.includes('LOCK ERROR')
+    );
+
+    if (isTimeout) {
+      console.error(RED + `[OPENSEA_TIMEOUT] Task ${taskId} timed out after ${TIMEOUT_DURATION}ms${RESET}`);
+
+      // Log timeout with additional context
+      await logger.logError(ErrorCategory.QUEUE, 'OpenSea scheduled bid timeout', {
+        taskId,
+        timeoutDuration: TIMEOUT_DURATION,
+        lockAcquired,
+        currentLoopCount,
+        error: error instanceof Error ? error : new Error(String(error))
+      });
+
+      // Clean up resources on timeout
+      if (lockAcquired) {
+        try {
+          timedLockManager.releaseLock(taskId, 'opensea');
+          console.log(`${YELLOW}[TIMEOUT_CLEANUP] Released lock for timed out task ${taskId}${RESET}`);
+        } catch (cleanupError) {
+          console.error(`${RED}[TIMEOUT_CLEANUP] Failed to release lock for task ${taskId}: ${cleanupError}${RESET}`);
+        }
+      }
+    }
+
+    if (isLockError) {
+      console.error(RED + `[OPENSEA_LOCK_ERROR] Lock error for task ${taskId}: ${error instanceof Error ? error.message : String(error)}${RESET}`);
+
+      // Attempt queue cleanup on lock errors
+      try {
+        const redis = redisClient.getClient();
+        if (redis && scheduleJob) {
+          const lockKey = `bull:BIDDING_BOT:${scheduleJob.id}:lock`;
+          await redis.del(lockKey);
+          console.log(`${YELLOW}[LOCK_CLEANUP] Cleaned up BullMQ lock ${lockKey}${RESET}`);
+        }
+      } catch (cleanupError) {
+        console.error(`${RED}[LOCK_CLEANUP] Failed to clean up BullMQ lock: ${cleanupError}${RESET}`);
+      }
+
+      // Log lock error for monitoring
+      await logger.logError(ErrorCategory.QUEUE, 'OpenSea scheduled bid lock error', {
+        taskId,
+        lockAcquired,
+        jobId: scheduleJob?.id,
+        error: error instanceof Error ? error : new Error(String(error))
+      });
+    }
 
     // Log to file
     const logsDir = path.join(process.cwd(), 'logs');
@@ -12742,6 +12865,11 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, scheduleJ
       taskId: task._id,
       error: error instanceof Error ? error.message : String(error),
       stackTrace: error instanceof Error ? error.stack : undefined,
+      isTimeout,
+      isLockError,
+      lockAcquired,
+      currentLoopCount,
+      processingTimeBeforeError: Date.now() - (scheduleJob?.processedOn || Date.now()),
       taskData: {
         running: task.running,
         selectedMarketplaces: task.selectedMarketplaces,
@@ -13336,7 +13464,7 @@ async function processBlurScheduledBid(task: ITask) {
       await blurQueue.add(
         BLUR_COLLECTION_BID,
         { task: newTask, contractAddress, expiry },
-        { jobId }
+        { jobId, attempts: 1 }
       );
 
       // Update parent job count after successful job addition - mark as all queued for single job
@@ -14842,337 +14970,450 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
   const taskId = task._id.toString();
   let lockAcquired = false;
 
+  // Timeout protection wrapper - 120 seconds max processing time
+  const TIMEOUT_DURATION = 120000; // 2 minutes
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => {
+      reject(new Error(`MagicEden scheduled bid timeout after ${TIMEOUT_DURATION}ms for task ${taskId}`));
+    }, TIMEOUT_DURATION);
+  });
+
   try {
-    // Early return consolidation
-    if (!enabledMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) {
-      console.log(`${YELLOW}[processMagicedenScheduledBid] MagicEden not in enabled marketplaces, returning${RESET}`);
-      return;
-    }
+    // Wrap the main processing logic in a timeout
+    await Promise.race([
+      (async () => {
+        // Early return consolidation
+        if (!enabledMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) {
+          console.log(`${YELLOW}[processMagicedenScheduledBid] MagicEden not in enabled marketplaces, returning${RESET}`);
+          return;
+        }
 
-    const currentTask = activeTasks.get(task._id);
+        const currentTask = activeTasks.get(task._id);
 
-    if (!currentTask?.running || !currentTask.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) {
-      console.log(`${YELLOW}[processMagicedenScheduledBid] Task not running or MagicEden not selected, returning${RESET}`);
-      return;
-    }
+        if (!currentTask?.running || !currentTask.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) {
+          console.log(`${YELLOW}[processMagicedenScheduledBid] Task not running or MagicEden not selected, returning${RESET}`);
+          return;
+        }
 
-    // Get preprocessing data - first check the Map, then perform if needed
-    let preprocessing = taskPreprocessing.get(taskId);
+        // Get preprocessing data - first check the Map, then perform if needed
+        let preprocessing = taskPreprocessing.get(taskId);
 
-    if (!preprocessing || !preprocessing.magiceden.enabled) {
-      console.log(`${MAGENTA}[processMagicedenScheduledBid] No preprocessing data found, performing preprocessing now${RESET}`);
+        if (!preprocessing || !preprocessing.magiceden.enabled) {
+          console.log(`${MAGENTA}[processMagicedenScheduledBid] No preprocessing data found, performing preprocessing now${RESET}`);
 
-      // Determine available marketplaces for this task
-      const validMarketplaces = ["opensea", "magiceden", "blur"];
-      const availableMarketplaces = currentTask.selectedMarketplaces
-        .map(m => m.toLowerCase())
-        .filter(m => enabledMarketplaces.map(em => em.toLowerCase()).includes(m))
-        .filter(m => validMarketplaces.includes(m));
+          // Determine available marketplaces for this task
+          const validMarketplaces = ["opensea", "magiceden", "blur"];
+          const availableMarketplaces = currentTask.selectedMarketplaces
+            .map(m => m.toLowerCase())
+            .filter(m => enabledMarketplaces.map(em => em.toLowerCase()).includes(m))
+            .filter(m => validMarketplaces.includes(m));
 
-      // Perform preprocessing for MagicEden
-      preprocessing = await performMarketplacePreprocessing(currentTask, "magiceden", availableMarketplaces);
+          // Perform preprocessing for MagicEden
+          preprocessing = await performMarketplacePreprocessing(currentTask, "magiceden", availableMarketplaces);
 
-      // Store in Map for other marketplaces to use
-      taskPreprocessing.set(taskId, preprocessing);
+          // Store in Map for other marketplaces to use
+          taskPreprocessing.set(taskId, preprocessing);
 
-      // If preprocessing didn't enable MagicEden, it means something went wrong
-      if (!preprocessing.magiceden.enabled) {
-        throw new Error(`Preprocessing failed to enable MagicEden for task ${taskId}`);
-      }
-    }
+          // If preprocessing didn't enable MagicEden, it means something went wrong
+          if (!preprocessing.magiceden.enabled) {
+            throw new Error(`Preprocessing failed to enable MagicEden for task ${taskId}`);
+          }
+        }
 
-    if (preprocessing.magiceden.skipReason) {
-      console.log(`${YELLOW}[MAGICEDEN] Skipped: ${preprocessing.magiceden.skipReason}${RESET}`);
-      if (!warningBids[taskId]) {
-        warningBids[taskId] = { opensea: false, magiceden: false, blur: false };
-      }
-      if (!warningMessage[taskId]) {
-        warningMessage[taskId] = { opensea: "", magiceden: "", blur: "" };
-      }
-      warningBids[taskId].magiceden = true;
-      warningMessage[taskId].magiceden = preprocessing.magiceden.skipReason;
+        if (preprocessing.magiceden.skipReason) {
+          console.log(`${YELLOW}[MAGICEDEN] Skipped: ${preprocessing.magiceden.skipReason}${RESET}`);
+          if (!warningBids[taskId]) {
+            warningBids[taskId] = { opensea: false, magiceden: false, blur: false };
+          }
+          if (!warningMessage[taskId]) {
+            warningMessage[taskId] = { opensea: "", magiceden: "", blur: "" };
+          }
+          warningBids[taskId].magiceden = true;
+          warningMessage[taskId].magiceden = preprocessing.magiceden.skipReason;
 
-      return;
-    }
+          return;
+        }
 
-    // Initialize task status if it doesn't exist or check for completion state
-    if (!taskStatus[taskId]) {
-      taskStatus[taskId] = {
-        status: 'PROCESSING',
-        runningPercentage: 0,
-        cancellationPercentage: 0,
-        processingPercentage: 0,
-        totalJobs: 0,
-        completedJobs: 0,
-        waitingTime: 0
-      };
-    }
+        // Initialize task status if it doesn't exist or check for completion state
+        if (!taskStatus[taskId]) {
+          taskStatus[taskId] = {
+            status: 'PROCESSING',
+            runningPercentage: 0,
+            cancellationPercentage: 0,
+            processingPercentage: 0,
+            totalJobs: 0,
+            completedJobs: 0,
+            waitingTime: 0
+          };
+        }
 
-    // Acquire lock for this task - will throw if stale or already locked
-    // Use timed lock manager for better timeout handling
-    lockAcquired = timedLockManager.acquireLock(taskId, 'magiceden');
-    if (!lockAcquired) {
-      console.log(`${YELLOW}[LOCK] Task ${taskId} is already being processed by MagicEden scheduled bid - skipping${RESET}`);
-      return;
-    }
-    console.log(`${GREEN}[LOCK] Acquired lock for task ${taskId} in MagicEden scheduled bid${RESET}`);
+        // Acquire lock for this task with BullMQ lock validation
+        try {
+          // Validate BullMQ lock before acquiring our custom lock
+          if (scheduleJob && scheduleJob.id) {
+            const lockKey = `bull:BIDDING_BOT:${scheduleJob.id}:lock`;
+            const redis = redisClient.getClient();
+            if (redis) {
+              const lockExists = await redis.get(lockKey);
+              if (!lockExists) {
+                console.warn(`${YELLOW}[LOCK WARNING] BullMQ lock missing for job ${scheduleJob.id}, proceeding with recovery${RESET}`);
+                // Continue processing but add monitoring
+                await logger.logError(ErrorCategory.QUEUE, 'Missing BullMQ lock detected in MagicEden scheduled bid', {
+                  taskId,
+                  jobId: scheduleJob.id,
+                  lockKey
+                });
+              }
+            }
+          }
 
-    if (!currentTokenIds[taskId]) {
-      currentTokenIds[taskId] = {
-        opensea: [],
-        magiceden: [],
-      }
-    }
-    currentTokenIds[taskId].magiceden = preprocessing.magiceden.tokens;
+          lockAcquired = timedLockManager.acquireLock(taskId, 'magiceden');
+          if (!lockAcquired) {
+            console.log(`${YELLOW}[LOCK] Task ${taskId} is already being processed by MagicEden scheduled bid - skipping${RESET}`);
+            return;
+          }
+          console.log(`${GREEN}[LOCK] Acquired lock for task ${taskId} in MagicEden scheduled bid${RESET}`);
+        } catch (lockError) {
+          console.error(`${RED}[LOCK ERROR] Failed to acquire lock for task ${taskId}: ${lockError}${RESET}`);
 
-    const WALLET_ADDRESS: string = currentTask.wallet;
-    const wallets = await walletCache.getWalletById(currentTask.walletId);
-    const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+          // If lock acquisition fails due to corruption, attempt cleanup
+          if (lockError instanceof Error && lockError.message.includes('Missing lock')) {
+            console.log(`${YELLOW}[LOCK RECOVERY] Attempting to clean up corrupted lock for task ${taskId}${RESET}`);
+            try {
+              // Clean up any stale locks
+              timedLockManager.releaseLock(taskId, 'magiceden');
+              // Try once more
+              lockAcquired = timedLockManager.acquireLock(taskId, 'magiceden');
+              if (lockAcquired) {
+                console.log(`${GREEN}[LOCK RECOVERY] Successfully recovered lock for task ${taskId}${RESET}`);
+              } else {
+                throw new Error('Lock recovery failed');
+              }
+            } catch (recoveryError) {
+              console.error(`${RED}[LOCK RECOVERY] Failed to recover lock for task ${taskId}: ${recoveryError}${RESET}`);
+              throw lockError; // Re-throw original error
+            }
+          } else {
+            throw lockError;
+          }
+        }
 
-    // Extend lock before fetching balances
-    if (lockAcquired) {
-      timedLockManager.extendLock(taskId, 'magiceden');
-    }
+        if (!currentTokenIds[taskId]) {
+          currentTokenIds[taskId] = {
+            opensea: [],
+            magiceden: [],
+          }
+        }
+        currentTokenIds[taskId].magiceden = preprocessing.magiceden.tokens;
 
-    // Fetch fresh WETH balance with timeout protection
-    console.log(`${MAGENTA}[MagicEden] Fetching WETH balance for ${WALLET_ADDRESS}...${RESET}`);
-    let wethBalance = 0;
-    try {
-      const { fetchERC20BalanceFresh } = await import('./utils/balance');
-      const { WETH } = await import('./utils/currencies');
-      wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, WETH);
-      console.log(`${MAGENTA}[MagicEden] Fresh WETH balance for ${WALLET_ADDRESS}: ${wethBalance}${RESET}`);
-    } catch (error) {
-      console.error(`${RED}[MagicEden] Failed to fetch WETH balance: ${error}${RESET}`);
-      console.log(`${YELLOW}[MagicEden] Continuing with balance: 0.00${RESET}`);
-    }
+        const WALLET_ADDRESS: string = currentTask.wallet;
+        const wallets = await walletCache.getWalletById(currentTask.walletId);
+        const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
-    console.log(`${MAGENTA}[MagicEden] Processing for collection ${currentTask.contract.slug}...${RESET}`);
-    const contractAddress = currentTask.contract.contractAddress
-    const expiration = getExpiry(currentTask.bidDuration)
-    const newTask = { ...currentTask, traits: {} } as ITask
-
-    // Note: Status will be set to appropriate state after job creation is determined
-
-    console.log(`${MAGENTA}[MagicEden] Checking preprocessing results:${RESET}`);
-    console.log(`${MAGENTA}[MagicEden] - tokens.length: ${preprocessing.magiceden.tokens.length}${RESET}`);
-    console.log(`${MAGENTA}[MagicEden] - traits.length: ${preprocessing.magiceden.traits.length}${RESET}`);
-    console.log(`${MAGENTA}[MagicEden] - jobCount: ${preprocessing.magiceden.jobCount}${RESET}`);
-
-    // Create jobs based on preprocessing results
-    if (preprocessing.magiceden.tokens.length > 0) {
-      // Token bid
-      console.log(`${MAGENTA}[MAGICEDEN] Creating ${preprocessing.magiceden.tokens.length} token bid jobs${RESET}`);
-
-      // Ensure parent job exists BEFORE processing jobs
-      await ensureParentJobExists(taskId, 'magiceden');
-      const parentJobId = getParentJobId(taskId, 'magiceden');
-      const parentJob = parentJobs.get(parentJobId);
-      if (parentJob) {
-        parentJob.expectedJobs = preprocessing.magiceden.tokens.length;
-        parentJob.totalJobs = preprocessing.magiceden.tokens.length; // Use expected count initially
-        console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
-      }
-
-      const jobs = preprocessing.magiceden.tokens
-        .map((token) => ({
-          name: MAGICEDEN_TOKEN_BID,
-          data: {
-            _id: taskId,
-            address: WALLET_ADDRESS,
-            contractAddress,
-            quantity: 1,
-            expiration: expiration,
-            privateKey: WALLET_PRIVATE_KEY,
-            slug: currentTask.contract.slug,
-            tokenId: token,
-            outbidOptions: currentTask.outbidOptions,
-            task: newTask,
-          },
-          opts: {
-            priority: TOKEN_BID_PRIORITY.MAGICEDEN,
-          } as JobsOptions
-        })) as Job[]
-
-      try {
-        // Extend lock before processing bulk jobs
+        // Extend lock before fetching balances
         if (lockAcquired) {
           timedLockManager.extendLock(taskId, 'magiceden');
         }
 
-        // Transition to QUEUEING state before creating jobs
-        setTaskStatus(taskId, 'QUEUEING', 'queueing magiceden token bid jobs');
-
-        // Fire-and-forget: processBulkJobs runs asynchronously to prevent timeout
-        processBulkJobs(jobs, true, scheduleJob);
-
-        // Register for job creation verification
-        registerJobCreationVerification(taskId, 'magiceden', preprocessing.magiceden.tokens.length);
-
-        console.log(MAGENTA + `[MAGICEDEN] Started queueing ${preprocessing.magiceden.tokens.length} token bid jobs` + RESET);
-
-        // The task will transition to RUNNING when jobs start processing
-
-      } catch (jobError) {
-        console.error(RED + `[MAGICEDEN] Failed to queue token bid jobs: ${jobError}` + RESET);
-
-        // Reset parent job on failure
-        const parentJobId = getParentJobId(taskId, 'magiceden');
-        const parentJob = parentJobs.get(parentJobId);
-        if (parentJob) {
-          parentJob.actualJobs = 0;
-          parentJob.allJobsQueued = true; // Mark as queued even on failure
-          parentJob.totalJobs = 0;
-          console.log(RED + `[MAGICEDEN] Marked parent job ${parentJobId} as complete with 0 jobs due to queueing failure` + RESET);
+        // Fetch fresh WETH balance with timeout protection
+        console.log(`${MAGENTA}[MagicEden] Fetching WETH balance for ${WALLET_ADDRESS}...${RESET}`);
+        let wethBalance = 0;
+        try {
+          const { fetchERC20BalanceFresh } = await import('./utils/balance');
+          const { WETH } = await import('./utils/currencies');
+          wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, WETH);
+          console.log(`${MAGENTA}[MagicEden] Fresh WETH balance for ${WALLET_ADDRESS}: ${wethBalance}${RESET}`);
+        } catch (error) {
+          console.error(`${RED}[MagicEden] Failed to fetch WETH balance: ${error}${RESET}`);
+          console.log(`${YELLOW}[MagicEden] Continuing with balance: 0.00${RESET}`);
         }
 
-        // Update task status to reflect failure
-        setTaskStatus(taskId, 'PROCESSING', 'job queueing failed');
+        console.log(`${MAGENTA}[MagicEden] Processing for collection ${currentTask.contract.slug}...${RESET}`);
+        const contractAddress = currentTask.contract.contractAddress
+        const expiration = getExpiry(currentTask.bidDuration)
+        const newTask = { ...currentTask, traits: {} } as ITask
 
-        // Re-throw to trigger retry
-        throw jobError;
-      }
-    }
-    else if (preprocessing.magiceden.traits.length > 0) {
-      // Trait bid
-      console.log(`${MAGENTA}[MAGICEDEN] Creating ${preprocessing.magiceden.traits.length} trait bid jobs${RESET}`);
+        // Note: Status will be set to appropriate state after job creation is determined
 
-      // Ensure parent job exists BEFORE processing jobs
-      await ensureParentJobExists(taskId, 'magiceden');
-      const parentJobId = getParentJobId(taskId, 'magiceden');
-      const parentJob = parentJobs.get(parentJobId);
-      if (parentJob) {
-        parentJob.expectedJobs = preprocessing.magiceden.traits.length;
-        parentJob.totalJobs = preprocessing.magiceden.traits.length; // Use expected count initially
-        console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
-      }
+        console.log(`${MAGENTA}[MagicEden] Checking preprocessing results:${RESET}`);
+        console.log(`${MAGENTA}[MagicEden] - tokens.length: ${preprocessing.magiceden.tokens.length}${RESET}`);
+        console.log(`${MAGENTA}[MagicEden] - traits.length: ${preprocessing.magiceden.traits.length}${RESET}`);
+        console.log(`${MAGENTA}[MagicEden] - jobCount: ${preprocessing.magiceden.jobCount}${RESET}`);
 
-      const traitJobs = preprocessing.magiceden.traits.map((trait) => ({
-        name: MAGICEDEN_TRAIT_BID,
-        data: {
-          _id: taskId,
-          address: WALLET_ADDRESS,
-          contractAddress,
-          quantity: 1,
-          expiration: expiration,
-          privateKey: WALLET_PRIVATE_KEY,
-          slug: currentTask.contract.slug,
-          trait,
-          outbidOptions: currentTask.outbidOptions,
-          task: newTask,
-        },
-        opts: { priority: TRAIT_BID_PRIORITY.MAGICEDEN } as JobsOptions
-      })) as Job[]
+        // Create jobs based on preprocessing results
+        if (preprocessing.magiceden.tokens.length > 0) {
+          // Token bid
+          console.log(`${MAGENTA}[MAGICEDEN] Creating ${preprocessing.magiceden.tokens.length} token bid jobs${RESET}`);
 
-      try {
-        // Extend lock before processing bulk trait jobs
-        if (lockAcquired) {
-          timedLockManager.extendLock(taskId, 'magiceden');
+          // Ensure parent job exists BEFORE processing jobs
+          await ensureParentJobExists(taskId, 'magiceden');
+          const parentJobId = getParentJobId(taskId, 'magiceden');
+          const parentJob = parentJobs.get(parentJobId);
+          if (parentJob) {
+            parentJob.expectedJobs = preprocessing.magiceden.tokens.length;
+            parentJob.totalJobs = preprocessing.magiceden.tokens.length; // Use expected count initially
+            console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
+          }
+
+          const jobs = preprocessing.magiceden.tokens
+            .map((token) => ({
+              name: MAGICEDEN_TOKEN_BID,
+              data: {
+                _id: taskId,
+                address: WALLET_ADDRESS,
+                contractAddress,
+                quantity: 1,
+                expiration: expiration,
+                privateKey: WALLET_PRIVATE_KEY,
+                slug: currentTask.contract.slug,
+                tokenId: token,
+                outbidOptions: currentTask.outbidOptions,
+                task: newTask,
+              },
+              opts: {
+                priority: TOKEN_BID_PRIORITY.MAGICEDEN,
+                attempts: 1
+              } as JobsOptions
+            })) as Job[]
+
+          try {
+            // Extend lock before processing bulk jobs
+            if (lockAcquired) {
+              timedLockManager.extendLock(taskId, 'magiceden');
+            }
+
+            // Transition to QUEUEING state before creating jobs
+            setTaskStatus(taskId, 'QUEUEING', 'queueing magiceden token bid jobs');
+
+            // Fire-and-forget: processBulkJobs runs asynchronously to prevent timeout
+            processBulkJobs(jobs, true, scheduleJob);
+
+            // Register for job creation verification
+            registerJobCreationVerification(taskId, 'magiceden', preprocessing.magiceden.tokens.length);
+
+            console.log(MAGENTA + `[MAGICEDEN] Started queueing ${preprocessing.magiceden.tokens.length} token bid jobs` + RESET);
+
+            // The task will transition to RUNNING when jobs start processing
+
+          } catch (jobError) {
+            console.error(RED + `[MAGICEDEN] Failed to queue token bid jobs: ${jobError}` + RESET);
+
+            // Reset parent job on failure
+            const parentJobId = getParentJobId(taskId, 'magiceden');
+            const parentJob = parentJobs.get(parentJobId);
+            if (parentJob) {
+              parentJob.actualJobs = 0;
+              parentJob.allJobsQueued = true; // Mark as queued even on failure
+              parentJob.totalJobs = 0;
+              console.log(RED + `[MAGICEDEN] Marked parent job ${parentJobId} as complete with 0 jobs due to queueing failure` + RESET);
+            }
+
+            // Update task status to reflect failure
+            setTaskStatus(taskId, 'PROCESSING', 'job queueing failed');
+
+            // Re-throw to trigger retry
+            throw jobError;
+          }
         }
+        else if (preprocessing.magiceden.traits.length > 0) {
+          // Trait bid
+          console.log(`${MAGENTA}[MAGICEDEN] Creating ${preprocessing.magiceden.traits.length} trait bid jobs${RESET}`);
 
-        // Transition to QUEUEING state before creating jobs
-        setTaskStatus(taskId, 'QUEUEING', 'queueing magiceden trait bid jobs');
+          // Ensure parent job exists BEFORE processing jobs
+          await ensureParentJobExists(taskId, 'magiceden');
+          const parentJobId = getParentJobId(taskId, 'magiceden');
+          const parentJob = parentJobs.get(parentJobId);
+          if (parentJob) {
+            parentJob.expectedJobs = preprocessing.magiceden.traits.length;
+            parentJob.totalJobs = preprocessing.magiceden.traits.length; // Use expected count initially
+            console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
+          }
 
-        // Fire-and-forget: processBulkJobs runs asynchronously to prevent timeout
-        processBulkJobs(traitJobs, true, scheduleJob);
+          const traitJobs = preprocessing.magiceden.traits.map((trait) => ({
+            name: MAGICEDEN_TRAIT_BID,
+            data: {
+              _id: taskId,
+              address: WALLET_ADDRESS,
+              contractAddress,
+              quantity: 1,
+              expiration: expiration,
+              privateKey: WALLET_PRIVATE_KEY,
+              slug: currentTask.contract.slug,
+              trait,
+              outbidOptions: currentTask.outbidOptions,
+              task: newTask,
+            },
+            opts: { priority: TRAIT_BID_PRIORITY.MAGICEDEN, attempts: 1 } as JobsOptions
+          })) as Job[]
 
-        // Register for job creation verification
-        registerJobCreationVerification(taskId, 'magiceden', preprocessing.magiceden.traits.length);
+          try {
+            // Extend lock before processing bulk trait jobs
+            if (lockAcquired) {
+              timedLockManager.extendLock(taskId, 'magiceden');
+            }
 
-        console.log(MAGENTA + `[MAGICEDEN] Started queueing ${preprocessing.magiceden.traits.length} trait bid jobs` + RESET);
+            // Transition to QUEUEING state before creating jobs
+            setTaskStatus(taskId, 'QUEUEING', 'queueing magiceden trait bid jobs');
 
-        // The task will transition to RUNNING when jobs start processing
+            // Fire-and-forget: processBulkJobs runs asynchronously to prevent timeout
+            processBulkJobs(traitJobs, true, scheduleJob);
 
-      } catch (jobError) {
-        console.error(RED + `[MAGICEDEN] Failed to queue trait bid jobs: ${jobError}` + RESET);
+            // Register for job creation verification
+            registerJobCreationVerification(taskId, 'magiceden', preprocessing.magiceden.traits.length);
 
-        // Reset parent job on failure
-        const parentJobId = getParentJobId(taskId, 'magiceden');
-        const parentJob = parentJobs.get(parentJobId);
-        if (parentJob) {
-          parentJob.actualJobs = 0;
-          parentJob.allJobsQueued = true; // Mark as queued even on failure
-          parentJob.totalJobs = 0;
-          console.log(RED + `[MAGICEDEN] Marked parent job ${parentJobId} as complete with 0 jobs due to queueing failure` + RESET);
+            console.log(MAGENTA + `[MAGICEDEN] Started queueing ${preprocessing.magiceden.traits.length} trait bid jobs` + RESET);
+
+            // The task will transition to RUNNING when jobs start processing
+
+          } catch (jobError) {
+            console.error(RED + `[MAGICEDEN] Failed to queue trait bid jobs: ${jobError}` + RESET);
+
+            // Reset parent job on failure
+            const parentJobId = getParentJobId(taskId, 'magiceden');
+            const parentJob = parentJobs.get(parentJobId);
+            if (parentJob) {
+              parentJob.actualJobs = 0;
+              parentJob.allJobsQueued = true; // Mark as queued even on failure
+              parentJob.totalJobs = 0;
+              console.log(RED + `[MAGICEDEN] Marked parent job ${parentJobId} as complete with 0 jobs due to queueing failure` + RESET);
+            }
+
+            // Update task status to reflect failure
+            setTaskStatus(taskId, 'PROCESSING', 'job queueing failed');
+
+            // Re-throw to trigger retry
+            throw jobError;
+          }
         }
+        else if (preprocessing.magiceden.jobCount === 1) {
+          // Collection bid
+          console.log(`${MAGENTA}[MAGICEDEN] Creating 1 collection bid job${RESET}`);
+          const jobId = `bid-${taskId}-magiceden-${currentTask.contract.slug}-collection`
 
-        // Update task status to reflect failure
-        setTaskStatus(taskId, 'PROCESSING', 'job queueing failed');
+          // Ensure parent job exists BEFORE adding job
+          await ensureParentJobExists(taskId, 'magiceden');
+          const parentJobId = getParentJobId(taskId, 'magiceden');
+          const parentJob = parentJobs.get(parentJobId);
+          if (parentJob) {
+            parentJob.expectedJobs = 1;
+            parentJob.totalJobs = 1; // Use expected count initially
+            console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} expectedJobs: 1${RESET}`);
+          }
 
-        // Re-throw to trigger retry
-        throw jobError;
-      }
-    }
-    else if (preprocessing.magiceden.jobCount === 1) {
-      // Collection bid
-      console.log(`${MAGENTA}[MAGICEDEN] Creating 1 collection bid job${RESET}`);
-      const jobId = `bid-${taskId}-magiceden-${currentTask.contract.slug}-collection`
+          // Transition to QUEUEING state before creating job
+          setTaskStatus(taskId, 'QUEUEING', 'queueing magiceden collection bid job');
 
-      // Ensure parent job exists BEFORE adding job
-      await ensureParentJobExists(taskId, 'magiceden');
-      const parentJobId = getParentJobId(taskId, 'magiceden');
-      const parentJob = parentJobs.get(parentJobId);
-      if (parentJob) {
-        parentJob.expectedJobs = 1;
-        parentJob.totalJobs = 1; // Use expected count initially
-        console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} expectedJobs: 1${RESET}`);
-      }
+          await queue.add(
+            MAGICEDEN_COLLECTION_BID,
+            { task: newTask },
+            { jobId, attempts: 1 }
+          );
 
-      // Transition to QUEUEING state before creating job
-      setTaskStatus(taskId, 'QUEUEING', 'queueing magiceden collection bid job');
+          // Update parent job count after successful job addition - mark as all queued for single job
+          if (parentJob) {
+            parentJob.actualJobs = 1;
+            parentJob.allJobsQueued = true;
+            console.log(GREEN + `[MAGICEDEN] Collection bid job added, marking ${parentJobId} as allJobsQueued` + RESET);
+          }
 
-      await queue.add(
-        MAGICEDEN_COLLECTION_BID,
-        { task: newTask },
-        { jobId }
-      );
+          console.log(GREEN + `[MAGICEDEN] Successfully queued 1 collection bid job` + RESET);
 
-      // Update parent job count after successful job addition - mark as all queued for single job
-      if (parentJob) {
-        parentJob.actualJobs = 1;
-        parentJob.allJobsQueued = true;
-        console.log(GREEN + `[MAGICEDEN] Collection bid job added, marking ${parentJobId} as allJobsQueued` + RESET);
-      }
+          // Transition to RUNNING after job is queued
+          setTaskStatus(taskId, 'RUNNING', 'magiceden collection bid job queued');
 
-      console.log(GREEN + `[MAGICEDEN] Successfully queued 1 collection bid job` + RESET);
+          // Trigger percentage update now that the job is queued
+          await updateTaskRunningPercentage(taskId);
+        } else {
+          // No jobs to create - create empty parent job and complete the loop
+          console.log(YELLOW + `[MAGICEDEN] No jobs to create for task ${taskId} - completing loop with 0 jobs` + RESET);
 
-      // Transition to RUNNING after job is queued
-      setTaskStatus(taskId, 'RUNNING', 'magiceden collection bid job queued');
+          await ensureParentJobExists(taskId, 'magiceden');
+          const parentJobId = getParentJobId(taskId, 'magiceden');
+          const parentJob = parentJobs.get(parentJobId);
+          if (parentJob) {
+            parentJob.expectedJobs = 0;
+            parentJob.totalJobs = 0;
+            parentJob.actualJobs = 0;
+            parentJob.completedJobs = 0;
+            parentJob.allJobsQueued = true;
+            console.log(GREEN + `[MAGICEDEN] Marked parent job ${parentJobId} as complete with 0 jobs` + RESET);
+          }
 
-      // Trigger percentage update now that the job is queued
-      await updateTaskRunningPercentage(taskId);
-    } else {
-      // No jobs to create - create empty parent job and complete the loop
-      console.log(YELLOW + `[MAGICEDEN] No jobs to create for task ${taskId} - completing loop with 0 jobs` + RESET);
+          // Update task status to trigger completion flow
+          setTaskStatus(taskId, 'RUNNING', 'magiceden no jobs - completing loop');
+          await updateTaskRunningPercentage(taskId);
 
-      await ensureParentJobExists(taskId, 'magiceden');
-      const parentJobId = getParentJobId(taskId, 'magiceden');
-      const parentJob = parentJobs.get(parentJobId);
-      if (parentJob) {
-        parentJob.expectedJobs = 0;
-        parentJob.totalJobs = 0;
-        parentJob.actualJobs = 0;
-        parentJob.completedJobs = 0;
-        parentJob.allJobsQueued = true;
-        console.log(GREEN + `[MAGICEDEN] Marked parent job ${parentJobId} as complete with 0 jobs` + RESET);
-      }
+          // Check if all parent jobs are complete to trigger next loop
+          const allComplete = checkAllParentJobsComplete(taskId);
+          if (allComplete) {
+            console.log(GREEN + `[MAGICEDEN] All parent jobs complete for task ${taskId}, triggering completion` + RESET);
+            await checkTaskCompletionAndScheduleNext(taskId);
+          }
 
-      // Update task status to trigger completion flow
-      setTaskStatus(taskId, 'RUNNING', 'magiceden no jobs - completing loop');
-      await updateTaskRunningPercentage(taskId);
-
-      // Check if all parent jobs are complete to trigger next loop
-      const allComplete = checkAllParentJobsComplete(taskId);
-      if (allComplete) {
-        console.log(GREEN + `[MAGICEDEN] All parent jobs complete for task ${taskId}, triggering completion` + RESET);
-        await checkTaskCompletionAndScheduleNext(taskId);
-      }
-
-      // Don't throw error - let the loop complete normally
-      console.log(YELLOW + `[MAGICEDEN] Loop will complete with 0 jobs and retry in next cycle` + RESET);
-    }
+          // Don't throw error - let the loop complete normally
+          console.log(YELLOW + `[MAGICEDEN] Loop will complete with 0 jobs and retry in next cycle` + RESET);
+        }
+      })(), // End of main processing logic
+      timeoutPromise
+    ]);
   } catch (error) {
     console.error(RED + `Error processing MagicEden scheduled bid for task: ${task._id} (${Date.now() - checkpointStart}ms)` + RESET, error);
+
+    // Enhanced error handling for timeout and lock issues
+    const isTimeout = error instanceof Error && error.message.includes('timeout');
+    const isLockError = error instanceof Error && (
+      error.message.includes('Missing lock') ||
+      error.message.includes('Lock acquisition failed') ||
+      error.message.includes('LOCK ERROR')
+    );
+
+    if (isTimeout) {
+      console.error(RED + `[MAGICEDEN_TIMEOUT] Task ${taskId} timed out after ${TIMEOUT_DURATION}ms${RESET}`);
+
+      // Log timeout with additional context
+      await logger.logError(ErrorCategory.QUEUE, 'MagicEden scheduled bid timeout', {
+        taskId,
+        timeoutDuration: TIMEOUT_DURATION,
+        lockAcquired,
+        currentLoopCount,
+        processingTime: Date.now() - checkpointStart,
+        error: error instanceof Error ? error : new Error(String(error))
+      });
+
+      // Clean up resources on timeout
+      if (lockAcquired) {
+        try {
+          timedLockManager.releaseLock(taskId, 'magiceden');
+          console.log(`${YELLOW}[TIMEOUT_CLEANUP] Released lock for timed out task ${taskId}${RESET}`);
+        } catch (cleanupError) {
+          console.error(`${RED}[TIMEOUT_CLEANUP] Failed to release lock for task ${taskId}: ${cleanupError}${RESET}`);
+        }
+      }
+    }
+
+    if (isLockError) {
+      console.error(RED + `[MAGICEDEN_LOCK_ERROR] Lock error for task ${taskId}: ${error instanceof Error ? error.message : String(error)}${RESET}`);
+
+      // Attempt queue cleanup on lock errors
+      try {
+        const redis = redisClient.getClient();
+        if (redis && scheduleJob) {
+          const lockKey = `bull:BIDDING_BOT:${scheduleJob.id}:lock`;
+          await redis.del(lockKey);
+          console.log(`${YELLOW}[LOCK_CLEANUP] Cleaned up BullMQ lock ${lockKey}${RESET}`);
+        }
+      } catch (cleanupError) {
+        console.error(`${RED}[LOCK_CLEANUP] Failed to clean up BullMQ lock: ${cleanupError}${RESET}`);
+      }
+
+      // Log lock error for monitoring
+      await logger.logError(ErrorCategory.QUEUE, 'MagicEden scheduled bid lock error', {
+        taskId,
+        lockAcquired,
+        jobId: scheduleJob?.id,
+        error: error instanceof Error ? error : new Error(String(error))
+      });
+    }
 
     // Log to file
     const logsDir = path.join(process.cwd(), 'logs');
@@ -15187,7 +15428,10 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
       processingTime: Date.now() - checkpointStart,
       error: error instanceof Error ? error.message : String(error),
       stackTrace: error instanceof Error ? error.stack : undefined,
-      isTimeout: error instanceof Error && error.message.includes('timeout'),
+      isTimeout,
+      isLockError,
+      lockAcquired,
+      currentLoopCount,
       taskData: {
         running: task.running,
         selectedMarketplaces: task.selectedMarketplaces,
@@ -15202,8 +15446,8 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
     fs.appendFileSync(logPath, JSON.stringify(errorDetails, null, 2) + '\n---\n');
 
     // Log specific error details to help diagnose timeouts
-    if (error instanceof Error && error.message.includes('timeout')) {
-      console.error(RED + `[MAGICEDEN_SCHEDULE] Timeout details: ${error.message}` + RESET);
+    if (isTimeout) {
+      console.error(RED + `[MAGICEDEN_SCHEDULE] Timeout details: ${error instanceof Error ? error.message : String(error)}` + RESET);
     }
 
     // Re-throw error to trigger job retry
@@ -20637,7 +20881,7 @@ async function recoverStuckTask(taskId: string): Promise<void> {
                 address: task.wallet,
                 slug: task.contract.slug
               },
-              { jobId: meJobId }
+              { jobId: meJobId, attempts: 1 }
             );
 
             jobsCreated = true;
@@ -20656,7 +20900,7 @@ async function recoverStuckTask(taskId: string): Promise<void> {
                 address: task.wallet,
                 slug: task.contract.slug
               },
-              { jobId: blurJobId }
+              { jobId: blurJobId, attempts: 1 }
             );
 
             jobsCreated = true;
