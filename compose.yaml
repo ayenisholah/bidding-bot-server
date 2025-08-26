@@ -3,10 +3,16 @@ services:
     image: nfttools/bidding-bot-server-production:latest
     platform: linux/amd64
     restart: always
-    mem_limit: 1200m
-    memswap_limit: 1200m
+    mem_limit: 1280m
+    memswap_limit: 1536m
     ports:
       - "3003:3003"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3003/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     environment:
       PORT: 3003
       NODE_OPTIONS: '--max-old-space-size=1024'
@@ -35,8 +41,8 @@ services:
     image: nfttools/bidding-bot-client-production:latest
     platform: linux/amd64
     restart: always
-    mem_limit: 350m
-    memswap_limit: 350m
+    mem_limit: 256m
+    memswap_limit: 384m
     ports:
       - "3001:3001"
     environment:
@@ -52,10 +58,11 @@ services:
       NEXT_PUBLIC_SERVER_IP: ${SERVER_IP}
       NEXT_PUBLIC_EMAIL: ${EMAIL}
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001"]
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health", "||", "exit", "1"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 60s
     depends_on:
       - mongodb
       - server
@@ -66,19 +73,26 @@ services:
   mongodb:
     image: "mongo:latest"
     container_name: "mongodb_container"
-    mem_limit: 700m
-    memswap_limit: 700m
+    mem_limit: 512m
+    memswap_limit: 768m
+    command: mongod --wiredTigerCacheSizeGB 0.25
     ports:
       - "127.0.0.1:27017:27017"
     volumes:
       - mongodb_data:/data/db
     networks:
       - my_network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   redis-node-1:
     image: "redis:latest"
     container_name: "redis_node_1"
-    mem_limit: 300m
+    mem_limit: 200m
     memswap_limit: 300m
     command: redis-server --port 6379
       --cluster-enabled yes
@@ -86,31 +100,31 @@ services:
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-1
       --maxmemory-policy noeviction
-      --maxmemory 256mb
+      --maxmemory 150mb
       --appendonly yes
       --save ""
       --tcp-keepalive 60
       --timeout 0
       --activedefrag yes
     ports:
-      - "8001:6379"
-      - "18001:16379"
+      - "127.0.0.1:8001:6379"
+      - "127.0.0.1:18001:16379"
     networks:
       - my_network
     volumes:
       - redis_data_1:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "--cluster", "info", "|", "grep", "cluster_state:ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
 
   redis-node-2:
     image: "redis:latest"
     container_name: "redis_node_2"
-    mem_limit: 300m
+    mem_limit: 200m
     memswap_limit: 300m
     command: redis-server --port 6379
       --cluster-enabled yes
@@ -118,31 +132,31 @@ services:
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-2
       --maxmemory-policy noeviction
-      --maxmemory 256mb
+      --maxmemory 150mb
       --appendonly yes
       --save ""
       --tcp-keepalive 60
       --timeout 0
       --activedefrag yes
     ports:
-      - "8002:6379"
-      - "18002:16379"
+      - "127.0.0.1:8002:6379"
+      - "127.0.0.1:18002:16379"
     networks:
       - my_network
     volumes:
       - redis_data_2:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "--cluster", "info", "|", "grep", "cluster_state:ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
 
   redis-node-3:
     image: "redis:latest"
     container_name: "redis_node_3"
-    mem_limit: 300m
+    mem_limit: 200m
     memswap_limit: 300m
     command: redis-server --port 6379
       --cluster-enabled yes
@@ -150,31 +164,31 @@ services:
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-3
       --maxmemory-policy noeviction
-      --maxmemory 256mb
+      --maxmemory 150mb
       --appendonly yes
       --save ""
       --tcp-keepalive 60
       --timeout 0
       --activedefrag yes
     ports:
-      - "8003:6379"
-      - "18003:16379"
+      - "127.0.0.1:8003:6379"
+      - "127.0.0.1:18003:16379"
     networks:
       - my_network
     volumes:
       - redis_data_3:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "--cluster", "info", "|", "grep", "cluster_state:ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
 
   redis-node-4:
     image: "redis:latest"
     container_name: "redis_node_4"
-    mem_limit: 300m
+    mem_limit: 200m
     memswap_limit: 300m
     command: redis-server --port 6379
       --cluster-enabled yes
@@ -182,31 +196,31 @@ services:
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-4
       --maxmemory-policy noeviction
-      --maxmemory 256mb
+      --maxmemory 150mb
       --appendonly yes
       --save ""
       --tcp-keepalive 60
       --timeout 0
       --activedefrag yes
     ports:
-      - "8004:6379"
-      - "18004:16379"
+      - "127.0.0.1:8004:6379"
+      - "127.0.0.1:18004:16379"
     networks:
       - my_network
     volumes:
       - redis_data_4:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "--cluster", "info", "|", "grep", "cluster_state:ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
 
   redis-node-5:
     image: "redis:latest"
     container_name: "redis_node_5"
-    mem_limit: 300m
+    mem_limit: 200m
     memswap_limit: 300m
     command: redis-server --port 6379
       --cluster-enabled yes
@@ -214,31 +228,31 @@ services:
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-5
       --maxmemory-policy noeviction
-      --maxmemory 256mb
+      --maxmemory 150mb
       --appendonly yes
       --save ""
       --tcp-keepalive 60
       --timeout 0
       --activedefrag yes
     ports:
-      - "8005:6379"
-      - "18005:16379"
+      - "127.0.0.1:8005:6379"
+      - "127.0.0.1:18005:16379"
     networks:
       - my_network
     volumes:
       - redis_data_5:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "--cluster", "info", "|", "grep", "cluster_state:ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
 
   redis-node-6:
     image: "redis:latest"
     container_name: "redis_node_6"
-    mem_limit: 300m
+    mem_limit: 200m
     memswap_limit: 300m
     command: redis-server --port 6379
       --cluster-enabled yes
@@ -246,25 +260,25 @@ services:
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-6
       --maxmemory-policy noeviction
-      --maxmemory 256mb
+      --maxmemory 150mb
       --appendonly yes
       --save ""
       --tcp-keepalive 60
       --timeout 0
       --activedefrag yes
     ports:
-      - "8006:6379"
-      - "18006:16379"
+      - "127.0.0.1:8006:6379"
+      - "127.0.0.1:18006:16379"
     networks:
       - my_network
     volumes:
       - redis_data_6:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "--cluster", "info", "|", "grep", "cluster_state:ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
 
   redis-cluster-init:
