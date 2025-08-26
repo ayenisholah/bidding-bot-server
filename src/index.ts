@@ -2139,20 +2139,20 @@ async function startServer() {
         // Handle failed bid jobs - immediately mark as processed
         if (job && job.id && typeof job.id === 'string' && job.id.startsWith('bid-')) {
           console.log(YELLOW + `[Worker ${i + 1}] Bid job ${job.id} failed - marking as processed immediately` + RESET);
-          
+
           // Extract task and marketplace from job ID (format: bid-taskId-marketplace-...)
           const parts = job.id.split('-');
           if (parts.length >= 3) {
             const taskId = parts[1];
             const marketplace = parts[2].toLowerCase();
-            
+
             // Mark job as processed to allow loop completion
             markJobAsProcessed(taskId, marketplace, job.id, false).catch(err => {
               console.error(RED + `[ERROR - Worker ${i + 1}] Failed to mark failed bid job as processed: ${err}` + RESET);
             });
           }
         }
-        
+
         // Handle failed cancellation jobs - track them as completed
         if (job && job.name && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_MAGICEDEN_BID || job.name === CANCEL_BLUR_BID)) {
           const { taskId } = job.data;
@@ -2275,13 +2275,13 @@ async function startServer() {
       // Handle failed bid jobs - immediately mark as processed
       if (job && job.id && typeof job.id === 'string' && job.id.startsWith('bid-')) {
         console.log(YELLOW + `[Blur Worker] Bid job ${job.id} failed - marking as processed immediately` + RESET);
-        
+
         // Extract task and marketplace from job ID (format: bid-taskId-marketplace-...)
         const parts = job.id.split('-');
         if (parts.length >= 3) {
           const taskId = parts[1];
           const marketplace = parts[2].toLowerCase();
-          
+
           // Mark job as processed to allow loop completion
           markJobAsProcessed(taskId, marketplace, job.id, false).catch(err => {
             console.error(RED + `[ERROR - Blur Worker] Failed to mark failed bid job as processed: ${err}` + RESET);
@@ -5738,7 +5738,7 @@ async function updateTaskData(task: ITask) {
   }
 }
 
-const DRAIN_THRESHOLD = 4500; // Queue drain threshold
+const DRAIN_THRESHOLD = RATE_LIMIT * 9; // Queue drain threshold
 
 const BLUR_JOBS = [
   'BLUR_COLLECTION_BID',
@@ -5770,7 +5770,7 @@ async function waitForQueueDrain(): Promise<void> {
   }
 }
 
-const MAX_QUEUE_JOBS = 5000; // Maximum jobs allowed in queue
+const MAX_QUEUE_JOBS = RATE_LIMIT * 10; // Maximum jobs allowed in queue
 // Helper function to get total jobs in all queues
 async function getTotalJobsInQueues(): Promise<number> {
   const [counts, blurCounts] = await Promise.all([
@@ -5822,7 +5822,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
   const progressUpdateInterval = 10000; // Update every 10 seconds
 
   // Create a simple rate limiter for queueing jobs at RATE_LIMIT per second
-  const rateLimiter = new RateLimiter(250);
+  const rateLimiter = new RateLimiter(RATE_LIMIT * 2);
 
   try {
     // Check Redis health before attempting bulk operations
@@ -5857,7 +5857,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
     // Log current state but proceed immediately
     console.log(CYAN + `[processBulkJobs] Current prioritized count: ${prioritizedCount}, target range: [${2 * RATE_LIMIT}, ${DRAIN_THRESHOLD}]` + RESET);
 
-    const CHUNK_SIZE = 250
+    const CHUNK_SIZE = RATE_LIMIT * 2
     const chunks = chunk(jobs, CHUNK_SIZE);
     let retryChunkIndex = -1; // Track if we need to retry a chunk
 
@@ -6013,7 +6013,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
               for (const jobChunk of rateLimitChunks) {
                 await rateLimiter.acquire();
-                
+
                 const addedJobs = await queue.addBulk(jobChunk);
 
                 // Log successful addition of cancellation jobs
@@ -6097,7 +6097,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
               const blurRateLimitChunks = chunk(uniqueBlurJobs, RATE_LIMIT);
               for (const jobChunk of blurRateLimitChunks) {
                 await rateLimiter.acquire();
-                
+
                 const addedJobs = await blurQueue.addBulk(jobChunk);
               }
 
@@ -9807,7 +9807,7 @@ async function _doConnect(): Promise<void> {
             data: clientData
           };
           wsManager.sendMessage(initialDataMessage);
-          return;
+        return;
         }
         // All messages use the queue
         pQueue.add(() => handleMarketplaceMessage(message))
