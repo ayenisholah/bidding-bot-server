@@ -2422,14 +2422,6 @@ async function startServer() {
       throw error;
     }
 
-    // Set all tasks to not running
-    try {
-      const result = await Task.updateMany({ running: true }, { running: false });
-      await Listing.updateMany({ running: true }, { running: false });
-      // Tasks updated silently
-    } catch (error) {
-      console.error(RED + '[ERROR - Task Update - Task: N/A] Failed to update tasks:' + RESET, error);
-    }
 
     // Try to recover password from Redis BEFORE starting jobs
     console.log(CYAN + '🔍 Checking for stored password...' + RESET);
@@ -2703,6 +2695,35 @@ async function startServer() {
       }
     } else {
       console.log(GREEN + '✅ No orphaned scheduled tasks found' + RESET);
+    }
+
+    // Start all listings that have running: true in database
+    // This handles server restarts where listings were previously running
+    console.log(YELLOW + '🔄 Checking for listings to restart...' + RESET);
+    try {
+      const runningListings = await Listing.find({ running: true });
+      let listingsToRestart = runningListings.length;
+
+      if (listingsToRestart > 0) {
+        console.log(GREEN + `✅ Found ${listingsToRestart} running listings to restart` + RESET);
+
+        for (let i = 0; i < runningListings.length; i++) {
+          const listing = runningListings[i];
+          // Stagger listing starts by 500ms each to avoid overwhelming the system
+          setTimeout(async () => {
+            try {
+              console.log(GREEN + `✅ Restarting listing ${listing._id} (Token: ${listing.tokenId}, Collection: ${listing.contract?.slug || 'Unknown'})` + RESET);
+              await scheduleListing(listing);
+            } catch (error) {
+              console.error(RED + `[ERROR - Listing Restart - Listing: ${listing._id}] Failed to restart listing:` + RESET, error);
+            }
+          }, i * 500);
+        }
+      } else {
+        console.log(YELLOW + '⚠️  No running listings found to restart' + RESET);
+      }
+    } catch (error) {
+      console.error(RED + '[ERROR - Listing Fetch - Task: N/A] Failed to fetch running listings:' + RESET, error);
     }
 
     // Start password auto-recovery checker now that Redis is connected
@@ -16182,7 +16203,34 @@ app.get("/health", async (req, res) => {
       renewPasswordTTL().catch(() => { }); // Fire and forget, don't block health check
     }
 
-    const queueCounts = await queue.getJobCounts();
+    // Use Promise.race to timeout slow operations after 5 seconds
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Health check timeout')), 5000);
+    });
+
+    let queueCounts = { active: 0, completed: 0, delayed: 0, failed: 0, paused: 0, prioritized: 0, waiting: 0, 'waiting-children': 0 };
+    let blurRateLimits = { totalWallets: 0, rateLimitedWallets: 0, wallets: [] };
+
+    try {
+      // Get queue counts with timeout
+      queueCounts = await Promise.race([
+        queue.getJobCounts(),
+        timeoutPromise
+      ]) as any;
+    } catch (error) {
+      console.warn('Queue counts timeout, using defaults');
+    }
+
+    try {
+      // Get blur rate limits with timeout
+      blurRateLimits = await Promise.race([
+        Promise.resolve(blurRateLimiter.getStatus()),
+        timeoutPromise
+      ]) as any;
+    } catch (error) {
+      console.warn('Blur rate limits timeout, using defaults');
+    }
+
     const metrics = {
       status: "ok",
       timestamp: new Date().toISOString(),
@@ -16200,7 +16248,7 @@ app.get("/health", async (req, res) => {
           external: `${Math.round(process.memoryUsage().external / 1024 / 1024)}MB`
         },
         queue: queueCounts,
-        blurRateLimits: blurRateLimiter.getStatus()
+        blurRateLimits: blurRateLimits
       }
     };
     res.json(metrics);
