@@ -3,10 +3,13 @@ services:
     image: nfttools/bidding-bot-server-production:latest
     platform: linux/amd64
     restart: always
+    mem_limit: 1200m
+    memswap_limit: 1200m
     ports:
       - "3003:3003"
     environment:
       PORT: 3003
+      NODE_OPTIONS: '--max-old-space-size=1024'
       REDIS_NODES: '[{"host":"redis-node-1","port":6379},{"host":"redis-node-2","port":6379},{"host":"redis-node-3","port":6379},{"host":"redis-node-4","port":6379},{"host":"redis-node-5","port":6379},{"host":"redis-node-6","port":6379}]'
       REDIS_NET_MAP: '{"redis-node-1:6379":{"host":"redis-node-1","port":6379},"redis-node-2:6379":{"host":"redis-node-2","port":6379},"redis-node-3:6379":{"host":"redis-node-3","port":6379},"redis-node-4:6379":{"host":"redis-node-4","port":6379},"redis-node-5:6379":{"host":"redis-node-5","port":6379},"redis-node-6:6379":{"host":"redis-node-6","port":6379}}'
       ALCHEMY_API_KEY: "HGWgCONolXMB2op5UjPH1YreDCwmSbvx"
@@ -32,6 +35,8 @@ services:
     image: nfttools/bidding-bot-client-production:latest
     platform: linux/amd64
     restart: always
+    mem_limit: 350m
+    memswap_limit: 350m
     ports:
       - "3001:3001"
     environment:
@@ -61,6 +66,8 @@ services:
   mongodb:
     image: "mongo:latest"
     container_name: "mongodb_container"
+    mem_limit: 700m
+    memswap_limit: 700m
     ports:
       - "127.0.0.1:27017:27017"
     volumes:
@@ -71,13 +78,15 @@ services:
   redis-node-1:
     image: "redis:latest"
     container_name: "redis_node_1"
+    mem_limit: 300m
+    memswap_limit: 300m
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-1
       --maxmemory-policy noeviction
-      --maxmemory 4gb
+      --maxmemory 256mb
       --appendonly yes
       --save ""
       --tcp-keepalive 60
@@ -101,13 +110,15 @@ services:
   redis-node-2:
     image: "redis:latest"
     container_name: "redis_node_2"
+    mem_limit: 300m
+    memswap_limit: 300m
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-2
       --maxmemory-policy noeviction
-      --maxmemory 4gb
+      --maxmemory 256mb
       --appendonly yes
       --save ""
       --tcp-keepalive 60
@@ -131,13 +142,15 @@ services:
   redis-node-3:
     image: "redis:latest"
     container_name: "redis_node_3"
+    mem_limit: 300m
+    memswap_limit: 300m
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-3
       --maxmemory-policy noeviction
-      --maxmemory 4gb
+      --maxmemory 256mb
       --appendonly yes
       --save ""
       --tcp-keepalive 60
@@ -161,13 +174,15 @@ services:
   redis-node-4:
     image: "redis:latest"
     container_name: "redis_node_4"
+    mem_limit: 300m
+    memswap_limit: 300m
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-4
       --maxmemory-policy noeviction
-      --maxmemory 4gb
+      --maxmemory 256mb
       --appendonly yes
       --save ""
       --tcp-keepalive 60
@@ -191,13 +206,15 @@ services:
   redis-node-5:
     image: "redis:latest"
     container_name: "redis_node_5"
+    mem_limit: 300m
+    memswap_limit: 300m
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-5
       --maxmemory-policy noeviction
-      --maxmemory 4gb
+      --maxmemory 256mb
       --appendonly yes
       --save ""
       --tcp-keepalive 60
@@ -221,13 +238,15 @@ services:
   redis-node-6:
     image: "redis:latest"
     container_name: "redis_node_6"
+    mem_limit: 300m
+    memswap_limit: 300m
     command: redis-server --port 6379
       --cluster-enabled yes
       --cluster-config-file nodes.conf
       --bind 0.0.0.0
       --cluster-announce-ip redis-node-6
       --maxmemory-policy noeviction
-      --maxmemory 4gb
+      --maxmemory 256mb
       --appendonly yes
       --save ""
       --tcp-keepalive 60
