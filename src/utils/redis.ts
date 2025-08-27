@@ -1,91 +1,47 @@
 import { config } from 'dotenv';
-import Redis, { Cluster } from 'ioredis';
+import Redis from 'ioredis';
 import { logger, DatabaseOperation } from './logger';
 
 config()
 
-const REDIS_NODES = process.env.REDIS_NODES as string
-
-const getRedisNodes = async () => {
-  if (!REDIS_NODES) {
-    await logger.logDatabaseConnectionError('REDIS_NODES is not defined in the environment variables', {
-      operation: 'redis_initialization',
-      errorCode: 'MISSING_CONFIG'
-    });
-    throw new Error('REDIS_NODES is not defined in the environment variables');
-  }
-  return JSON.parse(REDIS_NODES)
-};
-
-const REDIS_NET_MAP = process.env.REDIS_NET_MAP ? JSON.parse(process.env.REDIS_NET_MAP) : null
+const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
+const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
 
 const RETRY_MAX_ATTEMPTS = 30;
 const INITIAL_RETRY_DELAY = 2000;
 
 const defaultConfig = {
+  host: REDIS_HOST,
+  port: REDIS_PORT,
   maxRetriesPerRequest: null,
-  retryDelayOnMoved: 100,
-  retryDelayOnClusterDown: 300,
-  maxRedirections: 16, // Reduced to force earlier slot refresh
   retryStrategy: (times: number) => {
-    const delay = Math.min(times * INITIAL_RETRY_DELAY, 20000);
-    return delay;
-  },
-  clusterRetryStrategy: (times: number, reason?: Error) => {
-    // Log the specific error for debugging
-    if (reason) {
-      console.log(`[Redis] Cluster retry ${times} due to: ${reason.message}`);
-
-      // Handle "Too many Cluster redirections" specifically
-      if (reason.message.includes('Too many Cluster redirections') || reason.message.includes('MOVED')) {
-        console.error('[Redis] Cluster topology issue detected, forcing immediate slot refresh');
-        // Force immediate slot refresh on the singleton instance
-        if (RedisClient.instance) {
-          RedisClient.instance.forceSlotRefresh().catch(err => 
-            console.error('[Redis] Failed to force slot refresh during retry:', err)
-          );
-        }
-        // Use exponential backoff for MOVED errors
-        const backoffDelay = Math.min(1000 * Math.pow(2, times - 1), 10000);
-        return backoffDelay;
-      }
-    }
-
     if (times > RETRY_MAX_ATTEMPTS) {
       return null;
     }
     const delay = Math.min(times * INITIAL_RETRY_DELAY, 20000);
     return delay;
   },
-  redisOptions: {
-    enableReadyCheck: true,
-    maxRetriesPerRequest: null,
-    connectTimeout: 30000,
-    retryStrategy: (times: number) => {
-      const delay = Math.min(times * INITIAL_RETRY_DELAY, 20000);
-      return delay;
-    }
-  },
+  enableReadyCheck: true,
+  connectTimeout: 30000,
   // Add memory optimization settings
   dropBufferSupport: true,
-  slotsRefreshTimeout: 30000,
   showFriendlyErrorStack: true,
   enableOfflineQueue: true,
   reconnectOnError: (err: Error) => {
-    const targetErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'CLUSTERDOWN', 'MOVED'];
+    const targetErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED'];
     return targetErrors.some(errType => err.message.includes(errType));
   }
 };
 
 class RedisClient {
   private static _instance: RedisClient;
-  private client: Cluster | null = null;
+  private client: Redis | null = null;
   private isConnected: boolean = false;
   private connectionAttempts: number = 0;
   private readonly maxConnectionAttempts = 10;
   private connecting: boolean = false;
 
-  // Getter for instance to allow access in clusterRetryStrategy
+  // Getter for instance
   static get instance(): RedisClient | undefined {
     return RedisClient._instance;
   }
@@ -110,24 +66,12 @@ class RedisClient {
 
     if (!this.client) {
       try {
-        const nodes = await getRedisNodes();
-        this.client = new Redis.Cluster(nodes, {
+        console.log(`[Redis] Connecting to ${REDIS_HOST}:${REDIS_PORT}...`);
+        
+        this.client = new Redis({
           ...defaultConfig,
-          scaleReads: 'master',
-          redisOptions: {
-            ...defaultConfig.redisOptions,
-            lazyConnect: true,
-            // Disable auto-discovery of nodes
-            enableAutoPipelining: false,
-          },
-          enableOfflineQueue: true,
-          slotsRefreshTimeout: 30000,
-          dnsLookup: (address, callback) => callback(null, address),
-          natMap: REDIS_NET_MAP,
-          // Enable automatic slot refresh to handle cluster topology changes
-          slotsRefreshInterval: 30000, // Refresh every 30 seconds
-          // Prevent connection to default Redis
           lazyConnect: true,
+          enableAutoPipelining: false,
         });
 
         this.setupEventHandlers();
@@ -138,12 +82,12 @@ class RedisClient {
         this.isConnected = false;
         this.client = null;
 
-        console.error('Failed to connect to Redis cluster:', error);
+        console.error('Failed to connect to Redis:', error);
 
         // Always log Redis connection errors
         try {
-          await logger.logDatabaseConnectionError('Failed to connect to Redis cluster', {
-            operation: 'redis_cluster_connection',
+          await logger.logDatabaseConnectionError('Failed to connect to Redis', {
+            operation: 'redis_connection',
             connectionAttempts: this.connectionAttempts,
             maxAttempts: this.maxConnectionAttempts,
             error: error as Error,
@@ -176,39 +120,22 @@ class RedisClient {
       this.isConnected = true;
       this.connecting = false;
       this.connectionAttempts = 0;
-      // Redis cluster connection established
+      console.log('[Redis] Connection established');
     });
 
     this.client.on('error', async (err) => {
-      console.error('Redis cluster error:', err);
-
-      // Handle MOVED errors by forcing a slot refresh
-      if (err.message.includes('MOVED') || err.message.includes('Too many Cluster redirections')) {
-        console.warn('[Redis] Detected MOVED/redirection error, forcing slot refresh...');
-        // Force refresh cluster slots
-        if (this.client) {
-          this.client.refreshSlotsCache((err) => {
-            if (err) {
-              console.error('[Redis] Failed to refresh cluster slots:', err);
-            } else {
-              console.log('[Redis] Cluster slots refreshed successfully');
-            }
-          });
-        }
-      }
+      console.error('Redis error:', err);
 
       // Only log to Better Stack if it's not a connection refused error to localhost:6379
       // This prevents recursive logging attempts
       if (!err.message.includes('ECONNREFUSED') || !err.message.includes('127.0.0.1:6379')) {
         try {
-          await logger.logDatabaseError('Redis cluster error', {
+          await logger.logDatabaseError('Redis error', {
             databaseOperation: DatabaseOperation.CONNECTION,
-            collection_name: 'redis_cluster',
+            collection_name: 'redis',
             error: err,
             errorMessage: err.message,
             connectionAttempts: this.connectionAttempts,
-            isMovedError: err.message.includes('MOVED'),
-            isRedirectionError: err.message.includes('Too many Cluster redirections')
           });
         } catch (logError) {
           console.error('Failed to log Redis error:', logError);
@@ -227,7 +154,7 @@ class RedisClient {
         this.client.ping().catch(async err => {
           await logger.logDatabaseError('Redis health check failed', {
             databaseOperation: DatabaseOperation.CONNECTION,
-            collection_name: 'redis_cluster',
+            collection_name: 'redis',
             operation: 'health_check_ping',
             error: err,
             errorMessage: err.message
@@ -238,20 +165,9 @@ class RedisClient {
         });
       }
     }, 30000);
-
-    // Add periodic slot refresh to proactively handle cluster changes
-    setInterval(() => {
-      if (this.isConnected && this.client) {
-        this.client.refreshSlotsCache((err) => {
-          if (err) {
-            console.warn('[Redis] Periodic slot refresh failed:', err.message);
-          }
-        });
-      }
-    }, 60000); // Refresh every 60 seconds
   }
 
-  public getClient(): Cluster {
+  public getClient(): Redis {
     if (!this.client) {
       this.connect();
     }
@@ -261,25 +177,6 @@ class RedisClient {
   public isReady(): boolean {
     return this.isConnected;
   }
-
-  public async forceSlotRefresh(): Promise<void> {
-    if (!this.client) {
-      throw new Error('Redis client not initialized');
-    }
-
-    return new Promise((resolve, reject) => {
-      console.log('[Redis] Forcing cluster slot refresh...');
-      this.client!.refreshSlotsCache((err) => {
-        if (err) {
-          console.error('[Redis] Failed to refresh cluster slots:', err);
-          reject(err);
-        } else {
-          console.log('[Redis] Cluster slots refreshed successfully');
-          resolve();
-        }
-      });
-    });
-  }
 }
 
 const redisClient = RedisClient.getInstance();
@@ -287,14 +184,13 @@ const redisClient = RedisClient.getInstance();
 // Export both the client instance and a getter for the actual Redis connection
 export default redisClient;
 export const getRedisConnection = () => redisClient.getClient();
-export const forceRedisSlotRefresh = () => redisClient.forceSlotRefresh();
 
 // Connection tracking for BullMQ
-const bullMQConnections = new Map<string, { cluster: Cluster; createdAt: number; lastHealthCheck: number }>();
+const bullMQConnections = new Map<string, { redis: Redis; createdAt: number; lastHealthCheck: number }>();
 let connectionIdCounter = 0;
 
-// Create a new Redis Cluster connection for BullMQ with enhanced configuration
-export const createBullMQConnection = async (identifier?: string): Promise<Cluster> => {
+// Create a new Redis connection for BullMQ with enhanced configuration
+export const createBullMQConnection = async (identifier?: string): Promise<Redis> => {
   const connectionId = identifier || `bullmq-${++connectionIdCounter}`;
   console.log(`[Redis] Creating BullMQ connection: ${connectionId}`);
 
@@ -309,16 +205,12 @@ export const createBullMQConnection = async (identifier?: string): Promise<Clust
   }
 
   try {
-    const nodes = await getRedisNodes();
-
-    const cluster = new Redis.Cluster(nodes, {
-      // Cluster-level retry strategy
-      clusterRetryStrategy: (times: number, reason?: Error) => {
-        // Log the retry reason
-        if (reason) {
-          console.log(`[Redis] BullMQ connection ${connectionId} retry ${times} due to: ${reason.message}`);
-        }
-
+    const redis = new Redis({
+      host: REDIS_HOST,
+      port: REDIS_PORT,
+      
+      // Retry strategy
+      retryStrategy: (times: number) => {
         if (times > RETRY_MAX_ATTEMPTS) {
           console.error(`[Redis] BullMQ connection ${connectionId} exceeded max retry attempts`);
           return null;
@@ -333,62 +225,32 @@ export const createBullMQConnection = async (identifier?: string): Promise<Clust
       // Critical: disable offline queue to fail fast (except for blocking connections)
       enableOfflineQueue: needsBlockingConfig ? true : false,
 
-      // Connection pool configuration
-      scaleReads: 'master',
+      // Connection settings
+      // Blocking connections don't need ready check as they use blocking operations
+      enableReadyCheck: !needsBlockingConfig,
+      connectTimeout: 10000,
+      ...(needsBlockingConfig ? {} : { commandTimeout: 60000 }), // 60 second timeout for non-blocking connections
 
-      // Node-level Redis options
-      redisOptions: {
-        // Connection settings
-        // Blocking connections don't need ready check as they use blocking operations
-        enableReadyCheck: !needsBlockingConfig,
-        connectTimeout: 10000,
-        ...(needsBlockingConfig ? {} : { commandTimeout: 60000 }), // 60 second timeout for non-blocking connections
+      // Retry configuration - BullMQ requires null for blocking operations
+      maxRetriesPerRequest: null,
 
-        // Retry configuration - BullMQ requires null for blocking operations
-        maxRetriesPerRequest: null,
+      // Performance settings
+      enableAutoPipelining: false,
 
-
-        // Performance settings
-        enableAutoPipelining: false,
-
-        // Keep-alive settings
-        keepAlive: 30000,
-        noDelay: true,
-
-        // Don't set socket timeout - let ioredis handle it based on operation type
-      },
-
-      // NAT mapping for Docker environments
-      natMap: REDIS_NET_MAP,
-
-      // Cluster refresh settings
-      slotsRefreshTimeout: 10000, // 10 seconds for all connections
-      slotsRefreshInterval: 30000, // Refresh every 30 seconds
-
-      // DNS resolution
-      dnsLookup: (address, callback) => callback(null, address),
-
+      // Keep-alive settings
+      keepAlive: 30000,
+      noDelay: true,
 
       // Show friendly error messages
       showFriendlyErrorStack: true,
     });
 
     // Set up event handlers before connecting
-    cluster.on('error', async (err) => {
+    redis.on('error', async (err) => {
       // Check if it's a timeout error
       const isTimeoutError = err.message.includes('Command timed out') || err.message.includes('ETIMEDOUT');
-      const isMovedError = err.message.includes('MOVED') || err.message.includes('Too many Cluster redirections');
 
-      if (isMovedError) {
-        console.warn(`[Redis] BullMQ connection ${connectionId} detected MOVED/redirection error, forcing slot refresh...`);
-        cluster.refreshSlotsCache((refreshErr) => {
-          if (refreshErr) {
-            console.error(`[Redis] BullMQ connection ${connectionId} failed to refresh slots:`, refreshErr);
-          } else {
-            console.log(`[Redis] BullMQ connection ${connectionId} slots refreshed successfully`);
-          }
-        });
-      } else if (isTimeoutError && needsBlockingConfig) {
+      if (isTimeoutError && needsBlockingConfig) {
         console.warn(`[Redis] BullMQ connection ${connectionId} timeout (expected for ${isQueueEvents ? 'queue events' : 'worker'}):`, err.message);
       } else {
         console.error(`[Redis] BullMQ connection ${connectionId} error:`, err.message);
@@ -402,37 +264,36 @@ export const createBullMQConnection = async (identifier?: string): Promise<Clust
           isQueueEvents,
           isWorker,
           needsBlockingConfig,
-          isMovedError
         });
       }
     });
 
-    cluster.on('connect', () => {
+    redis.on('connect', () => {
       console.log(`[Redis] BullMQ connection ${connectionId} connected`);
     });
 
-    cluster.on('ready', () => {
+    redis.on('ready', () => {
       console.log(`[Redis] BullMQ connection ${connectionId} ready`);
     });
 
-    cluster.on('close', () => {
+    redis.on('close', () => {
       console.log(`[Redis] BullMQ connection ${connectionId} closed`);
       bullMQConnections.delete(connectionId);
     });
 
-    cluster.on('reconnecting', () => {
+    redis.on('reconnecting', () => {
       console.log(`[Redis] BullMQ connection ${connectionId} reconnecting...`);
     });
 
-    cluster.on('end', () => {
+    redis.on('end', () => {
       console.log(`[Redis] BullMQ connection ${connectionId} ended`);
       bullMQConnections.delete(connectionId);
     });
 
     // Check if already connected/connecting before calling connect
-    if (cluster.status === 'ready') {
+    if (redis.status === 'ready') {
       console.log(`[Redis] BullMQ connection ${connectionId} already ready`);
-    } else if (cluster.status === 'connecting' || cluster.status === 'connect') {
+    } else if (redis.status === 'connecting' || redis.status === 'connect') {
       console.log(`[Redis] BullMQ connection ${connectionId} already connecting, waiting...`);
       // Wait for connection to complete
       await new Promise<void>((resolve, reject) => {
@@ -440,34 +301,34 @@ export const createBullMQConnection = async (identifier?: string): Promise<Clust
           reject(new Error(`Connection timeout waiting for ${connectionId}`));
         }, 15000);
 
-        cluster.once('ready', () => {
+        redis.once('ready', () => {
           clearTimeout(timeout);
           resolve();
         });
 
-        cluster.once('error', (err) => {
+        redis.once('error', (err) => {
           clearTimeout(timeout);
           reject(err);
         });
       });
     } else {
       // Only connect if not already connected/connecting
-      await cluster.connect();
+      await redis.connect();
     }
 
-    // Ensure cluster is ready
-    if (cluster.status !== 'ready') {
+    // Ensure redis is ready
+    if (redis.status !== 'ready') {
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error(`BullMQ connection ${connectionId} timed out waiting for ready state`));
         }, 15000);
 
-        cluster.once('ready', () => {
+        redis.once('ready', () => {
           clearTimeout(timeout);
           resolve();
         });
 
-        cluster.once('error', (err) => {
+        redis.once('error', (err) => {
           clearTimeout(timeout);
           reject(err);
         });
@@ -476,7 +337,7 @@ export const createBullMQConnection = async (identifier?: string): Promise<Clust
 
     // Verify connection with a ping
     try {
-      await cluster.ping();
+      await redis.ping();
       console.log(`[Redis] BullMQ connection ${connectionId} verified with ping`);
     } catch (pingError) {
       console.error(`[Redis] BullMQ connection ${connectionId} ping failed:`, pingError);
@@ -485,13 +346,13 @@ export const createBullMQConnection = async (identifier?: string): Promise<Clust
 
     // Track connection
     bullMQConnections.set(connectionId, {
-      cluster,
+      redis,
       createdAt: Date.now(),
       lastHealthCheck: Date.now()
     });
 
     console.log(`[Redis] BullMQ connection ${connectionId} successfully created. Total connections: ${bullMQConnections.size}`);
-    return cluster;
+    return redis;
 
   } catch (error) {
     console.error(`[Redis] Failed to create BullMQ connection ${connectionId}:`, error);
@@ -512,7 +373,7 @@ export const getBullMQConnections = () => {
     createdAt: info.createdAt,
     lastHealthCheck: info.lastHealthCheck,
     age: Date.now() - info.createdAt,
-    status: info.cluster.status || 'unknown'
+    status: info.redis.status || 'unknown'
   }));
 };
 
@@ -522,7 +383,7 @@ export const checkBullMQConnectionsHealth = async () => {
 
   for (const [id, info] of bullMQConnections.entries()) {
     try {
-      await info.cluster.ping();
+      await info.redis.ping();
       info.lastHealthCheck = Date.now();
       results[id] = { healthy: true };
     } catch (error) {
@@ -544,7 +405,7 @@ export const closeAllBullMQConnections = async () => {
 
   for (const [id, info] of bullMQConnections.entries()) {
     promises.push(
-      info.cluster.quit()
+      info.redis.quit()
         .then(() => console.log(`[Redis] Closed BullMQ connection: ${id}`))
         .catch(err => console.error(`[Redis] Error closing BullMQ connection ${id}:`, err))
     );
@@ -555,38 +416,27 @@ export const closeAllBullMQConnections = async () => {
   console.log('[Redis] All BullMQ connections closed');
 };
 
-// Helper function to check if an error is a Redis cluster error
-export const isRedisClusterError = (error: unknown): boolean => {
+// Helper function to check if an error is a Redis error
+export const isRedisError = (error: unknown): boolean => {
   if (!(error instanceof Error)) return false;
 
-  const clusterErrorPatterns = [
-    'MOVED',
-    'ASK',
-    'CLUSTERDOWN',
-    'Too many Cluster redirections',
-    'CROSSSLOT',
-    'TRYAGAIN',
+  const redisErrorPatterns = [
+    'READONLY',
+    'ECONNRESET',
+    'ETIMEDOUT',
+    'ECONNREFUSED',
     'Connection is closed',
     'Connection lost',
-    'All sentinels are unreachable'
   ];
 
-  return clusterErrorPatterns.some(pattern => error.message.includes(pattern));
+  return redisErrorPatterns.some(pattern => error.message.includes(pattern));
 };
 
-// Helper function to handle Redis cluster errors with automatic recovery
-export const handleRedisClusterError = async (error: unknown, context: string): Promise<void> => {
-  if (!isRedisClusterError(error)) return;
+// Helper function to handle Redis errors with automatic recovery
+export const handleRedisError = async (error: unknown, context: string): Promise<void> => {
+  if (!isRedisError(error)) return;
 
-  console.error(`[Redis] Cluster error in ${context}:`, error);
-
-  try {
-    // Force slot refresh to recover from topology changes
-    await forceRedisSlotRefresh();
-    console.log(`[Redis] Successfully refreshed slots after error in ${context}`);
-  } catch (refreshError) {
-    console.error(`[Redis] Failed to refresh slots after error in ${context}:`, refreshError);
-  }
+  console.error(`[Redis] Error in ${context}:`, error);
 };
 
 // Retry wrapper for Redis operations with exponential backoff
@@ -603,19 +453,9 @@ export const withRedisRetry = async <T>(
     } catch (error: any) {
       lastError = error;
       
-      // Check if it's a cluster error
-      if (isRedisClusterError(error)) {
-        console.warn(`[Redis] Cluster error in ${context} (attempt ${attempt}/${maxRetries}):`, error.message);
-        
-        // Force slot refresh on MOVED errors
-        if (error.message.includes('MOVED') || error.message.includes('Too many Cluster redirections')) {
-          try {
-            await forceRedisSlotRefresh();
-            console.log(`[Redis] Forced slot refresh after MOVED error in ${context}`);
-          } catch (refreshError) {
-            console.error(`[Redis] Failed to refresh slots:`, refreshError);
-          }
-        }
+      // Check if it's a redis error
+      if (isRedisError(error)) {
+        console.warn(`[Redis] Error in ${context} (attempt ${attempt}/${maxRetries}):`, error.message);
         
         // Don't retry if we've exhausted attempts
         if (attempt === maxRetries) {
@@ -628,7 +468,7 @@ export const withRedisRetry = async <T>(
         console.log(`[Redis] Retrying ${context} after ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       } else {
-        // Non-cluster errors, don't retry
+        // Non-redis errors, don't retry
         throw error;
       }
     }

@@ -1,5 +1,5 @@
-import { Cluster } from 'ioredis';
-import { getRedisConnection, forceRedisSlotRefresh } from './redis';
+import { Redis } from 'ioredis';
+import { getRedisConnection } from './redis';
 import { logger, DatabaseOperation, ErrorCategory } from './logger';
 import { EventEmitter } from 'events';
 
@@ -119,7 +119,7 @@ export class RedisClusterMonitor extends EventEmitter {
     }
   }
 
-  private async getClusterHealth(cluster: Cluster): Promise<ClusterHealthStatus> {
+  private async getClusterHealth(cluster: Redis): Promise<ClusterHealthStatus> {
     const checkStartTime = Date.now();
     const status: ClusterHealthStatus = {
       healthy: false,
@@ -213,9 +213,9 @@ export class RedisClusterMonitor extends EventEmitter {
     console.error('[RedisMonitor] Handling cluster failure...');
     
     try {
-      // Force slot refresh first
-      await forceRedisSlotRefresh();
-      console.log('[RedisMonitor] Forced slot refresh completed');
+      // Force slot refresh first - disabled for single node
+      // await forceRedisSlotRefresh();
+      // console.log('[RedisMonitor] Forced slot refresh completed');
       
       // Check if split-brain or critical failure
       if (healthStatus.splitBrain || healthStatus.clusterState !== 'ok' || healthStatus.activeNodes < healthStatus.totalNodes / 2) {

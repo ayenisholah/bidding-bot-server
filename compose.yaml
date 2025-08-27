@@ -3,8 +3,8 @@ services:
     image: nfttools/bidding-bot-server-production:latest
     platform: linux/amd64
     restart: always
-    mem_limit: 2048m
-    memswap_limit: 3072m
+    mem_limit: 3072m
+    memswap_limit: 4096m
     ports:
       - "3003:3003"
     healthcheck:
@@ -16,9 +16,9 @@ services:
       start_period: 60s
     environment:
       PORT: 3003
-      NODE_OPTIONS: '--max-old-space-size=1536'
-      REDIS_NODES: '[{"host":"redis-node-1","port":6379},{"host":"redis-node-2","port":6379},{"host":"redis-node-3","port":6379},{"host":"redis-node-4","port":6379},{"host":"redis-node-5","port":6379},{"host":"redis-node-6","port":6379}]'
-      REDIS_NET_MAP: '{"redis-node-1:6379":{"host":"redis-node-1","port":6379},"redis-node-2:6379":{"host":"redis-node-2","port":6379},"redis-node-3:6379":{"host":"redis-node-3","port":6379},"redis-node-4:6379":{"host":"redis-node-4","port":6379},"redis-node-5:6379":{"host":"redis-node-5","port":6379},"redis-node-6:6379":{"host":"redis-node-6","port":6379}}'
+      NODE_OPTIONS: '--max-old-space-size=2560'
+      REDIS_HOST: 'redis'
+      REDIS_PORT: '6379'
       ALCHEMY_API_KEY: "HGWgCONolXMB2op5UjPH1YreDCwmSbvx"
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
       SERVER_IP: ${SERVER_IP}
@@ -32,7 +32,7 @@ services:
       RATE_LIMIT: ${RATE_LIMIT}
     depends_on:
       - mongodb
-      - redis-cluster-init
+      - redis
     networks:
       - my_network
     volumes:
@@ -67,7 +67,6 @@ services:
     depends_on:
       - mongodb
       - server
-      - redis-cluster-init
     networks:
       - my_network
 
@@ -90,30 +89,24 @@ services:
       retries: 3
       start_period: 40s
 
-  redis-node-1:
+  redis:
     image: "redis:latest"
-    container_name: "redis_node_1"
-    mem_limit: 400m
-    memswap_limit: 600m
+    container_name: "redis"
     command: redis-server --port 6379
-      --cluster-enabled yes
-      --cluster-config-file nodes.conf
       --bind 0.0.0.0
-      --cluster-announce-ip redis-node-1
       --maxmemory-policy noeviction
-      --maxmemory 350mb
       --appendonly yes
       --save ""
       --tcp-keepalive 60
       --timeout 0
       --activedefrag yes
+      --protected-mode no
     ports:
-      - "127.0.0.1:8001:6379"
-      - "127.0.0.1:18001:16379"
+      - "127.0.0.1:6379:6379"
     networks:
       - my_network
     volumes:
-      - redis_data_1:/data
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s
@@ -121,227 +114,10 @@ services:
       retries: 3
       start_period: 40s
     restart: unless-stopped
-
-  redis-node-2:
-    image: "redis:latest"
-    container_name: "redis_node_2"
-    mem_limit: 400m
-    memswap_limit: 600m
-    command: redis-server --port 6379
-      --cluster-enabled yes
-      --cluster-config-file nodes.conf
-      --bind 0.0.0.0
-      --cluster-announce-ip redis-node-2
-      --maxmemory-policy noeviction
-      --maxmemory 350mb
-      --appendonly yes
-      --save ""
-      --tcp-keepalive 60
-      --timeout 0
-      --activedefrag yes
-    ports:
-      - "127.0.0.1:8002:6379"
-      - "127.0.0.1:18002:16379"
-    networks:
-      - my_network
-    volumes:
-      - redis_data_2:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    restart: unless-stopped
-
-  redis-node-3:
-    image: "redis:latest"
-    container_name: "redis_node_3"
-    mem_limit: 400m
-    memswap_limit: 600m
-    command: redis-server --port 6379
-      --cluster-enabled yes
-      --cluster-config-file nodes.conf
-      --bind 0.0.0.0
-      --cluster-announce-ip redis-node-3
-      --maxmemory-policy noeviction
-      --maxmemory 350mb
-      --appendonly yes
-      --save ""
-      --tcp-keepalive 60
-      --timeout 0
-      --activedefrag yes
-    ports:
-      - "127.0.0.1:8003:6379"
-      - "127.0.0.1:18003:16379"
-    networks:
-      - my_network
-    volumes:
-      - redis_data_3:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    restart: unless-stopped
-
-  redis-node-4:
-    image: "redis:latest"
-    container_name: "redis_node_4"
-    mem_limit: 400m
-    memswap_limit: 600m
-    command: redis-server --port 6379
-      --cluster-enabled yes
-      --cluster-config-file nodes.conf
-      --bind 0.0.0.0
-      --cluster-announce-ip redis-node-4
-      --maxmemory-policy noeviction
-      --maxmemory 350mb
-      --appendonly yes
-      --save ""
-      --tcp-keepalive 60
-      --timeout 0
-      --activedefrag yes
-    ports:
-      - "127.0.0.1:8004:6379"
-      - "127.0.0.1:18004:16379"
-    networks:
-      - my_network
-    volumes:
-      - redis_data_4:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    restart: unless-stopped
-
-  redis-node-5:
-    image: "redis:latest"
-    container_name: "redis_node_5"
-    mem_limit: 400m
-    memswap_limit: 600m
-    command: redis-server --port 6379
-      --cluster-enabled yes
-      --cluster-config-file nodes.conf
-      --bind 0.0.0.0
-      --cluster-announce-ip redis-node-5
-      --maxmemory-policy noeviction
-      --maxmemory 350mb
-      --appendonly yes
-      --save ""
-      --tcp-keepalive 60
-      --timeout 0
-      --activedefrag yes
-    ports:
-      - "127.0.0.1:8005:6379"
-      - "127.0.0.1:18005:16379"
-    networks:
-      - my_network
-    volumes:
-      - redis_data_5:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    restart: unless-stopped
-
-  redis-node-6:
-    image: "redis:latest"
-    container_name: "redis_node_6"
-    mem_limit: 400m
-    memswap_limit: 600m
-    command: redis-server --port 6379
-      --cluster-enabled yes
-      --cluster-config-file nodes.conf
-      --bind 0.0.0.0
-      --cluster-announce-ip redis-node-6
-      --maxmemory-policy noeviction
-      --maxmemory 350mb
-      --appendonly yes
-      --save ""
-      --tcp-keepalive 60
-      --timeout 0
-      --activedefrag yes
-    ports:
-      - "127.0.0.1:8006:6379"
-      - "127.0.0.1:18006:16379"
-    networks:
-      - my_network
-    volumes:
-      - redis_data_6:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    restart: unless-stopped
-
-  redis-cluster-init:
-    image: redis:latest
-    command: >
-      /bin/sh -c '
-        echo "Waiting for Redis nodes..." &&
-        until redis-cli -h redis-node-1 ping; do sleep 1; done &&
-        until redis-cli -h redis-node-2 ping; do sleep 1; done &&
-        until redis-cli -h redis-node-3 ping; do sleep 1; done &&
-        until redis-cli -h redis-node-4 ping; do sleep 1; done &&
-        until redis-cli -h redis-node-5 ping; do sleep 1; done &&
-        until redis-cli -h redis-node-6 ping; do sleep 1; done &&
-        echo "Checking cluster state..." &&
-        CLUSTER_STATE=$$(redis-cli -h redis-node-1 cluster info 2>/dev/null | grep cluster_state | cut -d: -f2 | tr -d "\r\n" || echo "unknown") &&
-        echo "Current cluster state: $$CLUSTER_STATE" &&
-        if [ "$$CLUSTER_STATE" = "ok" ]; then
-          echo "Cluster is healthy, skipping reset to preserve data" &&
-          redis-cli -h redis-node-1 cluster nodes &&
-          exit 0
-        else
-          echo "Cluster is not healthy or not initialized, proceeding with setup..." &&
-          echo "Flushing data on replica nodes only (nodes 4-6)..." &&
-          # Only flush replica nodes to preserve master data
-          redis-cli -h redis-node-4 FLUSHALL &&
-          redis-cli -h redis-node-5 FLUSHALL &&
-          redis-cli -h redis-node-6 FLUSHALL &&
-          echo "Resetting cluster state on all nodes..." &&
-          # Reset all nodes for clean cluster initialization
-          redis-cli -h redis-node-1 CLUSTER RESET HARD &&
-          redis-cli -h redis-node-2 CLUSTER RESET HARD &&
-          redis-cli -h redis-node-3 CLUSTER RESET HARD &&
-          redis-cli -h redis-node-4 CLUSTER RESET HARD &&
-          redis-cli -h redis-node-5 CLUSTER RESET HARD &&
-          redis-cli -h redis-node-6 CLUSTER RESET HARD &&
-          echo "Creating cluster with nodes 1-3 as masters, 4-6 as replicas..." &&
-          redis-cli --cluster create \
-            redis-node-1:6379 redis-node-2:6379 redis-node-3:6379 \
-            redis-node-4:6379 redis-node-5:6379 redis-node-6:6379 \
-            --cluster-replicas 1 --cluster-yes &&
-          echo "Cluster initialization complete. Verifying..." &&
-          redis-cli -h redis-node-1 cluster nodes
-        fi
-      '
-    depends_on:
-      - redis-node-1
-      - redis-node-2
-      - redis-node-3
-      - redis-node-4
-      - redis-node-5
-      - redis-node-6
-    networks:
-      - my_network
 
 volumes:
   mongodb_data:
-  redis_data_1:
-  redis_data_2:
-  redis_data_3:
-  redis_data_4:
-  redis_data_5:
-  redis_data_6:
+  redis_data:
   server_data:
 
 networks:

@@ -39,7 +39,7 @@ import { BASE_URL, ERC20_MIN_ABI } from "./constants";
 import { Contract, ethers, Wallet as Web3Wallet, parseEther, MaxUint256 } from "ethers";
 import { DistributedLockManager } from "./utils/lock";
 import { safeGetJob, safeMarkJobAsProcessed, recoverStuckJobs } from "./utils/redis-job-fallback";
-import { startRedisClusterMonitoring, stopRedisClusterMonitoring } from "./utils/redis-monitor";
+// import { startRedisClusterMonitoring, stopRedisClusterMonitoring } from "./utils/redis-monitor";
 
 import BidLogs from "./models/logs.model";
 import PQueue from "p-queue";
@@ -49,7 +49,7 @@ import { USDC, WETH } from "./utils/currencies";
 import axios from "axios";
 import { decryptPrivateKey, setPassword, getPassword, decryptPassword, recoverPasswordFromRedis, renewPasswordTTL, reEncryptWallet, clearDecryptedKeyCache } from "./utils/crypto";
 import { fetchWalletNFTs } from "./utils/nft";
-import { logger, ErrorCategory } from "./utils/logger";
+import { logger, ErrorCategory, DatabaseOperation } from "./utils/logger";
 import { MarketplaceError, InsufficientBalanceError, TransferRestrictedError, MinimumPriceError, isSoftError, isRetryableError } from "./marketplace/errors";
 import WebSocketManager from "./utils/websocket-manager";
 import Listing from "./models/listing.model";
@@ -227,7 +227,7 @@ const TRAIT_BID_PRIORITY = {
 
 
 const lockManager = new DistributedLockManager({
-  lockPrefix: '{marketplace}:',
+  lockPrefix: 'marketplace:',
   defaultTTLSeconds: 60
 });
 
@@ -1016,18 +1016,20 @@ const walletsArr: string[] = []
 const MIN_BID_DURATION = 60
 
 // Redis cluster health monitoring
-let redisClusterFailures = 0;
-let lastRedisClusterRecovery = 0;
-const REDIS_CLUSTER_FAILURE_THRESHOLD = 2; // Consecutive failures before recovery
+let redisFailures = 0;
+let lastRedisRecovery = 0;
+const REDIS_FAILURE_THRESHOLD = 2; // Consecutive failures before recovery
 const REDIS_RECOVERY_COOLDOWN = 60000; // 1 minute cooldown between recovery attempts
 
-// Helper to detect Redis cluster errors
-function isRedisClusterError(error: any): boolean {
+// Helper to detect Redis errors
+function isRedisError(error: any): boolean {
   const errorMessage = error instanceof Error ? error.message : String(error);
-  return errorMessage.includes('CLUSTERDOWN') ||
-    errorMessage.includes('Too many Cluster redirections') ||
-    errorMessage.includes('MOVED') ||
-    errorMessage.includes('ASK');
+  return errorMessage.includes('ECONNREFUSED') ||
+    errorMessage.includes('ECONNRESET') ||
+    errorMessage.includes('ETIMEDOUT') ||
+    errorMessage.includes('Connection is closed') ||
+    errorMessage.includes('Connection lost') ||
+    errorMessage.includes('READONLY');
 }
 
 function cleanupMemory() {
@@ -1036,69 +1038,64 @@ function cleanupMemory() {
   }
 }
 
-async function checkRedisClusterHealth(): Promise<boolean> {
+async function checkRedisHealth(): Promise<boolean> {
   try {
     const redis = redisClient.getClient();
     if (!redis) {
       return false;
     }
 
-    // Check cluster info using proper command
-    const clusterInfo = await redis.cluster('INFO') as string;
-    const clusterState = clusterInfo.split('\n')
-      .find((line: string) => line.startsWith('cluster_state:'))
-      ?.split(':')[1]
-      ?.trim();
-
-    return clusterState === 'ok';
+    // Simple ping check for single Redis instance
+    const result = await redis.ping();
+    return result === 'PONG';
   } catch (error) {
-    // If we can't even check cluster info, it's definitely not healthy
+    // If we can't even ping, it's definitely not healthy
     return false;
   }
 }
 
-async function handleRedisClusterFailure() {
+async function handleRedisFailure() {
   const now = Date.now();
 
   // Check cooldown
-  if (now - lastRedisClusterRecovery < REDIS_RECOVERY_COOLDOWN) {
-    const cooldownRemaining = Math.ceil((REDIS_RECOVERY_COOLDOWN - (now - lastRedisClusterRecovery)) / 1000);
-    console.log(YELLOW + `Redis cluster recovery on cooldown (${cooldownRemaining}s remaining)` + RESET);
+  if (now - lastRedisRecovery < REDIS_RECOVERY_COOLDOWN) {
+    const cooldownRemaining = Math.ceil((REDIS_RECOVERY_COOLDOWN - (now - lastRedisRecovery)) / 1000);
+    console.log(YELLOW + `Redis recovery on cooldown (${cooldownRemaining}s remaining)` + RESET);
     return;
   }
 
-  console.log(RED + '🚨 REDIS CLUSTER FAILURE DETECTED - Initiating recovery 🚨' + RESET);
-  console.log(RED + `Consecutive failures: ${redisClusterFailures}` + RESET);
+  console.log(RED + '🚨 REDIS FAILURE DETECTED - Initiating recovery 🚨' + RESET);
+  console.log(RED + `Consecutive failures: ${redisFailures}` + RESET);
 
   try {
-    lastRedisClusterRecovery = now;
+    lastRedisRecovery = now;
     await clearQueueAndRestartJobs();
 
     // Reset failure counter after successful recovery
-    redisClusterFailures = 0;
-    console.log(GREEN + '✅ Redis cluster recovery completed' + RESET);
+    redisFailures = 0;
+    console.log(GREEN + '✅ Redis recovery completed' + RESET);
   } catch (error) {
-    console.error(RED + '[ERROR - Redis Cluster Recovery - Task: N/A] Failed to recover from Redis cluster failure:' + RESET, error);
+    console.error(RED + '[ERROR - Redis Recovery - Task: N/A] Failed to recover from Redis failure:' + RESET, error);
     // Don't reset failure counter if recovery fails
   }
 }
 
 async function monitorHealth() {
   try {
-    const isRedisHealthy = await checkRedisClusterHealth();
+    const isRedisHealthy = await checkRedisHealth();
     if (!isRedisHealthy) {
-      redisClusterFailures++;
-      console.log(RED + `⚠️  Redis cluster unhealthy - failure count: ${redisClusterFailures}/${REDIS_CLUSTER_FAILURE_THRESHOLD}` + RESET);
+      redisFailures++;
+      console.log(RED + `⚠️  Redis unhealthy - failure count: ${redisFailures}/${REDIS_FAILURE_THRESHOLD}` + RESET);
 
-      if (redisClusterFailures >= REDIS_CLUSTER_FAILURE_THRESHOLD) {
-        await handleRedisClusterFailure();
+      if (redisFailures >= REDIS_FAILURE_THRESHOLD) {
+        await handleRedisFailure();
       }
       return; // Skip rest of health check if Redis is down
     } else {
       // Reset failure counter if Redis is healthy
-      if (redisClusterFailures > 0) {
+      if (redisFailures > 0) {
         console.log(GREEN + '✅ Redis cluster recovered - resetting failure counter' + RESET);
-        redisClusterFailures = 0;
+        redisFailures = 0;
       }
     }
 
@@ -1351,14 +1348,8 @@ async function handleConnectivityRestored() {
     console.log(YELLOW + `Connectivity was lost for ${downtimeMinutes} minutes ${Math.floor((downtime % 60000) / 1000)} seconds` + RESET);
   }
 
-  // Resume both queues first
-  try {
-    await queue.resume();
-    await blurQueue.resume();
-    console.log(GREEN + 'Queues resumed after network restoration' + RESET);
-  } catch (err) {
-    console.error(RED + '[ERROR - Queue Resume - Task: N/A] Failed to resume queues:' + RESET, err);
-  }
+  // No need to resume queues - BullMQ handles retries automatically
+  console.log(GREEN + 'Network restored - BullMQ will resume processing jobs' + RESET);
 
   // Only clear and restart jobs if connectivity was lost for more than 1 minute
   if (downtime > 60000) {
@@ -1411,15 +1402,7 @@ function startConnectivityMonitoring() {
       isConnected = false;
       connectivityLostAt = Date.now();
       console.error(RED + '[ERROR - Connectivity Monitor - Task: N/A] \n⚠️  Internet connectivity lost!' + RESET);
-
-      // Pause queue operations during network outage
-      try {
-        await queue.pause();
-        await blurQueue.pause();
-        console.log(YELLOW + 'Queues paused due to network loss' + RESET);
-      } catch (err) {
-        console.error(RED + '[ERROR - Queue Pause - Task: N/A] Failed to pause queues:' + RESET, err);
-      }
+      console.log(YELLOW + 'BullMQ will automatically retry failed jobs when connection is restored' + RESET);
     }
   }, STANDARD_INTERVAL);
 
@@ -1832,6 +1815,48 @@ async function checkWorkerHealth() {
       connectionDetails: connectionAges
     });
 
+    // Enhanced Redis connection pool monitoring
+    const maxConnections = connectionPoolStats.length;
+    const connectionPoolWarningThreshold = 40; // Warn when 80% of assumed max 50 connections
+    const connectionPoolCriticalThreshold = 45; // Critical when 90% of max connections
+
+    if (maxConnections >= connectionPoolCriticalThreshold) {
+      console.error(RED + `[CRITICAL - Connection Pool] Redis connection pool at critical level: ${maxConnections} connections` + RESET);
+      await logger.logDatabaseError('Redis connection pool critical', {
+        databaseOperation: DatabaseOperation.CONNECTION,
+        collection_name: 'redis_pool',
+        connectionCount: maxConnections,
+        threshold: connectionPoolCriticalThreshold,
+        connections: connectionAges
+      });
+    } else if (maxConnections >= connectionPoolWarningThreshold) {
+      console.warn(YELLOW + `[WARNING - Connection Pool] Redis connection pool high: ${maxConnections} connections` + RESET);
+      await logger.logWarning(ErrorCategory.DATABASE, 'Redis connection pool warning', {
+        connectionCount: maxConnections,
+        threshold: connectionPoolWarningThreshold,
+        connections: connectionAges
+      });
+    }
+
+    // Check for connection leaks (very old connections)
+    const connectionLeakThreshold = 2 * 60 * 60; // 2 hours in seconds
+    const possibleLeaks = connectionAges.filter(conn => conn.age > connectionLeakThreshold);
+
+    if (possibleLeaks.length > 0) {
+      console.warn(YELLOW + `[WARNING - Connection Pool] Possible connection leaks detected: ${possibleLeaks.length} connections older than 2 hours` + RESET);
+      possibleLeaks.forEach(conn => {
+        console.warn(YELLOW + `  - ${conn.id}: ${Math.floor(conn.age / 3600)} hours old` + RESET);
+      });
+
+      await logger.logWarning(ErrorCategory.DATABASE, 'Possible Redis connection leaks', {
+        leakedConnections: possibleLeaks.length,
+        connections: possibleLeaks.map(c => ({
+          id: c.id,
+          ageHours: Math.floor(c.age / 3600)
+        }))
+      });
+    }
+
   } catch (error) {
     console.error(RED + '[ERROR - Worker Health Check - Task: N/A] Error during worker health check:' + RESET, error);
   }
@@ -2034,7 +2059,6 @@ async function startServer() {
 
     // Initialize queue options with main queue connection
     QUEUE_OPTIONS = {
-      prefix: '{bull}',
       connection: mainQueueConnection,
       defaultJobOptions: {
         removeOnComplete: true,
@@ -2045,12 +2069,11 @@ async function startServer() {
 
     // Initialize queue and events with their own connections
     queue = new Queue(QUEUE_NAME, QUEUE_OPTIONS);
-    queueEvents = new QueueEvents(QUEUE_NAME, { connection: mainQueueEventsConnection, prefix: '{bull}' });
-    blurQueueEvents = new QueueEvents(BLUR_BIDDING_QUEUE, { connection: blurQueueEventsConnection, prefix: '{bull}' });
+    queueEvents = new QueueEvents(QUEUE_NAME, { connection: mainQueueEventsConnection });
+    blurQueueEvents = new QueueEvents(BLUR_BIDDING_QUEUE, { connection: blurQueueEventsConnection });
 
     // Initialize Blur queue with its own connection
     blurQueue = new Queue(BLUR_BIDDING_QUEUE, {
-      prefix: '{bull}',
       connection: blurQueueConnection,
       defaultJobOptions: {
         removeOnComplete: true,
@@ -2074,7 +2097,7 @@ async function startServer() {
       const worker = new Worker(
         QUEUE_NAME,
         async (job) => {
-          const jobTimeout = job.name.endsWith('_SCHEDULE') ? 900000 : 60000; // 15 minutes for scheduled jobs, 60 seconds for others
+          const jobTimeout = job.name.endsWith('_SCHEDULE') ? 900000 : 60000; // 15 minutes for scheduled jobs, 60 seconds for otherscla
           const abortController = new AbortController();
 
           const timeoutPromise = new Promise((_, reject) => {
@@ -2101,7 +2124,6 @@ async function startServer() {
         },
         {
           connection: workerConnection,
-          prefix: '{bull}',
           concurrency: concurrencyPerWorker,
           lockDuration: 90000, // 90 seconds lock (1.5x job timeout)
           stalledInterval: 90000, // Check for stalled jobs every 90 seconds
@@ -2114,13 +2136,13 @@ async function startServer() {
         console.error(RED + `[ERROR - Worker ${i + 1} - Task: N/A] Worker error:` + RESET, error);
         trackWorkerFailure(i, `Worker error: ${error.message || String(error)}`);
 
-        // Check if this is a Redis cluster error
-        if (isRedisClusterError(error)) {
-          console.log(RED + '🚨 Redis cluster error detected in worker' + RESET);
-          redisClusterFailures++;
+        // Check if this is a Redis error
+        if (isRedisError(error)) {
+          console.log(RED + '🚨 Redis error detected in worker' + RESET);
+          redisFailures++;
 
-          if (redisClusterFailures >= REDIS_CLUSTER_FAILURE_THRESHOLD) {
-            await handleRedisClusterFailure();
+          if (redisFailures >= REDIS_FAILURE_THRESHOLD) {
+            await handleRedisFailure();
           }
         }
 
@@ -2232,7 +2254,6 @@ async function startServer() {
         }
       },
       {
-        prefix: '{bull}',
         connection: blurWorkerConnection,
         concurrency: concurrencyPerWorker, // Reduce concurrency for Blur to prevent rate limit issues
         lockDuration: 90000, // 90 seconds lock (1.5x job timeout)
@@ -2251,14 +2272,10 @@ async function startServer() {
       const blurWorkerIndex = workers.length - 1; // Blur worker is the last one
       trackWorkerFailure(blurWorkerIndex, `Blur worker error: ${error.message || String(error)}`);
 
-      // Check if this is a Redis cluster error
-      if (isRedisClusterError(error)) {
-        console.log(RED + '🚨 Redis cluster error detected in blur worker' + RESET);
-        redisClusterFailures++;
-
-        if (redisClusterFailures >= REDIS_CLUSTER_FAILURE_THRESHOLD) {
-          await handleRedisClusterFailure();
-        }
+      // Check if this is a Redis error
+      if (isRedisError(error)) {
+        console.log(RED + '🚨 Redis error detected in blur worker' + RESET);
+        // Single node Redis - no cluster failure tracking needed
       }
 
       logger.logGeneralError('Blur worker error', {
@@ -2356,6 +2373,48 @@ async function startServer() {
       } else {
         console.error(RED + '[ERROR - Unhandled Rejection - Task: N/A] Unhandled Rejection at:' + RESET, promise, 'reason:', reason);
       }
+    });
+
+    // Add uncaught exception handler for production stability
+    process.on('uncaughtException', async (error) => {
+      console.error(RED + '[CRITICAL - Uncaught Exception - Task: N/A] Uncaught exception:' + RESET, error);
+
+      try {
+        // Log to Better Stack if possible
+        await logger.logGeneralError('Uncaught exception', {
+          error: error,
+          errorMessage: error.message || String(error),
+          errorStack: error.stack,
+          critical: true
+        });
+      } catch (logError) {
+        console.error(RED + '[ERROR - Logger - Task: N/A] Failed to log uncaught exception:' + RESET, logError);
+      }
+
+      // Give some time for error logging before exiting
+      console.error(RED + '[CRITICAL] Server shutting down due to uncaught exception' + RESET);
+
+      // Try graceful shutdown
+      try {
+        // Update all running tasks to not running
+        await Task.updateMany({ running: true }, { running: false });
+
+        // Stop workers
+        await Promise.all(workers.map(worker => worker.close()));
+
+        // Close BullMQ connections
+        await closeAllBullMQConnections();
+
+        // Close MongoDB connection
+        await mongoose.connection.close();
+
+        console.log('Graceful shutdown completed');
+      } catch (shutdownError) {
+        console.error(RED + '[ERROR - Shutdown - Task: N/A] Error during graceful shutdown:' + RESET, shutdownError);
+      }
+
+      // Exit with error code
+      process.exit(1);
     });
 
     const mongoUri = process.env.MONGODB_URI;
@@ -2540,13 +2599,13 @@ async function startServer() {
       console.log(`Magic happening on http://localhost:${port}`);
       console.log(`WebSocket server is running on ws://localhost:${port}`);
 
-      // Start Redis cluster monitoring with clearQueueAndRestartJobs callback
-      try {
-        startRedisClusterMonitoring(clearQueueAndRestartJobs);
-        console.log('Redis cluster monitoring started with recovery callback');
-      } catch (error) {
-        console.error(RED + '[ERROR - Redis Monitor - Task: N/A] Failed to start Redis cluster monitoring:' + RESET, error);
-      }
+      // Redis cluster monitoring disabled - using single node
+      // try {
+      //   startRedisClusterMonitoring(clearQueueAndRestartJobs);
+      //   console.log('Redis cluster monitoring started with recovery callback');
+      // } catch (error) {
+      //   console.error(RED + '[ERROR - Redis Monitor - Task: N/A] Failed to start Redis cluster monitoring:' + RESET, error);
+      // }
     });
 
     // Initialize periodic cleanup for aborted tasks (every 30 minutes)
@@ -2609,9 +2668,9 @@ async function startServer() {
     // Start internet connectivity monitoring
     startConnectivityMonitoring();
 
-    // Start Redis cluster monitoring
-    startRedisClusterMonitoring();
-    console.log('🔍 Redis cluster monitoring initialized');
+    // Redis cluster monitoring disabled - using single node
+    // startRedisClusterMonitoring();
+    // console.log('🔍 Redis cluster monitoring initialized');
 
     await fetchCurrentTasks()
 
@@ -2777,9 +2836,9 @@ process.on('SIGINT', async () => {
 
   // Stop job reconciliation service
 
-  // Stop Redis cluster monitoring
-  stopRedisClusterMonitoring();
-  console.log('Redis cluster monitoring stopped');
+  // Redis cluster monitoring disabled - using single node
+  // stopRedisClusterMonitoring();
+  // console.log('Redis cluster monitoring stopped');
 
   // Stop validate bid count interval
   if (validateBidCountInterval) {
@@ -2842,9 +2901,9 @@ process.on('SIGTERM', async () => {
   orphanedJobRecovery.stopRecovery();
   console.log('Orphaned job recovery stopped');
 
-  // Stop Redis cluster monitoring
-  stopRedisClusterMonitoring();
-  console.log('Redis cluster monitoring stopped');
+  // Redis cluster monitoring disabled - using single node
+  // stopRedisClusterMonitoring();
+  // console.log('Redis cluster monitoring stopped');
 
   // Stop validate bid count interval
   if (validateBidCountInterval) {
@@ -3702,7 +3761,7 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
   // CRITICAL: Use a mutex lock to prevent race conditions during counter increment
   const counterLockKey = `counter-lock:${parentJobId}`;
   const lockManager = new DistributedLockManager({
-    lockPrefix: '{counter}:',
+    lockPrefix: 'counter:',
     defaultTTLSeconds: 5
   });
 
@@ -4103,7 +4162,7 @@ function initializeQueueEventHandlers() {
           // Use a distributed lock to prevent multiple restarts
           const restartLockKey = `schedule-timeout-restart:${taskId}`;
           const lockManager = new DistributedLockManager({
-            lockPrefix: '{task-restart}:',
+            lockPrefix: 'task-restart:',
             defaultTTLSeconds: 60
           });
 
@@ -4806,7 +4865,7 @@ async function processBlurJob(job: Job) {
         const redis = redisClient.getClient();
         if (redis) {
           // Check authentication block
-          const authBlockKey = `{blurAuth}:block:${walletAddress}`;
+          const authBlockKey = `blurAuth:block:${walletAddress}`;
           const authBlockTime = await redis.get(authBlockKey);
           if (authBlockTime) {
             const blockTime = parseInt(authBlockTime);
@@ -4839,7 +4898,7 @@ async function processBlurJob(job: Job) {
           // Progress reporting removed - await job.updateProgress(25);
 
           // Then check rate limit pauses
-          const pauseKey = `{blurWallet}:pause:${walletAddress}`;
+          const pauseKey = `blurWallet:pause:${walletAddress}`;
           const redisPauseUntil = await redis.get(pauseKey);
           if (redisPauseUntil) {
             const pauseTime = parseInt(redisPauseUntil);
@@ -5847,7 +5906,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
   try {
     // Check Redis health before attempting bulk operations
-    const isRedisHealthy = await checkRedisClusterHealth();
+    const isRedisHealthy = await checkRedisHealth();
     if (!isRedisHealthy) {
       const error = new Error('Redis cluster is not healthy - cannot queue jobs');
       throw error;
@@ -7484,11 +7543,24 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string, stopp
     console.log(YELLOW + `  Blur: ${orders.blur.length}` + RESET);
 
     // Log detailed order information for debugging
+    if (!taskStatus[taskId]) {
+      taskStatus[taskId] = {
+        status: 'STOPPED',
+        runningPercentage: 0,
+        cancellationPercentage: 0,
+        processingPercentage: 0,
+        totalJobs: 0,
+        completedJobs: 0,
+        lastUpdate: Date.now()
+      }
+    }
+
     if (orders.opensea.length > 0) {
       console.log(YELLOW + `  OpenSea order samples (first 3):` + RESET);
       orders.opensea.slice(0, 3).forEach(order => {
         console.log(YELLOW + `    - ${order.tokenId || 'collection'} | ${order.price} | expires: ${new Date(order.expiresAt).toISOString()}` + RESET);
       });
+
       taskStatus[taskId].status = "CANCELLING";
     }
     if (orders.magiceden.length > 0) {
@@ -12908,17 +12980,17 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, scheduleJ
     const logPath = path.join(logsDir, 'scheduled-job-failures.log');
     fs.appendFileSync(logPath, JSON.stringify(errorDetails, null, 2) + '\n---\n');
 
-    // Check if this is a Redis cluster failure
-    if (isRedisClusterError(error)) {
-      console.log(RED + '🚨 Redis cluster error detected in OpenSea scheduled bid processor' + RESET);
+    // Check if this is a Redis failure
+    if (isRedisError(error)) {
+      console.log(RED + '🚨 Redis error detected in OpenSea scheduled bid processor' + RESET);
 
       // Add detailed error information
       await logger.logGeneralError(
-        'Redis cluster failure in OpenSea scheduled bid',
+        'Redis failure in OpenSea scheduled bid',
         {
           taskId: task._id.toString(),
           marketplace: 'opensea',
-          errorType: 'REDIS_CLUSTER_DOWN',
+          errorType: 'REDIS_DOWN',
           error: error instanceof Error ? error : new Error(String(error))
         }
       );
@@ -16262,6 +16334,156 @@ app.get("/health", async (req, res) => {
   }
 });
 
+// Detailed metrics endpoint for monitoring
+app.get("/metrics", async (req, res) => {
+  try {
+    // Get queue metrics
+    const [mainQueueCounts, blurQueueCounts] = await Promise.all([
+      queue.getJobCounts(),
+      blurQueue.getJobCounts()
+    ]);
+
+    // Get worker health status
+    const workerStatuses = await Promise.all(
+      workers.map(async (worker, index) => {
+        try {
+          return {
+            index,
+            running: worker.isRunning(),
+            paused: worker.isPaused(),
+            healthy: worker.isRunning() && !worker.isPaused()
+          };
+        } catch (error) {
+          return {
+            index,
+            running: false,
+            paused: false,
+            healthy: false,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          };
+        }
+      })
+    );
+
+    // Get Redis connection pool stats
+    const connectionPoolStats = getBullMQConnections();
+    const connectionHealth = await checkBullMQConnectionsHealth();
+
+    // Calculate processing rates
+    const currentTime = Date.now();
+    const processingHistory = Array.from(queueProcessingHistory.entries())
+      .sort((a, b) => b[0] - a[0])
+      .slice(0, 10); // Last 10 entries
+
+    let processingRate = 0;
+    if (processingHistory.length >= 2) {
+      const timeDiff = (processingHistory[0][0] - processingHistory[processingHistory.length - 1][0]) / 1000; // seconds
+      const processedDiff = processingHistory[0][1].processed - processingHistory[processingHistory.length - 1][1].processed;
+      processingRate = processedDiff / timeDiff;
+    }
+
+    // Get active tasks and their status
+    const taskStatuses = Array.from(activeTasks.entries()).map(([taskId, task]) => ({
+      taskId,
+      slug: task.contract?.slug || 'Unknown',
+      running: task.running,
+      status: taskStatus[taskId]?.status || 'UNKNOWN',
+      runningPercentage: taskStatus[taskId]?.runningPercentage || 0,
+      cancellationPercentage: taskStatus[taskId]?.cancellationPercentage || 0,
+      bidCount: (bidStats[taskId]?.opensea || 0) + (bidStats[taskId]?.magiceden || 0) + (bidStats[taskId]?.blur || 0),
+      errorCount: (errorStats[taskId]?.opensea || 0) + (errorStats[taskId]?.magiceden || 0) + (errorStats[taskId]?.blur || 0)
+    }));
+
+    // Calculate bid rates
+    const totalBidsPerSecond = bidRates.opensea.bidsPerSecond + bidRates.blur.bidsPerSecond + bidRates.magiceden.bidsPerSecond;
+
+    const metrics = {
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      system: {
+        memory: {
+          rss: process.memoryUsage().rss,
+          heapTotal: process.memoryUsage().heapTotal,
+          heapUsed: process.memoryUsage().heapUsed,
+          external: process.memoryUsage().external,
+          heapUsedPercentage: (process.memoryUsage().heapUsed / process.memoryUsage().heapTotal) * 100
+        },
+        cpu: process.cpuUsage()
+      },
+      queues: {
+        main: {
+          ...mainQueueCounts,
+          name: QUEUE_NAME
+        },
+        blur: {
+          ...blurQueueCounts,
+          name: BLUR_BIDDING_QUEUE
+        },
+        totals: {
+          waiting: (mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0),
+          active: (mainQueueCounts.active || 0) + (blurQueueCounts.active || 0),
+          completed: (mainQueueCounts.completed || 0) + (blurQueueCounts.completed || 0),
+          failed: (mainQueueCounts.failed || 0) + (blurQueueCounts.failed || 0)
+        },
+        processingRate: processingRate.toFixed(2) + ' jobs/sec'
+      },
+      workers: {
+        total: workers.length,
+        healthy: workerStatuses.filter(w => w.healthy).length,
+        unhealthy: workerStatuses.filter(w => !w.healthy).length,
+        details: workerStatuses
+      },
+      redis: {
+        connections: {
+          total: connectionPoolStats.length,
+          healthy: Object.values(connectionHealth).filter(c => c.healthy).length,
+          unhealthy: Object.values(connectionHealth).filter(c => !c.healthy).length,
+          oldest: Math.max(...connectionPoolStats.map(c => c.age)) / 1000 + ' seconds',
+          details: connectionPoolStats.map(c => ({
+            id: c.id,
+            age: Math.floor(c.age / 1000) + ' seconds',
+            healthy: connectionHealth[c.id]?.healthy || false
+          }))
+        }
+      },
+      tasks: {
+        total: activeTasks.size,
+        running: taskStatuses.filter(t => t.running).length,
+        active: taskStatuses.filter(t => t.status === 'RUNNING' || t.status === 'PROCESSING').length,
+        details: taskStatuses
+      },
+      bidding: {
+        ratePerSecond: totalBidsPerSecond.toFixed(2),
+        byMarketplace: {
+          opensea: bidRates.opensea.bidsPerSecond.toFixed(2),
+          blur: bidRates.blur.bidsPerSecond.toFixed(2),
+          magiceden: bidRates.magiceden.bidsPerSecond.toFixed(2)
+        },
+        totalBids: {
+          opensea: bidRates.opensea.totalBids,
+          blur: bidRates.blur.totalBids,
+          magiceden: bidRates.magiceden.totalBids
+        }
+      },
+      rateLimits: {
+        current: rps.currentRPS,
+        max: rps.maxRPS,
+        utilization: rps.maxRPS > 0 ? (rps.currentRPS / rps.maxRPS * 100).toFixed(2) + '%' : '0%',
+        blur: blurRateLimiter.getStatus()
+      }
+    };
+
+    res.json(metrics);
+  } catch (error: any) {
+    console.error("Metrics endpoint error:", error);
+    res.status(500).json({
+      status: "error",
+      timestamp: new Date().toISOString(),
+      error: error.message
+    });
+  }
+});
+
 
 app.post("/api/traits/count", async (req, res) => {
   try {
@@ -17146,7 +17368,7 @@ app.post('/api/blur-auth/clear', async (req, res) => {
     }
 
     // Find all Blur access token keys
-    const keys = await redis.keys('{blurAccessToken}:*');
+    const keys = await redis.keys('blurAccessToken:*');
     let clearedCount = 0;
 
     if (keys.length > 0) {
@@ -18192,7 +18414,7 @@ export async function fetchAddressBalances(walletAddress: string): Promise<Addre
 
   // Use distributed lock to prevent duplicate requests
   const lockManager = new DistributedLockManager({
-    lockPrefix: '{address_balances}:lock:',
+    lockPrefix: 'address_balances:lock:',
     defaultTTLSeconds: CACHE_EXPIRY_SECONDS
   });
 
@@ -19496,7 +19718,7 @@ export function decrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
 export async function getOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', taskId: string) {
   try {
     if (redis) {
-      const key = `{own_bid_count}:${marketplace}:${taskId}`;
+      const key = `own_bid_count:${marketplace}:${taskId}`;
       const count = await redis.get(key);
       return parseInt(count || '0');
     }

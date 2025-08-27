@@ -8,6 +8,6 @@
 		"coverage/*",
 		"node_modules/*"
 	],
-	"exec": "NODE_OPTIONS='--max-old-space-size=1536' node --expose-gc -r ts-node/register/transpile-only src/index.ts",
+	"exec": "NODE_OPTIONS='--max-old-space-size=2560' node --expose-gc -r ts-node/register/transpile-only src/index.ts",
 	"delay": "1000"
 }

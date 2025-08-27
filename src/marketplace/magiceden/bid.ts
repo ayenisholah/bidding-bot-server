@@ -65,7 +65,7 @@ const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 
 const lockManager = new DistributedLockManager({
-  lockPrefix: '{magiceden}:fetch:',
+  lockPrefix: 'magiceden:fetch:',
   defaultTTLSeconds: 30
 });
 

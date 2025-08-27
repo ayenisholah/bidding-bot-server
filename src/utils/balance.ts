@@ -26,7 +26,7 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
   }
 
   const lockManager = new DistributedLockManager({
-    lockPrefix: '{erc20_balance}:lock:',
+    lockPrefix: 'erc20_balance:lock:',
     defaultTTLSeconds: CACHE_EXPIRY_SECONDS
   });
 
@@ -173,7 +173,7 @@ export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress
 
   const fetchPromise = async (): Promise<number> => {
     const lockManager = new DistributedLockManager({
-      lockPrefix: '{erc20_balance}:lock:',
+      lockPrefix: 'erc20_balance:lock:',
       defaultTTLSeconds: CACHE_EXPIRY_SECONDS
     });
 

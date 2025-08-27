@@ -8,7 +8,7 @@ export class AtomicBidCache {
   private keyPrefix: string;
   private ttl: number;
 
-  constructor(keyPrefix = '{seenBids}:', ttl = 30) {
+  constructor(keyPrefix = 'seenBids:', ttl = 30) {
     this.keyPrefix = keyPrefix;
     this.ttl = ttl; // TTL in seconds
   }
@@ -122,4 +122,4 @@ export class AtomicBidCache {
 }
 
 // Export a singleton instance
-export const atomicBidCache = new AtomicBidCache('{seenBids}:', 30); // 30 second TTL
+export const atomicBidCache = new AtomicBidCache('seenBids:', 30); // 30 second TTL

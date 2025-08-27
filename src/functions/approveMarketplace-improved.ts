@@ -59,7 +59,7 @@ export async function approveMarketplaceWithCache(
     const marketplaceLower = marketplace.toLowerCase();
     
     // Create cache keys
-    const redisCacheKey = `{marketplace_approval}:${address}:${marketplaceLower}:${currency.toLowerCase()}`;
+    const redisCacheKey = `marketplace_approval:${address}:${marketplaceLower}:${currency.toLowerCase()}`;
     const approvalLockKey = `{${address}}:${marketplaceLower}:${currency.toLowerCase()}`;
     
     // Check Redis cache first
@@ -228,7 +228,7 @@ export async function clearMarketplaceApprovalCache(
   const redis = redisClient.getClient();
   if (!redis || !redisClient.isReady()) return;
   
-  const cacheKey = `{marketplace_approval}:${walletAddress.toLowerCase()}:${marketplace.toLowerCase()}:${currency.toLowerCase()}`;
+  const cacheKey = `marketplace_approval:${walletAddress.toLowerCase()}:${marketplace.toLowerCase()}:${currency.toLowerCase()}`;
   
   try {
     await redis.del(cacheKey);
@@ -255,7 +255,7 @@ export async function checkMultipleMarketplaceApprovals(
   if (redis && redisClient.isReady()) {
     for (const wallet of wallets) {
       const address = wallet.address.toLowerCase();
-      const cacheKey = `{marketplace_approval}:${address}:${marketplace.toLowerCase()}:${currency.toLowerCase()}`;
+      const cacheKey = `marketplace_approval:${address}:${marketplace.toLowerCase()}:${currency.toLowerCase()}`;
       
       try {
         const cached = await redis.get(cacheKey);
@@ -291,7 +291,7 @@ export async function checkMultipleMarketplaceApprovals(
         
         // Cache the result
         if (redis && redisClient.isReady()) {
-          const cacheKey = `{marketplace_approval}:${approval.address}:${marketplace.toLowerCase()}:${currency.toLowerCase()}`;
+          const cacheKey = `marketplace_approval:${approval.address}:${marketplace.toLowerCase()}:${currency.toLowerCase()}`;
           try {
             await redis.set(cacheKey, 'true', 'EX', MARKETPLACE_APPROVAL_CACHE_TTL);
           } catch (error) {

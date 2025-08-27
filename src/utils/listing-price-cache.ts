@@ -35,7 +35,7 @@ class ListingPriceCache {
     }
     
     // L2: Check Redis cache
-    const redisKey = `{listing:price}:${contractAddress}:${tokenId}`.toLowerCase();
+    const redisKey = `listing:price:${contractAddress}:${tokenId}`.toLowerCase();
     
     const result = await withRedisRetry(async () => {
       const redis = getRedisConnection();
@@ -66,7 +66,7 @@ class ListingPriceCache {
    */
   async updatePrice(contractAddress: string, tokenId: string, price: number, wallet: string): Promise<boolean> {
     const memoryKey = `${contractAddress}:${tokenId}`.toLowerCase();
-    const redisKey = `{listing:price}:${contractAddress}:${tokenId}`.toLowerCase();
+    const redisKey = `listing:price:${contractAddress}:${tokenId}`.toLowerCase();
     
     try {
       // Get current lowest price
@@ -131,7 +131,7 @@ class ListingPriceCache {
    */
   async clearPrice(contractAddress: string, tokenId: string): Promise<void> {
     const memoryKey = `${contractAddress}:${tokenId}`.toLowerCase();
-    const redisKey = `{listing:price}:${contractAddress}:${tokenId}`.toLowerCase();
+    const redisKey = `listing:price:${contractAddress}:${tokenId}`.toLowerCase();
     
     try {
       // Clear memory cache
@@ -177,30 +177,27 @@ class ListingPriceCache {
         }
         
         // Use SCAN to find all listing price keys
-        // For cluster, we need to scan each node
         const keys: string[] = [];
-        const nodes = redis.nodes('master');
         
-        for (const node of nodes) {
-          const stream = node.scanStream({
-            match: '{listing:price}:*',
-            count: 100
+        // For single node, scan directly
+        const stream = redis.scanStream({
+          match: 'listing:price:*',
+          count: 100
+        });
+        
+        await new Promise<void>((resolve, reject) => {
+          stream.on('data', (resultKeys: string[]) => {
+            keys.push(...resultKeys);
           });
           
-          await new Promise<void>((resolve, reject) => {
-            stream.on('data', (resultKeys: string[]) => {
-              keys.push(...resultKeys);
-            });
-            
-            stream.on('end', () => {
-              resolve();
-            });
-            
-            stream.on('error', (err) => {
-              reject(err);
-            });
+          stream.on('end', () => {
+            resolve();
           });
-        }
+          
+          stream.on('error', (err: any) => {
+            reject(err);
+          });
+        });
         
         // Delete all found keys
         if (keys.length > 0) {

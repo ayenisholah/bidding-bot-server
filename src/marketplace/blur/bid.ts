@@ -24,7 +24,7 @@ const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 
 const lockManager = new DistributedLockManager({
-  lockPrefix: '{blur}:lock:',
+  lockPrefix: 'blur:lock:',
   defaultTTLSeconds: 60 // 1 minute lock timeout
 });
 
@@ -352,7 +352,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
   }
 
   // First, check cache OUTSIDE the lock for immediate return
-  const key = `{blurAccessToken}:${wallet.address}`;
+  const key = `blurAccessToken:${wallet.address}`;
   const redis = redisClient.getClient();
 
   try {
@@ -667,7 +667,7 @@ async function formatBidOnBlur(
         // Clear the cached token
         const redis = redisClient.getClient();
         if (redis) {
-          const key = `{blurAccessToken}:${walletAddress}`;
+          const key = `blurAccessToken:${walletAddress}`;
           await redis.del(key);
         }
 

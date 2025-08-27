@@ -59,7 +59,7 @@ export async function approveNFTCached(
   const walletAddress = wallet.address.toLowerCase();
   
   // Create cache key: {nft_approval}:walletAddress:nftAddress:marketContractAddress
-  const cacheKey = `{nft_approval}:${walletAddress}:${nftAddress.toLowerCase()}:${marketContractAddress.toLowerCase()}`;
+  const cacheKey = `nft_approval:${walletAddress}:${nftAddress.toLowerCase()}:${marketContractAddress.toLowerCase()}`;
   
   try {
     // Check Redis cache first
@@ -137,7 +137,7 @@ export async function clearNFTApprovalCache(
   const redis = redisClient.getClient();
   if (!redis || !redisClient.isReady()) return;
   
-  const cacheKey = `{nft_approval}:${walletAddress.toLowerCase()}:${nftAddress.toLowerCase()}:${marketContractAddress.toLowerCase()}`;
+  const cacheKey = `nft_approval:${walletAddress.toLowerCase()}:${nftAddress.toLowerCase()}:${marketContractAddress.toLowerCase()}`;
   
   try {
     await redis.del(cacheKey);
@@ -161,7 +161,7 @@ export async function checkMultipleNFTApprovals(
   // First, check cache for all NFTs
   if (redis && redisClient.isReady()) {
     for (const nftAddress of nftAddresses) {
-      const cacheKey = `{nft_approval}:${walletAddress}:${nftAddress.toLowerCase()}:${marketContractAddress.toLowerCase()}`;
+      const cacheKey = `nft_approval:${walletAddress}:${nftAddress.toLowerCase()}:${marketContractAddress.toLowerCase()}`;
       try {
         const cached = await redis.get(cacheKey);
         if (cached === 'true') {
@@ -186,7 +186,7 @@ export async function checkMultipleNFTApprovals(
       
       // Cache the result
       if (approved && redis && redisClient.isReady()) {
-        const cacheKey = `{nft_approval}:${walletAddress}:${nftAddress.toLowerCase()}:${marketContractAddress.toLowerCase()}`;
+        const cacheKey = `nft_approval:${walletAddress}:${nftAddress.toLowerCase()}:${marketContractAddress.toLowerCase()}`;
         try {
           await redis.set(cacheKey, 'true', 'EX', NFT_APPROVAL_CACHE_TTL);
         } catch (error) {

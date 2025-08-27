@@ -19,7 +19,7 @@ const MAX_CACHE_ITEMS = 1000;
 const getRedis = () => redisClient.getClient();
 
 const lockManager = new DistributedLockManager({
-  lockPrefix: '{collection}:fetch:',
+  lockPrefix: 'collection:fetch:',
   defaultTTLSeconds: 300 // Reduced from 10 hours to 5 minutes
 });
 
@@ -38,7 +38,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
   }
 
   // Check Redis cache
-  const cacheKey = `{opensea:collection}:${slug}`;
+  const cacheKey = `opensea:collection:${slug}`;
   const redis = getRedis();
 
   if (redis && redisClient.isReady()) {
@@ -244,8 +244,8 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
 
 export async function getOpenseaFloor(collectionSlug: string) {
   const CACHE_TTL = 60; // 1 minute cache (updated from 30 seconds)
-  const cacheKey = `{opensea:floor}:${collectionSlug}`;
-  const lockKey = `{floor:opensea}:${collectionSlug}`;
+  const cacheKey = `opensea:floor:${collectionSlug}`;
+  const lockKey = `floor:opensea}:${collectionSlug}`;
 
   // Try to get from cache first
   try {
@@ -357,8 +357,8 @@ export async function getOpenseaFloor(collectionSlug: string) {
 
 export async function getBlurFloor(collectionSlug: string): Promise<number> {
   const CACHE_TTL = 60; // 1 minute cache (updated from 30 seconds)
-  const cacheKey = `{blur:floor}:${collectionSlug}`;
-  const lockKey = `{floor:blur}:${collectionSlug}`;
+  const cacheKey = `blur:floor}:${collectionSlug}`;
+  const lockKey = `floor:blur}:${collectionSlug}`;
 
   // Try to get from cache first
   try {
@@ -402,8 +402,8 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
 
 export async function getMagicEdenFloor(collectionSlug: string): Promise<number> {
   const CACHE_TTL = 60; // 1 minute cache (updated from 30 seconds)
-  const cacheKey = `{magiceden:floor}:${collectionSlug}`;
-  const lockKey = `{floor:magiceden}:${collectionSlug}`;
+  const cacheKey = `magiceden:floor}:${collectionSlug}`;
+  const lockKey = `floor:magiceden}:${collectionSlug}`;
 
   // Try to get from cache first
   try {
@@ -486,7 +486,7 @@ export async function getCollectionEvents(
   eventTypes: string[] = ['all', 'cancel', 'listing', 'offer', 'order', 'sale', 'transfer'],
   limit: number = 50
 ) {
-  const cacheKey = `{collectionEvents:${collectionSlug}:${eventTypes.join(',')}}:${limit}`;
+  const cacheKey = `collectionEvents:${collectionSlug}:${eventTypes.join(',')}}:${limit}`;
   const cachedData = getRedis() ? await getRedis().get(cacheKey) : null;
   if (cachedData) {
     return JSON.parse(cachedData);
@@ -537,8 +537,8 @@ export async function fetchOpenSeaCollectionItems(
   expectedCount?: number
 ): Promise<string[]> {
   const CACHE_TTL = 3600; // 1 hour cache
-  const cacheKey = `{opensea}:collection-items:${hashData(variables)}`;
-  const lockKey = `{opensea}:lock:collection-items:${variables.collectionSlug}:${hashData(variables)}`;
+  const cacheKey = `opensea:collection-items:${hashData(variables)}`;
+  const lockKey = `opensea:lock:collection-items:${variables.collectionSlug}:${hashData(variables)}`;
 
   // Debug log the initial request
   if (!cursor) {
@@ -752,8 +752,8 @@ export async function fetchOpenseaTraits(
   cursor?: string
 ): Promise<CollectionAttribute[]> {
   const CACHE_TTL = 3600; // 1 hour cache
-  const cacheKey = `{opensea}:traits:${slug}`;
-  const lockKey = `{opensea}:lock:traits:${slug}`;
+  const cacheKey = `opensea:traits:${slug}`;
+  const lockKey = `opensea:lock:traits:${slug}`;
 
   // Try to get from cache first if no cursor (first page)
   if (!cursor) {
@@ -915,8 +915,8 @@ export async function fetchOpenseaTraitFloors(
 ): Promise<TraitWithFloorPrice[]> {
   const CACHE_TTL = 60; // 1 minute cache
   const traitHash = hashData(traits);
-  const cacheKey = `{opensea}:trait-floors:${slug}:${traitHash}`;
-  const lockKey = `{opensea}:lock:trait-floors:${slug}:${traitHash}`;
+  const cacheKey = `opensea:trait-floors:${slug}:${traitHash}`;
+  const lockKey = `opensea:lock:trait-floors:${slug}:${traitHash}`;
 
   // Try to get from cache first
   try {

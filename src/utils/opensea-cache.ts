@@ -78,14 +78,14 @@ export const CACHE_TTL = {
   COLLECTION_ITEMS: 3600  // 1 hour for collection items
 };
 
-// Cache key generators with cluster-friendly patterns
+// Cache key generators
 export const CACHE_KEYS = {
-  floorPrice: (slug: string) => `{opensea:floor}:${slug}`,
-  listings: (slug: string, limit: number) => `{opensea:listings}:${slug}:${limit}`,
+  floorPrice: (slug: string) => `opensea:floor:${slug}`,
+  listings: (slug: string, limit: number) => `opensea:listings:${slug}:${limit}`,
   traitFloor: (slug: string, traitType: string, values: string[]) =>
-    `{opensea:trait-floor}:${slug}:${traitType}:${values.join(',')}`,
+    `opensea:trait-floor:${slug}:${traitType}:${values.join(',')}`,
   balance: (walletAddress: string, tokenAddress: string) =>
-    `{balance}:${walletAddress}:${tokenAddress}`,
-  collection: (slug: string) => `{opensea:collection}:${slug}`,
-  collectionItems: (variablesHash: string) => `{opensea:items}:${variablesHash}`
+    `balance:${walletAddress}:${tokenAddress}`,
+  collection: (slug: string) => `opensea:collection:${slug}`,
+  collectionItems: (variablesHash: string) => `opensea:items:${variablesHash}`
 };

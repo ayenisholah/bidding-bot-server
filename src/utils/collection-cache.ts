@@ -44,7 +44,7 @@ class CollectionCache {
     }
     
     // L2: Check Redis cache
-    const redisKey = `{floor:${marketplace}}:${collection}`.toLowerCase();
+    const redisKey = `floor:${marketplace}:${collection}`.toLowerCase();
     try {
       const redis = getRedisConnection();
       if (redis && redisClient.isReady()) {
@@ -85,7 +85,7 @@ class CollectionCache {
     this.floorCache.set(memoryKey, data);
     
     // L2: Update Redis cache
-    const redisKey = `{floor:${marketplace}}:${collection}`.toLowerCase();
+    const redisKey = `floor:${marketplace}:${collection}`.toLowerCase();
     try {
       const redis = getRedisConnection();
       if (redis && redisClient.isReady()) {
@@ -117,7 +117,7 @@ class CollectionCache {
     }
     
     // L2: Check Redis cache
-    const redisKey = `{collection:details}:${collection}`.toLowerCase();
+    const redisKey = `collection:details:${collection}`.toLowerCase();
     try {
       const redis = getRedisConnection();
       if (redis && redisClient.isReady()) {
@@ -158,7 +158,7 @@ class CollectionCache {
     this.detailsCache.set(memoryKey, data);
     
     // L2: Update Redis cache
-    const redisKey = `{collection:details}:${collection}`.toLowerCase();
+    const redisKey = `collection:details:${collection}`.toLowerCase();
     try {
       const redis = getRedisConnection();
       if (redis && redisClient.isReady()) {
@@ -189,7 +189,7 @@ class CollectionCache {
     }
     
     // L2: Check Redis cache
-    const redisKey = `{collection:stats}:${collection}`.toLowerCase();
+    const redisKey = `collection:stats:${collection}`.toLowerCase();
     try {
       const redis = getRedisConnection();
       if (redis && redisClient.isReady()) {
@@ -230,7 +230,7 @@ class CollectionCache {
     this.detailsCache.set(memoryKey, data);
     
     // L2: Update Redis cache
-    const redisKey = `{collection:stats}:${collection}`.toLowerCase();
+    const redisKey = `collection:stats:${collection}`.toLowerCase();
     try {
       const redis = getRedisConnection();
       if (redis && redisClient.isReady()) {
@@ -297,13 +297,13 @@ class CollectionCache {
       const redis = getRedisConnection();
       if (redis && redisClient.isReady()) {
         // Remove collection details and stats
-        await redis.del(`{collection:details}:${key}`);
-        await redis.del(`{collection:stats}:${key}`);
+        await redis.del(`collection:details:${key}`);
+        await redis.del(`collection:stats:${key}`);
         
         // Remove floor prices for all marketplaces
         const marketplaces = ['opensea', 'blur', 'magiceden'];
         for (const marketplace of marketplaces) {
-          await redis.del(`{floor:${marketplace}}:${key}`);
+          await redis.del(`floor:${marketplace}:${key}`);
         }
       }
     } catch (error) {

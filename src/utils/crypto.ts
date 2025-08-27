@@ -13,7 +13,7 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache TTL
 const MAX_CACHE_SIZE = 100; // Maximum number of cached keys
 
 // Password persistence configuration
-const PASSWORD_REDIS_KEY = '{nft-bot}:server:password'; // Using {keyslot} pattern for Redis Cluster
+const PASSWORD_REDIS_KEY = 'nft-bot:server:password'; // Single Redis node key
 const PASSWORD_TTL = 604800; // Default 7 days (7 * 24 * 60 * 60)
 
 // In development mode, allow password from environment variable

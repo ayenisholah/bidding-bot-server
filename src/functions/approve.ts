@@ -59,7 +59,7 @@ export async function approveNFT(
   const walletAddress = wallet.address.toLowerCase();
   
   // Create cache key: {nft_approval}:walletAddress:nftAddress:marketContractAddress
-  const cacheKey = `{nft_approval}:${walletAddress}:${nftAddress.toLowerCase()}:${marketContractAddress.toLowerCase()}`;
+  const cacheKey = `nft_approval:${walletAddress}:${nftAddress.toLowerCase()}:${marketContractAddress.toLowerCase()}`;
   
   try {
     // Check Redis cache first
