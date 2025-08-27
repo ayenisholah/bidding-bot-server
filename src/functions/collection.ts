@@ -153,8 +153,6 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
           enforceCreatorFee: enforceCreatorFee
         };
 
-        // Log the complete result object
-        console.log(`[Collection Details - Full Result] ${slug}:`, JSON.stringify(result, null, 2));
 
         collectionCache[slug] = result;
 

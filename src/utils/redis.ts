@@ -26,7 +26,7 @@ const defaultConfig = {
   // Add memory optimization settings
   dropBufferSupport: true,
   showFriendlyErrorStack: true,
-  enableOfflineQueue: true,
+  enableOfflineQueue: false,
   reconnectOnError: (err: Error) => {
     const targetErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED'];
     return targetErrors.some(errType => err.message.includes(errType));

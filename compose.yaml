@@ -3,8 +3,8 @@ services:
     image: nfttools/bidding-bot-server-production:latest
     platform: linux/amd64
     restart: always
-    mem_limit: 3072m
-    memswap_limit: 4096m
+    mem_limit: 4608m
+    memswap_limit: 5120m
     ports:
       - "3003:3003"
     healthcheck:
@@ -16,7 +16,7 @@ services:
       start_period: 60s
     environment:
       PORT: 3003
-      NODE_OPTIONS: '--max-old-space-size=2560'
+      NODE_OPTIONS: '--max-old-space-size=4096'
       REDIS_HOST: 'redis'
       REDIS_PORT: '6379'
       ALCHEMY_API_KEY: "HGWgCONolXMB2op5UjPH1YreDCwmSbvx"
@@ -42,8 +42,8 @@ services:
     image: nfttools/bidding-bot-client-production:latest
     platform: linux/amd64
     restart: always
-    mem_limit: 256m
-    memswap_limit: 384m
+    mem_limit: 512m
+    memswap_limit: 640m
     ports:
       - "3001:3001"
     environment:
@@ -73,9 +73,9 @@ services:
   mongodb:
     image: "mongo:latest"
     container_name: "mongodb_container"
-    mem_limit: 512m
-    memswap_limit: 768m
-    command: mongod --wiredTigerCacheSizeGB 0.25
+    mem_limit: 1536m
+    memswap_limit: 1792m
+    command: mongod --wiredTigerCacheSizeGB 1.0
     ports:
       - "127.0.0.1:27017:27017"
     volumes:

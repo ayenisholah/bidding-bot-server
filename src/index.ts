@@ -3047,32 +3047,17 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string): boo
 
   const currentStatus = taskStatus[taskId].status;
 
-  // Define valid state transitions
-  const validTransitions: { [key: string]: string[] } = {
-    'STARTED': ['PROCESSING', 'QUEUEING', 'STOPPED', 'CANCELLING'],
-    'PROCESSING': ['QUEUEING', 'STARTED', 'STOPPED', 'CANCELLING'],
-    'QUEUEING': ['RUNNING', 'STARTED', 'STOPPED', 'CANCELLING'],
-    'QUEUED': ['RUNNING', 'QUEUEING', 'STOPPED', 'CANCELLING'],
-    'RUNNING': ['COMPLETED', 'SCHEDULED', 'STOPPED', 'CANCELLING'],
-    'COMPLETED': ['SCHEDULED'],
-    'SCHEDULED': ['STARTED'],
-    'CANCELLING': ['STOPPED'],
-    'STOPPED': ['STARTED']
-  };
+  // Log state transition for debugging
+  console.log(YELLOW + `[StateTransition] Task ${taskId}: ${currentStatus} -> ${newStatus}${context ? ` (${context})` : ''}` + RESET);
+  console.log(YELLOW + `  Current state: ${JSON.stringify({
+    status: currentStatus,
+    runningPercentage: taskStatus[taskId].runningPercentage,
+    totalJobs: taskStatus[taskId].totalJobs,
+    completedJobs: taskStatus[taskId].completedJobs
+  })}` + RESET);
 
-  // Check if transition is valid
-  const allowedTransitions = validTransitions[currentStatus] || [];
-  if (!allowedTransitions.includes(newStatus)) {
-    // Log detailed state info for debugging
-    console.log(YELLOW + `  Current state: ${JSON.stringify({
-      status: currentStatus,
-      runningPercentage: taskStatus[taskId].runningPercentage,
-      totalJobs: taskStatus[taskId].totalJobs,
-      completedJobs: taskStatus[taskId].completedJobs
-    })}` + RESET);
-
-    return false;
-  }
+  // State transition validation removed to allow flexible state changes
+  // Tasks were getting stuck when StatusManager tried to force STARTED -> RUNNING transition
 
   // Additional validation for specific transitions
   if (newStatus === 'RUNNING') {

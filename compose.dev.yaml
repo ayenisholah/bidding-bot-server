@@ -27,8 +27,8 @@ services:
   mongodb:
     image: "mongo:latest"
     container_name: "mongodb_container"
-    mem_limit: 700m
-    memswap_limit: 700m
+    mem_limit: 1024m
+    memswap_limit: 1280m
     ports:
       - "27017:27017"
     volumes:
