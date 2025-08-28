@@ -25,7 +25,7 @@ import helmet from "helmet";
 import stringify from 'json-stable-stringify';
 import WebSocket, { Server as WebSocketServer } from 'ws';
 import http from 'http';
-import { axiosInstance, initialize, limiter, cancelTaskJobs, removeTaskFromBlacklist, isTaskBlacklisted } from "./init";
+import { axiosInstance, initialize, limiter, cancelTaskJobs, removeTaskFromBlacklist, isTaskBlacklisted, getLimiterCounts } from "./init";
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrder, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor, getAccessToken, getAuthMetrics, getTimeoutMetrics } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
@@ -1187,6 +1187,7 @@ async function monitorHealth() {
     }
 
     updateAllBidRates();
+    triggerBroadcast(); // Trigger broadcast after bid rates update
 
   } catch (error) {
     // Log as debug level to avoid sending to Axiom
@@ -2431,22 +2432,27 @@ async function startServer() {
         socketTimeoutMS: 45000,
 
         // Connection pool optimization for high throughput (100+ QPS)
-        maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE) || 50, // Increased from 10
-        minPoolSize: Number(process.env.MONGO_MIN_POOL_SIZE) || 5,  // Maintain warm connections
-        maxIdleTimeMS: 30000, // Close idle connections after 30s
+        maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE) || 30, // Reduced to prevent overload
+        minPoolSize: Number(process.env.MONGO_MIN_POOL_SIZE) || 10, // More warm connections
+        maxIdleTimeMS: 60000, // Keep connections open longer for frequent queries
+        waitQueueTimeoutMS: 10000, // Max wait time for connection from pool
 
         // Performance optimizations
         retryWrites: true,
         family: 4, // Use IPv4, skip trying IPv6
         heartbeatFrequencyMS: 10000, // Reduced from 5000 to default for less network traffic
 
+        // Write concern for performance (faster writes, less durability)
+
         // Buffer settings for immediate error feedback
         bufferCommands: false,  // Disable command buffering for immediate errors
 
-        // Write concern optimization for performance
+        // Compression for reduced network traffic
+        compressors: ['zlib'],
+
+        // Write concern optimization for performance  
         writeConcern: {
-          w: 1,      // Wait for acknowledgment from primary only
-          j: false   // Don't wait for journal sync (faster writes)
+          w: 1      // Wait for acknowledgment from primary only
         }
       });
       console.log('Connected to MongoDB successfully');
@@ -2973,10 +2979,7 @@ async function shouldTaskBeStopped(taskId: string): Promise<boolean> {
   // If cancellation is at 100%, verify no active orders exist
   if (isCancellationComplete) {
     try {
-      const activeOrderCount = await Order.countDocuments({
-        taskId: taskId,
-        expiresAt: { $gt: new Date() }
-      });
+      const activeOrderCount = await Order.countDocuments({ taskId, expiresAt: { $gt: new Date() } });
 
       if (activeOrderCount > 0) {
         console.log(YELLOW + `[shouldTaskBeStopped] Task ${taskId} at 100% but still has ${activeOrderCount} active orders, keeping CANCELLING status` + RESET);
@@ -3042,6 +3045,7 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string): boo
       waitingTime: 0,
       lastUpdate: Date.now()
     };
+    triggerBroadcast(); // Trigger broadcast after task status update
     return true;
   }
 
@@ -3120,6 +3124,7 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string): boo
 
   console.log(CYAN + `[setTaskStatus] ${taskId}: ${currentStatus} -> ${newStatus}${context ? ' (' + context + ')' : ''}` + RESET);
 
+  triggerBroadcast(); // Trigger broadcast after task status update
   return true;
 }
 
@@ -3166,11 +3171,7 @@ async function setMarketplaceCancellationComplete(taskId: string, marketplace?: 
     // Verify no active orders remain for this marketplace
     if (marketplace) {
       try {
-        const activeOrderCount = await Order.countDocuments({
-          taskId: taskId,
-          marketplace: marketplace.toLowerCase(),
-          expiresAt: { $gt: new Date() }
-        });
+        const activeOrderCount = await Order.countDocuments({ taskId, marketplace: marketplace.toLowerCase(), expiresAt: { $gt: new Date() } });
 
         if (activeOrderCount > 0) {
           console.log(YELLOW + `[setMarketplaceCancellationComplete] Task ${taskId}/${marketplace} still has ${activeOrderCount} active orders, not marking complete` + RESET);
@@ -3475,6 +3476,8 @@ async function updateTaskRunningPercentage(taskId: string) {
   taskStatus[taskId].completedJobs = completedJobs;
   taskStatus[taskId].lastUpdate = Date.now();
   taskStatus[taskId].lastProgressUpdate = Date.now(); // Track last progress update
+
+  triggerBroadcast(); // Trigger broadcast after percentage update
 
   // Summary section - Keep only TOTAL SUMMARY logs
   console.log(`\n${BLUE}[updateTaskRunningPercentage] TOTAL SUMMARY:${RESET}`);
@@ -4329,6 +4332,7 @@ function initializeQueueEventHandlers() {
           // Increment error stats for the specific marketplace
           if (marketplace === 'opensea' || marketplace === 'blur' || marketplace === 'magiceden') {
             errorStats[taskId][marketplace]++;
+            triggerBroadcast(); // Trigger broadcast after error stat update
           }
           const task = activeTasks.get(taskId);
           if (task && task.running) {
@@ -4590,6 +4594,7 @@ function initializeQueueEventHandlers() {
         }
         // Increment error stats for blur marketplace
         errorStats[taskId].blur++;
+        triggerBroadcast(); // Trigger broadcast after error stat update
         const task = activeTasks.get(taskId);
         if (task && task.running) {
           console.log(YELLOW + `[Blur Queue Event - FAILED] Processing failure for task ${taskId}, marketplace ${marketplace}, jobId: ${jobId}` + RESET);
@@ -4632,31 +4637,109 @@ const clientData = {
   loopCounterStats
 };
 
-const BROADCAST_INTERVAL = 1000;
-setInterval(broadcastBidRates, BROADCAST_INTERVAL);
+// Debounced broadcasting system for efficient real-time updates
+let lastBroadcastData: string | null = null;
+let broadcastTimeout: NodeJS.Timeout | null = null;
+const BROADCAST_DEBOUNCE_MS = 200; // 200ms debounce for batching updates
+const HEARTBEAT_INTERVAL_MS = 30000; // 30 second heartbeat for connection health
 
-async function broadcastBidRates() {
-  bidRates = getAllBidRates();
+// Debounced broadcast function - triggers after data changes
+function triggerBroadcast() {
 
-  // Log warning state for debugging
-  const tasksWithWarnings = Object.keys(warningBids).filter(taskId =>
-    Object.values(warningBids[taskId]).some(hasWarning => hasWarning)
-  );
-  if (tasksWithWarnings.length > 0) {
-    console.log(YELLOW + `[broadcastBidRates] Tasks with warnings: ${tasksWithWarnings.join(', ')}` + RESET);
+  // Clear existing timeout to reset debounce timer
+  if (broadcastTimeout) {
+    clearTimeout(broadcastTimeout);
   }
 
+  // Set new timeout to broadcast after debounce period
+  broadcastTimeout = setTimeout(() => {
+    broadcastBidRates();
+  }, BROADCAST_DEBOUNCE_MS);
+}
+
+async function broadcastBidRates() {
+  const broadcastStart = Date.now();
+
+  bidRates = getAllBidRates();
+
+
+  const currentData = {
+    bidRates,
+    bidCounts: bidStats,
+    skipCounts: skipStats,
+    errorCounts: errorStats,
+    floorPrices,
+    bestOffers,
+    warningBids,
+    warningMessage,
+    rps,
+    taskStatus,
+    ownBidCounts,
+    loopCounterStats,
+    timestamp: Date.now() // Add timestamp for client to track data freshness
+  };
   const message = JSON.stringify({
     type: 'bidRatesUpdate',
-    data: { bidRates, bidCounts: bidStats, skipCounts: skipStats, errorCounts: errorStats, floorPrices, bestOffers, warningBids, warningMessage, rps, taskStatus, ownBidCounts, loopCounterStats }
+    data: currentData
   });
 
+  // Change detection - only broadcast if data actually changed
+  if (lastBroadcastData === message) {
+    return;
+  }
+
+  // Change detection - only broadcast if data actually changed
+  if (lastBroadcastData !== message) {
+    lastBroadcastData = message;
+
+    let activeSockets = 0;
+    clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+        activeSockets++;
+      }
+    });
+
+    const broadcastDuration = Date.now() - broadcastStart;
+  }
+}
+
+// Periodic heartbeat to maintain WebSocket connections and ensure clients stay connected
+setInterval(() => {
+  const heartbeat = JSON.stringify({
+    type: 'heartbeat',
+    timestamp: Date.now()
+  });
+
+  let activeConnections = 0;
   clients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
+      client.send(heartbeat);
+      activeConnections++;
     }
   });
-}
+
+  if (activeConnections > 0) {
+    console.log(BLUE + `[heartbeat] Sent to ${activeConnections} clients` + RESET);
+  }
+}, HEARTBEAT_INTERVAL_MS);
+
+// Real-time bid statistics broadcast - sends updates every second
+const REALTIME_BROADCAST_INTERVAL_MS = 1000; // 1 second
+setInterval(() => {
+  // Only broadcast if we have connected clients
+  if (clients.size > 0) {
+    // Force update of RPS before broadcast
+    const counts = getLimiterCounts();
+    const instantaneousRPS = rps.currentRPS; // This is already updated every second in init.ts
+
+    // Update all bid rates to ensure freshness
+    updateAllBidRates();
+
+    // Trigger broadcast without debounce for real-time updates
+    broadcastBidRates();
+  }
+}, REALTIME_BROADCAST_INTERVAL_MS);
 
 // Broadcast instant price match notification to all connected clients
 export function broadcastInstantPriceMatch(data: {
@@ -5858,6 +5941,8 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
   const task = activeTasks.get(taskId);
   let processedCount = 0;
   let actuallyQueuedCount = 0;
+  let totalRejectedCount = 0;
+  const rejectionReasonsSummary: Record<string, number> = {};
 
   // Detect marketplace from job name
   const jobName = firstJob.name.toLowerCase();
@@ -6021,28 +6106,83 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
           // Process the full chunk since we verified we have capacity
           const jobsToProcess = currentChunk;
 
+          const rejectedJobs: { job: any; reason: string }[] = [];
           const validJobs = jobsToProcess.filter(job => {
-            if (!job?.name || !job?.data) return false;
+            if (!job?.name || !job?.data) {
+              rejectedJobs.push({ job, reason: 'Missing name or data' });
+              return false;
+            }
 
             // For cancellation jobs, taskId is in data.taskId, for others it's in data._id
             const jobTaskId = job.data._id || job.data.taskId;
-            if (!jobTaskId) return false;
+            if (!jobTaskId) {
+              rejectedJobs.push({ job, reason: 'Missing taskId' });
+              return false;
+            }
 
             const jobTask = activeTasks.get(jobTaskId);
             const isCancelJob = job.name.toLowerCase().includes('cancel');
 
             // Allow cancellation jobs even if task is not running
             if (isCancelJob) {
-              return !!jobTask; // Just check if task exists
+              if (!jobTask) {
+                rejectedJobs.push({ job, reason: 'Task not found in activeTasks' });
+                return false;
+              }
+              return true; // Just check if task exists
             }
 
-            return jobTask && jobTask.running;
+            if (!jobTask) {
+              rejectedJobs.push({ job, reason: 'Task not found in activeTasks' });
+              return false;
+            }
+            if (!jobTask.running) {
+              rejectedJobs.push({ job, reason: 'Task not running' });
+              return false;
+            }
+            return true;
           });
 
           if (!validJobs.length) {
-            console.log(YELLOW + `[processBulkJobs] Task ${taskId}: No valid jobs in chunk` + RESET);
+            console.log(YELLOW + `[processBulkJobs] Task ${taskId}: No valid jobs in chunk (${rejectedJobs.length} rejected)` + RESET);
+            
+            // Log rejection reasons summary
+            if (rejectedJobs.length > 0) {
+              totalRejectedCount += rejectedJobs.length;
+              
+              // Update global rejection summary
+              rejectedJobs.forEach(({ reason }) => {
+                rejectionReasonsSummary[reason] = (rejectionReasonsSummary[reason] || 0) + 1;
+              });
+              
+              const rejectionSummary = rejectedJobs.reduce((acc, { reason }) => {
+                acc[reason] = (acc[reason] || 0) + 1;
+                return acc;
+              }, {} as Record<string, number>);
+              
+              console.log(YELLOW + `[processBulkJobs] Chunk rejection reasons: ${JSON.stringify(rejectionSummary)}` + RESET);
+              
+              // Log first few rejected jobs for debugging
+              const samplesToLog = Math.min(3, rejectedJobs.length);
+              for (let i = 0; i < samplesToLog; i++) {
+                const { job, reason } = rejectedJobs[i];
+                console.log(YELLOW + `[processBulkJobs] Rejected job sample: ${job?.name || 'no-name'} - ${reason}` + RESET);
+              }
+            }
             // No valid jobs, but we successfully processed the chunk
           } else {
+            // Track rejected jobs even when we have some valid ones
+            if (rejectedJobs.length > 0) {
+              totalRejectedCount += rejectedJobs.length;
+              
+              // Update global rejection summary
+              rejectedJobs.forEach(({ reason }) => {
+                rejectionReasonsSummary[reason] = (rejectionReasonsSummary[reason] || 0) + 1;
+              });
+              
+              console.log(YELLOW + `[processBulkJobs] Processed chunk: ${validJobs.length} valid, ${rejectedJobs.length} rejected` + RESET);
+            }
+            
             // Separate Blur and non-Blur jobs
             const blurJobs = validJobs.filter(job => BLUR_JOBS.includes(job.name));
             const nonBlurJobs = validJobs.filter(job => !BLUR_JOBS.includes(job.name));
@@ -6294,8 +6434,21 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
       // Verify all jobs were queued successfully
       if (actuallyQueuedCount < jobs.length) {
-        const errorMsg = `Failed to queue all jobs: ${actuallyQueuedCount}/${jobs.length} for task ${taskId}`;
+        const errorMsg = `Failed to queue all jobs: ${actuallyQueuedCount}/${jobs.length} for task ${taskId} (${totalRejectedCount} rejected)`;
         console.error(RED + `[processBulkJobs] ${errorMsg}` + RESET);
+        
+        // Log rejection summary if we have rejected jobs
+        if (totalRejectedCount > 0) {
+          console.error(RED + `[processBulkJobs] Total rejection reasons: ${JSON.stringify(rejectionReasonsSummary)}` + RESET);
+          
+          // Check if task is still in activeTasks and running
+          const currentTask = activeTasks.get(taskId);
+          if (!currentTask) {
+            console.error(RED + `[processBulkJobs] Task ${taskId} is no longer in activeTasks` + RESET);
+          } else if (!currentTask.running) {
+            console.error(RED + `[processBulkJobs] Task ${taskId} is no longer running (running=${currentTask.running})` + RESET);
+          }
+        }
 
         // Log the failure details
         await logger.logQueueError('Failed to queue all jobs', {
@@ -6303,7 +6456,9 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
           marketplace: getMarketplaceFromJobName(firstJob.name) || 'unknown',
           requested: jobs.length,
           queued: actuallyQueuedCount,
-          failed: jobs.length - actuallyQueuedCount
+          rejected: totalRejectedCount,
+          failed: jobs.length - actuallyQueuedCount,
+          rejectionReasons: rejectionReasonsSummary
         });
 
         // Since we have recursive waiting, this should never happen unless there's a real error
@@ -7426,9 +7581,22 @@ async function fetchOrdersForCancellation(taskId: string, marketplace?: string):
   }
 }
 
-async function stopTask(task: ITask, start: boolean, marketplace?: string, stoppedByWarning = false) {
+async function
+  stopTask(task: ITask, start: boolean, marketplace?: string, stoppedByWarning = false) {
   const taskId = task._id.toString();
   try {
+    // Log detailed order information for debugging
+    if (!taskStatus[taskId]) {
+      taskStatus[taskId] = {
+        status: 'STOPPED',
+        runningPercentage: 0,
+        cancellationPercentage: 0,
+        processingPercentage: 0,
+        totalJobs: 0,
+        completedJobs: 0,
+        lastUpdate: Date.now()
+      }
+    }
     let WALLET_PRIVATE_KEY: string | undefined;
     try {
       const wallet = await walletCache.getWalletById(task.walletId);
@@ -7527,18 +7695,7 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string, stopp
     console.log(YELLOW + `  MagicEden: ${orders.magiceden.length}` + RESET);
     console.log(YELLOW + `  Blur: ${orders.blur.length}` + RESET);
 
-    // Log detailed order information for debugging
-    if (!taskStatus[taskId]) {
-      taskStatus[taskId] = {
-        status: 'STOPPED',
-        runningPercentage: 0,
-        cancellationPercentage: 0,
-        processingPercentage: 0,
-        totalJobs: 0,
-        completedJobs: 0,
-        lastUpdate: Date.now()
-      }
-    }
+
 
     if (orders.opensea.length > 0) {
       console.log(YELLOW + `  OpenSea order samples (first 3):` + RESET);
@@ -7573,35 +7730,16 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string, stopp
 
     if (marketplace) {
       // Count for specific marketplace
-      totalBids = await Order.countDocuments({
-        taskId: taskId,
-        marketplace: marketplace.toLowerCase(),
-        expiresAt: { $gt: new Date() }
-      });
+      totalBids = await Order.countDocuments({ taskId, marketplace: marketplace.toLowerCase(), expiresAt: { $gt: new Date() } });
     } else {
       // Count all active orders for the task and by marketplace
-      totalBids = await Order.countDocuments({
-        taskId: taskId,
-        expiresAt: { $gt: new Date() }
-      });
+      totalBids = await Order.countDocuments({ taskId, expiresAt: { $gt: new Date() } });
 
       // Get marketplace-specific counts for global cancellation
       const [openSeaCount, magicEdenCount, blurCount] = await Promise.all([
-        Order.countDocuments({
-          taskId: taskId,
-          marketplace: 'opensea',
-          expiresAt: { $gt: new Date() }
-        }),
-        Order.countDocuments({
-          taskId: taskId,
-          marketplace: 'magiceden',
-          expiresAt: { $gt: new Date() }
-        }),
-        Order.countDocuments({
-          taskId: taskId,
-          marketplace: 'blur',
-          expiresAt: { $gt: new Date() }
-        })
+        Order.countDocuments({ taskId, marketplace: 'opensea', expiresAt: { $gt: new Date() } }),
+        Order.countDocuments({ taskId, marketplace: 'magiceden', expiresAt: { $gt: new Date() } }),
+        Order.countDocuments({ taskId, marketplace: 'blur', expiresAt: { $gt: new Date() } })
       ]);
 
       marketplaceTotals.opensea = openSeaCount;
@@ -8081,6 +8219,11 @@ async function deleteTask(task: ITask) {
     if (countdownTimer) {
       clearInterval(countdownTimer);
       taskCountdownTimers.delete(taskId);
+    }
+
+    // Unsubscribe from WebSocket for this task's collection
+    if (wsManager && task.contract?.slug && task.contract?.contractAddress) {
+      await wsManager.unsubscribe(task.contract.slug, task.contract.contractAddress);
     }
 
     // Clean up all task resources
@@ -13090,6 +13233,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
     }
 
     floorPrices[currentTask._id].opensea = floor_price as number;
+    triggerBroadcast(); // Trigger broadcast after floor price update
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
     const stopBid = await stopOption(currentTask, 'opensea', Number(data), false)
@@ -13180,6 +13324,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
 
       warningBids[task._id] = { opensea: true, magiceden: true, blur: true };
       warningMessage[task._id] = { opensea: message, magiceden: message, blur: message }
+      triggerBroadcast(); // Trigger broadcast after warning update
 
       logBidError(task._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "opensea"); // Non-blocking
       console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -13190,6 +13335,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
 
     if (currentTask.outbidOptions.outbid && offerEth > maxBidPriceEth) {
       skipStats[task._id]['opensea']++;
+      triggerBroadcast(); // Trigger broadcast after skip stat update
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR OPENSEA.Skipping ...`.toUpperCase()
       logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea"); // Non-blocking
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -13789,6 +13935,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
         }
       }
       skipStats[task._id]['blur']++;
+      triggerBroadcast(); // Trigger broadcast after skip stat update
       const message = `❌ Offer price ${collectionOfferEth} BETH for ${task.contract.slug} collection bid exceeds max bid price ${maxBidPriceEth} BETH FOR BLUR BID.Skipping ...`.toUpperCase()
       await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "blur");
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -15590,6 +15737,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
     floorPrices[task._id].magiceden = floor_price;
+    triggerBroadcast(); // Trigger broadcast after floor price update
     const stopBid = await stopOption(currentTask, 'magiceden', floor_price, false)
 
     if (stopBid) {
@@ -15704,6 +15852,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
         }
       }
       skipStats[task._id].magiceden++;
+      triggerBroadcast(); // Trigger broadcast after skip stat update
       return;
     } else if (offerEth < minBidPriceEth) {
       colletionOffer = minBidPriceEth * Math.pow(10, decimal);
@@ -19660,6 +19809,7 @@ export function trackBidRate(marketplace: 'opensea' | 'magiceden' | 'blur', task
   }
   bidStats[taskId][marketplace]++;
 
+  triggerBroadcast(); // Trigger broadcast after bid stat update
   return { globalBidRates, bidStats };
 }
 
