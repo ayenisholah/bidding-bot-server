@@ -10492,11 +10492,12 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
       const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal)
-      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
-        const reason = incomingBidAmountEth < minBidPriceEth
-          ? `is less than min bid price ${minBidPriceEth} ${currencySymbol}`
-          : `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
-        const message = `incoming bid ${incomingBidAmountEth} ${currencySymbol} for ${task.contract.slug}: ${tokenId} ${reason}. Skipping ...`.toUpperCase()
+      if (incomingBidAmountEth < minBidPriceEth) {
+        // Return silently when incoming bid is less than min bid price
+        return
+      }
+      if (incomingBidAmountEth > maxBidPriceEth) {
+        const message = `incoming bid ${incomingBidAmountEth} ${currencySymbol} for ${task.contract.slug}: ${tokenId} is greater than max bid price ${maxBidPriceEth} ${currencySymbol}. Skipping ...`.toUpperCase()
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "magiceden");
         return
       }
@@ -10614,11 +10615,12 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
       const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal)
-      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
-        const reason = incomingBidAmountEth < minBidPriceEth
-          ? `is less than min bid price ${minBidPriceEth} ${currencySymbol}`
-          : `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
-        const message = `incoming bid ${incomingBidAmountEth} ${currencySymbol} for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
+      if (incomingBidAmountEth < minBidPriceEth) {
+        // Return silently when incoming bid is less than min bid price
+        return
+      }
+      if (incomingBidAmountEth > maxBidPriceEth) {
+        const message = `incoming bid ${incomingBidAmountEth} ${currencySymbol} for ${task.contract.slug}: ${identifier} is greater than max bid price ${maxBidPriceEth} ${currencySymbol}. Skipping ...`.toUpperCase()
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "magiceden");
         return
       }
@@ -10779,15 +10781,16 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
 
       // Check if incoming bid is within valid range
-      if (incomingBidAmountEth < minBidPriceEth || incomingBidAmountEth > maxBidPriceEth) {
-        const reason = incomingBidAmountEth < minBidPriceEth
-          ? `is less than min bid price ${minBidPriceEth} ${currencySymbol}`
-          : `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
-        const message = `incoming bid ${incomingBidAmountEth} ${currencySymbol} for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
+      if (incomingBidAmountEth < minBidPriceEth) {
+        // Return silently when incoming bid is less than min bid price
+        return
+      }
+      if (incomingBidAmountEth > maxBidPriceEth) {
+        const message = `incoming bid ${incomingBidAmountEth} ${currencySymbol} for ${task.contract.slug}: collection is greater than max bid price ${maxBidPriceEth} ${currencySymbol}. Skipping ...`.toUpperCase()
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "magiceden");
 
         // Cancel all orders if configured and price exceeds max
-        if (incomingBidAmountEth > maxBidPriceEth && currentTask.outbidOptions.cancelMaxWhenOutbid) {
+        if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
           const allOrders = await Order.find({
             taskId: task._id,
             marketplace: MAGICEDEN.toLowerCase()
@@ -11130,9 +11133,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         identifier: tokenId.toString()
       })
       if (incomingBidAmountEth < minBidPriceEth) {
-        const reason = `is less than min bid price ${minBidPriceEth} ${currencySymbol}`
-        const message = `incoming bid ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: ${tokenId} ${reason}. Skipping ...`.toUpperCase()
-        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
+        // Return silently when incoming bid is less than min bid price
         return
       } else if (incomingBidAmountEth > maxBidPriceEth) {
         const reason = `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
@@ -11281,9 +11282,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       })
 
       if (incomingBidAmountEth < minBidPriceEth) {
-        const reason = `is less than min bid price ${minBidPriceEth} ${currencySymbol}`
-        const message = `incoming bid ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: ${identifier} ${reason}.Skipping ...`.toUpperCase()
-        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
+        // Return silently when incoming bid is less than min bid price
         console.log(YELLOW + `[OpenSea trait_offer] Task ${task._id} - Skipping collection bid - Below min price` + RESET);
         return
       } else if (incomingBidAmountEth > maxBidPriceEth) {
@@ -11466,9 +11465,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       // Check if incoming bid is within valid range
       if (incomingBidAmountEth < minBidPriceEth) {
-        const reason = `is less than min bid price ${minBidPriceEth} ${currencySymbol}`
-        const message = `incoming bid  ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
-        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
+        // Return silently when incoming bid is less than min bid price
         return
       } else if (incomingBidAmountEth > maxBidPriceEth) {
         const reason = `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
@@ -11746,9 +11743,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         })
 
         if (+totalOffer < minBidPriceEth) {
-          const reason = `is less than min bid price ${minBidPriceEth} BETH`
-          const message = `incoming bid ${incomingPrice} + Blur Outbid Margin(${blurOutbidMargin}) BETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
-          await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "blur");
+          // Return silently when incoming bid is less than min bid price
           return
         } else if (+totalOffer > maxBidPriceEth) {
           const reason = `is greater than max bid price ${maxBidPriceEth} BETH`
@@ -11860,9 +11855,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
       // Check if incoming bid is within valid range
       if (+bestPrice < minBidPriceEth) {
-        const reason = `is less than min bid price ${minBidPriceEth} BETH`
-        const message = `incoming bid ${bestPrice} BETH for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
-        await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "blur");
+        // Return silently when incoming bid is less than min bid price
         return
       } else if (+bestPrice > maxBidPriceEth) {
         const reason = `is greater than max bid price ${maxBidPriceEth} BETH`;
@@ -13235,13 +13228,23 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
     floorPrices[currentTask._id].opensea = floor_price as number;
     triggerBroadcast(); // Trigger broadcast after floor price update
 
-    const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
-    const stopBid = await stopOption(currentTask, 'opensea', Number(data), false)
-    const expiry = getExpiry(currentTask.bidDuration)
-
+    const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false)
     if (stopBid) {
       return;
     }
+
+    const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+    
+    // Fetch fresh balance and check if sufficient for minimum bid
+    const { fetchERC20BalanceFresh } = await import('./utils/balance');
+    const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency);
+    
+    if (balance < minBidPriceEth) {
+      console.log(`${YELLOW}[OPENSEA] Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId} collection bid - skipping${RESET}`);
+      return;
+    }
+    
+    const expiry = getExpiry(currentTask.bidDuration)
 
     const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
     let offerPrice = BigInt(Math.ceil(roundToValidPrecision(offerPriceEth) * Math.pow(10, decimal)));
@@ -13320,11 +13323,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
 
     // Check if offer exceeds floor price (only for WETH)
     if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
-      const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA. Task stopped - Update task configuration to continue.`.toUpperCase();
-
-      warningBids[task._id] = { opensea: true, magiceden: true, blur: true };
-      warningMessage[task._id] = { opensea: message, magiceden: message, blur: message }
-      triggerBroadcast(); // Trigger broadcast after warning update
+      const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA.`.toUpperCase();
 
       logBidError(task._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "opensea"); // Non-blocking
       console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -13530,16 +13529,12 @@ async function processBlurScheduledBid(task: ITask) {
           console.log(RED + `[Blur Auth Block] Will resume at: ${new Date(blockTime).toLocaleTimeString()}` + RESET);
           console.log(RED + `[Blur Auth Block] Skipping task ${taskId} - wait ${waitSeconds} seconds` + RESET);
 
-          // Update warning for UI
-          if (!warningBids[taskId]) {
-            warningBids[taskId] = { opensea: false, magiceden: false, blur: true };
+          if (!skipStats[taskId]) {
+            skipStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
           }
-          if (!warningMessage[taskId]) {
-            warningMessage[taskId] = { opensea: "", magiceden: "", blur: "" };
-          }
-          warningBids[taskId].blur = true;
-          warningMessage[taskId].blur = `Authentication blocked - retry in ${waitSeconds}s`;
-
+          skipStats[taskId].blur++;
+          triggerBroadcast(); // Trigger broadcast after skip stat update
+          
           throw new Error(`Authentication blocked - retry in ${waitSeconds}s`);
         }
       }
@@ -13839,21 +13834,28 @@ async function processBlurCollectionBid(data: { task: ITask }) {
     floorPrices[task._id].blur = floor_price;
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "blur")
+    
+    // Fetch fresh BETH balance and check if sufficient for minimum bid
+    const { fetchERC20BalanceFresh } = await import('./utils/balance');
+    const { BETH } = await import('./utils/currencies');
+    const balance = await fetchERC20BalanceFresh(currentTask.wallet, BETH);
+    
+    if (balance < minBidPriceEth) {
+      console.log(`${YELLOW}[BLUR] Insufficient BETH balance: ${balance} < ${minBidPriceEth} for task ${taskId} collection bid - skipping${RESET}`);
+      return;
+    }
+    
     let colletionOffer = BigInt(Math.round(offerPriceEth * 1e18))
 
     // Check if offer exceeds floor price (only for WETH)
     const offerEth = Number(colletionOffer) / 1e18;
     if (offerEth > floor_price) {
-
-      const message = `⚠️ Offer price ${offerEth} WETH for ${task.contract.slug} collection bid exceeds floor price ${floor_price} WETH FOR BLUR.Stopping bid...`.toUpperCase();
-      warningBids[task._id] = { opensea: true, magiceden: true, blur: true };
-      warningMessage[task._id] = { opensea: message, magiceden: message, blur: message }
+      const message = `⚠️ Offer price ${offerEth} WETH for ${task.contract.slug} collection bid exceeds floor price ${floor_price} WETH FOR BLUR.`.toUpperCase();
 
       await logBidError(task._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "blur");
       console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(YELLOW + message + RESET);
       console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-
       return;
     }
 
@@ -14095,12 +14097,8 @@ async function processOpenseaTraitBid(data: {
     }
 
     floorPrices[_id].opensea = floor_price as number;
-    const { maxBidPriceEth, offerPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
-
-
+    
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false, traitFloor, identifier)
-    const outbidOptions = currentTask.outbidOptions
-
     if (stopBid) {
       if (orders.length > 0) {
         const cancelData = orders.map((order, index) => {
@@ -14113,6 +14111,19 @@ async function processOpenseaTraitBid(data: {
       }
       return
     }
+
+    const { maxBidPriceEth, offerPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+
+    // Fetch fresh balance and check if sufficient for minimum bid
+    const { fetchERC20BalanceFresh } = await import('./utils/balance');
+    const balance = await fetchERC20BalanceFresh(address, currency);
+    
+    if (balance < minBidPriceEth) {
+      console.log(`${YELLOW}[OPENSEA] Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} trait ${trait} - skipping${RESET}`);
+      return;
+    }
+
+    const outbidOptions = currentTask.outbidOptions
 
     const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
     let traitOffer = BigInt(Math.round(roundToValidPrecision(offerPriceEth) * Math.pow(10, decimal)))
@@ -14326,13 +14337,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
     floorPrices[_id].opensea = floor_price as number;
 
-    const { maxBidPriceEth, offerPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
-    const outbidOptions = currentTask.outbidOptions
-    const expiry = getExpiry(currentTask.bidDuration)
-    const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
-
-    let tokenOffer = BigInt(Math.round(offerPriceEth * Math.pow(10, decimal)))
-
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false)
     if (stopBid) {
       if (orders.length > 0) {
@@ -14346,6 +14350,22 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       }
       return
     }
+
+    const { maxBidPriceEth, offerPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+    const outbidOptions = currentTask.outbidOptions
+    const expiry = getExpiry(currentTask.bidDuration)
+    const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
+
+    // Fetch fresh balance and check if sufficient for minimum bid
+    const { fetchERC20BalanceFresh } = await import('./utils/balance');
+    const balance = await fetchERC20BalanceFresh(address, currency);
+    
+    if (balance < minBidPriceEth) {
+      console.log(`${YELLOW}[OPENSEA] Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} token ${asset.tokenId} - skipping${RESET}`);
+      return;
+    }
+
+    let tokenOffer = BigInt(Math.round(offerPriceEth * Math.pow(10, decimal)))
 
     const [order] = orders
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
@@ -14537,10 +14557,7 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
 
   // Check if offer exceeds floor price (only for WETH)
   if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
-    const message = `⚠️ Counter bid offer price ${offerEth} ${currencySymbol} for ${slug} collection exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA.Stopping bid...`.toUpperCase();
-
-    warningBids[taskId] = { opensea: true, magiceden: true, blur: true };
-    warningMessage[taskId] = { opensea: message, magiceden: message, blur: message }
+    const message = `⚠️ Counter bid offer price ${offerEth} ${currencySymbol} for ${slug} collection exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA.`.toUpperCase();
 
     await logBidError(taskId, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "opensea");
     console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -14607,8 +14624,6 @@ async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) 
     if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
       const message = `⚠️ Counter bid offer price ${offerEth} ${currencySymbol} for ${slug} collection exceeds floor price ${floor_price} ${currencySymbol} FOR MAGICEDEN.Stopping bid...`.toUpperCase();
 
-      warningBids[_id] = { opensea: true, magiceden: true, blur: true };
-      warningMessage[_id] = { opensea: message, magiceden: message, blur: message }
 
       await logBidError(_id, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "magiceden");
       console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -14671,8 +14686,6 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
   if (offerEth > floor_price) {
     const message = `⚠️ Counter bid offer price ${offerEth} WETH for ${slug} collection exceeds floor price ${floor_price} WETH FOR BLUR.Stopping bid...`.toUpperCase();
 
-    warningBids[taskId] = { opensea: true, magiceden: true, blur: true };
-    warningMessage[taskId] = { opensea: message, magiceden: message, blur: message }
 
     await logBidError(taskId, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "blur");
     console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -15048,6 +15061,15 @@ async function processBlurTraitBid(data: {
     }
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "blur")
 
+    // Fetch fresh BETH balance and check if sufficient for minimum bid
+    const { fetchERC20BalanceFresh } = await import('./utils/balance');
+    const { BETH } = await import('./utils/currencies');
+    const balance = await fetchERC20BalanceFresh(address, BETH);
+    
+    if (balance < minBidPriceEth) {
+      console.log(`${YELLOW}[BLUR] Insufficient BETH balance: ${balance} < ${minBidPriceEth} for task ${_id} trait ${trait} - skipping${RESET}`);
+      return;
+    }
 
     let traitOffer = BigInt(Math.round(Number(offerPriceEth * Math.pow(10, 18)) / 1e16) * 1e16);
 
@@ -15735,11 +15757,10 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
       };
     }
 
-    const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
     floorPrices[task._id].magiceden = floor_price;
     triggerBroadcast(); // Trigger broadcast after floor price update
+    
     const stopBid = await stopOption(currentTask, 'magiceden', floor_price, false)
-
     if (stopBid) {
       if (orders.length > 0) {
         const orderKeys = orders.map(order => order._id)
@@ -15747,6 +15768,17 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
         queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys: orderKeys, taskId: task._id }); // Non-blocking
       }
       return
+    }
+
+    const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
+    
+    // Fetch fresh balance and check if sufficient for minimum bid
+    const { fetchERC20BalanceFresh } = await import('./utils/balance');
+    const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency);
+    
+    if (balance < minBidPriceEth) {
+      console.log(`${YELLOW}[MAGICEDEN] Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId} collection bid - skipping${RESET}`);
+      return;
     }
     const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
 
@@ -15808,10 +15840,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     const offerEth = Number(colletionOffer) / Math.pow(10, decimal);
 
     if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
-      const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR MAGICEDEN.Stopping bid...`.toUpperCase();
-
-      warningBids[task._id] = { opensea: true, magiceden: true, blur: true };
-      warningMessage[task._id] = { opensea: message, magiceden: message, blur: message }
+      const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR MAGICEDEN.`.toUpperCase();
 
       logBidError(task._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "magiceden"); // Non-blocking
       console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -15923,10 +15952,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
     floorPrices[_id].magiceden = floor_price;
 
-    const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
     const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), false)
-    const expiration = getExpiry(currentTask.bidDuration)
-
     if (stopBid) {
       if (orders.length > 0) {
         const orderKeys = orders.map((order: any) => order._id)
@@ -15935,6 +15961,19 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       }
       return
     };
+
+    const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
+    
+    // Fetch fresh balance and check if sufficient for minimum bid
+    const { fetchERC20BalanceFresh } = await import('./utils/balance');
+    const balance = await fetchERC20BalanceFresh(address, currency);
+    
+    if (balance < minBidPriceEth) {
+      console.log(`${YELLOW}[MAGICEDEN] Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} token ${tokenId} - skipping${RESET}`);
+      return;
+    }
+    
+    const expiration = getExpiry(currentTask.bidDuration)
     const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
 
 
@@ -16097,10 +16136,8 @@ async function processMagicedenTraitBid(data: {
     ]);
 
     if (!floor_price) return
-    const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
-
+    
     const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), false, traitFloor, identifier)
-
     if (stopBid) {
       if (orders.length > 0) {
         const orderKeys = orders.map((order: any) => order._id)
@@ -16114,6 +16151,17 @@ async function processMagicedenTraitBid(data: {
       }
       return
     };
+
+    const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
+
+    // Fetch fresh balance and check if sufficient for minimum bid
+    const { fetchERC20BalanceFresh } = await import('./utils/balance');
+    const balance = await fetchERC20BalanceFresh(address, currency);
+    
+    if (balance < minBidPriceEth) {
+      console.log(`${YELLOW}[MAGICEDEN] Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} trait ${identifier} - skipping${RESET}`);
+      return;
+    }
     const expiration = getExpiry(currentTask.bidDuration)
     if (!floorPrices[currentTask._id]) {
       floorPrices[currentTask._id] = {
@@ -18884,11 +18932,11 @@ async function stopOption(
         console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
         console.log(RED + `❌ Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${minFloorPrice} ETH - ${maxFloorPrice} ETH). Skipping...`.toUpperCase() + RESET);
         console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-
-        warningBids[task._id][marketplace] = true;
-        warningMessage[task._id][marketplace] = `Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${minFloorPrice} ETH - ${maxFloorPrice} ETH). Task stopped - Update task configuration to continue.`;
-        console.log(RED + `[stopOption] Setting warning for task ${task._id} on ${marketplace}` + RESET);
-        console.log(RED + `[stopOption] Warning message: ${warningMessage[task._id][marketplace]}` + RESET);
+        
+        if (!counterBid) {
+          skipStats[task._id][marketplace]++;
+          triggerBroadcast(); // Trigger broadcast after skip stat update
+        }
         return true;
       }
     }
