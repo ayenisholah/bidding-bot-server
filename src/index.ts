@@ -13391,7 +13391,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
     const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
     if (!floor_price) {
-      return;
+      throw new Error(`Failed to fetch floor price for ${currentTask.contract.slug}`);
     }
 
     floorPrices[currentTask._id].opensea = floor_price as number;
@@ -13409,6 +13409,15 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
     const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency);
 
     if (balance < minBidPriceEth) {
+      skipStats[currentTask._id]['opensea']++;
+      triggerBroadcast();
+      await logBidError(
+        taskId,
+        "INSUFFICIENT_BALANCE",
+        `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId} collection bid`,
+        "skipped",
+        "opensea"
+      );
       console.log(`${YELLOW}[OPENSEA] Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId} collection bid - skipping${RESET}`);
       return;
     }
@@ -13492,6 +13501,8 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
 
     // Check if offer exceeds floor price (only for WETH)
     if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
+      skipStats[task._id]['opensea']++;
+      triggerBroadcast();
       const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA.`.toUpperCase();
 
       logBidError(task._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "opensea"); // Non-blocking
@@ -13967,7 +13978,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 
     const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
     if (!floor_price) {
-      return;
+      throw new Error(`Failed to fetch floor price for ${currentTask.contract.slug}`);
     }
 
     const orders = await Order.find({
@@ -14010,6 +14021,15 @@ async function processBlurCollectionBid(data: { task: ITask }) {
     const balance = await fetchERC20BalanceFresh(currentTask.wallet, BETH);
 
     if (balance < minBidPriceEth) {
+      skipStats[task._id]['blur']++;
+      triggerBroadcast();
+      await logBidError(
+        taskId,
+        "INSUFFICIENT_BALANCE",
+        `Insufficient BETH balance: ${balance} < ${minBidPriceEth} for task ${taskId} collection bid`,
+        "skipped",
+        "blur"
+      );
       console.log(`${YELLOW}[BLUR] Insufficient BETH balance: ${balance} < ${minBidPriceEth} for task ${taskId} collection bid - skipping${RESET}`);
       return;
     }
@@ -14019,6 +14039,8 @@ async function processBlurCollectionBid(data: { task: ITask }) {
     // Check if offer exceeds floor price (only for WETH)
     const offerEth = Number(colletionOffer) / 1e18;
     if (offerEth > floor_price) {
+      skipStats[task._id]['blur']++;
+      triggerBroadcast();
       const message = `⚠️ Offer price ${offerEth} WETH for ${task.contract.slug} collection bid exceeds floor price ${floor_price} WETH FOR BLUR.`.toUpperCase();
 
       await logBidError(task._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "blur");
@@ -14262,7 +14284,7 @@ async function processOpenseaTraitBid(data: {
 
 
     if (!floor_price) {
-      return;
+      throw new Error(`Failed to fetch floor price for ${slug}`);
     }
 
     floorPrices[_id].opensea = floor_price as number;
@@ -14288,6 +14310,15 @@ async function processOpenseaTraitBid(data: {
     const balance = await fetchERC20BalanceFresh(address, currency);
 
     if (balance < minBidPriceEth) {
+      skipStats[_id]['opensea']++;
+      triggerBroadcast();
+      await logBidError(
+        _id,
+        "INSUFFICIENT_BALANCE",
+        `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} trait ${trait}`,
+        "skipped",
+        "opensea"
+      );
       console.log(`${YELLOW}[OPENSEA] Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} trait ${trait} - skipping${RESET}`);
       return;
     }
@@ -14501,7 +14532,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     ]);
 
     if (!floor_price) {
-      return;
+      throw new Error(`Failed to fetch floor price for ${slug}`);
     }
 
     floorPrices[_id].opensea = floor_price as number;
@@ -14530,6 +14561,15 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     const balance = await fetchERC20BalanceFresh(address, currency);
 
     if (balance < minBidPriceEth) {
+      skipStats[_id]['opensea']++;
+      triggerBroadcast();
+      await logBidError(
+        _id,
+        "INSUFFICIENT_BALANCE",
+        `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} token ${asset.tokenId}`,
+        "skipped",
+        "opensea"
+      );
       console.log(`${YELLOW}[OPENSEA] Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} token ${asset.tokenId} - skipping${RESET}`);
       return;
     }
@@ -14604,8 +14644,9 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       console.log(RED + message + RESET);
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea");
       skipStats[_id].opensea++;
+      triggerBroadcast();
+      logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea");
       return;
     } else if (offerEth < minBidPriceEth) {
       tokenOffer = BigInt(Math.round(minBidPriceEth * Math.pow(10, decimal)));
@@ -15218,7 +15259,7 @@ async function processBlurTraitBid(data: {
       return;
     }
     if (!floor_price) {
-      return;
+      throw new Error(`Failed to fetch floor price for ${slug}`);
     }
 
     if (!floorPrices[_id]) {
@@ -15236,6 +15277,15 @@ async function processBlurTraitBid(data: {
     const balance = await fetchERC20BalanceFresh(address, BETH);
 
     if (balance < minBidPriceEth) {
+      skipStats[_id]['blur']++;
+      triggerBroadcast();
+      await logBidError(
+        _id,
+        "INSUFFICIENT_BALANCE",
+        `Insufficient BETH balance: ${balance} < ${minBidPriceEth} for task ${_id} trait ${trait}`,
+        "skipped",
+        "blur"
+      );
       console.log(`${YELLOW}[BLUR] Insufficient BETH balance: ${balance} < ${minBidPriceEth} for task ${_id} trait ${trait} - skipping${RESET}`);
       return;
     }
@@ -15324,6 +15374,7 @@ async function processBlurTraitBid(data: {
         }
       }
       skipStats[_id]['blur']++;
+      triggerBroadcast();
       const message = `❌ Offer price ${offerEth} BETH for ${slug} trait ${trait} bid exceeds max bid price ${maxBidPriceEth} BETH FOR BLUR BID.Skipping ...`.toUpperCase()
       await logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "blur");
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -15914,7 +15965,9 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     ]);
 
     // Early return for floor price
-    if (!floor_price) return;
+    if (!floor_price) {
+      throw new Error(`Failed to fetch floor price for ${task.contract.slug}`);
+    }
 
     const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
@@ -15946,6 +15999,15 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency);
 
     if (balance < minBidPriceEth) {
+      skipStats[task._id]['magiceden']++;
+      triggerBroadcast();
+      await logBidError(
+        taskId,
+        "INSUFFICIENT_BALANCE",
+        `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId} collection bid`,
+        "skipped",
+        "magiceden"
+      );
       console.log(`${YELLOW}[MAGICEDEN] Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId} collection bid - skipping${RESET}`);
       return;
     }
@@ -16009,6 +16071,8 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     const offerEth = Number(colletionOffer) / Math.pow(10, decimal);
 
     if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
+      skipStats[task._id]['magiceden']++;
+      triggerBroadcast();
       const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR MAGICEDEN.`.toUpperCase();
 
       logBidError(task._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "magiceden"); // Non-blocking
@@ -16100,7 +16164,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     ]);
 
     if (!floor_price) {
-      return
+      throw new Error(`Failed to fetch floor price for ${slug}`);
     }
 
     if (!floorPrices[_id]) {
@@ -16138,6 +16202,15 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     const balance = await fetchERC20BalanceFresh(address, currency);
 
     if (balance < minBidPriceEth) {
+      skipStats[_id]['magiceden']++;
+      triggerBroadcast();
+      await logBidError(
+        _id,
+        "INSUFFICIENT_BALANCE",
+        `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} token ${tokenId}`,
+        "skipped",
+        "magiceden"
+      );
       console.log(`${YELLOW}[MAGICEDEN] Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} token ${tokenId} - skipping${RESET}`);
       return;
     }
@@ -16222,6 +16295,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", `Offer price ${offerEth} ${currencySymbol} for ${slug} ${tokenId} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase(), "skipped", "magiceden");
 
       skipStats[_id].magiceden++;
+      triggerBroadcast();
       return;
     } else if (offerEth < minBidPriceEth) {
       tokenOffer = minBidPriceEth * Math.pow(10, decimal);
@@ -16304,7 +16378,9 @@ async function processMagicedenTraitBid(data: {
       }).sort({ createdAt: -1 })
     ]);
 
-    if (!floor_price) return
+    if (!floor_price) {
+      throw new Error(`Failed to fetch floor price for ${slug}`);
+    }
 
     const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), false, traitFloor, identifier)
     if (stopBid) {
@@ -16328,6 +16404,15 @@ async function processMagicedenTraitBid(data: {
     const balance = await fetchERC20BalanceFresh(address, currency);
 
     if (balance < minBidPriceEth) {
+      skipStats[_id]['magiceden']++;
+      triggerBroadcast();
+      await logBidError(
+        _id,
+        "INSUFFICIENT_BALANCE",
+        `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} trait ${identifier}`,
+        "skipped",
+        "magiceden"
+      );
       console.log(`${YELLOW}[MAGICEDEN] Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} trait ${identifier} - skipping${RESET}`);
       return;
     }
@@ -16430,6 +16515,7 @@ async function processMagicedenTraitBid(data: {
         }
       }
       skipStats[_id].magiceden++;
+      triggerBroadcast();
       return;
     } else if (offerEth < minBidPriceEth) {
       traitOffer = minBidPriceEth * Math.pow(10, decimal);
