@@ -6145,23 +6145,23 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
           if (!validJobs.length) {
             console.log(YELLOW + `[processBulkJobs] Task ${taskId}: No valid jobs in chunk (${rejectedJobs.length} rejected)` + RESET);
-            
+
             // Log rejection reasons summary
             if (rejectedJobs.length > 0) {
               totalRejectedCount += rejectedJobs.length;
-              
+
               // Update global rejection summary
               rejectedJobs.forEach(({ reason }) => {
                 rejectionReasonsSummary[reason] = (rejectionReasonsSummary[reason] || 0) + 1;
               });
-              
+
               const rejectionSummary = rejectedJobs.reduce((acc, { reason }) => {
                 acc[reason] = (acc[reason] || 0) + 1;
                 return acc;
               }, {} as Record<string, number>);
-              
+
               console.log(YELLOW + `[processBulkJobs] Chunk rejection reasons: ${JSON.stringify(rejectionSummary)}` + RESET);
-              
+
               // Log first few rejected jobs for debugging
               const samplesToLog = Math.min(3, rejectedJobs.length);
               for (let i = 0; i < samplesToLog; i++) {
@@ -6174,15 +6174,15 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
             // Track rejected jobs even when we have some valid ones
             if (rejectedJobs.length > 0) {
               totalRejectedCount += rejectedJobs.length;
-              
+
               // Update global rejection summary
               rejectedJobs.forEach(({ reason }) => {
                 rejectionReasonsSummary[reason] = (rejectionReasonsSummary[reason] || 0) + 1;
               });
-              
+
               console.log(YELLOW + `[processBulkJobs] Processed chunk: ${validJobs.length} valid, ${rejectedJobs.length} rejected` + RESET);
             }
-            
+
             // Separate Blur and non-Blur jobs
             const blurJobs = validJobs.filter(job => BLUR_JOBS.includes(job.name));
             const nonBlurJobs = validJobs.filter(job => !BLUR_JOBS.includes(job.name));
@@ -6436,11 +6436,11 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
       if (actuallyQueuedCount < jobs.length) {
         const errorMsg = `Failed to queue all jobs: ${actuallyQueuedCount}/${jobs.length} for task ${taskId} (${totalRejectedCount} rejected)`;
         console.error(RED + `[processBulkJobs] ${errorMsg}` + RESET);
-        
+
         // Log rejection summary if we have rejected jobs
         if (totalRejectedCount > 0) {
           console.error(RED + `[processBulkJobs] Total rejection reasons: ${JSON.stringify(rejectionReasonsSummary)}` + RESET);
-          
+
           // Check if task is still in activeTasks and running
           const currentTask = activeTasks.get(taskId);
           if (!currentTask) {
@@ -17680,7 +17680,7 @@ app.post('/api/update-app', async (req, res) => {
     const scriptUrl = update.releaseInfo.downloadUrl;
 
     // Trigger update with timeout
-    const { data } = await axios.post(`http://${SERVER_IP}:9999/update`,
+    const { data } = await axios.post(`http://172.17.0.1:9999/update`,
       { scriptUrl },
       { timeout: 30000 } // 30 second timeout
     );
