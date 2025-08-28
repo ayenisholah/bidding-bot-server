@@ -17680,7 +17680,7 @@ app.post('/api/update-app', async (req, res) => {
     const scriptUrl = update.releaseInfo.downloadUrl;
 
     // Trigger update with timeout
-    const { data } = await axios.post(`http://172.17.0.1:9999/update`,
+    const { data } = await axios.post(`http://host.docker.internal:9999/update`,
       { scriptUrl },
       { timeout: 30000 } // 30 second timeout
     );
