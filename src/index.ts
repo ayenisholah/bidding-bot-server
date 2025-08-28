@@ -10683,7 +10683,17 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       if (incomingBidAmount < currentBidPrice) return
 
-      offerPrice = Math.ceil((magicedenOutbidMargin * Math.pow(10, decimal)) + incomingBidAmount)
+      // Determine margin based on bid type
+      let effectiveMargin: number;
+      if (task.bidType === "token") {
+        // Trait offer counterbidding token offers: use 10x margin
+        effectiveMargin = magicedenOutbidMargin * 10;
+      } else {
+        // Trait offer counterbidding other trait offers: use regular margin
+        effectiveMargin = magicedenOutbidMargin;
+      }
+      
+      offerPrice = Math.ceil((effectiveMargin * Math.pow(10, decimal)) + incomingBidAmount)
       const offerPriceEth = offerPrice / Math.pow(10, decimal)
 
       // Log successful trait counterbid preparation
@@ -10873,18 +10883,21 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       // Calculate the new offer price based on incoming bid
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
-      offerPrice = Math.ceil((magicedenOutbidMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)))
-      const offerPriceEth = offerPrice / Math.pow(10, decimal)
+      // We'll calculate the actual offer price per order type in the loop below
+      const baseOfferPrice = Math.ceil((magicedenOutbidMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)))
+      const baseOfferPriceEth = baseOfferPrice / Math.pow(10, decimal)
 
-      // Check if new offer would exceed max bid price
-      if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
-        const message = `counter Offer ${offerPriceEth} ${currencySymbol} for ${task.contract.slug} exceeds max bid price ${maxBidPriceEth} ${currencySymbol}.Skipping ...`.toUpperCase()
+      // Check if new offer would exceed max bid price (using base offer price for initial check)
+      if (maxBidPriceEth > 0 && baseOfferPriceEth > maxBidPriceEth) {
+        const message = `counter Offer ${baseOfferPriceEth} ${currencySymbol} for ${task.contract.slug} exceeds max bid price ${maxBidPriceEth} ${currencySymbol}.Skipping ...`.toUpperCase()
         await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "magiceden");
 
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-          if (allTaskOrders.length > 0) {
-            const orderKeys = allTaskOrders.map((order: any) => order._id)
-            const extractedOrderIds = await extractMagicedenOrderHash(allTaskOrders)
+          // Filter orders to only include those belonging to the current task
+          const taskOrders = allTaskOrders.filter((order: any) => order.taskId === currentTask._id);
+          if (taskOrders.length > 0) {
+            const orderKeys = taskOrders.map((order: any) => order._id)
+            const extractedOrderIds = await extractMagicedenOrderHash(taskOrders)
             queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
           }
         }
@@ -10900,6 +10913,17 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         if (Number(order.offerPrice) <= incomingBidAmount) {
           const bidCount = getIncrementedBidCount(MAGICEDEN, task.contract.slug, task._id)
 
+          // Calculate offer price based on order type
+          let orderOfferPrice: number;
+          if (order.identifier === 'collection') {
+            // Collection vs collection: use normal margin
+            orderOfferPrice = baseOfferPrice;
+          } else {
+            // Collection vs trait/token: use 10x margin
+            const multipliedMargin = magicedenOutbidMargin * 10;
+            orderOfferPrice = Math.ceil((multipliedMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)));
+          }
+
           if (order.identifier.includes(':')) {
             // This is a trait offer
             const [attributeKey, attributeValue] = order.identifier.split(':');
@@ -10911,7 +10935,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               address: task.wallet,
               contractAddress: task.contract.contractAddress,
               quantity: 1,
-              offerPrice: offerPrice,
+              offerPrice: orderOfferPrice,
               expiration: expiration,
               privateKey: WALLET_PRIVATE_KEY,
               slug: task.contract.slug,
@@ -10941,7 +10965,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               address: task.wallet,
               contractAddress: task.contract.contractAddress,
               quantity: 1,
-              offerPrice: offerPrice,
+              offerPrice: orderOfferPrice,
               expiration: expiration,
               privateKey: WALLET_PRIVATE_KEY,
               slug: task.contract.slug,
@@ -10972,7 +10996,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               address: task.wallet,
               contractAddress: task.contract.contractAddress,
               quantity: 1,
-              offerPrice: offerPrice,
+              offerPrice: orderOfferPrice,
               expiration: expiration,
               privateKey: WALLET_PRIVATE_KEY,
               slug: task.contract.slug,
@@ -11004,7 +11028,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       if (counterbidsQueued > 0) {
         console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-        console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | New offer: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
+        console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${baseOfferPriceEth.toFixed(4)} ${currencySymbol} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
         console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
         // Cancel the orders that we're counterbidding
@@ -11399,7 +11423,17 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth, currency)
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
 
-      offerPrice = Math.ceil((openseaOutbidMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)))
+      // Determine margin based on bid type
+      let effectiveMargin: number;
+      if (task.bidType.toLowerCase() === "token") {
+        // Trait offer counterbidding token offers: use 10x margin
+        effectiveMargin = openseaOutbidMargin * 10;
+      } else {
+        // Trait offer counterbidding other trait offers: use regular margin
+        effectiveMargin = openseaOutbidMargin;
+      }
+      
+      offerPrice = Math.ceil((effectiveMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)))
       const offerPriceEth = offerPrice / Math.pow(10, decimal)
 
       if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
@@ -11603,17 +11637,20 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       // Calculate the new offer price based on incoming bid
       const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth, currency)
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
-      offerPrice = Math.ceil((openseaOutbidMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)))
-      const offerPriceEth = offerPrice / Math.pow(10, decimal)
+      // We'll calculate the actual offer price per order type in the loop below
+      const baseOfferPrice = Math.ceil((openseaOutbidMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)))
+      const baseOfferPriceEth = baseOfferPrice / Math.pow(10, decimal)
 
-      // Check if new offer would exceed max bid price
-      if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
-        const message = `counter Offer price ${offerPriceEth} ${currencySymbol} for ${task.contract.slug} exceeds max bid price ${maxBidPriceEth} ${currencySymbol} ON OPENSEA.Skipping ...`.toUpperCase()
+      // Check if new offer would exceed max bid price (using base offer price for initial check)
+      if (maxBidPriceEth > 0 && baseOfferPriceEth > maxBidPriceEth) {
+        const message = `counter Offer price ${baseOfferPriceEth} ${currencySymbol} for ${task.contract.slug} exceeds max bid price ${maxBidPriceEth} ${currencySymbol} ON OPENSEA.Skipping ...`.toUpperCase()
         await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea");
 
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-          if (allTaskOrders.length > 0) {
-            const cancelData = allTaskOrders.map((order) => {
+          // Filter orders to only include those belonging to the current task
+          const taskOrders = allTaskOrders.filter((order: any) => order.taskId === currentTask._id);
+          if (taskOrders.length > 0) {
+            const cancelData = taskOrders.map((order) => {
               return {
                 name: CANCEL_OPENSEA_BID,
                 data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
@@ -11633,6 +11670,17 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         if (Number(order.offerPrice) <= incomingBidAmount) {
           const bidCount = getIncrementedBidCount(OPENSEA, task.contract.slug, task._id)
 
+          // Calculate offer price based on order type
+          let orderOfferPrice: number;
+          if (order.identifier === 'collection') {
+            // Collection vs collection: use normal margin
+            orderOfferPrice = baseOfferPrice;
+          } else {
+            // Collection vs trait/token: use 10x margin
+            const multipliedMargin = openseaOutbidMargin * 10;
+            orderOfferPrice = Math.ceil((multipliedMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)));
+          }
+
           if (order.identifier.includes(':')) {
             // This is a trait offer
             const [traitType, traitValue] = order.identifier.split(':');
@@ -11644,7 +11692,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               address: task.wallet,
               privateKey: WALLET_PRIVATE_KEY,
               slug: task.contract.slug,
-              offerPrice: Number(offerPrice),
+              offerPrice: Number(orderOfferPrice),
               creatorFees,
               enforceCreatorFee: collectionDetails.enforceCreatorFee,
               expiry,
@@ -11667,7 +11715,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
           } else if (order.identifier === 'collection') {
             // This is a collection offer
-            colletionOffer = BigInt(offerPrice)
+            colletionOffer = BigInt(orderOfferPrice)
 
             const bidData: IOpenseaBidParams = {
               taskId: task._id,
@@ -11704,7 +11752,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               address: task.wallet,
               privateKey: WALLET_PRIVATE_KEY,
               slug: task.contract.slug,
-              offerPrice: Number(offerPrice),
+              offerPrice: Number(orderOfferPrice),
               creatorFees,
               enforceCreatorFee: collectionDetails.enforceCreatorFee,
               asset: {
@@ -11735,7 +11783,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       if (counterbidsQueued > 0) {
         console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-        console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | New offer: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
+        console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${baseOfferPriceEth.toFixed(4)} ${currencySymbol} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
         console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       } else {
         console.log(YELLOW + `[OpenSea collection_offer] Task ${task._id} - No offers to counterbid (all existing offers > incoming offer)` + RESET);
@@ -12030,7 +12078,8 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       // Calculate the new offer price
       const blurOutbidMargin = currentTask?.outbidOptions?.blurOutbidMargin || 0.01
       const rawPrice = (+bestPrice + Number(blurOutbidMargin.toFixed(2))) * 1e18
-      let offerPrice = BigInt(Math.round(rawPrice / 1e16) * 1e16)
+      // We'll calculate the actual offer price per order type in the loop below
+      const baseOfferPrice = BigInt(Math.round(rawPrice / 1e16) * 1e16)
 
       // Process each existing order
       let counterbidsQueued = 0;
@@ -12039,6 +12088,9 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         // Only counterbid orders that are <= incoming collection offer
         if (Number(order.offerPrice) <= incomingPriceWei) {
           const bidCount = getIncrementedBidCount(BLUR, task.contract.slug, task._id)
+
+          // Always use regular margin for Blur counterbids
+          const orderOfferPrice = baseOfferPrice;
 
           if (order.identifier.includes(':')) {
             // This is a trait offer
@@ -12051,7 +12103,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
               address: task.wallet,
               privateKey: WALLET_PRIVATE_KEY || '',
               contractAddress: task.contract.contractAddress,
-              offerPrice: Number(offerPrice),
+              offerPrice: Number(orderOfferPrice),
               slug: task.contract.slug,
               traits,
               expiry
@@ -12079,7 +12131,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
               address: task.wallet,
               privateKey: WALLET_PRIVATE_KEY || '',
               contractAddress: task.contract.contractAddress,
-              offerPrice: Number(offerPrice),
+              offerPrice: Number(orderOfferPrice),
               slug: task.contract.slug,
               expiry
             }
@@ -12110,7 +12162,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
       if (counterbidsQueued > 0) {
         console.log(GREEN + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-        console.log(GREEN + `[Blur Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | New offer: ${Number(offerPrice) / 1e18} ETH | Outbidding: ${bestPrice} ETH` + RESET);
+        console.log(GREEN + `[Blur Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${Number(baseOfferPrice) / 1e18} ETH | Outbidding: ${bestPrice} ETH` + RESET);
         console.log(GREEN + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       } else {
         console.log(YELLOW + `[Blur collection] Task ${task._id} - No offers to counterbid (all existing offers > incoming offer)` + RESET);
