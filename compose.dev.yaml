@@ -12,8 +12,6 @@ services:
       --activedefrag yes
     ports:
       - "6379:6379"
-    networks:
-      - redis-network
     volumes:
       - redis_data:/data
     healthcheck:
@@ -33,13 +31,7 @@ services:
       - "27017:27017"
     volumes:
       - mongodb_data:/data/db
-    networks:
-      - redis-network
 
 volumes:
   redis_data:
   mongodb_data:
-
-networks:
-  redis-network:
-    driver: bridge

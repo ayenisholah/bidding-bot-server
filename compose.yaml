@@ -33,8 +33,6 @@ services:
     depends_on:
       - mongodb
       - redis
-    networks:
-      - my_network
     volumes:
       - server_data:/app/data
 
@@ -67,8 +65,6 @@ services:
     depends_on:
       - mongodb
       - server
-    networks:
-      - my_network
 
   mongodb:
     image: "mongo:latest"
@@ -80,8 +76,6 @@ services:
       - "127.0.0.1:27017:27017"
     volumes:
       - mongodb_data:/data/db
-    networks:
-      - my_network
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 30s
@@ -103,8 +97,6 @@ services:
       --protected-mode no
     ports:
       - "127.0.0.1:6379:6379"
-    networks:
-      - my_network
     volumes:
       - redis_data:/data
     healthcheck:
@@ -119,7 +111,3 @@ volumes:
   mongodb_data:
   redis_data:
   server_data:
-
-networks:
-  my_network:
-    driver: bridge
