@@ -10919,8 +10919,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
             // Collection vs collection: use normal margin
             orderOfferPrice = baseOfferPrice;
           } else {
-            // Collection vs trait/token: use 10x margin
-            const multipliedMargin = magicedenOutbidMargin * 10;
+            // Collection vs trait/token: use configurable margin multiplier
+            const marginMultiplier = task.outbidOptions.crossTypeMarginMultiplier || 10;
+            const multipliedMargin = magicedenOutbidMargin * marginMultiplier;
             orderOfferPrice = Math.ceil((multipliedMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)));
           }
 
@@ -11676,8 +11677,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             // Collection vs collection: use normal margin
             orderOfferPrice = baseOfferPrice;
           } else {
-            // Collection vs trait/token: use 10x margin
-            const multipliedMargin = openseaOutbidMargin * 10;
+            // Collection vs trait/token: use configurable margin multiplier
+            const marginMultiplier = task.outbidOptions.crossTypeMarginMultiplier || 10;
+            const multipliedMargin = openseaOutbidMargin * marginMultiplier;
             orderOfferPrice = Math.ceil((multipliedMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)));
           }
 

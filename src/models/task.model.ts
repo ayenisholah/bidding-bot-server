@@ -34,6 +34,7 @@ export interface ITask {
     magicedenOutbidMargin: number | null;
     counterbid: boolean;
     cancelMaxWhenOutbid: boolean;
+    crossTypeMarginMultiplier?: number | null;
   };
   bidPrice: {
     min: number;
@@ -160,6 +161,7 @@ const TaskSchema: Schema = new Schema(
       magicedenOutbidMargin: { type: Number, default: null },
       counterbid: { type: Boolean, default: false },
       cancelMaxWhenOutbid: { type: Boolean, default: false },
+      crossTypeMarginMultiplier: { type: Number, default: 10 },
     },
     bidPrice: {
       min: { type: Number, required: true },
