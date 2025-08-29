@@ -3753,23 +3753,21 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
     defaultTTLSeconds: 5
   });
 
-  let lockAcquired = false;
+  const lockAcquired = await lockManager.acquireLock(counterLockKey, 5);
+  
+  if (!lockAcquired) {
+    const lockTaskId = getTaskIdForLog({ data: { taskId, _id: taskId } });
+    console.error(RED + `[ERROR - Job Processing - Task: ${lockTaskId}] CRITICAL: Could not acquire lock for counter increment after retries! Job ${jobId} may not be counted.` + RESET);
+    // Continue anyway to prevent job from being stuck, but log this critical error
+    await logger.logError(ErrorCategory.PERFORMANCE, 'Failed to acquire counter lock after retries', {
+      parentJobId,
+      jobId,
+      taskId,
+      operation: 'markJobAsProcessed'
+    });
+  }
+
   try {
-    // Acquire lock with short timeout to prevent deadlocks
-    lockAcquired = await lockManager.acquireLock(counterLockKey, 5);
-
-    if (!lockAcquired) {
-      console.log(RED + `[markJobAsProcessed] Failed to acquire counter lock for ${parentJobId}, retrying...` + RESET);
-      // Wait a bit and retry once
-      await new Promise(resolve => setTimeout(resolve, 50));
-      lockAcquired = await lockManager.acquireLock(counterLockKey, 5);
-
-      if (!lockAcquired) {
-        const lockTaskId = getTaskIdForLog({ data: { taskId, _id: taskId } });
-        console.error(RED + `[ERROR - Job Processing - Task: ${lockTaskId}] CRITICAL: Could not acquire lock for counter increment! Job ${jobId} may not be counted.` + RESET);
-        // Continue anyway to prevent job from being stuck
-      }
-    }
 
     // Re-fetch parent job inside the lock to get latest values
     parentJob = parentJobs.get(parentJobId);
