@@ -83,12 +83,6 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
           `OpenSea API call for ${slug}`
         );
 
-        // Log FULL API response
-        console.log(`[Collection API Full Response] ${slug}:`, JSON.stringify(collection, null, 2));
-        
-        // Log raw API response fees
-        console.log(`[Collection API Response] ${slug} - Raw fees:`, JSON.stringify(collection?.fees, null, 2));
-
         let creator_fees: { [key: string]: number } = {};
         let enforceCreatorFee = false;
         
