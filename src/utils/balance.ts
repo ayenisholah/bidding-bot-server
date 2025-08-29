@@ -254,7 +254,7 @@ export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress
     // Race between fetch and timeout
     const balance = await Promise.race([fetchPromise(), timeoutPromise]);
     return balance;
-  } catch (error: any) {
+  } catch {
     const elapsed = Date.now() - startTime;
     console.warn(`[fetchERC20BalanceFresh] Failed to fetch fresh balance after ${elapsed}ms, checking stale cache...`);
     
