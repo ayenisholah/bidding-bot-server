@@ -5,7 +5,6 @@ import { axiosInstance } from "../../init";
 import Listing from "../../models/listing.model";
 import { logger } from "../../utils/logger";
 import Bottleneck from "bottleneck";
-import { listingPriceCache } from "../../utils/listing-price-cache";
 import { roundToNineDecimals } from "../../utils/decimal-precision";
 
 const MAGENTA = '\x1b[35m';
@@ -218,13 +217,8 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
 
     console.log(`${MAGENTA}[MAGICEDEN - LISTING] ✅ Successfully listed ${contract} #${tokenId} for ${roundedPrice} ETH${RESET}`);
 
-    // Update listing price cache
-    await listingPriceCache.updatePrice(
-      contract.toLowerCase(),
-      tokenId,
-      roundedPrice,
-      walletAddress.toLowerCase()
-    );
+    // REMOVED: Cache update - we're using real-time prices now!
+    // await listingPriceCache.updatePrice(...)
 
     // Update finalListingPrice.magiceden and expiration in the database
     try {

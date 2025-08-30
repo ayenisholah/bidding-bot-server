@@ -112,6 +112,7 @@ export enum ErrorCategory {
   OPENSEA_BID = 'opensea_bid',
   TASK = 'task',
   TASK_MANAGEMENT = 'task_management',
+  CACHE = 'cache',
   STATE_MANAGEMENT = 'state_management'
 }
 

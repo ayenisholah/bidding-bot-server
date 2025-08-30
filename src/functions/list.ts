@@ -4,7 +4,7 @@ import { NETWORK, BASE_URL } from "../constants";
 import { decryptPrivateKey } from "../utils/crypto";
 import { AlchemyProvider, Wallet as Web3Wallet } from "ethers";
 import { getOpenseaFloor } from "./collection";
-import { logger } from "../utils/logger";
+import { logger, ErrorCategory } from "../utils/logger";
 import { updateListingExpiration } from "./relistExpired";
 import Listing from "../models/listing.model";
 import { listOnOpensea } from "../marketplace/opensea/list";
@@ -14,32 +14,59 @@ import { walletCache } from "../utils/wallet-cache";
 import { roundToNineDecimals } from "../utils/decimal-precision";
 import { axiosInstance, limiter } from "../init";
 import { API_KEY } from "..";
+import { getOpenseaTraitFloor } from "../utils/opensea-trait-floor";
+import { getTraitFilteredListings } from "../functions/tokenMetadata";
 
 config()
+
+// Color constants for console output
+const GREEN = '\x1b[32m';
+const YELLOW = '\x1b[33m';
+const RED = '\x1b[31m';
+const BLUE = '\x1b[34m';
+const CYAN = '\x1b[36m';
+const RESET = '\x1b[0m';
 
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY
 const provider = new AlchemyProvider(NETWORK, ALCHEMY_API_KEY)
 
 export async function createListing(data: IListing) {
-  console.log('\n=== CREATE LISTING CALLED ===');
-  console.log('Token ID:', data.tokenId);
-  console.log('Running:', data.running);
-  console.log('Selected Marketplaces:', data.selectedMarketplaces);
-  console.log('Listing ID:', data._id);
-  console.log('Timestamp:', new Date().toISOString());
+  console.log(CYAN + '\n=== [LISTING - Create] CREATE LISTING CALLED ===' + RESET);
+  console.log(BLUE + `[LISTING - Create] Token ID: ${data.tokenId}` + RESET);
+  console.log(BLUE + `[LISTING - Create] Running: ${data.running}` + RESET);
+  console.log(BLUE + `[LISTING - Create] Selected Marketplaces: ${data.selectedMarketplaces}` + RESET);
+  console.log(BLUE + `[LISTING - Create] Listing ID: ${data._id}` + RESET);
+  console.log(BLUE + `[LISTING - Create] Timestamp: ${new Date().toISOString()}` + RESET);
 
   try {
     // Only process if listing is running
     if (!data.running) {
-      console.log('Listing not running, returning early');
+      console.log(YELLOW + '[LISTING - Create] Listing not running, returning early' + RESET);
+      logger.logWarning(ErrorCategory.BUSINESS_LOGIC, 'Listing creation skipped - not running', {
+        listingId: data._id?.toString(),
+        tokenId: data.tokenId,
+        contractAddress: data.contract.contractAddress,
+        component: 'listing',
+        operation: 'create_listing_check'
+      });
       return;
     }
 
-    console.log('Step 1: Fetching fresh data...');
+    console.log(CYAN + '[LISTING - Create] Step 1: Fetching fresh data...' + RESET);
+    
+    logger.logInfo(ErrorCategory.DATABASE, 'Starting listing creation', {
+      listingId: data._id?.toString(),
+      tokenId: data.tokenId,
+      contractAddress: data.contract.contractAddress,
+      selectedMarketplaces: data.selectedMarketplaces,
+      component: 'listing',
+      operation: 'create_listing_start'
+    });
+    
     // Fetch fresh data if we have an _id
     let freshData = data;
     if (data._id && typeof data._id === 'object') {
-      console.log(`Step 1.1: Querying database for listing ${data._id}...`);
+      console.log(BLUE + `[LISTING - Create] Step 1.1: Querying database for listing ${data._id}...` + RESET);
       const queryStartTime = Date.now();
 
       try {
@@ -51,7 +78,7 @@ export async function createListing(data: IListing) {
         ]);
 
         const queryTime = Date.now() - queryStartTime;
-        console.log(`Step 1.2: Database query completed in ${queryTime}ms`);
+        console.log(GREEN + `[LISTING - Create] Step 1.2: Database query completed in ${queryTime}ms` + RESET);
 
         if (freshListing) {
           // Use the complete fresh listing data and merge with any passed data
@@ -61,12 +88,39 @@ export async function createListing(data: IListing) {
             finalListingPrice: freshListing.finalListingPrice || data.finalListingPrice,
             listingExpiration: freshListing.listingExpiration || data.listingExpiration,
           };
-          console.log('Step 1.3: Fresh data retrieved and merged');
+          console.log(GREEN + '[LISTING - Create] Step 1.3: Fresh data retrieved and merged' + RESET);
+          
+          logger.logInfo(ErrorCategory.DATABASE, 'Fresh listing data retrieved', {
+            listingId: data._id?.toString(),
+            tokenId: data.tokenId,
+            queryTimeMs: queryTime,
+            component: 'listing',
+            operation: 'fetch_fresh_data'
+          });
         } else {
-          console.log('Step 1.3: No fresh listing found in database');
+          console.log(YELLOW + '[LISTING - Create] Step 1.3: No fresh listing found in database' + RESET);
+          
+          logger.logWarning(ErrorCategory.DATABASE, 'No fresh listing found in database', {
+            listingId: data._id?.toString(),
+            tokenId: data.tokenId,
+            component: 'listing',
+            operation: 'fetch_fresh_data'
+          });
         }
       } catch (dbError) {
-        console.error('Step 1.3: Database query error:', dbError);
+        console.error(RED + '[LISTING - Create] Step 1.3: Database query error' + RESET, dbError);
+        
+        logger.logDatabaseError('Database query failed during listing creation', {
+          listingId: data._id?.toString(),
+          tokenId: data.tokenId,
+          contractAddress: data.contract.contractAddress,
+          queryTimeMs: Date.now() - queryStartTime,
+          error: dbError as Error,
+          errorMessage: dbError instanceof Error ? dbError.message : 'Unknown error',
+          component: 'listing',
+          operation: 'fetch_fresh_data'
+        });
+        
         throw new Error(`Database query failed: ${dbError instanceof Error ? dbError.message : 'Unknown error'}`);
       }
     }
@@ -185,7 +239,17 @@ export async function createListing(data: IListing) {
         // Enforce floor price constraint if enabled
         const doNotListBelowFloor = freshData.doNotListBelowFloor === true; // Default to false
         if (doNotListBelowFloor) {
-          const floorPrice = await getOpenseaFloor(freshData.contract.slug);
+          let floorPrice: number;
+          
+          // Use trait floor if trait-based pricing is enabled
+          if ((freshData.dynamicPricingBasis === 'HIGHEST_TRAIT_FLOOR' || freshData.dynamicPricingBasis === 'SPECIFIC_TRAIT') 
+              && freshData.selectedTrait?.trait_type && freshData.selectedTrait?.value !== undefined) {
+            console.log(`Using trait floor for ${freshData.selectedTrait.trait_type}:${freshData.selectedTrait.value}`);
+            floorPrice = await getOpenseaTraitFloor(freshData.contract.slug, freshData.selectedTrait.trait_type, freshData.selectedTrait.value);
+          } else {
+            floorPrice = await getOpenseaFloor(freshData.contract.slug);
+          }
+          
           if (listingPrice < floorPrice) {
             console.log(`Instant price ${listingPrice} is below floor price ${floorPrice}, adjusting to floor price`);
             listingPrice = floorPrice;
@@ -217,11 +281,21 @@ export async function createListing(data: IListing) {
         return;
       }
 
-      // Check if we have the best listing
-      const isOurListingAtFloor = await checkIfWalletHasBestListing(freshData.contract.slug, walletAddress);
+      // Check if we need to adjust our listing based on undercut margin
+      const shouldSkipListing = await shouldSkipListingWithUndercutCheck(
+        freshData.contract.slug, 
+        walletAddress, 
+        listingPrice,
+        parseFloat(freshData.underCutMargin) || 0.00001,
+        marketplaceLower,
+        (freshData.dynamicPricingBasis === 'HIGHEST_TRAIT_FLOOR' || freshData.dynamicPricingBasis === 'SPECIFIC_TRAIT') 
+          && freshData.selectedTrait?.trait_type && freshData.selectedTrait?.value !== undefined 
+          ? freshData.selectedTrait 
+          : undefined
+      );
       
-      if (isOurListingAtFloor) {
-        // We have the best listing, check expiration time
+      if (shouldSkipListing) {
+        // We have the best listing with proper margin, check expiration time
         const marketplaceExpiration = freshData.listingExpiration?.[marketplaceLower];
         if (marketplaceExpiration) {
           const expirationTime = new Date(marketplaceExpiration).getTime();
@@ -230,13 +304,33 @@ export async function createListing(data: IListing) {
           
           if (timeUntilExpiration > 60000) { // More than 1 minute remaining
             const minutesRemaining = Math.floor(timeUntilExpiration / 60000);
-            console.log(`[LISTING - SKIPPED] Already have the best listing on ${marketplace} with ${minutesRemaining} minutes remaining`);
+            console.log(GREEN + `[LISTING - SKIPPED] Already have optimal listing on ${marketplace} with ${minutesRemaining} minutes remaining` + RESET);
+            
+            logger.logInfo(ErrorCategory.BUSINESS_LOGIC, 'Listing skipped - optimal position maintained', {
+              listingId: freshData._id?.toString(),
+              marketplace,
+              listingPrice,
+              undercutMargin: freshData.underCutMargin,
+              minutesRemaining,
+              component: 'listing',
+              operation: 'skip_optimal_listing'
+            });
             return;
           } else {
             // Less than 1 minute remaining, set price to floor
-            const floorPrice = await getOpenseaFloor(freshData.contract.slug);
+            let floorPrice: number;
+            
+            // Use trait floor if trait-based pricing is enabled
+            if ((freshData.dynamicPricingBasis === 'HIGHEST_TRAIT_FLOOR' || freshData.dynamicPricingBasis === 'SPECIFIC_TRAIT') 
+                && freshData.selectedTrait?.trait_type && freshData.selectedTrait?.value !== undefined) {
+              console.log(`[LISTING - FLOOR MATCH] Using trait floor for ${freshData.selectedTrait.trait_type}:${freshData.selectedTrait.value}`);
+              floorPrice = await getOpenseaTraitFloor(freshData.contract.slug, freshData.selectedTrait.trait_type, freshData.selectedTrait.value);
+            } else {
+              floorPrice = await getOpenseaFloor(freshData.contract.slug);
+            }
+            
             listingPrice = roundToNineDecimals(floorPrice);
-            console.log(`[LISTING - FLOOR MATCH] Best listing expiring soon on ${marketplace}, relisting at floor price: ${listingPrice} ETH`);
+            console.log(YELLOW + `[LISTING - FLOOR MATCH] Best listing expiring soon on ${marketplace}, relisting at floor price: ${listingPrice} ETH` + RESET);
           }
         }
       }
@@ -299,22 +393,44 @@ export async function createListing(data: IListing) {
       }
     });
 
-    console.log('Step 8: createListing function completed successfully');
-    // Results are already logged gracefully in marketplace-specific functions
-    // No need for additional error logging here
+    console.log(GREEN + '[LISTING - Create] Step 8: createListing function completed successfully' + RESET);
+    
+    logger.logInfo(ErrorCategory.GENERAL, 'Listing creation completed successfully', {
+      listingId: data._id?.toString(),
+      tokenId: data.tokenId,
+      contractAddress: data.contract.contractAddress,
+      selectedMarketplaces: data.selectedMarketplaces,
+      component: 'listing',
+      operation: 'create_listing_complete'
+    });
 
   } catch (error) {
+    console.error(RED + `[LISTING - Create] ❌ Unexpected listing error for ${data.tokenId}` + RESET, error);
+    
     // Only log unexpected errors that weren't handled by marketplace-specific functions
     if (!error || (error instanceof Error && !error.message.includes('Magic Eden') && !error.message.includes('Blur') && !error.message.includes('OpenSea'))) {
-      await logger.logMarketplaceError('Error creating listing', {
+      logger.logMarketplaceError('Error creating listing', {
+        listingId: data._id?.toString(),
         contractAddress: data.contract.contractAddress,
         tokenId: data.tokenId,
         selectedMarketplaces: data.selectedMarketplaces,
         operation: 'create_listing',
         error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
+        errorMessage: error instanceof Error ? error.message : String(error),
+        component: 'listing'
       });
-      console.error(`❌ Unexpected listing error for ${data.tokenId}`);
+    } else {
+      // Marketplace-specific error, log as debug only
+      logger.logDebug(ErrorCategory.MARKETPLACE, 'Marketplace-specific listing error', {
+        listingId: data._id?.toString(),
+        contractAddress: data.contract.contractAddress,
+        tokenId: data.tokenId,
+        selectedMarketplaces: data.selectedMarketplaces,
+        error: error as Error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        component: 'listing',
+        operation: 'create_listing_marketplace_error'
+      });
     }
   }
 }
@@ -410,7 +526,17 @@ async function calculateListingPrice(data: IListing, marketplace: 'opensea' | 'b
   // Apply floor price constraint if enabled
   const doNotListBelowFloor = data.doNotListBelowFloor === true; // Default to false if not specified
   if (doNotListBelowFloor) {
-    const floorPrice = await getOpenseaFloor(data.contract.slug);
+    let floorPrice: number;
+    
+    // Use trait floor if trait-based pricing is enabled
+    if ((data.dynamicPricingBasis === 'HIGHEST_TRAIT_FLOOR' || data.dynamicPricingBasis === 'SPECIFIC_TRAIT') 
+        && data.selectedTrait?.trait_type && data.selectedTrait?.value !== undefined) {
+      console.log(`Using trait floor for ${data.selectedTrait.trait_type}:${data.selectedTrait.value}`);
+      floorPrice = await getOpenseaTraitFloor(data.contract.slug, data.selectedTrait.trait_type, data.selectedTrait.value);
+    } else {
+      floorPrice = await getOpenseaFloor(data.contract.slug);
+    }
+    
     if (calculatedPrice < floorPrice) {
       console.log(`Price ${calculatedPrice} is below floor price ${floorPrice}, adjusting to floor price`);
       calculatedPrice = floorPrice;
@@ -456,14 +582,165 @@ interface ListingsResponse {
 }
 
 /**
+ * Check if we should skip listing based on undercut margin analysis
+ * 
+ * @param collectionSlug - The OpenSea collection slug
+ * @param walletAddress - Our wallet address
+ * @param ourListingPrice - The price we want to list at
+ * @param undercutMargin - Our required undercut margin
+ * @param marketplace - The marketplace being checked
+ * @returns True if we should skip listing (we have optimal position), false if we should list
+ */
+export async function shouldSkipListingWithUndercutCheck(
+  collectionSlug: string, 
+  walletAddress: string, 
+  ourListingPrice: number, 
+  undercutMargin: number,
+  marketplace: string,
+  selectedTrait?: { trait_type: string; value: any }
+): Promise<boolean> {
+  try {
+    console.log(BLUE + `[LISTING - Undercut Check] Checking optimal listing position for ${marketplace}` + RESET);
+    console.log(CYAN + `[LISTING - Undercut Check] Our price: ${ourListingPrice}, Undercut margin: ${undercutMargin}` + RESET);
+    
+    // Check if we need trait-filtered listings
+    let listings: any[] = [];
+    
+    if (selectedTrait?.trait_type && selectedTrait?.value !== undefined) {
+      console.log(CYAN + `[LISTING - Undercut Check] Using trait-filtered listings for ${selectedTrait.trait_type}:${selectedTrait.value}` + RESET);
+      
+      // Get trait-filtered listings
+      const traitListings = await getTraitFilteredListings(collectionSlug, selectedTrait.trait_type, selectedTrait.value, 3);
+      
+      // Convert to OpenSea format for consistency
+      listings = traitListings.map(item => ({
+        price: {
+          current: {
+            value: (item.price * 1e18).toString(),
+            decimals: 18
+          }
+        },
+        protocol_data: {
+          parameters: {
+            offerer: item.contractAddress // Note: this is not the actual offerer, we'd need additional data
+          }
+        }
+      }));
+      
+      if (listings.length === 0) {
+        console.log(YELLOW + `[LISTING - Undercut Check] No trait-filtered listings found, should list` + RESET);
+        return false;
+      }
+    } else {
+      // Get the best (floor) listings to analyze the market
+      const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
+        `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=3`, // Get top 3 to analyze
+        {
+          headers: { 'x-api-key': API_KEY }
+        }
+      ));
+
+      if (!data?.listings || data.listings.length === 0) {
+        console.log(YELLOW + `[LISTING - Undercut Check] No listings found, should list` + RESET);
+        return false;
+      }
+      
+      listings = data.listings;
+    }
+
+    const floorListing = listings[0];
+    const floorPrice = parseFloat(floorListing.price.current.value) / Math.pow(10, floorListing.price.current.decimals);
+    const floorOfferer = floorListing.protocol_data.parameters.offerer?.toLowerCase();
+    
+    console.log(CYAN + `[LISTING - Undercut Check] Floor price: ${floorPrice} ETH from ${floorOfferer}` + RESET);
+    
+    // For trait-based listings, we can't easily determine the offerer, so skip that check
+    if (!selectedTrait) {
+      // If we are the floor listing
+      if (floorOfferer === walletAddress.toLowerCase()) {
+        console.log(BLUE + `[LISTING - Undercut Check] We have the floor listing` + RESET);
+        
+        // Check if there's a second listing and if we're maintaining proper margin
+        if (listings.length > 1) {
+          const secondPrice = parseFloat(listings[1].price.current.value) / Math.pow(10, listings[1].price.current.decimals);
+          const priceDifference = secondPrice - floorPrice;
+          
+          console.log(CYAN + `[LISTING - Undercut Check] Second price: ${secondPrice} ETH, difference: ${priceDifference}` + RESET);
+          
+          // LISTING WAR LOGIC: If difference is 0 (tie), continue the war by undercutting
+          if (priceDifference === 0) {
+            console.log(YELLOW + `[LISTING - Undercut Check] Tie detected (difference = 0), continuing listing war` + RESET);
+            return false;
+          }
+          
+          // LISTING WAR STRATEGY: If difference equals our undercut margin, preemptively undercut to maintain advantage
+          // This prevents competitors from easily matching our position
+          if (Math.abs(priceDifference - undercutMargin) < 0.000001) {
+            console.log(YELLOW + `[LISTING - Undercut Check] Competitor at exact undercut margin (${priceDifference} ≈ ${undercutMargin}), preemptively continuing war` + RESET);
+            return false;
+          }
+          
+          // If the difference is significantly larger than our undercut margin, we might want to adjust
+          if (priceDifference > undercutMargin * 2) {
+            console.log(YELLOW + `[LISTING - Undercut Check] Large gap detected (${priceDifference} > ${undercutMargin * 2}), should relist` + RESET);
+            return false;
+          }
+        }
+        
+        console.log(GREEN + `[LISTING - Undercut Check] ✅ Optimal position maintained` + RESET);
+        return true;
+      }
+    }
+    
+    // We're not the floor (or checking trait-based), check if we need to undercut
+    const targetPrice = floorPrice - undercutMargin;
+    const priceDifference = Math.abs(ourListingPrice - targetPrice);
+    
+    console.log(CYAN + `[LISTING - Undercut Check] Target price: ${targetPrice}, price difference: ${priceDifference}` + RESET);  
+    console.log(YELLOW + `[LISTING - Undercut Check] Should relist to maintain undercut margin` + RESET);
+    return false;
+
+  } catch (error: any) {
+    console.error(RED + `[LISTING - Undercut Check] Error checking undercut position` + RESET, error);
+    
+    logger.logApiError('Failed to check undercut listing position', {
+      collectionSlug,
+      walletAddress,
+      ourListingPrice,
+      undercutMargin,
+      marketplace,
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      component: 'listing',
+      operation: 'undercut_check'
+    });
+    
+    // On error, don't skip - allow listing to proceed
+    return false;
+  }
+}
+
+/**
  * Checks if the given wallet address has the best (floor) listing for a collection
  * 
  * @param collectionSlug - The OpenSea collection slug
  * @param walletAddress - The wallet address to check against the best listing's offerer
+ * @param selectedTrait - Optional trait to filter listings by
  * @returns True if the wallet has the best listing, false otherwise
  */
-export async function checkIfWalletHasBestListing(collectionSlug: string, walletAddress: string): Promise<boolean> {
+export async function checkIfWalletHasBestListing(
+  collectionSlug: string, 
+  walletAddress: string,
+  selectedTrait?: { trait_type: string; value: any }
+): Promise<boolean> {
   try {
+    // For trait-based checks, we can't easily determine wallet ownership
+    // This would require additional API calls to get listing details
+    if (selectedTrait?.trait_type && selectedTrait?.value !== undefined) {
+      console.log(YELLOW + `[LISTING - Best Check] Trait-based best listing check not fully supported, returning false` + RESET);
+      return false;
+    }
+
     const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
       `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
       {

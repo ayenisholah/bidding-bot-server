@@ -1,9 +1,18 @@
 import { Queue, Job } from 'bullmq';
 import Listing, { IListing } from '../models/listing.model';
 import { createListing } from './list';
-import { logger } from '../utils/logger';
+import { logger, ErrorCategory } from '../utils/logger';
 import WebSocketManager from '../utils/websocket-manager';
 import { PROCESS_LISTING, queue } from '..';
+import { prefetchTokenTraits } from '../functions/tokenMetadata';
+
+// Color constants for console output
+const GREEN = '\x1b[32m';
+const YELLOW = '\x1b[33m';
+const RED = '\x1b[31m';
+const BLUE = '\x1b[34m';
+const CYAN = '\x1b[36m';
+const RESET = '\x1b[0m';
 
 // Use the main queue from index.ts
 let mainQueue: Queue | null = null;
@@ -15,6 +24,10 @@ export async function getMainQueue(): Promise<Queue> {
     mainQueue = queue;
   }
   if (!mainQueue) {
+    logger.logGeneralError('Main queue not initialized', {
+      component: 'listing_scheduler',
+      operation: 'get_main_queue'
+    });
     throw new Error('Main queue not initialized');
   }
   return mainQueue;
@@ -27,31 +40,48 @@ const activeJobs = new Map<string, string>();
  * Schedule a listing to run at specified intervals
  */
 export async function scheduleListing(listing: IListing): Promise<void> {
-  console.log(`\n=== SCHEDULE LISTING CALLED ===`);
-  console.log(`Listing ID: ${listing._id}`);
-  console.log(`Token ID: ${listing.tokenId}`);
-  console.log(`Timestamp: ${new Date().toISOString()}`);
+  console.log(CYAN + `\n=== [LISTING SCHEDULER] SCHEDULE LISTING CALLED ===` + RESET);
+  console.log(BLUE + `[LISTING SCHEDULER] Listing ID: ${listing._id}` + RESET);
+  console.log(BLUE + `[LISTING SCHEDULER] Token ID: ${listing.tokenId}` + RESET);
+  console.log(BLUE + `[LISTING SCHEDULER] Timestamp: ${new Date().toISOString()}` + RESET);
 
   try {
-    console.log('Schedule Step 1: Getting main queue...');
+    console.log(CYAN + '[LISTING SCHEDULER] Schedule Step 1: Getting main queue...' + RESET);
     const queue = await getMainQueue();
     const listingId = listing._id.toString();
 
-    console.log('Schedule Step 2: Cancelling existing jobs...');
+    logger.logInfo(ErrorCategory.QUEUE, 'Scheduling listing job', {
+      listingId,
+      tokenId: listing.tokenId,
+      contractAddress: listing.contract.contractAddress,
+      running: listing.running,
+      component: 'listing_scheduler',
+      operation: 'schedule_listing_start'
+    });
+
+    console.log(CYAN + '[LISTING SCHEDULER] Schedule Step 2: Cancelling existing jobs...' + RESET);
     // Cancel existing job if any
     await cancelListingJob(listingId);
 
     if (!listing.running) {
-      console.log('Schedule Step 3: Listing not running, returning early');
+      console.log(YELLOW + '[LISTING SCHEDULER] Schedule Step 3: Listing not running, returning early' + RESET);
+      
+      logger.logWarning(ErrorCategory.BUSINESS_LOGIC, 'Listing not running - skipping schedule', {
+        listingId,
+        tokenId: listing.tokenId,
+        contractAddress: listing.contract.contractAddress,
+        component: 'listing_scheduler',
+        operation: 'schedule_listing_skip'
+      });
       return;
     }
 
-    console.log('Schedule Step 3: Calculating delay...');
+    console.log(CYAN + '[LISTING SCHEDULER] Schedule Step 3: Calculating delay...' + RESET);
     // Calculate delay in milliseconds
     const delayMs = convertToSeconds(listing.loopInterval.value, listing.loopInterval.unit) * 1000;
-    console.log(`Schedule Step 3.1: Delay in ms: ${delayMs}`);
+    console.log(BLUE + `[LISTING SCHEDULER] Schedule Step 3.1: Delay in ms: ${delayMs}` + RESET);
 
-    console.log('Schedule Step 4: Adding job to queue...');
+    console.log(CYAN + '[LISTING SCHEDULER] Schedule Step 4: Adding job to queue...' + RESET);
     // Add a single repeating job with immediate execution
     const job = await queue.add(
       PROCESS_LISTING,
@@ -73,15 +103,32 @@ export async function scheduleListing(listing: IListing): Promise<void> {
       }
     );
 
-    console.log(`Schedule Step 5: Job added with ID: ${job.id}`);
+    console.log(GREEN + `[LISTING SCHEDULER] Schedule Step 5: Job added with ID: ${job.id}` + RESET);
     activeJobs.set(listingId, job.id!);
-    console.log('Schedule Step 6: scheduleListing completed successfully');
+    console.log(GREEN + '[LISTING SCHEDULER] Schedule Step 6: scheduleListing completed successfully' + RESET);
+
+    logger.logInfo(ErrorCategory.QUEUE, 'Listing job scheduled successfully', {
+      listingId,
+      tokenId: listing.tokenId,
+      contractAddress: listing.contract.contractAddress,
+      jobId: job.id,
+      delayMs,
+      loopInterval: listing.loopInterval,
+      component: 'listing_scheduler',
+      operation: 'schedule_listing_success'
+    });
 
   } catch (error) {
+    console.error(RED + `[LISTING SCHEDULER - Error] Failed to schedule listing ${listing._id}` + RESET, error);
+    
     await logger.logQueueError('Failed to schedule listing', {
       listingId: listing._id.toString(),
+      tokenId: listing.tokenId,
+      contractAddress: listing.contract.contractAddress,
       error: error as Error,
       errorMessage: error instanceof Error ? error.message : String(error),
+      component: 'listing_scheduler',
+      operation: 'schedule_listing_error'
     });
   }
 }
@@ -159,27 +206,34 @@ export async function updateListingSchedule(listing: IListing): Promise<void> {
  * Process a listing job - to be called from the main worker in index.ts
  */
 export async function processListingJob(job: Job): Promise<boolean> {
-  console.log('\n=== PROCESS LISTING JOB STARTED ===');
+  console.log(CYAN + '\n=== [LISTING SCHEDULER] PROCESS LISTING JOB STARTED ===' + RESET);
   const { listingId } = job.data;
-  console.log('Job ID:', job.id);
-  console.log('Listing ID:', listingId);
+  console.log(BLUE + `[LISTING SCHEDULER] Job ID: ${job.id}` + RESET);
+  console.log(BLUE + `[LISTING SCHEDULER] Listing ID: ${listingId}` + RESET);
 
   try {
-    console.log('Step 1: Updating progress to 10...');
+    logger.logInfo(ErrorCategory.QUEUE, 'Processing listing job started', {
+      jobId: job.id,
+      listingId,
+      component: 'listing_scheduler',
+      operation: 'process_listing_job_start'
+    });
+
+    console.log(CYAN + '[LISTING SCHEDULER] Step 1: Updating progress to 10...' + RESET);
     // Update progress to prevent stalling
     // Progress reporting removed - await job.updateProgress(10);
 
-    console.log('Step 3: Updating progress to 20...');
+    console.log(CYAN + '[LISTING SCHEDULER] Step 3: Updating progress to 20...' + RESET);
     // Update progress
     // Progress reporting removed - await job.updateProgress(20);
 
-    console.log('Step 4: Fetching listing from database...');
+    console.log(CYAN + '[LISTING SCHEDULER] Step 4: Fetching listing from database...' + RESET);
     // Fetch latest listing data
     const listing = await Listing.findById(listingId);
-    console.log('Fetched listing:', listing ? 'Found' : 'Not found');
+    console.log(listing ? GREEN + '[LISTING SCHEDULER] Fetched listing: Found' + RESET : YELLOW + '[LISTING SCHEDULER] Fetched listing: Not found' + RESET);
     if (listing) {
-      console.log('Listing running status:', listing.running);
-      console.log('Listing selectedMarketplaces:', listing.selectedMarketplaces);
+      console.log(BLUE + `[LISTING SCHEDULER] Listing running status: ${listing.running}` + RESET);
+      console.log(BLUE + `[LISTING SCHEDULER] Listing selectedMarketplaces: ${listing.selectedMarketplaces}` + RESET);
     }
 
     if (!listing) {
@@ -240,9 +294,20 @@ export async function processListingJob(job: Job): Promise<boolean> {
     // Update progress to completion
     // Progress reporting removed - await job.updateProgress(100);
 
+    console.log(GREEN + '[LISTING SCHEDULER] ✅ Listing job completed successfully' + RESET);
+    
+    logger.logInfo(ErrorCategory.QUEUE, 'Listing job completed successfully', {
+      jobId: job.id,
+      listingId,
+      component: 'listing_scheduler',
+      operation: 'process_listing_job_success'
+    });
+
     return true
 
   } catch (error) {
+    console.error(RED + `[LISTING SCHEDULER - Error] Process listing job failed: ${listingId}` + RESET, error);
+    
     // Log to database for tracking
     await logger.logQueueJobFailed(job.name, {
       jobId: job.id,
@@ -250,12 +315,14 @@ export async function processListingJob(job: Job): Promise<boolean> {
       queueName: 'BIDDING_BOT',
       error: error as Error,
       errorMessage: error instanceof Error ? error.message : String(error),
+      component: 'listing_scheduler',
+      operation: 'process_listing_job_error'
     });
 
     // Only show brief error message - detailed errors are already logged by marketplace functions
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     if (!errorMsg.includes('Magic Eden') && !errorMsg.includes('Blur') && !errorMsg.includes('OpenSea')) {
-      console.error(`❌ Process listing job failed: ${errorMsg}`);
+      console.error(RED + `[LISTING SCHEDULER - Error] ❌ Process listing job failed: ${errorMsg}` + RESET);
     }
 
     throw error;
@@ -287,6 +354,25 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
     const activeListings = await Listing.find({ running: true });
 
     // Process active listings
+
+    // Pre-fetch traits for listings with trait-based pricing
+    const traitListings = activeListings.filter(listing => 
+      (listing.dynamicPricingBasis === 'HIGHEST_TRAIT_FLOOR' || listing.dynamicPricingBasis === 'SPECIFIC_TRAIT') &&
+      listing.selectedTrait?.trait_type && 
+      listing.selectedTrait?.value !== undefined
+    );
+    
+    if (traitListings.length > 0) {
+      console.log(`Pre-fetching traits for ${traitListings.length} trait-based listings...`);
+      const tokensToFetch = traitListings.map(listing => ({
+        contractAddress: listing.contract.contractAddress,
+        tokenId: listing.tokenId
+      }));
+      
+      await prefetchTokenTraits(tokensToFetch).catch(err => {
+        console.error('Error pre-fetching token traits:', err);
+      });
+    }
 
     // Process each active listing
     for (const listing of activeListings) {

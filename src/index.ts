@@ -55,6 +55,7 @@ import WebSocketManager from "./utils/websocket-manager";
 import Listing from "./models/listing.model";
 import { initializeListingScheduler, shutdownListingScheduler, scheduleListing, cancelListingJob, processListingJob } from "./functions/listingScheduler";
 import { initializeExpirationMonitor, stopExpirationMonitor } from "./functions/relistExpired";
+import { initializeExpiredPriceCleanup, stopExpiredPriceCleanup } from "./functions/cleanupExpiredPrices";
 import { handleListingPriceUpdate } from "./functions/priceMonitor";
 import { createListing } from "./functions/list";
 import { BullMQErrorFormatter } from "./utils/bullmq-error-formatter";
@@ -197,6 +198,7 @@ function hasSeenItem(cache: BoundedCache<string, number>, key: string): boolean 
 }
 // Set up periodic intervals
 let expirationMonitorInterval: NodeJS.Timeout | null = null;
+let expiredPriceCleanupInterval: NodeJS.Timeout | null = null;
 let validateBidCountInterval: NodeJS.Timeout | null = null;
 
 const SERVER_IP = process.env.SERVER_IP as string
@@ -2663,6 +2665,14 @@ async function startServer() {
       checkInterval: 5 * 60 * 1000 // 5 minutes
     });
 
+    // Initialize expired price cleanup
+    expiredPriceCleanupInterval = initializeExpiredPriceCleanup();
+    console.log('🧹 Expired price cleanup initialized');
+    await logger.logInfo(ErrorCategory.GENERAL, 'Expired price cleanup initialized', {
+      schedulerType: 'expired_price_cleanup',
+      checkInterval: 5 * 60 * 1000 // 5 minutes
+    });
+
     // Initialize orphaned job recovery system
     orphanedJobRecovery.startRecovery(30000); // Check every 30 seconds
     console.log('🔧 Orphaned job recovery system initialized');
@@ -2836,6 +2846,12 @@ process.on('SIGINT', async () => {
     console.log('Expiration monitor stopped');
   }
 
+  // Stop expired price cleanup
+  if (expiredPriceCleanupInterval) {
+    stopExpiredPriceCleanup(expiredPriceCleanupInterval);
+    console.log('Expired price cleanup stopped');
+  }
+
   // Stop orphaned job recovery
   orphanedJobRecovery.stopRecovery();
   console.log('Orphaned job recovery stopped');
@@ -2901,6 +2917,12 @@ process.on('SIGTERM', async () => {
   if (expirationMonitorInterval) {
     stopExpirationMonitor(expirationMonitorInterval);
     console.log('Expiration monitor stopped');
+  }
+
+  // Stop expired price cleanup
+  if (expiredPriceCleanupInterval) {
+    stopExpiredPriceCleanup(expiredPriceCleanupInterval);
+    console.log('Expired price cleanup stopped');
   }
 
   // Stop orphaned job recovery
@@ -5276,6 +5298,11 @@ async function processListingUpdateJob(job: Job): Promise<boolean> {
     if (!freshListing) {
       return false;
     }
+
+    // Clear cache before creating listing to ensure fresh price comparison
+    const { listingPriceCache } = await import('./utils/listing-price-cache');
+    console.log(`[Listing Update] Clearing cache for ${freshListing.contract.contractAddress}:${freshListing.tokenId} before price adjustment`);
+    await listingPriceCache.clearPrice(freshListing.contract.contractAddress, freshListing.tokenId);
 
     // Create listing with adjusted price
     const adjustedListing = {

@@ -1,1 +1,9 @@
-increament for counterbiding collection/trait bids shoud be 10-100x higher than the other
+db.updates.insertOne({
+  version: '2.4.0',
+  releaseDate: new Date(),
+  changes: [ 'stable beta' ],
+  criticalUpdate: true,
+  minimumVersion: '1.0.0',
+  downloadUrl: 'https://gist.githubusercontent.com/ayenisholah/4767c3e4aac92af7c1a1a717c829183b/raw/3b078ee6abb4737804f800fc116d1bcc8bdbfd47/install-production.sh',
+  isBeta: true
+})

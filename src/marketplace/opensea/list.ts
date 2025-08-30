@@ -11,7 +11,6 @@ import { BASE_URL, domain, minABI, NETWORK } from "../../constants";
 import Listing from "../../models/listing.model";
 import { logger } from "../../utils/logger";
 import { convertDurationForOpenSea } from "../../utils/duration";
-import { listingPriceCache } from "../../utils/listing-price-cache";
 import { roundToNineDecimals } from "../../utils/decimal-precision";
 
 config()
@@ -430,13 +429,8 @@ export const listOnOpensea = async (
   } else {
     console.log(`${BLUE}[OPENSEA - LISTING] ✅ Successfully listed ${nftAddress} #${tokenId} for ${roundedPrice} ETH${RESET}`);
 
-    // Update listing price cache
-    await listingPriceCache.updatePrice(
-      nftAddress.toLowerCase(),
-      tokenId,
-      roundedPrice,
-      wallet.address.toLowerCase()
-    );
+    // REMOVED: Cache update - we're using real-time prices now!
+    // await listingPriceCache.updatePrice(...)
 
     // Update finalListingPrice.opensea and expiration in the database
     try {

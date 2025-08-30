@@ -8,7 +8,6 @@ import { axiosInstance, limiter } from "../../init";
 import { Wallet } from "ethers";
 import Listing from "../../models/listing.model";
 import { convertDurationForBlur } from "../../utils/duration";
-import { listingPriceCache } from "../../utils/listing-price-cache";
 import { roundToNineDecimals } from "../../utils/decimal-precision";
 import { getAccessToken } from "./bid";
 import { getCollectionDetails } from "../../functions/collection";
@@ -304,14 +303,8 @@ export async function listOnBlur(
       } else {
         console.log(`${GOLD}[BLUR - LISTING] ✅ Successfully listed ${nftAddress} #${tokenId} for ${price} ETH${RESET}`);
 
-        // Update listing price cache
-        const priceNumber = parseFloat(price);
-        await listingPriceCache.updatePrice(
-          nftAddress.toLowerCase(),
-          tokenId,
-          priceNumber,
-          wallet.address.toLowerCase()
-        );
+        // REMOVED: Cache update - we're using real-time prices now!
+        // await listingPriceCache.updatePrice(...)
 
         // Update finalListingPrice.blur and expiration in the database
         try {
