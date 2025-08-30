@@ -73,6 +73,7 @@ import { cancellationTracker } from "./utils/cancellation-tracker";
 import { listingPriceCache } from "./utils/listing-price-cache";
 
 const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
+// const MARKETPLACE_WS_URL = "ws://localhost:8080";
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
@@ -1189,7 +1190,6 @@ async function monitorHealth() {
     }
 
     updateAllBidRates();
-    triggerBroadcast(); // Trigger broadcast after bid rates update
 
   } catch (error) {
     // Log as debug level to avoid sending to Axiom
@@ -3067,7 +3067,6 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string): boo
       waitingTime: 0,
       lastUpdate: Date.now()
     };
-    triggerBroadcast(); // Trigger broadcast after task status update
     return true;
   }
 
@@ -3146,7 +3145,6 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string): boo
 
   console.log(CYAN + `[setTaskStatus] ${taskId}: ${currentStatus} -> ${newStatus}${context ? ' (' + context + ')' : ''}` + RESET);
 
-  triggerBroadcast(); // Trigger broadcast after task status update
   return true;
 }
 
@@ -3499,7 +3497,6 @@ async function updateTaskRunningPercentage(taskId: string) {
   taskStatus[taskId].lastUpdate = Date.now();
   taskStatus[taskId].lastProgressUpdate = Date.now(); // Track last progress update
 
-  triggerBroadcast(); // Trigger broadcast after percentage update
 
   // Summary section - Keep only TOTAL SUMMARY logs
   console.log(`\n${BLUE}[updateTaskRunningPercentage] TOTAL SUMMARY:${RESET}`);
@@ -4386,7 +4383,6 @@ function initializeQueueEventHandlers() {
           // Increment error stats for the specific marketplace
           if (marketplace === 'opensea' || marketplace === 'blur' || marketplace === 'magiceden') {
             errorStats[taskId][marketplace]++;
-            triggerBroadcast(); // Trigger broadcast after error stat update
           }
           const task = activeTasks.get(taskId);
           if (task && task.running) {
@@ -4648,7 +4644,6 @@ function initializeQueueEventHandlers() {
         }
         // Increment error stats for blur marketplace
         errorStats[taskId].blur++;
-        triggerBroadcast(); // Trigger broadcast after error stat update
         const task = activeTasks.get(taskId);
         if (task && task.running) {
           console.log(YELLOW + `[Blur Queue Event - FAILED] Processing failure for task ${taskId}, marketplace ${marketplace}, jobId: ${jobId}` + RESET);
@@ -4693,23 +4688,9 @@ const clientData = {
 
 // Debounced broadcasting system for efficient real-time updates
 let lastBroadcastData: string | null = null;
-let broadcastTimeout: NodeJS.Timeout | null = null;
 const BROADCAST_DEBOUNCE_MS = 200; // 200ms debounce for batching updates
 const HEARTBEAT_INTERVAL_MS = 30000; // 30 second heartbeat for connection health
 
-// Debounced broadcast function - triggers after data changes
-function triggerBroadcast() {
-
-  // Clear existing timeout to reset debounce timer
-  if (broadcastTimeout) {
-    clearTimeout(broadcastTimeout);
-  }
-
-  // Set new timeout to broadcast after debounce period
-  broadcastTimeout = setTimeout(() => {
-    broadcastBidRates();
-  }, BROADCAST_DEBOUNCE_MS);
-}
 
 async function broadcastBidRates() {
   const broadcastStart = Date.now();
@@ -4783,13 +4764,6 @@ const REALTIME_BROADCAST_INTERVAL_MS = 1000; // 1 second
 setInterval(() => {
   // Only broadcast if we have connected clients
   if (clients.size > 0) {
-    // Force update of RPS before broadcast
-    const counts = getLimiterCounts();
-    const instantaneousRPS = rps.currentRPS; // This is already updated every second in init.ts
-
-    // Update all bid rates to ensure freshness
-    updateAllBidRates();
-
     // Trigger broadcast without debounce for real-time updates
     broadcastBidRates();
   }
@@ -10141,6 +10115,12 @@ async function _doConnect(): Promise<void> {
 async function handleMarketplaceMessage(message: any) {
   try {
     // Debug logging for message inspection
+    console.log(YELLOW + `[DEBUG][handleMarketplaceMessage] Received message:` + RESET);
+    console.log(YELLOW + `  - eventType: ${message.eventType}` + RESET);
+    console.log(YELLOW + `  - marketplace: ${message.marketplace}` + RESET);
+    console.log(YELLOW + `  - event: ${message.event}` + RESET);
+    console.log(YELLOW + `  - Full message: ${JSON.stringify(message).substring(0, 500)}...` + RESET);
+    
     if (message.eventType === 'BID_CREATED') {
       return handleCounterBid(message)
     }
@@ -10382,12 +10362,27 @@ async function triggerAutoListingForPurchase(
 
 async function handleCounterBid(message: any) {
   try {
-
+    console.log(CYAN + `[DEBUG][handleCounterBid] Processing BID_CREATED message for marketplace: ${message.marketplace}` + RESET);
+    
     const { contractAddress, slug } = getMarketplaceDetails(message);
-    if (!contractAddress && !slug) return;
+    console.log(CYAN + `[DEBUG][handleCounterBid] Extracted details:` + RESET);
+    console.log(CYAN + `  - contractAddress: ${contractAddress}` + RESET);
+    console.log(CYAN + `  - slug: ${slug}` + RESET);
+    
+    if (!contractAddress && !slug) {
+      console.log(CYAN + `[DEBUG][handleCounterBid] No contract address or slug found, returning` + RESET);
+      return;
+    }
+    
     // Use fast O(1) lookup instead of O(n) filter
     const relevantTasks = getRelevantTasks(contractAddress, slug);
-    if (!relevantTasks.length) return;
+    console.log(CYAN + `[DEBUG][handleCounterBid] Found ${relevantTasks.length} relevant tasks` + RESET);
+    
+    if (!relevantTasks.length) {
+      console.log(CYAN + `[DEBUG][handleCounterBid] No relevant tasks found, returning` + RESET);
+      return;
+    }
+    
     relevantTasks.map(task => handleCounterBidForTask(task, message))
 
   } catch (error) {
@@ -10397,13 +10392,24 @@ async function handleCounterBid(message: any) {
 }
 
 function getMarketplaceDetails(message: any): { contractAddress?: string, slug?: string } {
+  console.log(GREEN + `[DEBUG][getMarketplaceDetails] Processing marketplace: ${message.marketplace}` + RESET);
+  console.log(GREEN + `[DEBUG][getMarketplaceDetails] BLUR=${BLUR}, OPENSEA=${OPENSEA}, MAGICEDEN=${MAGICEDEN}` + RESET);
+  
+  let result: { contractAddress?: string, slug?: string } = {};
+  
   switch (message.marketplace) {
     case BLUR:
-      return { contractAddress: handleBlurMessages(message) };
+      result = { contractAddress: handleBlurMessages(message) };
+      console.log(GREEN + `[DEBUG][getMarketplaceDetails] BLUR result: ${JSON.stringify(result)}` + RESET);
+      return result;
     case OPENSEA:
-      return handleOpenSeaMessages(message);
+      result = handleOpenSeaMessages(message);
+      console.log(GREEN + `[DEBUG][getMarketplaceDetails] OPENSEA result: ${JSON.stringify(result)}` + RESET);
+      return result;
     case MAGICEDEN:
-      return handleMagicEdenMessages(message);
+      result = handleMagicEdenMessages(message);
+      console.log(GREEN + `[DEBUG][getMarketplaceDetails] MAGICEDEN result: ${JSON.stringify(result)}` + RESET);
+      return result;
     default:
       console.log(`Unknown marketplace: ${message.marketplace}`);
       return {};
@@ -10412,16 +10418,29 @@ function getMarketplaceDetails(message: any): { contractAddress?: string, slug?:
 
 async function handleCounterBidForTask(task: any, message: any) {
   const selectedMarketplaces = task.selectedMarketplaces.map((m: string) => m.toLowerCase());
+  console.log(BLUE + `[DEBUG][handleCounterBidForTask] Task ${task._id}:` + RESET);
+  console.log(BLUE + `  - selectedMarketplaces: ${JSON.stringify(selectedMarketplaces)}` + RESET);
+  console.log(BLUE + `  - message.marketplace: ${message.marketplace}` + RESET);
+  console.log(BLUE + `  - Checking conditions:` + RESET);
+  console.log(BLUE + `    - Blur: includes=${selectedMarketplaces.includes('blur')}, matches=${message.marketplace === BLUR}` + RESET);
+  console.log(BLUE + `    - OpenSea: includes=${selectedMarketplaces.includes('opensea')}, matches=${message.marketplace === OPENSEA}` + RESET);
+  console.log(BLUE + `    - MagicEden: includes=${selectedMarketplaces.includes('magiceden')}, matches=${message.marketplace === MAGICEDEN}` + RESET);
+  
   // Process each marketplace handler with error handling and timeout protection
   try {
     if (selectedMarketplaces.includes('blur') && message.marketplace === BLUR) {
+      console.log(BLUE + `[DEBUG][handleCounterBidForTask] Calling handleBlurCounterbid` + RESET);
       await handleBlurCounterbid(message['1'], task)
     }
     else if (selectedMarketplaces.includes('opensea') && message.marketplace === OPENSEA) {
+      console.log(BLUE + `[DEBUG][handleCounterBidForTask] Calling handleOpenseaCounterbid` + RESET);
       handleOpenseaCounterbid(message, task)
     }
     else if (selectedMarketplaces.includes('magiceden') && message.marketplace === MAGICEDEN) {
+      console.log(BLUE + `[DEBUG][handleCounterBidForTask] Calling handleMagicEdenCounterbid` + RESET);
       handleMagicEdenCounterbid(message, task)
+    } else {
+      console.log(BLUE + `[DEBUG][handleCounterBidForTask] No matching marketplace handler found` + RESET);
     }
   } catch (error: any) {
     console.log(`Counterbid error for task ${task._id}: ${error.message}`);
@@ -10430,12 +10449,18 @@ async function handleCounterBidForTask(task: any, message: any) {
 
 
 async function handleMagicEdenCounterbid(data: any, task: ITask) {
+  console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] ENTRY - Task: ${task._id}` + RESET);
   try {
     const currentTask = activeTasks.get(task._id)
+    console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] currentTask found: ${!!currentTask}` + RESET);
+    console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] currentTask.running: ${currentTask?.running}` + RESET);
+    console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] selectedMarketplaces: ${JSON.stringify(currentTask?.selectedMarketplaces)}` + RESET);
+    console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] enabledMarketplaces: ${JSON.stringify(enabledMarketplaces)}` + RESET);
 
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces
       .map((m) => m.toLowerCase())
       .includes("magiceden")) {
+      console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] Early return - conditions not met` + RESET);
       return;
     };
 
@@ -10467,7 +10492,13 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     const eth_price = Number(data?.data?.price?.amount?.native)
 
     // Check if the maker is one of our wallets before decrypting private key
+    console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] Checking wallet ownership:` + RESET);
+    console.log(YELLOW + `  - maker: ${maker}` + RESET);
+    console.log(YELLOW + `  - walletAddresses: ${JSON.stringify(walletAddresses)}` + RESET);
+    console.log(YELLOW + `  - includes maker: ${walletAddresses.includes(maker)}` + RESET);
+    
     if (walletAddresses.includes(maker)) {
+      console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] Own wallet detected, calling incrementOwnBidCounter` + RESET);
       incrementOwnBidCounter('magiceden', task._id);
       return
     }
@@ -11074,12 +11105,18 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 }
 
 async function handleOpenseaCounterbid(data: any, task: ITask) {
+  console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] ENTRY - Task: ${task._id}` + RESET);
   try {
     const currentTask = activeTasks.get(task._id)
+    console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] currentTask found: ${!!currentTask}` + RESET);
+    console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] currentTask.running: ${currentTask?.running}` + RESET);
+    console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] selectedMarketplaces: ${JSON.stringify(currentTask?.selectedMarketplaces)}` + RESET);
+    console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] enabledMarketplaces: ${JSON.stringify(enabledMarketplaces)}` + RESET);
 
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces
       .map((m) => m.toLowerCase())
       .includes("opensea")) {
+      console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] Early return - conditions not met` + RESET);
       return;
     }
 
@@ -11157,7 +11194,13 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     if (hasSeenItem(seenOrderHashes, taskSpecificHash)) return;
     addSeenItem(seenOrderHashes, taskSpecificHash)
 
+    console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] Checking wallet ownership:` + RESET);
+    console.log(YELLOW + `  - maker: ${maker}` + RESET);
+    console.log(YELLOW + `  - walletAddresses: ${JSON.stringify(walletAddresses)}` + RESET);
+    console.log(YELLOW + `  - includes maker: ${walletAddresses.includes(maker)}` + RESET);
+    
     if (walletAddresses.includes(maker)) {
+      console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] Own wallet detected, calling incrementOwnBidCounter` + RESET);
       incrementOwnBidCounter('opensea', task._id);
       return
     }
@@ -12218,6 +12261,9 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 }
 
 function handleMagicEdenMessages(message: any) {
+  console.log(MAGENTA + `[DEBUG][handleMagicEdenMessages] Processing message with event: ${message.event}` + RESET);
+  console.log(MAGENTA + `[DEBUG][handleMagicEdenMessages] Message structure: ${JSON.stringify(message).substring(0, 300)}...` + RESET);
+  
   let slug, contractAddress;
   try {
     if (
@@ -12225,6 +12271,11 @@ function handleMagicEdenMessages(message: any) {
     ) {
       slug = message.payload?.payload?.collection?.slug;
       contractAddress = message.tags?.contract || message.payload?.payload?.asset_contract_criteria?.address;
+      console.log(MAGENTA + `[DEBUG][handleMagicEdenMessages] Extracted:` + RESET);
+      console.log(MAGENTA + `  - slug: ${slug}` + RESET);
+      console.log(MAGENTA + `  - contractAddress: ${contractAddress}` + RESET);
+    } else {
+      console.log(MAGENTA + `[DEBUG][handleMagicEdenMessages] Message event '${message.event}' not handled` + RESET);
     }
   } catch (error) {
     console.error("Error parsing MagicEden message:", error);
@@ -12233,6 +12284,9 @@ function handleMagicEdenMessages(message: any) {
 }
 
 function handleOpenSeaMessages(message: any) {
+  console.log(MAGENTA + `[DEBUG][handleOpenSeaMessages] Processing message with event: ${message.event}` + RESET);
+  console.log(MAGENTA + `[DEBUG][handleOpenSeaMessages] Message structure: ${JSON.stringify(message).substring(0, 300)}...` + RESET);
+  
   let contractAddress, slug
 
   try {
@@ -12245,6 +12299,11 @@ function handleOpenSeaMessages(message: any) {
     ) {
       slug = message.payload?.payload?.collection?.slug;
       contractAddress = message.payload?.payload?.asset_contract_criteria?.address;
+      console.log(MAGENTA + `[DEBUG][handleOpenSeaMessages] Extracted:` + RESET);
+      console.log(MAGENTA + `  - slug: ${slug}` + RESET);
+      console.log(MAGENTA + `  - contractAddress: ${contractAddress}` + RESET);
+    } else {
+      console.log(MAGENTA + `[DEBUG][handleOpenSeaMessages] Message event '${message.event}' not handled` + RESET);
     }
   } catch (err) {
     console.error("Error parsing OpenSea message:", err);
@@ -12370,7 +12429,7 @@ async function performMarketplacePreprocessing(
             .catch(() => []) :
           Promise.resolve([]),
         marketplace === "magiceden" && availableMarketplaces.includes("magiceden") ?
-          fetchMagicEdenTokens(taskId, task.contract.contractAddress, amount)
+          fetchMagicEdenTokens(taskId, task.contract.slug, amount)
             .then(result => {
               magicedenApiCalled = true;
               magicedenApiReturnedEmpty = result ? result.length === 0 : true;
@@ -12391,7 +12450,8 @@ async function performMarketplacePreprocessing(
     // If traits are selected for token bid type, fetch trait-based tokens
     // Fetch once and share between OpenSea and MagicEden
     console.log(CYAN + `[DEBUG] Task bidType: ${task.bidType}, marketplace: ${marketplace}` + RESET);
-    if ((marketplace === "opensea" || marketplace === "magiceden") && availableMarketplaces.includes("opensea")) {
+    if ((marketplace === "opensea" || marketplace === "magiceden") && 
+        (availableMarketplaces.includes("opensea") || availableMarketplaces.includes("magiceden"))) {
       const openseaFilteredTraits = Object.fromEntries(
         Object.entries(task?.selectedTraits?.opensea || {}).filter(([_, traits]) => traits.length > 0)
       );
@@ -13420,7 +13480,6 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
     }
 
     floorPrices[currentTask._id].opensea = floor_price as number;
-    triggerBroadcast(); // Trigger broadcast after floor price update
 
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false)
     if (stopBid) {
@@ -13435,7 +13494,6 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
 
     if (balance < minBidPriceEth) {
       skipStats[currentTask._id]['opensea']++;
-      triggerBroadcast();
       await logBidError(
         taskId,
         "INSUFFICIENT_BALANCE",
@@ -13527,7 +13585,6 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
     // Check if offer exceeds floor price (only for WETH)
     if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
       skipStats[task._id]['opensea']++;
-      triggerBroadcast();
       const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA.`.toUpperCase();
 
       logBidError(task._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "opensea"); // Non-blocking
@@ -13539,7 +13596,6 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
 
     if (currentTask.outbidOptions.outbid && offerEth > maxBidPriceEth) {
       skipStats[task._id]['opensea']++;
-      triggerBroadcast(); // Trigger broadcast after skip stat update
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR OPENSEA.Skipping ...`.toUpperCase()
       logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea"); // Non-blocking
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -13738,7 +13794,6 @@ async function processBlurScheduledBid(task: ITask) {
             skipStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
           }
           skipStats[taskId].blur++;
-          triggerBroadcast(); // Trigger broadcast after skip stat update
 
           throw new Error(`Authentication blocked - retry in ${waitSeconds}s`);
         }
@@ -14047,7 +14102,6 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 
     if (balance < minBidPriceEth) {
       skipStats[task._id]['blur']++;
-      triggerBroadcast();
       await logBidError(
         taskId,
         "INSUFFICIENT_BALANCE",
@@ -14065,7 +14119,6 @@ async function processBlurCollectionBid(data: { task: ITask }) {
     const offerEth = Number(colletionOffer) / 1e18;
     if (offerEth > floor_price) {
       skipStats[task._id]['blur']++;
-      triggerBroadcast();
       const message = `⚠️ Offer price ${offerEth} WETH for ${task.contract.slug} collection bid exceeds floor price ${floor_price} WETH FOR BLUR.`.toUpperCase();
 
       await logBidError(task._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "blur");
@@ -14153,7 +14206,6 @@ async function processBlurCollectionBid(data: { task: ITask }) {
         }
       }
       skipStats[task._id]['blur']++;
-      triggerBroadcast(); // Trigger broadcast after skip stat update
       const message = `❌ Offer price ${collectionOfferEth} BETH for ${task.contract.slug} collection bid exceeds max bid price ${maxBidPriceEth} BETH FOR BLUR BID.Skipping ...`.toUpperCase()
       await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "blur");
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -14336,7 +14388,6 @@ async function processOpenseaTraitBid(data: {
 
     if (balance < minBidPriceEth) {
       skipStats[_id]['opensea']++;
-      triggerBroadcast();
       await logBidError(
         _id,
         "INSUFFICIENT_BALANCE",
@@ -14587,7 +14638,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
     if (balance < minBidPriceEth) {
       skipStats[_id]['opensea']++;
-      triggerBroadcast();
       await logBidError(
         _id,
         "INSUFFICIENT_BALANCE",
@@ -14670,7 +14720,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       console.log(RED + message + RESET);
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       skipStats[_id].opensea++;
-      triggerBroadcast();
       logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea");
       return;
     } else if (offerEth < minBidPriceEth) {
@@ -15303,7 +15352,6 @@ async function processBlurTraitBid(data: {
 
     if (balance < minBidPriceEth) {
       skipStats[_id]['blur']++;
-      triggerBroadcast();
       await logBidError(
         _id,
         "INSUFFICIENT_BALANCE",
@@ -15399,7 +15447,6 @@ async function processBlurTraitBid(data: {
         }
       }
       skipStats[_id]['blur']++;
-      triggerBroadcast();
       const message = `❌ Offer price ${offerEth} BETH for ${slug} trait ${trait} bid exceeds max bid price ${maxBidPriceEth} BETH FOR BLUR BID.Skipping ...`.toUpperCase()
       await logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "blur");
       console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
@@ -16005,7 +16052,6 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     }
 
     floorPrices[task._id].magiceden = floor_price;
-    triggerBroadcast(); // Trigger broadcast after floor price update
 
     const stopBid = await stopOption(currentTask, 'magiceden', floor_price, false)
     if (stopBid) {
@@ -16025,7 +16071,6 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
 
     if (balance < minBidPriceEth) {
       skipStats[task._id]['magiceden']++;
-      triggerBroadcast();
       await logBidError(
         taskId,
         "INSUFFICIENT_BALANCE",
@@ -16097,7 +16142,6 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
 
     if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
       skipStats[task._id]['magiceden']++;
-      triggerBroadcast();
       const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR MAGICEDEN.`.toUpperCase();
 
       logBidError(task._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "magiceden"); // Non-blocking
@@ -16139,7 +16183,6 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
         }
       }
       skipStats[task._id].magiceden++;
-      triggerBroadcast(); // Trigger broadcast after skip stat update
       return;
     } else if (offerEth < minBidPriceEth) {
       colletionOffer = minBidPriceEth * Math.pow(10, decimal);
@@ -16228,7 +16271,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
     if (balance < minBidPriceEth) {
       skipStats[_id]['magiceden']++;
-      triggerBroadcast();
       await logBidError(
         _id,
         "INSUFFICIENT_BALANCE",
@@ -16320,7 +16362,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", `Offer price ${offerEth} ${currencySymbol} for ${slug} ${tokenId} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase(), "skipped", "magiceden");
 
       skipStats[_id].magiceden++;
-      triggerBroadcast();
       return;
     } else if (offerEth < minBidPriceEth) {
       tokenOffer = minBidPriceEth * Math.pow(10, decimal);
@@ -16430,7 +16471,6 @@ async function processMagicedenTraitBid(data: {
 
     if (balance < minBidPriceEth) {
       skipStats[_id]['magiceden']++;
-      triggerBroadcast();
       await logBidError(
         _id,
         "INSUFFICIENT_BALANCE",
@@ -16540,7 +16580,6 @@ async function processMagicedenTraitBid(data: {
         }
       }
       skipStats[_id].magiceden++;
-      triggerBroadcast();
       return;
     } else if (offerEth < minBidPriceEth) {
       traitOffer = minBidPriceEth * Math.pow(10, decimal);
@@ -19215,7 +19254,6 @@ async function stopOption(
 
         if (!counterBid) {
           skipStats[task._id][marketplace]++;
-          triggerBroadcast(); // Trigger broadcast after skip stat update
         }
         return true;
       }
@@ -20138,7 +20176,6 @@ export function trackBidRate(marketplace: 'opensea' | 'magiceden' | 'blur', task
   }
   bidStats[taskId][marketplace]++;
 
-  triggerBroadcast(); // Trigger broadcast after bid stat update
   return { globalBidRates, bidStats };
 }
 
@@ -20146,11 +20183,14 @@ export function trackBidRate(marketplace: 'opensea' | 'magiceden' | 'blur', task
  * Increments memory-based counter for our own bids when we detect we're the maker
  */
 export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', taskId: string) {
+  console.log(GREEN + `[DEBUG][incrementOwnBidCounter] CALLED - marketplace: ${marketplace}, taskId: ${taskId}` + RESET);
   try {
     if (!ownBidCounts[marketplace]) {
       ownBidCounts[marketplace] = 0;
     }
     ownBidCounts[marketplace]++;
+    console.log(GREEN + `[DEBUG][incrementOwnBidCounter] Incremented ${marketplace} count to: ${ownBidCounts[marketplace]}` + RESET);
+    console.log(GREEN + `[DEBUG][incrementOwnBidCounter] Current counts: ${JSON.stringify(ownBidCounts)}` + RESET);
     return ownBidCounts[marketplace];
   } catch (error) {
     console.error('Failed to increment own bid counter:', error);

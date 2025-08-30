@@ -20,10 +20,16 @@ const PASSWORD_TTL = 604800; // Default 7 days (7 * 24 * 60 * 60)
 let PASSWORD: string | undefined = undefined
 console.log('🔑 [crypto module] Initialized with PASSWORD =', PASSWORD ? 'SET' : 'UNDEFINED')
 
-// Try to recover password from Redis on startup
+// Try to recover password from Redis on startup (development only)
 export async function recoverPasswordFromRedis(): Promise<boolean> {
+  // Only attempt recovery in development
+  if (process.env.NODE_ENV === 'production') {
+    console.log('🔑 [PRODUCTION] Password recovery from Redis disabled');
+    return false;
+  }
+
   try {
-    console.log(`🔍 Attempting to recover password from Redis key: ${PASSWORD_REDIS_KEY}`);
+    console.log(`🔍 [DEVELOPMENT] Attempting to recover password from Redis key: ${PASSWORD_REDIS_KEY}`);
     const redis = getRedisConnection();
     
     // Check if key exists
@@ -82,22 +88,26 @@ export async function setPassword(password: string): Promise<void> {
   decryptedKeyCache.clear();
   console.log(`🔑 [setPassword] Decryption cache cleared`);
 
-  // Always store in Redis for persistence
-  try {
-    const redis = getRedisConnection();
-    if (PASSWORD_TTL > 0) {
-      await redis.setex(PASSWORD_REDIS_KEY, PASSWORD_TTL, password);
-      const days = Math.floor(PASSWORD_TTL / 86400);
-      const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
-      console.log(`🔑 Password stored in Redis with TTL of ${days} days, ${hours} hours`);
-    } else {
-      await redis.set(PASSWORD_REDIS_KEY, password);
-      console.log('🔑 Password stored in Redis (no expiration)');
+  // Only store in Redis during development
+  if (process.env.NODE_ENV !== 'production') {
+    try {
+      const redis = getRedisConnection();
+      if (PASSWORD_TTL > 0) {
+        await redis.setex(PASSWORD_REDIS_KEY, PASSWORD_TTL, password);
+        const days = Math.floor(PASSWORD_TTL / 86400);
+        const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
+        console.log(`🔑 [DEVELOPMENT] Password stored in Redis with TTL of ${days} days, ${hours} hours`);
+      } else {
+        await redis.set(PASSWORD_REDIS_KEY, password);
+        console.log('🔑 [DEVELOPMENT] Password stored in Redis (no expiration)');
+      }
+    } catch (error) {
+      console.error('[DEVELOPMENT] Failed to store password in Redis:', error);
+      // Still set in memory even if Redis fails
+      console.log('🔑 Password set in memory (Redis storage failed)');
     }
-  } catch (error) {
-    console.error('Failed to store password in Redis:', error);
-    // Still set in memory even if Redis fails
-    console.log('🔑 Password set in memory (Redis storage failed)');
+  } else {
+    console.log('🔑 [PRODUCTION] Password set in memory only (not stored in Redis)');
   }
 }
 
@@ -105,9 +115,9 @@ export function getPassword(): string | undefined {
   return PASSWORD;
 }
 
-// Renew password TTL without changing the password
+// Renew password TTL without changing the password (development only)
 export async function renewPasswordTTL(): Promise<void> {
-  if (!PASSWORD || PASSWORD_TTL <= 0) return;
+  if (!PASSWORD || PASSWORD_TTL <= 0 || process.env.NODE_ENV === 'production') return;
 
   try {
     const redis = getRedisConnection();
@@ -116,10 +126,10 @@ export async function renewPasswordTTL(): Promise<void> {
       await redis.expire(PASSWORD_REDIS_KEY, PASSWORD_TTL);
       const days = Math.floor(PASSWORD_TTL / 86400);
       const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
-      console.log(`🔑 Password TTL renewed for ${days} days, ${hours} hours`);
+      console.log(`🔑 [DEVELOPMENT] Password TTL renewed for ${days} days, ${hours} hours`);
     }
   } catch (error) {
-    console.error('Failed to renew password TTL:', error);
+    console.error('[DEVELOPMENT] Failed to renew password TTL:', error);
   }
 }
 
@@ -128,13 +138,18 @@ export async function clearPassword(): Promise<void> {
   PASSWORD = undefined;
   decryptedKeyCache.clear();
 
-  try {
-    const redis = getRedisConnection();
-    await redis.del(PASSWORD_REDIS_KEY);
-    console.log('🔑 Password cleared from Redis and memory');
-  } catch (error) {
-    console.error('Failed to clear password from Redis:', error);
-    console.log('🔑 Password cleared from memory only');
+  // Only attempt to clear from Redis in development
+  if (process.env.NODE_ENV !== 'production') {
+    try {
+      const redis = getRedisConnection();
+      await redis.del(PASSWORD_REDIS_KEY);
+      console.log('🔑 [DEVELOPMENT] Password cleared from Redis and memory');
+    } catch (error) {
+      console.error('[DEVELOPMENT] Failed to clear password from Redis:', error);
+      console.log('🔑 Password cleared from memory only');
+    }
+  } else {
+    console.log('🔑 [PRODUCTION] Password cleared from memory');
   }
 }
 
