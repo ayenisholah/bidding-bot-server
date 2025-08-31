@@ -33,7 +33,7 @@ Sec-WebSocket-Protocol: graphql-transport-ws
 
 
 db.updates.insertOne({
-  version: '2.5.0',
+  version: '2.6.0',
   releaseDate: new Date(),
   changes: [ 'stable beta' ],
   criticalUpdate: true,
@@ -42,5 +42,16 @@ db.updates.insertOne({
   isBeta: true
 })
 
-look for everywhere task is passed to queue data and replace with taskId
-in the job processor fetch task from activeTasks
+Error bidding on trait {"attributeKey":"background","attributeValue":"Blue"} in collection moonbirds: Invalid marketplace fee receiver. Expected: 0xca9337244b5f04cb946391bc8b8a980e988f9a6a:50. Received: 0x6fa303e72bed54f515a513496f922bc331e2f27e:50. Collection: ethereum:0x23581767a106ae21c074b2276d25e5c3e136a68b
+@src/marketplace/magiceden/bid.ts 
+
+
+MAGICEDEN_TOKEN_BID
+MAGICEDEN_TRAIT_BID
+MAGICEDEN_COLLECTION_BID
+MAGICEDEN_COLLECTION_BID_COUNTERBID
+MAGICEDEN_TOKEN_BID_COUNTERBID
+OPENSEA_TOKEN_BID
+OPENSEA_TRAIT_BID
+OPENSEA_COLLECTION_BID
+remove task from task: newTask
