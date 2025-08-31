@@ -20,6 +20,8 @@ import { InsufficientBalanceError, MinimumPriceError, RateLimitError, InvalidReq
 import { cancellationTracker } from "../../utils/cancellation-tracker";
 
 const YELLOW = '\x1b[33m';
+const CYAN = '\x1b[36m';
+const GREEN = '\x1b[32m';
 
 // Helper function to extract meaningful error messages from MagicEden API responses
 function extractMagicEdenErrorMessage(error: any): string {
@@ -63,6 +65,15 @@ const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
 
 config()
+
+// Environment-specific configuration for MagicEden
+const MAGICEDEN_CONFIG = process.env.NODE_ENV === 'production' ? {
+  domain: 'magiceden.us',
+  feeRecipient: '0xca9337244b5f04cb946391bc8b8a980e988f9a6a'
+} : {
+  domain: 'magiceden.io',
+  feeRecipient: '0x6fa303e72bed54f515a513496f922bc331e2f27e'
+};
 
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 // Singleton provider with connection pooling
@@ -203,124 +214,142 @@ export async function bidOnMagiceden(
   trait?: Trait,
   tokenId?: number
 ) {
+  console.log(CYAN + `[MagicEden] Starting bid process` + RESET);
+  console.log(CYAN + `  Task ID: ${taskId}` + RESET);
+  console.log(CYAN + `  Collection: ${slug}` + RESET);
+  console.log(CYAN + `  Trait: ${trait ? JSON.stringify(trait) : 'N/A'}` + RESET);
+  console.log(CYAN + `  Token ID: ${tokenId || 'N/A'}` + RESET);
+  console.log(CYAN + `  Wei Price: ${weiPrice}` + RESET);
+  
   try {
-  if (isTaskBlacklisted(taskId, 'magiceden')) {
-    const error = new Error(`Bid execution blocked - task ${taskId} is stopped for MagicEden`);
-    console.log(`[MagicEden] Job execution blocked for stopped task: ${taskId}`);
-    throw error;
-  }
+    if (isTaskBlacklisted(taskId, 'magiceden')) {
+      const error = new Error(`Bid execution blocked - task ${taskId} is stopped for MagicEden`);
+      console.log(`[MagicEden] Job execution blocked for stopped task: ${taskId}`);
+      throw error;
+    }
 
-  // Early validation before expensive operations
-  const slugLower = slug.toLowerCase();
-  const task = currentTasks.find((task) =>
-    task.contract.slug.toLowerCase() === slugLower &&
-    task.selectedMarketplaces.includes("MagicEden")
-  );
-
-  if (!task) {
-
-    return;
-  }
-
-  // Pre-calculate all constants upfront
-  const duration = bidExpiry / 60 || 15; // minutes
-  const currentTime = Date.now();
-  const expiration = Math.floor((currentTime + (duration * 60 * 1000)) / 1000);
-
-  const isUSDC = currency.toLowerCase() === USDC.toLowerCase();
-  const decimal = isUSDC ? 6 : 18;
-  const decimalPower = Math.pow(10, decimal);
-  const currencySymbol = isUSDC ? "USDC" : "WETH";
-
-  // Get wallet from cache
-  const wallet = getWallet(privateKey);
-
-  // Fetch balance (can't parallelize with wallet since we need wallet first)
-  const wethBalance = await fetchERC20Balance(maker, currency);
-
-  const offerPriceEth = Math.round(Number(weiPrice)) / decimalPower;
-
-  // Optimize decimal calculation
-  const decimals = offerPriceEth >= 1 ? 2 : offerPriceEth >= 0.1 ? 3 : 4;
-  const roundedEth = isUSDC ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
-
-  const basis = BASIS_CONSTANTS[decimals];
-  const roundedWei = decimal === 18 ?
-    Math.round(roundedEth * decimalPower / basis) * basis :
-    Math.round(roundedEth * decimalPower);
-
-  // Early validation - fail fast before expensive operations
-  if (offerPriceEth > wethBalance) {
-    const error = new InsufficientBalanceError(
-      'magiceden',
-      currencySymbol,
-      offerPriceEth,
-      wethBalance,
-      maker,
-      slug
+    // Early validation before expensive operations
+    const slugLower = slug.toLowerCase();
+    const task = currentTasks.find((task) =>
+      task.contract.slug.toLowerCase() === slugLower &&
+      task.selectedMarketplaces.includes("MagicEden")
     );
-    await logger.logMagicEdenBidError('Insufficient balance for bid', {
+
+    if (!task) {
+
+      return;
+    }
+
+    // Pre-calculate all constants upfront
+    const duration = bidExpiry / 60 || 15; // minutes
+    const currentTime = Date.now();
+    const expiration = Math.floor((currentTime + (duration * 60 * 1000)) / 1000);
+
+    const isUSDC = currency.toLowerCase() === USDC.toLowerCase();
+    const decimal = isUSDC ? 6 : 18;
+    const decimalPower = Math.pow(10, decimal);
+    const currencySymbol = isUSDC ? "USDC" : "WETH";
+
+    // Get wallet from cache
+    const wallet = getWallet(privateKey);
+
+    // Fetch balance (can't parallelize with wallet since we need wallet first)
+    const wethBalance = await fetchERC20Balance(maker, currency);
+
+    const offerPriceEth = Math.round(Number(weiPrice)) / decimalPower;
+
+    // Optimize decimal calculation
+    const decimals = offerPriceEth >= 1 ? 2 : offerPriceEth >= 0.1 ? 3 : 4;
+    const roundedEth = isUSDC ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
+
+    const basis = BASIS_CONSTANTS[decimals];
+    const roundedWei = decimal === 18 ?
+      Math.round(roundedEth * decimalPower / basis) * basis :
+      Math.round(roundedEth * decimalPower);
+
+    // Early validation - fail fast before expensive operations
+    if (offerPriceEth > wethBalance) {
+      const error = new InsufficientBalanceError(
+        'magiceden',
+        currencySymbol,
+        offerPriceEth,
+        wethBalance,
+        maker,
+        slug
+      );
+      await logger.logMagicEdenBidError('Insufficient balance for bid', {
+        taskId,
+        walletAddress: maker,
+        collection: slug,
+        bidAmount: offerPriceEth,
+        currency: currencySymbol,
+        availableBalance: wethBalance,
+        requiredBalance: offerPriceEth,
+        error
+      });
+      throw error;
+    }
+
+    // Generate order directly based on bid type
+    console.log(YELLOW + `[MagicEden] Generating order structure...` + RESET);
+    const order = generateMagicEdenOrder(
       taskId,
-      walletAddress: maker,
-      collection: slug,
-      bidAmount: offerPriceEth,
-      currency: currencySymbol,
-      availableBalance: wethBalance,
-      requiredBalance: offerPriceEth,
-      error
-    });
-    throw error;
-  }
+      slug,
+      maker,
+      collection,
+      quantity,
+      Math.round(Number(weiPrice)).toString(),
+      expiration.toString(),
+      currency,
+      trait,
+      tokenId
+    );
 
-  const order = await createBidData(
-    taskId,
-    slug,
-    maker,
-    collection,
-    quantity,
-    Math.round(Number(weiPrice)).toString(),
-    expiration.toString(),
-    currency,
-    trait,
-    tokenId,
-    task // Pass the cached task
-  );
+    console.log(GREEN + `[MagicEden] Order generated successfully` + RESET);
+    console.log(JSON.stringify(order));
 
-  if (!order) return;
+    if (!order) return;
 
-  // Simplify the submitSignedOrderData call
-  await submitSignedOrderData(
-    taskId,
-    roundedWei.toString(),
-    decimal,
-    currencySymbol,
-    bidCount,
-    order,
-    wallet,
-    slug,
-    bidExpiry,
-    trait,
-    tokenId,
-    task // Pass the cached task
-  );
+    // Simplify the submitSignedOrderData call
+    console.log(YELLOW + `[MagicEden] Submitting signed order data...` + RESET);
+    await submitSignedOrderData(
+      taskId,
+      roundedWei.toString(),
+      decimal,
+      currencySymbol,
+      bidCount,
+      order,
+      wallet,
+      slug,
+      bidExpiry,
+      trait,
+      tokenId,
+      task // Pass the cached task
+    );
 
-  return order;
+    console.log(GREEN + `[MagicEden] Bid submitted successfully` + RESET);
+    return order;
   } catch (error) {
+    console.log(RED + `[MagicEden] Bid failed: ${error}` + RESET);
     throw error;
   }
 }
 
 /**
- * Creates bid data for Magic Eden.
- * @param maker - The maker of the bid.
- * @param collection - The collection to bid on.
- * @param quantity - The quantity to bid.
- * @param weiPrice - The price in wei.
- * @param expirationTime - The expiration time of the bid.
- * @param traits - Optional traits for the offer.
- * @returns The bid data.
+ * Generates order structure for Magic Eden based on bid type.
+ * @param taskId - The task ID
+ * @param slug - The collection slug
+ * @param maker - The maker of the bid
+ * @param collection - The collection contract address
+ * @param quantity - The quantity to bid
+ * @param weiPrice - The price in wei
+ * @param expirationTime - The expiration time of the bid
+ * @param currency - The currency (WETH)
+ * @param trait - Optional traits for the offer
+ * @param tokenId - Optional token ID for token bids
+ * @returns The order structure
  */
-async function createBidData(
+function generateMagicEdenOrder(
   taskId: string,
   slug: string,
   maker: string,
@@ -330,123 +359,289 @@ async function createBidData(
   expirationTime: string,
   currency = WETH,
   trait?: Trait,
-  tokenId?: number | string,
-  cachedTask?: any // Accept cached task to avoid duplicate lookup
-) {
-  const task = cachedTask || currentTasks.find((task) =>
-    task.contract.slug.toLowerCase() === slug.toLowerCase() &&
-    task?.selectedMarketplaces?.map((marketplace) => marketplace.toLowerCase()).includes("magiceden")
-  );
+  tokenId?: number | string
+): any {
+  const currentTime = Math.floor(Date.now() / 1000);
+  const salt = ethers.hexlify(ethers.randomBytes(32));
+  const nonce = "0";
+  
+  // Calculate marketplace fee (0.5% = 50 basis points)
+  const marketplaceFee = Math.floor(Number(weiPrice) * 50 / 10000).toString();
+  console.log(CYAN + `[MagicEden] Marketplace fee calculated: ${marketplaceFee} (0.5% of ${weiPrice})` + RESET);
 
-  if (!task) return;
-
-  const options = trait || tokenId ? {
-    "seaport-v1.6": {
-      "useOffChainCancellation": true,
-      "conduitKey": "0x87328c9043E7BF343695554EAAF5a8892f7205e3000000000000000000000000",
-
-    }
-  } : {
-    "payment-processor-v2": {
-      useOffChainCancellation: true,
-    }
-  }
-
-  const orderKind = trait || tokenId ? "seaport-v1.6" : "payment-processor-v2"
-
-  const params = [
-    {
-      ...(tokenId ? {} : { collection: collection }),
-      currency: currency,
-      quantity: quantity,
-      weiPrice: (Math.round(Number(weiPrice))).toString(),
-      expirationTime: expirationTime.toString(),
-      orderKind: orderKind,
-      orderbook: "reservoir",
-      options: options,
-      automatedRoyalties: true,
-      ...(tokenId ? { token: `${collection}:${tokenId}` } : trait ? { attributeKey: trait.attributeKey, attributeValue: trait.attributeValue } : {})
-    }
-  ];
-
-  const data = {
-    maker: maker,
-    source: "magiceden.us",
-    params: params
-  };
-
-  // Enhanced request deduplication with better cache key
-  const requestKey = `createBid:${taskId}:${slug}:${weiPrice}:${currency}:${expirationTime}:${tokenId || (trait ? `${trait.attributeKey}:${trait.attributeValue}` : 'collection')}`;
-  const existingRequest = pendingRequests.get(requestKey);
-  if (existingRequest) {
-    return existingRequest;
-  }
-
-  const requestPromise = (async () => {
-    try {
-      const controller = new AbortController();
-      addActiveRequest(taskId, controller);
-
-      // Add timeout protection
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
-
-      try {
-        const { data: order } = await limiter.schedule(() => axiosInstance.post<CreateBidData>(
-          `${BASE_URL}/magiceden/v3/rtp/ethereum/execute/bid/v5`,
-          data,
-          {
-            headers: {
-              'content-type': 'application/json',
-              'x-api-key': API_KEY
-            },
-            signal: controller.signal,
-            timeout: 30000,
-            "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
-          }
-        ));
-        clearTimeout(timeoutId);
-
-        // Clean up cache after a delay to prevent immediate re-requests
-        setTimeout(() => {
-          pendingRequests.delete(requestKey);
-        }, 5000); // 5 second cache
-
-        return order;
-      } finally {
-        clearTimeout(timeoutId);
-        const controllers = activeRequests.get(taskId) || [];
-        const index = controllers.indexOf(controller);
-        if (index >= 0) {
-          controllers.splice(index, 1);
+  if (tokenId) {
+    // TOKEN bid - uses seaport-v1.6
+    return {
+      "steps": [
+        {
+          "id": "order-signature",
+          "action": "Order signature",
+          "description": "Authorize order",
+          "kind": "signature",
+          "items": [
+            {
+              "status": "incomplete",
+              "orderIndexes": [0],
+              "data": {
+                "sign": {
+                  "signatureKind": "eip712",
+                  "domain": domainCache,
+                  "types": typesCache,
+                  "value": {
+                    "kind": "single-token",
+                    "offerer": maker,
+                    "zone": "0x0000000000000000000000000000000000000000",
+                    "offer": [
+                      {
+                        "itemType": 1,
+                        "token": currency,
+                        "identifierOrCriteria": "0",
+                        "startAmount": weiPrice,
+                        "endAmount": weiPrice
+                      }
+                    ],
+                    "consideration": [
+                      {
+                        "itemType": 2,
+                        "token": collection,
+                        "identifierOrCriteria": tokenId.toString(),
+                        "startAmount": "1",
+                        "endAmount": "1",
+                        "recipient": maker
+                      },
+                      {
+                        "itemType": 1,
+                        "token": currency,
+                        "identifierOrCriteria": "0",
+                        "startAmount": marketplaceFee,
+                        "endAmount": marketplaceFee,
+                        "recipient": MAGICEDEN_CONFIG.feeRecipient
+                      }
+                    ],
+                    "orderType": 0,
+                    "startTime": currentTime.toString(),
+                    "endTime": expirationTime,
+                    "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                    "salt": salt,
+                    "conduitKey": "0x87328c9043e7bf343695554eaaf5a8892f7205e3000000000000000000000000",
+                    "counter": nonce,
+                    "signature": "0x0000000000000000000000000000000000000000000000000000000000000000"
+                  },
+                  "primaryType": "OrderComponents"
+                },
+                "post": {
+                  "endpoint": "/order/v3",
+                  "method": "POST",
+                  "body": {
+                    "order": {
+                      "kind": "seaport-v1.6",
+                      "data": {
+                        "kind": "single-token",
+                        "offerer": maker,
+                        "zone": "0x0000000000000000000000000000000000000000",
+                        "offer": [
+                          {
+                            "itemType": 1,
+                            "token": currency,
+                            "identifierOrCriteria": "0",
+                            "startAmount": weiPrice,
+                            "endAmount": weiPrice
+                          }
+                        ],
+                        "consideration": [
+                          {
+                            "itemType": 2,
+                            "token": collection,
+                            "identifierOrCriteria": tokenId.toString(),
+                            "startAmount": "1",
+                            "endAmount": "1",
+                            "recipient": maker
+                          },
+                          {
+                            "itemType": 1,
+                            "token": currency,
+                            "identifierOrCriteria": "0",
+                            "startAmount": marketplaceFee,
+                            "endAmount": marketplaceFee,
+                            "recipient": MAGICEDEN_CONFIG.feeRecipient
+                          }
+                        ],
+                        "orderType": 0,
+                        "startTime": currentTime.toString(),
+                        "endTime": expirationTime,
+                        "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                        "salt": salt,
+                        "conduitKey": "0x87328c9043e7bf343695554eaaf5a8892f7205e3000000000000000000000000",
+                        "counter": nonce,
+                        "signature": "0x0000000000000000000000000000000000000000000000000000000000000000"
+                      }
+                    },
+                    "orderbook": "reservoir",
+                    "source": MAGICEDEN_CONFIG.domain
+                  }
+                }
+              }
+            }
+          ]
         }
-        if (controllers.length === 0) {
-          activeRequests.delete(taskId);
+      ],
+      "errors": []
+    };
+  } else if (trait) {
+    // TRAIT bid - uses seaport-v1.6
+    return {
+      "steps": [
+        {
+          "id": "order-signature",
+          "action": "Order signature",
+          "description": "Authorize order",
+          "kind": "signature",
+          "items": [
+            {
+              "status": "incomplete",
+              "orderIndexes": [0],
+              "data": {
+                "sign": {
+                  "signatureKind": "eip712",
+                  "domain": domainCache,
+                  "types": typesCache,
+                  "value": {
+                    "kind": "token-list",
+                    "offerer": maker,
+                    "zone": "0x0000000000000000000000000000000000000000",
+                    "offer": [
+                      {
+                        "itemType": 1,
+                        "token": currency,
+                        "identifierOrCriteria": "0",
+                        "startAmount": weiPrice,
+                        "endAmount": weiPrice
+                      }
+                    ],
+                    "consideration": [
+                      {
+                        "itemType": 4,
+                        "token": collection,
+                        "identifierOrCriteria": "0",
+                        "startAmount": quantity.toString(),
+                        "endAmount": quantity.toString(),
+                        "recipient": maker
+                      },
+                      {
+                        "itemType": 1,
+                        "token": currency,
+                        "identifierOrCriteria": "0",
+                        "startAmount": marketplaceFee,
+                        "endAmount": marketplaceFee,
+                        "recipient": MAGICEDEN_CONFIG.feeRecipient
+                      }
+                    ],
+                    "orderType": 0,
+                    "startTime": currentTime.toString(),
+                    "endTime": expirationTime,
+                    "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                    "salt": salt,
+                    "conduitKey": "0x87328c9043e7bf343695554eaaf5a8892f7205e3000000000000000000000000",
+                    "counter": nonce,
+                    "signature": "0x0000000000000000000000000000000000000000000000000000000000000000"
+                  },
+                  "primaryType": "OrderComponents"
+                },
+                "post": {
+                  "endpoint": "/order/v3",
+                  "method": "POST",
+                  "body": {
+                    "attribute": {
+                      "collection": collection,
+                      "key": trait.attributeKey,
+                      "value": trait.attributeValue
+                    }
+                  }
+                }
+              }
+            }
+          ]
         }
-      }
-    } catch (error: any) {
-      // Clean up on error
-      pendingRequests.delete(requestKey);
-
-      if (axios.isCancel(error)) {
-        return null;
-      }
-      await logger.logMagicEdenBidError('Failed to create bid data on Magic Eden', {
-        taskId,
-        collection: slug,
-        tokenId: tokenId?.toString(),
-        traitType: trait?.attributeKey,
-        traitValue: trait?.attributeValue,
-        operation: 'create_bid_data',
-        error: error,
-        errorCode: error?.response?.status,
-        errorMessage: extractMagicEdenErrorMessage(error)
-      });
-      throw error;
-    }
-  })();
-
-  pendingRequests.set(requestKey, requestPromise);
-  return requestPromise;
+      ],
+      "errors": []
+    };
+  } else {
+    // COLLECTION bid - uses payment-processor-v2
+    return {
+      "steps": [
+        {
+          "id": "order-signature",
+          "action": "Order signature",
+          "description": "Authorize order",
+          "kind": "signature",
+          "items": [
+            {
+              "status": "incomplete",
+              "orderIndexes": [0],
+              "data": {
+                "sign": {
+                  "signatureKind": "eip712",
+                  "domain": {
+                    "name": "PaymentProcessor",
+                    "version": "2",
+                    "chainId": 1,
+                    "verifyingContract": "0x000000001bb835ab17164ff58f013a115ec465b8"
+                  },
+                  "types": {
+                    "CollectionOfferApproval": [
+                      { "name": "protocol", "type": "uint8" },
+                      { "name": "cosigner", "type": "address" },
+                      { "name": "buyer", "type": "address" },
+                      { "name": "beneficiary", "type": "address" },
+                      { "name": "marketplace", "type": "address" },
+                      { "name": "fallbackRoyaltyRecipient", "type": "address" },
+                      { "name": "paymentMethod", "type": "address" },
+                      { "name": "tokenAddress", "type": "address" },
+                      { "name": "tokenId", "type": "uint256" },
+                      { "name": "amount", "type": "uint256" },
+                      { "name": "itemPrice", "type": "uint256" },
+                      { "name": "nonce", "type": "uint256" },
+                      { "name": "expiration", "type": "uint256" },
+                      { "name": "marketplaceFeeNumerator", "type": "uint256" },
+                      { "name": "maxRoyaltyFeeNumerator", "type": "uint256" },
+                      { "name": "requestedFillAmount", "type": "uint256" },
+                      { "name": "minimumFillAmount", "type": "uint256" }
+                    ]
+                  },
+                  "value": {
+                    "protocol": 1,
+                    "cosigner": "0x0000000000000000000000000000000000000000",
+                    "buyer": maker,
+                    "beneficiary": maker,
+                    "marketplace": MAGICEDEN_CONFIG.feeRecipient,
+                    "fallbackRoyaltyRecipient": "0x0000000000000000000000000000000000000000",
+                    "paymentMethod": currency,
+                    "tokenAddress": collection,
+                    "tokenId": "0",
+                    "amount": weiPrice,
+                    "itemPrice": weiPrice,
+                    "nonce": salt,
+                    "expiration": expirationTime,
+                    "marketplaceFeeNumerator": "50",
+                    "maxRoyaltyFeeNumerator": "0",
+                    "requestedFillAmount": quantity.toString(),
+                    "minimumFillAmount": "1"
+                  },
+                  "primaryType": "CollectionOfferApproval"
+                },
+                "post": {
+                  "endpoint": "/order/v4",
+                  "method": "POST",
+                  "body": {}
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "errors": []
+    };
+  }
 }
 
 /**
@@ -646,42 +841,31 @@ export async function submitSignedOrderData(
   tokenId?: number | string,
   cachedTask?: any // Accept cached task
 ) {
+  console.log(YELLOW + `[MagicEden] submitSignedOrderData called` + RESET);
+  console.log(YELLOW + `  Trait: ${trait ? JSON.stringify(trait) : 'N/A'}` + RESET);
+  console.log(YELLOW + `  Token ID: ${tokenId || 'N/A'}` + RESET);
+  
   const task = cachedTask || currentTasks.find((task) =>
     task.contract.slug.toLowerCase() === slug.toLowerCase() &&
     task.selectedMarketplaces.includes("MagicEden")
   );
   if (!task) return;
 
-  // Optimize order data transformation with single pass
-  const targetRecipient = "0x6fa303e72bed54f515a513496f922bc331e2f27e".toLowerCase();
-  const replacementRecipient = "0xca9337244b5f04cb946391bc8b8a980e988f9a6a";
-
+  // Set source for all order types
   if (order?.steps) {
     for (const step of order.steps) {
       if (!step.items) continue;
 
       for (const item of step.items) {
+        // Log consideration before changes
+        if (item.data?.sign?.value?.consideration) {
+          console.log(CYAN + `[MagicEden] Consideration array:` + RESET);
+          console.log(JSON.stringify(item.data.sign.value.consideration, null, 2));
+        }
+        
         // Set source
         if (item.data?.post?.body) {
-          item.data.post.body.source = "magiceden.us";
-        }
-
-        // Replace recipients in sign value consideration
-        if (item.data?.sign?.value?.consideration) {
-          for (const considerationItem of item.data.sign.value.consideration) {
-            if (considerationItem.recipient.toLowerCase() === targetRecipient) {
-              considerationItem.recipient = replacementRecipient;
-            }
-          }
-        }
-
-        // Replace recipients in post body consideration
-        if (item.data?.post?.body?.order?.data?.consideration) {
-          for (const considerationItem of item.data.post.body.order.data.consideration) {
-            if (considerationItem.recipient.toLowerCase() === targetRecipient) {
-              considerationItem.recipient = replacementRecipient.toLowerCase();
-            }
-          }
+          item.data.post.body.source = MAGICEDEN_CONFIG.domain;
         }
       }
     }
@@ -715,7 +899,7 @@ export async function submitSignedOrderData(
       },
       "isNonFlagged": false,
       "orderbook": "reservoir",
-      "source": "magiceden.us"
+      "source": MAGICEDEN_CONFIG.domain
     };
   } else if (tokenId) {
     data = order?.steps
@@ -742,7 +926,7 @@ export async function submitSignedOrderData(
             orderbook: "reservoir",
           },
         ],
-        source: "magiceden.us",
+        source: MAGICEDEN_CONFIG.domain,
       };
     } else {
       await logger.logMagicEdenBidError('Sign data not found in order steps', {
@@ -858,10 +1042,10 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
     orderIds.forEach(() => {
       decrementBidCount('magiceden', taskId);
     });
-    
+
     // Track cancellation completion - MagicEden cancels multiple orders at once
     cancellationTracker.recordCompletion(taskId, orderIds.length, 'magiceden');
-    
+
     // Update cancellation percentage using centralized function
     await updateTaskCancellationPercentage(taskId);
 
