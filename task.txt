@@ -41,3 +41,6 @@ db.updates.insertOne({
   downloadUrl: 'https://gist.githubusercontent.com/ayenisholah/4767c3e4aac92af7c1a1a717c829183b/raw/3b078ee6abb4737804f800fc116d1bcc8bdbfd47/install-production.sh',
   isBeta: true
 })
+
+look for everywhere task is passed to queue data and replace with taskId
+in the job processor fetch task from activeTasks

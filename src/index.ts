@@ -19,7 +19,6 @@ config()
 import bodyParser from "body-parser";
 import { clearTimeout } from 'timers';
 import crypto from 'crypto';
-import os from "os"
 import cors from "cors";
 import helmet from "helmet";
 import stringify from 'json-stable-stringify';
@@ -39,7 +38,6 @@ import { BASE_URL, ERC20_MIN_ABI } from "./constants";
 import { Contract, ethers, Wallet as Web3Wallet, parseEther, MaxUint256 } from "ethers";
 import { DistributedLockManager } from "./utils/lock";
 import { safeGetJob, safeMarkJobAsProcessed, recoverStuckJobs } from "./utils/redis-job-fallback";
-// import { startRedisClusterMonitoring, stopRedisClusterMonitoring } from "./utils/redis-monitor";
 
 import BidLogs from "./models/logs.model";
 import PQueue from "p-queue";
@@ -52,7 +50,6 @@ import { fetchWalletNFTs } from "./utils/nft";
 import { logger, ErrorCategory, DatabaseOperation } from "./utils/logger";
 import { MarketplaceError, InsufficientBalanceError, TransferRestrictedError, MinimumPriceError, isSoftError, isRetryableError } from "./marketplace/errors";
 import WebSocketManager from "./utils/websocket-manager";
-import Listing from "./models/listing.model";
 import { initializeListingScheduler, shutdownListingScheduler, scheduleListing, cancelListingJob, processListingJob } from "./functions/listingScheduler";
 import { initializeExpirationMonitor, stopExpirationMonitor } from "./functions/relistExpired";
 import { initializeExpiredPriceCleanup, stopExpiredPriceCleanup } from "./functions/cleanupExpiredPrices";
@@ -69,8 +66,8 @@ import { blurRateLimiter } from "./utils/blur-rate-limiter";
 import { approvalCache } from "./utils/approval-cache";
 import { blurCompletionTracker } from "./utils/blur-completion-tracker";
 import { cancellationTracker } from "./utils/cancellation-tracker";
-// import { blurJobCoordinator } from "./utils/blur-job-coordinator";
 import { listingPriceCache } from "./utils/listing-price-cache";
+import Listing from "./models/listing.model";
 
 const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
 // const MARKETPLACE_WS_URL = "ws://localhost:8080";
@@ -2204,7 +2201,7 @@ async function startServer() {
               const ordersTaskId = getTaskIdForLog(job);
               console.error(RED + `[ERROR - Order Cleanup - Task: ${ordersTaskId}] Failed to delete orders after cancellation failure: ${err}` + RESET);
             });
-            
+
             // Clean up MagicEden tracking set on failure
             if (job.name === CANCEL_MAGICEDEN_BID && job.data.orderKeys) {
               job.data.orderKeys.forEach((orderKey: string) => {
@@ -3680,20 +3677,19 @@ async function handleTaskCleanup(taskId: string) {
   if (!task) return;
 
   const wallet = await walletCache.getWalletById(task.walletId);
-  const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
   const { currencySymbol } = await calculateBidPrice(task, 0, "opensea");
 
   let totalCancellationJobs = 0;
 
   // Cancel removed trait bids
   if (traitsToRemove[taskId]?.length > 0) {
-    const traitJobs = await cancelRemovedTraitBids(traitsToRemove[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol);
+    const traitJobs = await cancelRemovedTraitBids(traitsToRemove[taskId], task._id, task.walletId, currencySymbol);
     totalCancellationJobs += traitJobs;
   }
 
   // Cancel removed token bids
   if (removedTokens[taskId]?.opensea?.length > 0 || removedTokens[taskId]?.magiceden?.length > 0) {
-    const tokenJobs = await cancelRemovedTokenBids(removedTokens[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol);
+    const tokenJobs = await cancelRemovedTokenBids(removedTokens[taskId], task._id, task.walletId, currencySymbol);
     totalCancellationJobs += tokenJobs;
   }
 
@@ -3780,7 +3776,7 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
   });
 
   const lockAcquired = await lockManager.acquireLock(counterLockKey, 5);
-  
+
   if (!lockAcquired) {
     const lockTaskId = getTaskIdForLog({ data: { taskId, _id: taskId } });
     console.error(RED + `[ERROR - Job Processing - Task: ${lockTaskId}] CRITICAL: Could not acquire lock for counter increment after retries! Job ${jobId} may not be counted.` + RESET);
@@ -4044,14 +4040,14 @@ async function checkAndUpdateCounterbidJob(jobId: string, newData: any): Promise
   try {
     // Get the existing job from the queue
     const existingJob = await queue.getJob(jobId);
-    
+
     if (existingJob) {
       // Job exists - compare offer prices
       const existingOfferPrice = existingJob.data.offerPrice || 0;
       const newOfferPrice = newData.offerPrice || 0;
-      
+
       console.log(CYAN + `[Counterbid Dedup] Found existing job ${jobId} - Existing: ${existingOfferPrice}, New: ${newOfferPrice}` + RESET);
-      
+
       if (newOfferPrice > existingOfferPrice) {
         // New price is higher - update the job data
         await existingJob.updateData(newData);
@@ -4063,7 +4059,7 @@ async function checkAndUpdateCounterbidJob(jobId: string, newData: any): Promise
         return true; // Return true to indicate job exists (skip adding)
       }
     }
-    
+
     // Job doesn't exist
     return false;
   } catch (error) {
@@ -5154,7 +5150,7 @@ async function processJob(job: Job, signal?: AbortSignal) {
           return { completed: true };
         case OPENSEA_SCHEDULE:
           // Progress reporting removed - await job.updateProgress(15);
-          await processOpenseaScheduledBid(job.data, job.id as string, job);
+          await processOpenseaScheduledBid(job.data, job);
           // Progress reporting removed - await job.updateProgress(95);
           return { completed: true };
         case OPENSEA_TRAIT_BID:
@@ -5435,7 +5431,7 @@ async function processGlobalMarketplaces(incomingMarketplaces: string[]) {
   }
 }
 
-async function cancelRemovedTokenBids(removedTokens: { opensea: string[]; magiceden: string[] }, taskId: string, walletPrivateKey: string, currencySymbol: string): Promise<number> {
+async function cancelRemovedTokenBids(removedTokens: { opensea: string[]; magiceden: string[] }, taskId: string, walletId: string, currencySymbol: string): Promise<number> {
   let totalJobsCreated = 0;
   try {
     const openseaTokensToCancel = await Order.find({
@@ -5454,7 +5450,7 @@ async function cancelRemovedTokenBids(removedTokens: { opensea: string[]; magice
       const cancelData = openseaTokensToCancel.map((order) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey: walletPrivateKey, orderId: order.orderHash, taskId, orderKey: order._id }
+          data: { walletId: walletId, orderId: order.orderHash, taskId, orderKey: order._id }
         };
       });
       await queue.addBulk(cancelData);
@@ -5473,7 +5469,7 @@ async function cancelRemovedTokenBids(removedTokens: { opensea: string[]; magice
       const batchOrders = magicedenTokensToCancel.slice(i, i + 500);
       const extractedOrderIds = await extractMagicedenOrderHash(batchOrders)
       const orderKeys = batchOrders.map((order: any) => order._id)
-      await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: walletPrivateKey, orderKeys, taskId: taskId }, getCancellationJobOptions(taskId, orderKeys[0], CANCEL_MAGICEDEN_BID));
+      await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: walletId, orderKeys, taskId: taskId }, getCancellationJobOptions(taskId, orderKeys[0], CANCEL_MAGICEDEN_BID));
       totalJobsCreated++;
 
       // const magicedenJobId = `${taskId}-magiceden`.toLowerCase()
@@ -5490,7 +5486,7 @@ async function cancelRemovedTokenBids(removedTokens: { opensea: string[]; magice
   return totalJobsCreated;
 }
 
-async function cancelRemovedTraitBids(traitsToRemove: string[], taskId: string, walletPrivateKey: string, currencySymbol: string): Promise<number> {
+async function cancelRemovedTraitBids(traitsToRemove: string[], taskId: string, walletId: string, currencySymbol: string): Promise<number> {
   let totalJobsCreated = 0;
   try {
     const ordersToCancel = await Order.find({
@@ -5511,7 +5507,7 @@ async function cancelRemovedTraitBids(traitsToRemove: string[], taskId: string, 
         const payload = JSON.parse(order.orderHash);
         return {
           name: CANCEL_BLUR_BID,
-          data: { privateKey: walletPrivateKey, payload, taskId, orderKey: order._id }
+          data: { walletId: walletId, payload, taskId, orderKey: order._id }
         };
       });
       await queue.addBulk(cancelData);
@@ -5522,7 +5518,7 @@ async function cancelRemovedTraitBids(traitsToRemove: string[], taskId: string, 
       const cancelData = openseaOrders.map((order) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey: walletPrivateKey, orderId: order.orderHash, taskId, orderKey: order._id }
+          data: { walletId: walletId, orderId: order.orderHash, taskId, orderKey: order._id }
         };
       });
       await queue.addBulk(cancelData);
@@ -5541,7 +5537,7 @@ async function cancelRemovedTraitBids(traitsToRemove: string[], taskId: string, 
       const batchOrders = magicedenOrders.slice(i, i + 500);
       const extractedOrderIds = await extractMagicedenOrderHash(batchOrders)
       const orderKeys = batchOrders.map((order: any) => order._id)
-      await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: walletPrivateKey, orderKeys, taskId }, getCancellationJobOptions(taskId, orderKeys[0], CANCEL_MAGICEDEN_BID));
+      await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: walletId, orderKeys, taskId }, getCancellationJobOptions(taskId, orderKeys[0], CANCEL_MAGICEDEN_BID));
       totalJobsCreated++;
 
       // const magicedenJobId = `${taskId}-magiceden`.toLowerCase()
@@ -5578,7 +5574,6 @@ async function updateTaskData(task: ITask) {
     if (existingTaskIndex === -1 || !existingTask) return
 
     const wallet = await walletCache.getWalletById(task.walletId)
-    const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
     currentTasks.splice(existingTaskIndex, 1, task);
     activeTasks.set(task._id, task);
     updateTaskIndexes(currentTasks);
@@ -5742,8 +5737,8 @@ async function updateTaskData(task: ITask) {
     const { currencySymbol } = await calculateBidPrice(currentTask, 0, "magiceden")
 
     traitsToRemove[task._id] = removedTraits.map((trait) => `${trait.type}:${trait.value}`)
-    await cancelRemovedTraitBids(traitsToRemove[task._id], task._id, WALLET_PRIVATE_KEY, currencySymbol)
-    await cancelRemovedTokenBids(removedTokens[task._id], task._id, WALLET_PRIVATE_KEY, currencySymbol)
+    await cancelRemovedTraitBids(traitsToRemove[task._id], task._id, task.walletId, currencySymbol)
+    await cancelRemovedTokenBids(removedTokens[task._id], task._id, task.walletId, currencySymbol)
 
     console.log(GREEN + '--------------------------------------------------------------' + RESET);
     console.log(GREEN + `NEW TRAIT BIDS TO ADD: ${addedTraits.length}`.toUpperCase() + RESET);
@@ -5792,7 +5787,7 @@ async function updateTaskData(task: ITask) {
         data: {
           _id: task._id,
           address: task.wallet,
-          privateKey: WALLET_PRIVATE_KEY,
+          walletId: task.walletId,
           slug: task.contract.slug,
           contractAddress: task.contract.contractAddress,
           creatorFees,
@@ -5814,7 +5809,7 @@ async function updateTaskData(task: ITask) {
             contractAddress: task.contract.contractAddress,
             quantity: 1,
             expiration: expiration,
-            privateKey: WALLET_PRIVATE_KEY,
+            walletId: task.walletId,
             slug: task.contract.slug,
             trait,
             outbidOptions: task.outbidOptions,
@@ -5834,7 +5829,7 @@ async function updateTaskData(task: ITask) {
         data: {
           _id: task._id,
           address: task.wallet,
-          privateKey: WALLET_PRIVATE_KEY,
+          walletId: task.walletId,
           contractAddress: task.contract.contractAddress,
           slug: task.contract.slug,
           trait: JSON.stringify(trait),
@@ -5859,7 +5854,7 @@ async function updateTaskData(task: ITask) {
           data: {
             _id: task._id,
             address: task.wallet,
-            privateKey: WALLET_PRIVATE_KEY,
+            walletId: task.walletId,
             slug: task.contract.slug,
             creatorFees,
             enforceCreatorFee: collectionDetails.enforceCreatorFee,
@@ -5883,7 +5878,7 @@ async function updateTaskData(task: ITask) {
               contractAddress: task.contract.contractAddress,
               quantity: 1,
               expiration: expiration,
-              privateKey: WALLET_PRIVATE_KEY,
+              walletId: task.walletId,
               slug: task.contract.slug,
               tokenId: token,
               outbidOptions: task.outbidOptions,
@@ -7733,14 +7728,14 @@ async function
       lockPrefix: 'task-cancellation:',
       defaultTTLSeconds: 60 // 1 minute lock
     });
-    
+
     // Use wallet ID in lock key to prevent conflicts across tasks using same wallet
     const wallet = await walletCache.getWalletById(task.walletId);
     const lockKey = `${wallet?.address || taskId}-${marketplace || 'all'}`;
-    
+
     // Fetch orders for cancellation with lock
     let orders: { opensea: any[]; magiceden: any[]; blur: any[] };
-    
+
     const fetchResult = await lockManager.withLock(lockKey, async () => {
       const fetchedOrders = await fetchOrdersForCancellation(taskId, marketplace);
       console.log(YELLOW + `[stopTask] Fetched orders for cancellation:` + RESET);
@@ -7749,12 +7744,12 @@ async function
       console.log(YELLOW + `  Blur: ${fetchedOrders.blur.length}` + RESET);
       return fetchedOrders;
     });
-    
+
     if (!fetchResult) {
       console.log(YELLOW + `[stopTask] Could not acquire lock for cancellation (task: ${taskId}, wallet: ${wallet?.address}). Another process is handling it.` + RESET);
       return;
     }
-    
+
     orders = fetchResult;
 
 
@@ -7884,7 +7879,7 @@ async function
           };
           activeCancellationOperations.set(`${taskId}-opensea`, cancellationOp);
 
-          await cancelOpenseaBids(orders.opensea, WALLET_PRIVATE_KEY, taskId, currencySymbol);
+          await cancelOpenseaBids(orders.opensea, task.walletId, taskId, currencySymbol);
         } else if (orders.opensea.length === 0) {
           console.log(GREEN + `  ✅ No orders to cancel` + RESET);
 
@@ -7928,7 +7923,7 @@ async function
           };
           activeCancellationOperations.set(`${taskId}-magiceden`, cancellationOp);
 
-          await cancelMagicedenBids(orders.magiceden, WALLET_PRIVATE_KEY, taskId);
+          await cancelMagicedenBids(orders.magiceden, task.walletId, taskId);
         } else if (orders.magiceden.length === 0) {
           console.log(GREEN + `  ✅ No orders to cancel` + RESET);
 
@@ -7972,7 +7967,7 @@ async function
           };
           activeCancellationOperations.set(`${taskId}-blur`, cancellationOp);
 
-          await cancelBlurBids(orders.blur, WALLET_PRIVATE_KEY, taskId);
+          await cancelBlurBids(orders.blur, task.walletId, taskId);
         } else if (orders.blur.length === 0) {
           console.log(GREEN + `  ✅ No orders to cancel` + RESET);
 
@@ -8038,17 +8033,17 @@ async function
 
           if (orders.opensea.length > 0) {
             console.log(GOLD + `  Cancelling ${orders.opensea.length} OpenSea orders...` + RESET);
-            cancellationPromises.push(cancelOpenseaBids(orders.opensea, WALLET_PRIVATE_KEY, taskId, currencySymbol));
+            cancellationPromises.push(cancelOpenseaBids(orders.opensea, task.walletId, taskId, currencySymbol));
           }
 
           if (orders.magiceden.length > 0) {
             console.log(MAGENTA + `  Cancelling ${orders.magiceden.length} MagicEden orders...` + RESET);
-            cancellationPromises.push(cancelMagicedenBids(orders.magiceden, WALLET_PRIVATE_KEY, taskId));
+            cancellationPromises.push(cancelMagicedenBids(orders.magiceden, task.walletId, taskId));
           }
 
           if (orders.blur.length > 0) {
             console.log(BLUE + `  Cancelling ${orders.blur.length} Blur orders...` + RESET);
-            cancellationPromises.push(cancelBlurBids(orders.blur, WALLET_PRIVATE_KEY, taskId));
+            cancellationPromises.push(cancelBlurBids(orders.blur, task.walletId, taskId));
           }
 
           await Promise.allSettled(cancellationPromises);
@@ -8185,7 +8180,7 @@ async function
     } = { success: true, totalOrdersFound: 0, errors: [], duration: 0, results: {} };
 
     if (WALLET_PRIVATE_KEY) {
-      cancellationResult = await cancelAllRelatedBids(task, WALLET_PRIVATE_KEY, marketplace);
+      cancellationResult = await cancelAllRelatedBids(task, marketplace);
     } else {
       console.log(YELLOW + `[StopTask] Skipping bid cancellation for task ${taskId} - no valid wallet key available` + RESET);
       logger.logWarning(ErrorCategory.MARKETPLACE, 'Skipping bid cancellation - no valid wallet key', {
@@ -8373,7 +8368,7 @@ async function removePendingAndWaitingBids(
 
         if (!marketplace || marketplace.toLowerCase() === 'opensea') {
           bidCancellationPromises.push(
-            fetchAndCancelOpenseaBids(task, privateKey)
+            fetchAndCancelOpenseaBids(task)
               .then(() => { bidsCancelled++; })
               .catch(error => {
                 errors.push(`OpenSea bid cancellation failed: ${error.message}`);
@@ -8383,7 +8378,7 @@ async function removePendingAndWaitingBids(
 
         if (!marketplace || marketplace.toLowerCase() === 'magiceden') {
           bidCancellationPromises.push(
-            fetchAndCancelMagicedenBids(task, privateKey)
+            fetchAndCancelMagicedenBids(task)
               .then(() => { bidsCancelled++; })
               .catch(error => {
                 errors.push(`MagicEden bid cancellation failed: ${error.message}`);
@@ -8393,7 +8388,7 @@ async function removePendingAndWaitingBids(
 
         if (!marketplace || marketplace.toLowerCase() === 'blur') {
           bidCancellationPromises.push(
-            fetchAndCancelBlurBids(task, privateKey)
+            fetchAndCancelBlurBids(task)
               .then(() => { bidsCancelled++; })
               .catch(error => {
                 errors.push(`Blur bid cancellation failed: ${error.message}`);
@@ -8764,12 +8759,10 @@ async function updateTaskStatus(
 /**
  * Fetches and cancels OpenSea bids for a specific task
  * @param task - The bidding task to cancel bids for
- * @param WALLET_PRIVATE_KEY - Private key for wallet authentication
  * @returns Promise with operation results
  */
 async function fetchAndCancelOpenseaBids(
-  task: ITask,
-  WALLET_PRIVATE_KEY: string
+  task: ITask
 ): Promise<{ success: boolean; ordersFound: number; error?: string }> {
   const taskId = task?._id?.toString();
   const contractSlug = task?.contract?.slug;
@@ -8782,11 +8775,14 @@ async function fetchAndCancelOpenseaBids(
       return { success: false, ordersFound: 0, error };
     }
 
-    if (!WALLET_PRIVATE_KEY) {
-      const error = 'Invalid wallet private key provided';
-      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { taskId, contractSlug });
+    // Fetch wallet and decrypt private key
+    const wallet = await walletCache.getWalletById(task.walletId);
+    if (!wallet?.encryptedPrivateKey) {
+      const error = 'Wallet not found or missing private key';
+      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { taskId, walletId: task.walletId });
       return { success: false, ordersFound: 0, error };
     }
+    const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet.encryptedPrivateKey);
 
     await logger.logInfo(ErrorCategory.MARKETPLACE, 'Starting OpenSea bid cancellation', {
       taskId,
@@ -8928,12 +8924,10 @@ async function fetchAndCancelOpenseaBids(
 /**
  * Fetches and cancels Blur bids for a specific task
  * @param task - The bidding task to cancel bids for
- * @param WALLET_PRIVATE_KEY - Private key for wallet authentication
  * @returns Promise with operation results
  */
 async function fetchAndCancelBlurBids(
-  task: ITask,
-  WALLET_PRIVATE_KEY: string
+  task: ITask
 ): Promise<{ success: boolean; ordersFound: number; error?: string }> {
   const taskId = task?._id?.toString();
   const contractSlug = task?.contract?.slug;
@@ -8946,11 +8940,14 @@ async function fetchAndCancelBlurBids(
       return { success: false, ordersFound: 0, error };
     }
 
-    if (!WALLET_PRIVATE_KEY) {
-      const error = 'Invalid wallet private key provided';
-      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { taskId, contractSlug });
+    // Fetch wallet and decrypt private key
+    const wallet = await walletCache.getWalletById(task.walletId);
+    if (!wallet?.encryptedPrivateKey) {
+      const error = 'Wallet not found or missing private key';
+      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { taskId, walletId: task.walletId });
       return { success: false, ordersFound: 0, error };
     }
+    const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet.encryptedPrivateKey);
 
     await logger.logInfo(ErrorCategory.MARKETPLACE, 'Starting Blur bid cancellation', {
       taskId,
@@ -9011,7 +9008,7 @@ async function fetchAndCancelBlurBids(
         // Process this batch immediately to avoid memory buildup
         if (batch.length > 0) {
           // Queue cancellations for this batch
-          await cancelBlurBids(batch, WALLET_PRIVATE_KEY, taskId);
+          await cancelBlurBids(batch, task.walletId, taskId);
 
           await logger.logInfo(ErrorCategory.MARKETPLACE, 'Queued Blur bid cancellation batch', {
             taskId,
@@ -9084,12 +9081,10 @@ async function fetchAndCancelBlurBids(
 /**
  * Fetches and cancels MagicEden bids for a specific task
  * @param task - The bidding task to cancel bids for
- * @param WALLET_PRIVATE_KEY - Private key for wallet authentication
  * @returns Promise with operation results
  */
 async function fetchAndCancelMagicedenBids(
-  task: ITask,
-  WALLET_PRIVATE_KEY: string
+  task: ITask
 ): Promise<{ success: boolean; ordersFound: number; error?: string }> {
   const taskId = task?._id?.toString();
   const contractSlug = task?.contract?.slug;
@@ -9102,12 +9097,13 @@ async function fetchAndCancelMagicedenBids(
       return { success: false, ordersFound: 0, error };
     }
 
-    if (!WALLET_PRIVATE_KEY) {
-      const error = 'Invalid wallet private key provided';
-      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { taskId, contractSlug });
+    // Fetch wallet and decrypt private key
+    const wallet = await walletCache.getWalletById(task.walletId);
+    if (!wallet?.encryptedPrivateKey) {
+      const error = 'Wallet not found or missing private key';
+      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { taskId, walletId: task.walletId });
       return { success: false, ordersFound: 0, error };
     }
-
     await logger.logInfo(ErrorCategory.MARKETPLACE, 'Starting MagicEden bid cancellation', {
       taskId,
       contractSlug,
@@ -9188,7 +9184,7 @@ async function fetchAndCancelMagicedenBids(
           }
 
           // Queue cancellations for this batch
-          await cancelMagicedenBids(batch, WALLET_PRIVATE_KEY, taskId);
+          await cancelMagicedenBids(batch, task.walletId, taskId);
 
           await logger.logInfo(ErrorCategory.MARKETPLACE, 'Queued MagicEden bid cancellation batch', {
             taskId,
@@ -9270,7 +9266,6 @@ async function fetchAndCancelMagicedenBids(
  */
 async function cancelAllRelatedBids(
   task: ITask,
-  WALLET_PRIVATE_KEY: string,
   marketplace?: string,
   attempt: number = 1
 ): Promise<{
@@ -9311,12 +9306,6 @@ async function cancelAllRelatedBids(
       return { success: false, results: {}, totalOrdersFound: 0, errors: [error], duration: 0 };
     }
 
-    if (!WALLET_PRIVATE_KEY) {
-      const error = 'Invalid wallet private key provided';
-      await logger.logWarning(ErrorCategory.MARKETPLACE, error, { taskId, contractSlug, marketplace, attempt });
-      return { success: false, results: {}, totalOrdersFound: 0, errors: [error], duration: 0 };
-    }
-
     // Validate marketplace parameter if provided
     if (marketplace && !['opensea', 'magiceden', 'blur'].includes(marketplace.toLowerCase())) {
       const error = 'Invalid marketplace parameter';
@@ -9346,21 +9335,21 @@ async function cancelAllRelatedBids(
 
       switch (marketplace.toLowerCase()) {
         case OPENSEA.toLowerCase():
-          results.opensea = await fetchAndCancelOpenseaBids(task, WALLET_PRIVATE_KEY);
+          results.opensea = await fetchAndCancelOpenseaBids(task);
           totalOrdersFound += results.opensea.ordersFound;
           if (!results.opensea.success) {
             errors.push(`OpenSea cancellation failed: ${results.opensea.error}`);
           }
           break;
         case MAGICEDEN.toLowerCase():
-          results.magiceden = await fetchAndCancelMagicedenBids(task, WALLET_PRIVATE_KEY);
+          results.magiceden = await fetchAndCancelMagicedenBids(task);
           totalOrdersFound += results.magiceden.ordersFound;
           if (!results.magiceden.success) {
             errors.push(`MagicEden cancellation failed: ${results.magiceden.error}`);
           }
           break;
         case BLUR.toLowerCase():
-          results.blur = await fetchAndCancelBlurBids(task, WALLET_PRIVATE_KEY);
+          results.blur = await fetchAndCancelBlurBids(task);
           totalOrdersFound += results.blur.ordersFound;
           if (!results.blur.success) {
             errors.push(`Blur cancellation failed: ${results.blur.error}`);
@@ -9368,21 +9357,11 @@ async function cancelAllRelatedBids(
           break;
       }
     } else {
-      // Process all marketplaces in parallel
-      const openSeaParentJobId = `${taskId}-CANCEL_OPENSEA_BID`;
-      const magicEdenParentJobId = `${taskId}-CANCEL_MAGICEDEN_BID`;
-      const blurParentJobId = `${taskId}-CANCEL_BLUR_BID`;
-
-      // Don't delete parent jobs here - they're needed for tracking
-      // parentJobs.delete(openSeaParentJobId);
-      // parentJobs.delete(magicEdenParentJobId);
-      // parentJobs.delete(blurParentJobId);
-
       // Execute all marketplace cancellations in parallel with timeout
       const cancellationPromises = [
-        fetchAndCancelOpenseaBids(task, WALLET_PRIVATE_KEY),
-        fetchAndCancelMagicedenBids(task, WALLET_PRIVATE_KEY),
-        fetchAndCancelBlurBids(task, WALLET_PRIVATE_KEY)
+        fetchAndCancelOpenseaBids(task),
+        fetchAndCancelMagicedenBids(task),
+        fetchAndCancelBlurBids(task)
       ];
 
       const cancellationTimeout = 30000; // 30 seconds
@@ -9573,7 +9552,7 @@ async function extractMagicedenOrderHash(orders: any[]): Promise<string[]> {
 // Set to track orders being cancelled globally (across all tasks)
 const magicedenOrdersBeingCancelled = new Set<string>();
 
-async function cancelMagicedenBids(orders: any[], privateKey: string, taskId: string) {
+async function cancelMagicedenBids(orders: any[], walletId: string, taskId: string) {
   if (!orders.length) return;
 
   // Parent job tracking removed - now using cancellationTracker
@@ -9581,7 +9560,7 @@ async function cancelMagicedenBids(orders: any[], privateKey: string, taskId: st
   // Filter out orders that are already being cancelled
   const ordersToCancel = [];
   const duplicateOrders = [];
-  
+
   for (const order of orders) {
     const orderId = order._id?.toString() || order.orderHash;
     if (magicedenOrdersBeingCancelled.has(orderId)) {
@@ -9591,11 +9570,11 @@ async function cancelMagicedenBids(orders: any[], privateKey: string, taskId: st
       ordersToCancel.push(order);
     }
   }
-  
+
   if (duplicateOrders.length > 0) {
     console.log(YELLOW + `[cancelMagicedenBids] Skipping ${duplicateOrders.length} orders already being cancelled` + RESET);
   }
-  
+
   if (!ordersToCancel.length) {
     console.log(YELLOW + `[cancelMagicedenBids] All ${orders.length} orders are already being cancelled, skipping` + RESET);
     return;
@@ -9613,7 +9592,7 @@ async function cancelMagicedenBids(orders: any[], privateKey: string, taskId: st
 
     await queue.add(CANCEL_MAGICEDEN_BID, {
       orderIds: extractedOrderIds,
-      privateKey,
+      walletId,
       orderKeys,
       taskId,
       batchSize: batchOrders.length // Add batch size to job data
@@ -9626,7 +9605,7 @@ async function cancelMagicedenBids(orders: any[], privateKey: string, taskId: st
   console.log(MAGENTA + `[cancelMagicedenBids] Successfully queued all MagicEden cancellation jobs` + RESET);
 }
 
-async function cancelBlurBids(orders: any[], privateKey: string, taskId: string) {
+async function cancelBlurBids(orders: any[], walletId: string, taskId: string) {
   if (!orders.length) return
 
 
@@ -9638,7 +9617,7 @@ async function cancelBlurBids(orders: any[], privateKey: string, taskId: string)
     const payload = JSON.parse(order.orderHash)
     return {
       name: CANCEL_BLUR_BID,
-      data: { privateKey, payload, taskId, orderKey: order._id },
+      data: { walletId, payload, taskId, orderKey: order._id },
       opts: getCancellationJobOptions(taskId, order._id, CANCEL_BLUR_BID)
     }
   }) as Job[]
@@ -9648,7 +9627,7 @@ async function cancelBlurBids(orders: any[], privateKey: string, taskId: string)
   console.log(BLUE + `[cancelBlurBids] Successfully queued all Blur cancellation jobs` + RESET);
 }
 
-async function cancelOpenseaBids(orders: any[], privateKey: string, taskId: string, currencySymbol: string) {
+async function cancelOpenseaBids(orders: any[], walletId: string, taskId: string, currencySymbol: string) {
   if (!orders.length) return;
 
 
@@ -9657,7 +9636,7 @@ async function cancelOpenseaBids(orders: any[], privateKey: string, taskId: stri
   const cancelData = orders.map((order, index) => {
     return {
       name: CANCEL_OPENSEA_BID,
-      data: { privateKey, orderId: order.orderHash, taskId, orderKey: order._id },
+      data: { walletId, orderId: order.orderHash, taskId, orderKey: order._id },
       opts: getCancellationJobOptions(taskId, order._id, CANCEL_OPENSEA_BID)
     }
   }) as Job[]
@@ -10174,7 +10153,7 @@ async function handleMarketplaceMessage(message: any) {
     console.log(YELLOW + `  - marketplace: ${message.marketplace}` + RESET);
     console.log(YELLOW + `  - event: ${message.event}` + RESET);
     console.log(YELLOW + `  - Full message: ${JSON.stringify(message).substring(0, 500)}...` + RESET);
-    
+
     if (message.eventType === 'BID_CREATED') {
       return handleCounterBid(message)
     }
@@ -10417,26 +10396,26 @@ async function triggerAutoListingForPurchase(
 async function handleCounterBid(message: any) {
   try {
     console.log(CYAN + `[DEBUG][handleCounterBid] Processing BID_CREATED message for marketplace: ${message.marketplace}` + RESET);
-    
+
     const { contractAddress, slug } = getMarketplaceDetails(message);
     console.log(CYAN + `[DEBUG][handleCounterBid] Extracted details:` + RESET);
     console.log(CYAN + `  - contractAddress: ${contractAddress}` + RESET);
     console.log(CYAN + `  - slug: ${slug}` + RESET);
-    
+
     if (!contractAddress && !slug) {
       console.log(CYAN + `[DEBUG][handleCounterBid] No contract address or slug found, returning` + RESET);
       return;
     }
-    
+
     // Use fast O(1) lookup instead of O(n) filter
     const relevantTasks = getRelevantTasks(contractAddress, slug);
     console.log(CYAN + `[DEBUG][handleCounterBid] Found ${relevantTasks.length} relevant tasks` + RESET);
-    
+
     if (!relevantTasks.length) {
       console.log(CYAN + `[DEBUG][handleCounterBid] No relevant tasks found, returning` + RESET);
       return;
     }
-    
+
     relevantTasks.map(task => handleCounterBidForTask(task, message))
 
   } catch (error) {
@@ -10448,9 +10427,9 @@ async function handleCounterBid(message: any) {
 function getMarketplaceDetails(message: any): { contractAddress?: string, slug?: string } {
   console.log(GREEN + `[DEBUG][getMarketplaceDetails] Processing marketplace: ${message.marketplace}` + RESET);
   console.log(GREEN + `[DEBUG][getMarketplaceDetails] BLUR=${BLUR}, OPENSEA=${OPENSEA}, MAGICEDEN=${MAGICEDEN}` + RESET);
-  
+
   let result: { contractAddress?: string, slug?: string } = {};
-  
+
   switch (message.marketplace) {
     case BLUR:
       result = { contractAddress: handleBlurMessages(message) };
@@ -10479,7 +10458,7 @@ async function handleCounterBidForTask(task: any, message: any) {
   console.log(BLUE + `    - Blur: includes=${selectedMarketplaces.includes('blur')}, matches=${message.marketplace === BLUR}` + RESET);
   console.log(BLUE + `    - OpenSea: includes=${selectedMarketplaces.includes('opensea')}, matches=${message.marketplace === OPENSEA}` + RESET);
   console.log(BLUE + `    - MagicEden: includes=${selectedMarketplaces.includes('magiceden')}, matches=${message.marketplace === MAGICEDEN}` + RESET);
-  
+
   // Process each marketplace handler with error handling and timeout protection
   try {
     if (selectedMarketplaces.includes('blur') && message.marketplace === BLUR) {
@@ -10550,7 +10529,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     console.log(YELLOW + `  - maker: ${maker}` + RESET);
     console.log(YELLOW + `  - walletAddresses: ${JSON.stringify(walletAddresses)}` + RESET);
     console.log(YELLOW + `  - includes maker: ${walletAddresses.includes(maker)}` + RESET);
-    
+
     if (walletAddresses.includes(maker)) {
       console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] Own wallet detected, calling incrementOwnBidCounter` + RESET);
       incrementOwnBidCounter('magiceden', task._id);
@@ -10657,7 +10636,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         if (orders.length > 0) {
           const orderKeys = orders.map((order: any) => order._id)
           const extractedOrderIds = await extractMagicedenOrderHash(orders)
-          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
         }
         return
       }
@@ -10683,7 +10662,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           if (orders.length > 0) {
             const orderKeys = orders.map((order: any) => order._id)
             const extractedOrderIds = await extractMagicedenOrderHash(orders)
-            queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+            queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
           }
         }
 
@@ -10698,7 +10677,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         offerPrice: Number(offerPrice),
         tokenId: tokenId,
         expiration: expiration,
-        privateKey: WALLET_PRIVATE_KEY,
+        walletId: task.walletId,
         slug: task.contract.slug,
         outbidOptions: task.outbidOptions,
         maxBidPriceEth,
@@ -10722,7 +10701,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         const orderKeys = orders.map((order: any) => order._id)
         queue.add(CANCEL_MAGICEDEN_BID, {
           orderIds: extractedOrderIds,
-          privateKey: WALLET_PRIVATE_KEY,
+          walletId: task.walletId,
           orderKeys,
           taskId: task._id
         });
@@ -10782,7 +10761,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         if (orders.length > 0) {
           const orderKeys = orders.map((order: any) => order._id)
           const extractedOrderIds = await extractMagicedenOrderHash(orders)
-          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
         }
         return
       }
@@ -10802,7 +10781,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         // Trait offer counterbidding other trait offers: use regular margin
         effectiveMargin = magicedenOutbidMargin;
       }
-      
+
       offerPrice = Math.ceil((effectiveMargin * Math.pow(10, decimal)) + incomingBidAmount)
       const offerPriceEth = offerPrice / Math.pow(10, decimal)
 
@@ -10818,7 +10797,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           if (orders.length > 0) {
             const orderKeys = orders.map((order: any) => order._id)
             const extractedOrderIds = await extractMagicedenOrderHash(orders)
-            queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+            queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
           }
         }
         return;
@@ -10849,7 +10828,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         if (matchingTokenIds.length > 0) {
           // Create token bids for each matching token
           const jobsToAdd = [];
-          
+
           for (const tokenId of matchingTokenIds) {
             const counterbidJobId = `counterbid-token-${task.contract.slug}-${tokenId}`;
             const bidData = {
@@ -10860,16 +10839,16 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               offerPrice: offerPrice,
               tokenId: Number(tokenId),
               expiration: expiration,
-              privateKey: WALLET_PRIVATE_KEY,
+              walletId: task.walletId,
               slug: task.contract.slug,
               outbidOptions: task.outbidOptions,
               maxBidPriceEth,
               minBidPriceEth,
               task: currentTask,
             };
-            
+
             const jobExists = await checkAndUpdateCounterbidJob(counterbidJobId, bidData);
-            
+
             if (!jobExists) {
               jobsToAdd.push({
                 name: MAGICEDEN_TOKEN_BID_COUNTERBID,
@@ -10899,7 +10878,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           quantity: 1,
           offerPrice: offerPrice,
           expiration: expiration,
-          privateKey: WALLET_PRIVATE_KEY,
+          walletId: task.walletId,
           slug: task.contract.slug,
           trait: JSON.stringify(trait),
         }
@@ -10920,7 +10899,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       if (orders.length > 0) {
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
         const orderKeys = orders.map((order: any) => order._id)
-        queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+        queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
       }
     }
     else if (bidType === "collection") {
@@ -10965,7 +10944,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           if (allOrders.length > 0) {
             const orderKeys = allOrders.map((order: any) => order._id)
             const extractedOrderIds = await extractMagicedenOrderHash(allOrders)
-            queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+            queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
           }
         }
         return
@@ -10980,7 +10959,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         if (allOrders.length > 0) {
           const orderKeys = allOrders.map((order: any) => order._id)
           const extractedOrderIds = await extractMagicedenOrderHash(allOrders)
-          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
         }
         return
       }
@@ -11008,7 +10987,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           if (taskOrders.length > 0) {
             const orderKeys = taskOrders.map((order: any) => order._id)
             const extractedOrderIds = await extractMagicedenOrderHash(taskOrders)
-            queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+            queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
           }
         }
         return;
@@ -11048,14 +11027,14 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               quantity: 1,
               offerPrice: orderOfferPrice,
               expiration: expiration,
-              privateKey: WALLET_PRIVATE_KEY,
+              walletId: task.walletId,
               slug: task.contract.slug,
               trait: JSON.stringify(trait)
             }
 
             const counterbidJobId = `counterbid-trait-${task.contract.slug}-${order.identifier}`;
             const jobExists = await checkAndUpdateCounterbidJob(counterbidJobId, counterbidData);
-            
+
             if (!jobExists) {
               await queue.add(
                 MAGICEDEN_TRAIT_BID_COUNTERBID,
@@ -11078,14 +11057,14 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               quantity: 1,
               offerPrice: orderOfferPrice,
               expiration: expiration,
-              privateKey: WALLET_PRIVATE_KEY,
+              walletId: task.walletId,
               slug: task.contract.slug,
               currency
             }
 
             const counterbidJobId = `counterbid-collection-${task.contract.slug}`;
             const jobExists = await checkAndUpdateCounterbidJob(counterbidJobId, bidData);
-            
+
             if (!jobExists) {
               await queue.add(
                 MAGICEDEN_COLLECTION_BID_COUNTERBID,
@@ -11109,7 +11088,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               quantity: 1,
               offerPrice: orderOfferPrice,
               expiration: expiration,
-              privateKey: WALLET_PRIVATE_KEY,
+              walletId: task.walletId,
               slug: task.contract.slug,
               tokenId: parseInt(tokenId),
               outbidOptions: currentTask.outbidOptions,
@@ -11119,7 +11098,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
             const counterbidJobId = `counterbid-token-${task.contract.slug}-${tokenId}`;
             const jobExists = await checkAndUpdateCounterbidJob(counterbidJobId, bidData);
-            
+
             if (!jobExists) {
               await queue.add(
                 MAGICEDEN_TOKEN_BID_COUNTERBID,
@@ -11146,7 +11125,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         if (ordersToCancel.length > 0) {
           const orderKeys = ordersToCancel.map((order: any) => order._id)
           const extractedOrderIds = await extractMagicedenOrderHash(ordersToCancel)
-          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey: WALLET_PRIVATE_KEY, orderKeys: orderKeys, taskId: task._id });
+          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
         }
       } else {
         console.log(YELLOW + `[MagicEden collection] Task ${task._id} - No offers to counterbid (all existing offers > incoming offer)` + RESET);
@@ -11252,7 +11231,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     console.log(YELLOW + `  - maker: ${maker}` + RESET);
     console.log(YELLOW + `  - walletAddresses: ${JSON.stringify(walletAddresses)}` + RESET);
     console.log(YELLOW + `  - includes maker: ${walletAddresses.includes(maker)}` + RESET);
-    
+
     if (walletAddresses.includes(maker)) {
       console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] Own wallet detected, calling incrementOwnBidCounter` + RESET);
       incrementOwnBidCounter('opensea', task._id);
@@ -11269,8 +11248,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     if (!outbidOptions.counterbid) {
       return;
     }
-    // Only decrypt private key after checking if it's our own bid
-    const WALLET_PRIVATE_KEY = decryptPrivateKey(wallets.find((wallet) => wallet.address.toLowerCase() === task.wallet.toLowerCase())?.encryptedPrivateKey as string);
 
     const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal);
     // Check cache first
@@ -11354,7 +11331,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             const cancelData = orders.map((order, index) => {
               return {
                 name: CANCEL_OPENSEA_BID,
-                data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
+                data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
 
               }
             })
@@ -11370,7 +11347,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           const cancelData = orders.map((order, index) => {
             return {
               name: CANCEL_OPENSEA_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
+              data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
             }
           })
           queue.addBulk(cancelData)
@@ -11399,7 +11376,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             const cancelData = orders.map((order, index) => {
               return {
                 name: CANCEL_OPENSEA_BID,
-                data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
+                data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
 
               }
             })
@@ -11418,7 +11395,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       const bidData: IProcessOpenseaTokenBidData = {
         _id: task._id,
         address: task.wallet,
-        privateKey: WALLET_PRIVATE_KEY,
+        walletId: task.walletId,
         slug: task.contract.slug,
         offerPrice: Number(tokenOffer),
         creatorFees,
@@ -11429,7 +11406,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       const counterbidJobId = `counterbid-token-${task.contract.slug}-${tokenId}`;
       const jobExists = await checkAndUpdateCounterbidJob(counterbidJobId, bidData);
-      
+
       if (!jobExists) {
         await queue.add(
           OPENSEA_TOKEN_BID_COUNTERBID,
@@ -11509,7 +11486,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             const cancelData = orders.map((order, index) => {
               return {
                 name: CANCEL_OPENSEA_BID,
-                data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
+                data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
               }
             })
             queue.addBulk(cancelData)
@@ -11527,7 +11504,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           const cancelData = orders.map((order, index) => {
             return {
               name: CANCEL_OPENSEA_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
+              data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
             }
           })
           queue.addBulk(cancelData)
@@ -11555,7 +11532,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         // Trait offer counterbidding other trait offers: use regular margin
         effectiveMargin = openseaOutbidMargin;
       }
-      
+
       offerPrice = Math.ceil((effectiveMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)))
       const offerPriceEth = offerPrice / Math.pow(10, decimal)
 
@@ -11566,7 +11543,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             const cancelData = orders.map((order, index) => {
               return {
                 name: CANCEL_OPENSEA_BID,
-                data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
+                data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
               }
             })
             queue.addBulk(cancelData)
@@ -11603,13 +11580,13 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         if (matchingTokenIds.length > 0) {
           // Create token bids for each matching token
           const jobsToAdd = [];
-          
+
           for (const tokenId of matchingTokenIds) {
             const counterbidJobId = `counterbid-token-${task.contract.slug}-${tokenId}`;
             const bidData = {
               _id: task._id,
               address: task.wallet,
-              privateKey: WALLET_PRIVATE_KEY,
+              walletId: task.walletId,
               slug: task.contract.slug,
               offerPrice: Number(traitOffer),
               creatorFees,
@@ -11621,9 +11598,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               outbidOptions: outbidOptions,
               task
             };
-            
+
             const jobExists = await checkAndUpdateCounterbidJob(counterbidJobId, bidData);
-            
+
             if (!jobExists) {
               jobsToAdd.push({
                 name: OPENSEA_TOKEN_BID_COUNTERBID,
@@ -11652,7 +11629,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           _id: task._id,
           bidCount,
           address: task.wallet,
-          privateKey: WALLET_PRIVATE_KEY,
+          walletId: task.walletId,
           slug: task.contract.slug,
           offerPrice: Number(traitOffer),
           creatorFees,
@@ -11663,7 +11640,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
         const counterbidJobId = `counterbid-trait-${task.contract.slug}-${identifier}`;
         const jobExists = await checkAndUpdateCounterbidJob(counterbidJobId, counterbidData);
-        
+
         if (!jobExists) {
           await queue.add(
             OPENSEA_TRAIT_BID_COUNTERBID,
@@ -11724,7 +11701,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             const cancelData = allOrders.map((order) => {
               return {
                 name: CANCEL_OPENSEA_BID,
-                data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
+                data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
               }
             })
             queue.addBulk(cancelData)
@@ -11743,7 +11720,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           const cancelData = allOrders.map((order) => {
             return {
               name: CANCEL_OPENSEA_BID,
-              data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
+              data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
             }
           })
           queue.addBulk(cancelData)
@@ -11776,7 +11753,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             const cancelData = taskOrders.map((order) => {
               return {
                 name: CANCEL_OPENSEA_BID,
-                data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
+                data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
               }
             })
             queue.addBulk(cancelData)
@@ -11814,7 +11791,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               _id: task._id,
               bidCount,
               address: task.wallet,
-              privateKey: WALLET_PRIVATE_KEY,
+              walletId: task.walletId,
               slug: task.contract.slug,
               offerPrice: Number(orderOfferPrice),
               creatorFees,
@@ -11825,7 +11802,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
             const counterbidJobId = `counterbid-trait-${task.contract.slug}-${order.identifier}`;
             const jobExists = await checkAndUpdateCounterbidJob(counterbidJobId, counterbidData);
-            
+
             if (!jobExists) {
               await queue.add(
                 OPENSEA_TRAIT_BID_COUNTERBID,
@@ -11845,7 +11822,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               taskId: task._id,
               bidCount,
               walletAddress: task.wallet,
-              walletPrivateKey: WALLET_PRIVATE_KEY,
+              walletId: task.walletId,
               slug: task.contract.slug,
               offerPrice: Number(colletionOffer),
               creatorFees,
@@ -11855,7 +11832,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
             const counterbidJobId = `counterbid-collection-${task.contract.slug}`;
             const jobExists = await checkAndUpdateCounterbidJob(counterbidJobId, bidData);
-            
+
             if (!jobExists) {
               await queue.add(
                 OPENSEA_COLLECTION_BID_COUNTERBID,
@@ -11874,7 +11851,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             const bidData: IProcessOpenseaTokenBidData = {
               _id: task._id,
               address: task.wallet,
-              privateKey: WALLET_PRIVATE_KEY,
+              walletId: task.walletId,
               slug: task.contract.slug,
               offerPrice: Number(orderOfferPrice),
               creatorFees,
@@ -11888,7 +11865,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
             const counterbidJobId = `counterbid-token-${task.contract.slug}-${tokenId}`;
             const jobExists = await checkAndUpdateCounterbidJob(counterbidJobId, bidData);
-            
+
             if (!jobExists) {
               await queue.add(
                 OPENSEA_TOKEN_BID_COUNTERBID,
@@ -11939,7 +11916,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       await logger.logError(ErrorCategory.DATABASE, `Wallet not found for task ${task._id}: ${task.wallet}`, new Error('Wallet not found'));
       return;
     }
-    const WALLET_PRIVATE_KEY = await walletCache.getDecryptedPrivateKey(wallets);
     const selectedTraits = transformNewTask(currentTask?.selectedTraits?.blur)
     const traitBid = currentTask?.bidType === "collection" && selectedTraits && Object.keys(selectedTraits)?.length > 0
     const blurOutbidMargin = currentTask?.outbidOptions?.blurOutbidMargin || 0.01
@@ -12027,7 +12003,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
                 const payload = JSON.parse(order.orderHash)
                 return {
                   name: CANCEL_BLUR_BID,
-                  data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order._id }
+                  data: { walletId: task.walletId, payload, taskId: task._id, orderKey: order._id }
                 }
               })
               await queue.addBulk(cancelData)
@@ -12049,7 +12025,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
               const payload = JSON.parse(order.orderHash)
               return {
                 name: CANCEL_BLUR_BID,
-                data: { privateKey: WALLET_PRIVATE_KEY, payload, taskId: task._id, orderKey: order._id }
+                data: { walletId: task.walletId, payload, taskId: task._id, orderKey: order._id }
               }
             })
             await queue.addBulk(cancelData)
@@ -12071,7 +12047,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
           taskId: task._id,
           bidCount: bidCount,
           address: task.wallet,
-          privateKey: WALLET_PRIVATE_KEY || '',
+          walletId: task.walletId,
           contractAddress: task.contract.contractAddress,
           offerPrice: Number(offerPrice),
           slug: task.contract.slug,
@@ -12082,7 +12058,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
         const counterbidJobId = `counterbid-trait-${task.contract.slug}-${identifier}`;
         const jobExists = await checkAndUpdateCounterbidJob(counterbidJobId, bidData);
-        
+
         if (!jobExists) {
           await blurQueue.add(
             BLUR_TRAIT_BID_COUNTERBID,
@@ -12151,7 +12127,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
             return {
               name: CANCEL_BLUR_BID,
               data: {
-                privateKey: WALLET_PRIVATE_KEY,
+                walletId: task.walletId,
                 payload,
                 taskId: task._id,
                 orderKey: order._id
@@ -12177,7 +12153,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
             return {
               name: CANCEL_BLUR_BID,
               data: {
-                privateKey: WALLET_PRIVATE_KEY,
+                walletId: task.walletId,
                 payload,
                 taskId: task._id,
                 orderKey: order._id
@@ -12225,7 +12201,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
               taskId: task._id,
               bidCount,
               address: task.wallet,
-              privateKey: WALLET_PRIVATE_KEY || '',
+              walletId: task.walletId,
               contractAddress: task.contract.contractAddress,
               offerPrice: Number(orderOfferPrice),
               slug: task.contract.slug,
@@ -12235,7 +12211,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
             const counterbidJobId = `counterbid-trait-${task.contract.slug}-${order.identifier}`;
             const jobExists = await checkAndUpdateCounterbidJob(counterbidJobId, counterbidData);
-            
+
             if (!jobExists) {
               await blurQueue.add(
                 BLUR_TRAIT_BID_COUNTERBID,
@@ -12253,7 +12229,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
               taskId: task._id,
               bidCount,
               address: task.wallet,
-              privateKey: WALLET_PRIVATE_KEY || '',
+              walletId: task.walletId,
               contractAddress: task.contract.contractAddress,
               offerPrice: Number(orderOfferPrice),
               slug: task.contract.slug,
@@ -12262,7 +12238,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
             const counterbidJobId = `counterbid-collection-${task.contract.slug}`;
             const jobExists = await checkAndUpdateCounterbidJob(counterbidJobId, bidData);
-            
+
             if (!jobExists) {
               await blurQueue.add(
                 BLUR_COLLECTION_BID_COUNTERBID,
@@ -12317,7 +12293,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 function handleMagicEdenMessages(message: any) {
   console.log(MAGENTA + `[DEBUG][handleMagicEdenMessages] Processing message with event: ${message.event}` + RESET);
   console.log(MAGENTA + `[DEBUG][handleMagicEdenMessages] Message structure: ${JSON.stringify(message).substring(0, 300)}...` + RESET);
-  
+
   let slug, contractAddress;
   try {
     if (
@@ -12340,7 +12316,7 @@ function handleMagicEdenMessages(message: any) {
 function handleOpenSeaMessages(message: any) {
   console.log(MAGENTA + `[DEBUG][handleOpenSeaMessages] Processing message with event: ${message.event}` + RESET);
   console.log(MAGENTA + `[DEBUG][handleOpenSeaMessages] Message structure: ${JSON.stringify(message).substring(0, 300)}...` + RESET);
-  
+
   let contractAddress, slug
 
   try {
@@ -12504,8 +12480,8 @@ async function performMarketplacePreprocessing(
     // If traits are selected for token bid type, fetch trait-based tokens
     // Fetch once and share between OpenSea and MagicEden
     console.log(CYAN + `[DEBUG] Task bidType: ${task.bidType}, marketplace: ${marketplace}` + RESET);
-    if ((marketplace === "opensea" || marketplace === "magiceden") && 
-        (availableMarketplaces.includes("opensea") || availableMarketplaces.includes("magiceden"))) {
+    if ((marketplace === "opensea" || marketplace === "magiceden") &&
+      (availableMarketplaces.includes("opensea") || availableMarketplaces.includes("magiceden"))) {
       const openseaFilteredTraits = Object.fromEntries(
         Object.entries(task?.selectedTraits?.opensea || {}).filter(([_, traits]) => traits.length > 0)
       );
@@ -12921,7 +12897,7 @@ async function performMarketplacePreprocessing(
   return preprocessing;
 }
 
-async function processOpenseaScheduledBid(task: ITask, jobId?: string, scheduleJob?: Job) {
+async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
   const currentLoopCount = loopCounterStats[task._id.toString()] || 1;
   console.log(`${BLUE}[processOpenseaScheduledBid] CALLED for task ${task._id} - Loop #${currentLoopCount}${RESET}`);
 
@@ -13079,7 +13055,6 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, scheduleJ
 
         const WALLET_ADDRESS: string = currentTask.wallet;
         const wallets = await walletCache.getWalletById(currentTask.walletId);
-        const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
         // Extend lock before fetching balances
         if (lockAcquired) {
@@ -13152,7 +13127,7 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, scheduleJ
               data: {
                 _id: taskId,
                 address: WALLET_ADDRESS,
-                privateKey: WALLET_PRIVATE_KEY,
+                walletId: task.walletId,
                 slug: currentTask.contract.slug,
                 creatorFees,
                 enforceCreatorFee: collectionDetails.enforceCreatorFee,
@@ -13205,7 +13180,7 @@ async function processOpenseaScheduledBid(task: ITask, jobId?: string, scheduleJ
             const jobData = {
               _id: taskId,
               address: WALLET_ADDRESS,
-              privateKey: WALLET_PRIVATE_KEY,
+              walletId: task.walletId,
               slug: currentTask.contract.slug,
               contractAddress: currentTask.contract.contractAddress,
               creatorFees,
@@ -13515,9 +13490,8 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       }
     }
 
-    // Parallel fetch: wallet, floor price, and orders
-    const [wallets, floor_price, orders] = await Promise.all([
-      walletCache.getWalletById(task.walletId),
+    // Parallel fetch: floor price and orders (wallet will be fetched when needed)
+    const [floor_price, orders] = await Promise.all([
       getOpenseaFloor(currentTask.contract.slug),
       Order.find({
         slug: currentTask.contract.slug,
@@ -13525,9 +13499,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
         marketplace: OPENSEA.toLowerCase(),
         identifier: 'collection'
       }).sort({ createdAt: -1 })
-    ]);
-
-    const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
+    ])
 
     if (!floor_price) {
       throw new Error(`Failed to fetch floor price for ${currentTask.contract.slug}`);
@@ -13623,7 +13595,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
       const cancelData = orders.map((order, index) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
+          data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
         }
       })
       queue.addBulk(cancelData); // Non-blocking
@@ -13660,7 +13632,7 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
           const cancelData = orders.map((order, index) => {
             return {
               name: CANCEL_OPENSEA_BID,
-              data: { privateKey, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
+              data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
             }
           })
           queue.addBulk(cancelData)
@@ -13672,6 +13644,10 @@ async function processOpenseaCollectionBid(data: { task: ITask, collectionDetail
     }
 
     try {
+      // Fetch wallet and decrypt private key just before use
+      const wallet = await walletCache.getWalletById(task.walletId);
+      const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
+
       await bidOnOpensea(
         task._id,
         bidCount,
@@ -13942,7 +13918,7 @@ async function processBlurScheduledBid(task: ITask) {
             data: {
               _id: taskId,
               address: WALLET_ADDRESS,
-              privateKey: WALLET_PRIVATE_KEY,
+              walletId: task.walletId,
               contractAddress,
               slug: currentTask.contract.slug,
               trait: JSON.stringify(trait),
@@ -14129,7 +14105,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 
           return {
             name: CANCEL_BLUR_BID,
-            data: { privateKey, payload, taskId: task._id, orderKey: order._id }
+            data: { walletId: task.walletId, payload, taskId: task._id, orderKey: order._id }
           }
         })
         queue.addBulk(cancelData);
@@ -14242,7 +14218,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 
         return {
           name: CANCEL_BLUR_BID,
-          data: { privateKey, payload, taskId: task._id, orderKey: order._id }
+          data: { walletId: task.walletId, payload, taskId: task._id, orderKey: order._id }
         }
       })
       queue.addBulk(cancelData);
@@ -14273,7 +14249,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 
             return {
               name: CANCEL_BLUR_BID,
-              data: { privateKey, payload, taskId: task._id, orderKey: order._id }
+              data: { walletId: task.walletId, payload, taskId: task._id, orderKey: order._id }
             }
           })
           queue.addBulk(cancelData);
@@ -14327,7 +14303,7 @@ async function processBlurCollectionBid(data: { task: ITask }) {
 async function processOpenseaTraitBid(data: {
   _id: string
   address: string;
-  privateKey: string;
+  walletId: string;
   slug: string;
   contractAddress: string;
   creatorFees: IFee;
@@ -14367,7 +14343,11 @@ async function processOpenseaTraitBid(data: {
       return;
     }
 
-    const { address, privateKey, slug, creatorFees, enforceCreatorFee, trait, contractAddress, _id } = data
+    const { address, walletId, slug, creatorFees, enforceCreatorFee, trait, contractAddress, _id } = data
+
+    // Fetch wallet and decrypt private key
+    const wallet = await walletCache.getWalletById(walletId);
+    const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
     // Skip trait validation - preprocessing already determined valid traits
     // The trait passed in the job data is already validated
@@ -14426,7 +14406,7 @@ async function processOpenseaTraitBid(data: {
         const cancelData = orders.map((order, index) => {
           return {
             name: CANCEL_OPENSEA_BID,
-            data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order._id },
+            data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id },
           }
         })
         queue.addBulk(cancelData)
@@ -14509,7 +14489,7 @@ async function processOpenseaTraitBid(data: {
       const cancelData = orders.map((order, index) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order._id },
+          data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id },
         }
       })
       queue.addBulk(cancelData); // Non-blocking
@@ -14530,7 +14510,7 @@ async function processOpenseaTraitBid(data: {
           const cancelData = orders.map((order, index) => {
             return {
               name: CANCEL_OPENSEA_BID,
-              data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order._id },
+              data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id },
             }
           })
           queue.addBulk(cancelData); // Non-blocking
@@ -14607,7 +14587,12 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) {
       return;
     }
-    const { address, privateKey, slug, creatorFees, enforceCreatorFee, asset, _id } = data
+    const { address, walletId, slug, creatorFees, enforceCreatorFee, asset, _id } = data
+
+    // Fetch wallet and decrypt private key
+    const wallet = await walletCache.getWalletById(walletId);
+    const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
+
     if (!currentTokenIds[_id]?.opensea?.includes(asset.tokenId.toString())) {
       return;
     }
@@ -14673,7 +14658,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         const cancelData = orders.map((order, index) => {
           return {
             name: CANCEL_OPENSEA_BID,
-            data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order._id }
+            data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id }
           }
         })
         queue.addBulk(cancelData); // Non-blocking
@@ -14762,7 +14747,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
           const cancelData = orders.map((order, index) => {
             return {
               name: CANCEL_OPENSEA_BID,
-              data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order._id }
+              data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id }
             }
           })
           queue.addBulk(cancelData)
@@ -14785,13 +14770,17 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       const cancelData = orders.map((order, index) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey, orderId: order.orderHash, taskId: _id, orderKey: order._id }
+          data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id }
         }
       })
       queue.addBulk(cancelData); // Non-blocking
     }
 
     try {
+      // Fetch wallet and decrypt private key just before use
+      const wallet = await walletCache.getWalletById(walletId);
+      const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
+
       await bidOnOpensea(
         _id,
         bidCount,
@@ -14883,7 +14872,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
   if (!enabledMarketplaces.length) return
 
-  const { taskId, bidCount, walletAddress, walletPrivateKey, slug, offerPrice, creatorFees, enforceCreatorFee, expiry } = data
+  const { taskId, bidCount, walletAddress, walletId, slug, offerPrice, creatorFees, enforceCreatorFee, expiry } = data
   const currentTask = activeTasks.get(taskId)
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) return
 
@@ -14919,18 +14908,22 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
       const cancelData = existingOrders.map((order, index) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey: walletPrivateKey, orderId: order.orderHash, taskId, orderKey: order._id },
+          data: { walletId: walletId, orderId: order.orderHash, taskId, orderKey: order._id },
 
         }
       })
       await queue.addBulk(cancelData)
       console.log(GREEN + `[DEBUG][handleOpenseaCounterbid] Cancel jobs added successfully` + RESET);
     }
+    // Fetch wallet and decrypt private key just before use
+    const wallet = await walletCache.getWalletById(walletId);
+    const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
+
     await bidOnOpensea(
       taskId,
       bidCount,
       walletAddress,
-      walletPrivateKey,
+      privateKey,
       slug,
       Number(offerPrice),
       creatorFees,
@@ -14947,7 +14940,7 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
 
 async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) {
   if (!enabledMarketplaces.length) return
-  const { _id, bidCount, address, contractAddress, quantity, offerPrice, expiration, privateKey, slug } = data
+  const { _id, bidCount, address, contractAddress, quantity, offerPrice, expiration, walletId, slug } = data
   const currentTask = activeTasks.get(_id)
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return
 
@@ -14970,6 +14963,10 @@ async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) 
       return;
     }
 
+    // Fetch wallet and decrypt private key just before use
+    const wallet = await walletCache.getWalletById(walletId);
+    const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
+
     await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, offerPrice.toString(), privateKey, slug, expiration, currency);
 
   } catch (error: any) {
@@ -14985,14 +14982,14 @@ interface IMagicedenTraitBidData {
   quantity: number
   offerPrice: number
   expiration: number
-  privateKey: string
+  walletId: string
   slug: string
   trait: string
 }
 
 async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
   if (!enabledMarketplaces.length) return
-  const { taskId, bidCount, address, contractAddress, quantity, offerPrice, expiration, privateKey, slug, trait } = data
+  const { taskId, bidCount, address, contractAddress, quantity, offerPrice, expiration, walletId, slug, trait } = data
   const currentTask = activeTasks.get(taskId)
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return
   const triatData = JSON.parse(trait)
@@ -15003,6 +15000,10 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
   try {
     const { currencyType, currency } = await calculateBidPrice(currentTask, 0, "magiceden")
 
+    // Fetch wallet and decrypt private key just before use
+    const wallet = await walletCache.getWalletById(walletId);
+    const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
+
     await bidOnMagiceden(taskId, bidCount, address, contractAddress, quantity, offerPrice.toString(), privateKey, slug, expiration, currency, bidTrait);
   } catch (error: any) {
     await logBidError(data.taskId, "MAGICEDEN TRAIT COUNTER BID ERROR", `Error processing MagicEden trait counter bid for task: ${data.slug}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)}`, "error", "magiceden");
@@ -15011,7 +15012,7 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
 
 async function blurCollectionCounterBid(data: IBlurBidData) {
   if (!enabledMarketplaces.length) return
-  const { taskId, bidCount, address, privateKey, contractAddress, offerPrice, slug, expiry } = data
+  const { taskId, bidCount, address, walletId, contractAddress, offerPrice, slug, expiry } = data
   const currentTask = activeTasks.get(taskId)
 
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur")) return
@@ -15050,7 +15051,7 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
         return {
           name: CANCEL_BLUR_BID,
           data: {
-            privateKey: privateKey,
+            walletId: walletId,
             payload: payload,
             taskId: taskId,
             orderKey: order._id
@@ -15063,6 +15064,10 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
     } else {
       console.log(CYAN + `[DEBUG][blurCollectionCounterBid] No existing orders found to cancel for ${identifier}` + RESET);
     }
+
+    // Fetch wallet and decrypt private key just before use
+    const wallet = await walletCache.getWalletById(walletId);
+    const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
     await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry);
     console.log(YELLOW + `[DEBUG][blurCollectionCounterBid] Checking for existing orders to cancel for ${identifier}` + RESET);
@@ -15087,7 +15092,7 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
 
 async function blurTraitCounterBid(data: IBlurBidData) {
   if (!enabledMarketplaces.length) return
-  const { taskId, bidCount, address, privateKey, contractAddress, offerPrice, slug, expiry, traits } = data
+  const { taskId, bidCount, address, walletId, contractAddress, offerPrice, slug, expiry, traits } = data
   const currentTask = activeTasks.get(taskId)
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur")) return
 
@@ -15115,7 +15120,7 @@ async function blurTraitCounterBid(data: IBlurBidData) {
         return {
           name: CANCEL_BLUR_BID,
           data: {
-            privateKey: privateKey,
+            walletId: walletId,
             payload: payload,
             taskId: taskId,
             orderKey: order._id
@@ -15128,6 +15133,10 @@ async function blurTraitCounterBid(data: IBlurBidData) {
     } else {
       console.log(CYAN + `[DEBUG][blurTraitCounterBid] No existing orders found to cancel for ${identifier}` + RESET);
     }
+    // Fetch wallet and decrypt private key just before use
+    const wallet = await walletCache.getWalletById(walletId);
+    const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
+
     await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry, traits);
   } catch (error: any) {
     // Handle rate limit errors
@@ -15150,7 +15159,7 @@ interface BlurTraitCounterBid {
   taskId: string;
   bidCount: string;
   address: string;
-  privateKey: string;
+  walletId: string;
   contractAddress: string;
   offerPrice: number;
   slug: string;
@@ -15162,7 +15171,7 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
   const {
     _id,
     address,
-    privateKey,
+    walletId,
     slug,
     offerPrice,
     creatorFees,
@@ -15199,7 +15208,7 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
       const cancelData = orders.map((order, index) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey: privateKey, orderId: order.orderHash, taskId: _id, orderKey: order._id },
+          data: { walletId: walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id },
 
         }
       })
@@ -15207,6 +15216,10 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
       console.log(GREEN + `[DEBUG][handleOpenseaCounterbid] Cancel jobs added successfully` + RESET);
     }
     const { currency } = await calculateBidPrice(currentTask, 0, "opensea")
+
+    // Fetch wallet and decrypt private key just before use
+    const wallet = await walletCache.getWalletById(walletId);
+    const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
     await bidOnOpensea(
       _id,
@@ -15233,7 +15246,7 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
 async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
   try {
     if (!enabledMarketplaces.length) return
-    const { _id, bidCount, address, privateKey, slug, offerPrice, creatorFees, enforceCreatorFee, expiry, trait } = data
+    const { _id, bidCount, address, walletId, slug, offerPrice, creatorFees, enforceCreatorFee, expiry, trait } = data
     const currentTask = activeTasks.get(_id)
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) return
     if (!trait) return
@@ -15251,7 +15264,7 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
       const cancelData = orders.map((order, index) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey: privateKey, orderId: order.orderHash, taskId: _id, orderKey: order._id },
+          data: { walletId: walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id },
 
         }
       })
@@ -15260,6 +15273,10 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
     }
 
     const { currency } = await calculateBidPrice(currentTask, 0, "opensea")
+
+    // Fetch wallet and decrypt private key just before use
+    const wallet = await walletCache.getWalletById(walletId);
+    const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
     await bidOnOpensea(
       _id,
@@ -15283,7 +15300,7 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
 async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
   try {
     if (!enabledMarketplaces.length) return
-    const { _id, address, contractAddress, quantity, offerPrice, privateKey, slug, tokenId, expiration } = data
+    const { _id, address, contractAddress, quantity, offerPrice, walletId, slug, tokenId, expiration } = data
     const currentTask = activeTasks.get(_id)
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return
 
@@ -15309,6 +15326,10 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
     const { currency } = await calculateBidPrice(currentTask, 0, "magiceden")
 
     const bidCount = getIncrementedBidCount(MAGICEDEN, slug, _id)
+    // Fetch wallet and decrypt private key just before use
+    const wallet = await walletCache.getWalletById(walletId);
+    const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
+
     await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, (offerPrice as number).toString(), privateKey, slug, expiration, currency, undefined, tokenId)
   } catch (error: any) {
     await logBidError(data._id, "MAGICEDEN TOKEN COUNTER BID ERROR", `Error bidding on token ${data.tokenId} in collection ${data.slug}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)}`, "error", "magiceden");
@@ -15319,7 +15340,7 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
 async function processBlurTraitBid(data: {
   _id: string;
   address: string;
-  privateKey: string;
+  walletId: string;
   contractAddress: string;
   slug: string;
   trait: string;
@@ -15345,7 +15366,11 @@ async function processBlurTraitBid(data: {
     if (!enabledMarketplaces.length) {
       return;
     }
-    const { address, privateKey, contractAddress, slug, trait, _id } = data;
+    const { address, walletId, contractAddress, slug, trait, _id } = data;
+
+    // Fetch wallet and decrypt private key
+    const wallet = await walletCache.getWalletById(walletId);
+    const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
     // Skip trait validation - preprocessing already determined valid traits
     // The trait passed in the job data is already validated
@@ -15378,7 +15403,7 @@ async function processBlurTraitBid(data: {
           const payload = JSON.parse(order.orderHash)
           return {
             name: CANCEL_BLUR_BID,
-            data: { privateKey, payload, taskId: _id, orderKey: order._id }
+            data: { walletId, payload, taskId: _id, orderKey: order._id }
           }
         })
         queue.addBulk(cancelData);
@@ -15483,7 +15508,7 @@ async function processBlurTraitBid(data: {
 
         return {
           name: CANCEL_BLUR_BID,
-          data: { privateKey, payload, taskId: _id, orderKey: order._id }
+          data: { walletId, payload, taskId: _id, orderKey: order._id }
         }
       })
       queue.addBulk(cancelData);
@@ -15513,7 +15538,7 @@ async function processBlurTraitBid(data: {
 
             return {
               name: CANCEL_BLUR_BID,
-              data: { privateKey, payload, taskId: _id, orderKey: order._id }
+              data: { walletId, payload, taskId: _id, orderKey: order._id }
             }
           })
           queue.addBulk(cancelData);
@@ -15705,7 +15730,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
 
         const WALLET_ADDRESS: string = currentTask.wallet;
         const wallets = await walletCache.getWalletById(currentTask.walletId);
-        const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
         // Extend lock before fetching balances
         if (lockAcquired) {
@@ -15761,7 +15785,7 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
                 contractAddress,
                 quantity: 1,
                 expiration: expiration,
-                privateKey: WALLET_PRIVATE_KEY,
+                walletId: task.walletId,
                 slug: currentTask.contract.slug,
                 tokenId: token,
                 outbidOptions: currentTask.outbidOptions,
@@ -15834,7 +15858,7 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
               contractAddress,
               quantity: 1,
               expiration: expiration,
-              privateKey: WALLET_PRIVATE_KEY,
+              walletId: task.walletId,
               slug: currentTask.contract.slug,
               trait,
               outbidOptions: currentTask.outbidOptions,
@@ -16078,9 +16102,8 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
 
     const expiration = getExpiry(currentTask.bidDuration)
 
-    // Parallel data fetching
-    const [wallets, floor_price, orders] = await Promise.all([
-      walletCache.getWalletById(task.walletId),
+    // Parallel data fetching (wallet will be fetched when needed)
+    const [floor_price, orders] = await Promise.all([
       fetchMagicEdenCollectionStats(task.contract.contractAddress).then(Number),
       Order.find({
         slug: task.contract.slug,
@@ -16094,8 +16117,6 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     if (!floor_price) {
       throw new Error(`Failed to fetch floor price for ${task.contract.slug}`);
     }
-
-    const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
     if (!floorPrices[task._id]) {
       floorPrices[task._id] = {
@@ -16112,7 +16133,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
       if (orders.length > 0) {
         const orderKeys = orders.map(order => order._id)
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
-        queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys: orderKeys, taskId: task._id }); // Non-blocking
+        queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id }); // Non-blocking
       }
       return
     }
@@ -16210,7 +16231,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     if (orders.length > 0) {
       const orderKeys = orders.map(order => order._id)
       const extractedOrderIds = await extractMagicedenOrderHash(orders)
-      queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys: orderKeys, taskId: task._id }); // Non-blocking
+      queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id }); // Non-blocking
     }
 
     const outbidOptions = currentTask.outbidOptions
@@ -16220,7 +16241,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
         if (orders.length > 0) {
           const orderKeys = orders.map((order: any) => order._id)
           const extractedOrderIds = await extractMagicedenOrderHash(orders)
-          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, orderKeys, taskId: task._id }); // Non-blocking
+          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys, taskId: task._id }); // Non-blocking
         }
       }
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${task.contract.slug} COLLECTION bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase()
@@ -16243,6 +16264,10 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
     }
 
     try {
+      // Fetch wallet and decrypt private key just before use
+      const wallet = await walletCache.getWalletById(task.walletId);
+      const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
+
       await bidOnMagiceden(task._id, bidCount, task.wallet, task.contract.contractAddress, 1, colletionOffer.toString(), privateKey, task.contract.slug, expiration, currency);
     } catch (bidError) {
       console.error(RED + `MagicEden bid failed for task ${task._id}: ${bidError}` + RESET);
@@ -16261,7 +16286,7 @@ async function processMagicedenCollectionBid(data: { task: ITask }) {
 
 async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
   try {
-    const { contractAddress, address, quantity, privateKey, slug, tokenId, _id } = data
+    const { contractAddress, address, quantity, walletId, slug, tokenId, _id } = data
     if (!enabledMarketplaces.length) return
 
     // Early return for token validation
@@ -16312,7 +16337,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       if (orders.length > 0) {
         const orderKeys = orders.map((order: any) => order._id)
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
-        queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: _id });
+        queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId, orderKeys, taskId: _id });
       }
       return
     };
@@ -16406,7 +16431,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
         if (orders.length > 0) {
           const orderKeys = orders.map((order: any) => order._id)
           const extractedOrderIds = await extractMagicedenOrderHash(orders)
-          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: _id });
+          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId, orderKeys, taskId: _id });
         }
       }
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${slug} ${tokenId} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase()
@@ -16425,8 +16450,12 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     if (orders.length > 0) {
       const orderKeys = orders.map((order: any) => order._id)
       const extractedOrderIds = await extractMagicedenOrderHash(orders)
-      queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: _id });
+      queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId, orderKeys, taskId: _id });
     }
+
+    // Fetch wallet and decrypt private key just before use
+    const wallet = await walletCache.getWalletById(walletId);
+    const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
     await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, tokenOffer.toString(), privateKey, slug, expiration, currency, undefined, tokenId);
   } catch (error: any) {
@@ -16445,7 +16474,7 @@ async function processMagicedenTraitBid(data: {
   quantity: number;
   offerPrice?: string;
   expiration: number;
-  privateKey: string,
+  walletId: string,
   slug: string;
   trait: {
     attributeKey: string;
@@ -16473,7 +16502,7 @@ async function processMagicedenTraitBid(data: {
   try {
 
     const
-      { contractAddress, address, quantity, privateKey, slug, trait, _id } = data
+      { contractAddress, address, quantity, walletId, slug, trait, _id } = data
 
     // Skip trait validation - preprocessing already determined valid traits
     // The trait passed in the job data is already validated
@@ -16509,7 +16538,7 @@ async function processMagicedenTraitBid(data: {
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
         queue.add(CANCEL_MAGICEDEN_BID, {
           orderIds: extractedOrderIds,
-          privateKey,
+          walletId,
           orderKeys,
           taskId: _id
         }); // Non-blocking
@@ -16607,7 +16636,7 @@ async function processMagicedenTraitBid(data: {
       const extractedOrderIds = await extractMagicedenOrderHash(orders)
       queue.add(CANCEL_MAGICEDEN_BID, {
         orderIds: extractedOrderIds,
-        privateKey,
+        walletId,
         orderKeys,
         taskId: _id
       }); // Non-blocking
@@ -16617,7 +16646,7 @@ async function processMagicedenTraitBid(data: {
         if (orders.length > 0) {
           const orderKeys = orders.map((order: any) => order._id)
           const extractedOrderIds = await extractMagicedenOrderHash(orders)
-          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, privateKey, orderKeys, taskId: _id });
+          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId, orderKeys, taskId: _id });
         }
       }
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${slug} ${JSON.stringify(trait)} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase()
@@ -16640,6 +16669,10 @@ async function processMagicedenTraitBid(data: {
     }
 
     try {
+      // Fetch wallet and decrypt private key just before use
+      const wallet = await walletCache.getWalletById(walletId);
+      const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
+
       await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, traitOffer.toString(), privateKey, slug, expiration, currency, trait)
     } catch (bidError) {
       console.error(RED + `MagicEden trait bid failed for task ${_id}: ${bidError}` + RESET);
@@ -16663,10 +16696,33 @@ async function processMagicedenTraitBid(data: {
   }
 }
 
-async function bulkCancelOpenseaBid(data: { privateKey: string, orderId: string, taskId: string, orderKey: string }) {
-  const { privateKey, orderId, taskId, orderKey } = data
+async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, taskId: string, orderKey: string }) {
+  const { walletId, orderId, taskId, orderKey } = data
+
+  console.log(`🔐 [bulkCancelOpenseaBid] Starting cancellation for task ${taskId}, order ${orderId}, wallet ${walletId}`);
 
   try {
+    // Fetch wallet and decrypt private key
+    console.log(`🔐 [bulkCancelOpenseaBid] Fetching wallet ${walletId}...`);
+    const wallet = await walletCache.getWalletById(walletId);
+
+    if (!wallet) {
+      console.error(`❌ [bulkCancelOpenseaBid] Wallet ${walletId} not found for task ${taskId}`);
+      throw new Error(`Wallet ${walletId} not found`);
+    }
+
+    console.log(`✅ [bulkCancelOpenseaBid] Wallet ${walletId} found, checking encryptedPrivateKey...`);
+
+    if (!wallet.encryptedPrivateKey) {
+      console.error(`❌ [bulkCancelOpenseaBid] No encryptedPrivateKey found for wallet ${walletId} (task ${taskId})`);
+      throw new Error(`No encryptedPrivateKey found for wallet ${walletId}`);
+    }
+
+    console.log(`🔐 [bulkCancelOpenseaBid] EncryptedPrivateKey exists, proceeding with decryption for wallet ${walletId}`);
+    const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
+
+    console.log(`🔐 [bulkCancelOpenseaBid] Starting parallel operations for task ${taskId}: order deletion and cancellation`);
+
     await Promise.all([
       Order.deleteMany({
         _id: orderKey
@@ -16674,6 +16730,7 @@ async function bulkCancelOpenseaBid(data: { privateKey: string, orderId: string,
       cancelOrder(orderId, OPENSEA_PROTOCOL_ADDRESS, privateKey, taskId)
     ])
 
+    console.log(`✅ [bulkCancelOpenseaBid] Successfully completed cancellation for task ${taskId}, order ${orderId}`);
     // Cancellation tracking is now handled in cancelOrder directly
   } catch (error) {
     // Log detailed error information
@@ -16692,20 +16749,48 @@ async function bulkCancelOpenseaBid(data: { privateKey: string, orderId: string,
   }
 }
 
-async function bulkCancelMagicedenBid(data: { orderIds: string[], privateKey: string, orderKeys: string[], taskId: string, batchSize?: number }) {
-  const { orderIds, privateKey, orderKeys, taskId } = data
+async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: string, orderKeys: string[], taskId: string, batchSize?: number }) {
+  const { orderIds, walletId, orderKeys, taskId } = data
+
+  console.log(`🔐 [bulkCancelMagicedenBid] Starting cancellation for task ${taskId}, ${orderIds.length} orders, wallet ${walletId}`);
 
   try {
     if (orderIds.length > 0) {
+      // Fetch wallet and decrypt private key
+      console.log(`🔐 [bulkCancelMagicedenBid] Fetching wallet ${walletId}...`);
+      const wallet = await walletCache.getWalletById(walletId);
+
+      if (!wallet) {
+        console.error(`❌ [bulkCancelMagicedenBid] Wallet ${walletId} not found for task ${taskId}`);
+        throw new Error(`Wallet ${walletId} not found`);
+      }
+
+      console.log(`✅ [bulkCancelMagicedenBid] Wallet ${walletId} found, checking encryptedPrivateKey...`);
+
+      if (!wallet.encryptedPrivateKey) {
+        console.error(`❌ [bulkCancelMagicedenBid] No encryptedPrivateKey found for wallet ${walletId} (task ${taskId})`);
+        throw new Error(`No encryptedPrivateKey found for wallet ${walletId}`);
+      }
+
+      console.log(`🔐 [bulkCancelMagicedenBid] EncryptedPrivateKey exists, proceeding with decryption for wallet ${walletId}`);
+      const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
+
+      console.log(`🔐 [bulkCancelMagicedenBid] Starting parallel operations for task ${taskId}: ${orderIds.length} order cancellations and DB cleanup`);
+
       await Promise.all([
         cancelMagicEdenBid(orderIds, privateKey, taskId),
         Order.deleteMany({
           _id: { $in: orderKeys }
         })
       ])
+
+      console.log(`✅ [bulkCancelMagicedenBid] Successfully completed ${orderIds.length} cancellations for task ${taskId}`);
+    } else {
+      console.log(`🔐 [bulkCancelMagicedenBid] No orders to cancel for task ${taskId}`);
     }
 
     // Clean up the tracking set after successful cancellation
+    console.log(`🔐 [bulkCancelMagicedenBid] Cleaning up ${orderKeys.length} tracking entries for task ${taskId}`);
     orderKeys.forEach(orderKey => {
       magicedenOrdersBeingCancelled.delete(orderKey);
     });
@@ -16713,7 +16798,7 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], privateKey: st
     // Cancellation tracking is now handled in cancelMagicEdenBid directly
   } catch (error) {
     console.error(RED + `Error processing Magiceden bid cancellation for task: ${taskId}` + RESET, error);
-    
+
     // Clean up the tracking set even on error to allow retry
     orderKeys.forEach(orderKey => {
       magicedenOrdersBeingCancelled.delete(orderKey);
@@ -16807,10 +16892,15 @@ async function validateBidCount() {
 validateBidCountInterval = setInterval(validateBidCount, STANDARD_INTERVAL);
 
 async function bulkCancelBlurBid(data: BlurCancelPayload) {
-  const { orderKey, privateKey, taskId, payload } = data
+  const { orderKey, walletId, taskId, payload } = data
 
   try {
     if (!data) return
+
+    // Fetch wallet and decrypt private key
+    const wallet = await walletCache.getWalletById(walletId);
+    const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
+
     await Promise.all([
       Order.deleteMany({
         _id: orderKey
@@ -17169,7 +17259,6 @@ app.post('/api/task/cancel/:taskId', async (req, res) => {
       return res.status(404).json({ error: 'Task not found' });
     }
     const wallet = await walletCache.getWalletById(task.walletId)
-    const WALLET_PRIVATE_KEY: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string)
     const orders: any[] = req.body
     const openseaOrders = orders.filter((order: any) => order.marketplace === OPENSEA.toLowerCase())
     const magicedenOrders = orders.filter((order: any) => order.marketplace === 'magiceden')
@@ -17179,7 +17268,7 @@ app.post('/api/task/cancel/:taskId', async (req, res) => {
       const cancelData = openseaOrders.map((order) => {
         return {
           name: CANCEL_OPENSEA_BID,
-          data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order._id }
+          data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id }
         }
       })
       queue.addBulk(cancelData); // Non-blocking
@@ -17190,7 +17279,7 @@ app.post('/api/task/cancel/:taskId', async (req, res) => {
       const orderKeys = magicedenOrders.map((order) => order._id)
       queue.add(CANCEL_MAGICEDEN_BID, {
         orderIds: extractedOrderIds,
-        privateKey: WALLET_PRIVATE_KEY,
+        walletId: task.walletId,
         orderKeys,
         taskId: task._id
       });
@@ -17200,7 +17289,7 @@ app.post('/api/task/cancel/:taskId', async (req, res) => {
       const blurCancelData = blurOrders.map((order) => {
         return {
           name: CANCEL_BLUR_BID,
-          data: { privateKey: WALLET_PRIVATE_KEY, orderId: order.orderHash, taskId: task._id, orderKey: order._id }
+          data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id }
         }
       })
       queue.addBulk(blurCancelData)
@@ -19808,7 +19897,7 @@ interface BlurCancelPayload {
       }
     }>;
   };
-  privateKey: string;
+  walletId: string;
   orderKey: string;
   taskId: string;
 }
@@ -20133,7 +20222,7 @@ export function cleanupAbortedTasks(): void {
 interface IProcessOpenseaTokenBidData {
   _id: string;
   address: string;
-  privateKey: string;
+  walletId: string;
   slug: string;
   creatorFees: IFee;
   offerPrice: number;
@@ -20158,7 +20247,7 @@ interface IMagicedenTokenBidData {
   quantity: number;
   offerPrice?: number;
   expiration: number;
-  privateKey: string;
+  walletId: string;
   slug: string;
   tokenId: number;
   outbidOptions: {
@@ -20380,7 +20469,7 @@ interface IOpenseaBidParams {
   taskId: string;
   bidCount: string;
   walletAddress: string;
-  walletPrivateKey: string;
+  walletId: string;
   slug: string;
   offerPrice: number;
   creatorFees: IFee;
@@ -20396,7 +20485,7 @@ interface IMagicedenCollectionBidData {
   quantity: number;
   offerPrice: number;
   expiration: number;
-  privateKey: string;
+  walletId: string;
   slug: string;
   currency?: string;
 }
@@ -20404,7 +20493,7 @@ interface IBlurBidData {
   taskId: string;
   bidCount: string;
   address: string;
-  privateKey: string;
+  walletId: string;
   contractAddress: string;
   offerPrice: number;
   slug: string;
@@ -20416,7 +20505,7 @@ interface IProcessOpenseaTraitBidData {
   _id: string;
   bidCount: string;
   address: string;
-  privateKey: string;
+  walletId: string;
   slug: string;
   offerPrice: number;
   creatorFees: IFee;

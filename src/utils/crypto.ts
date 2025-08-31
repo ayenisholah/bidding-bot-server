@@ -31,16 +31,16 @@ export async function recoverPasswordFromRedis(): Promise<boolean> {
   try {
     console.log(`🔍 [DEVELOPMENT] Attempting to recover password from Redis key: ${PASSWORD_REDIS_KEY}`);
     const redis = getRedisConnection();
-    
+
     // Check if key exists
     const exists = await redis.exists(PASSWORD_REDIS_KEY);
     console.log(`🔍 Redis key exists: ${exists === 1 ? 'YES' : 'NO'}`);
-    
+
     if (!exists) {
       console.log('🔍 No password found in Redis');
       return false;
     }
-    
+
     const storedPassword = await redis.get(PASSWORD_REDIS_KEY);
     if (storedPassword) {
       PASSWORD = storedPassword;
@@ -209,11 +209,29 @@ export function encryptPrivateKey(privateKey: string): string {
 
 export function decryptPrivateKey(encryptedData: string): string {
   console.log('🔐 [decryptPrivateKey] Starting decryption...');
-  
+
+  // Validate input data
+  if (encryptedData === null || encryptedData === undefined) {
+    console.error('❌ [decryptPrivateKey] encryptedData is null or undefined');
+    throw new Error('Encrypted data is null or undefined');
+  }
+
+  if (typeof encryptedData !== 'string') {
+    console.error(`❌ [decryptPrivateKey] encryptedData is not a string, received: ${typeof encryptedData}`);
+    throw new Error(`Encrypted data must be a string, received: ${typeof encryptedData}`);
+  }
+
+  if (encryptedData.trim() === '') {
+    console.error('❌ [decryptPrivateKey] encryptedData is empty string');
+    throw new Error('Encrypted data is empty');
+  }
+
+  console.log(`🔐 [decryptPrivateKey] Input validation passed, data length: ${encryptedData.length}`);
+
   // Check if password is available
   const hasPassword = !!getPassword();
   console.log(`🔐 [decryptPrivateKey] Password available: ${hasPassword}`);
-  
+
   // Check cache first
   const cached = decryptedKeyCache.get(encryptedData);
   if (cached) {
@@ -242,7 +260,7 @@ export function decryptPrivateKey(encryptedData: string): string {
     console.error('🔐 [decryptPrivateKey] Failed to get encryption key:', error);
     throw error;
   }
-  
+
   const parts = encryptedData.split(':');
   console.log(`🔐 [decryptPrivateKey] Encrypted data parts: ${parts.length}`);
 
@@ -265,7 +283,7 @@ export function decryptPrivateKey(encryptedData: string): string {
     decrypted += decipher.final('utf8');
 
     console.log('🔐 [decryptPrivateKey] Decryption successful');
-    
+
     // Cache the result
     cacheDecryptedKey(encryptedData, decrypted);
     console.log(`🔐 [decryptPrivateKey] Result cached. Cache size: ${decryptedKeyCache.size}/${MAX_CACHE_SIZE}`);
@@ -283,29 +301,29 @@ export function decryptPrivateKey(encryptedData: string): string {
 
 // Re-encrypt a wallet's private key with a new password
 export async function reEncryptWallet(
-  encryptedPrivateKey: string, 
-  oldPassword: string, 
+  encryptedPrivateKey: string,
+  oldPassword: string,
   newPassword: string
 ): Promise<string> {
   console.log('🔐 [reEncryptWallet] Starting wallet re-encryption...');
-  
+
   try {
     // Temporarily set the old password to decrypt
     const currentPassword = PASSWORD;
     PASSWORD = oldPassword;
-    
+
     // Decrypt with old password
     const decryptedKey = await decryptPrivateKey(encryptedPrivateKey);
     console.log('🔐 [reEncryptWallet] Successfully decrypted with old password');
-    
+
     // Set new password and encrypt
     PASSWORD = newPassword;
     const newEncryptedKey = await encryptPrivateKey(decryptedKey);
     console.log('🔐 [reEncryptWallet] Successfully encrypted with new password');
-    
+
     // Restore the current password (will be the new one after change)
     PASSWORD = currentPassword;
-    
+
     return newEncryptedKey;
   } catch (error) {
     console.error('🔐 [reEncryptWallet] Re-encryption failed:', error);

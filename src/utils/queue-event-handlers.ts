@@ -27,7 +27,7 @@ export class QueueEventHandlerManager {
   private enabledMarketplaces: string[];
   private removedTokens: RemovalData = {};
   private traitsToRemove: { [taskId: string]: any[] } = {};
-  
+
   constructor(
     stateManager: TaskStateManager,
     queueEvents: QueueEvents,
@@ -87,9 +87,9 @@ export class QueueEventHandlerManager {
   }
 
   private isCancellationJob(jobId: string): boolean {
-    return jobId.includes('CANCEL_OPENSEA_BID') || 
-           jobId.includes('CANCEL_MAGICEDEN_BID') || 
-           jobId.includes('CANCEL_BLUR_BID');
+    return jobId.includes('CANCEL_OPENSEA_BID') ||
+      jobId.includes('CANCEL_MAGICEDEN_BID') ||
+      jobId.includes('CANCEL_BLUR_BID');
   }
 
   private isBiddingJob(jobId: string): boolean {
@@ -99,11 +99,11 @@ export class QueueEventHandlerManager {
   private async handleCancellationJobCompleted(jobId: string): Promise<void> {
     const taskId = jobId.split('-')[1];
     const marketplace = this.extractMarketplaceFromCancellationJob(jobId);
-    
+
     // Update parent job tracking
     const parentJobId = `${taskId}-CANCEL_${marketplace}_BID`;
     const parentJob = await this.stateManager.updateParentJob(parentJobId, { completed: 1 });
-    
+
     if (!parentJob) return;
 
     // Calculate cancellation progress
@@ -113,11 +113,11 @@ export class QueueEventHandlerManager {
   private async handleCancellationJobFailed(jobId: string): Promise<void> {
     const taskId = jobId.split('-')[1];
     const marketplace = this.extractMarketplaceFromCancellationJob(jobId);
-    
+
     // Update parent job tracking
     const parentJobId = `${taskId}-CANCEL_${marketplace}_BID`;
     const parentJob = await this.stateManager.updateParentJob(parentJobId, { failed: 1 });
-    
+
     if (!parentJob) return;
 
     // Calculate cancellation progress
@@ -127,12 +127,12 @@ export class QueueEventHandlerManager {
   private async handleBiddingJobCompleted(jobId: string): Promise<void> {
     const taskId = jobId.split('-')[0];
     const task = this.stateManager.getActiveTasks().get(taskId);
-    
+
     if (!task || !task.running) return;
 
     const marketplace = jobId.split('-')[1].toLowerCase();
     const parentId = `${taskId}-${marketplace}`.toLowerCase();
-    
+
     // Update parent job
     const parentJob = await this.stateManager.updateParentJob(parentId, { completed: 1 });
     if (!parentJob) return;
@@ -143,7 +143,7 @@ export class QueueEventHandlerManager {
     // Check if marketplace is complete
     if (parentJob.completedJobs + parentJob.failedJobs === parentJob.totalJobs) {
       const allComplete = await this.stateManager.markMarketplaceComplete(taskId, marketplace as any);
-      
+
       if (allComplete) {
         await this.handleAllMarketplacesComplete(taskId, task);
       }
@@ -153,12 +153,12 @@ export class QueueEventHandlerManager {
   private async handleBiddingJobFailed(jobId: string): Promise<void> {
     const taskId = jobId.split('-')[0];
     const task = this.stateManager.getActiveTasks().get(taskId);
-    
+
     if (!task || !task.running) return;
 
     const marketplace = jobId.split('-')[1].toLowerCase();
     const parentId = `${taskId}-${marketplace}`.toLowerCase();
-    
+
     // Update parent job
     const parentJob = await this.stateManager.updateParentJob(parentId, { failed: 1 });
     if (!parentJob) return;
@@ -169,7 +169,7 @@ export class QueueEventHandlerManager {
     // Check if marketplace is complete
     if (parentJob.completedJobs + parentJob.failedJobs === parentJob.totalJobs) {
       const allComplete = await this.stateManager.markMarketplaceComplete(taskId, marketplace as any);
-      
+
       if (allComplete) {
         await this.handleAllMarketplacesComplete(taskId, task);
       }
@@ -186,7 +186,7 @@ export class QueueEventHandlerManager {
     if (!task.running) {
       // Calculate combined cancellation percentage
       const percentage = await this.calculateCombinedCancellationPercentage(taskId);
-      
+
       await this.stateManager.updateTaskProgress(taskId, {
         cancellationPercentage: Math.min(percentage, 100)
       });
@@ -197,7 +197,7 @@ export class QueueEventHandlerManager {
     } else {
       // Single marketplace cancellation
       const percentage = await this.calculateMarketplaceCancellationPercentage(taskId, marketplace);
-      
+
       await this.stateManager.updateTaskProgress(taskId, {
         cancellationPercentage: percentage
       });
@@ -229,7 +229,7 @@ export class QueueEventHandlerManager {
     }
 
     const runningPercentage = totalJobs > 0 ? ((completedJobs + failedJobs) / totalJobs) * 100 : 0;
-    
+
     await this.stateManager.transitionState(taskId, 'RUNNING', (state) => {
       state.runningPercentage = Math.min(runningPercentage, 100);
     });
@@ -237,26 +237,23 @@ export class QueueEventHandlerManager {
 
   private async handleAllMarketplacesComplete(taskId: string, task: ITask): Promise<void> {
     console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
-    
+
     const wallet = await Wallet.findById(task.walletId);
     const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
     const { currencySymbol } = await calculateBidPrice(task, 0, "magiceden");
 
     // Handle trait and token removals
-    let totalCancellationJobs = 0;
     if (this.traitsToRemove[taskId]?.length > 0) {
-      const traitJobs = await cancelRemovedTraitBids(this.traitsToRemove[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol);
-      totalCancellationJobs += traitJobs;
+      await cancelRemovedTraitBids(this.traitsToRemove[taskId], task._id, WALLET_PRIVATE_KEY, currencySymbol);
     }
 
     if ((this.removedTokens[taskId]?.opensea?.length || 0) > 0 || (this.removedTokens[taskId]?.magiceden?.length || 0) > 0) {
       const removedTokens = this.removedTokens[taskId];
-      const tokenJobs = await cancelRemovedTokenBids({
+      await cancelRemovedTokenBids({
         opensea: removedTokens.opensea || [],
         magiceden: removedTokens.magiceden || [],
         blur: removedTokens.blur || []
       }, task._id, WALLET_PRIVATE_KEY, currencySymbol);
-      totalCancellationJobs += tokenJobs;
     }
 
     // Clean up removal data
@@ -265,7 +262,7 @@ export class QueueEventHandlerManager {
 
     // Transition to completed
     await this.stateManager.transitionState(taskId, 'COMPLETED');
-    
+
     // Wait a bit before scheduling next loop
     await new Promise(resolve => setTimeout(resolve, 1000));
 
@@ -281,7 +278,7 @@ export class QueueEventHandlerManager {
     const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
     console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
-    
+
     // Transition to scheduled state
     await this.stateManager.transitionState(taskId, 'SCHEDULED', (state) => {
       state.waitingTime = secondsUntilNextLoop;
@@ -294,7 +291,7 @@ export class QueueEventHandlerManager {
       if (state?.nextLoopTime) {
         const remainingSeconds = Math.max(0, Math.floor((state.nextLoopTime.getTime() - Date.now()) / 1000));
         this.stateManager.updateTaskProgress(taskId, { waitingTime: remainingSeconds });
-        
+
         if (remainingSeconds <= 0) {
           clearInterval(countdownTimer);
         }
@@ -325,9 +322,7 @@ export class QueueEventHandlerManager {
     const orders = await Order.find(whereQuery);
 
     if (orders.length > 0) {
-      const wallet = await Wallet.findById(task.walletId);
-      const private_key = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
-      await cancelAllRelatedBids(task, private_key, marketplace);
+      await cancelAllRelatedBids(task, marketplace);
     }
 
     // Transition to stopped state
@@ -349,7 +344,7 @@ export class QueueEventHandlerManager {
     if (totalOrderCount === 0) return 100;
 
     let weightedPercentage = 0;
-    
+
     // Calculate percentage for each marketplace
     const marketplaces = [
       { name: 'OPENSEA', count: openSeaCount },
@@ -361,7 +356,7 @@ export class QueueEventHandlerManager {
       if (count > 0) {
         const parentJobId = `${taskId}-CANCEL_${name}_BID`;
         const parentJob = this.stateManager.getParentJobs().get(parentJobId);
-        
+
         if (parentJob) {
           const progress = parentJob.completedJobs + parentJob.failedJobs;
           const percentage = parentJob.totalJobs > 0 ? (progress / parentJob.totalJobs) * 100 : 100;
@@ -378,9 +373,9 @@ export class QueueEventHandlerManager {
   private async calculateMarketplaceCancellationPercentage(taskId: string, marketplace: string): Promise<number> {
     const parentJobId = `${taskId}-CANCEL_${marketplace}_BID`;
     const parentJob = this.stateManager.getParentJobs().get(parentJobId);
-    
+
     if (!parentJob || parentJob.totalJobs < 1) return 100;
-    
+
     return ((parentJob.completedJobs + parentJob.failedJobs) / parentJob.totalJobs) * 100;
   }
 

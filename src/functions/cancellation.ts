@@ -20,8 +20,7 @@ export async function cancelBlurRequest(taskId?: string): Promise<any> {
 
 export async function cancelAllRelatedBids(
   task: ITask,
-  walletPrivateKey: string,
-  marketplace?: string
+  _marketplace?: string
 ): Promise<any> {
   // This is a placeholder - the actual implementation exists in index.ts
   // For now, return empty to prevent compilation errors
@@ -32,8 +31,8 @@ export async function cancelAllRelatedBids(
 export async function cancelRemovedTraitBids(
   traitsToRemove: string[],
   taskId: string,
-  walletPrivateKey: string,
-  currencySymbol: string
+  _walletPrivateKey: string,
+  _currencySymbol: string
 ): Promise<number> {
   // This is a placeholder - the actual implementation exists in index.ts
   console.log(`cancelRemovedTraitBids called for task ${taskId} with ${traitsToRemove.length} traits`);
@@ -43,13 +42,13 @@ export async function cancelRemovedTraitBids(
 export async function cancelRemovedTokenBids(
   removedTokens: { opensea: string[]; magiceden: string[]; blur?: string[] },
   taskId: string,
-  walletPrivateKey: string,
-  currencySymbol: string
+  _walletPrivateKey: string,
+  _currencySymbol: string
 ): Promise<number> {
   // This is a placeholder - the actual implementation exists in index.ts
-  const totalTokens = (removedTokens.opensea?.length || 0) + 
-                     (removedTokens.magiceden?.length || 0) + 
-                     (removedTokens.blur?.length || 0);
+  const totalTokens = (removedTokens.opensea?.length || 0) +
+    (removedTokens.magiceden?.length || 0) +
+    (removedTokens.blur?.length || 0);
   console.log(`cancelRemovedTokenBids called for task ${taskId} with ${totalTokens} tokens`);
   return 0;
 }
