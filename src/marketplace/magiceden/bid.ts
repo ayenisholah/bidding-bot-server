@@ -1,5 +1,7 @@
 /* eslint-disable */
 
+// To apply stashed changes to just this file: git stash apply stash@{0} -- src/marketplace/magiceden/bid.ts
+
 import { ethers, Wallet } from "ethers";
 import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
 import { config } from "dotenv";
@@ -16,6 +18,8 @@ import { convertBigNumbers } from "../../utils/bigNumberConverter";
 import { logger, DatabaseOperation, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
 import { InsufficientBalanceError, MinimumPriceError, RateLimitError, InvalidRequestError } from "../errors";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
+
+const YELLOW = '\x1b[33m';
 
 // Helper function to extract meaningful error messages from MagicEden API responses
 function extractMagicEdenErrorMessage(error: any): string {
@@ -862,7 +866,31 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
     await updateTaskCancellationPercentage(taskId);
 
   } catch (error: any) {
-    const message = `Error cancelling MagicEden bid: ${error?.response?.data?.message || error?.message || error}`
+    const errorMessage = error?.response?.data?.message || error?.message || error;
+    
+    // Check if this is a "No matching order(s)" error - this means the order was already cancelled
+    if (errorMessage?.includes('No matching order') || error?.response?.status === 404) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(YELLOW + `[MagicEden] Orders already cancelled or not found for task: ${taskId} (${orderIds.length} orders)` + RESET);
+      }
+      
+      // Still track as completed since the orders are effectively cancelled
+      orderIds.forEach(() => {
+        decrementBidCount('magiceden', taskId);
+      });
+      
+      // Track cancellation completion
+      cancellationTracker.recordCompletion(taskId, orderIds.length, 'magiceden');
+      
+      // Update cancellation percentage
+      await updateTaskCancellationPercentage(taskId);
+      
+      // Don't throw error for already cancelled orders
+      return;
+    }
+    
+    // For other errors, log and throw as before
+    const message = `Error cancelling MagicEden bid: ${errorMessage}`;
     if (process.env.NODE_ENV !== 'production') {
       console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
       console.log(RED + message + RESET);
@@ -874,8 +902,11 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
       orderIds: orderIds,
       error: error,
       errorCode: error?.response?.status,
-      errorMessage: error?.response?.data?.message || error?.message || String(error)
+      errorMessage: errorMessage
     });
+    
+    // Re-throw the error for non-"No matching order" cases
+    throw error;
   }
 }
 

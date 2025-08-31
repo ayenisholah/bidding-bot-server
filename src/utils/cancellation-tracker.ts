@@ -76,9 +76,18 @@ class CancellationTracker {
     const tracking = this.trackingMap.get(key);
     
     if (tracking) {
-      tracking.completedCancellations += completionCount;
+      // Cap completions at total bids to prevent overflow
+      const previousCompleted = tracking.completedCancellations;
+      tracking.completedCancellations = Math.min(tracking.completedCancellations + completionCount, tracking.totalBids);
+      const actualIncrement = tracking.completedCancellations - previousCompleted;
+      
       const percentage = tracking.totalBids > 0 ? ((tracking.completedCancellations / tracking.totalBids) * 100).toFixed(2) : '0.00';
-      console.log(`[CancellationTracker] Recording completion - Key: ${key}, Count: ${completionCount}, Total: ${tracking.completedCancellations}/${tracking.totalBids} (${percentage}%)`);
+      
+      if (actualIncrement < completionCount) {
+        console.log(`[CancellationTracker] Capped completion - Key: ${key}, Requested: ${completionCount}, Actual: ${actualIncrement}, Total: ${tracking.completedCancellations}/${tracking.totalBids} (${percentage}%)`);
+      } else {
+        console.log(`[CancellationTracker] Recording completion - Key: ${key}, Count: ${completionCount}, Total: ${tracking.completedCancellations}/${tracking.totalBids} (${percentage}%)`);
+      }
     } else {
       console.log(`[CancellationTracker] WARNING: No tracking found for key: ${key}`);
     }

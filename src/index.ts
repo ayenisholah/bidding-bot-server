@@ -2204,6 +2204,13 @@ async function startServer() {
               const ordersTaskId = getTaskIdForLog(job);
               console.error(RED + `[ERROR - Order Cleanup - Task: ${ordersTaskId}] Failed to delete orders after cancellation failure: ${err}` + RESET);
             });
+            
+            // Clean up MagicEden tracking set on failure
+            if (job.name === CANCEL_MAGICEDEN_BID && job.data.orderKeys) {
+              job.data.orderKeys.forEach((orderKey: string) => {
+                magicedenOrdersBeingCancelled.delete(orderKey);
+              });
+            }
           }
         }
 
@@ -7721,12 +7728,34 @@ async function
       };
     }
 
-    // Fetch orders for cancellation
-    const orders = await fetchOrdersForCancellation(taskId, marketplace);
-    console.log(YELLOW + `[stopTask] Fetched orders for cancellation:` + RESET);
-    console.log(YELLOW + `  OpenSea: ${orders.opensea.length}` + RESET);
-    console.log(YELLOW + `  MagicEden: ${orders.magiceden.length}` + RESET);
-    console.log(YELLOW + `  Blur: ${orders.blur.length}` + RESET);
+    // Create a distributed lock to prevent concurrent order fetching/cancellation
+    const lockManager = new DistributedLockManager({
+      lockPrefix: 'task-cancellation:',
+      defaultTTLSeconds: 60 // 1 minute lock
+    });
+    
+    // Use wallet ID in lock key to prevent conflicts across tasks using same wallet
+    const wallet = await walletCache.getWalletById(task.walletId);
+    const lockKey = `${wallet?.address || taskId}-${marketplace || 'all'}`;
+    
+    // Fetch orders for cancellation with lock
+    let orders: { opensea: any[]; magiceden: any[]; blur: any[] };
+    
+    const fetchResult = await lockManager.withLock(lockKey, async () => {
+      const fetchedOrders = await fetchOrdersForCancellation(taskId, marketplace);
+      console.log(YELLOW + `[stopTask] Fetched orders for cancellation:` + RESET);
+      console.log(YELLOW + `  OpenSea: ${fetchedOrders.opensea.length}` + RESET);
+      console.log(YELLOW + `  MagicEden: ${fetchedOrders.magiceden.length}` + RESET);
+      console.log(YELLOW + `  Blur: ${fetchedOrders.blur.length}` + RESET);
+      return fetchedOrders;
+    });
+    
+    if (!fetchResult) {
+      console.log(YELLOW + `[stopTask] Could not acquire lock for cancellation (task: ${taskId}, wallet: ${wallet?.address}). Another process is handling it.` + RESET);
+      return;
+    }
+    
+    orders = fetchResult;
 
 
 
@@ -9541,16 +9570,41 @@ async function extractMagicedenOrderHash(orders: any[]): Promise<string[]> {
     .filter(Boolean);
 }
 
+// Set to track orders being cancelled globally (across all tasks)
+const magicedenOrdersBeingCancelled = new Set<string>();
+
 async function cancelMagicedenBids(orders: any[], privateKey: string, taskId: string) {
   if (!orders.length) return;
 
-
   // Parent job tracking removed - now using cancellationTracker
 
-  console.log(MAGENTA + `[cancelMagicedenBids] Queueing ${orders.length} MagicEden cancellation orders for task ${taskId}` + RESET);
+  // Filter out orders that are already being cancelled
+  const ordersToCancel = [];
+  const duplicateOrders = [];
+  
+  for (const order of orders) {
+    const orderId = order._id?.toString() || order.orderHash;
+    if (magicedenOrdersBeingCancelled.has(orderId)) {
+      duplicateOrders.push(orderId);
+    } else {
+      magicedenOrdersBeingCancelled.add(orderId);
+      ordersToCancel.push(order);
+    }
+  }
+  
+  if (duplicateOrders.length > 0) {
+    console.log(YELLOW + `[cancelMagicedenBids] Skipping ${duplicateOrders.length} orders already being cancelled` + RESET);
+  }
+  
+  if (!ordersToCancel.length) {
+    console.log(YELLOW + `[cancelMagicedenBids] All ${orders.length} orders are already being cancelled, skipping` + RESET);
+    return;
+  }
 
-  for (let i = 0; i < orders.length; i += 500) {
-    const batchOrders = orders.slice(i, i + 500);
+  console.log(MAGENTA + `[cancelMagicedenBids] Queueing ${ordersToCancel.length} MagicEden cancellation orders for task ${taskId} (${duplicateOrders.length} duplicates filtered)` + RESET);
+
+  for (let i = 0; i < ordersToCancel.length; i += 500) {
+    const batchOrders = ordersToCancel.slice(i, i + 500);
     const extractedOrderIds = await extractMagicedenOrderHash(batchOrders)
     const orderKeys = batchOrders.map((order: any) => order._id)
     const batchId = `batch-${i / 500}-${Date.now()}`; // Unique batch identifier
@@ -9567,7 +9621,7 @@ async function cancelMagicedenBids(orders: any[], privateKey: string, taskId: st
   }
 
   // Decrement the own bid counter by the number of cancelled orders
-  decrementOwnBidCounter('magiceden', orders.length);
+  decrementOwnBidCounter('magiceden', ordersToCancel.length);
 
   console.log(MAGENTA + `[cancelMagicedenBids] Successfully queued all MagicEden cancellation jobs` + RESET);
 }
@@ -16651,9 +16705,19 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], privateKey: st
       ])
     }
 
+    // Clean up the tracking set after successful cancellation
+    orderKeys.forEach(orderKey => {
+      magicedenOrdersBeingCancelled.delete(orderKey);
+    });
+
     // Cancellation tracking is now handled in cancelMagicEdenBid directly
   } catch (error) {
     console.error(RED + `Error processing Magiceden bid cancellation for task: ${taskId}` + RESET, error);
+    
+    // Clean up the tracking set even on error to allow retry
+    orderKeys.forEach(orderKey => {
+      magicedenOrdersBeingCancelled.delete(orderKey);
+    });
 
     throw error; // Re-throw to maintain existing behavior
   }
