@@ -74,13 +74,35 @@ export class TaskStateManager {
   // Thread-safe state transition
   async transitionState(taskId: string, newStatus: TaskStatus, updater?: (info: TaskStatusInfo) => void): Promise<boolean> {
     const lockKey = `task-state:${taskId}`;
+    const timestamp = new Date().toISOString();
+    const stackTrace = new Error().stack?.split('\n').slice(2, 5).join('\n    ');
+    
+    console.log(`\n[TaskStateManager-TRANSITION] ${timestamp} Task ${taskId}`);
+    console.log(`  Attempting lock acquisition for key: ${lockKey}`);
+    
+    const lockStartTime = Date.now();
     
     return await this.lockManager.withLock(lockKey, async () => {
+      const lockAcquiredTime = Date.now() - lockStartTime;
+      console.log(`  Lock acquired in ${lockAcquiredTime}ms`);
+      
       const currentState = this.taskStatus.get(taskId);
       if (!currentState) {
         console.error(`[StateManager] Task ${taskId} has no current state`);
+        console.error(`  Available tasks: ${Array.from(this.taskStatus.keys()).join(', ')}`);
+        console.error(`  Called from:\n    ${stackTrace}`);
         return false;
       }
+
+      console.log(`  Current state: ${JSON.stringify({
+        status: currentState.status,
+        version: currentState.version,
+        runningPercentage: currentState.runningPercentage,
+        cancellationPercentage: currentState.cancellationPercentage,
+        waitingTime: currentState.waitingTime,
+        lastUpdate: currentState.lastUpdate ? new Date(currentState.lastUpdate).toISOString() : 'N/A'
+      }, null, 2)}`);
+      console.log(`  Requested transition: ${currentState.status} -> ${newStatus}`);
 
       // Validate state transition
       const validTransition = STATE_TRANSITIONS.find(t => 
@@ -89,12 +111,21 @@ export class TaskStateManager {
 
       if (!validTransition) {
         console.error(`[StateManager] Invalid state transition for task ${taskId}: ${currentState.status} -> ${newStatus}`);
+        console.error(`  Valid transitions from ${currentState.status}: ${
+          STATE_TRANSITIONS
+            .filter(t => t.from.includes(currentState.status))
+            .map(t => t.to)
+            .join(', ')
+        }`);
+        console.error(`  Called from:\n    ${stackTrace}`);
         return false;
       }
 
       // Check transition condition if any
       if (validTransition.condition && !validTransition.condition(currentState)) {
         console.error(`[StateManager] State transition condition not met for task ${taskId}`);
+        console.error(`  Transition: ${currentState.status} -> ${newStatus}`);
+        console.error(`  Current state details: ${JSON.stringify(currentState)}`);
         return false;
       }
 
@@ -110,6 +141,7 @@ export class TaskStateManager {
 
       // Apply custom updates if provided
       if (updater) {
+        console.log(`  Applying custom updater function`);
         updater(updatedState);
       }
 
@@ -118,7 +150,16 @@ export class TaskStateManager {
       // Notify listeners
       this.notifyStateChange(taskId, oldStatus, newStatus);
 
-      console.log(`[StateManager] Task ${taskId} transitioned from ${oldStatus} to ${newStatus}`);
+      console.log(`[StateManager] Task ${taskId} transitioned successfully`);
+      console.log(`  From: ${oldStatus} (v${currentState.version || 0})`);
+      console.log(`  To: ${newStatus} (v${updatedState.version})`);
+      console.log(`  Updated state: ${JSON.stringify({
+        status: updatedState.status,
+        version: updatedState.version,
+        runningPercentage: updatedState.runningPercentage,
+        cancellationPercentage: updatedState.cancellationPercentage
+      }, null, 2)}`);
+      
       return true;
     }, 30) || false;
   }
@@ -126,10 +167,22 @@ export class TaskStateManager {
   // Initialize task state
   async initializeTaskState(taskId: string, status: TaskStatus = 'STARTED'): Promise<void> {
     const lockKey = `task-state:${taskId}`;
+    const timestamp = new Date().toISOString();
+    const stackTrace = new Error().stack?.split('\n').slice(2, 5).join('\n    ');
+    
+    console.log(`\n[TaskStateManager-INIT] ${timestamp} Task ${taskId}`);
+    console.log(`  Initial status: ${status}`);
+    console.log(`  Lock key: ${lockKey}`);
+    console.log(`  Called from:\n    ${stackTrace}`);
+    
+    const lockStartTime = Date.now();
     
     await this.lockManager.withLock(lockKey, async () => {
+      const lockAcquiredTime = Date.now() - lockStartTime;
+      console.log(`  Lock acquired in ${lockAcquiredTime}ms`);
+      
       if (!this.taskStatus.has(taskId)) {
-        this.taskStatus.set(taskId, {
+        const initialState: TaskStatusInfo = {
           status,
           runningPercentage: 0,
           cancellationPercentage: 0,
@@ -137,7 +190,17 @@ export class TaskStateManager {
           processingPercentage: 0,
           lastUpdate: Date.now(),
           version: 1
-        });
+        };
+        
+        this.taskStatus.set(taskId, initialState);
+        
+        console.log(`  Task state initialized successfully`);
+        console.log(`  Initial state: ${JSON.stringify(initialState, null, 2)}`);
+        console.log(`  Total tasks in manager: ${this.taskStatus.size}`);
+      } else {
+        const existingState = this.taskStatus.get(taskId);
+        console.log(`  Task already exists in state manager`);
+        console.log(`  Existing state: ${JSON.stringify(existingState, null, 2)}`);
       }
     }, 30);
   }
@@ -150,16 +213,40 @@ export class TaskStateManager {
   // Update task progress (thread-safe)
   async updateTaskProgress(taskId: string, updates: Partial<TaskStatusInfo>): Promise<void> {
     const lockKey = `task-state:${taskId}`;
+    const timestamp = new Date().toISOString();
+    
+    console.log(`\n[TaskStateManager-PROGRESS] ${timestamp} Task ${taskId}`);
+    console.log(`  Updates: ${JSON.stringify(updates, null, 2)}`);
     
     await this.lockManager.withLock(lockKey, async () => {
       const current = this.taskStatus.get(taskId);
       if (current) {
-        this.taskStatus.set(taskId, {
+        const previousState = { ...current };
+        
+        const updatedState = {
           ...current,
           ...updates,
           lastUpdate: Date.now(),
           version: (current.version || 0) + 1
-        });
+        };
+        
+        this.taskStatus.set(taskId, updatedState);
+        
+        console.log(`  Progress updated successfully`);
+        console.log(`  Previous: ${JSON.stringify({
+          runningPercentage: previousState.runningPercentage,
+          cancellationPercentage: previousState.cancellationPercentage,
+          processingPercentage: previousState.processingPercentage,
+          waitingTime: previousState.waitingTime
+        }, null, 2)}`);
+        console.log(`  Current: ${JSON.stringify({
+          runningPercentage: updatedState.runningPercentage,
+          cancellationPercentage: updatedState.cancellationPercentage,
+          processingPercentage: updatedState.processingPercentage,
+          waitingTime: updatedState.waitingTime
+        }, null, 2)}`);
+      } else {
+        console.error(`  Task ${taskId} not found in state manager`);
       }
     }, 30);
   }
