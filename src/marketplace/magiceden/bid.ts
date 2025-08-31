@@ -67,13 +67,10 @@ const RESET = '\x1b[0m';
 config()
 
 // Environment-specific configuration for MagicEden
-const MAGICEDEN_CONFIG = process.env.NODE_ENV === 'production' ? {
+const MAGICEDEN_CONFIG = {
   domain: 'magiceden.us',
   feeRecipient: '0xca9337244b5f04cb946391bc8b8a980e988f9a6a'
-} : {
-  domain: 'magiceden.io',
-  feeRecipient: '0x6fa303e72bed54f515a513496f922bc331e2f27e'
-};
+}
 
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 // Singleton provider with connection pooling
@@ -220,7 +217,7 @@ export async function bidOnMagiceden(
   console.log(CYAN + `  Trait: ${trait ? JSON.stringify(trait) : 'N/A'}` + RESET);
   console.log(CYAN + `  Token ID: ${tokenId || 'N/A'}` + RESET);
   console.log(CYAN + `  Wei Price: ${weiPrice}` + RESET);
-  
+
   try {
     if (isTaskBlacklisted(taskId, 'magiceden')) {
       const error = new Error(`Bid execution blocked - task ${taskId} is stopped for MagicEden`);
@@ -306,8 +303,6 @@ export async function bidOnMagiceden(
     );
 
     console.log(GREEN + `[MagicEden] Order generated successfully` + RESET);
-    console.log(JSON.stringify(order));
-
     if (!order) return;
 
     // Simplify the submitSignedOrderData call
@@ -364,7 +359,7 @@ function generateMagicEdenOrder(
   const currentTime = Math.floor(Date.now() / 1000);
   const salt = ethers.hexlify(ethers.randomBytes(32));
   const nonce = "0";
-  
+
   // Calculate marketplace fee (0.5% = 50 basis points)
   const marketplaceFee = Math.floor(Number(weiPrice) * 50 / 10000).toString();
   console.log(CYAN + `[MagicEden] Marketplace fee calculated: ${marketplaceFee} (0.5% of ${weiPrice})` + RESET);
@@ -844,7 +839,7 @@ export async function submitSignedOrderData(
   console.log(YELLOW + `[MagicEden] submitSignedOrderData called` + RESET);
   console.log(YELLOW + `  Trait: ${trait ? JSON.stringify(trait) : 'N/A'}` + RESET);
   console.log(YELLOW + `  Token ID: ${tokenId || 'N/A'}` + RESET);
-  
+
   const task = cachedTask || currentTasks.find((task) =>
     task.contract.slug.toLowerCase() === slug.toLowerCase() &&
     task.selectedMarketplaces.includes("MagicEden")
@@ -862,7 +857,7 @@ export async function submitSignedOrderData(
           console.log(CYAN + `[MagicEden] Consideration array:` + RESET);
           console.log(JSON.stringify(item.data.sign.value.consideration, null, 2));
         }
-        
+
         // Set source
         if (item.data?.post?.body) {
           item.data.post.body.source = MAGICEDEN_CONFIG.domain;
@@ -1051,28 +1046,28 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
 
   } catch (error: any) {
     const errorMessage = error?.response?.data?.message || error?.message || error;
-    
+
     // Check if this is a "No matching order(s)" error - this means the order was already cancelled
     if (errorMessage?.includes('No matching order') || error?.response?.status === 404) {
       if (process.env.NODE_ENV !== 'production') {
         console.log(YELLOW + `[MagicEden] Orders already cancelled or not found for task: ${taskId} (${orderIds.length} orders)` + RESET);
       }
-      
+
       // Still track as completed since the orders are effectively cancelled
       orderIds.forEach(() => {
         decrementBidCount('magiceden', taskId);
       });
-      
+
       // Track cancellation completion
       cancellationTracker.recordCompletion(taskId, orderIds.length, 'magiceden');
-      
+
       // Update cancellation percentage
       await updateTaskCancellationPercentage(taskId);
-      
+
       // Don't throw error for already cancelled orders
       return;
     }
-    
+
     // For other errors, log and throw as before
     const message = `Error cancelling MagicEden bid: ${errorMessage}`;
     if (process.env.NODE_ENV !== 'production') {
@@ -1088,7 +1083,7 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
       errorCode: error?.response?.status,
       errorMessage: errorMessage
     });
-    
+
     // Re-throw the error for non-"No matching order" cases
     throw error;
   }
