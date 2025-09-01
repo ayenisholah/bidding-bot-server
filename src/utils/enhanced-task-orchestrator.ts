@@ -46,7 +46,7 @@ export class EnhancedTaskOrchestrator {
    */
   async startTask(taskId: string, task: ITask): Promise<void> {
     try {
-      console.log(`${this.CYAN}[Orchestrator] Starting enhanced task execution for ${taskId}${this.RESET}`);
+      // console.log(`${this.CYAN}[Orchestrator] Starting enhanced task execution for ${taskId}${this.RESET}`);
       
       // Initialize task state
       await this.stateManager.initializeEnhancedTaskState(taskId, task, 'STARTED');
@@ -81,7 +81,7 @@ export class EnhancedTaskOrchestrator {
    */
   async stopTask(taskId: string, marketplace?: string): Promise<void> {
     try {
-      console.log(`${this.YELLOW}[Orchestrator] Stopping task ${taskId}${marketplace ? ` for ${marketplace}` : ''}${this.RESET}`);
+      // console.log(`${this.YELLOW}[Orchestrator] Stopping task ${taskId}${marketplace ? ` for ${marketplace}` : ''}${this.RESET}`);
       
       // Start cancellation process
       await this.queueHandler.startTaskCancellation(taskId, marketplace);
@@ -102,7 +102,7 @@ export class EnhancedTaskOrchestrator {
    * Start the processing phase - analyze task requirements
    */
   private async startProcessingPhase(taskId: string, task: ITask): Promise<void> {
-    console.log(`${this.BLUE}[Orchestrator] Starting processing phase for task ${taskId}${this.RESET}`);
+    // console.log(`${this.BLUE}[Orchestrator] Starting processing phase for task ${taskId}${this.RESET}`);
     
     const executionPlan = this.executionPlans.get(taskId);
     if (!executionPlan) return;
@@ -130,20 +130,20 @@ export class EnhancedTaskOrchestrator {
       await this.stateManager.updateTaskProgress(taskId, { processingPercentage: percentage });
       
       if (percentage === 60) {
-        console.log(`${this.BLUE}[Orchestrator] Analyzing traits and tokens for task ${taskId}${this.RESET}`);
+        // console.log(`${this.BLUE}[Orchestrator] Analyzing traits and tokens for task ${taskId}${this.RESET}`);
       } else if (percentage === 80) {
-        console.log(`${this.BLUE}[Orchestrator] Calculating job requirements for task ${taskId}${this.RESET}`);
+        // console.log(`${this.BLUE}[Orchestrator] Calculating job requirements for task ${taskId}${this.RESET}`);
       }
     }
     
-    console.log(`${this.GREEN}[Orchestrator] Processing phase completed for task ${taskId}${this.RESET}`);
+    // console.log(`${this.GREEN}[Orchestrator] Processing phase completed for task ${taskId}${this.RESET}`);
   }
 
   /**
    * Start the queueing phase - create and queue all jobs
    */
   private async startQueueingPhase(taskId: string, task: ITask): Promise<void> {
-    console.log(`${this.BLUE}[Orchestrator] Starting queueing phase for task ${taskId}${this.RESET}`);
+    // console.log(`${this.BLUE}[Orchestrator] Starting queueing phase for task ${taskId}${this.RESET}`);
     
     const executionPlan = this.executionPlans.get(taskId);
     if (!executionPlan) return;
@@ -155,12 +155,12 @@ export class EnhancedTaskOrchestrator {
       // Update execution plan with estimated jobs
       executionPlan.estimatedJobs = jobBatches.reduce((total, batch) => total + batch.jobs.length, 0);
       
-      console.log(`${this.BLUE}[Orchestrator] Created ${executionPlan.estimatedJobs} jobs across ${jobBatches.length} marketplaces${this.RESET}`);
+      // console.log(`${this.BLUE}[Orchestrator] Created ${executionPlan.estimatedJobs} jobs across ${jobBatches.length} marketplaces${this.RESET}`);
       
       // Create and queue jobs
       await this.jobManager.createAndQueueTaskJobs(taskId, jobBatches);
       
-      console.log(`${this.GREEN}[Orchestrator] Queueing phase completed for task ${taskId}${this.RESET}`);
+      // console.log(`${this.GREEN}[Orchestrator] Queueing phase completed for task ${taskId}${this.RESET}`);
       
     } catch (error) {
       await logger.logError(ErrorCategory.TASK_MANAGEMENT, 'Error in queueing phase', {
@@ -243,26 +243,26 @@ export class EnhancedTaskOrchestrator {
   private async handleTaskStateChange(taskId: string, oldState: EnhancedTaskStatus, newState: EnhancedTaskStatus): Promise<void> {
     const executionPlan = this.executionPlans.get(taskId);
     
-    console.log(`${this.CYAN}[Orchestrator] Task ${taskId} transitioned: ${oldState} -> ${newState}${this.RESET}`);
+    // console.log(`${this.CYAN}[Orchestrator] Task ${taskId} transitioned: ${oldState} -> ${newState}${this.RESET}`);
     
     switch (newState) {
       case 'QUEUED':
-        console.log(`${this.GREEN}[Orchestrator] All jobs queued for task ${taskId}, ready to run${this.RESET}`);
+        // console.log(`${this.GREEN}[Orchestrator] All jobs queued for task ${taskId}, ready to run${this.RESET}`);
         await this.stateManager.transitionState(taskId, 'RUNNING');
         if (executionPlan) executionPlan.phase = 'RUNNING';
         break;
         
       case 'RUNNING':
-        console.log(`${this.GREEN}[Orchestrator] Task ${taskId} is now running jobs${this.RESET}`);
+        // console.log(`${this.GREEN}[Orchestrator] Task ${taskId} is now running jobs${this.RESET}`);
         break;
         
       case 'COMPLETED':
-        console.log(`${this.GREEN}[Orchestrator] Task ${taskId} completed successfully${this.RESET}`);
+        // console.log(`${this.GREEN}[Orchestrator] Task ${taskId} completed successfully${this.RESET}`);
         if (executionPlan) executionPlan.phase = 'COMPLETING';
         break;
         
       case 'SCHEDULED':
-        console.log(`${this.BLUE}[Orchestrator] Task ${taskId} scheduled for next loop${this.RESET}`);
+        // console.log(`${this.BLUE}[Orchestrator] Task ${taskId} scheduled for next loop${this.RESET}`);
         // Reset execution plan for next iteration
         if (executionPlan) {
           executionPlan.phase = 'PROCESSING';
@@ -271,7 +271,7 @@ export class EnhancedTaskOrchestrator {
         break;
         
       case 'STOPPED':
-        console.log(`${this.YELLOW}[Orchestrator] Task ${taskId} stopped${this.RESET}`);
+        // console.log(`${this.YELLOW}[Orchestrator] Task ${taskId} stopped${this.RESET}`);
         this.executionPlans.delete(taskId);
         break;
     }

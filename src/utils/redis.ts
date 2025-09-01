@@ -66,7 +66,7 @@ class RedisClient {
 
     if (!this.client) {
       try {
-        console.log(`[Redis] Connecting to ${REDIS_HOST}:${REDIS_PORT}...`);
+        // console.log(`[Redis] Connecting to ${REDIS_HOST}:${REDIS_PORT}...`);
         
         this.client = new Redis({
           ...defaultConfig,
@@ -120,7 +120,7 @@ class RedisClient {
       this.isConnected = true;
       this.connecting = false;
       this.connectionAttempts = 0;
-      console.log('[Redis] Connection established');
+      // console.log('[Redis] Connection established');
     });
 
     this.client.on('error', async (err) => {
@@ -192,7 +192,7 @@ let connectionIdCounter = 0;
 // Create a new Redis connection for BullMQ with enhanced configuration
 export const createBullMQConnection = async (identifier?: string): Promise<Redis> => {
   const connectionId = identifier || `bullmq-${++connectionIdCounter}`;
-  console.log(`[Redis] Creating BullMQ connection: ${connectionId}`);
+  // console.log(`[Redis] Creating BullMQ connection: ${connectionId}`);
 
   // Check if this is a queue events or worker connection that needs special handling
   // Both queue events and workers use blocking commands (BLPOP/BRPOP) which require special timeout configuration
@@ -201,7 +201,7 @@ export const createBullMQConnection = async (identifier?: string): Promise<Redis
   const needsBlockingConfig = isQueueEvents || isWorker;
 
   if (needsBlockingConfig) {
-    console.log(`[Redis] ${connectionId} is a ${isQueueEvents ? 'queue events' : 'worker'} connection - using blocking command configuration`);
+    // console.log(`[Redis] ${connectionId} is a ${isQueueEvents ? 'queue events' : 'worker'} connection - using blocking command configuration`);
   }
 
   try {
@@ -218,7 +218,7 @@ export const createBullMQConnection = async (identifier?: string): Promise<Redis
 
         // Use shorter delays for initial retries
         const delay = times <= 3 ? 1000 : Math.min(times * INITIAL_RETRY_DELAY, 20000);
-        console.log(`[Redis] BullMQ connection ${connectionId} retry attempt ${times}, delay: ${delay}ms`);
+        // console.log(`[Redis] BullMQ connection ${connectionId} retry attempt ${times}, delay: ${delay}ms`);
         return delay;
       },
 
@@ -269,32 +269,32 @@ export const createBullMQConnection = async (identifier?: string): Promise<Redis
     });
 
     redis.on('connect', () => {
-      console.log(`[Redis] BullMQ connection ${connectionId} connected`);
+      // console.log(`[Redis] BullMQ connection ${connectionId} connected`);
     });
 
     redis.on('ready', () => {
-      console.log(`[Redis] BullMQ connection ${connectionId} ready`);
+      // console.log(`[Redis] BullMQ connection ${connectionId} ready`);
     });
 
     redis.on('close', () => {
-      console.log(`[Redis] BullMQ connection ${connectionId} closed`);
+      // console.log(`[Redis] BullMQ connection ${connectionId} closed`);
       bullMQConnections.delete(connectionId);
     });
 
     redis.on('reconnecting', () => {
-      console.log(`[Redis] BullMQ connection ${connectionId} reconnecting...`);
+      // console.log(`[Redis] BullMQ connection ${connectionId} reconnecting...`);
     });
 
     redis.on('end', () => {
-      console.log(`[Redis] BullMQ connection ${connectionId} ended`);
+      // console.log(`[Redis] BullMQ connection ${connectionId} ended`);
       bullMQConnections.delete(connectionId);
     });
 
     // Check if already connected/connecting before calling connect
     if (redis.status === 'ready') {
-      console.log(`[Redis] BullMQ connection ${connectionId} already ready`);
+      // console.log(`[Redis] BullMQ connection ${connectionId} already ready`);
     } else if (redis.status === 'connecting' || redis.status === 'connect') {
-      console.log(`[Redis] BullMQ connection ${connectionId} already connecting, waiting...`);
+      // console.log(`[Redis] BullMQ connection ${connectionId} already connecting, waiting...`);
       // Wait for connection to complete
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
@@ -338,7 +338,7 @@ export const createBullMQConnection = async (identifier?: string): Promise<Redis
     // Verify connection with a ping
     try {
       await redis.ping();
-      console.log(`[Redis] BullMQ connection ${connectionId} verified with ping`);
+      // console.log(`[Redis] BullMQ connection ${connectionId} verified with ping`);
     } catch (pingError) {
       console.error(`[Redis] BullMQ connection ${connectionId} ping failed:`, pingError);
       throw pingError;
@@ -351,7 +351,7 @@ export const createBullMQConnection = async (identifier?: string): Promise<Redis
       lastHealthCheck: Date.now()
     });
 
-    console.log(`[Redis] BullMQ connection ${connectionId} successfully created. Total connections: ${bullMQConnections.size}`);
+    // console.log(`[Redis] BullMQ connection ${connectionId} successfully created. Total connections: ${bullMQConnections.size}`);
     return redis;
 
   } catch (error) {
@@ -399,7 +399,7 @@ export const checkBullMQConnectionsHealth = async () => {
 
 // Close all BullMQ connections gracefully
 export const closeAllBullMQConnections = async () => {
-  console.log(`[Redis] Closing ${bullMQConnections.size} BullMQ connections...`);
+  // console.log(`[Redis] Closing ${bullMQConnections.size} BullMQ connections...`);
 
   const promises: Promise<void>[] = [];
 
@@ -413,7 +413,7 @@ export const closeAllBullMQConnections = async () => {
 
   await Promise.all(promises);
   bullMQConnections.clear();
-  console.log('[Redis] All BullMQ connections closed');
+  // console.log('[Redis] All BullMQ connections closed');
 };
 
 // Helper function to check if an error is a Redis error
@@ -465,7 +465,7 @@ export const withRedisRetry = async <T>(
         
         // Exponential backoff
         const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
-        console.log(`[Redis] Retrying ${context} after ${delay}ms...`);
+        // console.log(`[Redis] Retrying ${context} after ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       } else {
         // Non-redis errors, don't retry

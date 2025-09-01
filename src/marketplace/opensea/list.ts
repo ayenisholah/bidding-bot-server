@@ -154,11 +154,11 @@ export const listOnOpensea = async (
   let enforceCreatorFee = false;
   
   try {
-    console.log(`${BLUE}[OPENSEA] Fetching collection details for ${contractSlug}...${RESET}`);
+    // console.log(`${BLUE}[OPENSEA] Fetching collection details for ${contractSlug}...${RESET}`);
     const collectionData = await getCollectionDetails(contractSlug, nftAddress);
     creatorFees = collectionData?.creator_fees as IFee;
     enforceCreatorFee = collectionData?.enforceCreatorFee as boolean;
-    console.log(`${BLUE}[OPENSEA] Collection details fetched - Enforce creator fee: ${enforceCreatorFee}${RESET}`);
+    // console.log(`${BLUE}[OPENSEA] Collection details fetched - Enforce creator fee: ${enforceCreatorFee}${RESET}`);
   } catch (error) {
     console.error(`${BLUE}[OPENSEA] Error fetching collection details, proceeding without creator fees${RESET}`);
     await logger.logOpenseaListingError('Error fetching collection details', {
@@ -230,14 +230,14 @@ export const listOnOpensea = async (
   // Payload data
   // Convert duration to seconds using OpenSea-specific converter
   const durationInSeconds = convertDurationForOpenSea(listDuration);
-  console.log(`${BLUE}[OPENSEA] Duration: ${listDuration.value} ${listDuration.unit} = ${durationInSeconds} seconds${RESET}`);
+  // console.log(`${BLUE}[OPENSEA] Duration: ${listDuration.value} ${listDuration.unit} = ${durationInSeconds} seconds${RESET}`);
   
   const currentTime = Math.floor(Date.now() / 1000);
   const endTime = Math.floor(Date.now() / 1000 + durationInSeconds);
   
-  console.log(`${BLUE}[OPENSEA] Start time: ${currentTime} (${new Date(currentTime * 1000).toISOString()})${RESET}`);
-  console.log(`${BLUE}[OPENSEA] End time: ${endTime} (${new Date(endTime * 1000).toISOString()})${RESET}`);
-  console.log(`${BLUE}[OPENSEA] Difference: ${endTime - currentTime} seconds${RESET}`);
+  // console.log(`${BLUE}[OPENSEA] Start time: ${currentTime} (${new Date(currentTime * 1000).toISOString()})${RESET}`);
+  // console.log(`${BLUE}[OPENSEA] End time: ${endTime} (${new Date(endTime * 1000).toISOString()})${RESET}`);
+  // console.log(`${BLUE}[OPENSEA] Difference: ${endTime - currentTime} seconds${RESET}`);
   
   listingPayload.parameters.startTime = BigInt(currentTime).toString();
   listingPayload.parameters.endTime = BigInt(
@@ -286,7 +286,7 @@ export const listOnOpensea = async (
 
   // build second consideration item
   // This is the opensea fee
-  // console.log(offerPrice.mul(openseaFee).div(divider).toString());
+  // console.log(((offerPrice * BigInt(openseaFee)) / BigInt(divider)).toString());
   const openseaConsideration = {
     itemType: 0,
     token: "0x0000000000000000000000000000000000000000",
@@ -361,7 +361,7 @@ export const listOnOpensea = async (
       
       // Check if it's a timeout error
       if (err.code === 'ECONNABORTED' && retryCount < maxRetries) {
-        console.log(`${BLUE}[OPENSEA] Listing timeout (attempt ${retryCount}/${maxRetries}), retrying in ${retryCount * 5} seconds...${RESET}`);
+        // console.log(`${BLUE}[OPENSEA] Listing timeout (attempt ${retryCount}/${maxRetries}), retrying in ${retryCount * 5} seconds...${RESET}`);
         await new Promise(resolve => setTimeout(resolve, retryCount * 5000));
         continue;
       }
@@ -414,20 +414,20 @@ export const listOnOpensea = async (
     // Check if the error is because user no longer owns the NFT
     const errorMessage = errorString.toLowerCase();
     if (errorMessage.includes('not owned') || errorMessage.includes('ownership') || errorMessage.includes('not the owner')) {
-      console.log(`${BLUE}[OPENSEA] User no longer owns NFT ${nftAddress}/${tokenId}, deleting listing...${RESET}`);
+      // console.log(`${BLUE}[OPENSEA] User no longer owns NFT ${nftAddress}/${tokenId}, deleting listing...${RESET}`);
       
       try {
         await Listing.findOneAndDelete({
           "contract.contractAddress": nftAddress,
           tokenId: tokenId
         });
-        console.log(`${BLUE}[OPENSEA] Deleted listing for ${nftAddress}/${tokenId} as user no longer owns it${RESET}`);
+        // console.log(`${BLUE}[OPENSEA] Deleted listing for ${nftAddress}/${tokenId} as user no longer owns it${RESET}`);
       } catch (deleteError) {
         console.error(`${BLUE}[OPENSEA] Error deleting listing:${RESET}`, deleteError);
       }
     }
   } else {
-    console.log(`${BLUE}[OPENSEA - LISTING] ✅ Successfully listed ${nftAddress} #${tokenId} for ${roundedPrice} ETH${RESET}`);
+    // console.log(`${BLUE}[OPENSEA - LISTING] ✅ Successfully listed ${nftAddress} #${tokenId} for ${roundedPrice} ETH${RESET}`);
 
     // REMOVED: Cache update - we're using real-time prices now!
     // await listingPriceCache.updatePrice(...)
@@ -470,12 +470,12 @@ export const listOnOpensea = async (
       );
 
       if (updatedListing) {
-        console.log(`${BLUE}[OPENSEA - LISTING] Updated DB: ${nftAddress} #${tokenId} | Price: ${roundedPrice} ETH | Expires: ${expirationTime.toISOString()}${RESET}`);
+        // console.log(`${BLUE}[OPENSEA - LISTING] Updated DB: ${nftAddress} #${tokenId} | Price: ${roundedPrice} ETH | Expires: ${expirationTime.toISOString()}${RESET}`);
         if (updatedListing.instantPriceOverride && updatedListing.instantPriceMatchingActiveUntil) {
-          console.log(`${BLUE}[OPENSEA - LISTING] Extended instant price matching until: ${updatedListing.instantPriceMatchingActiveUntil.toISOString()}${RESET}`);
+          // console.log(`${BLUE}[OPENSEA - LISTING] Extended instant price matching until: ${updatedListing.instantPriceMatchingActiveUntil.toISOString()}${RESET}`);
         }
       } else {
-        console.log(`${BLUE}[OPENSEA - LISTING] ⚠️  No listing found in DB for ${nftAddress} #${tokenId}${RESET}`);
+        // console.log(`${BLUE}[OPENSEA - LISTING] ⚠️  No listing found in DB for ${nftAddress} #${tokenId}${RESET}`);
       }
     } catch (updateError) {
       await logger.logOpenseaListingError('Error updating listing in database', {

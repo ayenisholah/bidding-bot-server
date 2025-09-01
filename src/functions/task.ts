@@ -27,5 +27,5 @@ export function getExpiry(bidDuration: { value: number; unit: string }): number 
 
 export async function removeTaskFromIndexes(taskId: string): Promise<void> {
   // This is a placeholder - the actual implementation might exist in index.ts
-  console.log(`removeTaskFromIndexes called for task ${taskId}`);
+  // console.log(`removeTaskFromIndexes called for task ${taskId}`);
 }

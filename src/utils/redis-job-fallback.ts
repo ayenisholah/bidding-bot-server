@@ -64,7 +64,7 @@ class JobFallbackStore {
 
     for (const [jobId, entry] of this.store.entries()) {
       if (entry.taskId === taskId && (now - entry.timestamp <= this.ttl)) {
-        console.log(`[JobFallbackStore] Found job ${jobId} for task ${taskId} in store`);
+        // console.log(`[JobFallbackStore] Found job ${jobId} for task ${taskId} in store`);
         results.push(entry);
       }
     }
@@ -141,7 +141,7 @@ export async function safeGetJob(
     // Try fallback store
     const fallback = jobFallbackStore.get(jobId);
     if (fallback) {
-      console.log(`[JobFallback] Retrieved job ${jobId} from fallback store`);
+      // console.log(`[JobFallback] Retrieved job ${jobId} from fallback store`);
       logger.logInfo(ErrorCategory.DATABASE, 'Job retrieved from fallback store', {
         databaseOperation: DatabaseOperation.READ,
         collection_name: 'job_fallback_store',
@@ -170,7 +170,7 @@ export async function safeGetJob(
     // Try fallback store on error
     const fallback = jobFallbackStore.get(jobId);
     if (fallback) {
-      console.log(`[JobFallback] Retrieved job ${jobId} from fallback store after error`);
+      // console.log(`[JobFallback] Retrieved job ${jobId} from fallback store after error`);
       return {
         id: jobId,
         data: fallback.data,
@@ -205,7 +205,7 @@ export async function safeMarkJobAsProcessed(
     // Clean up fallback store
     jobFallbackStore.delete(jobId);
     
-    console.log(`[JobFallback] Marked job ${jobId} as processed (${success ? 'success' : 'failed'})`);
+    // console.log(`[JobFallback] Marked job ${jobId} as processed (${success ? 'success' : 'failed'})`);
   } catch (error) {
     console.error(`[JobFallback] Error marking job ${jobId} as processed:`, error);
   }
@@ -249,10 +249,10 @@ export async function recoverStuckJobs(
   actualCounts: { [marketplace: string]: number },
   updateCallback: (taskId: string, marketplace: string, increment: number) => Promise<void>
 ): Promise<void> {
-  console.log(`[JobFallback] Checking for stuck jobs for task ${taskId}`);
+  // console.log(`[JobFallback] Checking for stuck jobs for task ${taskId}`);
   
   const fallbackJobs = jobFallbackStore.getByTaskId(taskId);
-  console.log(`[JobFallback] Found ${fallbackJobs.length} jobs in fallback store`);
+  // console.log(`[JobFallback] Found ${fallbackJobs.length} jobs in fallback store`);
 
   for (const marketplace of Object.keys(expectedCounts)) {
     const expected = expectedCounts[marketplace];
@@ -260,13 +260,13 @@ export async function recoverStuckJobs(
     const missing = expected - actual;
 
     if (missing > 0) {
-      console.log(`[JobFallback] Task ${taskId} missing ${missing} ${marketplace} jobs`);
+      // console.log(`[JobFallback] Task ${taskId} missing ${missing} ${marketplace} jobs`);
       
       // Count jobs in fallback for this marketplace
       const fallbackCount = fallbackJobs.filter(j => j.marketplace === marketplace).length;
       
       if (fallbackCount > 0) {
-        console.log(`[JobFallback] Recovering ${Math.min(fallbackCount, missing)} ${marketplace} jobs from fallback`);
+        // console.log(`[JobFallback] Recovering ${Math.min(fallbackCount, missing)} ${marketplace} jobs from fallback`);
         
         // Update counter for recovered jobs
         await updateCallback(taskId, marketplace, Math.min(fallbackCount, missing));
@@ -291,7 +291,7 @@ setInterval(() => {
     
     const sizeAfter = jobFallbackStore.size();
     if (sizeAfter < sizeBefore) {
-      console.log(`[JobFallback] Cleaned up ${sizeBefore - sizeAfter} expired entries`);
+      // console.log(`[JobFallback] Cleaned up ${sizeBefore - sizeAfter} expired entries`);
     }
   }
 }, 5 * 60 * 1000); // Every 5 minutes

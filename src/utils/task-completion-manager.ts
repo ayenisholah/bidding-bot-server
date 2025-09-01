@@ -24,7 +24,7 @@ export class TaskCompletionManager {
       blur: false
     });
     
-    console.log(`[TaskCompletion] Initialized completion state for task ${taskId}`);
+    // console.log(`[TaskCompletion] Initialized completion state for task ${taskId}`);
   }
   
   /**
@@ -44,7 +44,7 @@ export class TaskCompletionManager {
     }
     
     completion[marketplace] = true;
-    console.log(`[TaskCompletion] Task ${taskId} completed ${marketplace}`);
+    // console.log(`[TaskCompletion] Task ${taskId} completed ${marketplace}`);
   }
   
   /**
@@ -65,11 +65,11 @@ export class TaskCompletionManager {
     // Only check the marketplaces that this specific task requires
     const allComplete = requiredMarketplaces.every(marketplace => {
       const isComplete = completion[marketplace as keyof MarketplaceCompletion] === true;
-      console.log(`[TaskCompletion] Task ${taskId} ${marketplace}: ${isComplete}`);
+      // console.log(`[TaskCompletion] Task ${taskId} ${marketplace}: ${isComplete}`);
       return isComplete;
     });
     
-    console.log(`[TaskCompletion] Task ${taskId} all markets complete: ${allComplete} (required: ${requiredMarketplaces.join(', ')})`);
+    // console.log(`[TaskCompletion] Task ${taskId} all markets complete: ${allComplete} (required: ${requiredMarketplaces.join(', ')})`);
     return allComplete;
   }
   
@@ -79,7 +79,7 @@ export class TaskCompletionManager {
    */
   resetTask(taskId: string): void {
     this.completedTasks.delete(taskId);
-    console.log(`[TaskCompletion] Reset completion state for task ${taskId}`);
+    // console.log(`[TaskCompletion] Reset completion state for task ${taskId}`);
   }
   
   /**
@@ -87,7 +87,7 @@ export class TaskCompletionManager {
    */
   cleanupTask(taskId: string): void {
     this.completedTasks.delete(taskId);
-    console.log(`[TaskCompletion] Cleaned up completion state for task ${taskId}`);
+    // console.log(`[TaskCompletion] Cleaned up completion state for task ${taskId}`);
   }
   
   /**
@@ -117,7 +117,7 @@ export class TaskCompletionManager {
       
       // Log for monitoring
       if (completedCount > 0) {
-        console.log(`[TaskCompletion] Task ${taskId} has ${completedCount} completed marketplaces`);
+        // console.log(`[TaskCompletion] Task ${taskId} has ${completedCount} completed marketplaces`);
       }
     });
     

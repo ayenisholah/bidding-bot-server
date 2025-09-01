@@ -206,13 +206,13 @@ export const blurCircuitBreaker = new CircuitBreaker({
 
 // Log circuit breaker events
 blurCircuitBreaker.on('open', (data) => {
-  console.log('[CircuitBreaker] Blur circuit opened:', data);
+  // console.log('[CircuitBreaker] Blur circuit opened:', data);
 });
 
 blurCircuitBreaker.on('halfOpen', (data) => {
-  console.log('[CircuitBreaker] Blur circuit half-open:', data);
+  // console.log('[CircuitBreaker] Blur circuit half-open:', data);
 });
 
 blurCircuitBreaker.on('closed', (data) => {
-  console.log('[CircuitBreaker] Blur circuit closed:', data);
+  // console.log('[CircuitBreaker] Blur circuit closed:', data);
 });

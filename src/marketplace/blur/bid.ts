@@ -173,19 +173,19 @@ export async function bidOnBlur(
   // Log batch information if provided
   if (batchInfo) {
     const batchProgress = ((batchInfo.traitIndex + 1) / batchInfo.totalTraits * 100).toFixed(1);
-    console.log(`${GOLD}[Blur Batch ${batchInfo.batchNumber}/${batchInfo.totalBatches}] Trait ${batchInfo.traitIndex + 1}/${batchInfo.totalTraits} (${batchProgress}% total progress)${RESET}`);
+// console.log(`${GOLD}[Blur Batch ${batchInfo.batchNumber}/${batchInfo.totalBatches}] Trait ${batchInfo.traitIndex + 1}/${batchInfo.totalTraits} (${batchProgress}% total progress)${RESET}`);
   }
 
   // Check if task is blacklisted (stopped)
   if (isTaskBlacklisted(taskId, 'blur')) {
     const error = new Error(`Bid execution blocked - task ${taskId} is stopped for Blur`);
-    console.log(`[Blur] Job execution blocked for stopped task: ${taskId}`);
+// console.log(`[Blur] Job execution blocked for stopped task: ${taskId}`);
     throw error;
   }
 
   // Check if collection is in the restricted cache
   if (isCollectionRestricted(contractAddress)) {
-    console.log(`Blur: Collection ${contractAddress} is cached as transfer-restricted - skipping bid`);
+// console.log(`Blur: Collection ${contractAddress} is cached as transfer-restricted - skipping bid`);
     throw new TransferRestrictedError('blur', contractAddress, true);
   }
 
@@ -358,11 +358,11 @@ export async function getAccessToken(private_key: string): Promise<string | unde
   try {
     const cachedToken = redis ? await redis.get(key) : null;
     if (cachedToken) {
-      console.log(`[Auth Cache] Using cached token for ${wallet.address}`);
+// console.log(`[Auth Cache] Using cached token for ${wallet.address}`);
       return cachedToken;
     }
   } catch (error) {
-    console.warn(`[Auth Cache] Failed to read cache for ${wallet.address}:`, error);
+// console.warn(`[Auth Cache] Failed to read cache for ${wallet.address}:`, error);
   }
 
   // Check for authentication block in Redis first
@@ -373,8 +373,8 @@ export async function getAccessToken(private_key: string): Promise<string | unde
       const blockTime = parseInt(authBlockTime);
       if (blockTime > Date.now()) {
         const waitTime = blockTime - Date.now();
-        console.log(GOLD + `[Auth Block] Wallet ${wallet.address} is blocked by Blur API` + RESET);
-        console.log(GOLD + `[Auth Block] Wait time: ${Math.ceil(waitTime / 1000)} seconds` + RESET);
+// console.log(GOLD + `[Auth Block] Wallet ${wallet.address} is blocked by Blur API` + RESET);
+// console.log(GOLD + `[Auth Block] Wait time: ${Math.ceil(waitTime / 1000)} seconds` + RESET);
         throw new Error(`Authentication blocked until ${new Date(blockTime).toISOString()}`);
       } else {
         // Block has expired, remove it
@@ -386,26 +386,26 @@ export async function getAccessToken(private_key: string): Promise<string | unde
   // Check authentication retry queue
   const retryInfo = authRetryQueue.get(wallet.address);
   if (retryInfo && retryInfo.nextRetryTime > Date.now()) {
-    console.log(`[Auth Retry Queue] Wallet ${wallet.address} is in retry queue. Next retry at ${new Date(retryInfo.nextRetryTime).toISOString()}`);
+// console.log(`[Auth Retry Queue] Wallet ${wallet.address} is in retry queue. Next retry at ${new Date(retryInfo.nextRetryTime).toISOString()}`);
     throw new Error(`Authentication for ${wallet.address} is temporarily blocked. Retry after ${new Date(retryInfo.nextRetryTime).toISOString()}`);
   }
 
   // Check if authentication is already in progress for this wallet
   const existingAuthPromise = authInProgress.get(wallet.address);
   if (existingAuthPromise) {
-    console.log(`[Auth State] Authentication already in progress for ${wallet.address}, waiting for result`);
+// console.log(`[Auth State] Authentication already in progress for ${wallet.address}, waiting for result`);
     try {
       const result = await existingAuthPromise;
-      console.log(`[Auth State] Received auth result for ${wallet.address}:`, result ? 'SUCCESS' : 'FAILED');
+// console.log(`[Auth State] Received auth result for ${wallet.address}:`, result ? 'SUCCESS' : 'FAILED');
       return result;
     } catch (error) {
-      console.warn(`[Auth State] Failed to wait for existing auth for ${wallet.address}:`, error);
+// console.warn(`[Auth State] Failed to wait for existing auth for ${wallet.address}:`, error);
       // Continue with our own auth attempt if the existing one failed
     }
   }
 
   // If no cached token and no auth in progress, start authentication
-  console.log(`[Auth State] Starting new authentication for ${wallet.address}`);
+// console.log(`[Auth State] Starting new authentication for ${wallet.address}`);
 
   // Create and store the authentication promise
   const authPromise = lockManager.withLock(lockKey, async () => {
@@ -419,14 +419,14 @@ export async function getAccessToken(private_key: string): Promise<string | unde
     try {
       const cachedToken = redis ? await redis.get(key) : null;
       if (cachedToken) {
-        console.log(`[Auth Cache] Found cached token after acquiring lock for ${wallet.address}`);
+// console.log(`[Auth Cache] Found cached token after acquiring lock for ${wallet.address}`);
         return cachedToken;
       }
     } catch (error) {
-      console.warn(`[Auth Cache] Failed to double-check cache for ${wallet.address}:`, error);
+// console.warn(`[Auth Cache] Failed to double-check cache for ${wallet.address}:`, error);
     }
 
-    console.log(`[Auth] Starting authentication for ${wallet.address}`);
+// console.log(`[Auth] Starting authentication for ${wallet.address}`);
 
     // Enhanced retry logic with exponential backoff for 408 errors
     let retries = 0;
@@ -454,7 +454,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
         if (redis) {
           // Increase cache TTL from 5 minutes to 10 minutes
           await redis.set(key, accessToken, 'EX', 10 * 60);
-          console.log(`[Auth Cache] Successfully cached token for ${wallet.address} (TTL: 10 minutes)`);
+// console.log(`[Auth Cache] Successfully cached token for ${wallet.address} (TTL: 10 minutes)`);
         }
 
         authMetrics.successes++;
@@ -464,7 +464,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
           timeoutMetrics.successAfterRetry++;
         }
 
-        console.log(`[Auth] Successfully authenticated ${wallet.address}`);
+// console.log(`[Auth] Successfully authenticated ${wallet.address}`);
         return accessToken;
       } catch (error: any) {
         lastError = error;
@@ -490,15 +490,15 @@ export async function getAccessToken(private_key: string): Promise<string | unde
           const retryAfterTime = new Date(retryAfterTimestamp).getTime();
           const waitTime = Math.max(retryAfterTime - Date.now(), 0);
 
-          console.log(RED + `[Auth Block] Wallet ${wallet.address} is blocked by Blur until ${retryAfterTimestamp}` + RESET);
-          console.log(RED + `[Auth Block] Need to wait ${Math.ceil(waitTime / 1000)} seconds` + RESET);
+// console.log(RED + `[Auth Block] Wallet ${wallet.address} is blocked by Blur until ${retryAfterTimestamp}` + RESET);
+// console.log(RED + `[Auth Block] Need to wait ${Math.ceil(waitTime / 1000)} seconds` + RESET);
 
           // Store auth block in Redis
           if (redis) {
             const authBlockKey = `blur:auth:block:${wallet.address}`;
             const ttl = Math.ceil(waitTime / 1000) + 60; // Add 60s buffer
             await redis.set(authBlockKey, retryAfterTime.toString(), 'EX', ttl);
-            console.log(`[Auth Block] Stored block status in Redis with TTL ${ttl}s`);
+// console.log(`[Auth Block] Stored block status in Redis with TTL ${ttl}s`);
           }
 
           // Clear from retry queue and auth in progress
@@ -516,7 +516,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
           }
           // Exponential backoff: 2s, 4s, 8s, 16s, 32s
           const waitTime = Math.min(Math.pow(2, retries + 1) * 1000, 32000);
-          console.log(`Waiting ${waitTime}ms before retry due to 403 error...`);
+// console.log(`Waiting ${waitTime}ms before retry due to 403 error...`);
           await new Promise(resolve => setTimeout(resolve, waitTime));
         } else if (error.response?.status === 408) {
           // Track 408 errors for monitoring
@@ -529,7 +529,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
           const baseDelay = 1000 + (retries * 500); // 1s, 1.5s, 2s
           const jitter = Math.random() * 200;
           const waitTime = baseDelay + jitter;
-          console.log(`[408 Monitoring] Auth timeout error (attempt ${retries + 1}/${maxRetries}), waiting ${waitTime}ms before retry...`);
+// console.log(`[408 Monitoring] Auth timeout error (attempt ${retries + 1}/${maxRetries}), waiting ${waitTime}ms before retry...`);
           await new Promise(resolve => setTimeout(resolve, waitTime));
         } else if (retries < maxRetries - 1) {
           // For other errors, wait shorter time
@@ -553,7 +553,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
   try {
     // Execute the authentication
     const result = await authPromise;
-    console.log(`[Auth State] Authentication completed for ${wallet.address}`);
+// console.log(`[Auth State] Authentication completed for ${wallet.address}`);
 
     // Clear from retry queue on success
     authRetryQueue.delete(wallet.address);
@@ -569,9 +569,9 @@ export async function getAccessToken(private_key: string): Promise<string | unde
     if (retryInfo.retryCount < MAX_AUTH_RETRIES) {
       retryInfo.nextRetryTime = Date.now() + AUTH_RETRY_DELAY;
       authRetryQueue.set(wallet.address, retryInfo);
-      console.log(`[Auth Retry Queue] Added ${wallet.address} to retry queue. Retry count: ${retryInfo.retryCount}/${MAX_AUTH_RETRIES}, next retry at ${new Date(retryInfo.nextRetryTime).toISOString()}`);
+// console.log(`[Auth Retry Queue] Added ${wallet.address} to retry queue. Retry count: ${retryInfo.retryCount}/${MAX_AUTH_RETRIES}, next retry at ${new Date(retryInfo.nextRetryTime).toISOString()}`);
     } else {
-      console.log(`[Auth Retry Queue] Max retries reached for ${wallet.address}. Authentication permanently failed.`);
+// console.log(`[Auth Retry Queue] Max retries reached for ${wallet.address}. Authentication permanently failed.`);
       authRetryQueue.delete(wallet.address);
     }
 
@@ -579,7 +579,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
   } finally {
     // Always clean up the auth promise from the map
     authInProgress.delete(wallet.address);
-    console.log(`[Auth State] Cleaned up auth state for ${wallet.address}`);
+// console.log(`[Auth State] Cleaned up auth state for ${wallet.address}`);
   }
 };
 
@@ -644,7 +644,7 @@ async function formatBidOnBlur(
       return data;
     } catch (error: any) {
       if (isCancel(error)) {
-        console.log(`Request for task ${taskId} was cancelled`);
+// console.log(`Request for task ${taskId} was cancelled`);
         return null;
       }
 
@@ -657,12 +657,12 @@ async function formatBidOnBlur(
         timeoutMetrics.format408Errors++;
         timeoutMetrics.last408Error = new Date();
         timeoutMetrics.errorsByEndpoint.set('format', (timeoutMetrics.errorsByEndpoint.get('format') || 0) + 1);
-        console.log(`[408 Monitoring] Format bid timeout error for ${buildPayload.contractAddress}`);
+// console.log(`[408 Monitoring] Format bid timeout error for ${buildPayload.contractAddress}`);
       }
 
       // Handle 403 errors - refresh token and retry
       if (error.response?.status === 403 && retries < maxRetries && privateKey) {
-        console.log(`Got 403 error formatting Blur bid, refreshing token and retrying...`);
+// console.log(`Got 403 error formatting Blur bid, refreshing token and retrying...`);
 
         // Clear the cached token
         const redis = redisClient.getClient();
@@ -690,7 +690,7 @@ async function formatBidOnBlur(
         // Add to restricted collections cache
         addRestrictedCollection(buildPayload.contractAddress);
 
-        console.log(`Blur: Collection ${buildPayload.contractAddress} restricts transfers - skipping bid`);
+// console.log(`Blur: Collection ${buildPayload.contractAddress} restricts transfers - skipping bid`);
         throw new TransferRestrictedError('blur', buildPayload.contractAddress);
       }
 
@@ -741,7 +741,7 @@ async function submitBidToBlur(
 
     const [taskId] = bidCount.split(":")
     if (isTaskBlacklisted(taskId, 'blur')) {
-      console.log(`[Blur] Offer submission blocked for stopped task: ${taskId}`);
+// console.log(`[Blur] Offer submission blocked for stopped task: ${taskId}`);
       return;
     }
     const currentTask = activeTasks.get(taskId)
@@ -758,7 +758,7 @@ async function submitBidToBlur(
       
       if (!reserved) {
         const waitTime = Math.max(blurRateLimiter.getWaitTime(walletAddress), 2000); // Wait at least 2 seconds
-        console.log(`Blur rate limit: Waiting ${waitTime}ms for wallet ${walletAddress} (attempt ${retryCount + 1}/3)`);
+// console.log(`Blur rate limit: Waiting ${waitTime}ms for wallet ${walletAddress} (attempt ${retryCount + 1}/3)`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
         retryCount++;
       }
@@ -798,7 +798,7 @@ async function submitBidToBlur(
         } catch (submitError: any) {
           // Handle 403 errors
           if (submitError.response?.status === 403 && submitRetries < maxSubmitRetries) {
-            console.log(`Got 403 error submitting Blur bid (attempt ${submitRetries + 1}/${maxSubmitRetries + 1})`);
+// console.log(`Got 403 error submitting Blur bid (attempt ${submitRetries + 1}/${maxSubmitRetries + 1})`);
 
             // Wait before retry with exponential backoff
             const waitTime = Math.pow(2, submitRetries) * 1000;
@@ -836,7 +836,7 @@ async function submitBidToBlur(
 
       if (offers.success) {
         const successMessage = traits ? `🎉 TRAIT OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉 AMOUNT: ${offerPriceEth} BETH 🎉 TRAIT: ${traits}` : `🎉 OFFER POSTED TO BLUR SUCCESSFULLY FOR: ${slug.toUpperCase()} 🎉 AMOUNT: ${offerPriceEth} BETH 🎉`
-        console.log(GOLD + successMessage + RESET);
+// console.log(GOLD + successMessage + RESET);
 
         // Record successful submission for adaptive rate limiting
         blurRateLimiter.recordError(walletAddress, false);
@@ -888,11 +888,11 @@ async function submitBidToBlur(
         timeoutMetrics.submit408Errors++;
         timeoutMetrics.last408Error = new Date();
         timeoutMetrics.errorsByEndpoint.set('submit', (timeoutMetrics.errorsByEndpoint.get('submit') || 0) + 1);
-        console.log(`[408 Monitoring] Submit bid timeout error for ${slug}`);
+// console.log(`[408 Monitoring] Submit bid timeout error for ${slug}`);
       }
 
       if (isCancel(error)) {
-        console.log(`Request for task ${taskId} was cancelled`);
+// console.log(`Request for task ${taskId} was cancelled`);
         return;
       }
 
@@ -924,15 +924,15 @@ async function submitBidToBlur(
         blurRateLimiter.markRateLimited(walletAddress, retryAfter ? parseInt(retryAfter) : reset);
 
         // Enhanced rate limit logging
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-        console.log(RED + `[Blur API Rate Limit Detected]` + RESET);
-        console.log(RED + `Wallet: ${walletAddress}` + RESET);
-        console.log(RED + `Remaining Requests: ${remaining}/${limit}` + RESET);
-        console.log(RED + `Reset In: ${reset} seconds` + RESET);
-        console.log(RED + `Retry After: ${retryAfter || 'Not specified'}` + RESET);
-        console.log(RED + `Collection: ${slug}` + RESET);
-        console.log(RED + `Response: ${error.response?.data?.message || 'Rate limit exceeded'}` + RESET);
-        console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+// console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+// console.log(RED + `[Blur API Rate Limit Detected]` + RESET);
+// console.log(RED + `Wallet: ${walletAddress}` + RESET);
+// console.log(RED + `Remaining Requests: ${remaining}/${limit}` + RESET);
+// console.log(RED + `Reset In: ${reset} seconds` + RESET);
+// console.log(RED + `Retry After: ${retryAfter || 'Not specified'}` + RESET);
+// console.log(RED + `Collection: ${slug}` + RESET);
+// console.log(RED + `Response: ${error.response?.data?.message || 'Rate limit exceeded'}` + RESET);
+// console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
         // Store wallet pause info for processBlurJob to check
         const pauseDuration = retryAfter ? parseInt(retryAfter) * 1000 : 60000; // Default to 60 seconds if no retry-after
@@ -943,13 +943,13 @@ async function submitBidToBlur(
             const pauseUntil = Date.now() + pauseDuration;
             await redis.set(pauseKey, pauseUntil.toString(), 'PX', pauseDuration);
 
-            console.log(GOLD + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-            console.log(GOLD + `[Blur Rate Limit] Setting Wallet Pause` + RESET);
-            console.log(GOLD + `Wallet: ${walletAddress}` + RESET);
-            console.log(GOLD + `Pause Duration: ${pauseDuration}ms (${Math.round(pauseDuration / 1000)}s)` + RESET);
-            console.log(GOLD + `Resume At: ${new Date(pauseUntil).toLocaleTimeString()}` + RESET);
-            console.log(GOLD + `Redis Key: ${pauseKey}` + RESET);
-            console.log(GOLD + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+// console.log(GOLD + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+// console.log(GOLD + `[Blur Rate Limit] Setting Wallet Pause` + RESET);
+// console.log(GOLD + `Wallet: ${walletAddress}` + RESET);
+// console.log(GOLD + `Pause Duration: ${pauseDuration}ms (${Math.round(pauseDuration / 1000)}s)` + RESET);
+// console.log(GOLD + `Resume At: ${new Date(pauseUntil).toLocaleTimeString()}` + RESET);
+// console.log(GOLD + `Redis Key: ${pauseKey}` + RESET);
+// console.log(GOLD + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
           }
         });
       }
@@ -1006,14 +1006,14 @@ export async function cancelBlurBid(data: BlurCancelPayload) {
     }))
     decrementBidCount('blur', taskId);
     if (cancelResponse) {
-      console.log(JSON.stringify(cancelResponse));
+// console.log(JSON.stringify(cancelResponse));
     }
     
     // Track cancellation completion
     cancellationTracker.recordCompletion(taskId, 1, 'blur');
     
     // Update cancellation percentage using centralized function
-    await updateTaskCancellationPercentage(taskId);
+    await updateTaskCancellationPercentage(taskId, undefined, 'blur');
   } catch (error: any) {
     if (error.response?.data?.message?.message !== 'No bids found') {
       const errorDetails = error?.response?.data || error?.response || error?.code || error.message;
@@ -1163,7 +1163,7 @@ export async function fetchBlurCollectionStats(slug: string) {
       }
       return floor_price || 0;
     } catch (error: any) {
-      console.warn(`Failed to fetch Blur collection stats for ${slug}: ${error.response?.data?.message || error.message}`);
+// console.warn(`Failed to fetch Blur collection stats for ${slug}: ${error.response?.data?.message || error.message}`);
       await logger.logMarketplaceError('Failed to fetch Blur collection stats', {
         marketplace: 'blur',
         marketplaceSubCategory: MarketplaceSubCategory.COLLECTION,

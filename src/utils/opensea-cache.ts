@@ -61,7 +61,7 @@ export async function getCachedOrFetch<T>(
       const value = parseNumber ? String(result) : JSON.stringify(result);
       await redis.setex(cacheKey, ttl, value);
     } catch (error) {
-      console.log(error);
+      // console.log(error);
     }
   }
 

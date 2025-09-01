@@ -27,13 +27,13 @@ export function convertDurationToSeconds(
       seconds = duration.value * 60 * 60 * 24;
       break;
     default:
-      console.log(`[${marketplaceName}] Unrecognized unit '${duration.unit}', defaulting to ${minimumSeconds || 900} seconds`);
+      // console.log(`[${marketplaceName}] Unrecognized unit '${duration.unit}', defaulting to ${minimumSeconds || 900} seconds`);
       seconds = minimumSeconds || 900; // default to minimum or 15 minutes
   }
   
   // Enforce minimum duration if specified
   if (minimumSeconds && seconds < minimumSeconds) {
-    console.log(`[${marketplaceName}] Duration ${seconds}s is below minimum, using ${minimumSeconds}s (${minimumSeconds / 60} minutes)`);
+    // console.log(`[${marketplaceName}] Duration ${seconds}s is below minimum, using ${minimumSeconds}s (${minimumSeconds / 60} minutes)`);
     return minimumSeconds;
   }
   

@@ -73,7 +73,7 @@ async function relistOnExpiredMarketplaces(listing: IListing): Promise<void> {
  */
 export async function checkAndRelistExpired(): Promise<void> {
   try {
-    console.log('Checking for expired listings...');
+    // console.log('Checking for expired listings...');
     
     // Find all active listings
     const activeListings = await Listing.find({ 
@@ -81,7 +81,7 @@ export async function checkAndRelistExpired(): Promise<void> {
       listed: true 
     });
     
-    console.log(`Found ${activeListings.length} active listings to check`);
+    // console.log(`Found ${activeListings.length} active listings to check`);
     
     let expiredCount = 0;
     
@@ -95,7 +95,7 @@ export async function checkAndRelistExpired(): Promise<void> {
       }
     }
     
-    console.log(`Processed ${expiredCount} expired listings`);
+    // console.log(`Processed ${expiredCount} expired listings`);
 
   } catch (error) {
     await logger.logMarketplaceError('Failed to check expired listings', {
@@ -141,7 +141,7 @@ export async function updateListingExpiration(
  * Runs every 5 minutes by default
  */
 export function initializeExpirationMonitor(intervalMinutes: number = 5): NodeJS.Timeout {
-  console.log(`Starting expiration monitor (checking every ${intervalMinutes} minutes)`);
+  // console.log(`Starting expiration monitor (checking every ${intervalMinutes} minutes)`);
   
   // Run immediately on startup
   checkAndRelistExpired().catch(console.error);
@@ -159,5 +159,5 @@ export function initializeExpirationMonitor(intervalMinutes: number = 5): NodeJS
  */
 export function stopExpirationMonitor(interval: NodeJS.Timeout): void {
   clearInterval(interval);
-  console.log('Expiration monitor stopped');
+  // console.log('Expiration monitor stopped');
 }

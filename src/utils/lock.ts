@@ -113,7 +113,7 @@ export class DistributedLockManager {
         error: e as Error,
         errorMessage: e instanceof Error ? e.message : String(e)
       });
-      console.log('error in check ExistLock', e)
+      // console.log('error in check ExistLock', e)
       return false;
     }
   }

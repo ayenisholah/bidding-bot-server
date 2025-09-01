@@ -55,7 +55,7 @@ export class TaskCircuitBreaker {
       record.suspended = true;
       record.suspendedUntil = now + this.suspensionDurationMs;
       
-      console.log(`[Circuit Breaker] Suspending ${marketplace} for task ${taskId} (${collection}) due to ${record.consecutiveFailures} consecutive timeouts`);
+      // console.log(`[Circuit Breaker] Suspending ${marketplace} for task ${taskId} (${collection}) due to ${record.consecutiveFailures} consecutive timeouts`);
       
       logger.logGeneralError('Task suspended due to repeated timeouts', {
         taskId,
@@ -98,7 +98,7 @@ export class TaskCircuitBreaker {
       record.consecutiveFailures = 0;
       delete record.suspendedUntil;
       
-      console.log(`[Circuit Breaker] Resuming ${marketplace} for task ${taskId} after suspension period`);
+      // console.log(`[Circuit Breaker] Resuming ${marketplace} for task ${taskId} after suspension period`);
       return false;
     }
 

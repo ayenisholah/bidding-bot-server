@@ -54,7 +54,7 @@ async function connectToMongoDB(): Promise<void> {
 
   try {
     await mongoose.connect(MONGODB_URI);
-    console.log(GREEN + '[Recovery] Connected to MongoDB' + RESET);
+    // console.log(GREEN + '[Recovery] Connected to MongoDB' + RESET);
   } catch (error) {
     console.error(RED + '[Recovery] Failed to connect to MongoDB:' + RESET, error);
     throw error;
@@ -117,7 +117,7 @@ async function updateTaskStatusInRedis(taskId: string, updates: Partial<TaskStat
     const updatedData = { ...currentData, ...updates };
 
     await redis.hset(TASK_STATUS_KEY, taskId, JSON.stringify(updatedData));
-    console.log(GREEN + `[Recovery] Updated task status for ${taskId}` + RESET);
+    // console.log(GREEN + `[Recovery] Updated task status for ${taskId}` + RESET);
   } catch (error) {
     console.error(RED + `[Recovery] Failed to update task status for ${taskId}:` + RESET, error);
   }
@@ -138,11 +138,11 @@ function identifyStuckTasks(taskStatus: { [taskId: string]: TaskStatus }): strin
       const stuckMinutes = stuckTime / (1000 * 60);
 
       if (stuckMinutes > 5) {
-        console.log(YELLOW + `[Recovery] Found stuck task: ${taskId}` + RESET);
-        console.log(YELLOW + `  Status: ${status.status}` + RESET);
-        console.log(YELLOW + `  Progress: ${status.runningPercentage.toFixed(1)}%` + RESET);
-        console.log(YELLOW + `  Stuck for: ${stuckMinutes.toFixed(1)} minutes` + RESET);
-        console.log(YELLOW + `  Jobs: ${status.completedJobs}/${status.totalJobs}` + RESET);
+        // console.log(YELLOW + `[Recovery] Found stuck task: ${taskId}` + RESET);
+        // console.log(YELLOW + `  Status: ${status.status}` + RESET);
+        // console.log(YELLOW + `  Progress: ${status.runningPercentage.toFixed(1)}%` + RESET);
+        // console.log(YELLOW + `  Stuck for: ${stuckMinutes.toFixed(1)} minutes` + RESET);
+        // console.log(YELLOW + `  Jobs: ${status.completedJobs}/${status.totalJobs}` + RESET);
         stuckTasks.push(taskId);
       }
     }
@@ -156,7 +156,7 @@ function analyzeStuckTask(
   taskStatus: TaskStatus,
   parentJobs: Map<string, ParentJob>
 ): void {
-  console.log(BLUE + `\n[Recovery Analysis] Task ${taskId}:` + RESET);
+  // console.log(BLUE + `\n[Recovery Analysis] Task ${taskId}:` + RESET);
   console.log(BLUE + `  Status: ${taskStatus.status}` + RESET);
   console.log(BLUE + `  Progress: ${taskStatus.runningPercentage.toFixed(1)}%` + RESET);
   console.log(BLUE + `  Jobs: ${taskStatus.completedJobs}/${taskStatus.totalJobs}` + RESET);
@@ -169,32 +169,32 @@ function analyzeStuckTask(
     }
   }
 
-  console.log(BLUE + `  Related parent jobs: ${relatedParentJobs.length}` + RESET);
+  // console.log(BLUE + `  Related parent jobs: ${relatedParentJobs.length}` + RESET);
 
   let totalExpected = 0;
   let totalCompleted = 0;
 
   for (const [parentJobId, parentJob] of relatedParentJobs) {
-    console.log(BLUE + `    ${parentJobId}: ${parentJob.completedJobs}/${parentJob.totalJobs}` + RESET);
+    // console.log(BLUE + `    ${parentJobId}: ${parentJob.completedJobs}/${parentJob.totalJobs}` + RESET);
     totalExpected += parentJob.totalJobs || 0;
     totalCompleted += parentJob.completedJobs || 0;
   }
 
   if (totalExpected > 0) {
     const actualPercentage = (totalCompleted / totalExpected) * 100;
-    console.log(BLUE + `  Actual progress: ${totalCompleted}/${totalExpected} (${actualPercentage.toFixed(1)}%)` + RESET);
+    // console.log(BLUE + `  Actual progress: ${totalCompleted}/${totalExpected} (${actualPercentage.toFixed(1)}%)` + RESET);
 
     if (actualPercentage >= 100) {
-      console.log(GREEN + `  Task should be completed - parent jobs show 100% completion` + RESET);
+      // console.log(GREEN + `  Task should be completed - parent jobs show 100% completion` + RESET);
     } else if (actualPercentage >= 95) {
-      console.log(YELLOW + `  Task near completion - likely stuck on final jobs` + RESET);
+      // console.log(YELLOW + `  Task near completion - likely stuck on final jobs` + RESET);
     }
   }
 }
 
 async function fixStuckTask(taskId: string): Promise<boolean> {
   try {
-    console.log(GREEN + `\n[Recovery] Fixing stuck task: ${taskId}` + RESET);
+    // console.log(GREEN + `\n[Recovery] Fixing stuck task: ${taskId}` + RESET);
 
     // Force completion by setting percentage to 100% and status to COMPLETED
     await updateTaskStatusInRedis(taskId, {
@@ -210,7 +210,7 @@ async function fixStuckTask(taskId: string): Promise<boolean> {
         cancellationPercentage: 0,
         waitingTime: 0
       });
-      console.log(GREEN + `[Recovery] Task ${taskId} reset to SCHEDULED status` + RESET);
+      // console.log(GREEN + `[Recovery] Task ${taskId} reset to SCHEDULED status` + RESET);
     }, 2000);
 
     return true;
@@ -221,7 +221,7 @@ async function fixStuckTask(taskId: string): Promise<boolean> {
 }
 
 async function main(): Promise<void> {
-  console.log(BLUE + '[Recovery] Starting stuck task recovery script' + RESET);
+  // console.log(BLUE + '[Recovery] Starting stuck task recovery script' + RESET);
 
   try {
     // Connect to databases
@@ -229,22 +229,22 @@ async function main(): Promise<void> {
     await createBullMQConnection();
 
     // Get current state from Redis
-    console.log(BLUE + '[Recovery] Loading current task state from Redis...' + RESET);
+    // console.log(BLUE + '[Recovery] Loading current task state from Redis...' + RESET);
     const taskStatus = await getTaskStatusFromRedis();
     const parentJobs = await getParentJobsFromRedis();
 
     console.log(BLUE + `[Recovery] Found ${Object.keys(taskStatus).length} tasks in Redis` + RESET);
-    console.log(BLUE + `[Recovery] Found ${parentJobs.size} parent jobs in Redis` + RESET);
+    // console.log(BLUE + `[Recovery] Found ${parentJobs.size} parent jobs in Redis` + RESET);
 
     // Identify stuck tasks
     const stuckTasks = identifyStuckTasks(taskStatus);
 
     if (stuckTasks.length === 0) {
-      console.log(GREEN + '[Recovery] No stuck tasks found - all tasks appear healthy' + RESET);
+      // console.log(GREEN + '[Recovery] No stuck tasks found - all tasks appear healthy' + RESET);
       return;
     }
 
-    console.log(YELLOW + `[Recovery] Found ${stuckTasks.length} stuck tasks` + RESET);
+    // console.log(YELLOW + `[Recovery] Found ${stuckTasks.length} stuck tasks` + RESET);
 
     // Analyze each stuck task
     for (const taskId of stuckTasks) {
@@ -252,15 +252,15 @@ async function main(): Promise<void> {
     }
 
     // Ask for user confirmation before fixing (in production, you might want to auto-fix)
-    console.log(YELLOW + '\n[Recovery] The above tasks will be force-completed and reset to SCHEDULED.' + RESET);
-    console.log(YELLOW + '[Recovery] This will allow them to resume normal operation.' + RESET);
+    // console.log(YELLOW + '\n[Recovery] The above tasks will be force-completed and reset to SCHEDULED.' + RESET);
+    // console.log(YELLOW + '[Recovery] This will allow them to resume normal operation.' + RESET);
 
     // For the specific stuck tasks mentioned by the user, auto-fix them
     const targetTasks = ['68985da8490751bf0e9fcd37', '68985da8490751bf0e9fcd3c'];
     const tasksToFix = stuckTasks.filter(taskId => targetTasks.includes(taskId));
 
     if (tasksToFix.length > 0) {
-      console.log(GREEN + `\n[Recovery] Auto-fixing known stuck tasks: ${tasksToFix.join(', ')}` + RESET);
+      // console.log(GREEN + `\n[Recovery] Auto-fixing known stuck tasks: ${tasksToFix.join(', ')}` + RESET);
 
       let fixedCount = 0;
       for (const taskId of tasksToFix) {
@@ -270,14 +270,14 @@ async function main(): Promise<void> {
         }
       }
 
-      console.log(GREEN + `[Recovery] Successfully fixed ${fixedCount}/${tasksToFix.length} stuck tasks` + RESET);
+      // console.log(GREEN + `[Recovery] Successfully fixed ${fixedCount}/${tasksToFix.length} stuck tasks` + RESET);
     }
 
     // Handle remaining stuck tasks
     const otherStuckTasks = stuckTasks.filter(taskId => !targetTasks.includes(taskId));
     if (otherStuckTasks.length > 0) {
-      console.log(YELLOW + `\n[Recovery] Other stuck tasks found: ${otherStuckTasks.join(', ')}` + RESET);
-      console.log(YELLOW + '[Recovery] These can be fixed manually by running the fix for specific task IDs' + RESET);
+      // console.log(YELLOW + `\n[Recovery] Other stuck tasks found: ${otherStuckTasks.join(', ')}` + RESET);
+      // console.log(YELLOW + '[Recovery] These can be fixed manually by running the fix for specific task IDs' + RESET);
     }
 
   } catch (error) {
@@ -287,7 +287,7 @@ async function main(): Promise<void> {
     // Close connections
     await mongoose.connection.close();
     // Redis client is managed by the RedisClient class, no need to manually disconnect
-    console.log(BLUE + '[Recovery] Recovery script completed' + RESET);
+    // console.log(BLUE + '[Recovery] Recovery script completed' + RESET);
   }
 }
 

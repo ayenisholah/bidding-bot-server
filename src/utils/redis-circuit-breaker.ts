@@ -40,7 +40,7 @@ export class CircuitBreaker {
     if (this.state === CircuitState.OPEN) {
       const now = Date.now();
       if (now - this.lastFailureTime >= this.options.timeout) {
-        console.log(`[CircuitBreaker ${this.name}] Transitioning from OPEN to HALF_OPEN`);
+        // console.log(`[CircuitBreaker ${this.name}] Transitioning from OPEN to HALF_OPEN`);
         this.state = CircuitState.HALF_OPEN;
         this.halfOpenTestInProgress = false;
       } else {
@@ -87,7 +87,7 @@ export class CircuitBreaker {
 
     if (this.state === CircuitState.HALF_OPEN) {
       this.successCount++;
-      console.log(`[CircuitBreaker ${this.name}] Success in HALF_OPEN state (${this.successCount}/${this.options.successThreshold})`);
+      // console.log(`[CircuitBreaker ${this.name}] Success in HALF_OPEN state (${this.successCount}/${this.options.successThreshold})`);
       
       if (this.successCount >= this.options.successThreshold) {
         this.close();
@@ -168,7 +168,7 @@ export class CircuitBreaker {
     this.requestCount = 0;
     this.lastResetTime = Date.now();
     
-    console.log(`[CircuitBreaker ${this.name}] Circuit CLOSED - service recovered`);
+    // console.log(`[CircuitBreaker ${this.name}] Circuit CLOSED - service recovered`);
     
     logger.logInfo(ErrorCategory.DATABASE, `Circuit breaker ${this.name} closed`, {
       recoveryTime: Date.now() - this.lastFailureTime
@@ -236,7 +236,7 @@ export async function executeWithCircuitBreaker<T>(
     console.warn(`[CircuitBreaker] Operation failed with error:`, error);
     
     if (fallback) {
-      console.log(`[CircuitBreaker] Attempting fallback for error: ${error instanceof Error ? error.message : String(error)}`);
+      // console.log(`[CircuitBreaker] Attempting fallback for error: ${error instanceof Error ? error.message : String(error)}`);
       try {
         return await fallback();
       } catch (fallbackError) {

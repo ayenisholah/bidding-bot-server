@@ -14,16 +14,16 @@ async function readBidLevelsLogs(dateStr?: string) {
     const logFile = path.join(logsDir, `bidLevels-${targetDate}.log`);
     
     if (!fs.existsSync(logFile)) {
-      console.log(`No log file found for date: ${targetDate}`);
-      console.log(`Available log files:`);
+      // console.log(`No log file found for date: ${targetDate}`);
+      // console.log(`Available log files:`);
       
       const files = fs.readdirSync(logsDir).filter(f => f.startsWith('bidLevels-'));
       files.forEach(f => console.log(`  - ${f}`));
       return;
     }
     
-    console.log(`Reading bidLevels log for ${targetDate}...`);
-    console.log('─'.repeat(80));
+    // console.log(`Reading bidLevels log for ${targetDate}...`);
+    // console.log('─'.repeat(80));
     
     const fileStream = fs.createReadStream(logFile);
     const rl = readline.createInterface({
@@ -36,20 +36,20 @@ async function readBidLevelsLogs(dateStr?: string) {
       count++;
       try {
         const entry = JSON.parse(line);
-        console.log(`\n[${count}] ${entry.timestamp}`);
-        console.log('Contract:', entry.message['1']?.contractAddress);
-        console.log('Price:', entry.message['1']?.updates?.[0]?.price);
-        console.log('Bidder Count:', entry.message['1']?.updates?.[0]?.bidderCount);
-        console.log('Single Bidder:', entry.message['1']?.updates?.[0]?.singleBidder);
-        console.log('Event Type:', entry.message.eventType);
-        console.log('Full Message:', JSON.stringify(entry.message, null, 2));
+        // console.log(`\n[${count}] ${entry.timestamp}`);
+        // console.log('Contract:', entry.message['1']?.contractAddress);
+        // console.log('Price:', entry.message['1']?.updates?.[0]?.price);
+        // console.log('Bidder Count:', entry.message['1']?.updates?.[0]?.bidderCount);
+        // console.log('Single Bidder:', entry.message['1']?.updates?.[0]?.singleBidder);
+        // console.log('Event Type:', entry.message.eventType);
+        // console.log('Full Message:', JSON.stringify(entry.message, null, 2));
       } catch (err) {
         console.error(`Error parsing line ${count}:`, err);
       }
     }
     
-    console.log('\n' + '─'.repeat(80));
-    console.log(`Total entries: ${count}`);
+    // console.log('\n' + '─'.repeat(80));
+    // console.log(`Total entries: ${count}`);
     
   } catch (error) {
     console.error('Error reading logs:', error);
@@ -61,8 +61,8 @@ function watchBidLevelsLogs() {
   const dateStr = new Date().toISOString().split('T')[0];
   const logFile = path.join(logsDir, `bidLevels-${dateStr}.log`);
   
-  console.log(`Watching bidLevels log file: ${logFile}`);
-  console.log('Press Ctrl+C to stop\n');
+  // console.log(`Watching bidLevels log file: ${logFile}`);
+  // console.log('Press Ctrl+C to stop\n');
   
   // Create file if it doesn't exist
   if (!fs.existsSync(logFile)) {
@@ -84,11 +84,11 @@ function watchBidLevelsLogs() {
         lines.forEach(line => {
           try {
             const entry = JSON.parse(line);
-            console.log(`[${new Date().toLocaleTimeString()}] New bidLevels message:`);
-            console.log('  Contract:', entry.message['1']?.contractAddress);
-            console.log('  Price:', entry.message['1']?.updates?.[0]?.price);
-            console.log('  Event:', entry.message.eventType);
-            console.log('─'.repeat(60));
+            // console.log(`[${new Date().toLocaleTimeString()}] New bidLevels message:`);
+            // console.log('  Contract:', entry.message['1']?.contractAddress);
+            // console.log('  Price:', entry.message['1']?.updates?.[0]?.price);
+            // console.log('  Event:', entry.message.eventType);
+            // console.log('─'.repeat(60));
           } catch (err) {
             // Ignore parse errors
           }
@@ -110,11 +110,11 @@ if (command === 'watch') {
 } else if (command === 'read') {
   readBidLevelsLogs(date);
 } else {
-  console.log('Usage:');
-  console.log('  ts-node read-bidlevels-logs.ts read [date]     # Read logs for specific date (YYYY-MM-DD)');
-  console.log('  ts-node read-bidlevels-logs.ts watch           # Watch logs in real-time');
-  console.log('\nExamples:');
-  console.log('  ts-node read-bidlevels-logs.ts read            # Read today\'s logs');
-  console.log('  ts-node read-bidlevels-logs.ts read 2024-01-15 # Read logs for Jan 15, 2024');
-  console.log('  ts-node read-bidlevels-logs.ts watch           # Watch live logs');
+  // console.log('Usage:');
+  // console.log('  ts-node read-bidlevels-logs.ts read [date]     # Read logs for specific date (YYYY-MM-DD)');
+  // console.log('  ts-node read-bidlevels-logs.ts watch           # Watch logs in real-time');
+  // console.log('\nExamples:');
+  // console.log('  ts-node read-bidlevels-logs.ts read            # Read today\'s logs');
+  // console.log('  ts-node read-bidlevels-logs.ts read 2024-01-15 # Read logs for Jan 15, 2024');
+  // console.log('  ts-node read-bidlevels-logs.ts watch           # Watch live logs');
 }

@@ -236,7 +236,7 @@ export class QueueEventHandlerManager {
   }
 
   private async handleAllMarketplacesComplete(taskId: string, task: ITask): Promise<void> {
-    console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
+    // console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
 
     const wallet = await Wallet.findById(task.walletId);
     const WALLET_PRIVATE_KEY = decryptPrivateKey(wallet?.encryptedPrivateKey as string) as string;
@@ -277,7 +277,7 @@ export class QueueEventHandlerManager {
     const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
     const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
-    console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
+    // console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
 
     // Transition to scheduled state
     await this.stateManager.transitionState(taskId, 'SCHEDULED', (state) => {

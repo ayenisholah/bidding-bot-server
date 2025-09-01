@@ -43,7 +43,7 @@ export class BlurCompletionTracker {
     // Increment bid count for current window
     data.windowBidCount++;
     
-    console.log(`[Blur Completion] Wallet ${wallet} - Window: ${data.windowBidCount}/${this.MAX_BIDS_PER_WINDOW}, Window ends in ${this.WINDOW_SIZE_MS - (now - data.windowStartTime)}ms`);
+    // console.log(`[Blur Completion] Wallet ${wallet} - Window: ${data.windowBidCount}/${this.MAX_BIDS_PER_WINDOW}, Window ends in ${this.WINDOW_SIZE_MS - (now - data.windowStartTime)}ms`);
   }
 
   /**
@@ -67,7 +67,7 @@ export class BlurCompletionTracker {
     if (data.windowBidCount >= this.MAX_BIDS_PER_WINDOW) {
       // Calculate remaining time until window resets
       const remainingMs = this.WINDOW_SIZE_MS - (now - data.windowStartTime);
-      console.log(`[Blur Completion] Wallet ${wallet} hit limit (${data.windowBidCount}/${this.MAX_BIDS_PER_WINDOW}) - waiting ${remainingMs}ms for window reset`);
+      // console.log(`[Blur Completion] Wallet ${wallet} hit limit (${data.windowBidCount}/${this.MAX_BIDS_PER_WINDOW}) - waiting ${remainingMs}ms for window reset`);
       return remainingMs;
     }
     
@@ -133,10 +133,10 @@ export class BlurCompletionTracker {
   reset(walletAddress?: string): void {
     if (walletAddress) {
       this.completions.delete(walletAddress.toLowerCase());
-      console.log(`[Blur Completion] Reset tracking for wallet ${walletAddress}`);
+      // console.log(`[Blur Completion] Reset tracking for wallet ${walletAddress}`);
     } else {
       this.completions.clear();
-      console.log('[Blur Completion] Reset all completion tracking');
+      // console.log('[Blur Completion] Reset all completion tracking');
     }
   }
 
@@ -166,7 +166,7 @@ export class BlurCompletionTracker {
     }
     
     if (cleaned > 0) {
-      console.log(`[Blur Completion] Cleaned up ${cleaned} inactive wallets`);
+      // console.log(`[Blur Completion] Cleaned up ${cleaned} inactive wallets`);
     }
   }
 

@@ -27,7 +27,7 @@ setInterval(() => {
   const previousSize = processedMessageIds.size;
   processedMessageIds.clear();
   if (previousSize > 0) {
-    console.log(CYAN + `[PRICE MONITOR - Cleanup] Cleared ${previousSize} processed message IDs` + RESET);
+    // console.log(CYAN + `[PRICE MONITOR - Cleanup] Cleared ${previousSize} processed message IDs` + RESET);
     logger.logInfo(ErrorCategory.GENERAL, 'Price monitor message ID cleanup', {
       operation: 'cleanup_message_ids',
       clearedCount: previousSize,
@@ -39,7 +39,7 @@ setInterval(() => {
 // Log statistics every minute for debugging
 setInterval(() => {
   if (processedMessageIds.size > 0) {
-    console.log(BLUE + `[PRICE MONITOR - Stats] Processed messages: ${processedMessageIds.size}` + RESET);
+    // console.log(BLUE + `[PRICE MONITOR - Stats] Processed messages: ${processedMessageIds.size}` + RESET);
   }
 }, 60 * 1000);
 
@@ -77,16 +77,16 @@ async function getRealTimeListingPrice(listing: IListing): Promise<number | null
     });
 
     if (!ourListing) {
-      console.log(YELLOW + `[PRICE MONITOR - Real-time] No active listing found for token ${listing.tokenId}` + RESET);
+      // console.log(YELLOW + `[PRICE MONITOR - Real-time] No active listing found for token ${listing.tokenId}` + RESET);
       return null;
     }
 
     const price = parseFloat(ourListing.price.current.value) / Math.pow(10, ourListing.price.current.decimals);
     
-    console.log(CYAN + `[PRICE MONITOR - Real-time] Token ${listing.tokenId} current price: ${price} ETH` + RESET);
+    // console.log(CYAN + `[PRICE MONITOR - Real-time] Token ${listing.tokenId} current price: ${price} ETH` + RESET);
     return price;
   } catch (error) {
-    console.log(YELLOW + `[PRICE MONITOR - Real-time] Failed to get price for token ${listing.tokenId}: ${error}` + RESET);
+    // console.log(YELLOW + `[PRICE MONITOR - Real-time] Failed to get price for token ${listing.tokenId}: ${error}` + RESET);
     return null;
   }
 }
@@ -113,10 +113,10 @@ export async function handleListingPriceUpdate(message: any): Promise<void> {
         return;
       }
 
-      console.log(marketplaceColor + `[PRICE MONITOR - ${marketplace.toUpperCase()}] Incoming listing for ${contractAddress} #${tokenId} - ${price} ETH from ${seller}` + colors.reset);
+      // console.log(marketplaceColor + `[PRICE MONITOR - ${marketplace.toUpperCase()}] Incoming listing for ${contractAddress} #${tokenId} - ${price} ETH from ${seller}` + colors.reset);
 
       if (!contractAddress || !tokenId || !price || !marketplace) {
-        console.log(YELLOW + `[PRICE MONITOR - Warning] Incomplete message data - skipping` + RESET);
+        // console.log(YELLOW + `[PRICE MONITOR - Warning] Incomplete message data - skipping` + RESET);
         logger.logWarning(ErrorCategory.WEBSOCKET, 'Incomplete price monitor message data', {
           contractAddress,
           tokenId,
@@ -170,7 +170,7 @@ async function processListingUpdate(
 ): Promise<void> {
   const { contractAddress, tokenId, marketplace, price, seller } = data;
   
-  console.log(CYAN + `[PRICE MONITOR - Process] Processing listing update for ${contractAddress}:${tokenId}` + RESET);
+  // console.log(CYAN + `[PRICE MONITOR - Process] Processing listing update for ${contractAddress}:${tokenId}` + RESET);
   
   try {
     // Find all active listings for this CONTRACT (not just token) with instant price matching enabled
@@ -181,7 +181,7 @@ async function processListingUpdate(
       instantPriceMatching: true,
     });
 
-    console.log(BLUE + `[PRICE MONITOR - Query] Found ${activeListings.length} active instant price matching listings` + RESET);
+    // console.log(BLUE + `[PRICE MONITOR - Query] Found ${activeListings.length} active instant price matching listings` + RESET);
 
     if (activeListings.length > 0) {
       logger.logInfo(ErrorCategory.GENERAL, 'Processing instant price matching listings', {
@@ -199,7 +199,7 @@ async function processListingUpdate(
     for (const listing of activeListings) {
       // ALWAYS skip listings from our own wallet (prevent self-competition)
       if (seller && seller.toLowerCase() === listing.wallet.toLowerCase()) {
-        console.log(YELLOW + `[PRICE MONITOR - Skip] Skipping same-wallet listing: ${listing.wallet} token ${listing.tokenId} ignoring ${seller} token ${tokenId}` + RESET);
+        // console.log(YELLOW + `[PRICE MONITOR - Skip] Skipping same-wallet listing: ${listing.wallet} token ${listing.tokenId} ignoring ${seller} token ${tokenId}` + RESET);
         continue;
       }
 
@@ -207,15 +207,15 @@ async function processListingUpdate(
       if ((listing.dynamicPricingBasis === 'HIGHEST_TRAIT_FLOOR' || listing.dynamicPricingBasis === 'SPECIFIC_TRAIT') 
           && listing.selectedTrait?.trait_type && listing.selectedTrait?.value !== undefined) {
         
-        console.log(BLUE + `[PRICE MONITOR - Trait Config] Listing ${listing.tokenId} is configured for trait ${listing.selectedTrait.trait_type}:${listing.selectedTrait.value}` + RESET);
+        // console.log(BLUE + `[PRICE MONITOR - Trait Config] Listing ${listing.tokenId} is configured for trait ${listing.selectedTrait.trait_type}:${listing.selectedTrait.value}` + RESET);
         
         // First check if our own listing token has the configured trait
         const ourTokenHasTrait = await tokenHasTrait(contractAddress, listing.tokenId, listing.selectedTrait.trait_type, listing.selectedTrait.value);
         
         if (!ourTokenHasTrait) {
           // Our token doesn't have the configured trait - log warning and compete with all tokens
-          console.log(YELLOW + `[PRICE MONITOR - Warning] Listing token ${listing.tokenId} doesn't have configured trait ${listing.selectedTrait.trait_type}:${listing.selectedTrait.value}` + RESET);
-          console.log(YELLOW + `[PRICE MONITOR - Warning] Trait filtering disabled - will compete with all tokens` + RESET);
+          // console.log(YELLOW + `[PRICE MONITOR - Warning] Listing token ${listing.tokenId} doesn't have configured trait ${listing.selectedTrait.trait_type}:${listing.selectedTrait.value}` + RESET);
+          // console.log(YELLOW + `[PRICE MONITOR - Warning] Trait filtering disabled - will compete with all tokens` + RESET);
           
           logger.logWarning(ErrorCategory.BUSINESS_LOGIC, 'Listing configured for trait it does not possess', {
             listingId: listing._id.toString(),
@@ -228,22 +228,22 @@ async function processListingUpdate(
           // Continue without trait filtering
         } else {
           // Our token has the trait - now check if competitor has it too
-          console.log(GREEN + `[PRICE MONITOR - Trait Confirmed] Listing token ${listing.tokenId} has the configured trait` + RESET);
-          console.log(BLUE + `[PRICE MONITOR - Trait Check] Checking if competitor token ${tokenId} has trait ${listing.selectedTrait.trait_type}:${listing.selectedTrait.value}` + RESET);
+          // console.log(GREEN + `[PRICE MONITOR - Trait Confirmed] Listing token ${listing.tokenId} has the configured trait` + RESET);
+          // console.log(BLUE + `[PRICE MONITOR - Trait Check] Checking if competitor token ${tokenId} has trait ${listing.selectedTrait.trait_type}:${listing.selectedTrait.value}` + RESET);
           
           const competitorHasTrait = await tokenHasTrait(contractAddress, tokenId, listing.selectedTrait.trait_type, listing.selectedTrait.value);
           
           if (!competitorHasTrait) {
-            console.log(YELLOW + `[PRICE MONITOR - Skip] Competitor token ${tokenId} doesn't have required trait ${listing.selectedTrait.trait_type}:${listing.selectedTrait.value}` + RESET);
+            // console.log(YELLOW + `[PRICE MONITOR - Skip] Competitor token ${tokenId} doesn't have required trait ${listing.selectedTrait.trait_type}:${listing.selectedTrait.value}` + RESET);
             continue;
           }
           
-          console.log(GREEN + `[PRICE MONITOR - Trait Match] Both tokens have matching trait, proceeding with listing war` + RESET);
+          // console.log(GREEN + `[PRICE MONITOR - Trait Match] Both tokens have matching trait, proceeding with listing war` + RESET);
         }
       }
 
       // LISTING WAR: Process competitor listings from different wallets
-      console.log(BLUE + `[PRICE MONITOR - Competitor] Token ${listing.tokenId} (${listing.wallet}) reacting to competitor token ${tokenId} (${seller}) at ${price} ETH` + RESET);
+      // console.log(BLUE + `[PRICE MONITOR - Competitor] Token ${listing.tokenId} (${listing.wallet}) reacting to competitor token ${tokenId} (${seller}) at ${price} ETH` + RESET);
 
       // No need to clear cache - we're using real-time prices now!
       const shouldAdjust = await shouldAdjustPrice(listing, price);
@@ -255,7 +255,7 @@ async function processListingUpdate(
         // Create a unique job ID based on listing ID and marketplace
         const jobId = `listing-update-${listing._id}-${marketplace}`;
 
-        console.log(GREEN + `[PRICE MONITOR - Queue] Enqueueing instant price match job: ${newPrice} ETH` + RESET);
+        // console.log(GREEN + `[PRICE MONITOR - Queue] Enqueueing instant price match job: ${newPrice} ETH` + RESET);
 
         try {
           // Add the job to the queue
@@ -334,48 +334,48 @@ async function shouldAdjustPrice(
   competitorPrice: number
 ): Promise<boolean> {
   try {
-    console.log(BLUE + `[PRICE CHECK] Token ${listing.tokenId} - Checking adjustment for competitor price: ${competitorPrice} ETH` + RESET);
+    // console.log(BLUE + `[PRICE CHECK] Token ${listing.tokenId} - Checking adjustment for competitor price: ${competitorPrice} ETH` + RESET);
     
     // Get our current listing price in REAL-TIME - no cache!
     const ourPrice = await getRealTimeListingPrice(listing) || 0;
 
-    console.log(CYAN + `[PRICE CHECK] Token ${listing.tokenId} - Our real-time price: ${ourPrice} ETH` + RESET);
+    // console.log(CYAN + `[PRICE CHECK] Token ${listing.tokenId} - Our real-time price: ${ourPrice} ETH` + RESET);
 
     // For listing wars: if we don't have a current listing price, we should still compete
     // Calculate what our competitive price would be
     const undercutMargin = parseFloat(listing.underCutMargin) || 0.000001;
     const targetCompetitivePrice = roundToNineDecimals(competitorPrice - undercutMargin);
     
-    console.log(CYAN + `[PRICE CHECK] Token ${listing.tokenId} - Target competitive price: ${targetCompetitivePrice} ETH` + RESET);
+    // console.log(CYAN + `[PRICE CHECK] Token ${listing.tokenId} - Target competitive price: ${targetCompetitivePrice} ETH` + RESET);
 
     // If we don't have a current price, we should list competitively
     if (!ourPrice) {
-      console.log(YELLOW + `[PRICE CHECK] Token ${listing.tokenId} - No current price, should list competitively at ${targetCompetitivePrice}` + RESET);
+      // console.log(YELLOW + `[PRICE CHECK] Token ${listing.tokenId} - No current price, should list competitively at ${targetCompetitivePrice}` + RESET);
       return true;
     }
 
     // Check if we need to adjust: only skip if competitor price is HIGHER than ours
     // If prices are equal (tie), we should continue the war!
     if (competitorPrice > ourPrice) {
-      console.log(BLUE + `[PRICE CHECK] Token ${listing.tokenId} - Competitor price ${competitorPrice} > our price ${ourPrice}, no adjustment needed` + RESET);
+      // console.log(BLUE + `[PRICE CHECK] Token ${listing.tokenId} - Competitor price ${competitorPrice} > our price ${ourPrice}, no adjustment needed` + RESET);
       return false;
     }
     
     // Special handling for tie scenarios - always try to maintain competitive edge
     if (competitorPrice === ourPrice) {
-      console.log(YELLOW + `[PRICE CHECK] Token ${listing.tokenId} - TIE DETECTED! Both at ${ourPrice} ETH, continuing listing war` + RESET);
+      // console.log(YELLOW + `[PRICE CHECK] Token ${listing.tokenId} - TIE DETECTED! Both at ${ourPrice} ETH, continuing listing war` + RESET);
     }
 
-    console.log(GREEN + `[PRICE CHECK] Token ${listing.tokenId} - Competitor undercut us! ${competitorPrice} < ${ourPrice}, checking constraints...` + RESET);
+    // console.log(GREEN + `[PRICE CHECK] Token ${listing.tokenId} - Competitor undercut us! ${competitorPrice} < ${ourPrice}, checking constraints...` + RESET);
 
     // Check minimum listing price - always enforce this constraint
     const minPrice = parseFloat(listing.minListingPrice) || 0;
     const newPrice = targetCompetitivePrice; // Use the already calculated competitive price
 
-    console.log(CYAN + `[PRICE CHECK] Token ${listing.tokenId} - Calculated new price: ${newPrice} ETH (competitor: ${competitorPrice} - margin: ${undercutMargin})` + RESET);
+    // console.log(CYAN + `[PRICE CHECK] Token ${listing.tokenId} - Calculated new price: ${newPrice} ETH (competitor: ${competitorPrice} - margin: ${undercutMargin})` + RESET);
 
     if (newPrice < minPrice) {
-      console.log(YELLOW + `[PRICE CHECK] Token ${listing.tokenId} - New price ${newPrice} < min price ${minPrice}, skipping adjustment` + RESET);
+      // console.log(YELLOW + `[PRICE CHECK] Token ${listing.tokenId} - New price ${newPrice} < min price ${minPrice}, skipping adjustment` + RESET);
       logger.logWarning(ErrorCategory.BUSINESS_LOGIC, 'Price adjustment blocked by minimum price constraint', {
         listingId: listing._id.toString(),
         contractAddress: listing.contract.contractAddress,
@@ -395,9 +395,9 @@ async function shouldAdjustPrice(
       const minimumProfit = parseFloat(listing.minimumProfit) || 0;
       const profit = newPrice - listing.buyPrice;
 
-      console.log(CYAN + `[PRICE CHECK] Token ${listing.tokenId} - Profit check: ${profit} ETH (required: ${minimumProfit} ETH)` + RESET);
+      // console.log(CYAN + `[PRICE CHECK] Token ${listing.tokenId} - Profit check: ${profit} ETH (required: ${minimumProfit} ETH)` + RESET);
       if (profit < minimumProfit && minimumProfit > 0) {
-        console.log(YELLOW + `[PRICE CHECK] Token ${listing.tokenId} - Insufficient profit ${profit} < ${minimumProfit}, skipping adjustment` + RESET);
+        // console.log(YELLOW + `[PRICE CHECK] Token ${listing.tokenId} - Insufficient profit ${profit} < ${minimumProfit}, skipping adjustment` + RESET);
         logger.logWarning(ErrorCategory.BUSINESS_LOGIC, 'Price adjustment blocked by profit constraint', {
           listingId: listing._id.toString(),
           contractAddress: listing.contract.contractAddress,
@@ -422,14 +422,14 @@ async function shouldAdjustPrice(
       // Use trait floor if trait-based pricing is enabled
       if ((listing.dynamicPricingBasis === 'HIGHEST_TRAIT_FLOOR' || listing.dynamicPricingBasis === 'SPECIFIC_TRAIT') 
           && listing.selectedTrait?.trait_type && listing.selectedTrait?.value !== undefined) {
-        console.log(CYAN + `[PRICE CHECK] Token ${listing.tokenId} - Using trait floor for ${listing.selectedTrait.trait_type}:${listing.selectedTrait.value}` + RESET);
+        // console.log(CYAN + `[PRICE CHECK] Token ${listing.tokenId} - Using trait floor for ${listing.selectedTrait.trait_type}:${listing.selectedTrait.value}` + RESET);
         floorPrice = await getOpenseaTraitFloor(listing.contract.slug, listing.selectedTrait.trait_type, listing.selectedTrait.value);
       } else {
         floorPrice = await getOpenseaFloor(listing.contract.slug);
       }
       
       if (newPrice < floorPrice) {
-        console.log(YELLOW + `[PRICE CHECK] Token ${listing.tokenId} - New price ${newPrice} would be below floor price ${floorPrice}, skipping adjustment` + RESET);
+        // console.log(YELLOW + `[PRICE CHECK] Token ${listing.tokenId} - New price ${newPrice} would be below floor price ${floorPrice}, skipping adjustment` + RESET);
         logger.logWarning(ErrorCategory.BUSINESS_LOGIC, 'Price adjustment blocked by floor price constraint', {
           listingId: listing._id.toString(),
           contractAddress: listing.contract.contractAddress,
@@ -447,7 +447,7 @@ async function shouldAdjustPrice(
       }
     }
 
-    console.log(GREEN + `[PRICE CHECK] Token ${listing.tokenId} - ✅ All checks passed, should adjust price from ${ourPrice} to ${newPrice}` + RESET);
+    // console.log(GREEN + `[PRICE CHECK] Token ${listing.tokenId} - ✅ All checks passed, should adjust price from ${ourPrice} to ${newPrice}` + RESET);
     
     logger.logInfo(ErrorCategory.GENERAL, 'Price adjustment approved', {
       listingId: listing._id.toString(),
@@ -487,10 +487,10 @@ export async function getFloorPrices(collectionSlug: string): Promise<{
   magiceden: number;
 }> {
   try {
-    console.log(BLUE + `[PRICE MONITOR - Floor] Fetching floor prices for ${collectionSlug}` + RESET);
+    // console.log(BLUE + `[PRICE MONITOR - Floor] Fetching floor prices for ${collectionSlug}` + RESET);
     const floorPrices = await getAllFloorPrices(collectionSlug);
     
-    console.log(GREEN + `[PRICE MONITOR - Floor] Retrieved floor prices: OpenSea=${floorPrices.opensea}, Blur=${floorPrices.blur}, MagicEden=${floorPrices.magiceden}` + RESET);
+    // console.log(GREEN + `[PRICE MONITOR - Floor] Retrieved floor prices: OpenSea=${floorPrices.opensea}, Blur=${floorPrices.blur}, MagicEden=${floorPrices.magiceden}` + RESET);
     
     logger.logInfo(ErrorCategory.API, 'Floor prices retrieved successfully', {
       collectionSlug,
@@ -521,7 +521,7 @@ export async function getFloorPrices(collectionSlug: string): Promise<{
  */
 export async function extendInstantPriceMatchingSession(listingId: string, durationMinutes: number = 10): Promise<void> {
   try {
-    console.log(CYAN + `[PRICE MONITOR - Extend] Extending instant price matching session for listing ${listingId} by ${durationMinutes} minutes` + RESET);
+    // console.log(CYAN + `[PRICE MONITOR - Extend] Extending instant price matching session for listing ${listingId} by ${durationMinutes} minutes` + RESET);
     
     const newExpiration = new Date(Date.now() + durationMinutes * 60 * 1000);
     const result = await Listing.findByIdAndUpdate(listingId, {
@@ -529,7 +529,7 @@ export async function extendInstantPriceMatchingSession(listingId: string, durat
     });
 
     if (result) {
-      console.log(GREEN + `[PRICE MONITOR - Extend] ✅ Extended instant price matching until ${newExpiration.toISOString()}` + RESET);
+      // console.log(GREEN + `[PRICE MONITOR - Extend] ✅ Extended instant price matching until ${newExpiration.toISOString()}` + RESET);
       
       logger.logInfo(ErrorCategory.DATABASE, 'Instant price matching session extended', {
         listingId,
@@ -539,7 +539,7 @@ export async function extendInstantPriceMatchingSession(listingId: string, durat
         operation: 'extend_instant_price_matching'
       });
     } else {
-      console.log(YELLOW + `[PRICE MONITOR - Extend] Warning: Listing ${listingId} not found` + RESET);
+      // console.log(YELLOW + `[PRICE MONITOR - Extend] Warning: Listing ${listingId} not found` + RESET);
       
       logger.logWarning(ErrorCategory.DATABASE, 'Listing not found for instant price matching extension', {
         listingId,

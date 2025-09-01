@@ -62,7 +62,7 @@ export async function listOnBlur(
 
   try {
     // Fetch Blur access token
-    console.log(`${GOLD}[BLUR] Fetching access token...${RESET}`);
+    // console.log(`${GOLD}[BLUR] Fetching access token...${RESET}`);
     let authToken: string;
     try {
       const token = await getAccessToken(privateKey);
@@ -70,14 +70,14 @@ export async function listOnBlur(
         throw new Error('Failed to get Blur access token');
       }
       authToken = token;
-      console.log(`${GOLD}[BLUR] Access token fetched successfully${RESET}`);
+      // console.log(`${GOLD}[BLUR] Access token fetched successfully${RESET}`);
     } catch (tokenError) {
       console.error(`${GOLD}[BLUR] Failed to fetch access token${RESET}`, tokenError);
       throw new Error(`Blur access token fetch failed: ${tokenError instanceof Error ? tokenError.message : 'Unknown error'}`);
     }
     
     // Fetch collection details for creator fees
-    console.log(`${GOLD}[BLUR] Fetching collection details for ${contractSlug}...${RESET}`);
+    // console.log(`${GOLD}[BLUR] Fetching collection details for ${contractSlug}...${RESET}`);
     let feeRate = 0;
     try {
       const collectionData = await getCollectionDetails(contractSlug, nftAddress);
@@ -85,7 +85,7 @@ export async function listOnBlur(
       const enforceCreatorFee = collectionData?.enforceCreatorFee as boolean;
       const totalCreatorFee = enforceCreatorFee && creatorFees ? Object.values(creatorFees).reduce((sum, fee) => sum + fee, 0) : 0;
       feeRate = totalCreatorFee / 10000; // Convert basis points to decimal
-      console.log(`${GOLD}[BLUR] Collection details fetched - Total creator fee: ${totalCreatorFee} (${feeRate * 100}%)${RESET}`);
+      // console.log(`${GOLD}[BLUR] Collection details fetched - Total creator fee: ${totalCreatorFee} (${feeRate * 100}%)${RESET}`);
     } catch (error) {
       console.error(`${GOLD}[BLUR] Error fetching collection details, proceeding without creator fees${RESET}`);
     }
@@ -98,7 +98,7 @@ export async function listOnBlur(
 
     // Convert duration to seconds using Blur-specific converter
     const durationInSeconds = convertDurationForBlur(listDuration);
-    console.log(`${GOLD}[BLUR] Duration: ${listDuration.value} ${listDuration.unit} = ${durationInSeconds} seconds${RESET}`);
+    // console.log(`${GOLD}[BLUR] Duration: ${listDuration.value} ${listDuration.unit} = ${durationInSeconds} seconds${RESET}`);
     
     // Add buffer time to account for processing delays and API latency
     const bufferSeconds = 120; // 120 second buffer to ensure we meet Blur's requirements
@@ -110,24 +110,24 @@ export async function listOnBlur(
     const expirationTimestamp = nowTimestamp + durationMs;
     const expirationTime = new Date(expirationTimestamp).toISOString();
 
-    console.log(`${GOLD}=== Blur Expiration Time Calculation ===${RESET}`);
-    console.log(`${GOLD}Now: ${new Date(nowTimestamp).toISOString()}${RESET}`);
-    console.log(`${GOLD}Duration requested (seconds): ${durationInSeconds}${RESET}`);
-    console.log(`${GOLD}Buffer added (seconds): ${bufferSeconds}${RESET}`);
-    console.log(`${GOLD}Final duration (seconds): ${finalDuration}${RESET}`);
-    console.log(`${GOLD}Final duration (minutes): ${finalDuration / 60}${RESET}`);
-    console.log(`${GOLD}Expiration time: ${expirationTime}${RESET}`);
-    console.log(`${GOLD}Time until expiration (minutes): ${(expirationTimestamp - nowTimestamp) / (1000 * 60)}${RESET}`);
+    // console.log(`${GOLD}=== Blur Expiration Time Calculation ===${RESET}`);
+    // console.log(`${GOLD}Now: ${new Date(nowTimestamp).toISOString()}${RESET}`);
+    // console.log(`${GOLD}Duration requested (seconds): ${durationInSeconds}${RESET}`);
+    // console.log(`${GOLD}Buffer added (seconds): ${bufferSeconds}${RESET}`);
+    // console.log(`${GOLD}Final duration (seconds): ${finalDuration}${RESET}`);
+    // console.log(`${GOLD}Final duration (minutes): ${finalDuration / 60}${RESET}`);
+    // console.log(`${GOLD}Expiration time: ${expirationTime}${RESET}`);
+    // console.log(`${GOLD}Time until expiration (minutes): ${(expirationTimestamp - nowTimestamp) / (1000 * 60)}${RESET}`);
 
     // Recalculate expiration time just before sending to minimize delay
     const requestNowTimestamp = Date.now();
     const requestExpirationTimestamp = requestNowTimestamp + durationMs;
     const requestExpirationTime = new Date(requestExpirationTimestamp).toISOString();
     
-    console.log(`${GOLD}Request time calculation:${RESET}`);
-    console.log(`${GOLD}- Request sent at: ${new Date(requestNowTimestamp).toISOString()}${RESET}`);
-    console.log(`${GOLD}- Time since initial calculation (ms): ${requestNowTimestamp - nowTimestamp}${RESET}`);
-    console.log(`${GOLD}- Updated expiration time: ${requestExpirationTime}${RESET}`);
+    // console.log(`${GOLD}Request time calculation:${RESET}`);
+    // console.log(`${GOLD}- Request sent at: ${new Date(requestNowTimestamp).toISOString()}${RESET}`);
+    // console.log(`${GOLD}- Time since initial calculation (ms): ${requestNowTimestamp - nowTimestamp}${RESET}`);
+    // console.log(`${GOLD}- Updated expiration time: ${requestExpirationTime}${RESET}`);
 
     const options = {
       method: 'POST',
@@ -191,14 +191,14 @@ export async function listOnBlur(
       // Check if the error is because user no longer owns the NFT
       const errorMessage = data.errors?.message || '';
       if (errorMessage.includes('You need to own this NFT')) {
-        console.log(`${GOLD}[BLUR] User no longer owns NFT ${nftAddress}/${tokenId}, deleting listing...${RESET}`);
+        // console.log(`${GOLD}[BLUR] User no longer owns NFT ${nftAddress}/${tokenId}, deleting listing...${RESET}`);
 
         try {
           await Listing.findOneAndDelete({
             "contract.contractAddress": nftAddress,
             tokenId: tokenId
           });
-          console.log(`${GOLD}[BLUR] Deleted listing for ${nftAddress}/${tokenId} as user no longer owns it${RESET}`);
+          // console.log(`${GOLD}[BLUR] Deleted listing for ${nftAddress}/${tokenId} as user no longer owns it${RESET}`);
         } catch (deleteError) {
           console.error(`${GOLD}[BLUR] Error deleting listing:${RESET}`, deleteError);
         }
@@ -288,20 +288,20 @@ export async function listOnBlur(
         // Check if the error is because user no longer owns the NFT
         const errorMessage = listings.errors?.message || '';
         if (errorMessage.includes('You need to own this NFT')) {
-          console.log(`${GOLD}[BLUR] User no longer owns NFT ${nftAddress}/${tokenId}, deleting listing...${RESET}`);
+          // console.log(`${GOLD}[BLUR] User no longer owns NFT ${nftAddress}/${tokenId}, deleting listing...${RESET}`);
 
           try {
             await Listing.findOneAndDelete({
               "contract.contractAddress": nftAddress,
               tokenId: tokenId
             });
-            console.log(`${GOLD}[BLUR] Deleted listing for ${nftAddress}/${tokenId} as user no longer owns it${RESET}`);
+            // console.log(`${GOLD}[BLUR] Deleted listing for ${nftAddress}/${tokenId} as user no longer owns it${RESET}`);
           } catch (deleteError) {
             console.error(`${GOLD}[BLUR] Error deleting listing:${RESET}`, deleteError);
           }
         }
       } else {
-        console.log(`${GOLD}[BLUR - LISTING] ✅ Successfully listed ${nftAddress} #${tokenId} for ${price} ETH${RESET}`);
+        // console.log(`${GOLD}[BLUR - LISTING] ✅ Successfully listed ${nftAddress} #${tokenId} for ${price} ETH${RESET}`);
 
         // REMOVED: Cache update - we're using real-time prices now!
         // await listingPriceCache.updatePrice(...)
@@ -348,12 +348,12 @@ export async function listOnBlur(
           );
 
           if (updatedListing) {
-            console.log(`${GOLD}[BLUR - LISTING] Updated DB: ${nftAddress} #${tokenId} | Price: ${priceInEth} ETH | Expires: ${dbExpirationTime.toISOString()}${RESET}`);
+            // console.log(`${GOLD}[BLUR - LISTING] Updated DB: ${nftAddress} #${tokenId} | Price: ${priceInEth} ETH | Expires: ${dbExpirationTime.toISOString()}${RESET}`);
             if (updatedListing.instantPriceOverride && updatedListing.instantPriceMatchingActiveUntil) {
-              console.log(`${GOLD}[BLUR - LISTING] Extended instant price matching until: ${updatedListing.instantPriceMatchingActiveUntil.toISOString()}${RESET}`);
+              // console.log(`${GOLD}[BLUR - LISTING] Extended instant price matching until: ${updatedListing.instantPriceMatchingActiveUntil.toISOString()}${RESET}`);
             }
           } else {
-            console.log(`${GOLD}[BLUR - LISTING] ⚠️  No listing found in DB for ${nftAddress} #${tokenId}${RESET}`);
+            // console.log(`${GOLD}[BLUR - LISTING] ⚠️  No listing found in DB for ${nftAddress} #${tokenId}${RESET}`);
           }
         } catch (updateError) {
           console.error(`${GOLD}[BLUR] Error updating listing in database:${RESET}`, updateError);

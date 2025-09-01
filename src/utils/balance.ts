@@ -128,7 +128,7 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
       console.warn('Failed to get stale cache:', error);
     }
     if (staleBalance) {
-      console.log(`Using stale cached balance for ${walletAddress}/${tokenAddress}: ${staleBalance}`);
+      // console.log(`Using stale cached balance for ${walletAddress}/${tokenAddress}: ${staleBalance}`);
       return Number(staleBalance);
     }
 
@@ -150,7 +150,7 @@ export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress
   const staleCacheKey = `{erc20_balance_stale:${walletAddress}}:${tokenAddress}`;
   const startTime = Date.now();
 
-  console.log(`[fetchERC20BalanceFresh] Starting balance fetch for ${walletAddress}/${tokenAddress}`);
+  // console.log(`[fetchERC20BalanceFresh] Starting balance fetch for ${walletAddress}/${tokenAddress}`);
 
   // First try to get cached value
   try {
@@ -158,7 +158,7 @@ export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress
     if (redis) {
       const cachedBalance = await redis.get(cacheKey);
       if (cachedBalance) {
-        console.log(`[fetchERC20BalanceFresh] Using cached balance: ${cachedBalance}`);
+        // console.log(`[fetchERC20BalanceFresh] Using cached balance: ${cachedBalance}`);
         return Number(cachedBalance);
       }
     }
@@ -218,7 +218,7 @@ export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress
                 }
 
                 const elapsed = Date.now() - startTime;
-                console.log(`[fetchERC20BalanceFresh] Fresh balance for ${walletAddress}/${tokenAddress}: ${formattedBalance} (took ${elapsed}ms)`);
+                // console.log(`[fetchERC20BalanceFresh] Fresh balance for ${walletAddress}/${tokenAddress}: ${formattedBalance} (took ${elapsed}ms)`);
                 return formattedBalance;
               } catch (error: any) {
                 lastError = error;
@@ -264,7 +264,7 @@ export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress
       if (redis) {
         const staleBalance = await redis.get(staleCacheKey);
         if (staleBalance) {
-          console.log(`[fetchERC20BalanceFresh] Using stale cached balance: ${staleBalance}`);
+          // console.log(`[fetchERC20BalanceFresh] Using stale cached balance: ${staleBalance}`);
           return Number(staleBalance);
         }
       }

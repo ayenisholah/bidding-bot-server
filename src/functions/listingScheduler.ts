@@ -40,13 +40,13 @@ const activeJobs = new Map<string, string>();
  * Schedule a listing to run at specified intervals
  */
 export async function scheduleListing(listing: IListing): Promise<void> {
-  console.log(CYAN + `\n=== [LISTING SCHEDULER] SCHEDULE LISTING CALLED ===` + RESET);
-  console.log(BLUE + `[LISTING SCHEDULER] Listing ID: ${listing._id}` + RESET);
-  console.log(BLUE + `[LISTING SCHEDULER] Token ID: ${listing.tokenId}` + RESET);
-  console.log(BLUE + `[LISTING SCHEDULER] Timestamp: ${new Date().toISOString()}` + RESET);
+  // console.log(CYAN + `\n=== [LISTING SCHEDULER] SCHEDULE LISTING CALLED ===` + RESET);
+  // console.log(BLUE + `[LISTING SCHEDULER] Listing ID: ${listing._id}` + RESET);
+  // console.log(BLUE + `[LISTING SCHEDULER] Token ID: ${listing.tokenId}` + RESET);
+  // console.log(BLUE + `[LISTING SCHEDULER] Timestamp: ${new Date().toISOString()}` + RESET);
 
   try {
-    console.log(CYAN + '[LISTING SCHEDULER] Schedule Step 1: Getting main queue...' + RESET);
+    // console.log(CYAN + '[LISTING SCHEDULER] Schedule Step 1: Getting main queue...' + RESET);
     const queue = await getMainQueue();
     const listingId = listing._id.toString();
 
@@ -59,12 +59,12 @@ export async function scheduleListing(listing: IListing): Promise<void> {
       operation: 'schedule_listing_start'
     });
 
-    console.log(CYAN + '[LISTING SCHEDULER] Schedule Step 2: Cancelling existing jobs...' + RESET);
+    // console.log(CYAN + '[LISTING SCHEDULER] Schedule Step 2: Cancelling existing jobs...' + RESET);
     // Cancel existing job if any
     await cancelListingJob(listingId);
 
     if (!listing.running) {
-      console.log(YELLOW + '[LISTING SCHEDULER] Schedule Step 3: Listing not running, returning early' + RESET);
+      // console.log(YELLOW + '[LISTING SCHEDULER] Schedule Step 3: Listing not running, returning early' + RESET);
       
       logger.logWarning(ErrorCategory.BUSINESS_LOGIC, 'Listing not running - skipping schedule', {
         listingId,
@@ -76,12 +76,12 @@ export async function scheduleListing(listing: IListing): Promise<void> {
       return;
     }
 
-    console.log(CYAN + '[LISTING SCHEDULER] Schedule Step 3: Calculating delay...' + RESET);
+    // console.log(CYAN + '[LISTING SCHEDULER] Schedule Step 3: Calculating delay...' + RESET);
     // Calculate delay in milliseconds
     const delayMs = convertToSeconds(listing.loopInterval.value, listing.loopInterval.unit) * 1000;
-    console.log(BLUE + `[LISTING SCHEDULER] Schedule Step 3.1: Delay in ms: ${delayMs}` + RESET);
+    // console.log(BLUE + `[LISTING SCHEDULER] Schedule Step 3.1: Delay in ms: ${delayMs}` + RESET);
 
-    console.log(CYAN + '[LISTING SCHEDULER] Schedule Step 4: Adding job to queue...' + RESET);
+    // console.log(CYAN + '[LISTING SCHEDULER] Schedule Step 4: Adding job to queue...' + RESET);
     // Add a single repeating job with immediate execution
     const job = await queue.add(
       PROCESS_LISTING,
@@ -103,9 +103,9 @@ export async function scheduleListing(listing: IListing): Promise<void> {
       }
     );
 
-    console.log(GREEN + `[LISTING SCHEDULER] Schedule Step 5: Job added with ID: ${job.id}` + RESET);
+    // console.log(GREEN + `[LISTING SCHEDULER] Schedule Step 5: Job added with ID: ${job.id}` + RESET);
     activeJobs.set(listingId, job.id!);
-    console.log(GREEN + '[LISTING SCHEDULER] Schedule Step 6: scheduleListing completed successfully' + RESET);
+    // console.log(GREEN + '[LISTING SCHEDULER] Schedule Step 6: scheduleListing completed successfully' + RESET);
 
     logger.logInfo(ErrorCategory.QUEUE, 'Listing job scheduled successfully', {
       listingId,
@@ -184,7 +184,7 @@ export async function cancelListingJob(listingId: string): Promise<void> {
     activeJobs.delete(listingId);
 
     if (!removedRepeatable && !jobId) {
-      console.log(`No active job found for listing ${listingId}`);
+      // console.log(`No active job found for listing ${listingId}`);
     }
   } catch (error) {
     await logger.logQueueError('Failed to cancel listing job', {
@@ -206,10 +206,10 @@ export async function updateListingSchedule(listing: IListing): Promise<void> {
  * Process a listing job - to be called from the main worker in index.ts
  */
 export async function processListingJob(job: Job): Promise<boolean> {
-  console.log(CYAN + '\n=== [LISTING SCHEDULER] PROCESS LISTING JOB STARTED ===' + RESET);
+  // console.log(CYAN + '\n=== [LISTING SCHEDULER] PROCESS LISTING JOB STARTED ===' + RESET);
   const { listingId } = job.data;
-  console.log(BLUE + `[LISTING SCHEDULER] Job ID: ${job.id}` + RESET);
-  console.log(BLUE + `[LISTING SCHEDULER] Listing ID: ${listingId}` + RESET);
+  // console.log(BLUE + `[LISTING SCHEDULER] Job ID: ${job.id}` + RESET);
+  // console.log(BLUE + `[LISTING SCHEDULER] Listing ID: ${listingId}` + RESET);
 
   try {
     logger.logInfo(ErrorCategory.QUEUE, 'Processing listing job started', {
@@ -219,25 +219,25 @@ export async function processListingJob(job: Job): Promise<boolean> {
       operation: 'process_listing_job_start'
     });
 
-    console.log(CYAN + '[LISTING SCHEDULER] Step 1: Updating progress to 10...' + RESET);
+    // console.log(CYAN + '[LISTING SCHEDULER] Step 1: Updating progress to 10...' + RESET);
     // Update progress to prevent stalling
     // Progress reporting removed - await job.updateProgress(10);
 
-    console.log(CYAN + '[LISTING SCHEDULER] Step 3: Updating progress to 20...' + RESET);
+    // console.log(CYAN + '[LISTING SCHEDULER] Step 3: Updating progress to 20...' + RESET);
     // Update progress
     // Progress reporting removed - await job.updateProgress(20);
 
-    console.log(CYAN + '[LISTING SCHEDULER] Step 4: Fetching listing from database...' + RESET);
+    // console.log(CYAN + '[LISTING SCHEDULER] Step 4: Fetching listing from database...' + RESET);
     // Fetch latest listing data
     const listing = await Listing.findById(listingId);
-    console.log(listing ? GREEN + '[LISTING SCHEDULER] Fetched listing: Found' + RESET : YELLOW + '[LISTING SCHEDULER] Fetched listing: Not found' + RESET);
+    // console.log(listing ? GREEN + '[LISTING SCHEDULER] Fetched listing: Found' + RESET : YELLOW + '[LISTING SCHEDULER] Fetched listing: Not found' + RESET);
     if (listing) {
-      console.log(BLUE + `[LISTING SCHEDULER] Listing running status: ${listing.running}` + RESET);
-      console.log(BLUE + `[LISTING SCHEDULER] Listing selectedMarketplaces: ${listing.selectedMarketplaces}` + RESET);
+      // console.log(BLUE + `[LISTING SCHEDULER] Listing running status: ${listing.running}` + RESET);
+      // console.log(BLUE + `[LISTING SCHEDULER] Listing selectedMarketplaces: ${listing.selectedMarketplaces}` + RESET);
     }
 
     if (!listing) {
-      console.log('!!! LISTING NOT FOUND - RETURNING EARLY !!!');
+      // console.log('!!! LISTING NOT FOUND - RETURNING EARLY !!!');
 
       // Cancel the repeating job since the listing no longer exists
       await cancelListingJob(listingId);
@@ -245,20 +245,20 @@ export async function processListingJob(job: Job): Promise<boolean> {
     }
 
     if (!listing.running) {
-      console.log('!!! LISTING NOT RUNNING - RETURNING EARLY !!!');
+      // console.log('!!! LISTING NOT RUNNING - RETURNING EARLY !!!');
 
       // Cancel the repeating job
       await cancelListingJob(listingId);
       return false;
     }
 
-    console.log('Step 5: Listing is valid and running, continuing...');
-    console.log('About to check instant price matching...');
+    // console.log('Step 5: Listing is valid and running, continuing...');
+    // console.log('About to check instant price matching...');
 
-    console.log('About to update progress to 50...');
+    // console.log('About to update progress to 50...');
     // Update progress before long operation
     // Progress reporting removed - await job.updateProgress(50);
-    console.log('Progress updated to 50');
+    // console.log('Progress updated to 50');
 
     // Fetch fresh listing data again after cleanup to ensure we have the latest state
     const freshListing = await Listing.findById(listingId);
@@ -271,15 +271,15 @@ export async function processListingJob(job: Job): Promise<boolean> {
     const listingData = {
       ...freshListing.toObject(),
     };
-    console.log('\n=== ABOUT TO CALL CREATE LISTING ===');
-    console.log('Listing ID:', listingId);
-    console.log('Running:', freshListing.running);
-    console.log('Selected Marketplaces:', freshListing.selectedMarketplaces);
-    console.log('Listing data keys:', Object.keys(listingData));
+    // console.log('\n=== ABOUT TO CALL CREATE LISTING ===');
+    // console.log('Listing ID:', listingId);
+    // console.log('Running:', freshListing.running);
+    // console.log('Selected Marketplaces:', freshListing.selectedMarketplaces);
+    // console.log('Listing data keys:', Object.keys(listingData));
 
-    console.log('\n=== CALLING CREATE LISTING FROM SCHEDULER ===');
+    // console.log('\n=== CALLING CREATE LISTING FROM SCHEDULER ===');
     await createListing(listingData);
-    console.log('=== CREATE LISTING RETURNED ===');
+    // console.log('=== CREATE LISTING RETURNED ===');
 
     // Update progress
     // Progress reporting removed - await job.updateProgress(80);
@@ -294,7 +294,7 @@ export async function processListingJob(job: Job): Promise<boolean> {
     // Update progress to completion
     // Progress reporting removed - await job.updateProgress(100);
 
-    console.log(GREEN + '[LISTING SCHEDULER] ✅ Listing job completed successfully' + RESET);
+    // console.log(GREEN + '[LISTING SCHEDULER] ✅ Listing job completed successfully' + RESET);
     
     logger.logInfo(ErrorCategory.QUEUE, 'Listing job completed successfully', {
       jobId: job.id,
@@ -363,7 +363,7 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
     );
     
     if (traitListings.length > 0) {
-      console.log(`Pre-fetching traits for ${traitListings.length} trait-based listings...`);
+      // console.log(`Pre-fetching traits for ${traitListings.length} trait-based listings...`);
       const tokensToFetch = traitListings.map(listing => ({
         contractAddress: listing.contract.contractAddress,
         tokenId: listing.tokenId
@@ -384,7 +384,7 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
           const contractAddress = listing.contract.contractAddress;
           const contractSlug = listing.contract.slug;
 
-          console.log(`Subscribing to WebSocket for instant price matching: ${contractSlug} (${contractAddress})`);
+          // console.log(`Subscribing to WebSocket for instant price matching: ${contractSlug} (${contractAddress})`);
 
           // Subscribe to all marketplaces for this listing
           const subscriptionResults = [];
@@ -397,7 +397,7 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
                 'listing' // subscription type
               );
               subscriptionResults.push(`${marketplace}: success`);
-              console.log(`✅ Successfully subscribed to ${marketplace} for listing events`);
+              // console.log(`✅ Successfully subscribed to ${marketplace} for listing events`);
             } catch (error) {
               subscriptionResults.push(`${marketplace}: failed`);
               console.error(`❌ Failed to subscribe to ${marketplace}:`, error);
@@ -418,11 +418,11 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
 
       // 3. Immediately call createListing to list the NFT
       try {
-        console.log(`\n=== INITIAL LISTING ON STARTUP ===`);
-        console.log(`Listing ID: ${listingId}`);
-        console.log(`Token ID: ${listing.tokenId}`);
-        console.log(`Running: ${listing.running}`);
-        console.log(`Instant Price Matching: ${listing.instantPriceMatching}`);
+        // console.log(`\n=== INITIAL LISTING ON STARTUP ===`);
+        // console.log(`Listing ID: ${listingId}`);
+        // console.log(`Token ID: ${listing.tokenId}`);
+        // console.log(`Running: ${listing.running}`);
+        // console.log(`Instant Price Matching: ${listing.instantPriceMatching}`);
 
         const listingData = listing.toObject();
         await createListing(listingData);
@@ -450,7 +450,7 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
  */
 export async function shutdownListingScheduler(): Promise<void> {
   try {
-    console.log('Shutting down listing scheduler...');
+    // console.log('Shutting down listing scheduler...');
 
     // Cancel all active listing jobs
     const queue = await getMainQueue();
@@ -465,7 +465,7 @@ export async function shutdownListingScheduler(): Promise<void> {
     // Clear active jobs map
     activeJobs.clear();
 
-    console.log('Listing scheduler shut down successfully');
+    // console.log('Listing scheduler shut down successfully');
   } catch (error) {
     console.error('Error shutting down listing scheduler:', error);
   }

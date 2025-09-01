@@ -54,7 +54,7 @@ export class EnhancedJobManager {
    * Create and queue jobs for a task with proper state management
    */
   async createAndQueueTaskJobs(taskId: string, jobBatches: MarketplaceJobBatch[]): Promise<void> {
-    console.log(`[JobManager] Creating jobs for task ${taskId}`);
+    // console.log(`[JobManager] Creating jobs for task ${taskId}`);
     
     // Initialize parent jobs for tracking
     await this.initializeParentJobs(taskId, jobBatches);
@@ -75,10 +75,10 @@ export class EnhancedJobManager {
       const queuedCount = await this.queueMarketplaceJobs(taskId, batch, config);
       totalQueuedJobs += queuedCount;
       
-      console.log(`[JobManager] Queued ${queuedCount} jobs for ${batch.marketplace}`);
+      // console.log(`[JobManager] Queued ${queuedCount} jobs for ${batch.marketplace}`);
     }
     
-    console.log(`[JobManager] Total queued jobs: ${totalQueuedJobs} for task ${taskId}`);
+    // console.log(`[JobManager] Total queued jobs: ${totalQueuedJobs} for task ${taskId}`);
   }
 
   /**
@@ -159,7 +159,7 @@ export class EnhancedJobManager {
       return;
     }
     
-    console.log(`[JobManager] Creating cancellation jobs for ${orders.length} orders in ${marketplace}`);
+    // console.log(`[JobManager] Creating cancellation jobs for ${orders.length} orders in ${marketplace}`);
     
     // Calculate number of batches needed
     const batchSize = config.batchSize;
@@ -226,7 +226,7 @@ export class EnhancedJobManager {
         parentJob.queuedJobs += 1;
         this.stateManager.setParentJob(parentJobId, parentJob);
         
-        console.log(`[JobManager] Queued cancellation batch ${batchIndex}/${batchCount} for ${marketplace}`);
+        // console.log(`[JobManager] Queued cancellation batch ${batchIndex}/${batchCount} for ${marketplace}`);
         
       } catch (error) {
         await logger.logError(ErrorCategory.QUEUE, 'Error queuing cancellation job', {
@@ -353,7 +353,7 @@ export class EnhancedJobManager {
    */
   private decrementOwnBidCounter(marketplace: string, count: number): void {
     // This would need to be implemented based on the existing decrementOwnBidCounter function
-    console.log(`[JobManager] Decrementing ${marketplace} bid counter by ${count}`);
+    // console.log(`[JobManager] Decrementing ${marketplace} bid counter by ${count}`);
   }
 
   /**

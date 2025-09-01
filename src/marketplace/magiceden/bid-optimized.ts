@@ -52,7 +52,7 @@ export async function createBidDataOptimized(
     if (cached && Date.now() - cached.timestamp < cached.ttl) {
       // We still need to call the API because it generates dynamic values
       // But we can use the cached structure to optimize our request
-      console.log(`[MagicEden] Using cached order structure for ${slug}`);
+      // console.log(`[MagicEden] Using cached order structure for ${slug}`);
     }
     
     // Build params using pre-computed constants

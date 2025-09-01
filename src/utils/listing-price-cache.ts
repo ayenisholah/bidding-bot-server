@@ -97,9 +97,9 @@ class ListingPriceCache {
           // Update memory cache
           this.priceCache.set(memoryKey, data);
           if (!current) {
-            console.log(`[ListingPriceCache] Set initial price for ${contractAddress}:${tokenId} to ${price} ETH`);
+            // console.log(`[ListingPriceCache] Set initial price for ${contractAddress}:${tokenId} to ${price} ETH`);
           } else {
-            console.log(`[ListingPriceCache] Updated price for ${contractAddress}:${tokenId} from ${current} to ${price} ETH`);
+            // console.log(`[ListingPriceCache] Updated price for ${contractAddress}:${tokenId} from ${current} to ${price} ETH`);
           }
         }
         
@@ -107,7 +107,7 @@ class ListingPriceCache {
       }
       
       // New price is higher or equal, skip update
-      console.log(`[ListingPriceCache] Existing price ${current} ETH is lower than or equal to new price ${price} ETH, skipping update`);
+      // console.log(`[ListingPriceCache] Existing price ${current} ETH is lower than or equal to new price ${price} ETH, skipping update`);
       return false;
     } catch (error) {
       await logger.logDatabaseError('Failed to update listing price cache', {
@@ -147,7 +147,7 @@ class ListingPriceCache {
         await redis.del(redisKey);
       }, 'clearPrice', 3);
       
-      console.log(`[ListingPriceCache] Cleared price for ${contractAddress}:${tokenId}`);
+      // console.log(`[ListingPriceCache] Cleared price for ${contractAddress}:${tokenId}`);
     } catch (error) {
       await logger.logDatabaseError('Failed to clear listing price cache', {
         databaseOperation: DatabaseOperation.DELETE,
@@ -206,7 +206,7 @@ class ListingPriceCache {
             pipeline.del(key);
           });
           await pipeline.exec();
-          console.log(`[ListingPriceCache] Cleared ${keys.length} cached prices`);
+          // console.log(`[ListingPriceCache] Cleared ${keys.length} cached prices`);
         }
       }, 'clearAll', 3);
     } catch (error) {

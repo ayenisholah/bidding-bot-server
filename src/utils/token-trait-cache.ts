@@ -67,7 +67,7 @@ class TokenTraitCache {
         });
 
         this.redisClient.on('connect', () => {
-          console.log(GREEN + '[TOKEN TRAIT CACHE] Redis connected successfully' + RESET);
+          // console.log(GREEN + '[TOKEN TRAIT CACHE] Redis connected successfully' + RESET);
         });
       }
     } catch (error) {
@@ -107,7 +107,7 @@ class TokenTraitCache {
       const keyToEvict = this.accessOrder.shift();
       if (keyToEvict) {
         this.memoryCache.delete(keyToEvict);
-        console.log(YELLOW + `[TOKEN TRAIT CACHE] Evicted LRU entry: ${keyToEvict}` + RESET);
+        // console.log(YELLOW + `[TOKEN TRAIT CACHE] Evicted LRU entry: ${keyToEvict}` + RESET);
       }
     }
   }
@@ -136,7 +136,7 @@ class TokenTraitCache {
         );
       }
 
-      console.log(GREEN + `[TOKEN TRAIT CACHE] Cached traits for ${key}` + RESET);
+      // console.log(GREEN + `[TOKEN TRAIT CACHE] Cached traits for ${key}` + RESET);
       logger.logInfo(ErrorCategory.DATABASE, 'Token traits cached successfully', {
         contractAddress: data.contractAddress,
         tokenId: data.tokenId,
@@ -169,7 +169,7 @@ class TokenTraitCache {
       const memoryCacheEntry = this.memoryCache.get(key);
       if (memoryCacheEntry && memoryCacheEntry.expires > Date.now()) {
         this.updateAccessOrder(key);
-        console.log(BLUE + `[TOKEN TRAIT CACHE] Memory hit for ${key}` + RESET);
+        // console.log(BLUE + `[TOKEN TRAIT CACHE] Memory hit for ${key}` + RESET);
         return memoryCacheEntry.data;
       }
 
@@ -196,7 +196,7 @@ class TokenTraitCache {
           });
           this.updateAccessOrder(key);
           
-          console.log(CYAN + `[TOKEN TRAIT CACHE] Redis hit for ${key}` + RESET);
+          // console.log(CYAN + `[TOKEN TRAIT CACHE] Redis hit for ${key}` + RESET);
           return data;
         }
       }
@@ -280,7 +280,7 @@ class TokenTraitCache {
         await this.redisClient.del(key);
       }
 
-      console.log(YELLOW + `[TOKEN TRAIT CACHE] Cleared cache for ${key}` + RESET);
+      // console.log(YELLOW + `[TOKEN TRAIT CACHE] Cleared cache for ${key}` + RESET);
 
     } catch (error) {
       console.error(RED + `[TOKEN TRAIT CACHE] Failed to clear cache for ${key}` + RESET, error);
@@ -324,7 +324,7 @@ class TokenTraitCache {
         await this.redisClient.del(...keysToRemove);
       }
 
-      console.log(YELLOW + `[TOKEN TRAIT CACHE] Cleared ${keysToRemove.length} entries for contract ${contractAddress}` + RESET);
+      // console.log(YELLOW + `[TOKEN TRAIT CACHE] Cleared ${keysToRemove.length} entries for contract ${contractAddress}` + RESET);
 
     } catch (error) {
       console.error(RED + `[TOKEN TRAIT CACHE] Failed to clear contract cache` + RESET, error);
@@ -365,7 +365,7 @@ class TokenTraitCache {
     try {
       if (this.redisClient) {
         await this.redisClient.quit();
-        console.log(GREEN + '[TOKEN TRAIT CACHE] Redis connection closed' + RESET);
+        // console.log(GREEN + '[TOKEN TRAIT CACHE] Redis connection closed' + RESET);
       }
       
       this.memoryCache.clear();

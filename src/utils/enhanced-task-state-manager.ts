@@ -95,7 +95,15 @@ const ENHANCED_STATE_TRANSITIONS: StateTransition[] = [
   
   // Cancellation flow from any state
   { from: ['STARTED', 'PROCESSING', 'QUEUEING', 'QUEUED', 'RUNNING', 'SCHEDULED'], to: 'CANCELLING' },
-  { from: ['CANCELLING'], to: 'STOPPED', condition: (state) => state.cancellationPercentage >= 100 },
+  { from: ['CANCELLING'], to: 'STOPPED', condition: (state) => {
+    // Allow transition if:
+    // 1. Exactly 100% cancelled (all orders processed)
+    // 2. No orders to cancel (0 total jobs across all marketplaces)
+    const totalJobs = state.marketplaceProgress.opensea.totalJobs + 
+                     state.marketplaceProgress.magiceden.totalJobs + 
+                     state.marketplaceProgress.blur.totalJobs;
+    return state.cancellationPercentage === 100 || totalJobs === 0;
+  } },
   { from: ['STOPPED'], to: 'STARTED' },
   
   // Error recovery
@@ -202,9 +210,14 @@ export class EnhancedTaskStateManager {
       if (validTransition.condition && !validTransition.condition(currentState)) {
         // Special logging for cancellation transitions
         if (currentState.status === 'CANCELLING' && newStatus === 'STOPPED') {
+          const totalJobs = currentState.marketplaceProgress.opensea.totalJobs + 
+                           currentState.marketplaceProgress.magiceden.totalJobs + 
+                           currentState.marketplaceProgress.blur.totalJobs;
           console.log(`[StateTransition] Task ${taskId}: CANCELLING->STOPPED transition blocked`);
           console.log(`[StateTransition] Task ${taskId}: Current cancellation percentage: ${currentState.cancellationPercentage}%`);
-          console.log(`[StateTransition] Task ${taskId}: Required: >= 100%`);
+          console.log(`[StateTransition] Task ${taskId}: Total jobs to cancel: ${totalJobs}`);
+          console.log(`[StateTransition] Task ${taskId}: Required: exactly 100% OR 0 total jobs`);
+          console.log(`[StateTransition] Task ${taskId}: Condition check: cancellationPercentage === 100 (${currentState.cancellationPercentage === 100}) || totalJobs === 0 (${totalJobs === 0})`);
         }
         
         await logger.logError(ErrorCategory.STATE_MANAGEMENT, `State transition condition not met for task ${taskId}`, {
@@ -220,9 +233,17 @@ export class EnhancedTaskStateManager {
       
       // Special logging for critical transitions
       if (oldStatus === 'CANCELLING' && newStatus === 'STOPPED') {
+        const totalJobs = currentState.marketplaceProgress.opensea.totalJobs + 
+                         currentState.marketplaceProgress.magiceden.totalJobs + 
+                         currentState.marketplaceProgress.blur.totalJobs;
         console.log(`[StateTransition] *** CRITICAL TRANSITION *** Task ${taskId}: ${oldStatus} -> ${newStatus}`);
         console.log(`[StateTransition] Task ${taskId}: Final cancellation percentage: ${currentState.cancellationPercentage}%`);
-        console.log(`[StateTransition] Task ${taskId}: Transition allowed because: >= 100% condition met`);
+        console.log(`[StateTransition] Task ${taskId}: Total jobs to cancel: ${totalJobs}`);
+        console.log(`[StateTransition] Task ${taskId}: Transition allowed because: cancellationPercentage === 100 (${currentState.cancellationPercentage === 100}) || totalJobs === 0 (${totalJobs === 0})`);
+        console.log(`[StateTransition] Task ${taskId}: Marketplace breakdown:`);
+        console.log(`[StateTransition] Task ${taskId}:   - OpenSea: ${currentState.marketplaceProgress.opensea.totalJobs} jobs`);
+        console.log(`[StateTransition] Task ${taskId}:   - MagicEden: ${currentState.marketplaceProgress.magiceden.totalJobs} jobs`);
+        console.log(`[StateTransition] Task ${taskId}:   - Blur: ${currentState.marketplaceProgress.blur.totalJobs} jobs`);
       }
       
       // Update state with version increment
@@ -582,8 +603,9 @@ export class EnhancedTaskStateManager {
     // For display purposes, show progress based on job completion
     const displayPercentage = Math.min(Math.max(actualPercentage, parentJobPercentage), 100);
     
-    // For state transitions, only use actual order deletion percentage
-    const transitionPercentage = Math.min(actualPercentage, 100);
+    // For state transitions, only return 100 when ALL orders are actually deleted
+    // Use Math.round to handle floating point precision issues (99.999% -> 100%)
+    const transitionPercentage = Math.round(actualPercentage) >= 100 ? 100 : actualPercentage;
     
     // Critical logging for transition analysis
     console.log(`[CancellationCalc] Task ${taskId}: *** TRANSITION DECISION ***`);
@@ -591,7 +613,7 @@ export class EnhancedTaskStateManager {
     console.log(`[CancellationCalc] Task ${taskId}: Parent job percentage: ${parentJobPercentage.toFixed(2)}%`);
     console.log(`[CancellationCalc] Task ${taskId}: Display percentage (UI): ${displayPercentage.toFixed(2)}%`);
     console.log(`[CancellationCalc] Task ${taskId}: Transition percentage (State): ${transitionPercentage.toFixed(2)}%`);
-    console.log(`[CancellationCalc] Task ${taskId}: Will transition to STOPPED: ${transitionPercentage >= 100 ? 'YES' : 'NO'}`);
+    console.log(`[CancellationCalc] Task ${taskId}: Will transition to STOPPED: ${transitionPercentage === 100 ? 'YES' : 'NO'}`);
     
     // Return the transition percentage (based on actual order deletion) for state management
     return transitionPercentage;
@@ -785,18 +807,20 @@ export class EnhancedTaskStateManager {
     // Recalculate and update
     await this.handleCancellationProgress(taskId);
     
-    // Check if we should force completion
+    // Check if we should force completion - only when no orders remain
     const Order = await import('../models/order.model');
     const remainingOrders = await Order.default.countDocuments({ taskId });
     
     if (remainingOrders === 0) {
-// console.log(`[RecalculateCancellation] No orders remaining for task ${taskId}, forcing completion`);
+      console.log(`[RecalculateCancellation] No orders remaining for task ${taskId}, updating to 100% and attempting transition`);
       await this.updateTaskProgress(taskId, { cancellationPercentage: 100 });
-      await this.transitionState(taskId, 'STOPPED', (state) => {
+      // The transition will succeed because cancellationPercentage === 100
+      const transitioned = await this.transitionState(taskId, 'STOPPED', (state) => {
         state.cancellationPercentage = 100;
         delete state.nextLoopTime;
         state.waitingTime = 0;
       });
+      console.log(`[RecalculateCancellation] Task ${taskId} transition to STOPPED: ${transitioned ? 'SUCCESS' : 'FAILED'}`);
     }
   }
 

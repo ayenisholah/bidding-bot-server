@@ -4,7 +4,7 @@
  */
 
 export function checkForDuplicateTasks(currentTasks: any[]): void {
-  console.log('\n=== TASK DUPLICATION DIAGNOSTIC ===');
+  // console.log('\n=== TASK DUPLICATION DIAGNOSTIC ===');
   
   // Count occurrences of each task ID
   const taskIdCounts = new Map<string, number>();
@@ -26,8 +26,8 @@ export function checkForDuplicateTasks(currentTasks: any[]): void {
   });
   
   // Report findings
-  console.log(`Total tasks in currentTasks array: ${currentTasks.length}`);
-  console.log(`Unique task IDs: ${taskIdCounts.size}`);
+  // console.log(`Total tasks in currentTasks array: ${currentTasks.length}`);
+  // console.log(`Unique task IDs: ${taskIdCounts.size}`);
   
   let duplicatesFound = false;
   taskIdCounts.forEach((count, id) => {
@@ -36,18 +36,18 @@ export function checkForDuplicateTasks(currentTasks: any[]): void {
       console.error(`\n❌ DUPLICATE FOUND: Task ID ${id} appears ${count} times!`);
       const details = taskDetails.get(id) || [];
       details.forEach(detail => {
-        console.log(`   - Index ${detail.index}: ${detail.name} (running: ${detail.running}, markets: ${detail.marketplaces.join(', ')})`);
+        // console.log(`   - Index ${detail.index}: ${detail.name} (running: ${detail.running}, markets: ${detail.marketplaces.join(', ')})`);
       });
     }
   });
   
   if (!duplicatesFound) {
-    console.log('✅ No duplicate task IDs found');
+    // console.log('✅ No duplicate task IDs found');
   } else {
-    console.log('\n⚠️  DUPLICATES DETECTED - This will cause state management issues!');
+    // console.log('\n⚠️  DUPLICATES DETECTED - This will cause state management issues!');
   }
   
-  console.log('=== END DIAGNOSTIC ===\n');
+  // console.log('=== END DIAGNOSTIC ===\n');
 }
 
 /**

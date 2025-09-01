@@ -31,7 +31,7 @@ export class TaskIntegrationBridge {
    */
   async startEnhancedTask(task: ITask): Promise<void> {
     try {
-      console.log(`[TaskBridge] Starting enhanced task execution for ${task._id}`);
+      // console.log(`[TaskBridge] Starting enhanced task execution for ${task._id}`);
       
       // Initialize state change listener first
       this.orchestrator.initializeTaskStateListener(task._id);
@@ -55,7 +55,7 @@ export class TaskIntegrationBridge {
    */
   async stopEnhancedTask(taskId: string, marketplace?: string): Promise<void> {
     try {
-      console.log(`[TaskBridge] Stopping enhanced task ${taskId}${marketplace ? ` for ${marketplace}` : ''}`);
+      // console.log(`[TaskBridge] Stopping enhanced task ${taskId}${marketplace ? ` for ${marketplace}` : ''}`);
       
       await this.orchestrator.stopTask(taskId, marketplace);
       
@@ -101,7 +101,7 @@ export class TaskIntegrationBridge {
           }
         }
 
-        console.log(`[TaskBridge] Synced state for task ${taskId}: ${oldState} -> ${newState}`);
+        // console.log(`[TaskBridge] Synced state for task ${taskId}: ${oldState} -> ${newState}`);
         
       } catch (error) {
         console.error(`[TaskBridge] Error syncing legacy status for task ${taskId}:`, error);
@@ -185,7 +185,7 @@ export class TaskIntegrationBridge {
     const state = this.stateManager.getTaskState(taskId);
     if (!state) return;
 
-    console.log(`[TaskBridge] Forcing progression for task ${taskId} from ${state.status}`);
+    // console.log(`[TaskBridge] Forcing progression for task ${taskId} from ${state.status}`);
 
     switch (state.status) {
       case 'STARTED':

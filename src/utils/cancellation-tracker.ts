@@ -25,7 +25,7 @@ class CancellationTracker {
    */
   initializeTracking(taskId: string, totalBids: number, marketplace?: string): void {
     const key = this.getKey(taskId, marketplace);
-    console.log(`[CancellationTracker] Initializing tracking - Key: ${key}, TotalBids: ${totalBids}`);
+    // console.log(`[CancellationTracker] Initializing tracking - Key: ${key}, TotalBids: ${totalBids}`);
     this.trackingMap.set(key, {
       taskId,
       marketplace,
@@ -42,7 +42,7 @@ class CancellationTracker {
     Object.entries(marketplaceTotals).forEach(([marketplace, total]) => {
       const cacheKey = `${taskId}-${marketplace}-total`;
       this.marketplaceTotalsCache.set(cacheKey, total);
-      console.log(`[CancellationTracker] Set marketplace total - ${marketplace}: ${total}`);
+      // console.log(`[CancellationTracker] Set marketplace total - ${marketplace}: ${total}`);
     });
   }
 
@@ -68,7 +68,7 @@ class CancellationTracker {
           startTime: Date.now()
         });
         
-        console.log(`[CancellationTracker] Initialized marketplace tracking - Key: ${marketplaceKey}, TotalBids: ${marketplaceTotalBids}`);
+        // console.log(`[CancellationTracker] Initialized marketplace tracking - Key: ${marketplaceKey}, TotalBids: ${marketplaceTotalBids}`);
       }
     }
     
@@ -84,12 +84,12 @@ class CancellationTracker {
       const percentage = tracking.totalBids > 0 ? ((tracking.completedCancellations / tracking.totalBids) * 100).toFixed(2) : '0.00';
       
       if (actualIncrement < completionCount) {
-        console.log(`[CancellationTracker] Capped completion - Key: ${key}, Requested: ${completionCount}, Actual: ${actualIncrement}, Total: ${tracking.completedCancellations}/${tracking.totalBids} (${percentage}%)`);
+        // console.log(`[CancellationTracker] Capped completion - Key: ${key}, Requested: ${completionCount}, Actual: ${actualIncrement}, Total: ${tracking.completedCancellations}/${tracking.totalBids} (${percentage}%)`);
       } else {
-        console.log(`[CancellationTracker] Recording completion - Key: ${key}, Count: ${completionCount}, Total: ${tracking.completedCancellations}/${tracking.totalBids} (${percentage}%)`);
+        // console.log(`[CancellationTracker] Recording completion - Key: ${key}, Count: ${completionCount}, Total: ${tracking.completedCancellations}/${tracking.totalBids} (${percentage}%)`);
       }
     } else {
-      console.log(`[CancellationTracker] WARNING: No tracking found for key: ${key}`);
+      // console.log(`[CancellationTracker] WARNING: No tracking found for key: ${key}`);
     }
   }
 

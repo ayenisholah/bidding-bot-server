@@ -16,7 +16,7 @@ const BATCH_TIMEOUT = 5000; // 5 seconds
 
 // Initialize Axiom
 if (AXIOM_TOKEN && !DISABLE_AXIOM) {
-  console.log('✅ Axiom logging initialized');
+  // console.log('✅ Axiom logging initialized');
 
   // Flush batch periodically
   setInterval(flushLogs, BATCH_TIMEOUT);
@@ -30,7 +30,7 @@ if (AXIOM_TOKEN && !DISABLE_AXIOM) {
     flushLogs().finally(() => process.exit(0));
   });
 } else if (DISABLE_AXIOM) {
-  console.log('⚠️ Axiom logging disabled in production environment');
+  // console.log('⚠️ Axiom logging disabled in production environment');
 } else {
   console.warn('⚠️ AXIOM_TOKEN not found. Axiom logging disabled.');
 }

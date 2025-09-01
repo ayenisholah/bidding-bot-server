@@ -29,11 +29,11 @@ export class RedisClusterMonitor extends EventEmitter {
 
   public start(): void {
     if (this.monitorInterval) {
-      console.log('[RedisMonitor] Monitor already running');
+      // console.log('[RedisMonitor] Monitor already running');
       return;
     }
 
-    console.log(`[RedisMonitor] Starting cluster health monitoring (interval: ${this.checkInterval}ms)`);
+    // console.log(`[RedisMonitor] Starting cluster health monitoring (interval: ${this.checkInterval}ms)`);
     
     // Initial check
     this.checkClusterHealth();
@@ -48,7 +48,7 @@ export class RedisClusterMonitor extends EventEmitter {
     if (this.monitorInterval) {
       clearInterval(this.monitorInterval);
       this.monitorInterval = null;
-      console.log('[RedisMonitor] Cluster monitoring stopped');
+      // console.log('[RedisMonitor] Cluster monitoring stopped');
     }
   }
 
@@ -60,7 +60,7 @@ export class RedisClusterMonitor extends EventEmitter {
       // Log health status
       if (healthStatus.healthy) {
         if (this.consecutiveFailures > 0) {
-          console.log(`[RedisMonitor] Cluster recovered after ${this.consecutiveFailures} failures`);
+          // console.log(`[RedisMonitor] Cluster recovered after ${this.consecutiveFailures} failures`);
           this.emit('clusterRecovered', healthStatus);
         }
         this.consecutiveFailures = 0;
@@ -169,7 +169,7 @@ export class RedisClusterMonitor extends EventEmitter {
 
         // Track slave nodes and their masters
         if (flags.includes('slave') && masterId !== '-') {
-          console.log(`[RedisMonitor] Slave node ${nodeId} at ${address} is connected to master ${masterId}`);
+          // console.log(`[RedisMonitor] Slave node ${nodeId} at ${address} is connected to master ${masterId}`);
         }
         
         // Check for master nodes and their slots
@@ -224,11 +224,11 @@ export class RedisClusterMonitor extends EventEmitter {
         // Call clearQueueAndRestartJobs if callback is set and not already recovering
         if (this.clearQueueAndRestartJobsCallback && !this.isRecoveringCluster) {
           this.isRecoveringCluster = true;
-          console.log('[RedisMonitor] Calling clearQueueAndRestartJobs to recover cluster');
+          // console.log('[RedisMonitor] Calling clearQueueAndRestartJobs to recover cluster');
           
           try {
             await this.clearQueueAndRestartJobsCallback();
-            console.log('[RedisMonitor] clearQueueAndRestartJobs completed successfully');
+            // console.log('[RedisMonitor] clearQueueAndRestartJobs completed successfully');
           } catch (recoveryError) {
             console.error('[RedisMonitor] Error during clearQueueAndRestartJobs:', recoveryError);
           } finally {
@@ -238,7 +238,7 @@ export class RedisClusterMonitor extends EventEmitter {
             }, 60000); // Wait 1 minute before allowing another recovery
           }
         } else if (this.isRecoveringCluster) {
-          console.log('[RedisMonitor] Cluster recovery already in progress, skipping');
+          // console.log('[RedisMonitor] Cluster recovery already in progress, skipping');
         }
       }
       
@@ -269,7 +269,7 @@ export class RedisClusterMonitor extends EventEmitter {
   
   public setClearQueueAndRestartJobsCallback(callback: () => Promise<void>): void {
     this.clearQueueAndRestartJobsCallback = callback;
-    console.log('[RedisMonitor] clearQueueAndRestartJobs callback registered');
+    // console.log('[RedisMonitor] clearQueueAndRestartJobs callback registered');
   }
 }
 
@@ -291,7 +291,7 @@ export function startRedisClusterMonitoring(clearQueueAndRestartJobsCallback?: (
   });
   
   redisClusterMonitor.on('clusterRecovered', (status: ClusterHealthStatus) => {
-    console.log('[RedisMonitor] Cluster recovered event:', status);
+    // console.log('[RedisMonitor] Cluster recovered event:', status);
   });
   
   redisClusterMonitor.on('clusterCriticalFailure', (status: ClusterHealthStatus) => {

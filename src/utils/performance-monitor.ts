@@ -80,12 +80,12 @@ export class PerformanceMonitor {
       
       // Log metrics in development
       if (process.env.NODE_ENV === 'development' || process.env.PERF_MONITOR === 'true') {
-        console.log(`[PERF] ${functionName}:`, {
-          executionTime: `${executionTime.toFixed(2)}ms`,
-          cpuUser: `${cpuUsageDelta.user}ms`,
-          cpuSystem: `${cpuUsageDelta.system}ms`,
-          memoryDelta: `${(metrics.memoryDelta.heapUsed / 1024 / 1024).toFixed(2)}MB`
-        });
+        // console.log(`[PERF] ${functionName}:`, {
+          // executionTime: `${executionTime.toFixed(2)}ms`,
+          // cpuUser: `${cpuUsageDelta.user}ms`,
+          // cpuSystem: `${cpuUsageDelta.system}ms`,
+          // memoryDelta: `${(metrics.memoryDelta.heapUsed / 1024 / 1024).toFixed(2)}MB`
+        // });
       }
       
       return result;
@@ -151,39 +151,39 @@ export class PerformanceMonitor {
   }
 
   static printReport(functionName?: string): void {
-    console.log('\n========== PERFORMANCE REPORT ==========');
+    // console.log('\n========== PERFORMANCE REPORT ==========');
     
     if (functionName) {
       const metrics = this.aggregatedMetrics.get(functionName);
       if (metrics) {
-        console.log(`\nFunction: ${functionName}`);
-        console.log(`  Calls: ${metrics.count}`);
-        console.log(`  Avg Time: ${metrics.avgTime.toFixed(2)}ms`);
-        console.log(`  Min Time: ${metrics.minTime.toFixed(2)}ms`);
-        console.log(`  Max Time: ${metrics.maxTime.toFixed(2)}ms`);
-        console.log(`  Avg Memory Delta: ${(metrics.avgMemoryDelta.heapUsed / 1024 / 1024).toFixed(2)}MB`);
+        // console.log(`\nFunction: ${functionName}`);
+        // console.log(`  Calls: ${metrics.count}`);
+        // console.log(`  Avg Time: ${metrics.avgTime.toFixed(2)}ms`);
+        // console.log(`  Min Time: ${metrics.minTime.toFixed(2)}ms`);
+        // console.log(`  Max Time: ${metrics.maxTime.toFixed(2)}ms`);
+        // console.log(`  Avg Memory Delta: ${(metrics.avgMemoryDelta.heapUsed / 1024 / 1024).toFixed(2)}MB`);
       }
     } else {
       this.aggregatedMetrics.forEach((metrics, name) => {
-        console.log(`\nFunction: ${name}`);
-        console.log(`  Calls: ${metrics.count}`);
-        console.log(`  Avg Time: ${metrics.avgTime.toFixed(2)}ms`);
-        console.log(`  Min Time: ${metrics.minTime.toFixed(2)}ms`);
-        console.log(`  Max Time: ${metrics.maxTime.toFixed(2)}ms`);
-        console.log(`  Avg Memory Delta: ${(metrics.avgMemoryDelta.heapUsed / 1024 / 1024).toFixed(2)}MB`);
+        // console.log(`\nFunction: ${name}`);
+        // console.log(`  Calls: ${metrics.count}`);
+        // console.log(`  Avg Time: ${metrics.avgTime.toFixed(2)}ms`);
+        // console.log(`  Min Time: ${metrics.minTime.toFixed(2)}ms`);
+        // console.log(`  Max Time: ${metrics.maxTime.toFixed(2)}ms`);
+        // console.log(`  Avg Memory Delta: ${(metrics.avgMemoryDelta.heapUsed / 1024 / 1024).toFixed(2)}MB`);
       });
     }
     
     const systemInfo = this.getSystemInfo();
-    console.log('\n========== SYSTEM INFO ==========');
-    console.log(`Platform: ${systemInfo.platform}`);
-    console.log(`Node Version: ${systemInfo.nodeVersion}`);
-    console.log(`Process Uptime: ${(systemInfo.processUptime / 60).toFixed(2)} minutes`);
-    console.log(`Total Memory: ${(systemInfo.totalMemory / 1024 / 1024 / 1024).toFixed(2)}GB`);
-    console.log(`Free Memory: ${(systemInfo.freeMemory / 1024 / 1024 / 1024).toFixed(2)}GB`);
-    console.log(`Load Average (1m, 5m, 15m): ${systemInfo.loadAvg.map(l => l.toFixed(2)).join(', ')}`);
-    console.log(`Process Memory: RSS: ${(systemInfo.processMemory.rss / 1024 / 1024).toFixed(2)}MB, Heap: ${(systemInfo.processMemory.heapUsed / 1024 / 1024).toFixed(2)}MB`);
-    console.log('======================================\n');
+    // console.log('\n========== SYSTEM INFO ==========');
+    // console.log(`Platform: ${systemInfo.platform}`);
+    // console.log(`Node Version: ${systemInfo.nodeVersion}`);
+    // console.log(`Process Uptime: ${(systemInfo.processUptime / 60).toFixed(2)} minutes`);
+    // console.log(`Total Memory: ${(systemInfo.totalMemory / 1024 / 1024 / 1024).toFixed(2)}GB`);
+    // console.log(`Free Memory: ${(systemInfo.freeMemory / 1024 / 1024 / 1024).toFixed(2)}GB`);
+    // console.log(`Load Average (1m, 5m, 15m): ${systemInfo.loadAvg.map(l => l.toFixed(2)).join(', ')}`);
+    // console.log(`Process Memory: RSS: ${(systemInfo.processMemory.rss / 1024 / 1024).toFixed(2)}MB, Heap: ${(systemInfo.processMemory.heapUsed / 1024 / 1024).toFixed(2)}MB`);
+    // console.log('======================================\n');
   }
 
   // Export metrics to CSV
@@ -195,7 +195,7 @@ export class PerformanceMonitor {
     ).join('\n');
     
     fs.writeFileSync(filename, headers + rows);
-    console.log(`Performance metrics exported to ${filename}`);
+    // console.log(`Performance metrics exported to ${filename}`);
   }
 }
 

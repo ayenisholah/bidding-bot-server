@@ -211,17 +211,17 @@ export async function bidOnMagiceden(
   trait?: Trait,
   tokenId?: number
 ) {
-  console.log(CYAN + `[MagicEden] Starting bid process` + RESET);
-  console.log(CYAN + `  Task ID: ${taskId}` + RESET);
-  console.log(CYAN + `  Collection: ${slug}` + RESET);
-  console.log(CYAN + `  Trait: ${trait ? JSON.stringify(trait) : 'N/A'}` + RESET);
-  console.log(CYAN + `  Token ID: ${tokenId || 'N/A'}` + RESET);
-  console.log(CYAN + `  Wei Price: ${weiPrice}` + RESET);
+// console.log(CYAN + `[MagicEden] Starting bid process` + RESET);
+// console.log(CYAN + `  Task ID: ${taskId}` + RESET);
+// console.log(CYAN + `  Collection: ${slug}` + RESET);
+// console.log(CYAN + `  Trait: ${trait ? JSON.stringify(trait) : 'N/A'}` + RESET);
+// console.log(CYAN + `  Token ID: ${tokenId || 'N/A'}` + RESET);
+// console.log(CYAN + `  Wei Price: ${weiPrice}` + RESET);
 
   try {
     if (isTaskBlacklisted(taskId, 'magiceden')) {
       const error = new Error(`Bid execution blocked - task ${taskId} is stopped for MagicEden`);
-      console.log(`[MagicEden] Job execution blocked for stopped task: ${taskId}`);
+// console.log(`[MagicEden] Job execution blocked for stopped task: ${taskId}`);
       throw error;
     }
 
@@ -288,7 +288,7 @@ export async function bidOnMagiceden(
     }
 
     // Generate order directly based on bid type
-    console.log(YELLOW + `[MagicEden] Generating order structure...` + RESET);
+// console.log(YELLOW + `[MagicEden] Generating order structure...` + RESET);
     const order = generateMagicEdenOrder(
       taskId,
       slug,
@@ -302,11 +302,11 @@ export async function bidOnMagiceden(
       tokenId
     );
 
-    console.log(GREEN + `[MagicEden] Order generated successfully` + RESET);
+// console.log(GREEN + `[MagicEden] Order generated successfully` + RESET);
     if (!order) return;
 
     // Simplify the submitSignedOrderData call
-    console.log(YELLOW + `[MagicEden] Submitting signed order data...` + RESET);
+// console.log(YELLOW + `[MagicEden] Submitting signed order data...` + RESET);
     await submitSignedOrderData(
       taskId,
       roundedWei.toString(),
@@ -322,10 +322,10 @@ export async function bidOnMagiceden(
       task // Pass the cached task
     );
 
-    console.log(GREEN + `[MagicEden] Bid submitted successfully` + RESET);
+// console.log(GREEN + `[MagicEden] Bid submitted successfully` + RESET);
     return order;
   } catch (error) {
-    console.log(RED + `[MagicEden] Bid failed: ${error}` + RESET);
+// console.log(RED + `[MagicEden] Bid failed: ${error}` + RESET);
     throw error;
   }
 }
@@ -362,7 +362,7 @@ function generateMagicEdenOrder(
 
   // Calculate marketplace fee (0.5% = 50 basis points)
   const marketplaceFee = Math.floor(Number(weiPrice) * 50 / 10000).toString();
-  console.log(CYAN + `[MagicEden] Marketplace fee calculated: ${marketplaceFee} (0.5% of ${weiPrice})` + RESET);
+// console.log(CYAN + `[MagicEden] Marketplace fee calculated: ${marketplaceFee} (0.5% of ${weiPrice})` + RESET);
 
   if (tokenId) {
     // TOKEN bid - uses seaport-v1.6
@@ -703,7 +703,7 @@ async function sendSignedOrderData(
 
     // check if the tasks is still active before you make the offer
     if (isTaskBlacklisted(taskId, 'magiceden')) {
-      console.log(`[MagicEden] Offer submission blocked for stopped task: ${taskId}`);
+// console.log(`[MagicEden] Offer submission blocked for stopped task: ${taskId}`);
       return;
     }
     const currentTask = activeTasks.get(taskId)
@@ -778,7 +778,7 @@ async function sendSignedOrderData(
 
       // Log successful bid
 
-      console.log(MAGENTA, successMessage, RESET);
+// console.log(MAGENTA, successMessage, RESET);
 
       if (!task) return
       return offerResponse;
@@ -794,7 +794,7 @@ async function sendSignedOrderData(
     }
   } catch (error: any) {
     if (axios.isCancel(error)) {
-      console.log(`Request for task ${taskId} was cancelled`);
+// console.log(`Request for task ${taskId} was cancelled`);
       return null;
     }
     await logger.logMagicEdenBidError('Failed to send signed order data to Magic Eden', {
@@ -836,9 +836,9 @@ export async function submitSignedOrderData(
   tokenId?: number | string,
   cachedTask?: any // Accept cached task
 ) {
-  console.log(YELLOW + `[MagicEden] submitSignedOrderData called` + RESET);
-  console.log(YELLOW + `  Trait: ${trait ? JSON.stringify(trait) : 'N/A'}` + RESET);
-  console.log(YELLOW + `  Token ID: ${tokenId || 'N/A'}` + RESET);
+// console.log(YELLOW + `[MagicEden] submitSignedOrderData called` + RESET);
+// console.log(YELLOW + `  Trait: ${trait ? JSON.stringify(trait) : 'N/A'}` + RESET);
+// console.log(YELLOW + `  Token ID: ${tokenId || 'N/A'}` + RESET);
 
   const task = cachedTask || currentTasks.find((task) =>
     task.contract.slug.toLowerCase() === slug.toLowerCase() &&
@@ -854,8 +854,8 @@ export async function submitSignedOrderData(
       for (const item of step.items) {
         // Log consideration before changes
         if (item.data?.sign?.value?.consideration) {
-          console.log(CYAN + `[MagicEden] Consideration array:` + RESET);
-          console.log(JSON.stringify(item.data.sign.value.consideration, null, 2));
+// console.log(CYAN + `[MagicEden] Consideration array:` + RESET);
+// console.log(JSON.stringify(item.data.sign.value.consideration, null, 2));
         }
 
         // Set source
@@ -1028,11 +1028,11 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
     ))
     if (cancelResponse) {
       if (process.env.NODE_ENV !== 'production') {
-        console.log(JSON.stringify(cancelResponse));
+// console.log(JSON.stringify(cancelResponse));
       }
     }
     if (process.env.NODE_ENV !== 'production') {
-      console.log(`Successfully cancelled ${orderIds.length} MagicEden bids for task: ${taskId}`.toUpperCase());
+// console.log(`Successfully cancelled ${orderIds.length} MagicEden bids for task: ${taskId}`.toUpperCase());
     }
     orderIds.forEach(() => {
       decrementBidCount('magiceden', taskId);
@@ -1042,7 +1042,7 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
     cancellationTracker.recordCompletion(taskId, orderIds.length, 'magiceden');
 
     // Update cancellation percentage using centralized function
-    await updateTaskCancellationPercentage(taskId);
+    await updateTaskCancellationPercentage(taskId, undefined, 'magiceden');
 
   } catch (error: any) {
     const errorMessage = error?.response?.data?.message || error?.message || error;
@@ -1050,7 +1050,7 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
     // Check if this is a "No matching order(s)" error - this means the order was already cancelled
     if (errorMessage?.includes('No matching order') || error?.response?.status === 404) {
       if (process.env.NODE_ENV !== 'production') {
-        console.log(YELLOW + `[MagicEden] Orders already cancelled or not found for task: ${taskId} (${orderIds.length} orders)` + RESET);
+// console.log(YELLOW + `[MagicEden] Orders already cancelled or not found for task: ${taskId} (${orderIds.length} orders)` + RESET);
       }
 
       // Still track as completed since the orders are effectively cancelled
@@ -1062,7 +1062,7 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
       cancellationTracker.recordCompletion(taskId, orderIds.length, 'magiceden');
 
       // Update cancellation percentage
-      await updateTaskCancellationPercentage(taskId);
+      await updateTaskCancellationPercentage(taskId, undefined, 'magiceden');
 
       // Don't throw error for already cancelled orders
       return;
@@ -1071,9 +1071,9 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
     // For other errors, log and throw as before
     const message = `Error cancelling MagicEden bid: ${errorMessage}`;
     if (process.env.NODE_ENV !== 'production') {
-      console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-      console.log(RED + message + RESET);
-      console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
+// console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
+// console.log(RED + message + RESET);
+// console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
     }
     await logger.logMagicEdenBidError('Failed to cancel MagicEden bid', {
       taskId,

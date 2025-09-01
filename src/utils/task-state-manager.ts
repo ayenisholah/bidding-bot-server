@@ -53,6 +53,7 @@ const STATE_TRANSITIONS: StateTransition[] = [
   { from: ['SCHEDULED'], to: 'CANCELLING' },
   { from: ['CANCELLING'], to: 'STOPPED', condition: (state) => state.cancellationPercentage >= 100 },
   { from: ['STOPPED'], to: 'STARTED' },
+  { from: ['STOPPED'], to: 'CANCELLING' }, // Added for stopTask flow
 ];
 
 export class TaskStateManager {
@@ -77,14 +78,14 @@ export class TaskStateManager {
     const timestamp = new Date().toISOString();
     const stackTrace = new Error().stack?.split('\n').slice(2, 5).join('\n    ');
     
-    console.log(`\n[TaskStateManager-TRANSITION] ${timestamp} Task ${taskId}`);
-    console.log(`  Attempting lock acquisition for key: ${lockKey}`);
+    // console.log(`\n[TaskStateManager-TRANSITION] ${timestamp} Task ${taskId}`);
+// console.log(`  Attempting lock acquisition for key: ${lockKey}`);
     
     const lockStartTime = Date.now();
     
     return await this.lockManager.withLock(lockKey, async () => {
       const lockAcquiredTime = Date.now() - lockStartTime;
-      console.log(`  Lock acquired in ${lockAcquiredTime}ms`);
+// console.log(`  Lock acquired in ${lockAcquiredTime}ms`);
       
       const currentState = this.taskStatus.get(taskId);
       if (!currentState) {
@@ -94,15 +95,15 @@ export class TaskStateManager {
         return false;
       }
 
-      console.log(`  Current state: ${JSON.stringify({
-        status: currentState.status,
-        version: currentState.version,
-        runningPercentage: currentState.runningPercentage,
-        cancellationPercentage: currentState.cancellationPercentage,
-        waitingTime: currentState.waitingTime,
-        lastUpdate: currentState.lastUpdate ? new Date(currentState.lastUpdate).toISOString() : 'N/A'
-      }, null, 2)}`);
-      console.log(`  Requested transition: ${currentState.status} -> ${newStatus}`);
+// console.log(`  Current state: ${JSON.stringify({
+        // status: currentState.status,
+        // version: currentState.version,
+        // runningPercentage: currentState.runningPercentage,
+        // cancellationPercentage: currentState.cancellationPercentage,
+        // waitingTime: currentState.waitingTime,
+        // lastUpdate: currentState.lastUpdate ? new Date(currentState.lastUpdate).toISOString() : 'N/A'
+      // }, null, 2)}`);
+// console.log(`  Requested transition: ${currentState.status} -> ${newStatus}`);
 
       // Validate state transition
       const validTransition = STATE_TRANSITIONS.find(t => 
@@ -141,7 +142,7 @@ export class TaskStateManager {
 
       // Apply custom updates if provided
       if (updater) {
-        console.log(`  Applying custom updater function`);
+// console.log(`  Applying custom updater function`);
         updater(updatedState);
       }
 
@@ -150,15 +151,15 @@ export class TaskStateManager {
       // Notify listeners
       this.notifyStateChange(taskId, oldStatus, newStatus);
 
-      console.log(`[StateManager] Task ${taskId} transitioned successfully`);
-      console.log(`  From: ${oldStatus} (v${currentState.version || 0})`);
-      console.log(`  To: ${newStatus} (v${updatedState.version})`);
-      console.log(`  Updated state: ${JSON.stringify({
-        status: updatedState.status,
-        version: updatedState.version,
-        runningPercentage: updatedState.runningPercentage,
-        cancellationPercentage: updatedState.cancellationPercentage
-      }, null, 2)}`);
+      // console.log(`[StateManager] Task ${taskId} transitioned successfully`);
+// console.log(`  From: ${oldStatus} (v${currentState.version || 0})`);
+// console.log(`  To: ${newStatus} (v${updatedState.version})`);
+// console.log(`  Updated state: ${JSON.stringify({
+        // status: updatedState.status,
+        // version: updatedState.version,
+        // runningPercentage: updatedState.runningPercentage,
+        // cancellationPercentage: updatedState.cancellationPercentage
+      // }, null, 2)}`);
       
       return true;
     }, 30) || false;
@@ -170,16 +171,16 @@ export class TaskStateManager {
     const timestamp = new Date().toISOString();
     const stackTrace = new Error().stack?.split('\n').slice(2, 5).join('\n    ');
     
-    console.log(`\n[TaskStateManager-INIT] ${timestamp} Task ${taskId}`);
-    console.log(`  Initial status: ${status}`);
-    console.log(`  Lock key: ${lockKey}`);
-    console.log(`  Called from:\n    ${stackTrace}`);
+    // console.log(`\n[TaskStateManager-INIT] ${timestamp} Task ${taskId}`);
+// console.log(`  Initial status: ${status}`);
+// console.log(`  Lock key: ${lockKey}`);
+// console.log(`  Called from:\n    ${stackTrace}`);
     
     const lockStartTime = Date.now();
     
     await this.lockManager.withLock(lockKey, async () => {
       const lockAcquiredTime = Date.now() - lockStartTime;
-      console.log(`  Lock acquired in ${lockAcquiredTime}ms`);
+// console.log(`  Lock acquired in ${lockAcquiredTime}ms`);
       
       if (!this.taskStatus.has(taskId)) {
         const initialState: TaskStatusInfo = {
@@ -194,13 +195,13 @@ export class TaskStateManager {
         
         this.taskStatus.set(taskId, initialState);
         
-        console.log(`  Task state initialized successfully`);
-        console.log(`  Initial state: ${JSON.stringify(initialState, null, 2)}`);
-        console.log(`  Total tasks in manager: ${this.taskStatus.size}`);
+// console.log(`  Task state initialized successfully`);
+// console.log(`  Initial state: ${JSON.stringify(initialState, null, 2)}`);
+console.log(`  Total tasks in manager: ${this.taskStatus.size}`);
       } else {
         const existingState = this.taskStatus.get(taskId);
-        console.log(`  Task already exists in state manager`);
-        console.log(`  Existing state: ${JSON.stringify(existingState, null, 2)}`);
+// console.log(`  Task already exists in state manager`);
+// console.log(`  Existing state: ${JSON.stringify(existingState, null, 2)}`);
       }
     }, 30);
   }
@@ -215,8 +216,8 @@ export class TaskStateManager {
     const lockKey = `task-state:${taskId}`;
     const timestamp = new Date().toISOString();
     
-    console.log(`\n[TaskStateManager-PROGRESS] ${timestamp} Task ${taskId}`);
-    console.log(`  Updates: ${JSON.stringify(updates, null, 2)}`);
+    // console.log(`\n[TaskStateManager-PROGRESS] ${timestamp} Task ${taskId}`);
+// console.log(`  Updates: ${JSON.stringify(updates, null, 2)}`);
     
     await this.lockManager.withLock(lockKey, async () => {
       const current = this.taskStatus.get(taskId);
@@ -232,19 +233,19 @@ export class TaskStateManager {
         
         this.taskStatus.set(taskId, updatedState);
         
-        console.log(`  Progress updated successfully`);
-        console.log(`  Previous: ${JSON.stringify({
-          runningPercentage: previousState.runningPercentage,
-          cancellationPercentage: previousState.cancellationPercentage,
-          processingPercentage: previousState.processingPercentage,
-          waitingTime: previousState.waitingTime
-        }, null, 2)}`);
-        console.log(`  Current: ${JSON.stringify({
-          runningPercentage: updatedState.runningPercentage,
-          cancellationPercentage: updatedState.cancellationPercentage,
-          processingPercentage: updatedState.processingPercentage,
-          waitingTime: updatedState.waitingTime
-        }, null, 2)}`);
+// console.log(`  Progress updated successfully`);
+// console.log(`  Previous: ${JSON.stringify({
+          // runningPercentage: previousState.runningPercentage,
+          // cancellationPercentage: previousState.cancellationPercentage,
+          // processingPercentage: previousState.processingPercentage,
+          // waitingTime: previousState.waitingTime
+        // }, null, 2)}`);
+// console.log(`  Current: ${JSON.stringify({
+          // runningPercentage: updatedState.runningPercentage,
+          // cancellationPercentage: updatedState.cancellationPercentage,
+          // processingPercentage: updatedState.processingPercentage,
+          // waitingTime: updatedState.waitingTime
+        // }, null, 2)}`);
       } else {
         console.error(`  Task ${taskId} not found in state manager`);
       }

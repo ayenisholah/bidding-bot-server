@@ -128,11 +128,11 @@ export async function fetchTokenMetadata(
   // Check cache first
   const cached = await tokenTraitCache.getTokenTraits(contractAddress, tokenId);
   if (cached) {
-    console.log(BLUE + `[TOKEN METADATA] Using cached traits for ${contractAddress}:${tokenId}` + RESET);
+    // console.log(BLUE + `[TOKEN METADATA] Using cached traits for ${contractAddress}:${tokenId}` + RESET);
     return cached;
   }
 
-  console.log(CYAN + `[TOKEN METADATA] Fetching traits from OpenSea for ${contractAddress}:${tokenId}` + RESET);
+  // console.log(CYAN + `[TOKEN METADATA] Fetching traits from OpenSea for ${contractAddress}:${tokenId}` + RESET);
 
   try {
     const response = await limiter.schedule(() =>
@@ -155,7 +155,7 @@ export async function fetchTokenMetadata(
     );
 
     if (!response.data?.data?.contract?.nft) {
-      console.log(YELLOW + `[TOKEN METADATA] No metadata found for ${contractAddress}:${tokenId}` + RESET);
+      // console.log(YELLOW + `[TOKEN METADATA] No metadata found for ${contractAddress}:${tokenId}` + RESET);
       return null;
     }
 
@@ -179,7 +179,7 @@ export async function fetchTokenMetadata(
     // Cache the result
     await tokenTraitCache.setTokenTraits(tokenTraitData);
 
-    console.log(GREEN + `[TOKEN METADATA] Successfully fetched ${traits.length} traits for ${contractAddress}:${tokenId}` + RESET);
+    // console.log(GREEN + `[TOKEN METADATA] Successfully fetched ${traits.length} traits for ${contractAddress}:${tokenId}` + RESET);
 
     logger.logInfo(ErrorCategory.API, 'Token metadata fetched successfully', {
       contractAddress,
@@ -194,7 +194,7 @@ export async function fetchTokenMetadata(
   } catch (error: any) {
     // Handle specific error cases
     if (error.response?.status === 400) {
-      console.log(YELLOW + `[TOKEN METADATA] Bad request for ${contractAddress}:${tokenId} - Token might not exist or be unsupported` + RESET);
+      // console.log(YELLOW + `[TOKEN METADATA] Bad request for ${contractAddress}:${tokenId} - Token might not exist or be unsupported` + RESET);
       
       // Don't log full error for 400s to reduce noise
       logger.logApiError('Token metadata bad request', {
@@ -234,7 +234,7 @@ export async function getTraitFloorPrice(
   traitType: string,
   traitValue: any
 ): Promise<number | null> {
-  console.log(CYAN + `[TOKEN METADATA] Fetching floor price for trait ${traitType}:${traitValue} in ${collectionSlug}` + RESET);
+  // console.log(CYAN + `[TOKEN METADATA] Fetching floor price for trait ${traitType}:${traitValue} in ${collectionSlug}` + RESET);
 
   try {
     // Use the collection items query with trait filter
@@ -268,13 +268,13 @@ export async function getTraitFloorPrice(
 
     const edges = response.data?.data?.collections?.edges;
     if (!edges || edges.length === 0) {
-      console.log(YELLOW + `[TOKEN METADATA] No collection data found for ${collectionSlug}` + RESET);
+      // console.log(YELLOW + `[TOKEN METADATA] No collection data found for ${collectionSlug}` + RESET);
       return null;
     }
 
     const items = edges[0]?.node?.items?.edges;
     if (!items || items.length === 0) {
-      console.log(YELLOW + `[TOKEN METADATA] No items with trait ${traitType}:${traitValue} found` + RESET);
+      // console.log(YELLOW + `[TOKEN METADATA] No items with trait ${traitType}:${traitValue} found` + RESET);
       return null;
     }
 
@@ -283,7 +283,7 @@ export async function getTraitFloorPrice(
     if (floorItem.price) {
       const price = parseFloat(floorItem.price.value) / Math.pow(10, floorItem.price.currency.decimals);
       
-      console.log(GREEN + `[TOKEN METADATA] Trait floor price: ${price} ETH` + RESET);
+      // console.log(GREEN + `[TOKEN METADATA] Trait floor price: ${price} ETH` + RESET);
       
       logger.logInfo(ErrorCategory.API, 'Trait floor price fetched', {
         collectionSlug,
@@ -332,7 +332,7 @@ export async function getTraitFilteredListings(
   price: number;
   traits: TokenTrait[];
 }>> {
-  console.log(CYAN + `[TOKEN METADATA] Fetching listings for trait ${traitType}:${traitValue} in ${collectionSlug}` + RESET);
+  // console.log(CYAN + `[TOKEN METADATA] Fetching listings for trait ${traitType}:${traitValue} in ${collectionSlug}` + RESET);
 
   try {
     const response = await limiter.schedule(() =>
@@ -390,7 +390,7 @@ export async function getTraitFilteredListings(
       };
     });
 
-    console.log(GREEN + `[TOKEN METADATA] Found ${listings.length} listings with trait ${traitType}:${traitValue}` + RESET);
+    // console.log(GREEN + `[TOKEN METADATA] Found ${listings.length} listings with trait ${traitType}:${traitValue}` + RESET);
 
     return listings;
 
@@ -420,7 +420,7 @@ export async function getTraitFilteredListings(
 export async function prefetchTokenTraits(
   tokens: Array<{ contractAddress: string; tokenId: string }>
 ): Promise<void> {
-  console.log(CYAN + `[TOKEN METADATA] Pre-fetching traits for ${tokens.length} tokens` + RESET);
+  // console.log(CYAN + `[TOKEN METADATA] Pre-fetching traits for ${tokens.length} tokens` + RESET);
 
   const fetchPromises = tokens.map(token =>
     fetchTokenMetadata(token.contractAddress, token.tokenId).catch(err => {
@@ -431,7 +431,7 @@ export async function prefetchTokenTraits(
 
   await Promise.allSettled(fetchPromises);
 
-  console.log(GREEN + `[TOKEN METADATA] Pre-fetch completed for ${tokens.length} tokens` + RESET);
+  // console.log(GREEN + `[TOKEN METADATA] Pre-fetch completed for ${tokens.length} tokens` + RESET);
 }
 
 /**
@@ -470,7 +470,7 @@ export async function getCollectionTraitFloors(
   collectionSlug: string,
   traits: Array<{ trait_type: string; value: any }>
 ): Promise<CollectionTraitStats> {
-  console.log(CYAN + `[TOKEN METADATA] Fetching floor prices for ${traits.length} traits in ${collectionSlug}` + RESET);
+  // console.log(CYAN + `[TOKEN METADATA] Fetching floor prices for ${traits.length} traits in ${collectionSlug}` + RESET);
 
   const traitFloors: TraitFloorInfo[] = [];
 
@@ -490,7 +490,7 @@ export async function getCollectionTraitFloors(
 
   await Promise.allSettled(floorPromises);
 
-  console.log(GREEN + `[TOKEN METADATA] Retrieved ${traitFloors.length} trait floor prices` + RESET);
+  // console.log(GREEN + `[TOKEN METADATA] Retrieved ${traitFloors.length} trait floor prices` + RESET);
 
   return {
     slug: collectionSlug,

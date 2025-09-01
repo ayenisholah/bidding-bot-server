@@ -92,13 +92,13 @@ export async function startTaskImproved(
   const taskId = task._id.toString();
 
   try {
-    console.log(YELLOW + `[startTask] Called with task ${taskId}, start=${start}, marketplace=${marketplace || 'all'}` + RESET);
+    // console.log(YELLOW + `[startTask] Called with task ${taskId}, start=${start}, marketplace=${marketplace || 'all'}` + RESET);
 
     // Validate API_KEY
     if (!deps.API_KEY) {
       const error = 'API_KEY is not set - cannot start task';
-      console.log(RED + error + RESET);
-      console.log(YELLOW + 'Please set API_KEY environment variable and restart' + RESET);
+      // console.log(RED + error + RESET);
+      // console.log(YELLOW + 'Please set API_KEY environment variable and restart' + RESET);
       result.errors.push(error);
       return result;
     }
@@ -106,8 +106,8 @@ export async function startTaskImproved(
     // Validate RATE_LIMIT
     if (!deps.RATE_LIMIT) {
       const error = 'RATE_LIMIT is not set - cannot start task';
-      console.log(RED + error + RESET);
-      console.log(YELLOW + 'Please set RATE_LIMIT environment variable and restart' + RESET);
+      // console.log(RED + error + RESET);
+      // console.log(YELLOW + 'Please set RATE_LIMIT environment variable and restart' + RESET);
       result.errors.push(error);
       return result;
     }
@@ -214,19 +214,19 @@ export async function startTaskImproved(
     result.metrics.duration = Date.now() - startTime;
     
     // Log performance metrics
-    console.log(CYAN + `[startTask] Completed in ${result.metrics.duration}ms for task ${taskId}` + RESET);
+    // console.log(CYAN + `[startTask] Completed in ${result.metrics.duration}ms for task ${taskId}` + RESET);
     
     if (result.metrics.duration > 5000) {
       const warning = `Task startup took ${(result.metrics.duration / 1000).toFixed(1)}s - consider optimization`;
-      console.log(YELLOW + `[Performance] ${warning}` + RESET);
+      // console.log(YELLOW + `[Performance] ${warning}` + RESET);
       result.warnings.push(warning);
     }
 
     // Log final status
     if (result.success) {
-      console.log(GREEN + `[startTask] Successfully started task ${taskId}` + RESET);
+      // console.log(GREEN + `[startTask] Successfully started task ${taskId}` + RESET);
     } else {
-      console.log(RED + `[startTask] Failed to start task ${taskId}: ${result.errors.join(', ')}` + RESET);
+      // console.log(RED + `[startTask] Failed to start task ${taskId}: ${result.errors.join(', ')}` + RESET);
     }
   }
 
@@ -261,7 +261,7 @@ function initializeTaskStatus(
   } else {
     console.log(GREEN + `Starting marketplace ${marketplace} for task ${taskId} (current status: ${taskStatus[taskId].status})` + RESET);
     if (taskStatus[taskId].previousState) {
-      console.log(YELLOW + `Clearing previousState for task ${taskId}` + RESET);
+      // console.log(YELLOW + `Clearing previousState for task ${taskId}` + RESET);
       delete taskStatus[taskId].previousState;
     }
   }
@@ -320,7 +320,7 @@ async function processWalletApprovals(
     const wallet = await walletCache.getWalletById(task.walletId);
     if (!wallet?.encryptedPrivateKey) {
       const error = `Cannot start task - wallet not found or missing private key: ${task.walletId}`;
-      console.log(RED + error + RESET);
+      // console.log(RED + error + RESET);
       result.errors.push(error);
       return { success: false, critical: true };
     }
@@ -339,7 +339,7 @@ async function processWalletApprovals(
     const selectedMarketplaces = marketplace ? [marketplace.toLowerCase()] : task.selectedMarketplaces.map(m => m.toLowerCase());
     const marketplacesToApprove = selectedMarketplaces.filter(m => validMarketplaces.includes(m));
 
-    console.log(CYAN + `Checking marketplace approvals for wallet ${wallet.address}...` + RESET);
+    // console.log(CYAN + `Checking marketplace approvals for wallet ${wallet.address}...` + RESET);
 
     // Process approvals in parallel with error handling for each
     const approvalPromises = marketplacesToApprove.map(mp => 
@@ -377,7 +377,7 @@ async function processWalletApprovals(
 
     // Log summary
     if (result.metrics.approvalsFailed > 0) {
-      console.log(YELLOW + `Warning: ${result.metrics.approvalsFailed} marketplace(s) failed approval` + RESET);
+      // console.log(YELLOW + `Warning: ${result.metrics.approvalsFailed} marketplace(s) failed approval` + RESET);
     }
 
     return { success: true, critical: false };
@@ -409,10 +409,10 @@ async function processMarketplaceApproval(
       marketplaceAddress = deps.MAGICEDEN_MARKETPLACE;
       break;
     case "blur":
-      console.log(YELLOW + `Skipping approval for Blur - not required` + RESET);
+      // console.log(YELLOW + `Skipping approval for Blur - not required` + RESET);
       return { marketplace, approved: true, cached: false };
     default:
-      console.log(YELLOW + `Unknown marketplace: ${marketplace}, skipping approval` + RESET);
+      // console.log(YELLOW + `Unknown marketplace: ${marketplace}, skipping approval` + RESET);
       return { marketplace, approved: false, cached: false, error: 'Unknown marketplace' };
   }
 
@@ -420,15 +420,15 @@ async function processMarketplaceApproval(
     // Check cache first
     const cached = await approvalCache.isApproved(wallet.address, marketplaceAddress, deps.WETH);
     if (cached) {
-      console.log(GREEN + `✓ ${marketplace} approval confirmed for wallet ${wallet.address} (cached)` + RESET);
+      // console.log(GREEN + `✓ ${marketplace} approval confirmed for wallet ${wallet.address} (cached)` + RESET);
       return { marketplace, approved: true, cached: true };
     }
 
-    console.log(CYAN + `Checking ${marketplace} approval on-chain...` + RESET);
+    // console.log(CYAN + `Checking ${marketplace} approval on-chain...` + RESET);
     const approved = await approveMarketplaceWithCache(marketplaceAddress, privateKey, deps.WETH, process.env.ALCHEMY_API_KEY || '');
 
     if (approved) {
-      console.log(GREEN + `✓ ${marketplace} approval confirmed for wallet ${wallet.address}` + RESET);
+      // console.log(GREEN + `✓ ${marketplace} approval confirmed for wallet ${wallet.address}` + RESET);
       
       // Update cache with successful approval
       try {
@@ -444,7 +444,7 @@ async function processMarketplaceApproval(
       
       return { marketplace, approved: true, cached: false };
     } else {
-      console.log(RED + `✗ Failed to approve ${marketplace} for wallet ${wallet.address}` + RESET);
+      // console.log(RED + `✗ Failed to approve ${marketplace} for wallet ${wallet.address}` + RESET);
       return { marketplace, approved: false, cached: false, error: 'Approval transaction failed' };
     }
 
@@ -476,7 +476,7 @@ async function updateTaskState(
 
   deps.addTaskToIndexes(updatedTask);
   
-  console.log(GREEN + `Updated task ${task.contract.slug} running status to: ${start}`.toUpperCase() + RESET);
+  // console.log(GREEN + `Updated task ${task.contract.slug} running status to: ${start}`.toUpperCase() + RESET);
 }
 
 /**
@@ -484,7 +484,7 @@ async function updateTaskState(
  */
 async function subscribeToWebSocket(task: ITask, deps: any): Promise<void> {
   if (deps.wsManager?.isConnected()) {
-    console.log("subscribing to collection: ", task.contract.slug);
+    // console.log("subscribing to collection: ", task.contract.slug);
     const newTask = { ...task, running: true };
     deps.subscribeToCollections([newTask]);
   } else {
@@ -507,19 +507,37 @@ async function createAndQueueJobs(
     const validMarketplaces = ["opensea", "magiceden", "blur"];
     const selectedMarketplaces = marketplace ? [marketplace.toLowerCase()] : task.selectedMarketplaces.map(m => m.toLowerCase());
     
+    // Log marketplace filtering process
+    console.log(CYAN + `[createAndQueueJobs] Filtering marketplaces for task ${taskId}:` + RESET);
+    console.log(CYAN + `  - Selected marketplaces: ${selectedMarketplaces.join(', ')}` + RESET);
+    console.log(CYAN + `  - Enabled marketplaces: ${deps.enabledMarketplaces.join(', ')}` + RESET);
+    
     // Pre-filter marketplaces
-    const availableMarketplaces = selectedMarketplaces
-      .filter(m => deps.enabledMarketplaces.map((em: string) => em.toLowerCase()).includes(m))
+    const enabledSelectedMarketplaces = selectedMarketplaces
+      .filter(m => {
+        const isEnabled = deps.enabledMarketplaces.map((em: string) => em.toLowerCase()).includes(m);
+        if (!isEnabled) {
+          console.log(YELLOW + `  ✗ Filtered out ${m} - not in enabled marketplaces` + RESET);
+          result.warnings.push(`${m} is not enabled`);
+        } else {
+          console.log(GREEN + `  ✓ Including ${m} - is enabled` + RESET);
+        }
+        return isEnabled;
+      });
+    
+    const availableMarketplaces = enabledSelectedMarketplaces
       .filter(m => validMarketplaces.includes(m))
       .filter(m => {
         if (taskCircuitBreaker.isSuspended(taskId, m)) {
-          console.log(YELLOW + `[Circuit Breaker] Skipping ${m} for task ${taskId} - currently suspended` + RESET);
+          console.log(YELLOW + `  ✗ Circuit breaker suspended ${m} for task ${taskId}` + RESET);
           result.warnings.push(`Circuit breaker suspended ${m}`);
           result.metrics.jobsSkipped++;
           return false;
         }
         return true;
       });
+    
+    console.log(CYAN + `  - Final marketplaces for job creation: ${availableMarketplaces.join(', ') || 'none'}` + RESET);
 
     const jobs = createJobs(task, start, availableMarketplaces, deps);
 
@@ -531,7 +549,7 @@ async function createAndQueueJobs(
 
       if (start === true) {
         // Loop restart - add all jobs
-        console.log(GREEN + `Loop restart: Adding ${jobs.length} jobs without deduplication` + RESET);
+        // console.log(GREEN + `Loop restart: Adding ${jobs.length} jobs without deduplication` + RESET);
         await deps.queue.addBulk(jobsWithOptions as Job[]);
         result.metrics.jobsCreated = jobs.length;
       } else {
@@ -539,12 +557,12 @@ async function createAndQueueJobs(
         const { newJobs, duplicateCount } = await deduplicateJobs(jobsWithOptions, taskId, deps);
         
         if (newJobs.length > 0) {
-          console.log(GREEN + `Adding ${newJobs.length} new jobs (filtered ${duplicateCount} duplicates)` + RESET);
+          // console.log(GREEN + `Adding ${newJobs.length} new jobs (filtered ${duplicateCount} duplicates)` + RESET);
           await deps.queue.addBulk(newJobs as Job[]);
           result.metrics.jobsCreated = newJobs.length;
           result.metrics.jobsSkipped += duplicateCount;
         } else {
-          console.log(YELLOW + `All ${jobs.length} jobs already exist in queue, skipping` + RESET);
+          // console.log(YELLOW + `All ${jobs.length} jobs already exist in queue, skipping` + RESET);
           result.metrics.jobsSkipped += jobs.length;
         }
       }
@@ -625,21 +643,15 @@ function updateTaskProgression(
   marketplace: string | undefined,
   deps: any
 ): void {
-  if (!marketplace) {
-    // Schedule status update for full task start
-    setTimeout(() => {
-      if (deps.taskStatus[taskId]?.status === 'STARTED') {
-        console.log(`[TaskProgression] Moving task ${taskId} from STARTED to RUNNING`);
-        deps.taskStatus[taskId].status = 'RUNNING';
-        deps.taskStatus[taskId].processingPercentage = 100;
-      }
-    }, 1000);
-  } else {
-    // For marketplace-specific starts
-    console.log(GREEN + `Recalculating progress for task ${taskId} after adding marketplace ${marketplace}` + RESET);
+  // For marketplace-specific starts, reset completed tasks tracking
+  if (marketplace) {
+    // console.log(GREEN + `Recalculating progress for task ${taskId} after adding marketplace ${marketplace}` + RESET);
     
     if (deps.completedTasks[taskId]) {
       deps.completedTasks[taskId][marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur'] = false;
     }
   }
+  
+  // Task will transition to RUNNING only when markJobAsProcessed is called
+  // This ensures the task is actually processing work before showing as RUNNING
 }

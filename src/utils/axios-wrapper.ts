@@ -19,7 +19,7 @@ export function wrapAxiosInstance(instance: AxiosInstance, jobIdGetter: () => st
       if (extendedConfig.metadata.jobId) {
         const url = extendedConfig.url || '';
         const method = extendedConfig.method?.toUpperCase() || 'GET';
-        console.log(`[API Request] Job ${extendedConfig.metadata.jobId} - ${method} ${url}`);
+        // console.log(`[API Request] Job ${extendedConfig.metadata.jobId} - ${method} ${url}`);
       }
 
       return extendedConfig;

@@ -13,9 +13,9 @@ export async function unsubscribeListingFromWebSocket(listing: IListing): Promis
   const contractAddress = listing.contract.contractAddress;
   const contractSlug = listing.contract.slug;
   
-  console.log(`\n=== WebSocket Unsubscription ===`);
-  console.log(`Contract: ${contractSlug} (${contractAddress})`);
-  console.log(`Token ID: ${listing.tokenId}`);
+  // console.log(`\n=== WebSocket Unsubscription ===`);
+  // console.log(`Contract: ${contractSlug} (${contractAddress})`);
+  // console.log(`Token ID: ${listing.tokenId}`);
   
   for (const marketplace of listing.selectedMarketplaces) {
     try {
@@ -24,7 +24,7 @@ export async function unsubscribeListingFromWebSocket(listing: IListing): Promis
         contractAddress,
         marketplace.toLowerCase()
       );
-      console.log(`✅ Unsubscribed from ${marketplace} listing events`);
+      // console.log(`✅ Unsubscribed from ${marketplace} listing events`);
     } catch (error) {
       console.error(`❌ Failed to unsubscribe from ${marketplace}:`, error);
       // Don't throw - unsubscription failure is not critical

@@ -38,7 +38,7 @@ export class BlurJobCoordinator {
     }));
     
     this.pendingJobs.push(...queuedJobs);
-    console.log(`[Blur Coordinator] Added ${jobs.length} jobs for task ${taskId}. Total pending: ${this.pendingJobs.length}`);
+    // console.log(`[Blur Coordinator] Added ${jobs.length} jobs for task ${taskId}. Total pending: ${this.pendingJobs.length}`);
   }
   
   /**
@@ -81,7 +81,7 @@ export class BlurJobCoordinator {
         const requiredDelay = blurCompletionTracker.getRequiredDelay(walletAddress);
         
         if (requiredDelay > 0) {
-          console.log(`[Blur Coordinator] Wallet ${walletAddress} needs ${requiredDelay}ms delay`);
+          // console.log(`[Blur Coordinator] Wallet ${walletAddress} needs ${requiredDelay}ms delay`);
           jobsToDelay.push(...walletJobs);
           continue;
         }
@@ -106,7 +106,7 @@ export class BlurJobCoordinator {
       
       // Return the jobs to be added to the actual queue
       if (jobsToProcess.length > 0) {
-        console.log(`[Blur Coordinator] Processing ${jobsToProcess.length} jobs, ${jobsToDelay.length} delayed`);
+        // console.log(`[Blur Coordinator] Processing ${jobsToProcess.length} jobs, ${jobsToDelay.length} delayed`);
         
         // Get the blur queue instance and add jobs
         const { blurQueue } = await import('../index');

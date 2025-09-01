@@ -19,7 +19,7 @@ async function withRetry<T>(fn: () => Promise<T>, retries = MAX_RETRIES): Promis
     return await fn();
   } catch (error: any) {
     if (retries > 0) {
-      console.log(`Retrying operation, ${retries} attempts remaining...`);
+      // console.log(`Retrying operation, ${retries} attempts remaining...`);
       await delay(RETRY_DELAY);
       return withRetry(fn, retries - 1);
     }
@@ -67,7 +67,7 @@ export async function approveMarketplaceWithCache(
       try {
         const cachedApproval = await redis.get(redisCacheKey);
         if (cachedApproval === 'true') {
-          console.log(`Marketplace approval found in Redis cache for ${marketplace}`);
+          // console.log(`Marketplace approval found in Redis cache for ${marketplace}`);
           return true;
         }
       } catch (cacheError) {
@@ -141,7 +141,7 @@ export async function approveMarketplaceWithCache(
           if (redis && redisClient.isReady()) {
             try {
               await redis.set(redisCacheKey, 'true', 'EX', MARKETPLACE_APPROVAL_CACHE_TTL);
-              console.log(`Cached marketplace approval for ${marketplace}`);
+              // console.log(`Cached marketplace approval for ${marketplace}`);
             } catch (error) {
               console.warn('Failed to cache marketplace approval:', error);
             }
@@ -151,17 +151,17 @@ export async function approveMarketplaceWithCache(
         }
         
         // Submit approval transaction
-        console.log(`Submitting approval transaction for ${marketplace}...`);
+        // console.log(`Submitting approval transaction for ${marketplace}...`);
         const tx = await withRetry(async () => {
           return await erc20Contract.approve(marketplace, MaxUint256);
         });
         
-        console.log(`Waiting for approval transaction confirmation...`);
+        // console.log(`Waiting for approval transaction confirmation...`);
         await withRetry(async () => {
           await tx.wait();
         });
         
-        console.log(`Marketplace ${marketplace} approved successfully`);
+        // console.log(`Marketplace ${marketplace} approved successfully`);
         
         // Update database
         const updateData = marketplaceLower === SEAPORT.toLowerCase()
@@ -181,7 +181,7 @@ export async function approveMarketplaceWithCache(
         if (redis && redisClient.isReady()) {
           try {
             await redis.set(redisCacheKey, 'true', 'EX', MARKETPLACE_APPROVAL_CACHE_TTL);
-            console.log(`Cached new marketplace approval for ${marketplace}`);
+            // console.log(`Cached new marketplace approval for ${marketplace}`);
           } catch (error) {
             console.warn('Failed to cache new marketplace approval:', error);
           }
@@ -232,7 +232,7 @@ export async function clearMarketplaceApprovalCache(
   
   try {
     await redis.del(cacheKey);
-    console.log(`Cleared marketplace approval cache for ${marketplace}`);
+    // console.log(`Cleared marketplace approval cache for ${marketplace}`);
   } catch (error) {
     console.warn('Failed to clear marketplace approval cache:', error);
   }

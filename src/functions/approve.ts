@@ -67,7 +67,7 @@ export async function approveNFT(
       try {
         const cachedApproval = await redis.get(cacheKey);
         if (cachedApproval === 'true') {
-          console.log(`NFT approval found in cache for ${nftAddress}`);
+          // console.log(`NFT approval found in cache for ${nftAddress}`);
           return;
         }
       } catch (cacheError) {
@@ -88,7 +88,7 @@ export async function approveNFT(
       if (redis && redisClient.isReady()) {
         try {
           await redis.set(cacheKey, 'true', 'EX', NFT_APPROVAL_CACHE_TTL);
-          console.log(`Cached NFT approval for ${nftAddress}`);
+          // console.log(`Cached NFT approval for ${nftAddress}`);
         } catch (cacheError) {
           console.warn('Failed to cache NFT approval:', cacheError);
         }
@@ -100,13 +100,13 @@ export async function approveNFT(
         true
       );
       await tx.wait();
-      console.log('NFT approved successfully');
+      // console.log('NFT approved successfully');
       
       // Cache the new approval
       if (redis && redisClient.isReady()) {
         try {
           await redis.set(cacheKey, 'true', 'EX', NFT_APPROVAL_CACHE_TTL);
-          console.log(`Cached new NFT approval for ${nftAddress}`);
+          // console.log(`Cached new NFT approval for ${nftAddress}`);
         } catch (cacheError) {
           console.warn('Failed to cache new NFT approval:', cacheError);
         }
@@ -123,6 +123,6 @@ export async function approveNFT(
       errorCode: err?.code,
       errorMessage: err?.reason ?? err?.message
     });
-    console.log(err?.reason ?? err?.message);
+    // console.log(err?.reason ?? err?.message);
   }
 };

@@ -167,19 +167,19 @@ export class BullMQErrorFormatter {
    */
   static printFormattedErrors() {
     if (this.errorBuffer.length === 0) {
-      console.log('No BullMQ errors in buffer');
+      // console.log('No BullMQ errors in buffer');
       return;
     }
 
-    console.log('\n=== BullMQ Lock Renewal Errors ===');
-    console.log(`Total errors: ${this.errorBuffer.length}\n`);
+    // console.log('\n=== BullMQ Lock Renewal Errors ===');
+    // console.log(`Total errors: ${this.errorBuffer.length}\n`);
 
     this.errorBuffer.forEach((error, index) => {
-      console.log(`[${index + 1}] ${error.type}`);
-      console.log(`    Job: ${error.jobName}`);
-      console.log(`    ID: ${error.jobId}`);
-      console.log(`    Time: ${error.timestamp}`);
-      console.log(`    ${error.details}\n`);
+      // console.log(`[${index + 1}] ${error.type}`);
+      // console.log(`    Job: ${error.jobName}`);
+      // console.log(`    ID: ${error.jobId}`);
+      // console.log(`    Time: ${error.timestamp}`);
+      // console.log(`    ${error.details}\n`);
     });
   }
 

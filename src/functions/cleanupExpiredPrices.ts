@@ -8,7 +8,7 @@ import { logger, ErrorCategory } from "../utils/logger";
  */
 export async function cleanupExpiredPrices(): Promise<void> {
   try {
-    console.log('Starting cleanup of expired listing prices...');
+    // console.log('Starting cleanup of expired listing prices...');
     
     const now = new Date();
     const marketplaces: Array<'opensea' | 'blur' | 'magiceden'> = ['opensea', 'blur', 'magiceden'];
@@ -22,7 +22,7 @@ export async function cleanupExpiredPrices(): Promise<void> {
       ]
     });
     
-    console.log(`Found ${listings.length} listings to check for expired prices`);
+    // console.log(`Found ${listings.length} listings to check for expired prices`);
     
     let cleanedCount = 0;
     
@@ -39,7 +39,7 @@ export async function cleanupExpiredPrices(): Promise<void> {
           // This marketplace has expired
           updates[`finalListingPrice.${marketplace}`] = 1;
           hasExpired = true;
-          console.log(`Removing expired ${marketplace} price for listing ${listing._id} (token ${listing.tokenId})`);
+          // console.log(`Removing expired ${marketplace} price for listing ${listing._id} (token ${listing.tokenId})`);
         }
       }
       
@@ -52,7 +52,7 @@ export async function cleanupExpiredPrices(): Promise<void> {
       }
     }
     
-    console.log(`Cleanup complete. Removed expired prices from ${cleanedCount} listings`);
+    // console.log(`Cleanup complete. Removed expired prices from ${cleanedCount} listings`);
 
   } catch (error) {
     console.error('Error cleaning up expired prices:', error);
@@ -68,7 +68,7 @@ export async function cleanupExpiredPrices(): Promise<void> {
  * Runs every 5 minutes by default
  */
 export function initializeExpiredPriceCleanup(intervalMinutes: number = 5): NodeJS.Timeout {
-  console.log(`Starting expired price cleanup monitor (checking every ${intervalMinutes} minutes)`);
+  // console.log(`Starting expired price cleanup monitor (checking every ${intervalMinutes} minutes)`);
   
   // Run immediately on startup
   cleanupExpiredPrices().catch(console.error);
@@ -86,5 +86,5 @@ export function initializeExpiredPriceCleanup(intervalMinutes: number = 5): Node
  */
 export function stopExpiredPriceCleanup(interval: NodeJS.Timeout): void {
   clearInterval(interval);
-  console.log('Expired price cleanup monitor stopped');
+  // console.log('Expired price cleanup monitor stopped');
 }
