@@ -18,6 +18,7 @@ export interface EnhancedTaskStatusInfo {
   status: EnhancedTaskStatus;
   runningPercentage: number;
   cancellationPercentage: number;
+  displayCancellationPercentage?: number; // For UI display (job-based progress)
   processingPercentage: number;
   queueingPercentage: number;
   waitingTime: number;
@@ -199,6 +200,13 @@ export class EnhancedTaskStateManager {
 
       // Check transition condition if any
       if (validTransition.condition && !validTransition.condition(currentState)) {
+        // Special logging for cancellation transitions
+        if (currentState.status === 'CANCELLING' && newStatus === 'STOPPED') {
+          console.log(`[StateTransition] Task ${taskId}: CANCELLING->STOPPED transition blocked`);
+          console.log(`[StateTransition] Task ${taskId}: Current cancellation percentage: ${currentState.cancellationPercentage}%`);
+          console.log(`[StateTransition] Task ${taskId}: Required: >= 100%`);
+        }
+        
         await logger.logError(ErrorCategory.STATE_MANAGEMENT, `State transition condition not met for task ${taskId}`, {
           taskId,
           currentStatus: currentState.status,
@@ -209,6 +217,13 @@ export class EnhancedTaskStateManager {
       }
 
       const oldStatus = currentState.status;
+      
+      // Special logging for critical transitions
+      if (oldStatus === 'CANCELLING' && newStatus === 'STOPPED') {
+        console.log(`[StateTransition] *** CRITICAL TRANSITION *** Task ${taskId}: ${oldStatus} -> ${newStatus}`);
+        console.log(`[StateTransition] Task ${taskId}: Final cancellation percentage: ${currentState.cancellationPercentage}%`);
+        console.log(`[StateTransition] Task ${taskId}: Transition allowed because: >= 100% condition met`);
+      }
       
       // Update state with version increment
       const updatedState: EnhancedTaskStatusInfo = {
@@ -406,20 +421,92 @@ export class EnhancedTaskStateManager {
     const state = this.taskStatus.get(taskId);
     if (!state || state.status !== 'CANCELLING') return;
 
+    console.log(`[CancellationProgress] Task ${taskId}: Handling cancellation progress${marketplace ? ` for ${marketplace}` : ' (all marketplaces)'}`);
+    console.log(`[CancellationProgress] Task ${taskId}: Current state percentage: ${state.cancellationPercentage}%`);
+
     let cancellationPercentage: number;
+    let displayPercentage: number;
 
     if (marketplace) {
       // Single marketplace cancellation
+      console.log(`[CancellationProgress] Task ${taskId}: Calculating marketplace-specific percentage for ${marketplace}`);
       cancellationPercentage = await this.calculateMarketplaceCancellationPercentage(taskId, marketplace);
+      displayPercentage = cancellationPercentage; // For single marketplace, they're the same
     } else {
       // Combined cancellation with proper weighting
+      console.log(`[CancellationProgress] Task ${taskId}: Calculating weighted percentage across all marketplaces`);
       cancellationPercentage = await this.calculateWeightedCancellationPercentage(taskId);
+      displayPercentage = await this.calculateDisplayCancellationPercentage(taskId);
     }
 
-    await this.updateTaskProgress(taskId, { cancellationPercentage });
+    console.log(`[CancellationProgress] Task ${taskId}: Calculated state percentage: ${cancellationPercentage}%`);
+    console.log(`[CancellationProgress] Task ${taskId}: Calculated display percentage: ${displayPercentage}%`);
+    console.log(`[CancellationProgress] Task ${taskId}: Updating task progress to state: ${cancellationPercentage}%`);
+
+    // Update both state percentage (for transitions) and display percentage (for UI)
+    await this.updateTaskProgress(taskId, { 
+      cancellationPercentage,
+      // Add display percentage for UI if different
+      ...(displayPercentage !== cancellationPercentage && { displayCancellationPercentage: displayPercentage })
+    });
+
+    // Check if this triggers a state transition
+    const updatedState = this.taskStatus.get(taskId);
+    if (updatedState && updatedState.cancellationPercentage >= 100) {
+      console.log(`[CancellationProgress] Task ${taskId}: *** PERCENTAGE AT 100% - SHOULD TRIGGER TRANSITION ***`);
+      console.log(`[CancellationProgress] Task ${taskId}: Current status: ${updatedState.status}`);
+    } else if (displayPercentage >= 100) {
+      console.log(`[CancellationProgress] Task ${taskId}: Display at 100% but state at ${cancellationPercentage}% - NO TRANSITION YET`);
+    }
 
     // Don't auto-complete here - let the verification mechanism handle it
     // This prevents premature completion when jobs are still processing
+  }
+
+  /**
+   * Calculate display cancellation percentage (for UI) - uses job progress
+   */
+  private async calculateDisplayCancellationPercentage(taskId: string): Promise<number> {
+    const Order = await import('../models/order.model');
+    const [currentOpenSeaCount, currentMagicEdenCount, currentBlurCount] = await Promise.all([
+      Order.default.countDocuments({ taskId, marketplace: 'opensea' }),
+      Order.default.countDocuments({ taskId, marketplace: 'magiceden' }),
+      Order.default.countDocuments({ taskId, marketplace: 'blur' })
+    ]);
+
+    const currentTotalCount = currentOpenSeaCount + currentMagicEdenCount + currentBlurCount;
+    if (currentTotalCount === 0) return 100;
+
+    const initialCounts = await this.getInitialOrderCounts(taskId);
+    const totalInitialCount = initialCounts.opensea + initialCounts.magiceden + initialCounts.blur;
+    if (totalInitialCount === 0) return 100;
+    
+    const actualPercentage = ((totalInitialCount - currentTotalCount) / totalInitialCount) * 100;
+
+    // Check parent job progress
+    let parentJobPercentage = 0;
+    const marketplaces = [
+      { name: 'opensea', initialCount: initialCounts.opensea },
+      { name: 'magiceden', initialCount: initialCounts.magiceden },
+      { name: 'blur', initialCount: initialCounts.blur }
+    ];
+
+    for (const { name, initialCount } of marketplaces) {
+      if (initialCount > 0) {
+        const parentJobId = `${taskId}-CANCEL_${name.toUpperCase()}_BID`;
+        const parentJob = this.parentJobs.get(parentJobId);
+        
+        if (parentJob && parentJob.totalJobs > 0) {
+          const progress = parentJob.completedJobs + parentJob.failedJobs;
+          const percentage = (progress / parentJob.totalJobs) * 100;
+          const weight = initialCount / totalInitialCount;
+          parentJobPercentage += weight * percentage;
+        }
+      }
+    }
+
+    // For display, use the higher of the two (shows progress even before orders are deleted)
+    return Math.min(Math.max(actualPercentage, parentJobPercentage), 100);
   }
 
   /**
@@ -446,7 +533,7 @@ export class EnhancedTaskStateManager {
     const initialCounts = await this.getInitialOrderCounts(taskId);
     const totalInitialCount = initialCounts.opensea + initialCounts.magiceden + initialCounts.blur;
     
-    // Log for debugging
+    // Enhanced debugging - always log for analysis
     console.log(`[CancellationCalc] Task ${taskId}: Initial counts - OpenSea: ${initialCounts.opensea}, MagicEden: ${initialCounts.magiceden}, Blur: ${initialCounts.blur}`);
     console.log(`[CancellationCalc] Task ${taskId}: Current counts - OpenSea: ${currentOpenSeaCount}, MagicEden: ${currentMagicEdenCount}, Blur: ${currentBlurCount}`);
     
@@ -489,12 +576,25 @@ export class EnhancedTaskStateManager {
     
     console.log(`[CancellationCalc] Task ${taskId}: Parent job percentage: ${parentJobPercentage.toFixed(2)}%`);
 
-    // Use the higher of the two percentages (actual orders cancelled vs job progress)
-    // This ensures we show progress even if orders haven't been deleted yet
-    const finalPercentage = Math.min(Math.max(actualPercentage, parentJobPercentage), 100);
-    console.log(`[CancellationCalc] Task ${taskId}: Final percentage: ${finalPercentage.toFixed(2)}%`);
+    // CRITICAL FIX: Only use actual order percentage for state transitions
+    // Job progress can be used for UI display, but state transitions should only happen when orders are actually cancelled
     
-    return finalPercentage;
+    // For display purposes, show progress based on job completion
+    const displayPercentage = Math.min(Math.max(actualPercentage, parentJobPercentage), 100);
+    
+    // For state transitions, only use actual order deletion percentage
+    const transitionPercentage = Math.min(actualPercentage, 100);
+    
+    // Critical logging for transition analysis
+    console.log(`[CancellationCalc] Task ${taskId}: *** TRANSITION DECISION ***`);
+    console.log(`[CancellationCalc] Task ${taskId}: Actual order percentage: ${actualPercentage.toFixed(2)}%`);
+    console.log(`[CancellationCalc] Task ${taskId}: Parent job percentage: ${parentJobPercentage.toFixed(2)}%`);
+    console.log(`[CancellationCalc] Task ${taskId}: Display percentage (UI): ${displayPercentage.toFixed(2)}%`);
+    console.log(`[CancellationCalc] Task ${taskId}: Transition percentage (State): ${transitionPercentage.toFixed(2)}%`);
+    console.log(`[CancellationCalc] Task ${taskId}: Will transition to STOPPED: ${transitionPercentage >= 100 ? 'YES' : 'NO'}`);
+    
+    // Return the transition percentage (based on actual order deletion) for state management
+    return transitionPercentage;
   }
 
   /**
@@ -680,7 +780,7 @@ export class EnhancedTaskStateManager {
     const state = this.taskStatus.get(taskId);
     if (!state || state.status !== 'CANCELLING') return;
     
-    console.log(`[RecalculateCancellation] Forcing recalculation for task ${taskId}`);
+// console.log(`[RecalculateCancellation] Forcing recalculation for task ${taskId}`);
     
     // Recalculate and update
     await this.handleCancellationProgress(taskId);
@@ -690,7 +790,7 @@ export class EnhancedTaskStateManager {
     const remainingOrders = await Order.default.countDocuments({ taskId });
     
     if (remainingOrders === 0) {
-      console.log(`[RecalculateCancellation] No orders remaining for task ${taskId}, forcing completion`);
+// console.log(`[RecalculateCancellation] No orders remaining for task ${taskId}, forcing completion`);
       await this.updateTaskProgress(taskId, { cancellationPercentage: 100 });
       await this.transitionState(taskId, 'STOPPED', (state) => {
         state.cancellationPercentage = 100;

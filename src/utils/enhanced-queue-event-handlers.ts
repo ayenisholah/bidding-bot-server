@@ -61,7 +61,7 @@ export class EnhancedQueueEventHandlerManager {
         return;
       }
 
-      console.log(BLUE + `Job ${jobId} is queued and waiting` + RESET);
+      // console.log(BLUE + `Job ${jobId} is queued and waiting` + RESET);
 
       // Update state for job queued
       await this.stateManager.handleJobQueued(jobId);
@@ -90,7 +90,7 @@ export class EnhancedQueueEventHandlerManager {
       const state = this.stateManager.getTaskState(taskId);
       if (!state) return;
 
-      console.log(GREEN + `Job ${jobId} is now active` + RESET);
+      // console.log(GREEN + `Job ${jobId} is now active` + RESET);
 
       // Transition to RUNNING if we're in QUEUED state
       if (state.status === 'QUEUED') {
@@ -129,7 +129,7 @@ export class EnhancedQueueEventHandlerManager {
         return;
       }
 
-      console.log(GREEN + `Job ${jobId} completed successfully` + RESET);
+      // console.log(GREEN + `Job ${jobId} completed successfully` + RESET);
 
       // Handle cancellation jobs
       if (parsed.jobType === 'CANCEL') {
@@ -162,7 +162,7 @@ export class EnhancedQueueEventHandlerManager {
         return;
       }
 
-      console.log(`${YELLOW}Job ${jobId} failed: ${failedReason}${RESET}`);
+      // console.log(`${YELLOW}Job ${jobId} failed: ${failedReason}${RESET}`);
 
       // Handle cancellation job failures
       if (parsed.jobType === 'CANCEL') {
@@ -190,7 +190,7 @@ export class EnhancedQueueEventHandlerManager {
    */
   private async handleJobStalled({ jobId }: { jobId: string }): Promise<void> {
     try {
-      console.log(`${YELLOW}Job ${jobId} has stalled${RESET}`);
+      // console.log(`${YELLOW}Job ${jobId} has stalled${RESET}`);
 
       // Log stalled job for monitoring
       await logger.logError(ErrorCategory.QUEUE, 'Job stalled', { jobId });
@@ -212,7 +212,7 @@ export class EnhancedQueueEventHandlerManager {
     if (!marketplace) return;
 
     // This will be handled by the parent job tracking system
-    console.log(BLUE + `Cancellation job ${jobId} queued for ${marketplace}` + RESET);
+    // console.log(BLUE + `Cancellation job ${jobId} queued for ${marketplace}` + RESET);
   }
 
   /**
@@ -224,7 +224,7 @@ export class EnhancedQueueEventHandlerManager {
 
     if (!marketplace) return;
 
-    console.log(GREEN + `Cancellation job ${jobId} completed for ${marketplace}` + RESET);
+    console.log(`[CancellationJob] Job ${jobId} completed for ${marketplace} (Task: ${taskId})`);
 
     // Update cancellation progress
     await this.stateManager.handleCancellationProgress(taskId, marketplace);
@@ -239,7 +239,7 @@ export class EnhancedQueueEventHandlerManager {
 
     if (!marketplace) return;
 
-    console.log(YELLOW + `Cancellation job ${jobId} failed for ${marketplace}` + RESET);
+    console.log(`[CancellationJob] Job ${jobId} FAILED for ${marketplace} (Task: ${taskId})`);
 
     // Update cancellation progress (failed jobs still count as progress)
     await this.stateManager.handleCancellationProgress(taskId, marketplace);
@@ -256,7 +256,7 @@ export class EnhancedQueueEventHandlerManager {
 
     // Check if all marketplaces are complete based on running percentage
     if (state.runningPercentage >= 100) {
-      console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
+      // console.log(GREEN + `Task ${taskId} completed for all marketplaces` + RESET);
       await this.handleAllMarketplacesComplete(taskId, task);
     }
   }
@@ -275,7 +275,7 @@ export class EnhancedQueueEventHandlerManager {
       let totalCancellationJobs = 0;
 
       if (this.traitsToRemove[taskId]?.length > 0) {
-        console.log(`Processing ${this.traitsToRemove[taskId].length} trait removals for task ${taskId}`);
+        // console.log(`Processing ${this.traitsToRemove[taskId].length} trait removals for task ${taskId}`);
         const traitJobs = await cancelRemovedTraitBids(
           this.traitsToRemove[taskId],
           task._id,
@@ -291,7 +291,7 @@ export class EnhancedQueueEventHandlerManager {
           (removedTokens.magiceden?.length || 0) +
           (removedTokens.blur?.length || 0);
 
-        console.log(`Processing ${tokenCount} token removals for task ${taskId}`);
+        // console.log(`Processing ${tokenCount} token removals for task ${taskId}`);
         const tokenJobs = await cancelRemovedTokenBids(
           {
             opensea: removedTokens.opensea || [],
@@ -310,7 +310,7 @@ export class EnhancedQueueEventHandlerManager {
       delete this.removedTokens[taskId];
 
       if (totalCancellationJobs > 0) {
-        console.log(GREEN + `Scheduled ${totalCancellationJobs} cancellation jobs for task ${taskId}` + RESET);
+        // console.log(GREEN + `Scheduled ${totalCancellationJobs} cancellation jobs for task ${taskId}` + RESET);
       }
 
       // Transition to completed
@@ -323,7 +323,7 @@ export class EnhancedQueueEventHandlerManager {
       if (task.running) {
         await this.scheduleNextLoop(taskId, task);
       } else {
-        console.log(`${YELLOW}Task ${taskId} is not running, skipping loop scheduling${RESET}`);
+        // console.log(`${YELLOW}Task ${taskId} is not running, skipping loop scheduling${RESET}`);
       }
 
     } catch (error) {
@@ -343,7 +343,7 @@ export class EnhancedQueueEventHandlerManager {
       const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
       const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
-      console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
+      // console.log(GREEN + `Scheduling task ${taskId} to run again in ${loopInterval} seconds` + RESET);
 
       // Transition to scheduled state
       await this.stateManager.transitionState(taskId, 'SCHEDULED', (state) => {
@@ -377,7 +377,7 @@ export class EnhancedQueueEventHandlerManager {
       const timeoutId = setTimeout(async () => {
         const currentTask = this.stateManager.getActiveTasks().get(taskId);
         if (currentTask?.running) {
-          console.log(GREEN + `Starting next loop for task ${taskId}` + RESET);
+          // console.log(GREEN + `Starting next loop for task ${taskId}` + RESET);
           await this.stateManager.transitionState(taskId, 'STARTED');
           // The main task execution logic should pick this up and start processing
         }
@@ -402,7 +402,7 @@ export class EnhancedQueueEventHandlerManager {
 
     if (!state || !task) return;
 
-    console.log(YELLOW + `Starting cancellation for task ${taskId}` + (marketplace ? ` (${marketplace})` : '') + RESET);
+    // console.log(YELLOW + `Starting cancellation for task ${taskId}` + (marketplace ? ` (${marketplace})` : '') + RESET);
 
     // Get initial order counts before starting cancellation
     const [openSeaCount, magicEdenCount, blurCount] = await Promise.all([
@@ -412,7 +412,7 @@ export class EnhancedQueueEventHandlerManager {
     ]);
 
     const totalInitialOrders = openSeaCount + magicEdenCount + blurCount;
-    console.log(YELLOW + `[StartCancellation] Task ${taskId} initial order counts - OpenSea: ${openSeaCount}, MagicEden: ${magicEdenCount}, Blur: ${blurCount}, Total: ${totalInitialOrders}` + RESET);
+    // console.log(YELLOW + `[StartCancellation] Task ${taskId} initial order counts - OpenSea: ${openSeaCount}, MagicEden: ${magicEdenCount}, Blur: ${blurCount}, Total: ${totalInitialOrders}` + RESET);
 
     // Transition to cancelling state
     await this.stateManager.transitionState(taskId, 'CANCELLING', (state) => {
@@ -436,7 +436,7 @@ export class EnhancedQueueEventHandlerManager {
     const orders = await Order.find(whereClause);
 
     if (orders.length > 0) {
-      console.log(`Found ${orders.length} orders to cancel for task ${taskId}`);
+      // console.log(`Found ${orders.length} orders to cancel for task ${taskId}`);
 
       // Start cancellation process
       await cancelAllRelatedBids(task, marketplace);
@@ -448,7 +448,7 @@ export class EnhancedQueueEventHandlerManager {
       if (marketplace) {
         // Marketplace-specific cancellation - don't transition to STOPPED
         // Instead, transition back to previous state and update marketplace progress
-        console.log(`${GREEN}Marketplace ${marketplace} cancellation completed for task ${taskId}${RESET}`);
+        // console.log(`${GREEN}Marketplace ${marketplace} cancellation completed for task ${taskId}${RESET}`);
 
         await this.stateManager.updateTaskProgress(taskId, {
           cancellationPercentage: 100,
@@ -531,7 +531,7 @@ export class EnhancedQueueEventHandlerManager {
       const verification = await verifyCancellationComplete(taskId, marketplace);
 
       if (verification.complete) {
-        console.log(GREEN + `All orders cancelled for task ${taskId}${marketplace ? ` (${marketplace})` : ''}` + RESET);
+        // console.log(GREEN + `All orders cancelled for task ${taskId}${marketplace ? ` (${marketplace})` : ''}` + RESET);
 
         // Force completion
         await this.handleCancellationComplete(taskId, marketplace);
@@ -541,10 +541,10 @@ export class EnhancedQueueEventHandlerManager {
       // Check cancellation percentage
       if (state.cancellationPercentage >= 99) {
         // If we're at 99% but orders remain, force check again
-        console.log(YELLOW + `Cancellation at ${state.cancellationPercentage}% but ${verification.remainingOrders} orders remain` + RESET);
+        // console.log(YELLOW + `Cancellation at ${state.cancellationPercentage}% but ${verification.remainingOrders} orders remain` + RESET);
 
         if (verification.marketplaceBreakdown) {
-          console.log(`Remaining orders - OpenSea: ${verification.marketplaceBreakdown.opensea}, MagicEden: ${verification.marketplaceBreakdown.magiceden}, Blur: ${verification.marketplaceBreakdown.blur}`);
+          // console.log(`Remaining orders - OpenSea: ${verification.marketplaceBreakdown.opensea}, MagicEden: ${verification.marketplaceBreakdown.magiceden}, Blur: ${verification.marketplaceBreakdown.blur}`);
         }
       }
 
@@ -553,7 +553,7 @@ export class EnhancedQueueEventHandlerManager {
     }
 
     // Timeout reached - force completion anyway
-    console.log(YELLOW + `Cancellation timeout reached for task ${taskId}, forcing completion` + RESET);
+    // console.log(YELLOW + `Cancellation timeout reached for task ${taskId}, forcing completion` + RESET);
     await this.handleCancellationComplete(taskId, marketplace);
   }
 
@@ -566,7 +566,7 @@ export class EnhancedQueueEventHandlerManager {
 
     if (!state || !task) return;
 
-    console.log(GREEN + `[CancellationComplete] Forcing completion for task ${taskId}${marketplace ? ` (${marketplace})` : ''}` + RESET);
+    // console.log(GREEN + `[CancellationComplete] Forcing completion for task ${taskId}${marketplace ? ` (${marketplace})` : ''}` + RESET);
 
     if (marketplace) {
       // Marketplace-specific cancellation completed
