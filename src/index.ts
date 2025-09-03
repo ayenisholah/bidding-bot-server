@@ -2643,6 +2643,7 @@ async function startServer() {
       // console.log(`Magic happening on http://localhost:${port}`);
       // console.log(`WebSocket server is running on ws://localhost:${port}`);
 
+
       // Redis cluster monitoring disabled - using single node
       // try {
       //   startRedisClusterMonitoring(clearQueueAndRestartJobs);
@@ -6840,9 +6841,17 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
         }
       );
 
-      // Reset marketplace status to allow retry
+      // Reset marketplace status to allow retry - but only if marketplace is still valid
       if (taskStatus[taskId] && marketplace) {
-        setTaskStatus(taskId, 'PROCESSING', 'job queueing failed - will retry', marketplace);
+        const activeTask = activeTasks.get(taskId);
+        const marketplaceLower = marketplace.toLowerCase();
+        const isMarketplaceEnabled = enabledMarketplaces.map(m => m.toLowerCase()).includes(marketplaceLower);
+        const isMarketplaceSelected = activeTask?.selectedMarketplaces.map(m => m.toLowerCase()).includes(marketplaceLower);
+        const isTaskRunning = activeTask?.running === true;
+        
+        if (isMarketplaceEnabled && isMarketplaceSelected && isTaskRunning) {
+          setTaskStatus(taskId, 'PROCESSING', 'job queueing failed - will retry', marketplace);
+        }
       }
 
       // Re-throw error to trigger job retry in scheduled bid processor
@@ -8954,6 +8963,75 @@ async function
     }
 
     // console.log(GREEN + `[stopTask] Enhanced cancellation complete for task ${taskId}` + RESET);
+    
+    // Clean up marketplace-specific resources for scheduleNextLoop
+    if (marketplace) {
+      const marketplaceLower = marketplace.toLowerCase();
+      console.log(CYAN + `[stopTask] Cleaning up marketplace-specific resources for ${marketplaceLower}` + RESET);
+      
+      // Clear marketplace-specific countdown timer
+      const timerKey = `${taskId}-${marketplaceLower}`;
+      const countdownTimer = taskCountdownTimers.get(timerKey);
+      if (countdownTimer) {
+        clearInterval(countdownTimer);
+        taskCountdownTimers.delete(timerKey);
+        console.log(CYAN + `  - Cleared countdown timer for ${timerKey}` + RESET);
+      }
+      
+      // Clear marketplace-specific timeout
+      const timeout = taskTimeouts.get(timerKey);
+      if (timeout) {
+        clearTimeout(timeout);
+        taskTimeouts.delete(timerKey);
+        console.log(CYAN + `  - Cleared timeout for ${timerKey}` + RESET);
+      }
+      
+      // Reset marketplace loop counter
+      if (loopCounterStats[taskId] && loopCounterStats[taskId][marketplaceLower]) {
+        const previousCount = loopCounterStats[taskId][marketplaceLower];
+        delete loopCounterStats[taskId][marketplaceLower];
+        console.log(CYAN + `  - Reset loop counter for ${marketplaceLower} (was at loop #${previousCount})` + RESET);
+        
+        // If all marketplaces are removed, clean up the task entry
+        if (Object.keys(loopCounterStats[taskId]).length === 0) {
+          delete loopCounterStats[taskId];
+          console.log(CYAN + `  - Removed empty loop counter entry for task ${taskId}` + RESET);
+        }
+      }
+      
+      // Clear marketplace from preprocessing if exists
+      const preprocessing = taskPreprocessing.get(taskId);
+      if (preprocessing) {
+        if (marketplaceLower === 'opensea' && preprocessing.opensea) {
+          preprocessing.opensea = {
+            enabled: false,
+            tokens: [],
+            traits: [],
+            jobCount: 0,
+            skipReason: 'Marketplace stopped'
+          };
+          console.log(CYAN + `  - Cleared preprocessing data for opensea` + RESET);
+        } else if (marketplaceLower === 'magiceden' && preprocessing.magiceden) {
+          preprocessing.magiceden = {
+            enabled: false,
+            tokens: [],
+            traits: [],
+            jobCount: 0,
+            skipReason: 'Marketplace stopped'
+          };
+          console.log(CYAN + `  - Cleared preprocessing data for magiceden` + RESET);
+        } else if (marketplaceLower === 'blur' && preprocessing.blur) {
+          preprocessing.blur = {
+            enabled: false,
+            tokens: [],
+            traits: [],
+            jobCount: 0,
+            skipReason: 'Marketplace stopped'
+          };
+          console.log(CYAN + `  - Cleared preprocessing data for blur` + RESET);
+        }
+      }
+    }
 
   } catch (error: any) {
     console.error(`[StopTask] Error in enhanced stopTask for ${taskId}:`, {
@@ -8976,6 +9054,69 @@ async function
 
     // Log that task remains blacklisted due to error
     // console.log(YELLOW + `[StopTask] Task ${taskId} remains blacklisted due to error - manual intervention may be required` + RESET);
+    
+    // Clean up marketplace-specific resources even on error
+    if (marketplace) {
+      try {
+        const marketplaceLower = marketplace.toLowerCase();
+        console.log(YELLOW + `[stopTask] Cleaning up marketplace-specific resources after error for ${marketplaceLower}` + RESET);
+        
+        // Clear marketplace-specific countdown timer
+        const timerKey = `${taskId}-${marketplaceLower}`;
+        const countdownTimer = taskCountdownTimers.get(timerKey);
+        if (countdownTimer) {
+          clearInterval(countdownTimer);
+          taskCountdownTimers.delete(timerKey);
+        }
+        
+        // Clear marketplace-specific timeout
+        const timeout = taskTimeouts.get(timerKey);
+        if (timeout) {
+          clearTimeout(timeout);
+          taskTimeouts.delete(timerKey);
+        }
+        
+        // Reset marketplace loop counter
+        if (loopCounterStats[taskId] && loopCounterStats[taskId][marketplaceLower]) {
+          delete loopCounterStats[taskId][marketplaceLower];
+          if (Object.keys(loopCounterStats[taskId]).length === 0) {
+            delete loopCounterStats[taskId];
+          }
+        }
+        
+        // Clear marketplace from preprocessing
+        const preprocessing = taskPreprocessing.get(taskId);
+        if (preprocessing) {
+          if (marketplaceLower === 'opensea' && preprocessing.opensea) {
+            preprocessing.opensea = {
+              enabled: false,
+              tokens: [],
+              traits: [],
+              jobCount: 0,
+              skipReason: 'Marketplace stopped due to error'
+            };
+          } else if (marketplaceLower === 'magiceden' && preprocessing.magiceden) {
+            preprocessing.magiceden = {
+              enabled: false,
+              tokens: [],
+              traits: [],
+              jobCount: 0,
+              skipReason: 'Marketplace stopped due to error'
+            };
+          } else if (marketplaceLower === 'blur' && preprocessing.blur) {
+            preprocessing.blur = {
+              enabled: false,
+              tokens: [],
+              traits: [],
+              jobCount: 0,
+              skipReason: 'Marketplace stopped due to error'
+            };
+          }
+        }
+      } catch (cleanupError) {
+        console.error(RED + `[stopTask] Error during marketplace cleanup: ${cleanupError}` + RESET);
+      }
+    }
   }
 }
 
@@ -14595,8 +14736,19 @@ async function processBlurScheduledBid(task: ITask) {
         marketplaces: {}
       };
     } else {
-      // Use setTaskStatus for comprehensive logging
-      setTaskStatus(taskId, 'PROCESSING', 'blur scheduled bid processing', 'blur');
+      // Validate before setting PROCESSING status
+      const activeTask = activeTasks.get(taskId);
+      const isBlurEnabled = enabledMarketplaces.map(m => m.toLowerCase()).includes('blur');
+      const isBlurSelected = activeTask?.selectedMarketplaces.map(m => m.toLowerCase()).includes('blur');
+      const isTaskRunning = activeTask?.running === true;
+      
+      if (isBlurEnabled && isBlurSelected && isTaskRunning) {
+        // Use setTaskStatus for comprehensive logging
+        setTaskStatus(taskId, 'PROCESSING', 'blur scheduled bid processing', 'blur');
+      } else {
+        console.log(YELLOW + `[processBlurScheduledBid] Skipping PROCESSING status update - blur enabled: ${isBlurEnabled}, selected: ${isBlurSelected}, running: ${isTaskRunning}` + RESET);
+        return;
+      }
     }
 
     // Acquire lock for this task - will throw if stale or already locked
@@ -16738,8 +16890,15 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
               // console.log(RED + `[MAGICEDEN] Marked parent job ${parentJobId} as complete with 0 jobs due to queueing failure` + RESET);
             }
 
-            // Update task status to reflect failure
-            setTaskStatus(taskId, 'PROCESSING', 'job queueing failed', 'magiceden');
+            // Update task status to reflect failure - but only if marketplace is still valid
+            const activeTask = activeTasks.get(taskId);
+            const isMagicedenEnabled = enabledMarketplaces.map(m => m.toLowerCase()).includes('magiceden');
+            const isMagicedenSelected = activeTask?.selectedMarketplaces.map(m => m.toLowerCase()).includes('magiceden');
+            const isTaskRunning = activeTask?.running === true;
+            
+            if (isMagicedenEnabled && isMagicedenSelected && isTaskRunning) {
+              setTaskStatus(taskId, 'PROCESSING', 'job queueing failed', 'magiceden');
+            }
 
             // Re-throw to trigger retry
             throw jobError;
@@ -16807,8 +16966,15 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
               // console.log(RED + `[MAGICEDEN] Marked parent job ${parentJobId} as complete with 0 jobs due to queueing failure` + RESET);
             }
 
-            // Update task status to reflect failure
-            setTaskStatus(taskId, 'PROCESSING', 'job queueing failed', 'magiceden');
+            // Update task status to reflect failure - but only if marketplace is still valid
+            const activeTask = activeTasks.get(taskId);
+            const isMagicedenEnabled = enabledMarketplaces.map(m => m.toLowerCase()).includes('magiceden');
+            const isMagicedenSelected = activeTask?.selectedMarketplaces.map(m => m.toLowerCase()).includes('magiceden');
+            const isTaskRunning = activeTask?.running === true;
+            
+            if (isMagicedenEnabled && isMagicedenSelected && isTaskRunning) {
+              setTaskStatus(taskId, 'PROCESSING', 'job queueing failed', 'magiceden');
+            }
 
             // Re-throw to trigger retry
             throw jobError;
@@ -17677,6 +17843,9 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
     console.log(`🔐 [bulkCancelOpenseaBid] Recording completion for task ${taskId}, order ${orderId}`);
     cancellationTracker.recordCompletion(taskId, 1, 'opensea');
     await updateTaskCancellationPercentage(taskId, undefined, 'opensea');
+    
+    // Decrement ownBidCounts for the cancelled order
+    decrementOwnBidCounter('opensea', 1);
 
     console.log(`✅ [bulkCancelOpenseaBid] Successfully completed cancellation for task ${taskId}, order ${orderId} with synchronized DB cleanup`);
   } catch (error) {
@@ -17738,6 +17907,9 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
       console.log(`🔐 [bulkCancelMagicedenBid] Recording completion for task ${taskId}, batch of ${completedCount} orders`);
       cancellationTracker.recordCompletion(taskId, completedCount, 'magiceden');
       await updateTaskCancellationPercentage(taskId, undefined, 'magiceden');
+      
+      // Decrement ownBidCounts for the cancelled orders
+      decrementOwnBidCounter('magiceden', completedCount);
     } else {
       console.log(`🔐 [bulkCancelMagicedenBid] No orders to cancel for task ${taskId}`);
     }
@@ -17820,8 +17992,34 @@ async function validateBidCount() {
     // Update global bidStats
     Object.assign(bidStats, bidStatsMap);
 
-    // Delete expired orders
+    // Delete expired orders and update ownBidCounts
     if (expiredOrders.length > 0) {
+      // First, count expired orders by marketplace for ownBidCounts
+      const expiredByMarketplace = await Order.aggregate([
+        {
+          $match: {
+            _id: { $in: expiredOrders.map(o => o._id) },
+            marketplace: { $in: ['opensea', 'magiceden'] } // Only track these two
+          }
+        },
+        {
+          $group: {
+            _id: '$marketplace',
+            count: { $sum: 1 }
+          }
+        }
+      ]);
+      
+      // Decrement ownBidCounts for expired orders
+      for (const group of expiredByMarketplace) {
+        const marketplace = group._id.toLowerCase();
+        if (marketplace === 'opensea' || marketplace === 'magiceden') {
+          decrementOwnBidCounter(marketplace as 'opensea' | 'magiceden', group.count);
+          console.log(YELLOW + `[validateBidCount] Decremented ${group.count} expired ${marketplace} orders from ownBidCounts` + RESET);
+        }
+      }
+      
+      // Now delete the expired orders
       await Order.deleteMany({
         _id: { $in: expiredOrders.map(o => o._id) }
       });
@@ -21418,6 +21616,7 @@ export function decrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
   }
   return 0;
 }
+
 
 /**
  * Gets Redis-based counter for our own bids
