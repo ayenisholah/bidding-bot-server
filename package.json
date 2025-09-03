@@ -18,6 +18,8 @@
 		"blur:clear-tokens": "ts-node scripts/clear-blur-tokens.ts",
 		"dc:build": "DOCKER_BUILDKIT=1 docker buildx build --platform linux/arm64,linux/amd64 --cache-from type=registry,ref=nfttools/bidding-bot-server-production:buildcache --cache-to type=registry,ref=nfttools/bidding-bot-server-production:buildcache,mode=max -t nfttools/bidding-bot-server-production:latest --push .",
 		"dc:push": "docker push nfttools/bidding-bot-server-production:latest",
+		"dc:build:beta": "DOCKER_BUILDKIT=1 docker buildx build --platform linux/arm64,linux/amd64 --cache-from type=registry,ref=nfttools/bidding-bot-server-beta:buildcache --cache-to type=registry,ref=nfttools/bidding-bot-server-beta:buildcache,mode=max -t nfttools/bidding-bot-server-beta:latest --push .",
+		"dc:push:beta": "docker push nfttools/bidding-bot-server-beta:latest",
 		"lint": "eslint 'src/**/*.{ts,tsx}'",
 		"lint:fix": "eslint 'src/**/*.{ts,tsx}' --fix",
 		"test:axiom": "ts-node scripts/test-axiom.ts",
