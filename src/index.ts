@@ -13610,9 +13610,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
   console.log(`${BLUE}[processOpenseaScheduledBid] CALLED for task ${task._id} - Loop #${currentLoopCount}${RESET}`);
   console.log(`${BLUE}[loopCounterStats] OpenSea Loop ${currentLoopCount} - All counters: ${JSON.stringify(loopCounterStats[taskId])}${RESET}`);
 
-  // Transition from SCHEDULED to STARTED for this marketplace
-  setTaskStatus(taskId, 'STARTED', `opensea scheduled bid starting - Loop #${currentLoopCount}`, 'opensea');
-
   // Log if this appears to be a retry (job has an ID and attempt number)
   if (scheduleJob && scheduleJob.attemptsMade > 0) {
     // console.log(`${YELLOW}[processOpenseaScheduledBid] This is retry attempt ${scheduleJob.attemptsMade + 1} for job ${scheduleJob.id}${RESET}`);
@@ -13639,7 +13636,9 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
           return;
         }
 
-        const taskId = task._id;
+        // Transition from SCHEDULED to STARTED for this marketplace - AFTER validation
+        setTaskStatus(taskId, 'STARTED', `opensea scheduled bid starting - Loop #${currentLoopCount}`, 'opensea');
+
         // Processing OpenSea scheduled bid
 
         // Get preprocessing data - first check the Map, then perform if needed
@@ -14412,8 +14411,6 @@ async function processBlurScheduledBid(task: ITask) {
   console.log(`${GOLD}[processBlurScheduledBid] CALLED for task ${task._id} - Loop #${currentLoopCount}${RESET}`);
   console.log(`${GOLD}[loopCounterStats] Blur Loop ${currentLoopCount} - All counters: ${JSON.stringify(loopCounterStats[taskId])}${RESET}`);
 
-  // Transition from SCHEDULED to STARTED for this marketplace
-  setTaskStatus(taskId, 'STARTED', `blur scheduled bid starting - Loop #${currentLoopCount}`, 'blur');
   let lockAcquired = false;
 
   try {
@@ -14421,6 +14418,9 @@ async function processBlurScheduledBid(task: ITask) {
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur") || !enabledMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur")) {
       return;
     }
+    
+    // Transition from SCHEDULED to STARTED for this marketplace - AFTER validation
+    setTaskStatus(taskId, 'STARTED', `blur scheduled bid starting - Loop #${currentLoopCount}`, 'blur');
     // Processing Blur scheduled bid
 
     // Get preprocessing data - first check the Map, then perform if needed
@@ -16370,9 +16370,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
   console.log(`${MAGENTA}[processMagicedenScheduledBid] CALLED for task ${task._id} - Loop #${currentLoopCount}${RESET}`);
   console.log(`${MAGENTA}[loopCounterStats] MagicEden Loop ${currentLoopCount} - All counters: ${JSON.stringify(loopCounterStats[taskId])}${RESET}`);
 
-  // Transition from SCHEDULED to STARTED for this marketplace
-  setTaskStatus(taskId, 'STARTED', `magiceden scheduled bid starting - Loop #${currentLoopCount}`, 'magiceden');
-
   // Log if this appears to be a retry (job has an ID and attempt number)
   if (scheduleJob && scheduleJob.attemptsMade > 0) {
     // console.log(`${YELLOW}[processMagicedenScheduledBid] This is retry attempt ${scheduleJob.attemptsMade + 1} for job ${scheduleJob.id}${RESET}`);
@@ -16405,6 +16402,9 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
           // console.log(`${YELLOW}[processMagicedenScheduledBid] Task not running or MagicEden not selected, returning${RESET}`);
           return;
         }
+
+        // Transition from SCHEDULED to STARTED for this marketplace - AFTER validation
+        setTaskStatus(taskId, 'STARTED', `magiceden scheduled bid starting - Loop #${currentLoopCount}`, 'magiceden');
 
         // Get preprocessing data - first check the Map, then perform if needed
         let preprocessing = taskPreprocessing.get(taskId);
