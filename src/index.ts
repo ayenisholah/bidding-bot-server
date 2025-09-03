@@ -7878,6 +7878,80 @@ async function cancelMarketplaceRateLimiterJobs(taskId: string, marketplace?: st
   }
 }
 
+// Helper function to attempt cancellation of any remaining orders
+async function attemptRemainingCancellations(taskId: string, marketplace: string): Promise<number> {
+  console.log(YELLOW + `[attemptRemainingCancellations] Attempting to cancel remaining orders for ${marketplace} on task ${taskId}` + RESET);
+  
+  try {
+    // Fetch the remaining active orders
+    const remainingOrders = await Order.find({
+      taskId: taskId,
+      marketplace: marketplace.toLowerCase(),
+      expiresAt: { $gt: new Date() }
+    }).limit(500); // Limit to prevent overwhelming the system
+    
+    if (remainingOrders.length === 0) {
+      console.log(GREEN + `[attemptRemainingCancellations] No remaining orders found` + RESET);
+      return 0;
+    }
+    
+    console.log(YELLOW + `[attemptRemainingCancellations] Found ${remainingOrders.length} remaining orders to cancel` + RESET);
+    
+    // Get the task to find wallet ID
+    const task = await Task.findById(taskId);
+    if (!task) {
+      console.log(RED + `[attemptRemainingCancellations] Task ${taskId} not found` + RESET);
+      return remainingOrders.length;
+    }
+    
+    // Log specific order details for debugging
+    remainingOrders.slice(0, 5).forEach((order, index) => {
+      console.log(YELLOW + `  - Order ${index + 1}: ${order._id} (${order.orderHash})` + RESET);
+    });
+    if (remainingOrders.length > 5) {
+      console.log(YELLOW + `  - ... and ${remainingOrders.length - 5} more orders` + RESET);
+    }
+    
+    // Attempt to cancel based on marketplace
+    const marketplaceLower = marketplace.toLowerCase();
+    const ordersArray = remainingOrders.map(o => o.toObject());
+    
+    switch (marketplaceLower) {
+      case 'opensea':
+        await cancelOpenseaBids(ordersArray, task.walletId, taskId, 'WETH');
+        break;
+      case 'magiceden':
+        await cancelMagicedenBids(ordersArray, task.walletId, taskId);
+        break;
+      case 'blur':
+        await cancelBlurBids(ordersArray, task.walletId, taskId);
+        break;
+      default:
+        console.log(RED + `[attemptRemainingCancellations] Unknown marketplace: ${marketplace}` + RESET);
+        return remainingOrders.length;
+    }
+    
+    console.log(GREEN + `[attemptRemainingCancellations] Cancellation jobs queued for ${remainingOrders.length} orders` + RESET);
+    
+    // Wait a bit for jobs to be processed
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    
+    // Re-check how many orders remain
+    const stillActiveCount = await Order.countDocuments({
+      taskId: taskId,
+      marketplace: marketplace.toLowerCase(),
+      expiresAt: { $gt: new Date() }
+    });
+    
+    console.log(CYAN + `[attemptRemainingCancellations] After cancellation attempt: ${stillActiveCount} orders still active` + RESET);
+    return stillActiveCount;
+    
+  } catch (error) {
+    console.error(RED + `[attemptRemainingCancellations] Error attempting remaining cancellations:` + RESET, error);
+    return -1; // Return -1 to indicate error
+  }
+}
+
 // Enhanced cancellation completion validation with race condition protection
 async function validateAndTransitionToStopped(taskId: string, marketplace: string, marketplaceName: string, retryCount = 0): Promise<void> {
   const MAX_RETRIES = 3;
@@ -7913,20 +7987,33 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
         // Retry validation
         return await validateAndTransitionToStopped(taskId, marketplace, marketplaceName, retryCount + 1);
       } else {
-        // Max retries reached but still have orders - this suggests actual incomplete cancellation
+        // Max retries reached but still have orders - attempt to cancel them
         console.log(RED + `[validateAndTransitionToStopped] WARNING: ${marketplaceName} at 100% tracking but ${activeOrderCount} orders still active after ${MAX_RETRIES} retries!` + RESET);
-        console.log(RED + `[validateAndTransitionToStopped] Query: ${JSON.stringify(query)}` + RESET);
-        console.log(RED + `[validateAndTransitionToStopped] Keeping CANCELLING status - possible cancellation failure or database sync issue` + RESET);
+        console.log(YELLOW + `[validateAndTransitionToStopped] Attempting to cancel remaining orders...` + RESET);
         
-        // Reset the cancellation percentage to reflect actual state
-        if (trackingStatus && trackingStatus.totalBids > 0) {
-          const actualCompleted = Math.max(0, trackingStatus.totalBids - activeOrderCount);
-          const actualPercentage = (actualCompleted / trackingStatus.totalBids) * 100;
-          console.log(RED + `[validateAndTransitionToStopped] Adjusting ${marketplaceName} percentage to ${actualPercentage.toFixed(2)}% based on remaining orders` + RESET);
+        // Attempt to cancel remaining orders
+        const remainingAfterAttempt = await attemptRemainingCancellations(taskId, marketplace);
+        
+        if (remainingAfterAttempt === 0) {
+          // Successfully cancelled all remaining orders
+          console.log(GREEN + `[validateAndTransitionToStopped] Successfully cancelled all remaining orders, transitioning to STOPPED` + RESET);
+          setTaskStatus(taskId, 'STOPPED', `${marketplaceName} cancellation complete after cleanup`, marketplace);
+          return;
+        } else if (remainingAfterAttempt > 0) {
+          // Still have orders after cancellation attempt
+          console.log(RED + `[validateAndTransitionToStopped] Still have ${remainingAfterAttempt} orders after cancellation attempt` + RESET);
+          console.log(RED + `[validateAndTransitionToStopped] Keeping CANCELLING status - manual intervention may be required` + RESET);
           
-          if (taskStatus[taskId]?.marketplaces[marketplaceName as keyof typeof taskStatus[string]['marketplaces']]) {
-            taskStatus[taskId].marketplaces[marketplaceName as keyof typeof taskStatus[string]['marketplaces']]!.cancellationPercentage = Math.floor(actualPercentage);
-            broadcastBidRates();
+          // Reset the cancellation percentage to reflect actual state
+          if (trackingStatus && trackingStatus.totalBids > 0) {
+            const actualCompleted = Math.max(0, trackingStatus.totalBids - remainingAfterAttempt);
+            const actualPercentage = (actualCompleted / trackingStatus.totalBids) * 100;
+            console.log(RED + `[validateAndTransitionToStopped] Adjusting ${marketplaceName} percentage to ${actualPercentage.toFixed(2)}% based on remaining orders` + RESET);
+            
+            if (taskStatus[taskId]?.marketplaces[marketplaceName as keyof typeof taskStatus[string]['marketplaces']]) {
+              taskStatus[taskId].marketplaces[marketplaceName as keyof typeof taskStatus[string]['marketplaces']]!.cancellationPercentage = Math.floor(actualPercentage);
+              broadcastBidRates();
+            }
           }
         }
         return;
@@ -8105,10 +8192,47 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
         });
 
         if (activeOrderCount === 0) {
-          // console.log(GREEN + `[updateTaskCancellationPercentage] Global cancellation at 100% with no remaining active orders` + RESET);
+          console.log(GREEN + `[updateTaskCancellationPercentage] Global cancellation at 100% with no remaining active orders` + RESET);
           // Transition all marketplaces back to STOPPED
           for (const mp of cancellingMarketplaces) {
             setTaskStatus(taskId, 'STOPPED', 'global cancellation complete - 100% and no active orders', mp);
+          }
+        } else {
+          // Still have active orders at 100% - attempt to cancel them
+          console.log(YELLOW + `[updateTaskCancellationPercentage] Global cancellation at 100% but ${activeOrderCount} orders still active` + RESET);
+          console.log(YELLOW + `[updateTaskCancellationPercentage] Attempting to cancel remaining orders across all marketplaces...` + RESET);
+          
+          // Attempt to cancel remaining orders for each marketplace
+          let totalRemaining = 0;
+          for (const mp of cancellingMarketplaces) {
+            const remainingForMarketplace = await attemptRemainingCancellations(taskId, mp);
+            if (remainingForMarketplace >= 0) {
+              totalRemaining += remainingForMarketplace;
+            }
+          }
+          
+          if (totalRemaining === 0) {
+            console.log(GREEN + `[updateTaskCancellationPercentage] Successfully cancelled all remaining orders globally` + RESET);
+            // Transition all marketplaces to STOPPED
+            for (const mp of cancellingMarketplaces) {
+              setTaskStatus(taskId, 'STOPPED', 'global cancellation complete after cleanup', mp);
+            }
+          } else {
+            console.log(RED + `[updateTaskCancellationPercentage] Still have ${totalRemaining} orders remaining after cleanup attempt` + RESET);
+            // Adjust percentages based on actual remaining orders
+            const trackingStatus = cancellationTracker.getStatus(taskId);
+            if (trackingStatus && trackingStatus.totalBids > 0) {
+              const actualCompleted = Math.max(0, trackingStatus.totalBids - totalRemaining);
+              const actualPercentage = Math.floor((actualCompleted / trackingStatus.totalBids) * 100);
+              
+              // Update all cancelling marketplaces with adjusted percentage
+              for (const mp of cancellingMarketplaces) {
+                const mpKey = mp as keyof typeof taskStatus[string]['marketplaces'];
+                if (taskStatus[taskId]?.marketplaces[mpKey]) {
+                  taskStatus[taskId].marketplaces[mpKey]!.cancellationPercentage = actualPercentage;
+                }
+              }
+            }
           }
         }
       } catch (error) {
