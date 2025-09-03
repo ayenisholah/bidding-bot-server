@@ -25,7 +25,7 @@ class CancellationTracker {
    */
   initializeTracking(taskId: string, totalBids: number, marketplace?: string): void {
     const key = this.getKey(taskId, marketplace);
-    // console.log(`[CancellationTracker] Initializing tracking - Key: ${key}, TotalBids: ${totalBids}`);
+    console.log(`[CancellationTracker] Initializing tracking - Key: ${key}, TotalBids: ${totalBids}`);
     this.trackingMap.set(key, {
       taskId,
       marketplace,
@@ -33,6 +33,7 @@ class CancellationTracker {
       completedCancellations: 0,
       startTime: Date.now()
     });
+    console.log(`[CancellationTracker] Tracking initialized successfully for ${key}`);
   }
 
   /**
@@ -84,12 +85,12 @@ class CancellationTracker {
       const percentage = tracking.totalBids > 0 ? ((tracking.completedCancellations / tracking.totalBids) * 100).toFixed(2) : '0.00';
       
       if (actualIncrement < completionCount) {
-        // console.log(`[CancellationTracker] Capped completion - Key: ${key}, Requested: ${completionCount}, Actual: ${actualIncrement}, Total: ${tracking.completedCancellations}/${tracking.totalBids} (${percentage}%)`);
+        console.log(`[CancellationTracker] Capped completion - Key: ${key}, Requested: ${completionCount}, Actual: ${actualIncrement}, Total: ${tracking.completedCancellations}/${tracking.totalBids} (${percentage}%)`);
       } else {
-        // console.log(`[CancellationTracker] Recording completion - Key: ${key}, Count: ${completionCount}, Total: ${tracking.completedCancellations}/${tracking.totalBids} (${percentage}%)`);
+        console.log(`[CancellationTracker] Recording completion - Key: ${key}, Count: ${completionCount}, Total: ${tracking.completedCancellations}/${tracking.totalBids} (${percentage}%)`);
       }
     } else {
-      // console.log(`[CancellationTracker] WARNING: No tracking found for key: ${key}`);
+      console.log(`[CancellationTracker] WARNING: No tracking found for key: ${key}`);
     }
   }
 
@@ -101,17 +102,25 @@ class CancellationTracker {
     const key = this.getKey(taskId, marketplace);
     const tracking = this.trackingMap.get(key);
     
+    console.log(`[CancellationTracker] getPercentage called for key: ${key}`);
+    
     if (!tracking) {
+      console.log(`[CancellationTracker] No tracking data for key: ${key}`);
       return null;
     }
 
     if (tracking.totalBids === 0) {
+      console.log(`[CancellationTracker] Total bids is 0 for key: ${key}, returning 100%`);
       return 100; // No bids to cancel = 100% complete
     }
 
     // Calculate percentage with 2 decimal places
     const percentage = (tracking.completedCancellations / tracking.totalBids) * 100;
-    return Math.min(100, parseFloat(percentage.toFixed(2)));
+    const result = Math.min(100, parseFloat(percentage.toFixed(2)));
+    
+    console.log(`[CancellationTracker] Percentage for key ${key}: ${result}% (${tracking.completedCancellations}/${tracking.totalBids})`);
+    
+    return result;
   }
 
   /**

@@ -99,15 +99,6 @@ interface TaskStatusChange {
 }
 const taskStatusHistory: { [taskId: string]: TaskStatusChange[] } = {};
 
-// Marketplace completion tracking for sequential execution
-interface MarketplaceCompletion {
-  opensea: boolean;
-  blur: boolean;
-  magiceden: boolean;
-  pendingMagicedenJob?: any; // Job config waiting to be scheduled
-}
-const marketplaceCompletionTracker: Map<string, MarketplaceCompletion> = new Map();
-
 // Blur rate limiting is now handled by BlurRateLimiter class
 const QUEUE_NAME = 'BIDDING_BOT';
 const BLUR_BIDDING_QUEUE = 'BLUR_BIDDING_QUEUE';
@@ -3409,7 +3400,6 @@ function cleanupTaskResources(taskId: string, preserveWarnings = false): void {
   // console.log(CYAN + `[cleanupTaskResources] ${timestamp} - Cleaning up resources for task ${taskId}` + RESET);
 
   // Clean up marketplace completion tracking
-  cleanupMarketplaceCompletion(taskId);
 
   // Clear loop counter
   if (loopCounterStats[taskId]) {
@@ -4426,11 +4416,9 @@ function initializeQueueEventHandlers() {
         if (jobId.includes('-opensea-schedule')) {
           const taskId = jobId.replace('-opensea-schedule', '');
           console.log(GREEN + `[MarketplaceSequence] OpenSea schedule job completed for task ${taskId}` + RESET);
-          await markMarketplaceComplete(taskId, 'opensea');
         } else if (jobId.includes('-blur-schedule')) {
           const taskId = jobId.replace('-blur-schedule', '');
           console.log(GREEN + `[MarketplaceSequence] Blur schedule job completed for task ${taskId}` + RESET);
-          await markMarketplaceComplete(taskId, 'blur');
         }
         return;
       }
@@ -4901,7 +4889,6 @@ function initializeQueueEventHandlers() {
         if (jobId.includes('-blur-schedule')) {
           const taskId = jobId.replace('-blur-schedule', '');
           console.log(GREEN + `[MarketplaceSequence] Blur schedule job completed for task ${taskId}` + RESET);
-          await markMarketplaceComplete(taskId, 'blur');
         }
         return;
       }
@@ -7123,100 +7110,6 @@ async function triggerTaskRestart(taskId: string) {
 /**
  * Initialize completion tracking for a task
  */
-function initializeMarketplaceCompletion(taskId: string, selectedMarketplaces: string[]): void {
-  // Only track enabled marketplaces
-  const enabledSelected = selectedMarketplaces.filter(mp => 
-    enabledMarketplaces.map(em => em.toLowerCase()).includes(mp.toLowerCase())
-  );
-  
-  const completion: MarketplaceCompletion = {
-    opensea: !enabledSelected.includes('opensea'),
-    blur: !enabledSelected.includes('blur'),
-    magiceden: !enabledSelected.includes('magiceden'),
-    pendingMagicedenJob: null
-  };
-  marketplaceCompletionTracker.set(taskId, completion);
-  console.log(CYAN + `[MarketplaceSequence] Initialized tracking for task ${taskId} (enabled: ${enabledSelected.join(', ')}): ${JSON.stringify(completion)}` + RESET);
-}
-
-/**
- * Mark a marketplace as completed and check if MagicEden should be triggered
- */
-async function markMarketplaceComplete(taskId: string, marketplace: string): Promise<void> {
-  // Check if marketplace is enabled before processing
-  const isEnabled = enabledMarketplaces.map(em => em.toLowerCase()).includes(marketplace.toLowerCase());
-  if (!isEnabled) {
-    console.log(YELLOW + `[MarketplaceSequence] Skipping completion tracking for disabled marketplace ${marketplace} on task ${taskId}` + RESET);
-    return;
-  }
-
-  const completion = marketplaceCompletionTracker.get(taskId);
-  if (!completion) return;
-
-  if (marketplace === 'opensea') {
-    completion.opensea = true;
-  } else if (marketplace === 'blur') {
-    completion.blur = true;
-  }
-
-  console.log(CYAN + `[MarketplaceSequence] Marked ${marketplace} complete for task ${taskId}: ${JSON.stringify(completion)}` + RESET);
-
-  // Check if prerequisites are complete and MagicEden job is pending
-  if (completion.opensea && completion.blur && completion.pendingMagicedenJob) {
-    console.log(GREEN + `[MarketplaceSequence] Prerequisites complete! Scheduling MagicEden job for task ${taskId}` + RESET);
-    
-    try {
-      await queue.addBulk([completion.pendingMagicedenJob]);
-      console.log(GREEN + `[MarketplaceSequence] Successfully scheduled MagicEden job for task ${taskId}` + RESET);
-      completion.pendingMagicedenJob = null; // Clear pending job
-    } catch (error) {
-      console.error(RED + `[MarketplaceSequence] Failed to schedule MagicEden job for task ${taskId}:` + RESET, error);
-    }
-  }
-}
-
-/**
- * Schedule MagicEden job to run after prerequisites
- */
-function scheduleSequentialMagicedenJob(taskId: string, jobConfig: any): void {
-  const completion = marketplaceCompletionTracker.get(taskId);
-  if (!completion) return;
-
-  // If prerequisites are already complete, schedule immediately
-  if (completion.opensea && completion.blur) {
-    console.log(GREEN + `[MarketplaceSequence] Prerequisites already complete, scheduling MagicEden immediately for task ${taskId}` + RESET);
-    queue.addBulk([jobConfig]).catch(error => {
-      console.error(RED + `[MarketplaceSequence] Failed to immediately schedule MagicEden job for task ${taskId}:` + RESET, error);
-    });
-  } else {
-    // Store job for later execution
-    completion.pendingMagicedenJob = jobConfig;
-    console.log(YELLOW + `[MarketplaceSequence] MagicEden job pending prerequisites for task ${taskId} (opensea: ${completion.opensea}, blur: ${completion.blur})` + RESET);
-    
-    // Set timeout fallback to schedule MagicEden after 5 minutes if prerequisites don't complete
-    setTimeout(() => {
-      const currentCompletion = marketplaceCompletionTracker.get(taskId);
-      if (currentCompletion && currentCompletion.pendingMagicedenJob && 
-          (!currentCompletion.opensea || !currentCompletion.blur)) {
-        console.log(YELLOW + `[MarketplaceSequence] TIMEOUT FALLBACK: Scheduling MagicEden for task ${taskId} after 5 minutes (opensea: ${currentCompletion.opensea}, blur: ${currentCompletion.blur})` + RESET);
-        queue.addBulk([currentCompletion.pendingMagicedenJob]).catch(error => {
-          console.error(RED + `[MarketplaceSequence] Failed to schedule fallback MagicEden job for task ${taskId}:` + RESET, error);
-        });
-        currentCompletion.pendingMagicedenJob = null;
-      }
-    }, 5 * 60 * 1000); // 5 minutes
-  }
-}
-
-/**
- * Clean up completion tracking for a task
- */
-function cleanupMarketplaceCompletion(taskId: string): void {
-  if (marketplaceCompletionTracker.has(taskId)) {
-    marketplaceCompletionTracker.delete(taskId);
-    console.log(CYAN + `[MarketplaceSequence] Cleaned up tracking for task ${taskId}` + RESET);
-  }
-}
 
 // Wrapper function with retry logic for Redis timeouts
 async function startTask(task: ITask, start: boolean, marketplace?: string, isRestart?: boolean) {
@@ -7710,30 +7603,51 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
 
     // Add deduplication check before adding jobs (skip deduplication for loop restarts)
     if (jobs.length > 0) {
-
-      // Initialize sequential execution tracking
-      initializeMarketplaceCompletion(taskId, task.selectedMarketplaces.map(m => m.toLowerCase()));
-
-      // Separate jobs by type for sequential execution
+      // Separate jobs by type
       const blurJobs = jobs.filter(job => job.name === BLUR_SCHEDULE);
       const openseaJobs = jobs.filter(job => job.name === OPENSEA_SCHEDULE);
       const magicedenJobs = jobs.filter(job => job.name === MAGICEDEN_SCHEDULE);
 
+      // Calculate delay for MagicEden based on total marketplace count
+      const totalMarketplaceCount = jobs.length;
+      let magicedenDelay = 0;
+      if (totalMarketplaceCount === 3 && magicedenJobs.length > 0) {
+        magicedenDelay = 2000; // 2 seconds if all 3 marketplaces
+      } else if (totalMarketplaceCount === 2 && magicedenJobs.length > 0) {
+        magicedenDelay = 1000; // 1 second if 2 marketplaces
+      }
+
+      // We'll add the delay when scheduling MagicEden jobs
+      if (magicedenDelay > 0) {
+        console.log(MAGENTA + `[Scheduling] Will add ${magicedenDelay}ms delay to MagicEden jobs (${totalMarketplaceCount} marketplaces total)` + RESET);
+      }
+
       // For loop restarts (start=true), always add jobs without deduplication
       if (start === true) {
-        // Phase 1: Schedule OpenSea and Blur jobs immediately
+        // Schedule all jobs immediately (MagicEden with delay if applicable)
         if (openseaJobs.length > 0) {
-          const addedOpenseaJobs = await queue.addBulk(openseaJobs);
-          console.log(GREEN + `[MarketplaceSequence] Scheduled ${openseaJobs.length} OpenSea job(s) for task ${taskId}` + RESET);
+          await queue.addBulk(openseaJobs);
+          console.log(GREEN + `[Scheduling] Scheduled ${openseaJobs.length} OpenSea job(s) for task ${taskId}` + RESET);
         }
         if (blurJobs.length > 0) {
-          const addedBlurJobs = await blurQueue.addBulk(blurJobs);
-          console.log(GREEN + `[MarketplaceSequence] Scheduled ${blurJobs.length} Blur job(s) for task ${taskId}` + RESET);
+          await blurQueue.addBulk(blurJobs);
+          console.log(GREEN + `[Scheduling] Scheduled ${blurJobs.length} Blur job(s) for task ${taskId}` + RESET);
         }
-        
-        // Phase 2: Schedule MagicEden job sequentially (after OpenSea/Blur complete)
         if (magicedenJobs.length > 0) {
-          scheduleSequentialMagicedenJob(taskId, magicedenJobs[0]);
+          if (magicedenDelay > 0) {
+            // Schedule MagicEden job with delay
+            setTimeout(async () => {
+              try {
+                await queue.addBulk(magicedenJobs);
+                console.log(GREEN + `[Scheduling] Scheduled ${magicedenJobs.length} MagicEden job(s) for task ${taskId} after ${magicedenDelay}ms delay` + RESET);
+              } catch (error) {
+                console.error(RED + `[Scheduling] Failed to schedule MagicEden jobs for task ${taskId}:` + RESET, error);
+              }
+            }, magicedenDelay);
+          } else {
+            await queue.addBulk(magicedenJobs);
+            console.log(GREEN + `[Scheduling] Scheduled ${magicedenJobs.length} MagicEden job(s) for task ${taskId}` + RESET);
+          }
         }
       } else {
         // Optimized deduplication - only check for this specific task's jobs
@@ -7766,23 +7680,31 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
         const newMagicedenJobs = newJobs.filter(job => job.name === MAGICEDEN_SCHEDULE);
 
         if (newJobs.length > 0) {
-          // Phase 1: Schedule OpenSea and Blur jobs immediately
+          // Schedule all new jobs (MagicEden with delay if applicable)
           if (newOpenseaJobs.length > 0) {
-            const addedOpensea = await queue.addBulk(newOpenseaJobs);
-            console.log(GREEN + `[MarketplaceSequence] Scheduled ${newOpenseaJobs.length} new OpenSea job(s) for task ${taskId}` + RESET);
+            await queue.addBulk(newOpenseaJobs);
+            console.log(GREEN + `[Scheduling] Scheduled ${newOpenseaJobs.length} new OpenSea job(s) for task ${taskId}` + RESET);
           }
           if (newBlurJobs.length > 0) {
-            const addedBlur = await blurQueue.addBulk(newBlurJobs);
-            console.log(GREEN + `[MarketplaceSequence] Scheduled ${newBlurJobs.length} new Blur job(s) for task ${taskId}` + RESET);
+            await blurQueue.addBulk(newBlurJobs);
+            console.log(GREEN + `[Scheduling] Scheduled ${newBlurJobs.length} new Blur job(s) for task ${taskId}` + RESET);
           }
-          
-          // Phase 2: Schedule MagicEden job sequentially (after OpenSea/Blur complete)
           if (newMagicedenJobs.length > 0) {
-            scheduleSequentialMagicedenJob(taskId, newMagicedenJobs[0]);
+            if (magicedenDelay > 0) {
+              // Schedule MagicEden job with delay
+              setTimeout(async () => {
+                try {
+                  await queue.addBulk(newMagicedenJobs);
+                  console.log(GREEN + `[Scheduling] Scheduled ${newMagicedenJobs.length} new MagicEden job(s) for task ${taskId} after ${magicedenDelay}ms delay` + RESET);
+                } catch (error) {
+                  console.error(RED + `[Scheduling] Failed to schedule new MagicEden jobs for task ${taskId}:` + RESET, error);
+                }
+              }, magicedenDelay);
+            } else {
+              await queue.addBulk(newMagicedenJobs);
+              console.log(GREEN + `[Scheduling] Scheduled ${newMagicedenJobs.length} new MagicEden job(s) for task ${taskId}` + RESET);
+            }
           }
-          
-          // Check queue status
-          const jobCounts = await queue.getJobCounts();
         }
       }
     }
@@ -8034,6 +7956,15 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
 
 // Centralized function to update task cancellation percentage - single source of truth
 export async function updateTaskCancellationPercentage(taskId: string, forcePercentage?: number, marketplace?: string) {
+  console.log(CYAN + `[updateTaskCancellationPercentage] Called for task ${taskId}, forcePercentage: ${forcePercentage}, marketplace: ${marketplace || 'ALL'}` + RESET);
+  
+  // Log current tracker state
+  const allTrackings = cancellationTracker.getAllTrackings();
+  console.log(CYAN + `[updateTaskCancellationPercentage] All active trackings:` + RESET);
+  allTrackings.forEach((tracking, key) => {
+    console.log(CYAN + `  - Key: ${key}, Total: ${tracking.totalBids}, Completed: ${tracking.completedCancellations}, Percentage: ${tracking.totalBids > 0 ? ((tracking.completedCancellations / tracking.totalBids) * 100).toFixed(2) : '0'}%` + RESET);
+  });
+  
   if (!taskStatus[taskId]) {
     const task = activeTasks.get(taskId);
     taskStatus[taskId] = {
@@ -8074,19 +8005,20 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
       const aggregatedPercentage = cancellationTracker.getAggregatedPercentage(taskId);
       if (aggregatedPercentage !== null) {
         percentage = aggregatedPercentage;
-        // console.log(CYAN + `[updateTaskCancellationPercentage] Task ${taskId} - Using aggregated percentage: ${percentage}%` + RESET);
+        console.log(CYAN + `[updateTaskCancellationPercentage] Task ${taskId} - Using aggregated percentage: ${percentage}%` + RESET);
       } else {
-        // console.log(YELLOW + `[updateTaskCancellationPercentage] No aggregated tracking data for ${taskId}` + RESET);
+        console.log(YELLOW + `[updateTaskCancellationPercentage] No aggregated tracking data for ${taskId}` + RESET);
         return;
       }
     } else {
       // Use regular percentage for marketplace-specific cancellations
-      const trackerPercentage = cancellationTracker.getPercentage(taskId);
+      const trackerPercentage = cancellationTracker.getPercentage(taskId, marketplace);
+      console.log(CYAN + `[updateTaskCancellationPercentage] Getting tracker percentage for task ${taskId}, marketplace: ${marketplace || 'none'}` + RESET);
       if (trackerPercentage !== null) {
         percentage = trackerPercentage;
-        // console.log(CYAN + `[updateTaskCancellationPercentage] Task ${taskId} - Using regular percentage: ${percentage}%` + RESET);
+        console.log(CYAN + `[updateTaskCancellationPercentage] Task ${taskId} - Using regular percentage: ${percentage}%` + RESET);
       } else {
-        // console.log(YELLOW + `[updateTaskCancellationPercentage] No tracking data for ${taskId}` + RESET);
+        console.log(YELLOW + `[updateTaskCancellationPercentage] No tracking data for ${taskId}, marketplace: ${marketplace || 'none'}` + RESET);
         return;
       }
     }
@@ -8505,19 +8437,21 @@ async function
     }
 
     // Initialize cancellation tracking
-    // console.log(CYAN + `[stopTask] Initializing cancellation tracking - Task: ${taskId}, TotalBids: ${totalBids}, Marketplace: ${marketplace || 'ALL'}` + RESET);
+    console.log(CYAN + `[stopTask] Initializing cancellation tracking - Task: ${taskId}, TotalBids: ${totalBids}, Marketplace: ${marketplace || 'ALL'}` + RESET);
     cancellationTracker.initializeTracking(taskId, totalBids, marketplace);
 
     // For global cancellations, set marketplace-specific totals
     if (!marketplace) {
       cancellationTracker.setMarketplaceTotals(taskId, marketplaceTotals);
-      // console.log(CYAN + `[stopTask] Marketplace totals set - OpenSea: ${marketplaceTotals.opensea}, MagicEden: ${marketplaceTotals.magiceden}, Blur: ${marketplaceTotals.blur}` + RESET);
+      console.log(CYAN + `[stopTask] Marketplace totals set - OpenSea: ${marketplaceTotals.opensea}, MagicEden: ${marketplaceTotals.magiceden}, Blur: ${marketplaceTotals.blur}` + RESET);
     }
 
     // Log current cancellation tracking state
     const trackingStatus = cancellationTracker.getStatus(taskId, marketplace);
     if (trackingStatus) {
-      // console.log(CYAN + `[stopTask] Tracking initialized - Total: ${trackingStatus.totalBids}, Completed: ${trackingStatus.completedCancellations}` + RESET);
+      console.log(CYAN + `[stopTask] Tracking initialized - Total: ${trackingStatus.totalBids}, Completed: ${trackingStatus.completedCancellations}` + RESET);
+    } else {
+      console.log(YELLOW + `[stopTask] WARNING: Failed to get tracking status after initialization` + RESET);
     }
 
     // Set initial cancellation percentage
@@ -8525,7 +8459,7 @@ async function
       await updateTaskCancellationPercentage(taskId, 0);
     }
 
-    // console.log(YELLOW + `[stopTask] Total active bids to cancel: ${totalBids}` + RESET);
+    console.log(YELLOW + `[stopTask] Total active bids to cancel: ${totalBids}` + RESET);
 
     // Get currency symbol for OpenSea cancellations
     let currencySymbol = 'WETH'; // Default to WETH
@@ -8544,7 +8478,7 @@ async function
 
         // Now cancel actual orders
         if (orders.opensea.length > 0 && WALLET_PRIVATE_KEY) {
-          // console.log(GOLD + `  Cancelling ${orders.opensea.length} OpenSea orders...` + RESET);
+          console.log(GOLD + `  Cancelling ${orders.opensea.length} OpenSea orders...` + RESET);
 
 
           // Track cancellation operation
@@ -10219,7 +10153,13 @@ const magicedenOrdersBeingCancelled = new Set<string>();
 async function cancelMagicedenBids(orders: any[], walletId: string, taskId: string) {
   if (!orders.length) return;
 
+  console.log(MAGENTA + `[cancelMagicedenBids] Starting cancellation for ${orders.length} MagicEden orders for task ${taskId}` + RESET);
+
   // Parent job tracking removed - now using cancellationTracker
+  
+  // Check cancellation tracker status
+  const trackingStatus = cancellationTracker.getStatus(taskId, 'magiceden');
+  console.log(MAGENTA + `[cancelMagicedenBids] Cancellation tracker status: ${trackingStatus ? `${trackingStatus.completedCancellations}/${trackingStatus.totalBids} (${cancellationTracker.getPercentage(taskId, 'magiceden')}%)` : 'Not initialized'}` + RESET);
 
   // Filter out orders that are already being cancelled
   const ordersToCancel = [];
@@ -10236,15 +10176,15 @@ async function cancelMagicedenBids(orders: any[], walletId: string, taskId: stri
   }
 
   if (duplicateOrders.length > 0) {
-    // console.log(YELLOW + `[cancelMagicedenBids] Skipping ${duplicateOrders.length} orders already being cancelled` + RESET);
+    console.log(YELLOW + `[cancelMagicedenBids] Skipping ${duplicateOrders.length} orders already being cancelled` + RESET);
   }
 
   if (!ordersToCancel.length) {
-    // console.log(YELLOW + `[cancelMagicedenBids] All ${orders.length} orders are already being cancelled, skipping` + RESET);
+    console.log(YELLOW + `[cancelMagicedenBids] All ${orders.length} orders are already being cancelled, skipping` + RESET);
     return;
   }
 
-  // console.log(MAGENTA + `[cancelMagicedenBids] Queueing ${ordersToCancel.length} MagicEden cancellation orders for task ${taskId} (${duplicateOrders.length} duplicates filtered)` + RESET);
+  console.log(MAGENTA + `[cancelMagicedenBids] Queueing ${ordersToCancel.length} MagicEden cancellation orders for task ${taskId} (${duplicateOrders.length} duplicates filtered)` + RESET);
 
   for (let i = 0; i < ordersToCancel.length; i += 500) {
     const batchOrders = ordersToCancel.slice(i, i + 500);
@@ -10252,7 +10192,10 @@ async function cancelMagicedenBids(orders: any[], walletId: string, taskId: stri
     const orderKeys = batchOrders.map((order: any) => order._id)
     const batchId = `batch-${i / 500}-${Date.now()}`; // Unique batch identifier
 
-    // console.log(MAGENTA + `[cancelMagicedenBids] Adding batch ${i / 500 + 1} with ${batchOrders.length} orders` + RESET);
+    console.log(MAGENTA + `[cancelMagicedenBids] Adding batch ${i / 500 + 1} with ${batchOrders.length} orders` + RESET);
+
+    const jobOptions = getCancellationJobOptions(taskId, batchId, CANCEL_MAGICEDEN_BID);
+    console.log(MAGENTA + `[cancelMagicedenBids] Job options for batch: ${JSON.stringify(jobOptions)}` + RESET);
 
     await queue.add(CANCEL_MAGICEDEN_BID, {
       orderIds: extractedOrderIds,
@@ -10260,40 +10203,49 @@ async function cancelMagicedenBids(orders: any[], walletId: string, taskId: stri
       orderKeys,
       taskId,
       batchSize: batchOrders.length // Add batch size to job data
-    }, getCancellationJobOptions(taskId, batchId, CANCEL_MAGICEDEN_BID));
+    }, jobOptions);
   }
 
   // Decrement the own bid counter by the number of cancelled orders
   decrementOwnBidCounter('magiceden', ordersToCancel.length);
 
-  // console.log(MAGENTA + `[cancelMagicedenBids] Successfully queued all MagicEden cancellation jobs` + RESET);
+  console.log(MAGENTA + `[cancelMagicedenBids] Successfully queued all MagicEden cancellation jobs. Total jobs created: ${Math.ceil(ordersToCancel.length / 500)}` + RESET);
 }
 
 async function cancelBlurBids(orders: any[], walletId: string, taskId: string) {
   if (!orders.length) return
 
+  console.log(BLUE + `[cancelBlurBids] Starting cancellation for ${orders.length} Blur orders for task ${taskId}` + RESET);
 
   // Parent job tracking removed - now using cancellationTracker
+  
+  // Check cancellation tracker status
+  const trackingStatus = cancellationTracker.getStatus(taskId, 'blur');
+  console.log(BLUE + `[cancelBlurBids] Cancellation tracker status: ${trackingStatus ? `${trackingStatus.completedCancellations}/${trackingStatus.totalBids} (${cancellationTracker.getPercentage(taskId, 'blur')}%)` : 'Not initialized'}` + RESET);
 
-  // console.log(BLUE + `[cancelBlurBids] Queueing ${orders.length} Blur cancellation orders for task ${taskId}` + RESET);
+  console.log(BLUE + `[cancelBlurBids] Queueing ${orders.length} Blur cancellation orders for task ${taskId}` + RESET);
 
   const cancelData = orders.map((order, index) => {
     const payload = JSON.parse(order.orderHash)
+    const jobOptions = getCancellationJobOptions(taskId, order._id, CANCEL_BLUR_BID);
     return {
       name: CANCEL_BLUR_BID,
       data: { walletId, payload, taskId, orderKey: order._id },
-      opts: getCancellationJobOptions(taskId, order._id, CANCEL_BLUR_BID)
+      opts: jobOptions
     }
   }) as Job[]
+  
+  console.log(BLUE + `[cancelBlurBids] Created ${cancelData.length} cancellation job configurations` + RESET);
 
   await processBulkJobs(cancelData);
 
-  // console.log(BLUE + `[cancelBlurBids] Successfully queued all Blur cancellation jobs` + RESET);
+  console.log(BLUE + `[cancelBlurBids] Successfully queued all Blur cancellation jobs. Total jobs: ${cancelData.length}` + RESET);
 }
 
 async function cancelOpenseaBids(orders: any[], walletId: string, taskId: string, currencySymbol: string) {
   if (!orders.length) return;
 
+  console.log(GOLD + `[cancelOpenseaBids] Starting cancellation for ${orders.length} OpenSea orders for task ${taskId}` + RESET);
 
   // Parent job tracking removed - now using cancellationTracker
 
@@ -10307,13 +10259,19 @@ async function cancelOpenseaBids(orders: any[], walletId: string, taskId: string
 
   // Track the job IDs we're about to create for reconciliation
   const expectedJobIds = cancelData.map(job => job.opts.jobId);
-  // console.log(GOLD + `[cancelOpenseaBids] Creating ${expectedJobIds.length} cancellation jobs for task ${taskId}` + RESET);
+  console.log(GOLD + `[cancelOpenseaBids] Creating ${expectedJobIds.length} cancellation jobs for task ${taskId}` + RESET);
 
   // Expected job count tracking removed - using marketplace-specific counts
 
   await processBulkJobs(cancelData)
 
-  // console.log(GOLD + `[cancelOpenseaBids] Successfully queued all OpenSea cancellation jobs` + RESET);
+  console.log(GOLD + `[cancelOpenseaBids] Successfully queued all OpenSea cancellation jobs` + RESET);
+  
+  // Log current tracker state
+  const trackingStatus = cancellationTracker.getStatus(taskId, 'opensea');
+  if (trackingStatus) {
+    console.log(GOLD + `[cancelOpenseaBids] Tracking status after queueing: ${trackingStatus.completedCancellations}/${trackingStatus.totalBids} (${cancellationTracker.getPercentage(taskId, 'opensea')}%)` + RESET);
+  }
 
   // Decrement the own bid counter by the number of cancelled orders
   decrementOwnBidCounter('opensea', orders.length);
@@ -17559,7 +17517,7 @@ async function processMagicedenTraitBid(data: {
 async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, taskId: string, orderKey: string }) {
   const { walletId, orderId, taskId, orderKey } = data
 
-  // console.log(`🔐 [bulkCancelOpenseaBid] Starting cancellation for task ${taskId}, order ${orderId}, wallet ${walletId}`);
+  console.log(`🔐 [bulkCancelOpenseaBid] Starting cancellation for task ${taskId}, order ${orderId}, wallet ${walletId}`);
 
   try {
     // Fetch wallet and decrypt private key
@@ -17592,10 +17550,11 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
     });
 
     // Finally, record completion and update percentage - now that DB is clean
+    console.log(`🔐 [bulkCancelOpenseaBid] Recording completion for task ${taskId}, order ${orderId}`);
     cancellationTracker.recordCompletion(taskId, 1, 'opensea');
     await updateTaskCancellationPercentage(taskId, undefined, 'opensea');
 
-    // console.log(`✅ [bulkCancelOpenseaBid] Successfully completed cancellation for task ${taskId}, order ${orderId} with synchronized DB cleanup`);
+    console.log(`✅ [bulkCancelOpenseaBid] Successfully completed cancellation for task ${taskId}, order ${orderId} with synchronized DB cleanup`);
   } catch (error) {
     // Log detailed error information
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -17614,14 +17573,14 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
 }
 
 async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: string, orderKeys: string[], taskId: string, batchSize?: number }) {
-  const { orderIds, walletId, orderKeys, taskId } = data
+  const { orderIds, walletId, orderKeys, taskId, batchSize } = data
 
-  // console.log(`🔐 [bulkCancelMagicedenBid] Starting cancellation for task ${taskId}, ${orderIds.length} orders, wallet ${walletId}`);
+  console.log(`🔐 [bulkCancelMagicedenBid] Starting cancellation for task ${taskId}, ${orderIds.length} orders, wallet ${walletId}, batch size: ${batchSize || orderIds.length}`);
 
   try {
     if (orderIds.length > 0) {
       // Fetch wallet and decrypt private key
-      // console.log(`🔐 [bulkCancelMagicedenBid] Fetching wallet ${walletId}...`);
+      console.log(`🔐 [bulkCancelMagicedenBid] Fetching wallet ${walletId}...`);
       const wallet = await walletCache.getWalletById(walletId);
 
       if (!wallet) {
@@ -17629,17 +17588,17 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
         throw new Error(`Wallet ${walletId} not found`);
       }
 
-      // console.log(`✅ [bulkCancelMagicedenBid] Wallet ${walletId} found, checking encryptedPrivateKey...`);
+      console.log(`✅ [bulkCancelMagicedenBid] Wallet ${walletId} found, checking encryptedPrivateKey...`);
 
       if (!wallet.encryptedPrivateKey) {
         console.error(`❌ [bulkCancelMagicedenBid] No encryptedPrivateKey found for wallet ${walletId} (task ${taskId})`);
         throw new Error(`No encryptedPrivateKey found for wallet ${walletId}`);
       }
 
-      // console.log(`🔐 [bulkCancelMagicedenBid] EncryptedPrivateKey exists, proceeding with decryption for wallet ${walletId}`);
+      console.log(`🔐 [bulkCancelMagicedenBid] EncryptedPrivateKey exists, proceeding with decryption for wallet ${walletId}`);
       const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
 
-      // console.log(`🔐 [bulkCancelMagicedenBid] Starting parallel operations for task ${taskId}: ${orderIds.length} order cancellations and DB cleanup`);
+      console.log(`🔐 [bulkCancelMagicedenBid] Starting parallel operations for task ${taskId}: ${orderIds.length} order cancellations and DB cleanup`);
 
       await Promise.all([
         cancelMagicEdenBid(orderIds, privateKey, taskId),
@@ -17648,13 +17607,19 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
         })
       ])
 
-      // console.log(`✅ [bulkCancelMagicedenBid] Successfully completed ${orderIds.length} cancellations for task ${taskId}`);
+      console.log(`✅ [bulkCancelMagicedenBid] Successfully completed ${orderIds.length} cancellations for task ${taskId}`);
+      
+      // Record completion for the batch
+      const completedCount = batchSize || orderIds.length;
+      console.log(`🔐 [bulkCancelMagicedenBid] Recording completion for task ${taskId}, batch of ${completedCount} orders`);
+      cancellationTracker.recordCompletion(taskId, completedCount, 'magiceden');
+      await updateTaskCancellationPercentage(taskId, undefined, 'magiceden');
     } else {
-      // console.log(`🔐 [bulkCancelMagicedenBid] No orders to cancel for task ${taskId}`);
+      console.log(`🔐 [bulkCancelMagicedenBid] No orders to cancel for task ${taskId}`);
     }
 
     // Clean up the tracking set after successful cancellation
-    // console.log(`🔐 [bulkCancelMagicedenBid] Cleaning up ${orderKeys.length} tracking entries for task ${taskId}`);
+    console.log(`🔐 [bulkCancelMagicedenBid] Cleaning up ${orderKeys.length} tracking entries for task ${taskId}`);
     orderKeys.forEach(orderKey => {
       magicedenOrdersBeingCancelled.delete(orderKey);
     });
@@ -17758,13 +17723,30 @@ validateBidCountInterval = setInterval(validateBidCount, STANDARD_INTERVAL);
 async function bulkCancelBlurBid(data: BlurCancelPayload) {
   const { orderKey, walletId, taskId, payload } = data
 
+  console.log(`🔐 [bulkCancelBlurBid] Starting cancellation for task ${taskId}, order ${orderKey}, wallet ${walletId}`);
+
   try {
     if (!data) return
 
     // Fetch wallet and decrypt private key
+    console.log(`🔐 [bulkCancelBlurBid] Fetching wallet ${walletId}...`);
     const wallet = await walletCache.getWalletById(walletId);
-    const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
+    
+    if (!wallet) {
+      console.error(`❌ [bulkCancelBlurBid] Wallet ${walletId} not found for task ${taskId}`);
+      throw new Error(`Wallet ${walletId} not found`);
+    }
+    
+    if (!wallet.encryptedPrivateKey) {
+      console.error(`❌ [bulkCancelBlurBid] No encryptedPrivateKey found for wallet ${walletId} (task ${taskId})`);
+      throw new Error(`No encryptedPrivateKey found for wallet ${walletId}`);
+    }
+    
+    console.log(`🔐 [bulkCancelBlurBid] Decrypting private key for wallet ${walletId}`);
+    const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
 
+    console.log(`🔐 [bulkCancelBlurBid] Starting parallel operations for task ${taskId}: order deletion and API cancellation`);
+    
     await Promise.all([
       Order.deleteMany({
         _id: orderKey
@@ -17772,6 +17754,13 @@ async function bulkCancelBlurBid(data: BlurCancelPayload) {
       cancelBlurBid({ payload, privateKey, taskId })
     ])
 
+    console.log(`✅ [bulkCancelBlurBid] Successfully completed cancellation for task ${taskId}, order ${orderKey}`);
+    
+    // Record completion
+    console.log(`🔐 [bulkCancelBlurBid] Recording completion for task ${taskId}, order ${orderKey}`);
+    cancellationTracker.recordCompletion(taskId, 1, 'blur');
+    await updateTaskCancellationPercentage(taskId, undefined, 'blur');
+    
     // Cancellation tracking is now handled in cancelBlurBid directly
   } catch (error) {
     console.error(RED + `Error processing Blur bid cancellation for task: ${taskId}` + RESET, error);
