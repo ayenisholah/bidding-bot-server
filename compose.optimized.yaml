@@ -7,7 +7,7 @@ services:
     mem_limit: 4096m
     memswap_limit: 4608m
     # CPU limits: 2.5 cores for server
-    cpus: '2.5'
+    cpus: "2.5"
     cpu_shares: 2048
     ports:
       - "3003:3003"
@@ -20,16 +20,16 @@ services:
     environment:
       PORT: 3003
       # Node memory optimized for 4GB container limit
-      NODE_OPTIONS: '--max-old-space-size=3584'
+      NODE_OPTIONS: "--max-old-space-size=3584"
       # MongoDB connection pool optimization
-      MONGO_MAX_POOL_SIZE: '25'
-      MONGO_MIN_POOL_SIZE: '2'
-      REDIS_HOST: 'redis'
-      REDIS_PORT: '6379'
+      MONGO_MAX_POOL_SIZE: "25"
+      MONGO_MIN_POOL_SIZE: "2"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
       # Redis connection pooling
-      REDIS_MAX_RETRIES: '3'
-      REDIS_CONNECTION_TIMEOUT: '5000'
-      ALCHEMY_API_KEY: "HGWgCONolXMB2op5UjPH1YreDCwmSbvx"
+      REDIS_MAX_RETRIES: "3"
+      REDIS_CONNECTION_TIMEOUT: "5000"
+      ALCHEMY_API_KEY: "Vt4-KnmnLA7XAlfDkeWij"
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
       SERVER_IP: ${SERVER_IP}
       USERNAME: ${USERNAME}
@@ -41,8 +41,8 @@ services:
       API_KEY: ${API_KEY}
       RATE_LIMIT: ${RATE_LIMIT}
       # Performance tuning
-      UV_THREADPOOL_SIZE: '8'
-      NODE_ENV: 'production'
+      UV_THREADPOOL_SIZE: "8"
+      NODE_ENV: "production"
     depends_on:
       mongodb:
         condition: service_healthy
@@ -68,15 +68,15 @@ services:
     mem_limit: 384m
     memswap_limit: 512m
     # CPU limits: 0.5 cores for client
-    cpus: '0.5'
+    cpus: "0.5"
     cpu_shares: 512
     ports:
       - "3001:3001"
     environment:
       PORT: 3001
-      NODE_OPTIONS: '--max-old-space-size=256'
+      NODE_OPTIONS: "--max-old-space-size=256"
       BODY_SIZE_LIMIT: 104857600
-      NEXT_PUBLIC_ALCHEMY_API_KEY: "HGWgCONolXMB2op5UjPH1YreDCwmSbvx"
+      NEXT_PUBLIC_ALCHEMY_API_KEY: "Vt4-KnmnLA7XAlfDkeWij"
       NEXT_PUBLIC_API_KEY: ${API_KEY}
       NEXT_PUBLIC_AXIOM_DATASET: "nft-bidding-bot"
       NEXT_PUBLIC_AXIOM_TOKEN: "xaat-30ecb9c3-ce16-42f6-b824-ba8ef5c50e7c"
@@ -104,7 +104,7 @@ services:
     mem_limit: 2048m
     memswap_limit: 2560m
     # CPU limits: 0.75 cores for MongoDB
-    cpus: '0.75'
+    cpus: "0.75"
     cpu_shares: 768
     command: >
       mongod 
@@ -137,7 +137,7 @@ services:
     mem_limit: 1024m
     memswap_limit: 1280m
     # CPU limits: 0.25 cores for Redis
-    cpus: '0.25'
+    cpus: "0.25"
     cpu_shares: 256
     command: >
       redis-server
@@ -187,7 +187,7 @@ services:
     image: gcr.io/cadvisor/cadvisor:v0.47.0
     container_name: cadvisor
     mem_limit: 128m
-    cpus: '0.1'
+    cpus: "0.1"
     ports:
       - "127.0.0.1:8080:8080"
     volumes:

@@ -20,7 +20,7 @@ services:
       NODE_OPTIONS: "--max-old-space-size=4096"
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
-      ALCHEMY_API_KEY: "HGWgCONolXMB2op5UjPH1YreDCwmSbvx"
+      ALCHEMY_API_KEY: "Vt4-KnmnLA7XAlfDkeWij"
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
       SERVER_IP: ${SERVER_IP}
       USERNAME: ${USERNAME}
@@ -50,7 +50,7 @@ services:
     environment:
       PORT: 3001
       BODY_SIZE_LIMIT: 104857600
-      NEXT_PUBLIC_ALCHEMY_API_KEY: "HGWgCONolXMB2op5UjPH1YreDCwmSbvx"
+      NEXT_PUBLIC_ALCHEMY_API_KEY: "Vt4-KnmnLA7XAlfDkeWij"
       NEXT_PUBLIC_API_KEY: ${API_KEY}
       NEXT_PUBLIC_AXIOM_DATASET: "nft-bidding-bot"
       NEXT_PUBLIC_AXIOM_TOKEN: "xaat-30ecb9c3-ce16-42f6-b824-ba8ef5c50e7c"
