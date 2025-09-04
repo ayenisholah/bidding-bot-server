@@ -3237,10 +3237,10 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string, mark
 
     // CRITICAL DEBUG LOG FOR STOPPED TRANSITIONS
     if (newStatus === 'STOPPED') {
-      console.log(RED + `\n*** LEGACY setTaskStatus: SETTING ${marketplace.toUpperCase()} TO STOPPED FOR TASK ${taskId} ***` + RESET);
-      console.log(RED + `  Transition: ${currentMarketplaceStatus} -> ${newStatus}` + RESET);
-      console.log(RED + `  Context: ${context || 'No context provided'}` + RESET);
-      console.log(RED + `  Call Stack:` + RESET);
+      // console.log(RED + `\n*** LEGACY setTaskStatus: SETTING ${marketplace.toUpperCase()} TO STOPPED FOR TASK ${taskId} ***` + RESET);
+      // console.log(RED + `  Transition: ${currentMarketplaceStatus} -> ${newStatus}` + RESET);
+      // console.log(RED + `  Context: ${context || 'No context provided'}` + RESET);
+      // console.log(RED + `  Call Stack:` + RESET);
       console.log(RED + `    ${stackTrace}` + RESET);
       
       // Get current cancellation percentage
@@ -3250,7 +3250,7 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string, mark
     
     console.log(YELLOW + `\n[TaskStatus-UPDATE] ${timestamp} Task ${taskId} - ${marketplace.toUpperCase()}` + RESET);
     console.log(YELLOW + `  Marketplace Status: ${currentMarketplaceStatus} -> ${newStatus}` + RESET);
-    console.log(YELLOW + `  Context: ${context || 'No context provided'}` + RESET);
+    // console.log(YELLOW + `  Context: ${context || 'No context provided'}` + RESET);
     console.log(YELLOW + `  Enabled Marketplaces: ${enabledMarketplaces.join(', ')}` + RESET);
     console.log(YELLOW + `  Is ${marketplace} enabled: ${enabledMarketplaces.map(m => m.toLowerCase()).includes(marketplace.toLowerCase()) ? 'YES' : 'NO'}` + RESET);
     const loopInfo = loopCounterStats[taskId]?.[marketplace] ? ` (Loop #${loopCounterStats[taskId][marketplace]})` : '';
@@ -3515,7 +3515,7 @@ async function updateTaskRunningPercentage(taskId: string) {
   const marketplacesToCheck = selectedMarketplaces.filter(m => enabledMarketplacesLower.includes(m));
   
   // Log marketplace filtering for updateTaskRunningPercentage
-  console.log(CYAN + `[updateTaskRunningPercentage] Task ${taskId} marketplace analysis:` + RESET);
+  // console.log(CYAN + `[updateTaskRunningPercentage] Task ${taskId} marketplace analysis:` + RESET);
   console.log(CYAN + `  - Selected: ${selectedMarketplaces.join(', ')}` + RESET);
   console.log(CYAN + `  - Enabled: ${enabledMarketplacesLower.join(', ')}` + RESET);
   console.log(CYAN + `  - To check: ${marketplacesToCheck.join(', ')}` + RESET);
@@ -3618,7 +3618,7 @@ async function updateTaskRunningPercentage(taskId: string) {
         taskStatus[taskId].marketplaces[mpKey]!.completedJobs = mpCompleted;
         
         // Comprehensive logging for marketplace-specific status
-        console.log(CYAN + `[updateTaskRunningPercentage] ${parentJobId} marketplace status update:` + RESET);
+        // console.log(CYAN + `[updateTaskRunningPercentage] ${parentJobId} marketplace status update:` + RESET);
         console.log(CYAN + `  - Status: ${taskStatus[taskId].marketplaces[mpKey]!.status}` + RESET);
         console.log(CYAN + `  - Running Percentage: ${mpPercentage.toFixed(2)}%` + RESET);
         console.log(CYAN + `  - Jobs: ${mpCompleted}/${mpTotal} completed` + RESET);
@@ -3692,7 +3692,7 @@ async function updateTaskRunningPercentage(taskId: string) {
   // Running percentage already calculated above
 
   // Log comprehensive task status update
-  console.log(MAGENTA + `\n[updateTaskRunningPercentage] Task ${taskId} comprehensive status:` + RESET);
+  // console.log(MAGENTA + `\n[updateTaskRunningPercentage] Task ${taskId} comprehensive status:` + RESET);
   // Global status removed - now using marketplace-specific status only
   console.log(YELLOW + `  - Global Running Percentage: ${runningPercentage.toFixed(2)}% (DEPRECATED - use marketplace-specific)` + RESET);
   console.log(MAGENTA + `  - Total Jobs Across All Marketplaces: ${completedJobs}/${totalJobs}` + RESET);
@@ -4019,12 +4019,12 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
     if (success) {
       // Increment completed jobs with hard cap protection
       parentJob.completedJobs++;
-      console.log(CYAN + `[markJobAsProcessed] Success counter incremented for ${parentJobId}: ${beforeCount} -> ${parentJob.completedJobs}` + RESET);
+      // console.log(CYAN + `[markJobAsProcessed] Success counter incremented for ${parentJobId}: ${beforeCount} -> ${parentJob.completedJobs}` + RESET);
     } else {
       // Increment both completed (for progress) and failed (for tracking) counters
       parentJob.completedJobs++;
       parentJob.failedJobs = (parentJob.failedJobs || 0) + 1;
-      console.log(YELLOW + `[markJobAsProcessed] Failed job counted - completed: ${beforeCount} -> ${parentJob.completedJobs}, failed: ${beforeFailedCount} -> ${parentJob.failedJobs}` + RESET);
+      // console.log(YELLOW + `[markJobAsProcessed] Failed job counted - completed: ${beforeCount} -> ${parentJob.completedJobs}, failed: ${beforeFailedCount} -> ${parentJob.failedJobs}` + RESET);
     }
 
     // Additional safety check to prevent overflow (should never happen with above logic)
@@ -4050,7 +4050,7 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
     parentJob.totalJobs = 1;
   }
   // Update task running percentage
-  console.log(MAGENTA + `[markJobAsProcessed] Updating task running percentage for ${taskId}` + RESET);
+  // console.log(MAGENTA + `[markJobAsProcessed] Updating task running percentage for ${taskId}` + RESET);
   try {
     await updateTaskRunningPercentage(taskId);
   } catch (error) {
@@ -6036,9 +6036,9 @@ async function updateTaskData(task: ITask) {
     await cancelRemovedTraitBids(traitsToRemove[task._id], task._id, task.walletId, currencySymbol)
     await cancelRemovedTokenBids(removedTokens[task._id], task._id, task.walletId, currencySymbol)
 
-    // console.log(GREEN + '--------------------------------------------------------------' + RESET);
+    // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
     // console.log(GREEN + `NEW TRAIT BIDS TO ADD: ${addedTraits.length}`.toUpperCase() + RESET);
-    // console.log(GREEN + '--------------------------------------------------------------' + RESET);
+    // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
     const newTask = { ...task, traits: {} } as ITask
     // Check cache first
@@ -7220,7 +7220,7 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
     } else {
       // Starting all marketplaces - but only enabled ones
       console.log(CYAN + `[startTask] Processing marketplaces for task ${taskId}:` + RESET);
-      console.log(CYAN + `  - Selected marketplaces: ${task.selectedMarketplaces.join(', ')}` + RESET);
+      // console.log(CYAN + `  - Selected marketplaces: ${task.selectedMarketplaces.join(', ')}` + RESET);
       console.log(CYAN + `  - Enabled marketplaces: ${enabledMarketplaces.join(', ')}` + RESET);
       
       for (const mp of task.selectedMarketplaces) {
@@ -10504,7 +10504,7 @@ async function cancelBlurBids(orders: any[], walletId: string, taskId: string) {
 
   await processBulkJobs(cancelData);
 
-  console.log(BLUE + `[cancelBlurBids] Successfully queued all Blur cancellation jobs. Total jobs: ${cancelData.length}` + RESET);
+  // console.log(BLUE + `[cancelBlurBids] Successfully queued all Blur cancellation jobs. Total jobs: ${cancelData.length}` + RESET);
 }
 
 async function cancelOpenseaBids(orders: any[], walletId: string, taskId: string, currencySymbol: string) {
@@ -10530,7 +10530,7 @@ async function cancelOpenseaBids(orders: any[], walletId: string, taskId: string
 
   await processBulkJobs(cancelData)
 
-  console.log(GOLD + `[cancelOpenseaBids] Successfully queued all OpenSea cancellation jobs` + RESET);
+  // console.log(GOLD + `[cancelOpenseaBids] Successfully queued all OpenSea cancellation jobs` + RESET);
   
   // Log current tracker state
   const trackingStatus = cancellationTracker.getStatus(taskId, 'opensea');
@@ -11631,9 +11631,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         { jobId: orderHash }
       );
       // Log successful counterbid preparation
-      // console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       // console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Token: #${tokenId} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-      // console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
       seenOrderHashes.delete(orderHash);
 
@@ -11803,9 +11803,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
             await queue.addBulk(jobsToAdd);
           }
 
-          // console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+          // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
           // console.log(GREEN + `[MagicEden Trait Token Counterbid SUCCESS] Task: ${task._id} | Placing ${matchingTokenIds.length} token bids at ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier}` + RESET);
-          // console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+          // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         }
       }
 
@@ -11830,9 +11830,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           { jobId: orderHash }
         );
 
-        // console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         // console.log(GREEN + `[MagicEden Trait Collection Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${traitDisplay} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-        // console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       }
 
       seenOrderHashes.delete(taskSpecificHash);
@@ -12058,9 +12058,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
 
       if (counterbidsQueued > 0) {
-        // console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         // console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${baseOfferPriceEth.toFixed(4)} ${currencySymbol} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-        // console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
         // Cancel the orders that we're counterbidding
         if (ordersToCancel.length > 0) {
@@ -12182,9 +12182,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
     // Comprehensive logging for OpenSea counterbid
     const bidType = tokenId ? `Token #${tokenId}` : trait ? `Trait: ${trait.type}:${trait.value}` : 'Collection';
-    // console.log(BLUE + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+    // console.log(BLUE + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
     // console.log(BLUE + `[OpenSea Counterbid] Task: ${task._id} | Collection: ${task.contract.slug} | Type: ${bidType} | Incoming: ${bidDetails} (${extraDetails}) | Quantity: ${quantity} | Maker: ${maker}` + RESET);
-    // console.log(BLUE + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+    // console.log(BLUE + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
 
     if (!outbidOptions.counterbid) {
@@ -12373,9 +12373,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       }
 
       // Log successful counterbid preparation
-      // console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       // console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Token: #${tokenId} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-      // console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+      // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
       seenOrderHashes.delete(taskSpecificHash);
     }
@@ -12571,9 +12571,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             await queue.addBulk(jobsToAdd);
           }
 
-          // console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+          // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
           // console.log(GREEN + `[OpenSea Trait Token Counterbid SUCCESS] Task: ${task._id} | Placing ${matchingTokenIds.length} token bids at ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier}` + RESET);
-          // console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+          // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         }
       }
 
@@ -12607,9 +12607,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         }
 
         // Log successful trait counterbid preparation
-        // console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         // console.log(GREEN + `[OpenSea Trait Collection Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-        // console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       }
 
       seenOrderHashes.delete(taskSpecificHash);
@@ -12840,9 +12840,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       }
 
       if (counterbidsQueued > 0) {
-        // console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         // console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${baseOfferPriceEth.toFixed(4)} ${currencySymbol} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-        // console.log(GREEN + '----------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       } else {
         // console.log(YELLOW + `[OpenSea collection_offer] Task ${task._id} - No offers to counterbid (all existing offers > incoming offer)` + RESET);
       }
@@ -13025,9 +13025,9 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         }
 
         // Log successful trait counterbid preparation
-        // console.log(GREEN + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         // console.log(GREEN + `[Blur Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${Number(offerPrice) / 1e18} ETH | Trait: ${identifier} | Outbidding: ${incomingPrice} ETH` + RESET);
-        // console.log(GREEN + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
         // Track completion time
         const completionTime = Date.now() - startTime;
@@ -13218,9 +13218,9 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       }
 
       if (counterbidsQueued > 0) {
-        // console.log(GREEN + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         // console.log(GREEN + `[Blur Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${Number(baseOfferPrice) / 1e18} ETH | Outbidding: ${bestPrice} ETH` + RESET);
-        // console.log(GREEN + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       } else {
         // console.log(YELLOW + `[Blur collection] Task ${task._id} - No offers to counterbid (all existing offers > incoming offer)` + RESET);
       }
@@ -13872,7 +13872,7 @@ async function performMarketplacePreprocessing(
 async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
   const taskId = task._id.toString();
   const currentLoopCount = loopCounterStats[taskId]?.opensea || 1;
-  console.log(`${BLUE}[processOpenseaScheduledBid] CALLED for task ${task._id} - Loop #${currentLoopCount}${RESET}`);
+  // console.log(`${BLUE}[processOpenseaScheduledBid] CALLED for task ${task._id} - Loop #${currentLoopCount}${RESET}`);
   console.log(`${BLUE}[loopCounterStats] OpenSea Loop ${currentLoopCount} - All counters: ${JSON.stringify(loopCounterStats[taskId])}${RESET}`);
 
   // Log if this appears to be a retry (job has an ID and attempt number)
@@ -14673,7 +14673,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 async function processBlurScheduledBid(task: ITask) {
   const taskId = task._id.toString();
   const currentLoopCount = loopCounterStats[taskId]?.blur || 1;
-  console.log(`${GOLD}[processBlurScheduledBid] CALLED for task ${task._id} - Loop #${currentLoopCount}${RESET}`);
+  // console.log(`${GOLD}[processBlurScheduledBid] CALLED for task ${task._id} - Loop #${currentLoopCount}${RESET}`);
   console.log(`${GOLD}[loopCounterStats] Blur Loop ${currentLoopCount} - All counters: ${JSON.stringify(loopCounterStats[taskId])}${RESET}`);
 
   let lockAcquired = false;
@@ -14746,7 +14746,7 @@ async function processBlurScheduledBid(task: ITask) {
         // Use setTaskStatus for comprehensive logging
         setTaskStatus(taskId, 'PROCESSING', 'blur scheduled bid processing', 'blur');
       } else {
-        console.log(YELLOW + `[processBlurScheduledBid] Skipping PROCESSING status update - blur enabled: ${isBlurEnabled}, selected: ${isBlurSelected}, running: ${isTaskRunning}` + RESET);
+        // console.log(YELLOW + `[processBlurScheduledBid] Skipping PROCESSING status update - blur enabled: ${isBlurEnabled}, selected: ${isBlurSelected}, running: ${isTaskRunning}` + RESET);
         return;
       }
     }
@@ -16643,7 +16643,7 @@ async function processBlurTraitBid(data: {
 async function processMagicedenScheduledBid(task: ITask, jobId?: string, scheduleJob?: Job) {
   const taskId = task._id.toString();
   const currentLoopCount = loopCounterStats[taskId]?.magiceden || 1;
-  console.log(`${MAGENTA}[processMagicedenScheduledBid] CALLED for task ${task._id} - Loop #${currentLoopCount}${RESET}`);
+  // console.log(`${MAGENTA}[processMagicedenScheduledBid] CALLED for task ${task._id} - Loop #${currentLoopCount}${RESET}`);
   console.log(`${MAGENTA}[loopCounterStats] MagicEden Loop ${currentLoopCount} - All counters: ${JSON.stringify(loopCounterStats[taskId])}${RESET}`);
 
   // Log if this appears to be a retry (job has an ID and attempt number)
