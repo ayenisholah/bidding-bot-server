@@ -24,8 +24,8 @@ import helmet from "helmet";
 import stringify from 'json-stable-stringify';
 import WebSocket, { Server as WebSocketServer } from 'ws';
 import http from 'http';
-import { axiosInstance, initialize, limiter, cancelTaskJobs, removeTaskFromBlacklist, isTaskBlacklisted, getLimiterCounts } from "./init";
-import { bidOnOpensea, cancelOpenseaRequest, cancelOrder, cancelOrderWithoutTracking, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor } from "./marketplace/opensea";
+import { axiosInstance, initialize, limiter, removeTaskFromBlacklist, isTaskBlacklisted } from "./init";
+import { bidOnOpensea, cancelOpenseaRequest, cancelOrderWithoutTracking, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor, getAccessToken, getAuthMetrics, getTimeoutMetrics } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
 import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, fetchOpenseaTraits, getCollectionDetails, getOpenseaFloor } from "./functions";
@@ -49,7 +49,6 @@ import axios from "axios";
 import { decryptPrivateKey, setPassword, getPassword, decryptPassword, recoverPasswordFromRedis, renewPasswordTTL, reEncryptWallet, clearDecryptedKeyCache } from "./utils/crypto";
 import { fetchWalletNFTs } from "./utils/nft";
 import { logger, ErrorCategory, DatabaseOperation } from "./utils/logger";
-import { MarketplaceError, InsufficientBalanceError, TransferRestrictedError, MinimumPriceError, isSoftError, isRetryableError } from "./marketplace/errors";
 import WebSocketManager from "./utils/websocket-manager";
 import { initializeListingScheduler, shutdownListingScheduler, scheduleListing, cancelListingJob, processListingJob } from "./functions/listingScheduler";
 import { initializeExpirationMonitor, stopExpirationMonitor } from "./functions/relistExpired";
@@ -11666,10 +11665,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         bidData,
         { jobId: orderHash }
       );
-      // Log successful counterbid preparation
-      console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+      console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Token: #${tokenId} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-      console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+      console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
       seenOrderHashes.delete(orderHash);
 
@@ -11839,9 +11837,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
             await queue.addBulk(jobsToAdd);
           }
 
-          console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+          console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
           console.log(GREEN + `[MagicEden Trait Token Counterbid SUCCESS] Task: ${task._id} | Placing ${matchingTokenIds.length} token bids at ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier}` + RESET);
-          console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+          console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         }
       }
 
@@ -11866,9 +11864,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           { jobId: orderHash }
         );
 
-        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         console.log(GREEN + `[MagicEden Trait Collection Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${traitDisplay} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       }
 
       seenOrderHashes.delete(taskSpecificHash);
@@ -12100,9 +12098,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
 
       if (counterbidsQueued > 0) {
-        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${baseOfferPriceEth.toFixed(4)} ${currencySymbol} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
         // Cancel the orders that we're counterbidding
         if (ordersToCancel.length > 0) {
@@ -12401,9 +12399,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       }
 
       // Log successful counterbid preparation
-      console.log(BLUE + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+      console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Token: #${tokenId} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-      console.log(BLUE + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+      console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
       seenOrderHashes.delete(taskSpecificHash);
     }
@@ -12591,9 +12589,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             await queue.addBulk(jobsToAdd);
           }
 
-          console.log(BLUE + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+          console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
           console.log(GREEN + `[OpenSea Trait Token Counterbid SUCCESS] Task: ${task._id} | Placing ${matchingTokenIds.length} token bids at ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier}` + RESET);
-          console.log(BLUE + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+          console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         }
       }
 
@@ -12627,9 +12625,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         }
 
         // Log successful trait counterbid preparation
-        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         console.log(GREEN + `[OpenSea Trait Collection Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       }
 
       seenOrderHashes.delete(taskSpecificHash);
@@ -12830,10 +12828,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       }
 
       if (counterbidsQueued > 0) {
-        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${baseOfferPriceEth.toFixed(4)} ${currencySymbol} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      } 
+        console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+      }
       seenOrderHashes.delete(taskSpecificHash);
     }
     seenOrderHashes.delete(taskSpecificHash);
@@ -13013,21 +13011,12 @@ async function handleBlurCounterbid(data: any, task: ITask) {
             { jobId: counterbidJobId }
           );
         }
-
-        // Log successful trait counterbid preparation
-        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         console.log(GREEN + `[Blur Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${Number(offerPrice) / 1e18} ETH | Trait: ${identifier} | Outbidding: ${incomingPrice} ETH` + RESET);
-        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-
-        // Track completion time
-        const completionTime = Date.now() - startTime;
-        // console.log(CYAN + `[DEBUG][handleBlurCounterbid] COMPLETED successfully in ${completionTime}ms` + RESET);
+        console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       }
 
     } else {
-      // console.log(CYAN + `[DEBUG][handleBlurCounterbid] Processing collection bid` + RESET);
-      // Allow all task types to respond to collection offers
-
       const incomingBidDetails = incomingBid?.stats?.filter((item: any) => item?.criteriaType?.toLowerCase() === "collection") || incomingBid?.updates?.filter((item: any) => item?.criteriaType?.toLowerCase() === "collection")
 
       if (!incomingBidDetails || !incomingBidDetails?.length) return
@@ -13133,7 +13122,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       if (maxBidPriceEth > 0 && baseOfferPriceEth > maxBidPriceEth) {
         const message = `counter Offer ${baseOfferPriceEth} BETH for ${task.contract.slug} exceeds max bid price ${maxBidPriceEth} BETH. Skipping ...`.toUpperCase()
         await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "blur");
-        
+
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
           const taskOrders = allTaskOrders.filter((order: any) => order.taskId === currentTask._id);
           if (taskOrders.length > 0) {
@@ -13226,53 +13215,24 @@ async function handleBlurCounterbid(data: any, task: ITask) {
                 { jobId: counterbidJobId, attempts: 1 }
               );
             }
-
-            // console.log(GREEN + `[Blur collection] Queued collection counterbid - Existing: ${(Number(order.offerPrice) / 1e18).toFixed(4)} ETH <= Incoming: ${bestPrice} ETH` + RESET);
             counterbidsQueued++;
-
-          } else {
-            // This is a token offer - Blur doesn't support individual token bids
-            // but we'll log it for completeness
-            // console.log(YELLOW + `[Blur collection] Skipping token bid #${order.identifier} - Blur doesn't support token-specific bids` + RESET);
           }
-        } else {
-          // console.log(YELLOW + `[Blur collection] Skipping ${order.identifier} - Existing: ${(Number(order.offerPrice) / 1e18).toFixed(4)} ETH > Incoming: ${bestPrice} ETH` + RESET);
         }
       }
 
       if (counterbidsQueued > 0) {
-        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         console.log(GREEN + `[Blur Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${Number(baseOfferPrice) / 1e18} ETH | Outbidding: ${bestPrice} ETH` + RESET);
-        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      } else {
-        // console.log(YELLOW + `[Blur collection] Task ${task._id} - No offers to counterbid (all existing offers > incoming offer)` + RESET);
+        console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       }
     }
 
-    // Log completion time
-    const endTime = Date.now();
-    // console.log(GREEN + `[DEBUG][handleBlurCounterbid] COMPLETED successfully in ${endTime - startTime}ms` + RESET);
-
   } catch (error: any) {
-    const endTime = Date.now();
-    // console.log(RED + `[DEBUG][handleBlurCounterbid] ERROR after ${endTime - startTime}ms: ${error?.message || error?.toString() || 'Unknown error'}` + RESET);
-    if (error?.stack) {
-      // console.log(RED + `[DEBUG][handleBlurCounterbid] Stack trace: ${error.stack}` + RESET);
-    }
-    // Log specific error details
-    if (error?.response?.data) {
-      // console.log(RED + `[DEBUG][handleBlurCounterbid] API Response:`, JSON.stringify(error.response.data) + RESET);
-    }
-  } finally {
-    // Redis cache handles cleanup automatically with TTL
-    const duration = Date.now() - startTime;
-    // console.log(CYAN + `[DEBUG][handleBlurCounterbid] COMPLETED in ${duration}ms` + RESET);
+    console.log(error);
   }
 }
 
 function handleMagicEdenMessages(message: any) {
-  // console.log(MAGENTA + `[DEBUG][handleMagicEdenMessages] Processing message with event: ${message.event}` + RESET);
-  // console.log(MAGENTA + `[DEBUG][handleMagicEdenMessages] Message structure: ${JSON.stringify(message).substring(0, 300)}...` + RESET);
 
   let slug, contractAddress;
   try {
@@ -14443,9 +14403,7 @@ function transformSelectedTraitsToAttributes(selectedTraits: Record<string, stri
 async function processOpenseaCollectionBid(data: { taskId: string, collectionDetails: any }) {
   const taskId = data.taskId;
 
-  // Check if task is blacklisted
   if (isTaskBlacklisted(taskId, 'opensea')) {
-    // console.log(`[processOpenseaCollectionBid] Task ${taskId} is blacklisted, skipping job execution`);
     return;
   }
 
@@ -14462,7 +14420,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       return;
     }
 
-    // Job is starting to process - marketplace status will be updated when jobs are marked as processed
 
     const { collectionDetails } = data;
     const jobId = `opensea-collection-${currentTask.contract.slug}`;
@@ -14512,40 +14469,39 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
     const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency);
 
-    if (balance < minBidPriceEth) {
-      const errorMsg = balance <= 0
-        ? `Insufficient ${currencySymbol} balance: ${balance} (zero or negative) for task ${taskId}`
-        : `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId}`;
+    // if (balance < minBidPriceEth) {
+    //   const errorMsg = balance <= 0
+    //     ? `Insufficient ${currencySymbol} balance: ${balance} (zero or negative) for task ${taskId}`
+    //     : `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId}`;
 
-      console.log(`${YELLOW}[OPENSEA] ${errorMsg} - completing marketplace loop${RESET}`);
 
-      // Increment skip stats
-      if (!skipStats[currentTask._id]) {
-        skipStats[currentTask._id] = { opensea: 0, magiceden: 0, blur: 0 };
-      }
-      skipStats[currentTask._id].opensea++;
+    //   // Increment skip stats
+    //   if (!skipStats[currentTask._id]) {
+    //     skipStats[currentTask._id] = { opensea: 0, magiceden: 0, blur: 0 };
+    //   }
+    //   skipStats[currentTask._id].opensea++;
 
-      // Log the insufficient balance
-      await logBidError(taskId, "INSUFFICIENT_BALANCE", errorMsg, "skipped", "opensea");
+    //   // Log the insufficient balance
+    //   await logBidError(taskId, "INSUFFICIENT_BALANCE", errorMsg, "skipped", "opensea");
 
-      // Create empty parent job and complete the marketplace loop
-      await ensureParentJobExists(taskId, 'opensea');
-      const parentJobId = getParentJobId(taskId, 'opensea');
-      const parentJob = parentJobs.get(parentJobId);
-      if (parentJob) {
-        parentJob.expectedJobs = 0;
-        parentJob.totalJobs = 0;
-        parentJob.allJobsQueued = true;
-        parentJob.completedJobs = 0;
-        console.log(`${YELLOW}[OPENSEA] Marked parent job ${parentJobId} as complete with 0 jobs due to insufficient balance${RESET}`);
-      }
+    //   // Create empty parent job and complete the marketplace loop
+    //   await ensureParentJobExists(taskId, 'opensea');
+    //   const parentJobId = getParentJobId(taskId, 'opensea');
+    //   const parentJob = parentJobs.get(parentJobId);
+    //   if (parentJob) {
+    //     parentJob.expectedJobs = 0;
+    //     parentJob.totalJobs = 0;
+    //     parentJob.allJobsQueued = true;
+    //     parentJob.completedJobs = 0;
+    //     console.log(`${YELLOW}[OPENSEA] Marked parent job ${parentJobId} as complete with 0 jobs due to insufficient balance${RESET}`);
+    //   }
 
-      // Trigger marketplace completion
-      console.log(`${YELLOW}[OPENSEA] Insufficient balance for task ${taskId}, triggering OpenSea completion${RESET}`);
-      await checkTaskCompletionAndScheduleNext(taskId, 'opensea');
+    //   // Trigger marketplace completion
+    //   console.log(`${YELLOW}[OPENSEA] Insufficient balance for task ${taskId}, triggering OpenSea completion${RESET}`);
+    //   await checkTaskCompletionAndScheduleNext(taskId, 'opensea');
 
-      return;
-    }
+    //   return;
+    // }
 
     const expiry = getExpiry(currentTask.bidDuration)
 
@@ -14571,7 +14527,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       // Parallel fetch: wallets and offers
       const [walletsArr, offers] = await Promise.all([
         walletCache.getAllWallets(),
-        fetchOpenseaOffers('COLLECTION', currentTask.contract.slug, currentTask.contract.contractAddress, {})
+        fetchOpenseaOffers('COLLECTION', currentTask.contract.slug, {})
       ]);
       const [topOffer, secondOffer] = (offers as unknown) as OpenseaOfferData[]
       const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
@@ -14586,15 +14542,15 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 
       // 2. Handle own bid case
       if (isOwnBid) {
-        const spread = Math.round((Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal));
-        // Check for overbidding
-        if (spread > outbidMargin && Number(secondTopBidAmount) > 0) {
-          // Place new bid at optimal level
+        console.log({highestBidAmount, secondTopBidAmount});
+        const spread = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
+        console.log({ spread, outbidMargin });
+
+        if (spread > outbidMargin) {
           colletionOffer = BigInt(Math.round(secondTopBidAmount + (outbidMargin * Math.pow(10, decimal))));
         }
-        // Early return if bid isn't close to expiration
         else if (ttl > MIN_BID_DURATION) {
-          // console.log(YELLOW + `Skipping opensea collection bid for ${currentTask.contract.slug} - we have top bid(${highestBidAmount / Math.pow(10, decimal)} ${currencySymbol}) with ${(ttl / 60).toFixed(2)} minutes remaining`.toUpperCase() + RESET);
+
           return;
         }
         else {
@@ -15536,7 +15492,7 @@ async function processOpenseaTraitBid(data: {
 
     else {      // Parallel fetch: offers and wallets
       const [offers, walletsArr] = await Promise.all([
-        fetchOpenseaOffers('TRAIT', slug, contractAddress, JSON.parse(trait)),
+        fetchOpenseaOffers('TRAIT', slug, JSON.parse(trait)),
         walletCache.getAllWallets()
       ]);
 
@@ -15552,7 +15508,7 @@ async function processOpenseaTraitBid(data: {
 
 
       if (isOwnBid) {
-        const spread = Math.round((Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal));
+        const spread = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0) {
           traitOffer = BigInt(Math.round(+secondTopBidAmount + (outbidMargin * Math.pow(10, decimal))));
         }
@@ -15806,7 +15762,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         .includes(owner);
 
       if (isOwnBid) {
-        const spread = Math.round((Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal));
+        const spread = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0) {
           tokenOffer = BigInt(Math.round(+secondTopBidAmount + (outbidMargin * Math.pow(10, decimal))));
         }
@@ -17320,7 +17276,7 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
         .includes(owner);
 
       if (isOwnBid) {
-        const spread = Math.round((Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal));
+        const spread = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0) {
           colletionOffer = Number(secondTopBidAmount) + (outbidMargin * Math.pow(10, decimal))
         }
@@ -17520,7 +17476,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       const outbidMargin = currentTask.outbidOptions.magicedenOutbidMargin || usdcBid ? 0.01 : 0.0001
 
       if (isOwnBid) {
-        const spread = Math.round((Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal));
+        const spread = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0) {
           tokenOffer = Number(secondTopBidAmount) + (outbidMargin * Math.pow(10, decimal))
         } else if (ttl > MIN_BID_DURATION) {
@@ -17532,7 +17488,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       }
 
       else if (isTopBid) {
-        const spread = Math.round((Number(order.offerPrice) - Number(highestBidAmount)) / Math.pow(10, decimal));
+        const spread = (Number(order.offerPrice) - Number(highestBidAmount)) / Math.pow(10, decimal);
         if (spread > outbidMargin && Number(highestBidAmount) > 0) {
           tokenOffer = Number(highestBidAmount) + (outbidMargin * Math.pow(10, decimal));
         } else if (ttl > MIN_BID_DURATION) {
@@ -17727,7 +17683,7 @@ async function processMagicedenTraitBid(data: {
       const outbidMargin = currentTask.outbidOptions.magicedenOutbidMargin || usdcBid ? 0.01 : 0.0001
 
       if (isOwnBid) {
-        const spread = Math.round((Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal));
+        const spread = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0) {
           traitOffer = Number(secondTopBidAmount) + (outbidMargin * Math.pow(10, decimal));
         } else if (ttl > MIN_BID_DURATION) {
@@ -17738,7 +17694,7 @@ async function processMagicedenTraitBid(data: {
         }
       }
       else if (isTopBid) {
-        const spread = Math.round((Number(order.offerPrice) - Number(highestBidAmount)) / Math.pow(10, decimal));
+        const spread = (Number(order.offerPrice) - Number(highestBidAmount)) / Math.pow(10, decimal);
         if (spread > outbidMargin && Number(highestBidAmount) > 0) {
           traitOffer = Number(highestBidAmount) + (outbidMargin * Math.pow(10, decimal));
         } else if (ttl > MIN_BID_DURATION) {
@@ -18584,7 +18540,7 @@ app.post('/api/floor', async (req, res) => {
       try {
         const openseaFloorPrice = await getOpenseaFloor(slug);
         floorPrices[taskId]['opensea'] = openseaFloorPrice;
-        const [topOffer] = (await fetchOpenseaOffers('COLLECTION', slug, contractAddress, {}) as unknown) as OpenseaOfferData[]
+        const [topOffer] = (await fetchOpenseaOffers('COLLECTION', slug, {}) as unknown) as OpenseaOfferData[]
         const topOfferAmount = Number(topOffer?.eth) || 0
         bestOffers[taskId]['opensea'] = topOfferAmount
       } catch (error: any) {
