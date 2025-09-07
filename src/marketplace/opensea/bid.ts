@@ -280,7 +280,6 @@ export async function bidOnOpensea(
       // Check if task is blacklisted (stopped)
       if (isTaskBlacklisted(taskId, 'opensea')) {
         const error = new Error(`Bid execution blocked - task ${taskId} is stopped for OpenSea`);
-// console.log(`[OpenSea] Job execution blocked for stopped task: ${taskId}`);
         throw error;
       }
 
@@ -422,7 +421,7 @@ export async function bidOnOpensea(
 
         // Log successful token bid
         const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()} TOKEN: ${asset.tokenId} ${offerPriceEthFinal} ${currencySymbol} 🎉`;
-// console.log(BLUE, successMessage, RESET);
+        console.log(BLUE, successMessage, RESET);
       }
 
       else if (opensea_traits && typeof opensea_traits !== "undefined") {
@@ -488,7 +487,6 @@ export async function bidOnOpensea(
         ]);
 
         if (!data || !data.partialParameters) {
-// console.log(`[Trait Bid - buildOffer] No data or partialParameters returned`);
           return
         }
 
@@ -619,7 +617,6 @@ export async function bidOnOpensea(
 
 
         if (!data || !data.partialParameters) {
-// console.log(`[Collection Bid] No data or partialParameters`);
           return
         }
 
@@ -698,7 +695,6 @@ export async function bidOnOpensea(
 async function submitOfferToOpensea(decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900, opensea_traits?: string) {
   const [taskId] = bidCount.split(":")
   if (isTaskBlacklisted(taskId, 'opensea')) {
-// console.log(`[OpenSea] Offer submission blocked for stopped task: ${taskId}`);
     return;
   }
   const task = activeTasks.get(taskId)
@@ -726,15 +722,15 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
     // Check for merkle root error in submit response
     const errorData = (error as any)?.response?.data;
     if (errorData && typeof errorData === 'string' && errorData.includes('merkle')) {
-// console.log('[OPENSEA_DEBUG] MERKLE ROOT ERROR IN SUBMIT:', errorData);
+      console.log('[OPENSEA_DEBUG] MERKLE ROOT ERROR IN SUBMIT:', errorData);
     } else if (errorData?.error && errorData.error.includes('merkle')) {
-// console.log('[OPENSEA_DEBUG] MERKLE ROOT ERROR IN SUBMIT:', errorData.error);
+      console.log('[OPENSEA_DEBUG] MERKLE ROOT ERROR IN SUBMIT:', errorData.error);
     } else if (errorData?.message && errorData.message.includes('merkle')) {
-// console.log('[OPENSEA_DEBUG] MERKLE ROOT ERROR IN SUBMIT:', errorData.message);
+      console.log('[OPENSEA_DEBUG] MERKLE ROOT ERROR IN SUBMIT:', errorData.message);
     } else if (errorData?.errors && Array.isArray(errorData.errors)) {
       errorData.errors.forEach((err: any, index: number) => {
         if (err.includes && err.includes('merkle')) {
-// console.log(`[OPENSEA_DEBUG] MERKLE ROOT ERROR IN SUBMIT (error[${index}]):`, err);
+          console.log(`[OPENSEA_DEBUG] MERKLE ROOT ERROR IN SUBMIT (error[${index}]):`, err);
         }
       });
     }
@@ -780,7 +776,7 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
   const successMessage = opensea_traits ?
     `🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()}  TRAIT: ${opensea_traits} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
     : `🎉 COLLECTION OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
-// console.log(BLUE, successMessage, RESET);
+  console.log(BLUE, successMessage, RESET);
 }
 
 /**
@@ -815,11 +811,11 @@ async function buildOffer(taskId: string, buildPayload: any) {
     // Check for merkle root error
     const errorData = error?.response?.data;
     if (errorData && typeof errorData === 'string' && errorData.includes('merkle')) {
-// console.log('[OPENSEA_DEBUG] MERKLE ROOT ERROR DETECTED:', errorData);
+      console.log('[OPENSEA_DEBUG] MERKLE ROOT ERROR DETECTED:', errorData);
     } else if (errorData?.error && errorData.error.includes('merkle')) {
-// console.log('[OPENSEA_DEBUG] MERKLE ROOT ERROR DETECTED:', errorData.error);
+      console.log('[OPENSEA_DEBUG] MERKLE ROOT ERROR DETECTED:', errorData.error);
     } else if (errorData?.message && errorData.message.includes('merkle')) {
-// console.log('[OPENSEA_DEBUG] MERKLE ROOT ERROR DETECTED:', errorData.message);
+      console.log('[OPENSEA_DEBUG] MERKLE ROOT ERROR DETECTED:', errorData.message);
     }
 
     await logger.logOpenseaBidError('Failed to build OpenSea offer', {
@@ -864,7 +860,7 @@ async function cancelOrderInternal(orderHash: string, protocolAddress: string, p
     }
 
     const response = await limiter.schedule(() => axiosInstance.post(url, body, { headers }))
-// console.log(JSON.stringify({ cancelled: true }));
+    console.log(JSON.stringify({ cancelled: true }));
     decrementBidCount('opensea', taskId)
 
     // Only update tracking if requested (for synchronized cancellation control)

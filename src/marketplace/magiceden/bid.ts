@@ -1194,6 +1194,7 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
         }
       }
     ))
+    console.log(JSON.stringify(cancelResponse));
     orderIds.forEach(() => {
       decrementBidCount('magiceden', taskId);
     });

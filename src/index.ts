@@ -77,6 +77,7 @@ export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
 const bidStats: BidCounts = {};
 const ownBidCounts: { [marketplace: string]: number } = {};
+const processedOwnBids: Set<string> = new Set(); // Track processed own bid hashes
 const currentTokenIds: BottomListings = {};
 const currentTraits: CurrentTraits = {}
 export const taskStatus: TaskStatus = {};
@@ -11445,38 +11446,29 @@ async function handleCounterBidForTask(task: any, message: any) {
   // Process each marketplace handler with error handling and timeout protection
   try {
     if (selectedMarketplaces.includes('blur') && message.marketplace === BLUR) {
-      // console.log(BLUE + `[DEBUG][handleCounterBidForTask] Calling handleBlurCounterbid` + RESET);
       await handleBlurCounterbid(message['1'], task)
     }
     else if (selectedMarketplaces.includes('opensea') && message.marketplace === OPENSEA) {
-      // console.log(BLUE + `[DEBUG][handleCounterBidForTask] Calling handleOpenseaCounterbid` + RESET);
       handleOpenseaCounterbid(message, task)
     }
     else if (selectedMarketplaces.includes('magiceden') && message.marketplace === MAGICEDEN) {
-      // console.log(BLUE + `[DEBUG][handleCounterBidForTask] Calling handleMagicEdenCounterbid` + RESET);
       handleMagicEdenCounterbid(message, task)
     } else {
-      // console.log(BLUE + `[DEBUG][handleCounterBidForTask] No matching marketplace handler found` + RESET);
     }
   } catch (error: any) {
-    // console.log(`Counterbid error for task ${task._id}: ${error.message}`);
+    console.log(`Counterbid error for task ${task._id}: ${error.message}`);
   }
 }
 
 
 async function handleMagicEdenCounterbid(data: any, task: ITask) {
-  // console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] ENTRY - Task: ${task._id}` + RESET);
   try {
     const currentTask = activeTasks.get(task._id)
-    // console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] currentTask found: ${!!currentTask}` + RESET);
-    // console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] currentTask.running: ${currentTask?.running}` + RESET);
-    // console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] selectedMarketplaces: ${JSON.stringify(currentTask?.selectedMarketplaces)}` + RESET);
-    // console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] enabledMarketplaces: ${JSON.stringify(enabledMarketplaces)}` + RESET);
+
 
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces
       .map((m) => m.toLowerCase())
       .includes("magiceden")) {
-      // console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] Early return - conditions not met` + RESET);
       return;
     };
 
@@ -11523,18 +11515,11 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
     }
 
-    // Check if the maker is one of our wallets before decrypting private key
-    // console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] Checking wallet ownership:` + RESET);
-    // console.log(YELLOW + `  - maker: ${maker}` + RESET);
-    // console.log(YELLOW + `  - walletAddresses: ${JSON.stringify(walletAddresses)}` + RESET);
-    // console.log(YELLOW + `  - includes maker: ${walletAddresses.includes(maker)}` + RESET);
 
     if (walletAddresses.includes(maker)) {
-      // console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] Own wallet detected, calling incrementOwnBidCounter` + RESET);
-      incrementOwnBidCounter('magiceden', task._id);
-      // return
+      incrementOwnBidCounter('magiceden', orderHash);
+      return
     }
-
 
     // Comprehensive logging for MagicEden counterbid
     const makerFormatted = maker ? `${maker.slice(0, 6)}...${maker.slice(-4)}` : 'unknown';
@@ -12238,7 +12223,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
     if (walletAddresses.includes(maker)) {
       // console.log(YELLOW + `[DEBUG][handleOpenseaCounterbid] Own wallet detected, calling incrementOwnBidCounter` + RESET);
-      incrementOwnBidCounter('opensea', task._id);
+      incrementOwnBidCounter('opensea', orderHash);
       return
     }
 
@@ -21648,15 +21633,32 @@ export function trackBidRate(marketplace: 'opensea' | 'magiceden' | 'blur', task
 /**
  * Increments memory-based counter for our own bids when we detect we're the maker
  */
-export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', taskId: string) {
-  // console.log(GREEN + `[DEBUG][incrementOwnBidCounter] CALLED - marketplace: ${marketplace}, taskId: ${taskId}` + RESET);
+export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', orderHash: string) {
+  // console.log(GREEN + `[DEBUG][incrementOwnBidCounter] CALLED - marketplace: ${marketplace}, orderHash: ${orderHash}` + RESET);
   try {
+    // Check if we've already processed this bid
+    if (processedOwnBids.has(orderHash)) {
+      // console.log(YELLOW + `[DEBUG][incrementOwnBidCounter] Already processed bid ${orderHash}, skipping increment` + RESET);
+      return ownBidCounts[marketplace] || 0;
+    }
+    
+    // Mark this bid as processed
+    processedOwnBids.add(orderHash);
+    
     if (!ownBidCounts[marketplace]) {
       ownBidCounts[marketplace] = 0;
     }
     ownBidCounts[marketplace]++;
     // console.log(GREEN + `[DEBUG][incrementOwnBidCounter] Incremented ${marketplace} count to: ${ownBidCounts[marketplace]}` + RESET);
     // console.log(GREEN + `[DEBUG][incrementOwnBidCounter] Current counts: ${JSON.stringify(ownBidCounts)}` + RESET);
+    
+    // Clean up old entries periodically (keep last 10000 entries)
+    if (processedOwnBids.size > 10000) {
+      const entriesToKeep = Array.from(processedOwnBids).slice(-5000);
+      processedOwnBids.clear();
+      entriesToKeep.forEach(entry => processedOwnBids.add(entry));
+    }
+    
     return ownBidCounts[marketplace];
   } catch (error) {
     console.error('Failed to increment own bid counter:', error);
@@ -21667,8 +21669,13 @@ export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
 /**
  * Decrements memory-based counter for our own bids when we cancel a bid
  */
-export function decrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', count: number = 1) {
+export function decrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', count: number = 1, orderHash?: string) {
   try {
+    // If order hash provided, remove it from processed set
+    if (orderHash) {
+      processedOwnBids.delete(orderHash);
+    }
+    
     // Update local ownBidCounts object for immediate broadcast
     if (ownBidCounts[marketplace] && ownBidCounts[marketplace] > 0) {
       ownBidCounts[marketplace] = Math.max(0, ownBidCounts[marketplace] - count);
