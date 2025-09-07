@@ -1362,27 +1362,7 @@ export async function fetchOpenseaOffers(
     } else if (offers.length === 1) {
       return [offers[0], defaultOffer];
     }
-
-    return [
-      {
-        amount: 2.82,
-        owner: '0x50E877D6F52BD8b0812259ca22C1E298BE40Af75',
-        currency: 'WETH',
-        usd: 7383.5430787791165,
-        decimal: 18,
-        eth: 1.72
-      },
-      {
-        amount: 1.71,
-        owner: '0x5b468edb7688e9ae6c1fa5a6d2debbef06e92907',
-        currency: 'WETH',
-        usd: 7340.6155027397035,
-        decimal: 18,
-        eth: 1.71
-      }
-    ]
-    // console.log({ offers });
-    // return offers
+    return offers
   } else if (offerType === 'TRAIT') {
     const { type, value } = identifiers as Record<string, string>;
 
