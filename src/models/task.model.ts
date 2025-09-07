@@ -161,7 +161,7 @@ const TaskSchema: Schema = new Schema(
       magicedenOutbidMargin: { type: Number, default: null },
       counterbid: { type: Boolean, default: false },
       cancelMaxWhenOutbid: { type: Boolean, default: false },
-      crossTypeMarginMultiplier: { type: Number, default: 10 },
+      crossTypeMarginMultiplier: { type: Number, default: 1 },
     },
     bidPrice: {
       min: { type: Number, required: true },
