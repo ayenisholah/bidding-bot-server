@@ -1465,7 +1465,7 @@ async function fetchCurrentTasks() {
           clearInterval(countdownTimer);
           taskCountdownTimers.delete(taskId);
         }
-        
+
         // Clean up marketplace-specific timers
         const marketplacesList = ['opensea', 'magiceden', 'blur'];
         for (const marketplace of marketplacesList) {
@@ -2764,12 +2764,12 @@ async function startServer() {
       .filter(([taskId, task]) => {
         const status = taskStatus[taskId];
         const hasTimer = taskTimeouts.has(taskId);
-        
+
         // Check if any marketplace is in SCHEDULED state
         const hasScheduledMarketplace = status?.marketplaces && Object.values(status.marketplaces).some(
           mpStatus => mpStatus?.status === 'SCHEDULED'
         );
-        
+
         return task.running &&
           hasScheduledMarketplace &&
           !hasTimer;
@@ -3035,14 +3035,14 @@ async function shouldTaskBeStopped(taskId: string): Promise<boolean> {
   }
 
   const isNotRunning = !task || !task.running;
-  
+
   console.log(`[LEGACY-shouldTaskBeStopped] Task ${taskId}: Checking if should be stopped`);
   console.log(`[LEGACY-shouldTaskBeStopped] Task ${taskId}: Task running: ${task?.running || false}`);
   console.log(`[LEGACY-shouldTaskBeStopped] Task ${taskId}: isNotRunning: ${isNotRunning}`);
-  
+
   // Check if ALL marketplaces have completed cancellation (100%)
   const marketplaceStatuses = status.marketplaces;
-  
+
   if (marketplaceStatuses) {
     console.log(`[LEGACY-shouldTaskBeStopped] Task ${taskId}: Marketplace statuses:`);
     Object.entries(marketplaceStatuses).forEach(([mp, mpStatus]) => {
@@ -3051,12 +3051,12 @@ async function shouldTaskBeStopped(taskId: string): Promise<boolean> {
       }
     });
   }
-  
+
   // FIXED: Change >= 100 to === 100 to match enhanced system
-  const allMarketplacesCancelled = marketplaceStatuses && Object.values(marketplaceStatuses).every(mp => 
+  const allMarketplacesCancelled = marketplaceStatuses && Object.values(marketplaceStatuses).every(mp =>
     mp && (mp.cancellationPercentage === 100 || mp.status === 'COMPLETED' || mp.status === 'STOPPED')
   );
-  
+
   console.log(`[LEGACY-shouldTaskBeStopped] Task ${taskId}: allMarketplacesCancelled: ${allMarketplacesCancelled}`);
 
   // If all marketplaces cancelled, verify no active orders exist
@@ -3077,7 +3077,7 @@ async function shouldTaskBeStopped(taskId: string): Promise<boolean> {
 
   const shouldStop = isNotRunning && allMarketplacesCancelled;
   console.log(`[LEGACY-shouldTaskBeStopped] Task ${taskId}: FINAL DECISION: shouldStop = ${shouldStop} (isNotRunning: ${isNotRunning} && allMarketplacesCancelled: ${allMarketplacesCancelled})`);
-  
+
   if (shouldStop) {
     console.log(RED + `[LEGACY-shouldTaskBeStopped] *** LEGACY SYSTEM WANTS TO STOP TASK ${taskId} ***` + RESET);
   }
@@ -3088,7 +3088,7 @@ async function shouldTaskBeStopped(taskId: string): Promise<boolean> {
 // Helper function to ensure task transitions to STOPPED when cancellation is complete
 async function setTaskCancellationComplete(taskId: string) {
   console.log(RED + `[LEGACY-setTaskCancellationComplete] *** LEGACY SYSTEM ATTEMPTING TO COMPLETE TASK ${taskId} ***` + RESET);
-  
+
   const task = activeTasks.get(taskId)
 
   // Only proceed if taskStatus exists (don't create new ones here)
@@ -3103,17 +3103,17 @@ async function setTaskCancellationComplete(taskId: string) {
   const cancellingMarketplaces = Object.entries(taskStatus[taskId]?.marketplaces || {})
     .filter(([_, status]) => status?.status === 'CANCELLING')
     .map(([mp, _]) => mp);
-    
+
   console.log(RED + `[LEGACY-setTaskCancellationComplete] Task ${taskId} found ${cancellingMarketplaces.length} CANCELLING marketplaces: [${cancellingMarketplaces.join(', ')}]` + RESET);
-  
+
   // CRITICAL BUG FIX: Only transition marketplaces that are actually at 100% completion
   const marketplacesToStop = [];
   for (const mp of cancellingMarketplaces) {
     const marketplaceStatus = taskStatus[taskId]?.marketplaces[mp as keyof typeof taskStatus[string]['marketplaces']];
     const cancellationPercentage = marketplaceStatus?.cancellationPercentage || 0;
-    
+
     console.log(YELLOW + `[LEGACY-setTaskCancellationComplete] Checking ${mp}: ${cancellationPercentage}% complete` + RESET);
-    
+
     // FIXED: Only transition when exactly 100% complete OR no orders to cancel (0 total jobs)
     if (cancellationPercentage === 100 || (marketplaceStatus?.totalJobs === 0 && marketplaceStatus?.completedJobs === 0)) {
       console.log(GREEN + `[LEGACY-setTaskCancellationComplete] ✅ ${mp.toUpperCase()} ready for STOPPED: ${cancellationPercentage}% (${marketplaceStatus?.completedJobs}/${marketplaceStatus?.totalJobs} jobs)` + RESET);
@@ -3122,9 +3122,9 @@ async function setTaskCancellationComplete(taskId: string) {
       console.log(RED + `[LEGACY-setTaskCancellationComplete] ❌ ${mp.toUpperCase()} NOT ready for STOPPED: ${cancellationPercentage}% (need 100%)` + RESET);
     }
   }
-  
+
   console.log(RED + `[LEGACY-setTaskCancellationComplete] Transitioning ${marketplacesToStop.length}/${cancellingMarketplaces.length} marketplaces to STOPPED: [${marketplacesToStop.join(', ')}]` + RESET);
-  
+
   // Set only validated marketplaces to STOPPED
   for (const mp of marketplacesToStop) {
     console.log(GREEN + `[LEGACY-setTaskCancellationComplete] *** LEGACY SYSTEM SETTING ${mp.toUpperCase()} TO STOPPED FOR TASK ${taskId} *** (VALIDATED AT 100%)` + RESET);
@@ -3227,7 +3227,7 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string, mark
 
     // Special case: Allow STOPPED -> CANCELLING transition
     const isStopTaskTransition = currentMarketplaceStatus === 'STOPPED' && newStatus === 'CANCELLING';
-    
+
     if (!isStopTaskTransition && invalidTransitions[currentMarketplaceStatus]?.includes(newStatus)) {
       console.error(RED + `[setTaskStatus] INVALID STATE TRANSITION: ${currentMarketplaceStatus} -> ${newStatus} for task ${taskId}/${marketplace}` + RESET);
       console.error(RED + `  Context: ${context || 'No context provided'}` + RESET);
@@ -3242,12 +3242,12 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string, mark
       // console.log(RED + `  Context: ${context || 'No context provided'}` + RESET);
       // console.log(RED + `  Call Stack:` + RESET);
       console.log(RED + `    ${stackTrace}` + RESET);
-      
+
       // Get current cancellation percentage
       const currentCancelPct = taskStatus[taskId].marketplaces[marketplaceName]?.cancellationPercentage || 0;
       console.log(RED + `  Current ${marketplace} cancellation: ${currentCancelPct}%` + RESET);
     }
-    
+
     console.log(YELLOW + `\n[TaskStatus-UPDATE] ${timestamp} Task ${taskId} - ${marketplace.toUpperCase()}` + RESET);
     console.log(YELLOW + `  Marketplace Status: ${currentMarketplaceStatus} -> ${newStatus}` + RESET);
     // console.log(YELLOW + `  Context: ${context || 'No context provided'}` + RESET);
@@ -3325,7 +3325,7 @@ async function setMarketplaceCancellationComplete(taskId: string, marketplace?: 
   // Check if any marketplace has CANCELLING status (marketplace-specific cancellation)
   const marketplaceStatuses = taskStatus[taskId].marketplaces;
   const hasCancellingMarketplace = marketplaceStatuses && Object.values(marketplaceStatuses).some(mp => mp?.status === 'CANCELLING');
-  
+
   if (hasCancellingMarketplace) {
     // This is a marketplace-specific cancellation
     // console.log(GREEN + `[setMarketplaceCancellationComplete] Marketplace-specific cancellation complete for ${taskId}/${marketplace}` + RESET);
@@ -3422,7 +3422,7 @@ function cleanupTaskResources(taskId: string, preserveWarnings = false): void {
     clearInterval(countdownTimer);
     taskCountdownTimers.delete(taskId);
   }
-  
+
   // Then clear any marketplace-specific timers
   const marketplacesList = ['opensea', 'magiceden', 'blur'];
   for (const marketplace of marketplacesList) {
@@ -3513,7 +3513,7 @@ async function updateTaskRunningPercentage(taskId: string) {
   const selectedMarketplaces = task.selectedMarketplaces.map(m => m.toLowerCase());
   const enabledMarketplacesLower = enabledMarketplaces.map(m => m.toLowerCase());
   const marketplacesToCheck = selectedMarketplaces.filter(m => enabledMarketplacesLower.includes(m));
-  
+
   // Log marketplace filtering for updateTaskRunningPercentage
   // console.log(CYAN + `[updateTaskRunningPercentage] Task ${taskId} marketplace analysis:` + RESET);
   console.log(CYAN + `  - Selected: ${selectedMarketplaces.join(', ')}` + RESET);
@@ -3534,7 +3534,7 @@ async function updateTaskRunningPercentage(taskId: string) {
         taskStatus[taskId].marketplaces[mpKey]!.runningPercentage = 0;
         taskStatus[taskId].marketplaces[mpKey]!.totalJobs = 0;
         taskStatus[taskId].marketplaces[mpKey]!.completedJobs = 0;
-        
+
         // Clear parent job data for disabled marketplace
         const parentJobId = getParentJobId(taskId, marketplace);
         if (parentJobs.has(parentJobId)) {
@@ -3616,7 +3616,7 @@ async function updateTaskRunningPercentage(taskId: string) {
         taskStatus[taskId].marketplaces[mpKey]!.runningPercentage = mpPercentage;
         taskStatus[taskId].marketplaces[mpKey]!.totalJobs = mpTotal;
         taskStatus[taskId].marketplaces[mpKey]!.completedJobs = mpCompleted;
-        
+
         // Comprehensive logging for marketplace-specific status
         // console.log(CYAN + `[updateTaskRunningPercentage] ${parentJobId} marketplace status update:` + RESET);
         console.log(CYAN + `  - Status: ${taskStatus[taskId].marketplaces[mpKey]!.status}` + RESET);
@@ -3696,7 +3696,7 @@ async function updateTaskRunningPercentage(taskId: string) {
   // Global status removed - now using marketplace-specific status only
   console.log(YELLOW + `  - Global Running Percentage: ${runningPercentage.toFixed(2)}% (DEPRECATED - use marketplace-specific)` + RESET);
   console.log(MAGENTA + `  - Total Jobs Across All Marketplaces: ${completedJobs}/${totalJobs}` + RESET);
-  
+
   // Log marketplace breakdown
   console.log(MAGENTA + `  - Marketplace Breakdown (PREFERRED DATA):` + RESET);
   for (const [mp, breakdown] of Object.entries(marketplaceBreakdown)) {
@@ -3711,9 +3711,9 @@ async function updateTaskRunningPercentage(taskId: string) {
   // Summary section - Keep only TOTAL SUMMARY logs
   // console.log(`\n${BLUE}[updateTaskRunningPercentage] TOTAL SUMMARY:${RESET}`);
   // console.log(BLUE + `  Total Jobs: ${totalJobs} (` +
-    // marketplacesToCheck.map(mp =>
-      // `${mp.charAt(0).toUpperCase() + mp.slice(1)}: ${marketplaceBreakdown[mp]?.total || 0}`
-    // ).join(', ') + `)` + RESET);
+  // marketplacesToCheck.map(mp =>
+  // `${mp.charAt(0).toUpperCase() + mp.slice(1)}: ${marketplaceBreakdown[mp]?.total || 0}`
+  // ).join(', ') + `)` + RESET);
   // console.log(BLUE + `  Completed: ${completedJobs}` + RESET);
   // console.log(MAGENTA + `  Overall Progress: ${runningPercentage.toFixed(2)}%` + RESET);
 
@@ -3821,7 +3821,7 @@ async function checkTaskCompletionAndScheduleNext(taskId: string, marketplace?: 
     // Marketplace-specific completion only
     console.log(GREEN + `\n[Task Completion] Task ${taskId}/${marketplace} - Loop #${currentLoopCount} completed successfully` + RESET);
     console.log(GREEN + `[loopCounterStats] Completion - Task ${taskId} counters: ${JSON.stringify(loopCounterStats[taskId])}` + RESET);
-    
+
     // Log current marketplace status before completion
     const mpStatus = taskStatus[taskId]?.marketplaces?.[marketplace as 'opensea' | 'magiceden' | 'blur'];
     console.log(GREEN + `[Task Completion] ${marketplace} status before completion:` + RESET);
@@ -3831,7 +3831,7 @@ async function checkTaskCompletionAndScheduleNext(taskId: string, marketplace?: 
 
     setTaskStatus(taskId, 'COMPLETED', `marketplace completion - Loop #${currentLoopCount}`, marketplace);
     console.log(GREEN + `[Task Completion] ${marketplace} status set to COMPLETED` + RESET);
-    
+
     // Add 0.5-second delay before transitioning to SCHEDULED
     console.log(YELLOW + `[Task Completion] Waiting 0.5s before scheduling next loop...` + RESET);
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -4077,7 +4077,7 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
       // This prevents duplicate completion calls
       // Get overall percentage from marketplaces
       const marketplaceStatuses = taskStatus[taskId]?.marketplaces;
-      const overallPercentage = marketplaceStatuses ? 
+      const overallPercentage = marketplaceStatuses ?
         Math.max(...Object.values(marketplaceStatuses).map(mp => mp?.runningPercentage || 0)) : 0;
       console.log(CYAN + `[All Jobs Complete] Current percentage: ${overallPercentage}%` + RESET);
       // console.log(CYAN + `[All Jobs Complete] Completion will be triggered by updateTaskRunningPercentage when it reaches 100%` + RESET);
@@ -4116,7 +4116,7 @@ function clearTaskTimers(taskId: string, marketplace?: string) {
   // If marketplace is specified, only clear timers for that marketplace
   // Otherwise, clear all timers for the task
   const timerKeyPattern = marketplace ? `${taskId}-${marketplace}` : taskId;
-  
+
   // Clear timeouts
   for (const [key, timeout] of taskTimeouts.entries()) {
     if (marketplace) {
@@ -4189,13 +4189,13 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
     if (!loopCounterStats[taskId]) {
       loopCounterStats[taskId] = {};
     }
-    
+
     // Increment the counter for this specific marketplace
     if (!loopCounterStats[taskId][marketplace]) {
       loopCounterStats[taskId][marketplace] = 0;
     }
     loopCounterStats[taskId][marketplace]++;
-    
+
     const newLoopCount = loopCounterStats[taskId][marketplace];
     console.log(CYAN + `[scheduleNextLoop] Scheduling ${marketplace} Loop #${newLoopCount} for task ${taskId} in ${loopInterval}s` + RESET);
   } else {
@@ -4206,7 +4206,7 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
   // Set up next loop time and countdown timer
   const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
   const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
-  
+
   console.log(MAGENTA + `\n[scheduleNextLoop] Scheduling details:` + RESET);
   console.log(MAGENTA + `  - Task: ${taskId}` + RESET);
   console.log(MAGENTA + `  - Marketplace: ${marketplace || 'ALL'}` + RESET);
@@ -4224,7 +4224,7 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
       if (taskStatus[taskId].marketplaces && taskStatus[taskId].marketplaces[mpKey]) {
         taskStatus[taskId].marketplaces[mpKey].waitingTime = secondsUntilNextLoop;
         taskStatus[taskId].marketplaces[mpKey].nextLoopTime = nextLoopTime;
-        
+
         // Log other marketplace statuses
         console.log(MAGENTA + `  - Other marketplace statuses:` + RESET);
         for (const [mp, status] of Object.entries(taskStatus[taskId].marketplaces)) {
@@ -4250,7 +4250,7 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
 
   // Create a unique key for marketplace-specific timers
   const timerKey = marketplace ? `${taskId}-${marketplace}` : taskId;
-  
+
   // Clear any existing countdown timer before setting a new one
   const existingCountdownTimer = taskCountdownTimers.get(timerKey);
   if (existingCountdownTimer) {
@@ -4274,7 +4274,7 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
         if (mpStatus.nextLoopTime) {
           const remainingSeconds = Math.max(0, Math.floor((mpStatus.nextLoopTime.getTime() - Date.now()) / 1000));
           mpStatus.waitingTime = remainingSeconds;
-          
+
           if (remainingSeconds <= 0) {
             clearInterval(countdownTimer);
             taskCountdownTimers.delete(timerKey);
@@ -4297,7 +4297,7 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
           }
         }
       }
-      
+
       if (allComplete) {
         clearInterval(countdownTimer);
         taskCountdownTimers.delete(timerKey);
@@ -4340,7 +4340,7 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
 
 
         // Only skip if all marketplaces are STOPPED (not CANCELLING, as user might want to restart)
-        const allMarketplacesStopped = currentStatus?.marketplaces && 
+        const allMarketplacesStopped = currentStatus?.marketplaces &&
           Object.values(currentStatus.marketplaces).every(mp => mp?.status === 'STOPPED');
         if (allMarketplacesStopped) {
           // console.log(YELLOW + `[scheduleNextLoop] Task ${taskId} all marketplaces are STOPPED, skipping startTask` + RESET);
@@ -5068,7 +5068,7 @@ async function broadcastBidRates() {
     loopCounterStats,
     timestamp: Date.now() // Add timestamp for client to track data freshness
   };
-  
+
   let message: string;
   try {
     message = JSON.stringify({
@@ -5232,7 +5232,7 @@ wss.on('connection', async (ws) => {
           break
 
         default:
-          // console.warn(YELLOW + `Unknown endpoint: ${message.endpoint}` + RESET);
+        // console.warn(YELLOW + `Unknown endpoint: ${message.endpoint}` + RESET);
       }
     } catch (error) {
       logger.logApiError("WebSocket message handler failed", {
@@ -5864,6 +5864,10 @@ async function updateTaskData(task: ITask) {
 
     if (existingTaskIndex === -1 || !existingTask) return
 
+    // Check if loopInterval has changed
+    const loopIntervalChanged = existingTask.loopInterval.value !== task.loopInterval.value || 
+                               existingTask.loopInterval.unit !== task.loopInterval.unit;
+
     const wallet = await walletCache.getWalletById(task.walletId)
     currentTasks.splice(existingTaskIndex, 1, task);
     activeTasks.set(task._id, task);
@@ -6060,10 +6064,10 @@ async function updateTaskData(task: ITask) {
     // console.log(`[Trait Bid - Full Collection Details Retrieved] ${task.contract.slug}:`, JSON.stringify(collectionDetails, null, 2));
 
     // console.log(`[Trait Bid - CreatorFees Construction] Before transformation:`, {
-      // creator_fees: JSON.stringify(collectionDetails.creator_fees),
-      // has_null: collectionDetails.creator_fees.null !== undefined,
-      // null_value: collectionDetails.creator_fees.null,
-      // keys: Object.keys(collectionDetails.creator_fees)
+    // creator_fees: JSON.stringify(collectionDetails.creator_fees),
+    // has_null: collectionDetails.creator_fees.null !== undefined,
+    // null_value: collectionDetails.creator_fees.null,
+    // keys: Object.keys(collectionDetails.creator_fees)
     // });
 
     // Convert all creator fees to the IFee format (ensuring values are numbers)
@@ -6206,6 +6210,54 @@ async function updateTaskData(task: ITask) {
     }
 
     // existingTask
+
+    // Handle loopInterval changes for running tasks
+    if (loopIntervalChanged && task.running && taskStatus[task._id]) {
+      console.log(CYAN + `[updateTaskData] Loop interval changed for task ${task._id} - rescheduling` + RESET);
+      
+      // Check each marketplace's current status
+      const scheduledMarketplaces: string[] = [];
+      const selectedMarketplacesLower = task.selectedMarketplaces.map(m => m.toLowerCase());
+      
+      if (taskStatus[task._id].marketplaces) {
+        for (const [marketplace, status] of Object.entries(taskStatus[task._id].marketplaces)) {
+          if (status?.status === 'SCHEDULED' && selectedMarketplacesLower.includes(marketplace)) {
+            scheduledMarketplaces.push(marketplace);
+          }
+        }
+      }
+      
+      console.log(YELLOW + `  Found ${scheduledMarketplaces.length} scheduled marketplaces to reschedule: ${scheduledMarketplaces.join(', ')}` + RESET);
+
+      // Cancel existing timers and reschedule for each scheduled marketplace
+      for (const marketplace of scheduledMarketplaces) {
+        const timerKey = `${task._id}-${marketplace}`;
+        
+        // Clear the countdown timer
+        const countdownTimer = taskCountdownTimers.get(timerKey);
+        if (countdownTimer) {
+          clearInterval(countdownTimer);
+          taskCountdownTimers.delete(timerKey);
+          console.log(GREEN + `  ✓ Cleared countdown timer for ${marketplace}` + RESET);
+        } else {
+          console.log(YELLOW + `  ! No countdown timer found for ${marketplace}` + RESET);
+        }
+        
+        // Clear the scheduled timeout
+        const timeoutId = taskTimeouts.get(timerKey);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          taskTimeouts.delete(timerKey);
+          console.log(GREEN + `  ✓ Cleared scheduled timeout for ${marketplace}` + RESET);
+        } else {
+          console.log(YELLOW + `  ! No scheduled timeout found for ${marketplace}` + RESET);
+        }
+
+        // Reschedule with new interval
+        console.log(MAGENTA + `  Rescheduling ${marketplace} with new interval` + RESET);
+        await scheduleNextLoop(task._id, marketplace);
+      }
+    }
 
     const start = existingTask.running === false && task.running === true
     const stop = existingTask.running === true && task.running === false
@@ -6423,7 +6475,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
 
             // console.log(YELLOW + `[processBulkJobs] Task ${taskId}: Queue at capacity (${totalJobs}/${MAX_QUEUE_JOBS}, prioritized: ${prioritizedJobs}). ` +
-              // `Waiting ${WAIT_INTERVAL / 1000} seconds before retry (iteration ${waitIterations}, elapsed: ${Math.round(elapsedTime / 1000)}s)...` + RESET);
+            // `Waiting ${WAIT_INTERVAL / 1000} seconds before retry (iteration ${waitIterations}, elapsed: ${Math.round(elapsedTime / 1000)}s)...` + RESET);
 
             // Wait for 1 minute
             await new Promise(resolve => setTimeout(resolve, WAIT_INTERVAL));
@@ -6848,7 +6900,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
         const isMarketplaceEnabled = enabledMarketplaces.map(m => m.toLowerCase()).includes(marketplaceLower);
         const isMarketplaceSelected = activeTask?.selectedMarketplaces.map(m => m.toLowerCase()).includes(marketplaceLower);
         const isTaskRunning = activeTask?.running === true;
-        
+
         if (isMarketplaceEnabled && isMarketplaceSelected && isTaskRunning) {
           setTaskStatus(taskId, 'PROCESSING', 'job queueing failed - will retry', marketplace);
         }
@@ -7150,22 +7202,23 @@ async function startTask(task: ITask, start: boolean, marketplace?: string, isRe
 
 // Original startTask function implementation
 async function startTaskInternal(task: ITask, start: boolean, marketplace?: string, isRestart?: boolean) {
+  // Check start parameter immediately to avoid any unnecessary processing
+  if (!start) {
+    // console.log(YELLOW + `[startTask] Not starting task ${task._id} - start=false` + RESET);
+    return { success: false, reason: 'start_false' };
+  }
+  
   const startTime = Date.now();
   const taskId = task._id.toString();
 
   // console.log(GREEN + `[startTask] Called for task ${taskId}, start=${start}, marketplace=${marketplace}, isRestart=${isRestart}` + RESET);
 
-  if (!start) {
-    // console.log(YELLOW + `[startTask] Not starting task ${taskId} - start=false` + RESET);
-    return { success: false, reason: 'start_false' };
-  }
-
 
   // If task is in CANCELLING state, we'll clean it up and allow the start
   // Check if any marketplace is in CANCELLING state
-  const hasCancellingMarketplace = taskStatus[taskId]?.marketplaces && 
+  const hasCancellingMarketplace = taskStatus[taskId]?.marketplaces &&
     Object.values(taskStatus[taskId].marketplaces).some(mpStatus => mpStatus?.status === 'CANCELLING');
-  
+
   if (hasCancellingMarketplace) {
     // console.log(YELLOW + `[startTask] Task ${taskId} is in CANCELLING state, cleaning up and proceeding with start` + RESET);
 
@@ -7222,11 +7275,11 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
       console.log(CYAN + `[startTask] Processing marketplaces for task ${taskId}:` + RESET);
       // console.log(CYAN + `  - Selected marketplaces: ${task.selectedMarketplaces.join(', ')}` + RESET);
       console.log(CYAN + `  - Enabled marketplaces: ${enabledMarketplaces.join(', ')}` + RESET);
-      
+
       for (const mp of task.selectedMarketplaces) {
         const mpLower = mp.toLowerCase();
         const isEnabled = enabledMarketplaces.map(em => em.toLowerCase()).includes(mpLower);
-        
+
         if (isEnabled) {
           console.log(GREEN + `  ✓ Starting ${mp} (enabled)` + RESET);
           setTaskStatus(taskId, 'STARTED', `startTask called: isRestart=${isRestart}, marketplace=ALL`, mp);
@@ -7310,7 +7363,7 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
         ));
         cleanupOldParentJobs(taskId, maxLoopCount);
       }
-      
+
       // Log complete loop counter state for all marketplaces
       console.log(CYAN + `[loopCounterStats] Task ${taskId} complete counters: ${JSON.stringify(loopCounterStats[taskId])}` + RESET);
     }
@@ -7890,7 +7943,7 @@ async function cancelMarketplaceRateLimiterJobs(taskId: string, marketplace?: st
 // Helper function to attempt cancellation of any remaining orders
 async function attemptRemainingCancellations(taskId: string, marketplace: string): Promise<number> {
   console.log(YELLOW + `[attemptRemainingCancellations] Attempting to cancel remaining orders for ${marketplace} on task ${taskId}` + RESET);
-  
+
   try {
     // Fetch the remaining active orders
     const remainingOrders = await Order.find({
@@ -7898,21 +7951,21 @@ async function attemptRemainingCancellations(taskId: string, marketplace: string
       marketplace: marketplace.toLowerCase(),
       expiresAt: { $gt: new Date() }
     }).limit(500); // Limit to prevent overwhelming the system
-    
+
     if (remainingOrders.length === 0) {
       console.log(GREEN + `[attemptRemainingCancellations] No remaining orders found` + RESET);
       return 0;
     }
-    
+
     console.log(YELLOW + `[attemptRemainingCancellations] Found ${remainingOrders.length} remaining orders to cancel` + RESET);
-    
+
     // Get the task to find wallet ID
     const task = await Task.findById(taskId);
     if (!task) {
       console.log(RED + `[attemptRemainingCancellations] Task ${taskId} not found` + RESET);
       return remainingOrders.length;
     }
-    
+
     // Log specific order details for debugging
     remainingOrders.slice(0, 5).forEach((order, index) => {
       console.log(YELLOW + `  - Order ${index + 1}: ${order._id} (${order.orderHash})` + RESET);
@@ -7920,11 +7973,11 @@ async function attemptRemainingCancellations(taskId: string, marketplace: string
     if (remainingOrders.length > 5) {
       console.log(YELLOW + `  - ... and ${remainingOrders.length - 5} more orders` + RESET);
     }
-    
+
     // Attempt to cancel based on marketplace
     const marketplaceLower = marketplace.toLowerCase();
     const ordersArray = remainingOrders.map(o => o.toObject());
-    
+
     switch (marketplaceLower) {
       case 'opensea':
         await cancelOpenseaBids(ordersArray, task.walletId, taskId, 'WETH');
@@ -7939,22 +7992,22 @@ async function attemptRemainingCancellations(taskId: string, marketplace: string
         console.log(RED + `[attemptRemainingCancellations] Unknown marketplace: ${marketplace}` + RESET);
         return remainingOrders.length;
     }
-    
+
     console.log(GREEN + `[attemptRemainingCancellations] Cancellation jobs queued for ${remainingOrders.length} orders` + RESET);
-    
+
     // Wait a bit for jobs to be processed
     await new Promise(resolve => setTimeout(resolve, 5000));
-    
+
     // Re-check how many orders remain
     const stillActiveCount = await Order.countDocuments({
       taskId: taskId,
       marketplace: marketplace.toLowerCase(),
       expiresAt: { $gt: new Date() }
     });
-    
+
     console.log(CYAN + `[attemptRemainingCancellations] After cancellation attempt: ${stillActiveCount} orders still active` + RESET);
     return stillActiveCount;
-    
+
   } catch (error) {
     console.error(RED + `[attemptRemainingCancellations] Error attempting remaining cancellations:` + RESET, error);
     return -1; // Return -1 to indicate error
@@ -7965,7 +8018,7 @@ async function attemptRemainingCancellations(taskId: string, marketplace: string
 async function validateAndTransitionToStopped(taskId: string, marketplace: string, marketplaceName: string, retryCount = 0): Promise<void> {
   const MAX_RETRIES = 3;
   const RETRY_DELAY = 500; // 500ms delay between retries
-  
+
   try {
     // First check: Count active orders for this marketplace
     const query = {
@@ -7975,11 +8028,11 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
     };
 
     const activeOrderCount = await Order.countDocuments(query);
-    
+
     // Get current tracking status to validate completion
     const trackingStatus = cancellationTracker.getStatus(taskId, marketplace);
     const isTrackingComplete = trackingStatus ? cancellationTracker.isComplete(taskId, marketplace) : false;
-    
+
     console.log(CYAN + `[validateAndTransitionToStopped] ${marketplaceName} validation:` + RESET);
     console.log(CYAN + `  - Active orders: ${activeOrderCount}` + RESET);
     console.log(CYAN + `  - Tracking complete: ${isTrackingComplete}` + RESET);
@@ -7989,20 +8042,20 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
       // Still have active orders - check if we should retry or if this is expected
       if (retryCount < MAX_RETRIES) {
         console.log(YELLOW + `[validateAndTransitionToStopped] ${marketplaceName} has ${activeOrderCount} active orders, retrying in ${RETRY_DELAY}ms (attempt ${retryCount + 1}/${MAX_RETRIES + 1})` + RESET);
-        
+
         // Wait for potential database updates to complete
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
-        
+
         // Retry validation
         return await validateAndTransitionToStopped(taskId, marketplace, marketplaceName, retryCount + 1);
       } else {
         // Max retries reached but still have orders - attempt to cancel them
         console.log(RED + `[validateAndTransitionToStopped] WARNING: ${marketplaceName} at 100% tracking but ${activeOrderCount} orders still active after ${MAX_RETRIES} retries!` + RESET);
         console.log(YELLOW + `[validateAndTransitionToStopped] Attempting to cancel remaining orders...` + RESET);
-        
+
         // Attempt to cancel remaining orders
         const remainingAfterAttempt = await attemptRemainingCancellations(taskId, marketplace);
-        
+
         if (remainingAfterAttempt === 0) {
           // Successfully cancelled all remaining orders
           console.log(GREEN + `[validateAndTransitionToStopped] Successfully cancelled all remaining orders, transitioning to STOPPED` + RESET);
@@ -8012,13 +8065,13 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
           // Still have orders after cancellation attempt
           console.log(RED + `[validateAndTransitionToStopped] Still have ${remainingAfterAttempt} orders after cancellation attempt` + RESET);
           console.log(RED + `[validateAndTransitionToStopped] Keeping CANCELLING status - manual intervention may be required` + RESET);
-          
+
           // Reset the cancellation percentage to reflect actual state
           if (trackingStatus && trackingStatus.totalBids > 0) {
             const actualCompleted = Math.max(0, trackingStatus.totalBids - remainingAfterAttempt);
             const actualPercentage = (actualCompleted / trackingStatus.totalBids) * 100;
             console.log(RED + `[validateAndTransitionToStopped] Adjusting ${marketplaceName} percentage to ${actualPercentage.toFixed(2)}% based on remaining orders` + RESET);
-            
+
             if (taskStatus[taskId]?.marketplaces[marketplaceName as keyof typeof taskStatus[string]['marketplaces']]) {
               taskStatus[taskId].marketplaces[marketplaceName as keyof typeof taskStatus[string]['marketplaces']]!.cancellationPercentage = Math.floor(actualPercentage);
               broadcastBidRates();
@@ -8035,7 +8088,7 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
       console.log(GREEN + `  - No active orders remaining` + RESET);
       console.log(GREEN + `  - Tracking status complete: ${isTrackingComplete}` + RESET);
       console.log(GREEN + `  - Transitioning to STOPPED` + RESET);
-      
+
       // Safe to transition to STOPPED
       setTaskStatus(taskId, 'STOPPED', `${marketplaceName} cancellation complete - validated with enhanced checks`, marketplace);
     } else {
@@ -8044,7 +8097,7 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
 
   } catch (error) {
     console.error(RED + `[validateAndTransitionToStopped] Error validating ${marketplaceName} cancellation completion:` + RESET, error);
-    
+
     // On error, keep CANCELLING status to be safe
     console.log(RED + `[validateAndTransitionToStopped] Keeping CANCELLING status due to validation error` + RESET);
   }
@@ -8053,14 +8106,14 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
 // Centralized function to update task cancellation percentage - single source of truth
 export async function updateTaskCancellationPercentage(taskId: string, forcePercentage?: number, marketplace?: string) {
   console.log(CYAN + `[updateTaskCancellationPercentage] Called for task ${taskId}, forcePercentage: ${forcePercentage}, marketplace: ${marketplace || 'ALL'}` + RESET);
-  
+
   // Log current tracker state
   const allTrackings = cancellationTracker.getAllTrackings();
   console.log(CYAN + `[updateTaskCancellationPercentage] All active trackings:` + RESET);
   allTrackings.forEach((tracking, key) => {
     console.log(CYAN + `  - Key: ${key}, Total: ${tracking.totalBids}, Completed: ${tracking.completedCancellations}, Percentage: ${tracking.totalBids > 0 ? ((tracking.completedCancellations / tracking.totalBids) * 100).toFixed(2) : '0'}%` + RESET);
   });
-  
+
   if (!taskStatus[taskId]) {
     const task = activeTasks.get(taskId);
     taskStatus[taskId] = {
@@ -8068,7 +8121,7 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
       lastUpdate: Date.now(),
       marketplaces: {}
     };
-    
+
     // Initialize marketplace-specific cancellation status
     const selectedMarketplaces = task?.selectedMarketplaces || [];
     selectedMarketplaces.forEach(m => {
@@ -8083,7 +8136,7 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
         lastUpdate: Date.now()
       };
     });
-    
+
     console.log(CYAN + `[updateTaskCancellationPercentage] Initialized taskStatus for ${taskId} with CANCELLING status` + RESET);
   }
 
@@ -8121,18 +8174,18 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
   }
 
   // Update marketplace-specific cancellation percentages
-  
+
   const task = activeTasks.get(taskId);
   const selectedMarketplaces = task?.selectedMarketplaces || [];
-  
+
   // If marketplace is specified, only update that specific marketplace
   if (marketplace) {
     const mpKey = marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
     if (taskStatus[taskId].marketplaces[mpKey]) {
       // Get marketplace-specific percentage
-      const marketplacePercentage = forcePercentage !== undefined ? forcePercentage : 
+      const marketplacePercentage = forcePercentage !== undefined ? forcePercentage :
         cancellationTracker.getPercentage(taskId, marketplace) ?? percentage;
-      
+
       taskStatus[taskId].marketplaces[mpKey]!.cancellationPercentage = marketplacePercentage;
       console.log(CYAN + `[updateTaskCancellationPercentage] ${mpKey} cancellation: ${marketplacePercentage}%` + RESET);
     }
@@ -8142,18 +8195,18 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
       .filter(([_, status]) => status?.status === 'CANCELLING')
       .map(([mp, _]) => mp);
     const marketplacesToUpdate = cancellingMarketplaces.length > 0 ? cancellingMarketplaces : selectedMarketplaces;
-    
+
     for (const mp of marketplacesToUpdate) {
       const mpKey = mp.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
       if (taskStatus[taskId].marketplaces[mpKey]) {
         // Get marketplace-specific percentage from tracker
         const marketplacePercentage = cancellationTracker.getPercentage(taskId, mp) ?? percentage;
-        
+
         taskStatus[taskId].marketplaces[mpKey]!.cancellationPercentage = marketplacePercentage;
         console.log(CYAN + `[updateTaskCancellationPercentage] ${mpKey} cancellation: ${marketplacePercentage}%` + RESET);
       }
     }
-    
+
     // Log the global update (deprecated)
     console.log(YELLOW + `[updateTaskCancellationPercentage] DEPRECATED: Global cancellation: ${percentage}% (use marketplace-specific data)` + RESET);
   }
@@ -8173,13 +8226,13 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
     const marketplaceName = marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
     const isCancellingThisMarketplace = taskStatus[taskId]?.marketplaces[marketplaceName]?.status === 'CANCELLING';
     const marketplacePercentage = taskStatus[taskId]?.marketplaces[marketplaceName]?.cancellationPercentage || 0;
-    
+
     // CRITICAL BUG FIX: Fixed >= 100 to === 100 to prevent premature transitions
     if (isCancellingThisMarketplace && marketplacePercentage === 100) {
       console.log(RED + `[updateTaskCancellationPercentage] *** MARKETPLACE REACHED THRESHOLD *** ${marketplaceName}: ${marketplacePercentage}%` + RESET);
       console.log(GREEN + `[updateTaskCancellationPercentage] BUG FIXED: Using === 100 (was >= 100)` + RESET);
       console.log(GREEN + `[updateTaskCancellationPercentage] Fixed logic: ${marketplacePercentage} === 100 = ${marketplacePercentage === 100}` + RESET);
-      
+
       // FOR NOW: Keep the old logic but add extensive logging to prove this is the issue
       console.log(YELLOW + `[updateTaskCancellationPercentage] Marketplace ${marketplaceName} reached 100%, performing enhanced validation...` + RESET);
 
@@ -8192,7 +8245,7 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
     const cancellingMarketplaces = Object.entries(taskStatus[taskId]?.marketplaces || {})
       .filter(([_, status]) => status?.status === 'CANCELLING')
       .map(([mp, _]) => mp);
-    
+
     if (cancellingMarketplaces.length > 0) {
       try {
         const activeOrderCount = await Order.countDocuments({
@@ -8210,7 +8263,7 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
           // Still have active orders at 100% - attempt to cancel them
           console.log(YELLOW + `[updateTaskCancellationPercentage] Global cancellation at 100% but ${activeOrderCount} orders still active` + RESET);
           console.log(YELLOW + `[updateTaskCancellationPercentage] Attempting to cancel remaining orders across all marketplaces...` + RESET);
-          
+
           // Attempt to cancel remaining orders for each marketplace
           let totalRemaining = 0;
           for (const mp of cancellingMarketplaces) {
@@ -8219,7 +8272,7 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
               totalRemaining += remainingForMarketplace;
             }
           }
-          
+
           if (totalRemaining === 0) {
             console.log(GREEN + `[updateTaskCancellationPercentage] Successfully cancelled all remaining orders globally` + RESET);
             // Transition all marketplaces to STOPPED
@@ -8233,7 +8286,7 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
             if (trackingStatus && trackingStatus.totalBids > 0) {
               const actualCompleted = Math.max(0, trackingStatus.totalBids - totalRemaining);
               const actualPercentage = Math.floor((actualCompleted / trackingStatus.totalBids) * 100);
-              
+
               // Update all cancelling marketplaces with adjusted percentage
               for (const mp of cancellingMarketplaces) {
                 const mpKey = mp as keyof typeof taskStatus[string]['marketplaces'];
@@ -8337,7 +8390,7 @@ async function
         marketplaces: {}
       }
     }
-    
+
     // === STEP 1: PREPARE FOR TASK STOPPING ===
     // Clear scheduling data and prepare for status transitions
     // NOTE: Do NOT set STOPPED status yet - will transition to CANCELLING if orders exist, STOPPED if no orders
@@ -8354,7 +8407,7 @@ async function
         });
       }
     }
-    
+
     let WALLET_PRIVATE_KEY: string | undefined;
     try {
       const wallet = await walletCache.getWalletById(task.walletId);
@@ -8463,7 +8516,7 @@ async function
     // Determine which marketplaces have orders to cancel
     const marketplacesWithOrders = [];
     const marketplacesWithoutOrders = [];
-    
+
     if (marketplace) {
       // Marketplace-specific stop
       const mp = marketplace.toLowerCase();
@@ -8497,7 +8550,7 @@ async function
           // Only set to STOPPED if the marketplace is selected AND enabled
           const isSelected = task.selectedMarketplaces.map(m => m.toLowerCase()).includes(name);
           const isEnabled = enabledMarketplaces.map(m => m.toLowerCase()).includes(name);
-          
+
           if (isSelected && isEnabled) {
             marketplacesWithoutOrders.push(name);
             setTaskStatus(taskId, "STOPPED", "No orders to cancel", name);
@@ -8963,12 +9016,12 @@ async function
     }
 
     // console.log(GREEN + `[stopTask] Enhanced cancellation complete for task ${taskId}` + RESET);
-    
+
     // Clean up marketplace-specific resources for scheduleNextLoop
     if (marketplace) {
       const marketplaceLower = marketplace.toLowerCase();
       console.log(CYAN + `[stopTask] Cleaning up marketplace-specific resources for ${marketplaceLower}` + RESET);
-      
+
       // Clear marketplace-specific countdown timer
       const timerKey = `${taskId}-${marketplaceLower}`;
       const countdownTimer = taskCountdownTimers.get(timerKey);
@@ -8977,7 +9030,7 @@ async function
         taskCountdownTimers.delete(timerKey);
         console.log(CYAN + `  - Cleared countdown timer for ${timerKey}` + RESET);
       }
-      
+
       // Clear marketplace-specific timeout
       const timeout = taskTimeouts.get(timerKey);
       if (timeout) {
@@ -8985,20 +9038,20 @@ async function
         taskTimeouts.delete(timerKey);
         console.log(CYAN + `  - Cleared timeout for ${timerKey}` + RESET);
       }
-      
+
       // Reset marketplace loop counter
       if (loopCounterStats[taskId] && loopCounterStats[taskId][marketplaceLower]) {
         const previousCount = loopCounterStats[taskId][marketplaceLower];
         delete loopCounterStats[taskId][marketplaceLower];
         console.log(CYAN + `  - Reset loop counter for ${marketplaceLower} (was at loop #${previousCount})` + RESET);
-        
+
         // If all marketplaces are removed, clean up the task entry
         if (Object.keys(loopCounterStats[taskId]).length === 0) {
           delete loopCounterStats[taskId];
           console.log(CYAN + `  - Removed empty loop counter entry for task ${taskId}` + RESET);
         }
       }
-      
+
       // Clear marketplace from preprocessing if exists
       const preprocessing = taskPreprocessing.get(taskId);
       if (preprocessing) {
@@ -9054,13 +9107,13 @@ async function
 
     // Log that task remains blacklisted due to error
     // console.log(YELLOW + `[StopTask] Task ${taskId} remains blacklisted due to error - manual intervention may be required` + RESET);
-    
+
     // Clean up marketplace-specific resources even on error
     if (marketplace) {
       try {
         const marketplaceLower = marketplace.toLowerCase();
         console.log(YELLOW + `[stopTask] Cleaning up marketplace-specific resources after error for ${marketplaceLower}` + RESET);
-        
+
         // Clear marketplace-specific countdown timer
         const timerKey = `${taskId}-${marketplaceLower}`;
         const countdownTimer = taskCountdownTimers.get(timerKey);
@@ -9068,14 +9121,14 @@ async function
           clearInterval(countdownTimer);
           taskCountdownTimers.delete(timerKey);
         }
-        
+
         // Clear marketplace-specific timeout
         const timeout = taskTimeouts.get(timerKey);
         if (timeout) {
           clearTimeout(timeout);
           taskTimeouts.delete(timerKey);
         }
-        
+
         // Reset marketplace loop counter
         if (loopCounterStats[taskId] && loopCounterStats[taskId][marketplaceLower]) {
           delete loopCounterStats[taskId][marketplaceLower];
@@ -9083,7 +9136,7 @@ async function
             delete loopCounterStats[taskId];
           }
         }
-        
+
         // Clear marketplace from preprocessing
         const preprocessing = taskPreprocessing.get(taskId);
         if (preprocessing) {
@@ -10421,7 +10474,7 @@ async function cancelMagicedenBids(orders: any[], walletId: string, taskId: stri
   console.log(MAGENTA + `[cancelMagicedenBids] Starting cancellation for ${orders.length} MagicEden orders for task ${taskId}` + RESET);
 
   // Parent job tracking removed - now using cancellationTracker
-  
+
   // Check cancellation tracker status
   const trackingStatus = cancellationTracker.getStatus(taskId, 'magiceden');
   console.log(MAGENTA + `[cancelMagicedenBids] Cancellation tracker status: ${trackingStatus ? `${trackingStatus.completedCancellations}/${trackingStatus.totalBids} (${cancellationTracker.getPercentage(taskId, 'magiceden')}%)` : 'Not initialized'}` + RESET);
@@ -10483,7 +10536,7 @@ async function cancelBlurBids(orders: any[], walletId: string, taskId: string) {
   console.log(BLUE + `[cancelBlurBids] Starting cancellation for ${orders.length} Blur orders for task ${taskId}` + RESET);
 
   // Parent job tracking removed - now using cancellationTracker
-  
+
   // Check cancellation tracker status
   const trackingStatus = cancellationTracker.getStatus(taskId, 'blur');
   console.log(BLUE + `[cancelBlurBids] Cancellation tracker status: ${trackingStatus ? `${trackingStatus.completedCancellations}/${trackingStatus.totalBids} (${cancellationTracker.getPercentage(taskId, 'blur')}%)` : 'Not initialized'}` + RESET);
@@ -10499,7 +10552,7 @@ async function cancelBlurBids(orders: any[], walletId: string, taskId: string) {
       opts: jobOptions
     }
   }) as Job[]
-  
+
   console.log(BLUE + `[cancelBlurBids] Created ${cancelData.length} cancellation job configurations` + RESET);
 
   await processBulkJobs(cancelData);
@@ -10531,7 +10584,7 @@ async function cancelOpenseaBids(orders: any[], walletId: string, taskId: string
   await processBulkJobs(cancelData)
 
   // console.log(GOLD + `[cancelOpenseaBids] Successfully queued all OpenSea cancellation jobs` + RESET);
-  
+
   // Log current tracker state
   const trackingStatus = cancellationTracker.getStatus(taskId, 'opensea');
   if (trackingStatus) {
@@ -10625,12 +10678,17 @@ async function updateMarketplace(task: ITask) {
 
       // console.log(color + `Adding marketplace: ${incoming.toUpperCase()} for collection: ${task.contract.slug}`.toUpperCase() + RESET);
 
-      // Use startTask to handle marketplace addition - it will create the necessary jobs
-      // This prevents duplicate job creation
-      try {
-        await startTask(updatedTask, updatedTask.running, incoming.toLowerCase());
-      } catch (error) {
-        console.error(RED + `Error adding marketplace ${incoming} to task ${task._id}: ` + RESET, error);
+      // Only create jobs if the task is actually running
+      // This prevents jobs from being created when marketplaces are added to stopped tasks
+      if (updatedTask.running) {
+        // Use startTask to handle marketplace addition - it will create the necessary jobs
+        try {
+          await startTask(updatedTask, true, incoming.toLowerCase());
+        } catch (error) {
+          console.error(RED + `Error adding marketplace ${incoming} to task ${task._id}: ` + RESET, error);
+        }
+      } else {
+        // console.log(YELLOW + `Not starting jobs for marketplace ${incoming} - task ${task._id} is not running` + RESET);
       }
     }
 
@@ -10706,7 +10764,7 @@ async function updateMultipleTasksStatus(data: { tasks: ITask[], running: boolea
 
       // Log summary of results
       const errors = results.filter(r => r?.error);
-      
+
       // Add defensive check to ensure results are valid
       if (!Array.isArray(results)) {
         console.error(RED + '[updateMultipleTasksStatus] Invalid results from stopPromises' + RESET);
@@ -10717,36 +10775,36 @@ async function updateMultipleTasksStatus(data: { tasks: ITask[], running: boolea
       } else {
         // console.log(GREEN + `Successfully stopped all ${tasks.length} tasks` + RESET);
       }
-      
+
       // Clean up any orphaned data for stopped tasks
       for (const task of tasks) {
         const taskId = task._id.toString();
-        
+
         // Ensure skipStats is cleaned up
         if (skipStats[taskId]) {
           delete skipStats[taskId];
         }
-        
+
         // Ensure currentTraits is cleaned up
         if (currentTraits[taskId]) {
           delete currentTraits[taskId];
         }
-        
+
         // Ensure currentTokenIds is cleaned up
         if (currentTokenIds[taskId]) {
           delete currentTokenIds[taskId];
         }
-        
+
         // Ensure bestOffers is cleaned up
         if (bestOffers[taskId]) {
           delete bestOffers[taskId];
         }
-        
+
         // Ensure bidStats is cleaned up
         if (bidStats[taskId]) {
           delete bidStats[taskId];
         }
-        
+
         // Ensure errorStats is cleaned up
         if (errorStats[taskId]) {
           delete errorStats[taskId];
@@ -11474,16 +11532,20 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     if (walletAddresses.includes(maker)) {
       // console.log(YELLOW + `[DEBUG][handleMagicEdenCounterbid] Own wallet detected, calling incrementOwnBidCounter` + RESET);
       incrementOwnBidCounter('magiceden', task._id);
-      return
+      // return
     }
+
+
+    // Comprehensive logging for MagicEden counterbid
+    const makerFormatted = maker ? `${maker.slice(0, 6)}...${maker.slice(-4)}` : 'unknown';
+    const bidTypeDisplay = bidType === 'token' ? `Token #${tokenId}` : 'Collection';
+    console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+    console.log(MAGENTA + `[MagicEden Counterbid] Task: ${task._id} | Collection: ${task.contract.slug} | Type: ${bidTypeDisplay} | Incoming: ${eth_price.toFixed(4)} ETH ($${usdPrice.toFixed(2)}) | Maker: ${makerFormatted}` + RESET);
+    console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
     if (!currentTask.outbidOptions.counterbid) {
       return;
     }
-    // Comprehensive logging for MagicEden counterbid
-    const makerFormatted = maker ? `${maker.slice(0, 6)}...${maker.slice(-4)}` : 'unknown';
-    const bidTypeDisplay = bidType === 'token' ? `Token #${tokenId}` : 'Collection';
-    // console.log(`\x1b[35m[MagicEden Counterbid] Task: ${task._id} | Collection: ${task.contract.slug} | Type: ${bidTypeDisplay} | Incoming: ${eth_price.toFixed(4)} ETH ($${usdPrice.toFixed(2)}) | Maker: ${makerFormatted}\x1b[0m`);
 
     // Only decrypt private key after checking if it's our own bid
     const WALLET_PRIVATE_KEY = await walletCache.getDecryptedPrivateKey(taskWallet);
@@ -11631,9 +11693,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         { jobId: orderHash }
       );
       // Log successful counterbid preparation
-      // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Token: #${tokenId} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-      // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+      console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+      console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Token: #${tokenId} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
+      console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
       seenOrderHashes.delete(orderHash);
 
@@ -11803,9 +11865,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
             await queue.addBulk(jobsToAdd);
           }
 
-          // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-          // console.log(GREEN + `[MagicEden Trait Token Counterbid SUCCESS] Task: ${task._id} | Placing ${matchingTokenIds.length} token bids at ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier}` + RESET);
-          // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+          console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+          console.log(GREEN + `[MagicEden Trait Token Counterbid SUCCESS] Task: ${task._id} | Placing ${matchingTokenIds.length} token bids at ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier}` + RESET);
+          console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         }
       }
 
@@ -11830,9 +11892,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           { jobId: orderHash }
         );
 
-        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(GREEN + `[MagicEden Trait Collection Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${traitDisplay} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(GREEN + `[MagicEden Trait Collection Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${traitDisplay} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
+        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       }
 
       seenOrderHashes.delete(taskSpecificHash);
@@ -12058,9 +12120,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
 
       if (counterbidsQueued > 0) {
-        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${baseOfferPriceEth.toFixed(4)} ${currencySymbol} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${baseOfferPriceEth.toFixed(4)} ${currencySymbol} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
+        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
         // Cancel the orders that we're counterbidding
         if (ordersToCancel.length > 0) {
@@ -12182,9 +12244,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
     // Comprehensive logging for OpenSea counterbid
     const bidType = tokenId ? `Token #${tokenId}` : trait ? `Trait: ${trait.type}:${trait.value}` : 'Collection';
-    // console.log(BLUE + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-    // console.log(BLUE + `[OpenSea Counterbid] Task: ${task._id} | Collection: ${task.contract.slug} | Type: ${bidType} | Incoming: ${bidDetails} (${extraDetails}) | Quantity: ${quantity} | Maker: ${maker}` + RESET);
-    // console.log(BLUE + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+    console.log(BLUE + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+    console.log(BLUE + `[OpenSea Counterbid] Task: ${task._id} | Collection: ${task.contract.slug} | Type: ${bidType} | Incoming: ${bidDetails} (${extraDetails}) | Quantity: ${quantity} | Maker: ${maker}` + RESET);
+    console.log(BLUE + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
 
     if (!outbidOptions.counterbid) {
@@ -12373,9 +12435,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       }
 
       // Log successful counterbid preparation
-      // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Token: #${tokenId} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-      // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+      console.log(BLUE + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+      console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Token: #${tokenId} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
+      console.log(BLUE + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
       seenOrderHashes.delete(taskSpecificHash);
     }
@@ -12571,9 +12633,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             await queue.addBulk(jobsToAdd);
           }
 
-          // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-          // console.log(GREEN + `[OpenSea Trait Token Counterbid SUCCESS] Task: ${task._id} | Placing ${matchingTokenIds.length} token bids at ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier}` + RESET);
-          // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+          console.log(BLUE + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+          console.log(GREEN + `[OpenSea Trait Token Counterbid SUCCESS] Task: ${task._id} | Placing ${matchingTokenIds.length} token bids at ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier}` + RESET);
+          console.log(BLUE + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         }
       }
 
@@ -12607,9 +12669,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         }
 
         // Log successful trait counterbid preparation
-        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(GREEN + `[OpenSea Trait Collection Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(GREEN + `[OpenSea Trait Collection Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
+        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       }
 
       seenOrderHashes.delete(taskSpecificHash);
@@ -12840,9 +12902,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       }
 
       if (counterbidsQueued > 0) {
-        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${baseOfferPriceEth.toFixed(4)} ${currencySymbol} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${baseOfferPriceEth.toFixed(4)} ${currencySymbol} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
+        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       } else {
         // console.log(YELLOW + `[OpenSea collection_offer] Task ${task._id} - No offers to counterbid (all existing offers > incoming offer)` + RESET);
       }
@@ -12882,9 +12944,12 @@ async function handleBlurCounterbid(data: any, task: ITask) {
     const price = bidInfo?.bestPrice || bidInfo?.price || 0;
     const criteriaType = bidInfo?.criteriaType || 'unknown';
     const criteriaValue = bidInfo?.criteriaValue || {};
-    // console.log(GOLD + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-    // console.log(GOLD + `[Blur Counterbid] Task: ${task._id} | Collection: ${task.contract.slug} | Type: ${criteriaType} | Incoming: ${price} ETH | Criteria: ${JSON.stringify(criteriaValue)}` + RESET);
-    // console.log(GOLD + '------------------------------------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+    const makerAddress = incomingBid?.maker || bidInfo?.maker || 'unknown';
+    const makerFormatted = makerAddress !== 'unknown' ? `${makerAddress.slice(0, 6)}...${makerAddress.slice(-4)}` : 'unknown';
+    const bidTypeDisplay = criteriaType === 'trait' ? `Trait: ${JSON.stringify(criteriaValue)}` : criteriaType === 'token' ? `Token #${criteriaValue?.identifier || 'unknown'}` : 'Collection';
+    console.log(GOLD + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+    console.log(GOLD + `[Blur Counterbid] Task: ${task._id} | Collection: ${task.contract.slug} | Type: ${bidTypeDisplay} | Incoming: ${price} ETH | Maker: ${makerFormatted}` + RESET);
+    console.log(GOLD + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
     if (!currentTask?.outbidOptions?.counterbid) {
       return;
@@ -13025,9 +13090,9 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         }
 
         // Log successful trait counterbid preparation
-        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(GREEN + `[Blur Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${Number(offerPrice) / 1e18} ETH | Trait: ${identifier} | Outbidding: ${incomingPrice} ETH` + RESET);
-        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(GREEN + `[Blur Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${Number(offerPrice) / 1e18} ETH | Trait: ${identifier} | Outbidding: ${incomingPrice} ETH` + RESET);
+        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
         // Track completion time
         const completionTime = Date.now() - startTime;
@@ -13218,9 +13283,9 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       }
 
       if (counterbidsQueued > 0) {
-        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(GREEN + `[Blur Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${Number(baseOfferPrice) / 1e18} ETH | Outbidding: ${bestPrice} ETH` + RESET);
-        // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(GREEN + `[Blur Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${Number(baseOfferPrice) / 1e18} ETH | Outbidding: ${bestPrice} ETH` + RESET);
+        console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       } else {
         // console.log(YELLOW + `[Blur collection] Task ${task._id} - No offers to counterbid (all existing offers > incoming offer)` + RESET);
       }
@@ -14064,10 +14129,10 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
         }
 
         // console.log(`[CreatorFees Construction] Before transformation:`, {
-          // creator_fees: JSON.stringify(collectionDetails.creator_fees),
-          // has_null: collectionDetails.creator_fees.null !== undefined,
-          // null_value: collectionDetails.creator_fees.null,
-          // keys: Object.keys(collectionDetails.creator_fees)
+        // creator_fees: JSON.stringify(collectionDetails.creator_fees),
+        // has_null: collectionDetails.creator_fees.null !== undefined,
+        // null_value: collectionDetails.creator_fees.null,
+        // keys: Object.keys(collectionDetails.creator_fees)
         // });
 
         // Convert all creator fees to the IFee format (ensuring values are numbers)
@@ -14490,21 +14555,21 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency);
 
     if (balance < minBidPriceEth) {
-      const errorMsg = balance <= 0 
+      const errorMsg = balance <= 0
         ? `Insufficient ${currencySymbol} balance: ${balance} (zero or negative) for task ${taskId}`
         : `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId}`;
-      
+
       console.log(`${YELLOW}[OPENSEA] ${errorMsg} - completing marketplace loop${RESET}`);
-      
+
       // Increment skip stats
       if (!skipStats[currentTask._id]) {
         skipStats[currentTask._id] = { opensea: 0, magiceden: 0, blur: 0 };
       }
       skipStats[currentTask._id].opensea++;
-      
+
       // Log the insufficient balance
       await logBidError(taskId, "INSUFFICIENT_BALANCE", errorMsg, "skipped", "opensea");
-      
+
       // Create empty parent job and complete the marketplace loop
       await ensureParentJobExists(taskId, 'opensea');
       const parentJobId = getParentJobId(taskId, 'opensea');
@@ -14516,11 +14581,11 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
         parentJob.completedJobs = 0;
         console.log(`${YELLOW}[OPENSEA] Marked parent job ${parentJobId} as complete with 0 jobs due to insufficient balance${RESET}`);
       }
-      
+
       // Trigger marketplace completion
       console.log(`${YELLOW}[OPENSEA] Insufficient balance for task ${taskId}, triggering OpenSea completion${RESET}`);
       await checkTaskCompletionAndScheduleNext(taskId, 'opensea');
-      
+
       return;
     }
 
@@ -14683,7 +14748,7 @@ async function processBlurScheduledBid(task: ITask) {
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur") || !enabledMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur")) {
       return;
     }
-    
+
     // Transition from SCHEDULED to STARTED for this marketplace - AFTER validation
     setTaskStatus(taskId, 'STARTED', `blur scheduled bid starting - Loop #${currentLoopCount}`, 'blur');
     // Processing Blur scheduled bid
@@ -14741,7 +14806,7 @@ async function processBlurScheduledBid(task: ITask) {
       const isBlurEnabled = enabledMarketplaces.map(m => m.toLowerCase()).includes('blur');
       const isBlurSelected = activeTask?.selectedMarketplaces.map(m => m.toLowerCase()).includes('blur');
       const isTaskRunning = activeTask?.running === true;
-      
+
       if (isBlurEnabled && isBlurSelected && isTaskRunning) {
         // Use setTaskStatus for comprehensive logging
         setTaskStatus(taskId, 'PROCESSING', 'blur scheduled bid processing', 'blur');
@@ -14808,24 +14873,24 @@ async function processBlurScheduledBid(task: ITask) {
 
     // Calculate minimum bid price to validate sufficient balance
     const { minBidPriceEth } = await calculateBidPrice(currentTask, 0, "blur");
-    
+
     // Check if balance is insufficient or zero
     if (bethBalance <= 0 || bethBalance < minBidPriceEth) {
-      const errorMsg = bethBalance <= 0 
+      const errorMsg = bethBalance <= 0
         ? `Insufficient BETH balance: ${bethBalance} (zero or negative) for task ${taskId}`
         : `Insufficient BETH balance: ${bethBalance} < ${minBidPriceEth} for task ${taskId}`;
-      
+
       console.log(`${YELLOW}[BLUR] ${errorMsg} - completing marketplace loop${RESET}`);
-      
+
       // Increment skip stats
       if (!skipStats[taskId]) {
         skipStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
       }
       skipStats[taskId].blur++;
-      
+
       // Log the insufficient balance
       await logBidError(taskId, "INSUFFICIENT_BALANCE", errorMsg, "skipped", "blur");
-      
+
       // Create empty parent job and complete the marketplace loop
       await ensureParentJobExists(taskId, 'blur');
       const parentJobId = getParentJobId(taskId, 'blur');
@@ -14838,15 +14903,15 @@ async function processBlurScheduledBid(task: ITask) {
         parentJob.allJobsQueued = true;
         console.log(`${GREEN}[BLUR] Marked parent job ${parentJobId} as complete with 0 jobs due to insufficient balance${RESET}`);
       }
-      
+
       // Update task status to trigger completion flow
       // Insufficient balance - loop will complete without transitioning to RUNNING
       await updateTaskRunningPercentage(taskId);
-      
+
       // Trigger marketplace-specific completion for Blur
       console.log(`${GREEN}[BLUR] Insufficient balance for task ${taskId}, triggering Blur completion${RESET}`);
       await checkTaskCompletionAndScheduleNext(taskId, 'blur');
-      
+
       return; // Exit function without throwing error
     }
 
@@ -15312,11 +15377,11 @@ async function processBlurCollectionBid(data: { taskId: string }) {
     // Validate offer amount meets Blur's minimum before calling bidOnBlur
     const finalOfferEth = Number(colletionOffer) / 1e18;
     const BLUR_MIN_OFFER = 0.01; // Blur's minimum offer amount in ETH
-    
+
     if (finalOfferEth < BLUR_MIN_OFFER) {
       skipStats[currentTask._id]['blur']++;
       const message = `Offer price ${finalOfferEth} BETH is below minimum blur offer price (${BLUR_MIN_OFFER} BETH) for collection ${currentTask.contract.slug}`;
-      
+
       await logBidError(currentTask._id, "BELOW_MINIMUM_OFFER", message, "skipped", "blur");
       console.log(`${YELLOW}[BLUR] ${message} - skipping${RESET}`);
       return;
@@ -16895,7 +16960,7 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
             const isMagicedenEnabled = enabledMarketplaces.map(m => m.toLowerCase()).includes('magiceden');
             const isMagicedenSelected = activeTask?.selectedMarketplaces.map(m => m.toLowerCase()).includes('magiceden');
             const isTaskRunning = activeTask?.running === true;
-            
+
             if (isMagicedenEnabled && isMagicedenSelected && isTaskRunning) {
               setTaskStatus(taskId, 'PROCESSING', 'job queueing failed', 'magiceden');
             }
@@ -16971,7 +17036,7 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
             const isMagicedenEnabled = enabledMarketplaces.map(m => m.toLowerCase()).includes('magiceden');
             const isMagicedenSelected = activeTask?.selectedMarketplaces.map(m => m.toLowerCase()).includes('magiceden');
             const isTaskRunning = activeTask?.running === true;
-            
+
             if (isMagicedenEnabled && isMagicedenSelected && isTaskRunning) {
               setTaskStatus(taskId, 'PROCESSING', 'job queueing failed', 'magiceden');
             }
@@ -17172,12 +17237,12 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
       console.log(YELLOW + `[processMagicedenCollectionBid] Skipping task ${taskId} - not running` + RESET);
       return;
     }
-    
+
     if (!currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden")) {
       console.log(YELLOW + `[processMagicedenCollectionBid] Skipping task ${taskId} - magiceden not selected` + RESET);
       return;
     }
-    
+
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) {
       console.log(YELLOW + `[processMagicedenCollectionBid] Skipping task ${taskId} - magiceden not enabled (enabled: ${enabledMarketplaces.join(', ')})` + RESET);
       return;
@@ -17231,21 +17296,21 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
     const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency);
 
     if (balance < minBidPriceEth) {
-      const errorMsg = balance <= 0 
+      const errorMsg = balance <= 0
         ? `Insufficient ${currencySymbol} balance: ${balance} (zero or negative) for task ${taskId}`
         : `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId}`;
-      
+
       console.log(`${YELLOW}[MAGICEDEN] ${errorMsg} - completing marketplace loop${RESET}`);
-      
+
       // Increment skip stats
       if (!skipStats[currentTask._id]) {
         skipStats[currentTask._id] = { opensea: 0, magiceden: 0, blur: 0 };
       }
       skipStats[currentTask._id].magiceden++;
-      
+
       // Log the insufficient balance
       await logBidError(taskId, "INSUFFICIENT_BALANCE", errorMsg, "skipped", "magiceden");
-      
+
       // Create empty parent job and complete the marketplace loop
       await ensureParentJobExists(taskId, 'magiceden');
       const parentJobId = getParentJobId(taskId, 'magiceden');
@@ -17257,11 +17322,11 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
         parentJob.completedJobs = 0;
         console.log(`${YELLOW}[MAGICEDEN] Marked parent job ${parentJobId} as complete with 0 jobs due to insufficient balance${RESET}`);
       }
-      
+
       // Trigger marketplace completion
       console.log(`${YELLOW}[MAGICEDEN] Insufficient balance for task ${taskId}, triggering MagicEden completion${RESET}`);
       await checkTaskCompletionAndScheduleNext(taskId, 'magiceden');
-      
+
       return;
     }
     const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
@@ -17833,7 +17898,7 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
 
     // First, cancel the order with OpenSea API (but don't update tracking yet)
     await cancelOrderWithoutTracking(orderId, OPENSEA_PROTOCOL_ADDRESS, privateKey, taskId);
-    
+
     // Then, ensure database cleanup completes before tracking completion
     await Order.deleteMany({
       _id: orderKey
@@ -17843,7 +17908,7 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
     console.log(`🔐 [bulkCancelOpenseaBid] Recording completion for task ${taskId}, order ${orderId}`);
     cancellationTracker.recordCompletion(taskId, 1, 'opensea');
     await updateTaskCancellationPercentage(taskId, undefined, 'opensea');
-    
+
     // Decrement ownBidCounts for the cancelled order
     decrementOwnBidCounter('opensea', 1);
 
@@ -17901,13 +17966,13 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
       ])
 
       console.log(`✅ [bulkCancelMagicedenBid] Successfully completed ${orderIds.length} cancellations for task ${taskId}`);
-      
+
       // Record completion for the batch
       const completedCount = batchSize || orderIds.length;
       console.log(`🔐 [bulkCancelMagicedenBid] Recording completion for task ${taskId}, batch of ${completedCount} orders`);
       cancellationTracker.recordCompletion(taskId, completedCount, 'magiceden');
       await updateTaskCancellationPercentage(taskId, undefined, 'magiceden');
-      
+
       // Decrement ownBidCounts for the cancelled orders
       decrementOwnBidCounter('magiceden', completedCount);
     } else {
@@ -18009,7 +18074,7 @@ async function validateBidCount() {
           }
         }
       ]);
-      
+
       // Decrement ownBidCounts for expired orders
       for (const group of expiredByMarketplace) {
         const marketplace = group._id.toLowerCase();
@@ -18018,7 +18083,7 @@ async function validateBidCount() {
           console.log(YELLOW + `[validateBidCount] Decremented ${group.count} expired ${marketplace} orders from ownBidCounts` + RESET);
         }
       }
-      
+
       // Now delete the expired orders
       await Order.deleteMany({
         _id: { $in: expiredOrders.map(o => o._id) }
@@ -18053,22 +18118,22 @@ async function bulkCancelBlurBid(data: BlurCancelPayload) {
     // Fetch wallet and decrypt private key
     console.log(`🔐 [bulkCancelBlurBid] Fetching wallet ${walletId}...`);
     const wallet = await walletCache.getWalletById(walletId);
-    
+
     if (!wallet) {
       console.error(`❌ [bulkCancelBlurBid] Wallet ${walletId} not found for task ${taskId}`);
       throw new Error(`Wallet ${walletId} not found`);
     }
-    
+
     if (!wallet.encryptedPrivateKey) {
       console.error(`❌ [bulkCancelBlurBid] No encryptedPrivateKey found for wallet ${walletId} (task ${taskId})`);
       throw new Error(`No encryptedPrivateKey found for wallet ${walletId}`);
     }
-    
+
     console.log(`🔐 [bulkCancelBlurBid] Decrypting private key for wallet ${walletId}`);
     const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
 
     console.log(`🔐 [bulkCancelBlurBid] Starting parallel operations for task ${taskId}: order deletion and API cancellation`);
-    
+
     await Promise.all([
       Order.deleteMany({
         _id: orderKey
@@ -18077,12 +18142,12 @@ async function bulkCancelBlurBid(data: BlurCancelPayload) {
     ])
 
     console.log(`✅ [bulkCancelBlurBid] Successfully completed cancellation for task ${taskId}, order ${orderKey}`);
-    
+
     // Record completion
     console.log(`🔐 [bulkCancelBlurBid] Recording completion for task ${taskId}, order ${orderKey}`);
     cancellationTracker.recordCompletion(taskId, 1, 'blur');
     await updateTaskCancellationPercentage(taskId, undefined, 'blur');
-    
+
     // Cancellation tracking is now handled in cancelBlurBid directly
   } catch (error) {
     console.error(RED + `Error processing Blur bid cancellation for task: ${taskId}` + RESET, error);
@@ -18280,7 +18345,7 @@ app.get("/metrics", async (req, res) => {
         active: taskStatuses.filter(t => {
           // Check if any marketplace is in RUNNING or PROCESSING state
           const marketplaces = t.marketplaceStatuses;
-          return Object.values(marketplaces).some(mp => 
+          return Object.values(marketplaces).some(mp =>
             mp?.status === 'RUNNING' || mp?.status === 'PROCESSING'
           );
         }).length,
@@ -20083,12 +20148,12 @@ app.post('/api/debug/force-complete/:taskId', async (req, res) => {
     if (taskStatus[taskId]) {
       const task = activeTasks.get(taskId);
       const selectedMarketplaces = task?.selectedMarketplaces || [];
-      
+
       // Set each marketplace to COMPLETED with 100% running percentage
       for (const mp of selectedMarketplaces) {
         const mpLower = mp.toLowerCase();
         setTaskStatus(taskId, 'COMPLETED', 'Manually forced to complete', mpLower);
-        
+
         const mpKey = mpLower as 'opensea' | 'magiceden' | 'blur';
         if (taskStatus[taskId].marketplaces[mpKey]) {
           taskStatus[taskId].marketplaces[mpKey]!.runningPercentage = 100;
@@ -20182,7 +20247,7 @@ app.get('/api/debug/all-task-statuses', (req, res) => {
       const totalJobs = Object.values(marketplaceStatuses).reduce((sum, mp) => sum + (mp?.totalJobs || 0), 0);
       const completedJobs = Object.values(marketplaceStatuses).reduce((sum, mp) => sum + (mp?.completedJobs || 0), 0);
       const percentage = totalJobs > 0 ? (completedJobs / totalJobs * 100) : 0;
-      
+
       allStatuses.push({
         taskId,
         slug: task.contract?.slug || 'unknown',
@@ -20255,7 +20320,7 @@ app.get('/debug/scheduling', (req, res) => {
     // Determine overall status from marketplace statuses
     const marketplaceStatuses = taskStatus[taskId]?.marketplaces || {};
     let overallStatus = 'unknown';
-    
+
     // Prioritize status (RUNNING > PROCESSING > CANCELLING > SCHEDULED > COMPLETED > STOPPED)
     if (Object.values(marketplaceStatuses).some(mp => mp?.status === 'RUNNING')) {
       overallStatus = 'RUNNING';
@@ -20270,7 +20335,7 @@ app.get('/debug/scheduling', (req, res) => {
     } else if (Object.values(marketplaceStatuses).some(mp => mp?.status === 'STOPPED')) {
       overallStatus = 'STOPPED';
     }
-    
+
     activeTasksList.push({
       taskId,
       running: task.running,
@@ -22611,7 +22676,7 @@ async function recoverPartialQueueingTasks(): Promise<void> {
       const hasActiveMarketplace = status.marketplaces && Object.values(status.marketplaces).some(
         mpStatus => mpStatus && (mpStatus.status === 'RUNNING' || mpStatus.status === 'QUEUED' || mpStatus.status === 'QUEUEING')
       );
-      
+
       if (hasActiveMarketplace) {
         const task = activeTasks.get(taskId);
         if (!task || !task.running) continue;
@@ -22651,7 +22716,7 @@ async function recoverPartialQueueingTasks(): Promise<void> {
             totalJobs += mpStatus.totalJobs || 0;
           }
         }
-        
+
         if (hasPartialQueueing && totalJobs === 0) {
           // console.log(RED + `\n[Partial Queueing Recovery] Task ${taskId} detected with partial queueing` + RESET);
           // console.log(RED + `  Expected: ${totalExpected} jobs` + RESET);
@@ -22749,7 +22814,7 @@ async function checkStuckTasks() {
 
       const status = taskStatus[taskId];
       if (!status) continue;
-      
+
       // Check if any marketplace is in RUNNING, QUEUED, or QUEUEING state
       const hasActiveMarketplace = Object.values(status.marketplaces || {}).some(
         mp => mp && (mp.status === 'RUNNING' || mp.status === 'QUEUED' || mp.status === 'QUEUEING')
@@ -22760,7 +22825,7 @@ async function checkStuckTasks() {
       const queuingMarketplaces = Object.entries(status.marketplaces || {}).filter(
         ([_, mp]) => mp?.status === 'QUEUEING'
       );
-      
+
       if (queuingMarketplaces.length > 0) {
         const firstSeenQueueing = taskCompletionTracking.get(`${taskId}-queueing`);
 
@@ -22807,7 +22872,7 @@ async function checkStuckTasks() {
       const marketplacesAt99 = Object.entries(status.marketplaces || {}).filter(
         ([_, mp]) => mp && mp.runningPercentage >= 99 && mp.runningPercentage < 100
       );
-      
+
       if (marketplacesAt99.length > 0) {
         const firstSeen99 = taskCompletionTracking.get(`${taskId}-99`);
 
@@ -23239,7 +23304,7 @@ async function verifyJobCreation(): Promise<void> {
       const hasQueuingMarketplace = status && Object.values(status.marketplaces || {}).some(
         mp => mp?.status === 'QUEUEING'
       );
-      
+
       if (hasQueuingMarketplace) {
         // console.log(YELLOW + `[JobVerification] Triggering recovery for stuck task ${taskId}` + RESET);
         await recoverStuckTask(taskId);
@@ -23413,7 +23478,7 @@ async function ensureParentJobExistsEnhanced(taskId: string, marketplace: string
   const allMarketplacesFinished = Object.values(taskState.marketplaces || {}).every(
     mp => mp && ['COMPLETED', 'STOPPED'].includes(mp.status)
   );
-  
+
   if (allMarketplacesFinished) {
     // console.log(YELLOW + `[ensureParentJobExistsEnhanced] Task ${taskId} has all marketplaces finished, skipping parent job creation` + RESET);
     return;
@@ -23551,7 +23616,7 @@ class OrphanedJobRecovery {
         const hasStartedMarketplace = status && Object.values(status.marketplaces || {}).some(
           mp => mp?.status === 'STARTED'
         );
-        
+
         if (hasStartedMarketplace) {
           // Orphaned jobs recovered - will transition to RUNNING when processed
         }
@@ -23632,7 +23697,7 @@ async function fixStuckTask(taskId: string) {
   const hasStartedMarketplace = status && Object.values(status.marketplaces || {}).some(
     mp => mp?.status === 'STARTED'
   );
-  
+
   if (hasStartedMarketplace && task) {
     // Force progression check for all marketplaces
     for (const mp of task.selectedMarketplaces) {

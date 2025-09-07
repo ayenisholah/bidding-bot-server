@@ -19,6 +19,7 @@ import { logger, DatabaseOperation, ErrorCategory, MarketplaceSubCategory } from
 import { InsufficientBalanceError, MinimumPriceError, RateLimitError, InvalidRequestError } from "../errors";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
 
+
 const YELLOW = '\x1b[33m';
 const CYAN = '\x1b[36m';
 const GREEN = '\x1b[32m';
@@ -138,6 +139,7 @@ const typesCache = {
   ]
 };
 
+
 // Request deduplication for concurrent requests
 const pendingRequests = new Map<string, Promise<any>>();
 
@@ -211,17 +213,10 @@ export async function bidOnMagiceden(
   trait?: Trait,
   tokenId?: number
 ) {
-// console.log(CYAN + `[MagicEden] Starting bid process` + RESET);
-// console.log(CYAN + `  Task ID: ${taskId}` + RESET);
-// console.log(CYAN + `  Collection: ${slug}` + RESET);
-// console.log(CYAN + `  Trait: ${trait ? JSON.stringify(trait) : 'N/A'}` + RESET);
-// console.log(CYAN + `  Token ID: ${tokenId || 'N/A'}` + RESET);
-// console.log(CYAN + `  Wei Price: ${weiPrice}` + RESET);
 
   try {
     if (isTaskBlacklisted(taskId, 'magiceden')) {
       const error = new Error(`Bid execution blocked - task ${taskId} is stopped for MagicEden`);
-// console.log(`[MagicEden] Job execution blocked for stopped task: ${taskId}`);
       throw error;
     }
 
@@ -250,9 +245,7 @@ export async function bidOnMagiceden(
     // Get wallet from cache
     const wallet = getWallet(privateKey);
 
-    // Fetch balance (can't parallelize with wallet since we need wallet first)
     const wethBalance = await fetchERC20Balance(maker, currency);
-
     const offerPriceEth = Math.round(Number(weiPrice)) / decimalPower;
 
     // Optimize decimal calculation
@@ -287,26 +280,37 @@ export async function bidOnMagiceden(
       throw error;
     }
 
-    // Generate order directly based on bid type
-// console.log(YELLOW + `[MagicEden] Generating order structure...` + RESET);
-    const order = generateMagicEdenOrder(
-      taskId,
-      slug,
-      maker,
-      collection,
-      quantity,
-      Math.round(Number(weiPrice)).toString(),
-      expiration.toString(),
-      currency,
-      trait,
-      tokenId
-    );
-
-// console.log(GREEN + `[MagicEden] Order generated successfully` + RESET);
+    // Route based on offer type
+    let order;
+    if (!trait && !tokenId) {
+      // Collection offer - use v5 API
+      order = await createBidData(
+        taskId,
+        slug,
+        maker,
+        collection,
+        quantity,
+        Math.round(Number(weiPrice)).toString(),
+        expiration.toString(),
+        currency,
+        trait,
+        tokenId
+      );
+    } else {
+      order = generateMagicEdenOrder(
+        taskId,
+        slug,
+        maker,
+        collection,
+        quantity,
+        Math.round(Number(weiPrice)).toString(),
+        expiration.toString(),
+        currency,
+        trait,
+        tokenId
+      );
+    }
     if (!order) return;
-
-    // Simplify the submitSignedOrderData call
-// console.log(YELLOW + `[MagicEden] Submitting signed order data...` + RESET);
     await submitSignedOrderData(
       taskId,
       roundedWei.toString(),
@@ -321,17 +325,130 @@ export async function bidOnMagiceden(
       tokenId,
       task // Pass the cached task
     );
-
-// console.log(GREEN + `[MagicEden] Bid submitted successfully` + RESET);
     return order;
   } catch (error) {
-// console.log(RED + `[MagicEden] Bid failed: ${error}` + RESET);
     throw error;
   }
 }
 
 /**
- * Generates order structure for Magic Eden based on bid type.
+ * Creates collection offer bid data by calling MagicEden's v5 API.
+ * This is only used for collection offers. Trait and token offers use generateMagicEdenOrder.
+ * @param taskId - The task ID
+ * @param slug - The collection slug
+ * @param maker - The maker of the bid
+ * @param collection - The collection contract address
+ * @param quantity - The quantity to bid
+ * @param weiPrice - The price in wei
+ * @param expirationTime - The expiration time of the bid
+ * @param currency - The currency (WETH)
+ * @param trait - Optional traits for the offer (should be undefined for collection offers)
+ * @param tokenId - Optional token ID for token bids (should be undefined for collection offers)
+ * @returns The order structure from MagicEden API
+ */
+async function createBidData(
+  taskId: string,
+  slug: string,
+  maker: string,
+  collection: string,
+  quantity: number,
+  weiPrice: string,
+  expirationTime: string,
+  currency = WETH,
+  trait?: Trait,
+  tokenId?: number | string
+): Promise<any> {
+  const orderKind = trait || tokenId ? "seaport-v1.6" : "payment-processor-v2";
+  // Build options based on bid type
+  const options = tokenId ? {
+    [tokenId.toString()]: {
+      useOffChainCancellation: true
+    }
+  } : {};
+
+  const params = [
+    {
+      ...(tokenId ? {} : { collection: collection }),
+      currency: currency,
+      quantity: quantity,
+      weiPrice: weiPrice,
+      expirationTime: expirationTime,
+      orderKind: orderKind,
+      orderbook: "reservoir",
+      options: options,
+      automatedRoyalties: true,
+      ...(tokenId ? { token: `${collection}:${tokenId}` } : trait ? {
+        collection: collection,
+        attributeKey: trait.attributeKey,
+        attributeValue: trait.attributeValue
+      } : {})
+    }
+  ];
+
+  const data = {
+    maker: maker,
+    source: MAGICEDEN_CONFIG.domain,
+    params: params
+  };
+
+  try {
+    const controller = new AbortController();
+    addActiveRequest(taskId, controller);
+
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const { data: order } = await limiter.schedule(() => axiosInstance.post<CreateBidData>(
+        `${BASE_URL}/magiceden/v3/rtp/ethereum/execute/bid/v5`,
+        data,
+        {
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': API_KEY
+          },
+          signal: controller.signal,
+          timeout: 30000,
+          "axios-retry": { retries: 0 }
+        }
+      ));
+
+      clearTimeout(timeoutId);
+
+      return order;
+    } finally {
+      clearTimeout(timeoutId);
+      const controllers = activeRequests.get(taskId) || [];
+      const index = controllers.indexOf(controller);
+      if (index >= 0) {
+        controllers.splice(index, 1);
+      }
+      if (controllers.length === 0) {
+        activeRequests.delete(taskId);
+      }
+    }
+  } catch (error: any) {
+    if (axios.isCancel(error)) {
+      return null;
+    }
+
+    const errorMessage = extractMagicEdenErrorMessage(error);
+    await logger.logMagicEdenBidError('Failed to create bid data on Magic Eden', {
+      taskId,
+      collection: slug,
+      tokenId: tokenId?.toString(),
+      traitType: trait?.attributeKey,
+      traitValue: trait?.attributeValue,
+      operation: 'create_bid_data',
+      error: error,
+      errorCode: error?.response?.status,
+      errorMessage: errorMessage
+    });
+    throw error;
+  }
+}
+
+/**
+ * Generates order structure for Magic Eden based on bid type (for trait and token offers).
  * @param taskId - The task ID
  * @param slug - The collection slug
  * @param maker - The maker of the bid
@@ -360,9 +477,11 @@ function generateMagicEdenOrder(
   const salt = ethers.hexlify(ethers.randomBytes(32));
   const nonce = "0";
 
+  // For collection offers, generate a numeric nonce instead of using salt
+  const collectionNonce = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER).toString();
+
   // Calculate marketplace fee (0.5% = 50 basis points)
   const marketplaceFee = Math.floor(Number(weiPrice) * 50 / 10000).toString();
-// console.log(CYAN + `[MagicEden] Marketplace fee calculated: ${marketplaceFee} (0.5% of ${weiPrice})` + RESET);
 
   if (tokenId) {
     // TOKEN bid - uses seaport-v1.6
@@ -561,7 +680,6 @@ function generateMagicEdenOrder(
       "errors": []
     };
   } else {
-    // COLLECTION bid - uses payment-processor-v2
     return {
       "steps": [
         {
@@ -615,7 +733,7 @@ function generateMagicEdenOrder(
                     "tokenId": "0",
                     "amount": weiPrice,
                     "itemPrice": weiPrice,
-                    "nonce": salt,
+                    "nonce": collectionNonce,
                     "expiration": expirationTime,
                     "marketplaceFeeNumerator": "50",
                     "maxRoyaltyFeeNumerator": "0",
@@ -646,6 +764,7 @@ function generateMagicEdenOrder(
  * @returns The signature.
  */
 async function signOrderData(taskId: string, wallet: ethers.Wallet, signData: any, trait?: Trait): Promise<string> {
+
   if (!signData) {
     throw new Error('Asset does not exist.');
   }
@@ -654,13 +773,19 @@ async function signOrderData(taskId: string, wallet: ethers.Wallet, signData: an
   const domain = trait ? domainCache : (signData.domain || domainCache);
   const types = trait ? typesCache : signData.types;
 
-  const signature = await wallet.signTypedData(
-    domain,
-    types,
-    convertBigNumbers(signData.value)
-  );
+  try {
+    const convertedValue = convertBigNumbers(signData.value);
 
-  return signature;
+    const signature = await wallet.signTypedData(
+      domain,
+      types,
+      convertedValue
+    );
+
+    return signature;
+  } catch (error) {
+    throw error;
+  }
 }
 
 /**
@@ -688,6 +813,13 @@ async function sendSignedOrderData(
   tokenId?: number | string,
   cachedTask?: any // Accept cached task
 ) {
+  const endpoint = trait || tokenId
+    ? `${BASE_URL}/magiceden/v3/rtp/ethereum/order/v3`
+    : `${BASE_URL}/magiceden/v3/rtp/ethereum/order/v4`;
+
+  // Define url variable at function scope so it's accessible in error handler
+  let url: string = endpoint;
+
   try {
     const [_parsedTaskId] = bidCount.split(":");
 
@@ -697,13 +829,8 @@ async function sendSignedOrderData(
     );
     if (!task) return;
 
-    const endpoint = trait || tokenId
-      ? `${BASE_URL}/magiceden/v3/rtp/ethereum/order/v3`
-      : `${BASE_URL}/magiceden/v3/rtp/ethereum/order/v4`
-
     // check if the tasks is still active before you make the offer
     if (isTaskBlacklisted(taskId, 'magiceden')) {
-// console.log(`[MagicEden] Offer submission blocked for stopped task: ${taskId}`);
       return;
     }
     const currentTask = activeTasks.get(taskId)
@@ -713,9 +840,14 @@ async function sendSignedOrderData(
     addActiveRequest(taskId, controller);
 
     try {
+
+      const startTime = Date.now();
+      // For collection offers (v4), signature is in the payload, not in query params
+      url = (!trait && !tokenId) ? endpoint : `${endpoint}?signature=${encodeURIComponent(signature)}`;
+
       const { data: offerResponse } = await limiter.schedule(() =>
         axiosInstance.post(
-          `${endpoint}?signature=${encodeURIComponent(signature)}`,
+          url,
           data,
           {
             headers: {
@@ -727,6 +859,7 @@ async function sendSignedOrderData(
           }
         )
       );
+      const responseTime = Date.now() - startTime;
       const successMessage = tokenId ? `🎉 TOKEN OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: ${slug.toUpperCase()} TOKEN: ${tokenId} ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} 🎉` :
         trait ?
           `🎉 TRAIT OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: ${slug.toUpperCase()} TRAIT: ${JSON.stringify(trait)} ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} 🎉`
@@ -775,10 +908,8 @@ async function sendSignedOrderData(
         }, 100); // Batch every 100ms
       }
       trackBidRate("magiceden", taskId)
-
       // Log successful bid
-
-// console.log(MAGENTA, successMessage, RESET);
+      console.log(MAGENTA, successMessage, RESET);
 
       if (!task) return
       return offerResponse;
@@ -794,9 +925,10 @@ async function sendSignedOrderData(
     }
   } catch (error: any) {
     if (axios.isCancel(error)) {
-// console.log(`Request for task ${taskId} was cancelled`);
       return null;
     }
+    // Enhanced error logging
+    const errorMessage = extractMagicEdenErrorMessage(error);
     await logger.logMagicEdenBidError('Failed to send signed order data to Magic Eden', {
       taskId,
       collection: slug,
@@ -808,7 +940,7 @@ async function sendSignedOrderData(
       currency: currencySymbol,
       error: error,
       errorCode: error?.response?.status,
-      errorMessage: extractMagicEdenErrorMessage(error)
+      errorMessage: errorMessage
     });
     throw error
   }
@@ -836,10 +968,6 @@ export async function submitSignedOrderData(
   tokenId?: number | string,
   cachedTask?: any // Accept cached task
 ) {
-// console.log(YELLOW + `[MagicEden] submitSignedOrderData called` + RESET);
-// console.log(YELLOW + `  Trait: ${trait ? JSON.stringify(trait) : 'N/A'}` + RESET);
-// console.log(YELLOW + `  Token ID: ${tokenId || 'N/A'}` + RESET);
-
   const task = cachedTask || currentTasks.find((task) =>
     task.contract.slug.toLowerCase() === slug.toLowerCase() &&
     task.selectedMarketplaces.includes("MagicEden")
@@ -852,12 +980,6 @@ export async function submitSignedOrderData(
       if (!step.items) continue;
 
       for (const item of step.items) {
-        // Log consideration before changes
-        if (item.data?.sign?.value?.consideration) {
-// console.log(CYAN + `[MagicEden] Consideration array:` + RESET);
-// console.log(JSON.stringify(item.data.sign.value.consideration, null, 2));
-        }
-
         // Set source
         if (item.data?.post?.body) {
           item.data.post.body.source = MAGICEDEN_CONFIG.domain;
@@ -867,16 +989,16 @@ export async function submitSignedOrderData(
   }
   const signData = order?.steps
     ?.find((step) => step.id === "order-signature")
-    ?.items?.[0]?.data?.sign;
+    ?.items?.[0]?.data?.sign || null;
 
   const signature = await signOrderData(taskId, wallet, signData, trait);
   let data: any;
 
   if (trait) {
-    const orderSignatureStep = order.steps.find(step => step.id === "order-signature") as any;
-    const attributeStep = order.steps.find(step => step.id === "order-signature") as any
-    const attribute = attributeStep?.items[0]?.data?.post?.body?.attribute;
-    const valueObject = orderSignatureStep.items[0].data.sign.value;
+    const orderSignatureStep = order.steps?.find(step => step.id === "order-signature") as any;
+    const attributeStep = order.steps?.find(step => step.id === "order-signature") as any
+    const attribute = attributeStep?.items?.[0]?.data?.post?.body?.attribute;
+    const valueObject = orderSignatureStep?.items?.[0]?.data?.sign?.value;
 
     data = {
       "order": {
@@ -901,28 +1023,74 @@ export async function submitSignedOrderData(
       ?.find((step) => step.id === "order-signature")
       ?.items?.[0]?.data?.post.body;
   } else {
+
+
     if (signData) {
-      const payload = signData.value;
+      const payload: any = signData.value;
+
+      // Validate critical fields for collection offers
+      const requiredFields = ['buyer', 'protocol', 'tokenAddress', 'amount', 'nonce', 'expiration', 'paymentMethod'];
+      requiredFields.forEach(field => {
+      });
+
       const { buyer, ...rest } = payload;
-      data = {
-        items: [
-          {
-            order: {
-              kind: "payment-processor-v2",
-              data: {
-                kind: "collection-offer-approval",
-                sellerOrBuyer: buyer,
-                ...rest,
-                r: "0x0000000000000000000000000000000000000000000000000000000000000000",
-                s: "0x0000000000000000000000000000000000000000000000000000000000000000",
-                v: 0,
+
+      // Check if this order came from v5 API (collection offers)
+      const isV5Order = order?.steps?.some((step: any) =>
+        step.id === "order-signature" &&
+        step.items?.[0]?.data?.post?.body
+      );
+
+      if (isV5Order) {
+        // For v5 API collection offers, use the post body from the order steps
+        const postBody = order?.steps
+          ?.find((step: any) => step.id === "order-signature")
+          ?.items?.[0]?.data?.post?.body;
+
+        if (postBody) {
+          data = postBody;
+          // Parse signature and update the r, s, v values in the post body
+          const sig = signature.startsWith('0x') ? signature.slice(2) : signature;
+          const r = `0x${sig.slice(0, 64)}`;
+          const s = `0x${sig.slice(64, 128)}`;
+          const v = parseInt(sig.slice(128, 130), 16);
+
+          // Update the signature fields in the data
+          if (data.items?.[0]?.order?.data) {
+            data.items[0].order.data.r = r;
+            data.items[0].order.data.s = s;
+            data.items[0].order.data.v = v;
+          }
+        }
+      } else {
+        // For hardcoded collection offers (shouldn't happen, but as fallback)
+
+        // Parse the signature to extract r, s, v values
+        const sig = signature.startsWith('0x') ? signature.slice(2) : signature;
+        const r = `0x${sig.slice(0, 64)}`;
+        const s = `0x${sig.slice(64, 128)}`;
+        const v = parseInt(sig.slice(128, 130), 16);
+
+        data = {
+          items: [
+            {
+              order: {
+                kind: "payment-processor-v2",
+                data: {
+                  kind: "collection-offer-approval",
+                  sellerOrBuyer: buyer,
+                  ...rest,
+                  r: r,
+                  s: s,
+                  v: v,
+                },
               },
+              orderbook: "reservoir",
             },
-            orderbook: "reservoir",
-          },
-        ],
-        source: MAGICEDEN_CONFIG.domain,
-      };
+          ],
+          source: MAGICEDEN_CONFIG.domain,
+        };
+      }
     } else {
       await logger.logMagicEdenBidError('Sign data not found in order steps', {
         taskId,
@@ -1026,14 +1194,6 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
         }
       }
     ))
-    if (cancelResponse) {
-      if (process.env.NODE_ENV !== 'production') {
-// console.log(JSON.stringify(cancelResponse));
-      }
-    }
-    if (process.env.NODE_ENV !== 'production') {
-// console.log(`Successfully cancelled ${orderIds.length} MagicEden bids for task: ${taskId}`.toUpperCase());
-    }
     orderIds.forEach(() => {
       decrementBidCount('magiceden', taskId);
     });
@@ -1049,9 +1209,6 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
 
     // Check if this is a "No matching order(s)" error - this means the order was already cancelled
     if (errorMessage?.includes('No matching order') || error?.response?.status === 404) {
-      if (process.env.NODE_ENV !== 'production') {
-// console.log(YELLOW + `[MagicEden] Orders already cancelled or not found for task: ${taskId} (${orderIds.length} orders)` + RESET);
-      }
 
       // Still track as completed since the orders are effectively cancelled
       orderIds.forEach(() => {
@@ -1068,13 +1225,6 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
       return;
     }
 
-    // For other errors, log and throw as before
-    const message = `Error cancelling MagicEden bid: ${errorMessage}`;
-    if (process.env.NODE_ENV !== 'production') {
-// console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-// console.log(RED + message + RESET);
-// console.log(RED + '-----------------------------------------------------------------------------------------------------------' + RESET);
-    }
     await logger.logMagicEdenBidError('Failed to cancel MagicEden bid', {
       taskId,
       operation: 'cancel_bid',
@@ -1083,8 +1233,6 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
       errorCode: error?.response?.status,
       errorMessage: errorMessage
     });
-
-    // Re-throw the error for non-"No matching order" cases
     throw error;
   }
 }
