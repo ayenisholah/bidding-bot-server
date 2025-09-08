@@ -1,12 +1,8 @@
-import Redis from 'ioredis';
 import { logger, ErrorCategory } from './logger';
+import { getRedisConnection } from './redis';
 
 // Color constants for console output
-const GREEN = '\x1b[32m';
-const YELLOW = '\x1b[33m';
 const RED = '\x1b[31m';
-const BLUE = '\x1b[34m';
-const CYAN = '\x1b[36m';
 const RESET = '\x1b[0m';
 
 // Cache configuration
@@ -36,49 +32,10 @@ interface MemoryCacheEntry {
 
 class TokenTraitCache {
   private memoryCache: Map<string, MemoryCacheEntry> = new Map();
-  private redisClient: Redis | null = null;
   private accessOrder: string[] = []; // LRU tracking
 
   constructor() {
-    this.initializeRedis();
-  }
-
-  private async initializeRedis(): Promise<void> {
-    try {
-      const redisNodes = process.env.REDIS_NODES || '[{"host":"localhost","port":6379}]';
-      const nodes = JSON.parse(redisNodes);
-      
-      if (nodes.length > 0) {
-        const node = nodes[0];
-        this.redisClient = new Redis({
-          host: node.host,
-          port: node.port,
-          maxRetriesPerRequest: 3,
-        });
-
-        this.redisClient.on('error', (err: Error) => {
-          console.error(RED + '[TOKEN TRAIT CACHE] Redis Client Error' + RESET, err);
-          logger.logCacheError('read', 'token_trait', 'Redis client error in token trait cache', {
-            error: err,
-            errorMessage: err.message,
-            component: 'token_trait_cache',
-            operation: 'redis_connection'
-          });
-        });
-
-        this.redisClient.on('connect', () => {
-          // console.log(GREEN + '[TOKEN TRAIT CACHE] Redis connected successfully' + RESET);
-        });
-      }
-    } catch (error) {
-      console.error(RED + '[TOKEN TRAIT CACHE] Failed to initialize Redis' + RESET, error);
-      logger.logCacheError('read', 'token_trait', 'Failed to initialize Redis for token trait cache', {
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        component: 'token_trait_cache',
-        operation: 'initialize_redis'
-      });
-    }
+    // No need for initialization - we'll use the shared Redis client on demand
   }
 
   /**
@@ -128,12 +85,18 @@ class TokenTraitCache {
       this.updateAccessOrder(key);
 
       // Store in Redis if available
-      if (this.redisClient && this.redisClient.status === 'ready') {
-        await this.redisClient.setex(
-          key,
-          REDIS_TTL,
-          JSON.stringify(data)
-        );
+      try {
+        const redis = getRedisConnection();
+        if (redis && redis.status === 'ready') {
+          await redis.setex(
+            key,
+            REDIS_TTL,
+            JSON.stringify(data)
+          );
+        }
+      } catch {
+        // Redis not available, continue with memory cache only
+        console.warn('[TOKEN TRAIT CACHE] Redis not available for write, using memory cache only');
       }
 
       // console.log(GREEN + `[TOKEN TRAIT CACHE] Cached traits for ${key}` + RESET);
@@ -183,22 +146,28 @@ class TokenTraitCache {
       }
 
       // Check Redis if available
-      if (this.redisClient && this.redisClient.status === 'ready') {
-        const redisData = await this.redisClient.get(key);
-        if (redisData) {
-          const data = JSON.parse(redisData) as TokenTraitData;
-          
-          // Store back in memory cache
-          this.evictLRU();
-          this.memoryCache.set(key, {
-            data,
-            expires: Date.now() + MEMORY_TTL
-          });
-          this.updateAccessOrder(key);
-          
-          // console.log(CYAN + `[TOKEN TRAIT CACHE] Redis hit for ${key}` + RESET);
-          return data;
+      try {
+        const redis = getRedisConnection();
+        if (redis && redis.status === 'ready') {
+          const redisData = await redis.get(key);
+          if (redisData) {
+            const data = JSON.parse(redisData) as TokenTraitData;
+            
+            // Store back in memory cache
+            this.evictLRU();
+            this.memoryCache.set(key, {
+              data,
+              expires: Date.now() + MEMORY_TTL
+            });
+            this.updateAccessOrder(key);
+            
+            // console.log(CYAN + `[TOKEN TRAIT CACHE] Redis hit for ${key}` + RESET);
+            return data;
+          }
         }
+      } catch {
+        // Redis not available, continue without it
+        console.warn('[TOKEN TRAIT CACHE] Redis not available for read');
       }
 
       return null;
@@ -276,8 +245,14 @@ class TokenTraitCache {
       }
 
       // Remove from Redis if available
-      if (this.redisClient && this.redisClient.status === 'ready') {
-        await this.redisClient.del(key);
+      try {
+        const redis = getRedisConnection();
+        if (redis && redis.status === 'ready') {
+          await redis.del(key);
+        }
+      } catch {
+        // Redis not available, continue
+        console.warn('[TOKEN TRAIT CACHE] Redis not available for delete');
       }
 
       // console.log(YELLOW + `[TOKEN TRAIT CACHE] Cleared cache for ${key}` + RESET);
@@ -320,8 +295,14 @@ class TokenTraitCache {
       }
 
       // Remove from Redis if available
-      if (this.redisClient && this.redisClient.status === 'ready' && keysToRemove.length > 0) {
-        await this.redisClient.del(...keysToRemove);
+      try {
+        const redis = getRedisConnection();
+        if (redis && redis.status === 'ready' && keysToRemove.length > 0) {
+          await redis.del(...keysToRemove);
+        }
+      } catch {
+        // Redis not available, continue
+        console.warn('[TOKEN TRAIT CACHE] Redis not available for bulk delete');
       }
 
       // console.log(YELLOW + `[TOKEN TRAIT CACHE] Cleared ${keysToRemove.length} entries for contract ${contractAddress}` + RESET);
@@ -363,13 +344,12 @@ class TokenTraitCache {
    */
   async shutdown(): Promise<void> {
     try {
-      if (this.redisClient) {
-        await this.redisClient.quit();
-        // console.log(GREEN + '[TOKEN TRAIT CACHE] Redis connection closed' + RESET);
-      }
-      
+      // No need to close Redis connection as it's shared
+      // Just clear memory cache
       this.memoryCache.clear();
       this.accessOrder = [];
+      
+      console.log('[TOKEN TRAIT CACHE] Memory cache cleared');
       
     } catch (error) {
       console.error(RED + '[TOKEN TRAIT CACHE] Error during shutdown' + RESET, error);

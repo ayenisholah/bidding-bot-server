@@ -1,10 +1,8 @@
 services:
   server:
-    image: nfttools/bidding-bot-server-production:latest
+    image: nfttools/bidding-bot-server-beta-single:beta-single
     platform: linux/amd64
     restart: always
-    mem_limit: 4608m
-    memswap_limit: 5120m
     ports:
       - "3003:3003"
     healthcheck:
@@ -16,6 +14,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
+      NODE_ENV: "production"
       PORT: 3003
       NODE_OPTIONS: "--max-old-space-size=4096"
       REDIS_HOST: "redis"
@@ -36,13 +35,12 @@ services:
       - redis
     volumes:
       - server_data:/app/data
+      - /dev/null:/app/.env:ro
 
   client:
-    image: nfttools/bidding-bot-client-production:latest
+    image: nfttools/bidding-bot-client-beta-single:beta-single
     platform: linux/amd64
     restart: always
-    mem_limit: 512m
-    memswap_limit: 640m
     ports:
       - "3001:3001"
     extra_hosts:
@@ -72,9 +70,7 @@ services:
   mongodb:
     image: "mongo:latest"
     container_name: "mongodb_container"
-    mem_limit: 1536m
-    memswap_limit: 1792m
-    command: mongod --wiredTigerCacheSizeGB 1.0
+    command: mongod
     ports:
       - "127.0.0.1:27017:27017"
     volumes:

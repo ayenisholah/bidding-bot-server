@@ -4,33 +4,48 @@ import { logger, DatabaseOperation } from './logger';
 
 config()
 
-const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
-const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
+// Read Redis configuration at runtime to ensure Docker env vars are available
+export const getRedisConfig = () => {
+  const host = process.env.REDIS_HOST || 'localhost';
+  const port = parseInt(process.env.REDIS_PORT || '6379', 10);
+  
+  // In production Docker environment, ensure we use the service name
+  if (process.env.NODE_ENV === 'production' && host === 'localhost') {
+    console.warn('[Redis] Production environment detected but REDIS_HOST not set, using "redis" service name');
+    return { host: 'redis', port };
+  }
+  
+  console.log(`[Redis] Configuration: host=${host}, port=${port}, env=${process.env.NODE_ENV}`);
+  return { host, port };
+};
 
 const RETRY_MAX_ATTEMPTS = 30;
 const INITIAL_RETRY_DELAY = 2000;
 
-const defaultConfig = {
-  host: REDIS_HOST,
-  port: REDIS_PORT,
-  maxRetriesPerRequest: null,
-  retryStrategy: (times: number) => {
-    if (times > RETRY_MAX_ATTEMPTS) {
-      return null;
+const getDefaultConfig = () => {
+  const { host, port } = getRedisConfig();
+  return {
+    host,
+    port,
+    maxRetriesPerRequest: null,
+    retryStrategy: (times: number) => {
+      if (times > RETRY_MAX_ATTEMPTS) {
+        return null;
+      }
+      const delay = Math.min(times * INITIAL_RETRY_DELAY, 20000);
+      return delay;
+    },
+    enableReadyCheck: true,
+    connectTimeout: 30000,
+    // Add memory optimization settings
+    dropBufferSupport: true,
+    showFriendlyErrorStack: true,
+    enableOfflineQueue: false,
+    reconnectOnError: (err: Error) => {
+      const targetErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED'];
+      return targetErrors.some(errType => err.message.includes(errType));
     }
-    const delay = Math.min(times * INITIAL_RETRY_DELAY, 20000);
-    return delay;
-  },
-  enableReadyCheck: true,
-  connectTimeout: 30000,
-  // Add memory optimization settings
-  dropBufferSupport: true,
-  showFriendlyErrorStack: true,
-  enableOfflineQueue: false,
-  reconnectOnError: (err: Error) => {
-    const targetErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED'];
-    return targetErrors.some(errType => err.message.includes(errType));
-  }
+  };
 };
 
 class RedisClient {
@@ -66,10 +81,11 @@ class RedisClient {
 
     if (!this.client) {
       try {
-        // console.log(`[Redis] Connecting to ${REDIS_HOST}:${REDIS_PORT}...`);
+        const config = getDefaultConfig();
+        console.log(`[Redis] Connecting to ${config.host}:${config.port}...`);
         
         this.client = new Redis({
-          ...defaultConfig,
+          ...config,
           lazyConnect: true,
           enableAutoPipelining: false,
         });
@@ -205,9 +221,10 @@ export const createBullMQConnection = async (identifier?: string): Promise<Redis
   }
 
   try {
+    const { host, port } = getRedisConfig();
     const redis = new Redis({
-      host: REDIS_HOST,
-      port: REDIS_PORT,
+      host,
+      port,
       
       // Retry strategy
       retryStrategy: (times: number) => {
