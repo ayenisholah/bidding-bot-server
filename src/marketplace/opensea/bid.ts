@@ -1163,7 +1163,6 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
   } else if (order.length === 1) {
     return [order[0], defaultOffer];
   }
-
   return order
 }
 

@@ -12328,7 +12328,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       let tokenOffer: bigint;
       let offerPrice: number;
 
-      // Defensive check to ensure currentTokenIds[task._id] exists
       if (!currentTokenIds[task._id]) {
         currentTokenIds[task._id] = {
           opensea: [],
@@ -12337,12 +12336,13 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       }
       const currentTokens = currentTokenIds[task._id].opensea
       const tokenIds = [...task.tokenIds, ...currentTokens]
-      const tokenBid = task.bidType === "token"
 
-      if (!tokenBid || !tokenIds.includes(+tokenId)) {
+      if (!tokenIds.map((item) => +item).includes(+tokenId)) {
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Token #${tokenId} not in task's token list [${tokenIds.join(', ')}]` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return;
       }
-
 
       // Check cache first
       let floor_price = await collectionCache.getFloorPrice(task.contract.slug, 'opensea');
@@ -12358,7 +12358,12 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           }
         );
       }
-      if (!floor_price) return
+      if (!floor_price) {
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: No floor price found for ${task.contract.slug} on OpenSea (item_received_bid)` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        return
+      }
 
       const { maxBidPriceEth, minBidPriceEth, currency } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
       const orders = await Order.find({
@@ -12368,7 +12373,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         identifier: tokenId.toString()
       })
       if (incomingBidAmountEth < minBidPriceEth) {
-        // Return silently when incoming bid is less than min bid price
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid ${incomingBidAmountEth} ${currencySymbol} < min bid price ${minBidPriceEth} ${currencySymbol} for token #${tokenId}` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       } else if (incomingBidAmountEth > maxBidPriceEth) {
         const reason = `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
@@ -12387,6 +12394,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             await queue.addBulk(cancelData)
           }
         }
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid ${incomingBidAmountEth} ${currencySymbol} > max bid price ${maxBidPriceEth} ${currencySymbol} for token #${tokenId}` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
       const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true)
@@ -12400,13 +12410,21 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           })
           queue.addBulk(cancelData)
         }
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Stop option triggered for token #${tokenId} (floor: ${floor_price})` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
       const offers = orders.map((order: any) => order.offerPrice)
       const currentBidPrice = offers.length > 0 ? Math.max(...offers.map((offer) => Number(offer))) : 0
 
-      if (incomingBidAmount < currentBidPrice) return
+      if (incomingBidAmount < currentBidPrice) {
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} < current bid ${currentBidPrice / Math.pow(10, decimal)} ${currencySymbol} for token #${tokenId}` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        return;
+      }
 
       const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth, currency)
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
@@ -12431,6 +12449,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             queue.addBulk(cancelData)
           }
         }
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Counter offer ${offerPriceEth} ${currencySymbol} > max bid price ${maxBidPriceEth} ${currencySymbol} for token #${tokenId}` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return;
       }
       tokenOffer = BigInt(offerPrice)
@@ -12467,16 +12488,22 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
     if (data.event === "trait_offer") {
       if (!trait) {
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: No trait data found in trait_offer event` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
       let traitOffer = BigInt(incomingBidAmount)
       const hasTraits = checkOpenseaTrait(selectedTraits, data.payload.payload.trait_criteria)
+      const identifier = `${trait.type}:${trait.value}`
 
       if (!hasTraits) {
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Task does not have matching traits for ${identifier}` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
-      const identifier = `${trait.type}:${trait.value}`
 
       const traitFloor = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices ? await openseaTraitFloor(currentTask.contract.slug, { traitType: trait.type, values: [trait.value] }) : undefined
 
@@ -12495,6 +12522,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         );
       }
       if (!floor_price) {
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: No floor price found for ${task.contract.slug} on OpenSea (trait_offer)` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
@@ -12509,6 +12539,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       })
 
       if (incomingBidAmountEth < minBidPriceEth) {
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid ${incomingBidAmountEth} ${currencySymbol} < min bid price ${minBidPriceEth} ${currencySymbol} for trait ${identifier}` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       } else if (incomingBidAmountEth > maxBidPriceEth) {
         const reason = `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
@@ -12526,14 +12559,15 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             queue.addBulk(cancelData)
           }
         }
-        // console.log(YELLOW + `[OpenSea trait_offer] Task ${task._id} - Skipping collection bid - Above max price` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid ${incomingBidAmountEth} ${currencySymbol} > max bid price ${maxBidPriceEth} ${currencySymbol} for trait ${identifier}` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
       const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true, traitFloor, identifier)
 
       if (stopBid) {
-        // console.log(YELLOW + `[OpenSea trait_offer] Task ${task._id} - Skipping collection bid - Stop option triggered` + RESET);
         if (orders.length > 0) {
           const cancelData = orders.map((order, index) => {
             return {
@@ -12543,6 +12577,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           })
           queue.addBulk(cancelData)
         }
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Stop option triggered for trait ${identifier} (floor: ${floor_price}, trait floor: ${traitFloor || 'N/A'})` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
@@ -12550,7 +12587,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       const currentBidPrice = offers.length > 0 ? Math.max(...offers.map((offer) => Number(offer))) : 0
 
       if (incomingBidAmount < currentBidPrice) {
-        // console.log(YELLOW + `[OpenSea trait_offer] Task ${task._id} - Skipping - Current bid (${currentBidPrice}) is higher than incoming (${incomingBidAmount})` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} < current bid ${currentBidPrice / Math.pow(10, decimal)} ${currencySymbol} for trait ${identifier}` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
@@ -12572,7 +12611,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             queue.addBulk(cancelData)
           }
         }
-        // console.log(YELLOW + `[OpenSea trait_offer] Task ${task._id} - Skipping collection bid - Exceeds max price after margin` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Counter offer ${offerPriceEth} ${currencySymbol} > max bid price ${maxBidPriceEth} ${currencySymbol} for trait ${identifier}` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return;
       }
 
@@ -12700,9 +12741,17 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           }
         );
       }
-      if (!floor_price) return
+      if (!floor_price) {
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: No floor price found for ${task.contract.slug} on OpenSea (collection_offer)` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        return;
+      }
       const { maxBidPriceEth, minBidPriceEth, currency } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
       if (incomingBidAmountEth < minBidPriceEth) {
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid ${incomingBidAmountEth} ${currencySymbol} < min bid price ${minBidPriceEth} ${currencySymbol} for collection` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       } else if (incomingBidAmountEth > maxBidPriceEth) {
         const reason = `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
@@ -12725,11 +12774,17 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             queue.addBulk(cancelData)
           }
         }
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid ${incomingBidAmountEth} ${currencySymbol} > max bid price ${maxBidPriceEth} ${currencySymbol} for collection` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
       const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true)
       if (stopBid) {
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Stop option triggered for collection (floor: ${floor_price})` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         const allOrders = await Order.find({
           taskId: task._id,
           marketplace: OPENSEA.toLowerCase()
@@ -12772,6 +12827,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             queue.addBulk(cancelData)
           }
         }
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+        console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Counter offer ${baseOfferPriceEth} ${currencySymbol} > max bid price ${maxBidPriceEth} ${currencySymbol} for collection` + RESET);
+        console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return;
       }
 
@@ -15908,7 +15966,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         "skipped",
         "opensea"
       );
-      // console.log(`${YELLOW}[OPENSEA] Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} token ${asset.tokenId} - skipping${RESET}`);
+      console.log(`${YELLOW}[OPENSEA] Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} token ${asset.tokenId} - skipping${RESET}`);
       return;
     }
 
