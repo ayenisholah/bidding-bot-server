@@ -12448,6 +12448,19 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         break;
     }
 
+    if (!Number.isFinite(incomingBidAmount)) {
+      console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+      console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid amount is not finite (${incomingBidAmount})` + RESET);
+      console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
+      return;
+    }
+
+    const normalizedIncomingBidAmount = Math.ceil(incomingBidAmount);
+    if (normalizedIncomingBidAmount !== incomingBidAmount) {
+      console.log(YELLOW + `[OpenSea Counterbid] Normalized incoming bid amount from ${incomingBidAmount} to ${normalizedIncomingBidAmount}` + RESET);
+    }
+    incomingBidAmount = normalizedIncomingBidAmount;
+
     const formattedBidAmout = base_price / Math.pow(10, paymentTokenDecimal)
     const bidDetails = `${formattedBidAmout} ${symbol.toUpperCase()}`
     const extraDetails = `${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol.toUpperCase()}`
@@ -12698,6 +12711,11 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return;
       }
+      const normalizedOfferPrice = Math.ceil(offerPrice)
+      if (normalizedOfferPrice !== offerPrice) {
+        console.log(YELLOW + `[OpenSea Counterbid] Normalized token offer price from ${offerPrice} to ${normalizedOfferPrice}` + RESET);
+      }
+      offerPrice = normalizedOfferPrice
       tokenOffer = BigInt(offerPrice)
 
       const asset = {
@@ -12705,12 +12723,13 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         tokenId: tokenId
       }
 
+      const tokenOfferPriceForQueue = Math.ceil(Number(tokenOffer))
       const bidData: IProcessOpenseaTokenBidData = {
         _id: task._id,
         address: task.wallet,
         walletId: task.walletId,
         slug: task.contract.slug,
-        offerPrice: Number(tokenOffer),
+        offerPrice: tokenOfferPriceForQueue,
         creatorFees,
         enforceCreatorFee: collectionDetails.enforceCreatorFee,
         asset,
@@ -12909,12 +12928,13 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               continue; // Skip this token as it exceeds max bid price
             }
 
+            const tokenOfferPriceForQueue = Math.ceil(Number(tokenOfferPrice));
             const tokenBidData: IProcessOpenseaTokenBidData = {
               _id: task._id,
               address: task.wallet,
               walletId: task.walletId,
               slug: task.contract.slug,
-              offerPrice: Number(tokenOfferPrice),
+              offerPrice: tokenOfferPriceForQueue,
               creatorFees,
               enforceCreatorFee: collectionDetails.enforceCreatorFee,
               asset,
@@ -12944,13 +12964,14 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         // console.log(CYAN + `[OpenSea trait_offer] Task ${task._id} - Processing collection trait bid for ${identifier}` + RESET);
         const bidCount = getIncrementedBidCount(OPENSEA, task.contract.slug, task._id)
 
+        const traitOfferForQueue = Math.ceil(Number(traitOffer));
         const counterbidData: IProcessOpenseaTraitBidData = {
           _id: task._id,
           bidCount,
           address: task.wallet,
           walletId: task.walletId,
           slug: task.contract.slug,
-          offerPrice: Number(traitOffer),
+          offerPrice: traitOfferForQueue,
           creatorFees,
           enforceCreatorFee: collectionDetails.enforceCreatorFee,
           expiry,
@@ -13101,13 +13122,14 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             const [traitType, traitValue] = order.identifier.split(':');
             const trait = { type: traitType, value: traitValue };
 
+            const orderOfferPriceForQueue = Math.ceil(Number(orderOfferPrice));
             const counterbidData: IProcessOpenseaTraitBidData = {
               _id: task._id,
               bidCount,
               address: task.wallet,
               walletId: task.walletId,
               slug: task.contract.slug,
-              offerPrice: Number(orderOfferPrice),
+              offerPrice: orderOfferPriceForQueue,
               creatorFees,
               enforceCreatorFee: collectionDetails.enforceCreatorFee,
               expiry,
@@ -13123,13 +13145,14 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             counterbidsQueued++;
           } else if (order.identifier === 'collection') {
             colletionOffer = BigInt(orderOfferPrice)
+            const collectionOfferForQueue = Math.ceil(Number(colletionOffer));
             const bidData: IOpenseaBidParams = {
               taskId: task._id,
               bidCount,
               walletAddress: task.wallet,
               walletId: task.walletId,
               slug: task.contract.slug,
-              offerPrice: Number(colletionOffer),
+              offerPrice: collectionOfferForQueue,
               creatorFees,
               enforceCreatorFee: collectionDetails.enforceCreatorFee,
               expiry
@@ -13145,12 +13168,13 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           } else {
             // This is a token offer
             const tokenId = order.identifier;
+            const orderOfferPriceForQueue = Math.ceil(Number(orderOfferPrice));
             const bidData: IProcessOpenseaTokenBidData = {
               _id: task._id,
               address: task.wallet,
               walletId: task.walletId,
               slug: task.contract.slug,
-              offerPrice: Number(orderOfferPrice),
+              offerPrice: orderOfferPriceForQueue,
               creatorFees,
               enforceCreatorFee: collectionDetails.enforceCreatorFee,
               asset: {
