@@ -8,12 +8,61 @@ import redisClient from '../utils/redis';
 import { CollectionItemsListQuery } from "../queries";
 import { BASE_URL } from "../constants";
 import { logger, DatabaseOperation } from "../utils/logger";
-import { ICollectionDetails } from "../types/collection.types";
+import { ICollectionDetails, ICollectionFee } from "../types/collection.types";
+import { setOpenseaMarketplaceFee } from "../utils/marketplace-fee-cache";
 
 config()
 
 const collectionCache: { [key: string]: ICollectionDetails } = {};
 const MAX_CACHE_ITEMS = 1000;
+
+const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1F0DF003000390027140000fAa719";
+const OPENSEA_FEE_ADDRESS_LOWER = OPENSEA_FEE_ADDRESS.toLowerCase();
+
+function computeOpenseaMarketplaceFeeBps(fees?: ICollectionFee[]): number | undefined {
+  if (!Array.isArray(fees)) {
+    return undefined;
+  }
+
+  for (const fee of fees) {
+    if (!fee?.recipient) {
+      continue;
+    }
+
+    if (fee.recipient.toLowerCase() === OPENSEA_FEE_ADDRESS_LOWER) {
+      if (typeof fee.fee !== 'number' || Number.isNaN(fee.fee)) {
+        return undefined;
+      }
+
+      return Math.round(fee.fee * 100);
+    }
+  }
+
+  return undefined;
+}
+
+function ensureOpenseaMarketplaceFee(details?: ICollectionDetails) {
+  if (!details) {
+    return;
+  }
+
+  let basisPoints: number | undefined;
+
+  if (typeof details.openseaMarketplaceFeeBps === 'number' && Number.isFinite(details.openseaMarketplaceFeeBps)) {
+    basisPoints = Math.round(details.openseaMarketplaceFeeBps);
+  }
+
+  if (basisPoints === undefined) {
+    basisPoints = computeOpenseaMarketplaceFeeBps(details.fees);
+    if (basisPoints !== undefined) {
+      details.openseaMarketplaceFeeBps = basisPoints;
+    }
+  }
+
+  if (basisPoints !== undefined) {
+    setOpenseaMarketplaceFee(BigInt(basisPoints));
+  }
+}
 
 // Helper function to get Redis connection
 const getRedis = () => redisClient.getClient();
@@ -32,8 +81,8 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation:
 }
 
 export async function getCollectionDetails(slug: string, contractAddress?: string) {
-  // Check memory cache first
   if (collectionCache[slug]) {
+    ensureOpenseaMarketplaceFee(collectionCache[slug]);
     return collectionCache[slug];
   }
 
@@ -47,6 +96,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
       if (cached) {
         const details = JSON.parse(cached);
         collectionCache[slug] = details; // Update memory cache
+        ensureOpenseaMarketplaceFee(collectionCache[slug]);
         return details;
       }
     } catch (error) {
@@ -85,57 +135,32 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
 
         let creator_fees: { [key: string]: number } = {};
         let enforceCreatorFee = false;
-        
-        // OpenSea platform fee address
-        const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1F0DF003000390027140000fAa719";
-        
         if (collection?.fees && Array.isArray(collection.fees)) {
           // console.log(`[Fee Processing] ${slug} - Starting to process ${collection.fees.length} fees`);
-          
+
           // Process all fees except the OpenSea platform fee
           for (const fee of collection.fees) {
-            const isOpenSeaFee = fee.recipient.toLowerCase() === OPENSEA_FEE_ADDRESS.toLowerCase();
-            
-            // console.log(`[Fee Processing] ${slug} - Processing fee:`, {
-              // recipient: fee.recipient,
-              // amount: fee.fee,
-              // required: fee.required,
-              // isOpenSeaFee: isOpenSeaFee
-            // });
-            
+            const isOpenSeaFee = fee.recipient.toLowerCase() === OPENSEA_FEE_ADDRESS_LOWER;
+
+
             // Skip OpenSea platform fee
             if (isOpenSeaFee) {
-              // console.log(`[Fee Processing] ${slug} - Skipping OpenSea platform fee`);
               continue;
             }
-            
-            // Add creator fee (multiply by 100 to convert from decimal to basis points)
+
             creator_fees[fee.recipient] = fee.fee * 100;
-            // console.log(`[Fee Processing] ${slug} - Added creator fee: ${fee.recipient} = ${fee.fee * 100} basis points`);
-            
+
             // If any creator fee is required, set enforceCreatorFee to true
             if (fee.required) {
               enforceCreatorFee = true;
-              // console.log(`[Fee Processing] ${slug} - Fee is required, setting enforceCreatorFee = true`);
             }
           }
-        } else {
-          // console.log(`[Fee Processing] ${slug} - No fees found in API response`);
         }
-        
+
         // If no creator fees found, use default
         if (Object.keys(creator_fees).length === 0) {
-          // console.log(`[Fee Processing] ${slug} - No creator fees found, using default {null: 0}`);
           creator_fees = { null: 0 };
         }
-        
-        // Log final fee information
-        // console.log(`[Collection Fees] ${slug} - Final summary:`, {
-          // totalFeesFromAPI: collection?.fees?.length || 0,
-          // creatorFeesCount: Object.keys(creator_fees).length,
-          // creatorFees: JSON.stringify(creator_fees),
-          // enforceCreatorFee: enforceCreatorFee
-        // });
 
         if (Object.keys(collectionCache).length >= MAX_CACHE_ITEMS) {
           delete collectionCache[Object.keys(collectionCache)[0]];
@@ -147,7 +172,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
           enforceCreatorFee: enforceCreatorFee
         };
 
-
+        ensureOpenseaMarketplaceFee(result);
         collectionCache[slug] = result;
 
         // Cache in Redis with 1-hour TTL
@@ -155,10 +180,9 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
           try {
             await redis.setex(cacheKey, 3600, JSON.stringify(result));
           } catch (error) {
-            // console.log(error);
+            console.log(error);
           }
         }
-
         return result;
       }),
       30000, // 30 second timeout for entire operation
@@ -174,7 +198,22 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
       });
       throw new Error('Failed to acquire lock for collection details');
     }
+    console.log({ getCollectionDetails: result.fees });
 
+    // {
+    //   getCollectionDetails: [
+    //     {
+    //       fee: 1,
+    //       recipient: '0x0000a26b00c1f0df003000390027140000faa719',
+    //       required: true
+    //     },
+    //     {
+    //       fee: 1,
+    //       recipient: '0xa858ddc0445d8131dac4d1de01f834ffcba52ef1',
+    //       required: false
+    //     }
+    //   ]
+    // }
     return result;
   } catch (error) {
     // Log the error

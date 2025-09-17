@@ -12374,8 +12374,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 }
 
 async function handleOpenseaCounterbid(data: any, task: ITask) {
-  // Structured log: start
-  logDecision('opensea', task._id.toString(), 'handleOpenseaCounterbid', 'start', 'Starting OpenSea counterbid handler', { slug: task.contract?.slug });
   try {
 
     const currentTask = activeTasks.get(task._id)
@@ -12388,9 +12386,11 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     }
 
     if (!currentTask?.running) {
-      logEarlyReturn('opensea', task._id.toString(), 'handleOpenseaCounterbid', 'Task not running', { running: currentTask?.running });
       return;
     }
+
+    // Structured log: start
+    logDecision('opensea', task._id.toString(), 'handleOpenseaCounterbid', 'start', 'Starting OpenSea counterbid handler', { slug: task.contract?.slug });
 
     const taskMarketplaces = currentTask.selectedMarketplaces.map((market) => market.toLowerCase());
     if (!taskMarketplaces.includes("opensea")) {

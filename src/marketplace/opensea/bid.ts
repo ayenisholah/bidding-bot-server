@@ -16,6 +16,7 @@ import { logger, ErrorCategory, MarketplaceSubCategory } from "../../utils/logge
 import { InsufficientBalanceError } from "../errors";
 import { getCachedOrFetch, CACHE_TTL, CACHE_KEYS } from "../../utils/opensea-cache";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
+import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
 import fs from 'fs';
 import path from 'path';
 
@@ -82,7 +83,6 @@ const SEAPORT_CONTRACT = new ethers.Contract(SEAPORT_CONTRACT_ADDRESS, SEAPORT_M
 const RESET = '\x1b[0m';
 
 // Pre-calculated values for optimization
-const OPENSEA_FEE_BIGINT = 50n;
 const DIVIDER = 10000n;
 const BASIS_MAP: { [key: number]: number } = { 2: 1e16, 3: 1e15, 4: 1e14 };
 
@@ -261,7 +261,6 @@ export async function bidOnOpensea(
   slug: string,
   offer_price: number,
   creator_fees: IFee,
-  enforceCreatorFee: boolean,
   expiry: number = 900,
   currency = WETH,
   contractAddress: string,
@@ -288,6 +287,8 @@ export async function bidOnOpensea(
       if (!task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
         return
       }
+
+      const openseaMarketplaceFeeBps = getOpenseaMarketplaceFee();
 
 
       // Pre-calculate values
@@ -358,8 +359,8 @@ export async function bidOnOpensea(
           itemType: 1,
           token: currency,
           identifierOrCriteria: "0",
-          startAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
-          endAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
+          startAmount: ((offerPrice * openseaMarketplaceFeeBps) / DIVIDER).toString(),
+          endAmount: ((offerPrice * openseaMarketplaceFeeBps) / DIVIDER).toString(),
           recipient: OPENSEA_FEE_ADDRESS
         };
 
@@ -502,8 +503,8 @@ export async function bidOnOpensea(
           itemType: 1,
           token: currency,
           identifierOrCriteria: 0,
-          startAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
-          endAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
+          startAmount: ((offerPrice * openseaMarketplaceFeeBps) / DIVIDER).toString(),
+          endAmount: ((offerPrice * openseaMarketplaceFeeBps) / DIVIDER).toString(),
           recipient: OPENSEA_FEE_ADDRESS
         };
         payload.protocol_data.parameters.consideration.push(opensea_consideration);
@@ -632,8 +633,8 @@ export async function bidOnOpensea(
           itemType: 1,
           token: currency,
           identifierOrCriteria: 0,
-          startAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
-          endAmount: ((offerPrice * OPENSEA_FEE_BIGINT) / DIVIDER).toString(),
+          startAmount: ((offerPrice * openseaMarketplaceFeeBps) / DIVIDER).toString(),
+          endAmount: ((offerPrice * openseaMarketplaceFeeBps) / DIVIDER).toString(),
           recipient: OPENSEA_FEE_ADDRESS
         };
         payload.protocol_data.parameters.consideration.push(opensea_consideration);

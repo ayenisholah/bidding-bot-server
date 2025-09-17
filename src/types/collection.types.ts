@@ -52,4 +52,5 @@ export interface ICollectionDetails {
   // Additional fields that might be returned by the function
   creator_fees?: { [walletAddress: string]: number };
   enforceCreatorFee?: boolean;
+  openseaMarketplaceFeeBps?: number;
 }
