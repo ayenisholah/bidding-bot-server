@@ -64,12 +64,23 @@ class MarketplaceFileLogger {
     }
   }
 
+  private shouldSuppressEntry(entry: MarketLogEntry): boolean {
+    // Drop repetitive task-state noise entirely to keep logs actionable
+    return (
+      entry.level === 'warn' &&
+      typeof entry.message === 'string' &&
+      entry.message.toLowerCase().startsWith('task not running')
+    );
+  }
+
   log(entry: Omit<MarketLogEntry, 'timestamp' | 'marketplace'>) {
     const row: MarketLogEntry = {
       ...entry,
       marketplace: this.marketplace,
       timestamp: new Date().toISOString(),
     };
+
+    if (this.shouldSuppressEntry(row)) return;
 
     if (this.writeStream) {
       this.writeStream.write(JSON.stringify(row) + '\n');
