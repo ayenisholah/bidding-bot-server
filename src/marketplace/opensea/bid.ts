@@ -249,7 +249,6 @@ async function buildItemOffer(taskId: string, offerSpecification: ItemOfferSpeci
  * @param slug - The slug of the collection.
  * @param offerPrice - The price of the offer in wei.
  * @param creatorFees - The fees for the creators.
- * @param enforceCreatorFee - Whether to enforce creator fees.
  * @param expiry - bid expiry in seconds.
  * @param openseaTraits - Optional traits for the offer.
  */

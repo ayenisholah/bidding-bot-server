@@ -15404,7 +15404,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
         currentTask.contract.slug,
         Number(colletionOffer),
         creatorFees,
-        collectionDetails.enforceCreatorFee,
         expiry,
         currency,
         currentTask.contract.contractAddress
@@ -17275,10 +17274,6 @@ async function processOpenseaTraitBid(data: {
       traitOffer = BigInt(Math.round(minBidPriceEth * Math.pow(10, decimal)));
     }
 
-    // Get parent job for tracking
-    const parentId = `${_id}-opensea`.toLowerCase();
-    const parentJob = parentJobs.get(parentId);
-
     try {
       await bidOnOpensea(
         _id,
@@ -17288,7 +17283,6 @@ async function processOpenseaTraitBid(data: {
         slug,
         Number(traitOffer),
         creatorFees,
-        enforceCreatorFee,
         expiry,
         currency,
         task.contract.contractAddress,
@@ -17554,7 +17548,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         slug,
         Number(tokenOffer),
         creatorFees,
-        enforceCreatorFee,
         expiry,
         currency,
         currentTask.contract.contractAddress,
@@ -17690,7 +17683,6 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
       slug,
       Number(offerPrice),
       creatorFees,
-      enforceCreatorFee,
       expiry,
       currency,
       currentTask.contract.contractAddress
@@ -18459,7 +18451,6 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
       slug,
       Number(offerPrice),
       creatorFees,
-      enforceCreatorFee,
       expiry,
       currency,
       currentTask.contract.contractAddress,
@@ -18524,7 +18515,6 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
       slug,
       Number(offerPrice),
       creatorFees,
-      enforceCreatorFee,
       expiry,
       currency,
       currentTask.contract.contractAddress,
