@@ -24,14 +24,12 @@ const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
 const RED = '\x1b[31m';
 const BLUE = '\x1b[34m';
-const CYAN = '\x1b[36m';
 const RESET = '\x1b[0m';
 
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY
 const provider = new AlchemyProvider(NETWORK, ALCHEMY_API_KEY)
 
 export async function createListing(data: IListing) {
-  // console.log(CYAN + '\n=== [LISTING - Create] CREATE LISTING CALLED ===' + RESET);
   // console.log(BLUE + `[LISTING - Create] Token ID: ${data.tokenId}` + RESET);
   // console.log(BLUE + `[LISTING - Create] Running: ${data.running}` + RESET);
   // console.log(BLUE + `[LISTING - Create] Selected Marketplaces: ${data.selectedMarketplaces}` + RESET);
@@ -52,7 +50,6 @@ export async function createListing(data: IListing) {
       return;
     }
 
-    // console.log(CYAN + '[LISTING - Create] Step 1: Fetching fresh data...' + RESET);
     
     logger.logInfo(ErrorCategory.DATABASE, 'Starting listing creation', {
       listingId: data._id?.toString(),
@@ -601,13 +598,11 @@ export async function shouldSkipListingWithUndercutCheck(
 ): Promise<boolean> {
   try {
     // console.log(BLUE + `[LISTING - Undercut Check] Checking optimal listing position for ${marketplace}` + RESET);
-    // console.log(CYAN + `[LISTING - Undercut Check] Our price: ${ourListingPrice}, Undercut margin: ${undercutMargin}` + RESET);
     
     // Check if we need trait-filtered listings
     let listings: any[] = [];
     
     if (selectedTrait?.trait_type && selectedTrait?.value !== undefined) {
-      // console.log(CYAN + `[LISTING - Undercut Check] Using trait-filtered listings for ${selectedTrait.trait_type}:${selectedTrait.value}` + RESET);
       
       // Get trait-filtered listings
       const traitListings = await getTraitFilteredListings(collectionSlug, selectedTrait.trait_type, selectedTrait.value, 3);
@@ -652,7 +647,6 @@ export async function shouldSkipListingWithUndercutCheck(
     const floorPrice = parseFloat(floorListing.price.current.value) / Math.pow(10, floorListing.price.current.decimals);
     const floorOfferer = floorListing.protocol_data.parameters.offerer?.toLowerCase();
     
-    // console.log(CYAN + `[LISTING - Undercut Check] Floor price: ${floorPrice} ETH from ${floorOfferer}` + RESET);
     
     // For trait-based listings, we can't easily determine the offerer, so skip that check
     if (!selectedTrait) {
@@ -665,7 +659,6 @@ export async function shouldSkipListingWithUndercutCheck(
           const secondPrice = parseFloat(listings[1].price.current.value) / Math.pow(10, listings[1].price.current.decimals);
           const priceDifference = secondPrice - floorPrice;
           
-          // console.log(CYAN + `[LISTING - Undercut Check] Second price: ${secondPrice} ETH, difference: ${priceDifference}` + RESET);
           
           // LISTING WAR LOGIC: If difference is 0 (tie), continue the war by undercutting
           if (priceDifference === 0) {
@@ -696,7 +689,6 @@ export async function shouldSkipListingWithUndercutCheck(
     const targetPrice = floorPrice - undercutMargin;
     const priceDifference = Math.abs(ourListingPrice - targetPrice);
     
-    // console.log(CYAN + `[LISTING - Undercut Check] Target price: ${targetPrice}, price difference: ${priceDifference}` + RESET);
     // console.log(YELLOW + `[LISTING - Undercut Check] Should relist to maintain undercut margin` + RESET);
     return false;
 

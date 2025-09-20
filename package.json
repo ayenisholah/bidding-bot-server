@@ -10,11 +10,6 @@
 		"ci": "npm install --frozen-lockfile",
 		"dc:down": "docker compose down -v",
 		"dc:destroy": "docker stop $(docker ps -aq) || true sleep 3 docker compose down --volumes --remove-orphans --timeout 15 && docker system prune -af --volumes",
-		"test": "nodemon test.ts",
-		"test:opensea-loops": "ts-node test-opensea-loops.ts",
-		"test:opensea-trait-loops": "ts-node test-opensea-trait-loops.ts",
-		"test:verify-fix": "ts-node verify-opensea-fix.ts",
-		"timeout:logs": "node scripts/show-timeout-logs.js",
 		"blur:clear-tokens": "ts-node scripts/clear-blur-tokens.ts",
 		"dc:build": "DOCKER_BUILDKIT=1 docker buildx build --platform linux/arm64,linux/amd64 --cache-from type=registry,ref=nfttools/bidding-bot-server-production:buildcache --cache-to type=registry,ref=nfttools/bidding-bot-server-production:buildcache,mode=max -t nfttools/bidding-bot-server-production:latest --push .",
 		"dc:push": "docker push nfttools/bidding-bot-server-production:latest",
@@ -23,10 +18,7 @@
 		"dc:build:beta-cluster": "DOCKER_BUILDKIT=1 docker buildx build --platform linux/arm64,linux/amd64 --cache-from type=registry,ref=nfttools/bidding-bot-server-beta-cluster:buildcache --cache-to type=registry,ref=nfttools/bidding-bot-server-beta-cluster:buildcache,mode=max -t nfttools/bidding-bot-server-beta-cluster:beta-cluster --push .",
 		"dc:push:beta-cluster": "docker push nfttools/bidding-bot-server-beta-cluster:beta-cluster",
 		"lint": "eslint 'src/**/*.{ts,tsx}'",
-		"lint:fix": "eslint 'src/**/*.{ts,tsx}' --fix",
-		"test:axiom": "ts-node scripts/test-axiom.ts",
-		"scripts:fix-stuck-tasks": "ts-node src/scripts/fix-stuck-tasks.ts",
-		"scripts:fixCancellationPercentage": "ts-node src/scripts/fix-cancellation-percentage.ts"
+		"lint:fix": "eslint 'src/**/*.{ts,tsx}' --fix"
 	},
 	"keywords": [],
 	"author": "",

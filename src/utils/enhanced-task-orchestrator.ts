@@ -26,7 +26,6 @@ export class EnhancedTaskOrchestrator {
   private readonly GREEN = '\x1b[32m';
   private readonly BLUE = '\x1b[34m';
   private readonly YELLOW = '\x1b[33m';
-  private readonly CYAN = '\x1b[36m';
   private readonly RESET = '\x1b[0m';
 
   constructor(
@@ -46,7 +45,7 @@ export class EnhancedTaskOrchestrator {
    */
   async startTask(taskId: string, task: ITask): Promise<void> {
     try {
-      // console.log(`${this.CYAN}[Orchestrator] Starting enhanced task execution for ${taskId}${this.RESET}`);
+      // console.log(`${this.YELLOW}[Orchestrator] Starting enhanced task execution for ${taskId}${this.RESET}`);
       
       // Initialize task state
       await this.stateManager.initializeEnhancedTaskState(taskId, task, 'STARTED');
@@ -243,7 +242,7 @@ export class EnhancedTaskOrchestrator {
   private async handleTaskStateChange(taskId: string, oldState: EnhancedTaskStatus, newState: EnhancedTaskStatus): Promise<void> {
     const executionPlan = this.executionPlans.get(taskId);
     
-    // console.log(`${this.CYAN}[Orchestrator] Task ${taskId} transitioned: ${oldState} -> ${newState}${this.RESET}`);
+    // console.log(`${this.YELLOW}[Orchestrator] Task ${taskId} transitioned: ${oldState} -> ${newState}${this.RESET}`);
     
     switch (newState) {
       case 'QUEUED':

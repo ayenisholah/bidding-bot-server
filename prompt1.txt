@@ -1,3 +1,0 @@
-
-2025-08-16T03:59:43.140018601Z [updateTaskRunningPercentage] 689fd3a7a85c40f082ff9199-magiceden-loop13: Using totalJobs=9950 (actualJobs=9950, expectedJobs=10000, allJobsQueued=true)
-2025-08-16T03:59:43.140023409Z [updateTaskRunningPercentage] 689fd3a7a85c40f082ff9199-opensea-loop13: Using totalJobs=10000 (actualJobs=10000, expectedJobs=10000, allJobsQueued=true)

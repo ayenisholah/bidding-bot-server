@@ -598,7 +598,6 @@ class TimedLockManager {
       clearTimeout(lock.warningTimeouts.seventyFive);
     }
 
-    // console.log(CYAN + `[TimedLockManager] Extending lock for ${lockKey} (was at ${Math.round(percentComplete)}% of timeout)` + RESET);
 
     // Set up new warning timeouts based on elapsed time
     const remainingTime = this.MAX_LOCK_DURATION - elapsed;
@@ -716,7 +715,6 @@ class TaskStatusManager {
 
   // Fix tasks stuck in STARTED status for a specific marketplace
   async checkAndFixStuckStartedTask(taskId: string, marketplace: string) {
-    // console.log(CYAN + `[StatusManager] Checking stuck STARTED task ${taskId}/${marketplace}` + RESET);
 
     const task = activeTasks.get(taskId);
     if (!task) {
@@ -778,7 +776,6 @@ export const GREEN = '\x1b[32m';
 export const YELLOW = '\x1b[33m';
 export const RED = '\x1b[31m';
 export const GOLD = '\x1b[33m';
-export const CYAN = '\x1b[36m';
 
 const OPENSEA = "OPENSEA";
 const MAGICEDEN = "MAGICEDEN";
@@ -942,7 +939,6 @@ const STANDARD_INTERVAL = 60000; // 60 seconds - standard interval for most time
 const HEALTH_CHECK_INTERVAL = process.env.NODE_ENV === 'development' ? 5000 : 60000; // 5 seconds in dev, 60 seconds in prod
 // Initialize with default marketplaces - will be updated by WebSocket
 let enabledMarketplaces: string[] = ['opensea', 'magiceden', 'blur']
-// console.log(CYAN + `[Server] Initialized enabledMarketplaces with defaults: ${enabledMarketplaces.join(', ')}` + RESET)
 // Use deterministic client ID based on API_KEY or a fallback
 const generateDeterministicClientId = (): string => {
   const baseKey = process.env.API_KEY || 'bidding-bot-default';
@@ -1425,7 +1421,6 @@ const recentItemSoldEvents = new Set<string>();
 // Clean up old events every 60 seconds to prevent memory growth
 // Regular cleanup to maintain memory efficiency
 setInterval(() => {
-  // console.log(CYAN + `Clearing ${recentItemSoldEvents.size} cached ITEM_SOLD events` + RESET);
   recentItemSoldEvents.clear();
 }, STANDARD_INTERVAL);
 
@@ -1844,11 +1839,6 @@ async function checkWorkerHealth() {
 
     // Only log if there are issues or if in development mode
     if (unhealthyConnections.length > 0 || unhealthyWorkers.length > 0 || oldConnections.length > 0 || process.env.NODE_ENV === 'development') {
-      // console.log(CYAN + '\n📊 Worker Health Check Summary:' + RESET);
-      // console.log(CYAN + `  Connections: ${healthSummary.connections.healthy}/${healthSummary.connections.total} healthy` + RESET);
-      // console.log(CYAN + `  Workers: ${healthSummary.workers.healthy}/${healthSummary.workers.total} healthy` + RESET);
-      // console.log(CYAN + `  Main Queue: ${healthSummary.queues.main.waiting} waiting, ${healthSummary.queues.main.active} active` + RESET);
-      // console.log(CYAN + `  Blur Queue: ${healthSummary.queues.blur.waiting} waiting, ${healthSummary.queues.blur.active} active` + RESET);
 
       if (oldConnections.length > 0) {
         // console.log(YELLOW + `  ⚠️  ${oldConnections.length} connections older than 1 hour:` + RESET);
@@ -2547,12 +2537,10 @@ async function startServer() {
 
 
     // Try to recover password from Redis BEFORE starting jobs
-    // console.log(CYAN + '🔍 Checking for stored password...' + RESET);
     let passwordRecovered = false;
     const maxRetries = 3;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      // console.log(CYAN + `📡 Password recovery attempt ${attempt}/${maxRetries}...` + RESET);
 
       // Check Redis connection status
       if (!redisClient.isReady()) {
@@ -2594,7 +2582,6 @@ async function startServer() {
       // console.log(YELLOW + '⚠️  Queues and workers are paused - waiting for password' + RESET);
     } else {
       // Verify all workers are ready before processing jobs
-      // console.log(CYAN + '🔍 Verifying workers are ready...' + RESET);
 
       // Give workers time to fully initialize
       await new Promise(resolve => setTimeout(resolve, 2000));
@@ -3050,34 +3037,21 @@ async function shouldTaskBeStopped(taskId: string): Promise<boolean> {
   const status = taskStatus[taskId];
 
   if (!status) {
-    console.log(`[LEGACY-shouldTaskBeStopped] Task ${taskId}: No status found`);
     return false;
   }
 
   const isNotRunning = !task || !task.running;
 
-  console.log(`[LEGACY-shouldTaskBeStopped] Task ${taskId}: Checking if should be stopped`);
-  console.log(`[LEGACY-shouldTaskBeStopped] Task ${taskId}: Task running: ${task?.running || false}`);
-  console.log(`[LEGACY-shouldTaskBeStopped] Task ${taskId}: isNotRunning: ${isNotRunning}`);
 
   // Check if ALL marketplaces have completed cancellation (100%)
   const marketplaceStatuses = status.marketplaces;
 
-  if (marketplaceStatuses) {
-    console.log(`[LEGACY-shouldTaskBeStopped] Task ${taskId}: Marketplace statuses:`);
-    Object.entries(marketplaceStatuses).forEach(([mp, mpStatus]) => {
-      if (mpStatus) {
-        console.log(`[LEGACY-shouldTaskBeStopped] Task ${taskId}:   ${mp}: ${mpStatus.cancellationPercentage || 0}% (status: ${mpStatus.status})`);
-      }
-    });
-  }
 
   // FIXED: Change >= 100 to === 100 to match enhanced system
   const allMarketplacesCancelled = marketplaceStatuses && Object.values(marketplaceStatuses).every(mp =>
     mp && (mp.cancellationPercentage === 100 || mp.status === 'COMPLETED' || mp.status === 'STOPPED')
   );
 
-  console.log(`[LEGACY-shouldTaskBeStopped] Task ${taskId}: allMarketplacesCancelled: ${allMarketplacesCancelled}`);
 
   // If all marketplaces cancelled, verify no active orders exist
   if (allMarketplacesCancelled) {
@@ -3393,8 +3367,6 @@ async function setMarketplaceCancellationComplete(taskId: string, marketplace?: 
     // Check if we have task-level tracking (indicates global cancellation)
     if (cancellationTracker.hasTaskLevelTracking(taskId)) {
       // This is part of a global cancellation - just log and let the tracker handle it
-      // console.log(CYAN + `[setMarketplaceCancellationComplete] Marketplace ${marketplace} complete during global cancellation for task ${taskId}` + RESET);
-      // console.log(CYAN + `[setMarketplaceCancellationComplete] Letting cancellation tracker handle percentage updates` + RESET);
 
       // Do NOT call setTaskCancellationComplete here!
       // The task will transition to STOPPED when the aggregated percentage reaches 100%
@@ -3418,13 +3390,11 @@ const loopCounterStats: LoopCount = {};
 // Helper function to clean up task resources
 function cleanupTaskResources(taskId: string, preserveWarnings = false): void {
   const timestamp = new Date().toISOString();
-  // console.log(CYAN + `[cleanupTaskResources] ${timestamp} - Cleaning up resources for task ${taskId}` + RESET);
 
   // Clean up marketplace completion tracking
 
   // Clear loop counter
   if (loopCounterStats[taskId]) {
-    console.log(CYAN + `[cleanupTaskResources] Removing loop counters for task ${taskId}: ${JSON.stringify(loopCounterStats[taskId])}` + RESET);
     delete loopCounterStats[taskId];
   }
 
@@ -3466,7 +3436,6 @@ function cleanupTaskResources(taskId: string, preserveWarnings = false): void {
 
   // Log final stats before clearing
   if (skipStats[taskId]) {
-    // console.log(CYAN + `[cleanupTaskResources] Final skipStats for task ${taskId}: opensea=${skipStats[taskId].opensea || 0}, magiceden=${skipStats[taskId].magiceden || 0}, blur=${skipStats[taskId].blur || 0}` + RESET);
   }
 
   // Clear task-specific stats objects
@@ -3502,7 +3471,6 @@ function cleanupTaskResources(taskId: string, preserveWarnings = false): void {
   keysToDelete.forEach(key => {
     parentJobs.delete(key);
     processedJobsPerParent.delete(key);
-    // console.log(CYAN + `[cleanupTaskResources] Deleted parent job: ${key}` + RESET);
   });
 
   // Clean up cancellation tracking
@@ -3513,7 +3481,6 @@ function cleanupTaskResources(taskId: string, preserveWarnings = false): void {
   // Clean up restart counter
   taskRestartCounts.delete(taskId);
 
-  // console.log(CYAN + `[cleanupTaskResources] ${timestamp} - Cleanup complete for task ${taskId}` + RESET);
 }
 
 /**
@@ -3535,10 +3502,6 @@ async function updateTaskRunningPercentage(taskId: string) {
   const marketplacesToCheck = selectedMarketplaces.filter(m => enabledMarketplacesLower.includes(m));
 
   // Log marketplace filtering for updateTaskRunningPercentage
-  // console.log(CYAN + `[updateTaskRunningPercentage] Task ${taskId} marketplace analysis:` + RESET);
-  console.log(CYAN + `  - Selected: ${selectedMarketplaces.join(', ')}` + RESET);
-  console.log(CYAN + `  - Enabled: ${enabledMarketplacesLower.join(', ')}` + RESET);
-  console.log(CYAN + `  - To check: ${marketplacesToCheck.join(', ')}` + RESET);
 
   let totalJobs = 0;
   let completedJobs = 0;
@@ -3587,7 +3550,6 @@ async function updateTaskRunningPercentage(taskId: string) {
 
       // Log the values being used for transparency
       if (parentJob.allJobsQueued) {
-        // console.log(CYAN + `[updateTaskRunningPercentage] ${parentJobId}: Using totalJobs=${mpTotal} (actualJobs=${parentJob.actualJobs}, expectedJobs=${parentJob.expectedJobs}, allJobsQueued=true)` + RESET);
 
         // Log partial queueing warning
         if (parentJob.actualJobs !== undefined && parentJob.expectedJobs !== undefined &&
@@ -3618,7 +3580,6 @@ async function updateTaskRunningPercentage(taskId: string) {
           }
         }
       } else {
-        // console.log(CYAN + `[updateTaskRunningPercentage] ${parentJobId}: Using totalJobs=${mpTotal} (expectedJobs=${parentJob.expectedJobs}, allJobsQueued=false - still queueing)` + RESET);
       }
 
       const mpCompleted = parentJob.completedJobs || 0;
@@ -3638,11 +3599,6 @@ async function updateTaskRunningPercentage(taskId: string) {
         taskStatus[taskId].marketplaces[mpKey]!.completedJobs = mpCompleted;
 
         // Comprehensive logging for marketplace-specific status
-        // console.log(CYAN + `[updateTaskRunningPercentage] ${parentJobId} marketplace status update:` + RESET);
-        console.log(CYAN + `  - Status: ${taskStatus[taskId].marketplaces[mpKey]!.status}` + RESET);
-        console.log(CYAN + `  - Running Percentage: ${mpPercentage.toFixed(2)}%` + RESET);
-        console.log(CYAN + `  - Jobs: ${mpCompleted}/${mpTotal} completed` + RESET);
-        console.log(CYAN + `  - Parent Job State: allJobsQueued=${parentJob.allJobsQueued}, actualJobs=${parentJob.actualJobs}, expectedJobs=${parentJob.expectedJobs}` + RESET);
       }
 
       totalJobs += mpTotal;
@@ -3872,18 +3828,16 @@ async function checkTaskCompletionAndScheduleNext(taskId: string, marketplace?: 
       // Clear parent job for specific marketplace
       const parentJobId = getParentJobId(taskId, marketplace);
       if (parentJobs.has(parentJobId)) {
-        // console.log(CYAN + `[Task Completion] Clearing parent job ${parentJobId} after marketplace completion` + RESET);
         parentJobs.delete(parentJobId);
         // Also clear processed jobs tracking
         processedJobsPerParent.delete(parentJobId);
-      }
+  }
     } else {
       // Clear parent jobs for all marketplaces
       const marketplaces = ['opensea', 'magiceden', 'blur'];
       for (const mp of marketplaces) {
         const parentJobId = getParentJobId(taskId, mp);
         if (parentJobs.has(parentJobId)) {
-          // console.log(CYAN + `[Task Completion] Clearing parent job ${parentJobId} after completion` + RESET);
           parentJobs.delete(parentJobId);
           // Also clear processed jobs tracking
           processedJobsPerParent.delete(parentJobId);
@@ -3974,12 +3928,7 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
     return;
   }
 
-  // console.log(CYAN + `  Total jobs: ${parentJob.totalJobs}` + RESET);
-  // console.log(CYAN + `  Processed jobs: ${parentJob.completedJobs}` + RESET);
-  // console.log(CYAN + `  Failed jobs: ${parentJob.failedJobs || 0}` + RESET);
   const successCount = parentJob.completedJobs - (parentJob.failedJobs || 0);
-  // console.log(CYAN + `  Successful jobs: ${successCount}` + RESET);
-  // console.log(CYAN + `  Progress: ${parentJob.totalJobs > 0 ? ((parentJob.completedJobs / parentJob.totalJobs) * 100).toFixed(2) : 0}% (${parentJob.completedJobs}/${parentJob.totalJobs})` + RESET);
 
   // Check if parent job is already complete - prevent overflow
   if (parentJob.completedJobs >= parentJob.totalJobs && parentJob.totalJobs > 0) {
@@ -4039,7 +3988,6 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
     if (success) {
       // Increment completed jobs with hard cap protection
       parentJob.completedJobs++;
-      // console.log(CYAN + `[markJobAsProcessed] Success counter incremented for ${parentJobId}: ${beforeCount} -> ${parentJob.completedJobs}` + RESET);
     } else {
       // Increment both completed (for progress) and failed (for tracking) counters
       parentJob.completedJobs++;
@@ -4099,8 +4047,6 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
       const marketplaceStatuses = taskStatus[taskId]?.marketplaces;
       const overallPercentage = marketplaceStatuses ?
         Math.max(...Object.values(marketplaceStatuses).map(mp => mp?.runningPercentage || 0)) : 0;
-      console.log(CYAN + `[All Jobs Complete] Current percentage: ${overallPercentage}%` + RESET);
-      // console.log(CYAN + `[All Jobs Complete] Completion will be triggered by updateTaskRunningPercentage when it reaches 100%` + RESET);
     }
   }
 }
@@ -4217,11 +4163,8 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
     loopCounterStats[taskId][marketplace]++;
 
     const newLoopCount = loopCounterStats[taskId][marketplace];
-    console.log(CYAN + `[scheduleNextLoop] Scheduling ${marketplace} Loop #${newLoopCount} for task ${taskId} in ${loopInterval}s` + RESET);
   } else {
-    console.log(CYAN + `[scheduleNextLoop] Scheduling all marketplaces for task ${taskId} in ${loopInterval}s` + RESET);
   }
-  console.log(CYAN + `[loopCounterStats] Current state: ${JSON.stringify(loopCounterStats[taskId])}` + RESET);
 
   // Set up next loop time and countdown timer
   const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
@@ -4437,7 +4380,6 @@ function initializeQueueEventHandlers() {
       else {
         // Handle numeric job IDs (like 94460, 94481) - these should be tracked but may not have task context
         if (/^\d+$/.test(jobId)) {
-          // console.log(CYAN + `[Queue Event] Numeric job ID ${jobId} completed - no task context available` + RESET);
           return; // Skip numeric job IDs as they don't relate to task tracking
         }
 
@@ -4763,7 +4705,6 @@ function initializeQueueEventHandlers() {
 
       // Skip schedule jobs - they are orchestration jobs, not actual bid jobs
       if (jobId.includes('-schedule')) {
-        // console.log(CYAN + `[Queue Event] Skipping schedule job tracking (stalled): ${jobId}` + RESET);
         return;
       }
 
@@ -4941,7 +4882,6 @@ function initializeQueueEventHandlers() {
     try {
       // Skip schedule jobs - they are orchestration jobs, not actual bid jobs
       if (jobId.includes('-schedule')) {
-        // console.log(CYAN + `[Blur Queue Event] Skipping schedule job tracking (failed): ${jobId}` + RESET);
         return;
       }
 
@@ -5454,7 +5394,6 @@ async function processBlurJob(job: Job) {
             } else {
               // Block has expired, clean it up
               await redis.del(authBlockKey);
-              // console.log(CYAN + `[Blur Auth Block] Cleaned up expired block for wallet ${walletAddress.substring(0, 8)}...` + RESET);
 
               logRaw('blur', {
                 taskId,
@@ -5527,7 +5466,6 @@ async function processBlurJob(job: Job) {
             } else {
               // Pause has expired, clean it up
               await redis.del(pauseKey);
-              // console.log(CYAN + `[Blur API Rate Limit] Cleaned up expired pause for wallet ${walletAddress.substring(0, 8)}...` + RESET);
 
               logRaw('blur', {
                 taskId,
@@ -5902,7 +5840,6 @@ async function processImportedTasks(tasks: ITask[]) {
     // Start all running tasks concurrently
     const runningTasks = tasks.filter(task => task.running);
     if (runningTasks.length > 0) {
-      // console.log(CYAN + `Starting ${runningTasks.length} running tasks...` + RESET);
       await Promise.all(
         runningTasks.map(task => startTask(task, true))
       );
@@ -6486,7 +6423,6 @@ async function updateTaskData(task: ITask) {
 
     // Handle loopInterval changes for running tasks
     if (loopIntervalChanged && task.running && taskStatus[task._id]) {
-      console.log(CYAN + `[updateTaskData] Loop interval changed for task ${task._id} - rescheduling` + RESET);
 
       // Check each marketplace's current status
       const scheduledMarketplaces: string[] = [];
@@ -6678,7 +6614,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
     const prioritizedCount = (counts.prioritized || 0) + (blurCounts.prioritized || 0);
 
     // Log current state but proceed immediately
-    // console.log(CYAN + `[processBulkJobs] Current prioritized count: ${prioritizedCount}, target range: [${2 * RATE_LIMIT}, ${DRAIN_THRESHOLD}]` + RESET);
 
     const CHUNK_SIZE = RATE_LIMIT * 2
     const chunks = chunk(jobs, CHUNK_SIZE);
@@ -6762,7 +6697,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
             prioritizedJobs = (newCounts.prioritized || 0) + (newBlurCounts.prioritized || 0);
 
             // Log progress
-            // console.log(CYAN + `[processBulkJobs] Re-checked queue: totalJobs=${totalJobs}, prioritized=${prioritizedJobs}` + RESET);
           }
 
           if (waitIterations > 0) {
@@ -6905,7 +6839,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
                   const qCounts = await queue.getJobCounts();
                   const bCounts = await blurQueue.getJobCounts();
                   const currentPri = (qCounts.prioritized || 0) + (bCounts.prioritized || 0);
-                  // console.log(CYAN + `[processBulkJobs] Current prioritized: ${currentPri}, target: [${2 * RATE_LIMIT}, ${DRAIN_THRESHOLD}]` + RESET);
                 }
               }
 
@@ -7192,7 +7125,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
         const marketplace = getMarketplaceFromJobName(firstJob.name)?.toLowerCase() || '';
         if (marketplace) {
           releaseScheduledBidLock(taskId, marketplace);
-          // console.log(CYAN + `[processBulkJobs] Released scheduled bid lock for ${taskId}-${marketplace}` + RESET);
         }
       }
     }
@@ -7350,7 +7282,6 @@ function generateJobKey(job: any): string {
 
   // Log generateJobKey usage
   if (process.env.DEBUG_JOB_KEYS === 'true') {
-    // console.log(CYAN + `[generateJobKey] Simple key generated: ${key}` + RESET);
   }
 
   return key;
@@ -7545,9 +7476,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
       setTaskStatus(taskId, 'STARTED', `startTask called: isRestart=${isRestart}`, marketplace);
     } else {
       // Starting all marketplaces - but only enabled ones
-      console.log(CYAN + `[startTask] Processing marketplaces for task ${taskId}:` + RESET);
-      // console.log(CYAN + `  - Selected marketplaces: ${task.selectedMarketplaces.join(', ')}` + RESET);
-      console.log(CYAN + `  - Enabled marketplaces: ${enabledMarketplaces.join(', ')}` + RESET);
 
       for (const mp of task.selectedMarketplaces) {
         const mpLower = mp.toLowerCase();
@@ -7599,8 +7527,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
         }
         loopCounterStats[taskId][marketplace]++;
         newLoopCount = loopCounterStats[taskId][marketplace];
-        console.log(CYAN + `[startTask] Starting new loop #${newLoopCount} for task ${taskId}/${marketplace} (previous: #${previousLoopCount})` + RESET);
-        console.log(CYAN + `[loopCounterStats] Task ${taskId} counters: ${JSON.stringify(loopCounterStats[taskId])}` + RESET);
 
         // Clean up old parent jobs when starting a new loop
         cleanupOldParentJobs(taskId, newLoopCount);
@@ -7622,7 +7548,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
           if (!loopCounterStats[taskId][mpLower]) {
             loopCounterStats[taskId][mpLower] = 0;
           }
-          console.log(CYAN + `[startTask] Starting task ${taskId}/${mpLower} (current loop: #${currentLoopCount})` + RESET);
         } else {
           const restartLoopCount = loopCounterStats[taskId][mpLower] || 1;
           console.log(YELLOW + `[startTask] Restarting task ${taskId}/${mpLower} (current loop: #${restartLoopCount})` + RESET);
@@ -7638,7 +7563,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
       }
 
       // Log complete loop counter state for all marketplaces
-      console.log(CYAN + `[loopCounterStats] Task ${taskId} complete counters: ${JSON.stringify(loopCounterStats[taskId])}` + RESET);
     }
 
     // Clear all processed jobs for this task to ensure fresh tracking
@@ -7839,7 +7763,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
         // Clear parent job for current loop
         const parentId = getParentJobId(taskId, mp);
         if (parentJobs.has(parentId)) {
-          // console.log(CYAN + `[startTask] Clearing parent job ${parentId} at loop start` + RESET);
           parentJobs.delete(parentId);
         }
       }
@@ -8278,7 +8201,6 @@ async function attemptRemainingCancellations(taskId: string, marketplace: string
       expiresAt: { $gt: new Date() }
     });
 
-    console.log(CYAN + `[attemptRemainingCancellations] After cancellation attempt: ${stillActiveCount} orders still active` + RESET);
     return stillActiveCount;
 
   } catch (error) {
@@ -8306,10 +8228,6 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
     const trackingStatus = cancellationTracker.getStatus(taskId, marketplace);
     const isTrackingComplete = trackingStatus ? cancellationTracker.isComplete(taskId, marketplace) : false;
 
-    console.log(CYAN + `[validateAndTransitionToStopped] ${marketplaceName} validation:` + RESET);
-    console.log(CYAN + `  - Active orders: ${activeOrderCount}` + RESET);
-    console.log(CYAN + `  - Tracking complete: ${isTrackingComplete}` + RESET);
-    console.log(CYAN + `  - Retry attempt: ${retryCount + 1}/${MAX_RETRIES + 1}` + RESET);
 
     if (activeOrderCount > 0) {
       // Still have active orders - check if we should retry or if this is expected
@@ -8378,13 +8296,10 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
 
 // Centralized function to update task cancellation percentage - single source of truth
 export async function updateTaskCancellationPercentage(taskId: string, forcePercentage?: number, marketplace?: string) {
-  console.log(CYAN + `[updateTaskCancellationPercentage] Called for task ${taskId}, forcePercentage: ${forcePercentage}, marketplace: ${marketplace || 'ALL'}` + RESET);
 
   // Log current tracker state
   const allTrackings = cancellationTracker.getAllTrackings();
-  console.log(CYAN + `[updateTaskCancellationPercentage] All active trackings:` + RESET);
   allTrackings.forEach((tracking, key) => {
-    console.log(CYAN + `  - Key: ${key}, Total: ${tracking.totalBids}, Completed: ${tracking.completedCancellations}, Percentage: ${tracking.totalBids > 0 ? ((tracking.completedCancellations / tracking.totalBids) * 100).toFixed(2) : '0'}%` + RESET);
   });
 
   if (!taskStatus[taskId]) {
@@ -8410,7 +8325,6 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
       };
     });
 
-    console.log(CYAN + `[updateTaskCancellationPercentage] Initialized taskStatus for ${taskId} with CANCELLING status` + RESET);
   }
 
   let percentage: number;
@@ -8427,7 +8341,6 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
       const aggregatedPercentage = cancellationTracker.getAggregatedPercentage(taskId);
       if (aggregatedPercentage !== null) {
         percentage = aggregatedPercentage;
-        console.log(CYAN + `[updateTaskCancellationPercentage] Task ${taskId} - Using aggregated percentage: ${percentage}%` + RESET);
       } else {
         console.log(YELLOW + `[updateTaskCancellationPercentage] No aggregated tracking data for ${taskId}` + RESET);
         return;
@@ -8435,10 +8348,8 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
     } else {
       // Use regular percentage for marketplace-specific cancellations
       const trackerPercentage = cancellationTracker.getPercentage(taskId, marketplace);
-      console.log(CYAN + `[updateTaskCancellationPercentage] Getting tracker percentage for task ${taskId}, marketplace: ${marketplace || 'none'}` + RESET);
       if (trackerPercentage !== null) {
         percentage = trackerPercentage;
-        console.log(CYAN + `[updateTaskCancellationPercentage] Task ${taskId} - Using regular percentage: ${percentage}%` + RESET);
       } else {
         console.log(YELLOW + `[updateTaskCancellationPercentage] No tracking data for ${taskId}, marketplace: ${marketplace || 'none'}` + RESET);
         return;
@@ -8460,7 +8371,6 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
         cancellationTracker.getPercentage(taskId, marketplace) ?? percentage;
 
       taskStatus[taskId].marketplaces[mpKey]!.cancellationPercentage = marketplacePercentage;
-      console.log(CYAN + `[updateTaskCancellationPercentage] ${mpKey} cancellation: ${marketplacePercentage}%` + RESET);
     }
   } else {
     // Global cancellation - update each marketplace with its own percentage
@@ -8476,7 +8386,6 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
         const marketplacePercentage = cancellationTracker.getPercentage(taskId, mp) ?? percentage;
 
         taskStatus[taskId].marketplaces[mpKey]!.cancellationPercentage = marketplacePercentage;
-        console.log(CYAN + `[updateTaskCancellationPercentage] ${mpKey} cancellation: ${marketplacePercentage}%` + RESET);
       }
     }
 
@@ -8485,10 +8394,8 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
   }
 
   // Log marketplace-specific cancellation status
-  console.log(CYAN + `[updateTaskCancellationPercentage] Marketplace cancellation status:` + RESET);
   Object.entries(taskStatus[taskId].marketplaces).forEach(([mp, status]) => {
     if (status) {
-      console.log(CYAN + `  - ${mp}: ${status.cancellationPercentage}% (${status.status})` + RESET);
     }
   });
 
@@ -8865,7 +8772,6 @@ async function
       marketplaceTotals.magiceden = magicEdenCount;
       marketplaceTotals.blur = blurCount;
 
-      // console.log(CYAN + `[stopTask] Marketplace-specific counts - OpenSea: ${openSeaCount}, MagicEden: ${magicEdenCount}, Blur: ${blurCount}` + RESET);
     }
 
     // Check if there are no orders to cancel
@@ -8901,19 +8807,16 @@ async function
     }
 
     // Initialize cancellation tracking
-    console.log(CYAN + `[stopTask] Initializing cancellation tracking - Task: ${taskId}, TotalBids: ${totalBids}, Marketplace: ${marketplace || 'ALL'}` + RESET);
     cancellationTracker.initializeTracking(taskId, totalBids, marketplace);
 
     // For global cancellations, set marketplace-specific totals
     if (!marketplace) {
       cancellationTracker.setMarketplaceTotals(taskId, marketplaceTotals);
-      console.log(CYAN + `[stopTask] Marketplace totals set - OpenSea: ${marketplaceTotals.opensea}, MagicEden: ${marketplaceTotals.magiceden}, Blur: ${marketplaceTotals.blur}` + RESET);
     }
 
     // Log current cancellation tracking state
     const trackingStatus = cancellationTracker.getStatus(taskId, marketplace);
     if (trackingStatus) {
-      console.log(CYAN + `[stopTask] Tracking initialized - Total: ${trackingStatus.totalBids}, Completed: ${trackingStatus.completedCancellations}` + RESET);
     } else {
       console.log(YELLOW + `[stopTask] WARNING: Failed to get tracking status after initialization` + RESET);
     }
@@ -9298,7 +9201,6 @@ async function
     // Clean up marketplace-specific resources for scheduleNextLoop
     if (marketplace) {
       const marketplaceLower = marketplace.toLowerCase();
-      console.log(CYAN + `[stopTask] Cleaning up marketplace-specific resources for ${marketplaceLower}` + RESET);
 
       // Clear marketplace-specific countdown timer
       const timerKey = `${taskId}-${marketplaceLower}`;
@@ -9306,7 +9208,6 @@ async function
       if (countdownTimer) {
         clearInterval(countdownTimer);
         taskCountdownTimers.delete(timerKey);
-        console.log(CYAN + `  - Cleared countdown timer for ${timerKey}` + RESET);
       }
 
       // Clear marketplace-specific timeout
@@ -9314,19 +9215,16 @@ async function
       if (timeout) {
         clearTimeout(timeout);
         taskTimeouts.delete(timerKey);
-        console.log(CYAN + `  - Cleared timeout for ${timerKey}` + RESET);
       }
 
       // Reset marketplace loop counter
       if (loopCounterStats[taskId] && loopCounterStats[taskId][marketplaceLower]) {
         const previousCount = loopCounterStats[taskId][marketplaceLower];
         delete loopCounterStats[taskId][marketplaceLower];
-        console.log(CYAN + `  - Reset loop counter for ${marketplaceLower} (was at loop #${previousCount})` + RESET);
 
         // If all marketplaces are removed, clean up the task entry
         if (Object.keys(loopCounterStats[taskId]).length === 0) {
           delete loopCounterStats[taskId];
-          console.log(CYAN + `  - Removed empty loop counter entry for task ${taskId}` + RESET);
         }
       }
 
@@ -9341,7 +9239,6 @@ async function
             jobCount: 0,
             skipReason: 'Marketplace stopped'
           };
-          console.log(CYAN + `  - Cleared preprocessing data for opensea` + RESET);
         } else if (marketplaceLower === 'magiceden' && preprocessing.magiceden) {
           preprocessing.magiceden = {
             enabled: false,
@@ -9350,7 +9247,6 @@ async function
             jobCount: 0,
             skipReason: 'Marketplace stopped'
           };
-          console.log(CYAN + `  - Cleared preprocessing data for magiceden` + RESET);
         } else if (marketplaceLower === 'blur' && preprocessing.blur) {
           preprocessing.blur = {
             enabled: false,
@@ -9359,7 +9255,6 @@ async function
             jobCount: 0,
             skipReason: 'Marketplace stopped'
           };
-          console.log(CYAN + `  - Cleared preprocessing data for blur` + RESET);
         }
       }
     }
@@ -11170,7 +11065,6 @@ function getCloseReason(code: number): string {
 }
 
 function logConnectionStats() {
-  // console.log(CYAN + "=== WebSocket Connection Statistics ===" + RESET);
   // console.log(`Total Connections: ${connectionMetrics.totalConnections}`);
   // console.log(`Total Disconnections: ${connectionMetrics.totalDisconnections}`);
   // console.log(`Average Connection Duration: ${formatDuration(connectionMetrics.averageConnectionDuration)}`);
@@ -11188,7 +11082,6 @@ function logConnectionStats() {
   }, {} as Record<string, number>);
 
   // console.log(`Recent Disconnection Reasons:`, reasonCounts);
-  // console.log(CYAN + "=========================================" + RESET);
 }
 
 async function saveConnectionMetrics() {
@@ -11518,9 +11411,6 @@ async function updateBalancesForItemSold(message: any) {
     balances[walletAddressKey][contractAddress][marketplace] =
       (balances[walletAddressKey][contractAddress][marketplace] || 0) + 1;
 
-    // console.log(CYAN + `📊 Updated balance for wallet ${wallet.address}:` + RESET);
-    // console.log(CYAN + `   Contract: ${contractAddress}` + RESET);
-    // console.log(CYAN + `   ${marketplace}: ${balances[walletAddressKey][contractAddress][marketplace]} items` + RESET);
 
     // Check for auto-listing tasks
 
@@ -11671,24 +11561,17 @@ async function triggerAutoListingForPurchase(
 
 async function handleCounterBid(message: any) {
   try {
-    // console.log(CYAN + `[DEBUG][handleCounterBid] Processing BID_CREATED message for marketplace: ${message.marketplace}` + RESET);
 
     const { contractAddress, slug } = getMarketplaceDetails(message);
-    // console.log(CYAN + `[DEBUG][handleCounterBid] Extracted details:` + RESET);
-    // console.log(CYAN + `  - contractAddress: ${contractAddress}` + RESET);
-    // console.log(CYAN + `  - slug: ${slug}` + RESET);
 
     if (!contractAddress && !slug) {
-      // console.log(CYAN + `[DEBUG][handleCounterBid] No contract address or slug found, returning` + RESET);
       return;
     }
 
     // Use fast O(1) lookup instead of O(n) filter
     const relevantTasks = getRelevantTasks(contractAddress, slug);
-    // console.log(CYAN + `[DEBUG][handleCounterBid] Found ${relevantTasks.length} relevant tasks` + RESET);
 
     if (!relevantTasks.length) {
-      // console.log(CYAN + `[DEBUG][handleCounterBid] No relevant tasks found, returning` + RESET);
       return;
     }
 
@@ -13118,7 +13001,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       // Handle collection bids with traits
       if (task.bidType.toLowerCase() === "collection") {
-        // console.log(CYAN + `[OpenSea trait_offer] Task ${task._id} - Processing collection trait bid for ${identifier}` + RESET);
         const bidCount = getIncrementedBidCount(OPENSEA, task.contract.slug, task._id)
 
         const traitOfferForQueue = Math.ceil(Number(traitOffer));
@@ -14314,7 +14196,6 @@ async function performMarketplacePreprocessing(
 
     // If traits are selected for token bid type, fetch trait-based tokens
     // Fetch once and share between OpenSea and MagicEden
-    // console.log(CYAN + `[DEBUG] Task bidType: ${task.bidType}, marketplace: ${marketplace}` + RESET);
     if ((marketplace === "opensea" || marketplace === "magiceden") &&
       (availableMarketplaces.includes("opensea") || availableMarketplaces.includes("magiceden"))) {
       const openseaFilteredTraits = Object.fromEntries(
@@ -14481,7 +14362,6 @@ async function performMarketplacePreprocessing(
     const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0;
 
     if (task.bidType === "token") {
-      // console.log(CYAN + `[DEBUG] OpenSea tokens available: ${openseaTokens.length}` + RESET);
       if (openseaTokens.length > 0) {
         // Track duplicates before deduplication
         const originalCount = openseaTokens.length;
@@ -18545,7 +18425,6 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
       await queue.addBulk(cancelData);
       // console.log(GREEN + `[DEBUG][blurCollectionCounterBid] Added ${cancelData.length} cancellation jobs to queue` + RESET);
     } else {
-      // console.log(CYAN + `[DEBUG][blurCollectionCounterBid] No existing orders found to cancel for ${identifier}` + RESET);
     }
 
     // Fetch wallet and decrypt private key just before use
@@ -18815,7 +18694,6 @@ async function blurTraitCounterBid(data: IBlurBidData) {
       await queue.addBulk(cancelData);
       // console.log(GREEN + `[DEBUG][blurTraitCounterBid] Added ${cancelData.length} cancellation jobs to queue` + RESET);
     } else {
-      // console.log(CYAN + `[DEBUG][blurTraitCounterBid] No existing orders found to cancel for ${identifier}` + RESET);
     }
     // Fetch wallet and decrypt private key just before use
     logRaw('blur', {
@@ -22665,7 +22543,6 @@ app.post('/api/auth/change-password', async (req, res) => {
 
     // Get all wallets from database
     const wallets = await Wallet.find({ encryptedPrivateKey: { $exists: true, $ne: null } });
-    // console.log(CYAN + `Found ${wallets.length} wallets to re-encrypt` + RESET);
 
     let successCount = 0;
     let failedWallets: string[] = [];
@@ -22673,7 +22550,6 @@ app.post('/api/auth/change-password', async (req, res) => {
     // Re-encrypt each wallet
     for (const wallet of wallets) {
       try {
-        // console.log(CYAN + `Re-encrypting wallet ${wallet.address}...` + RESET);
         const newEncryptedKey = await reEncryptWallet(
           wallet.encryptedPrivateKey,
           oldPassword,
@@ -23760,7 +23636,6 @@ app.post('/api/debug/recalculate-percentage/:taskId', async (req, res) => {
       return res.status(404).json({ error: 'Task not found' });
     }
 
-    // console.log(CYAN + `[Manual Recalculation] Recalculating percentage for task ${taskId}` + RESET);
 
     // Get before state
     const beforeStatus = { ...taskStatus[taskId] };
@@ -24734,7 +24609,6 @@ async function subscribeToListingEvents(contractAddress: string, slug?: string) 
       contractAddress: contractAddress
     });
 
-    // console.log(CYAN + `SUBSCRIBED TO LISTING EVENTS: ${slug} (${contractAddress})` + RESET);
   } catch (error) {
     console.error(RED + `Error subscribing to listing events for ${contractAddress}:` + RESET, error);
   }
@@ -24742,7 +24616,6 @@ async function subscribeToListingEvents(contractAddress: string, slug?: string) 
 
 async function resubscribeToListingCollections() {
   try {
-    // console.log(CYAN + `Re-subscribing to listing collections after WebSocket reconnection...` + RESET);
 
     if (!wsManager?.isConnected()) {
       // console.log(YELLOW + `WebSocket not connected, delaying listing re-subscription` + RESET);
@@ -24795,7 +24668,6 @@ async function resubscribeToListingCollections() {
 
 async function processAllActiveListings() {
   try {
-    // console.log(CYAN + `Processing all active listings...` + RESET);
 
     // Find all active listings
     const activeListings = await Listing.find({
@@ -25236,7 +25108,6 @@ export function updateTaskProcessingPercentage(taskId: string, percentage: numbe
     const mpKey = marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
     if (taskStatus[taskId].marketplaces[mpKey]) {
       taskStatus[taskId].marketplaces[mpKey]!.processingPercentage = percentage;
-      console.log(CYAN + `[updateTaskProcessingPercentage] ${mpKey} processing: ${percentage}%` + RESET);
     }
   } else {
     // Update all marketplaces if no specific marketplace provided
@@ -26391,7 +26262,6 @@ async function handleUpdateListing(data: { _id: string, updates: any }, ws: WebS
  */
 async function logJobTrackingStatus() {
   try {
-    // console.log(CYAN + '\n========== Job Tracking Status Report ==========' + RESET);
 
     for (const [taskId, status] of Object.entries(taskStatus)) {
       // Check marketplace-specific statuses
@@ -26506,7 +26376,6 @@ async function logJobTrackingStatus() {
       }
     }
 
-    // console.log(CYAN + '================================================\n' + RESET);
   } catch (error) {
     console.error(RED + '[logJobTrackingStatus] Error:' + RESET, error);
   }
@@ -26518,7 +26387,6 @@ async function logJobTrackingStatus() {
  */
 async function recoverPartialQueueingTasks(): Promise<void> {
   try {
-    // console.log(CYAN + '\n========== Partial Queueing Recovery Check ==========' + RESET);
 
     for (const [taskId, status] of Object.entries(taskStatus)) {
       // Check if any marketplace is in RUNNING, QUEUED, or QUEUEING state
@@ -26598,7 +26466,6 @@ async function recoverPartialQueueingTasks(): Promise<void> {
       }
     }
 
-    // console.log(CYAN + '==================================================\n' + RESET);
   } catch (error) {
     console.error(RED + '[recoverPartialQueueingTasks] Error:' + RESET, error);
   }
@@ -26947,7 +26814,6 @@ async function healthCheckStuckTasks() {
 
           if (parentJob) {
             hasParentJobs = true;
-            // console.log(CYAN + `  ${marketplace}: Parent job exists - expectedJobs=${parentJob.expectedJobs}, actualJobs=${parentJob.actualJobs || 0}, totalJobs=${parentJob.totalJobs}` + RESET);
 
             // Check if parent job has expected jobs but no actual jobs
             if (parentJob.expectedJobs && parentJob.expectedJobs > 0 && (!parentJob.actualJobs || parentJob.actualJobs === 0)) {
@@ -27213,7 +27079,6 @@ async function ensureParentJobExists(taskId: string, marketplace: string): Promi
   // Check if already being created
   const existing = pendingJobCreation.get(parentJobId);
   if (existing) {
-    // console.log(CYAN + `[ensureParentJobExists] Waiting for existing creation of ${parentJobId}` + RESET);
     await existing;
     return;
   }
@@ -27292,7 +27157,6 @@ async function waitForParentJobReady(taskId: string, marketplace: string, maxWai
 
     // Check if creation is pending
     if (pendingJobCreation.has(parentJobId)) {
-      // console.log(CYAN + `[waitForParentJobReady] Waiting for parent job ${parentJobId} creation...` + RESET);
       await new Promise(resolve => setTimeout(resolve, 100));
       continue;
     }
@@ -27413,7 +27277,6 @@ class OrphanedJobRecovery {
         for (const job of orphanedJobs) {
           try {
             await job.remove();
-            // console.log(CYAN + `[OrphanedJobRecovery] Removed old job: ${job.id}` + RESET);
           } catch (error) {
             console.error(RED + `[OrphanedJobRecovery] Failed to remove job ${job.id}: ${error}` + RESET);
           }
@@ -27424,7 +27287,6 @@ class OrphanedJobRecovery {
       for (const [parentJobId, jobs] of recoveryActions.entries()) {
         const [taskId, marketplace] = parentJobId.split('-');
 
-        // console.log(CYAN + `[OrphanedJobRecovery] Recovering ${jobs.length} orphaned jobs for ${parentJobId}` + RESET);
 
         // Check if task is still active
         const task = activeTasks.get(taskId);
@@ -27479,7 +27341,6 @@ class OrphanedJobRecovery {
 
   // Manual recovery for specific task
   async recoverTaskJobs(taskId: string) {
-    // console.log(CYAN + `[OrphanedJobRecovery] Manual recovery for task ${taskId}` + RESET);
 
     const task = activeTasks.get(taskId);
     if (!task) {
@@ -27501,7 +27362,6 @@ class OrphanedJobRecovery {
         const matchingJobs = jobs.filter(job => job?.id?.includes(pattern));
 
         if (matchingJobs.length > 0) {
-          // console.log(CYAN + `[OrphanedJobRecovery] Found ${matchingJobs.length} orphaned ${marketplace} jobs for task ${taskId}` + RESET);
 
           // Create parent job
           const newParentJob: BulkJobParent = {
@@ -27534,7 +27394,6 @@ const orphanedJobRecovery = new OrphanedJobRecovery();
 
 // Helper function to fix stuck tasks
 async function fixStuckTask(taskId: string) {
-  // console.log(CYAN + `[fixStuckTask] Attempting to fix stuck task ${taskId}` + RESET);
 
   // First, try orphaned job recovery
   await orphanedJobRecovery.recoverTaskJobs(taskId);
@@ -27577,7 +27436,6 @@ async function checkCancellationJobStatus(taskId: string): Promise<{
   details: any;
 }> {
   try {
-    // console.log(CYAN + `[checkCancellationJobStatus] Checking cancellation status for task ${taskId}` + RESET);
 
     // Find cancellation jobs for this task
     let totalCancellationJobs = 0;
@@ -27657,7 +27515,6 @@ async function checkCancellationJobStatus(taskId: string): Promise<{
  */
 async function recoverOrphanedJobs() {
   try {
-    // console.log(CYAN + '\n========== Orphaned Job Recovery ==========' + RESET);
 
     // Get jobs from different states
     const states = ['completed', 'failed', 'active', 'waiting'] as const;
@@ -27719,7 +27576,6 @@ async function recoverOrphanedJobs() {
       // console.log('No orphaned jobs found');
     }
 
-    // console.log(CYAN + '==========================================\n' + RESET);
   } catch (error) {
     console.error(RED + '[recoverOrphanedJobs] Error:' + RESET, error);
   }

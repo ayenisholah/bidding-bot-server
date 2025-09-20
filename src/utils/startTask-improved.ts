@@ -14,7 +14,6 @@ import { logger, ErrorCategory } from './logger';
 const YELLOW = '\x1b[33m';
 const RED = '\x1b[31m';
 const GREEN = '\x1b[32m';
-const CYAN = '\x1b[36m';
 const RESET = '\x1b[0m';
 
 interface StartTaskResult {
@@ -214,7 +213,6 @@ export async function startTaskImproved(
     result.metrics.duration = Date.now() - startTime;
     
     // Log performance metrics
-    // console.log(CYAN + `[startTask] Completed in ${result.metrics.duration}ms for task ${taskId}` + RESET);
     
     if (result.metrics.duration > 5000) {
       const warning = `Task startup took ${(result.metrics.duration / 1000).toFixed(1)}s - consider optimization`;
@@ -339,7 +337,6 @@ async function processWalletApprovals(
     const selectedMarketplaces = marketplace ? [marketplace.toLowerCase()] : task.selectedMarketplaces.map(m => m.toLowerCase());
     const marketplacesToApprove = selectedMarketplaces.filter(m => validMarketplaces.includes(m));
 
-    // console.log(CYAN + `Checking marketplace approvals for wallet ${wallet.address}...` + RESET);
 
     // Process approvals in parallel with error handling for each
     const approvalPromises = marketplacesToApprove.map(mp => 
@@ -424,7 +421,6 @@ async function processMarketplaceApproval(
       return { marketplace, approved: true, cached: true };
     }
 
-    // console.log(CYAN + `Checking ${marketplace} approval on-chain...` + RESET);
     const approved = await approveMarketplaceWithCache(marketplaceAddress, privateKey, deps.WETH, process.env.ALCHEMY_API_KEY || '');
 
     if (approved) {
@@ -508,9 +504,6 @@ async function createAndQueueJobs(
     const selectedMarketplaces = marketplace ? [marketplace.toLowerCase()] : task.selectedMarketplaces.map(m => m.toLowerCase());
     
     // Log marketplace filtering process
-    console.log(CYAN + `[createAndQueueJobs] Filtering marketplaces for task ${taskId}:` + RESET);
-    console.log(CYAN + `  - Selected marketplaces: ${selectedMarketplaces.join(', ')}` + RESET);
-    console.log(CYAN + `  - Enabled marketplaces: ${deps.enabledMarketplaces.join(', ')}` + RESET);
     
     // Pre-filter marketplaces
     const enabledSelectedMarketplaces = selectedMarketplaces
@@ -537,7 +530,6 @@ async function createAndQueueJobs(
         return true;
       });
     
-    console.log(CYAN + `  - Final marketplaces for job creation: ${availableMarketplaces.join(', ') || 'none'}` + RESET);
 
     const jobs = createJobs(task, start, availableMarketplaces, deps);
 

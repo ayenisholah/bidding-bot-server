@@ -161,7 +161,6 @@ class TokenTraitCache {
             });
             this.updateAccessOrder(key);
             
-            // console.log(CYAN + `[TOKEN TRAIT CACHE] Redis hit for ${key}` + RESET);
             return data;
           }
         }

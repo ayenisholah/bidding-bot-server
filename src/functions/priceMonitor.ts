@@ -19,7 +19,6 @@ const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
 const RED = '\x1b[31m';
 const BLUE = '\x1b[34m';
-const CYAN = '\x1b[36m';
 const RESET = '\x1b[0m';
 
 // Clean up old message IDs every 5 minutes to prevent memory leak
@@ -27,7 +26,6 @@ setInterval(() => {
   const previousSize = processedMessageIds.size;
   processedMessageIds.clear();
   if (previousSize > 0) {
-    // console.log(CYAN + `[PRICE MONITOR - Cleanup] Cleared ${previousSize} processed message IDs` + RESET);
     logger.logInfo(ErrorCategory.GENERAL, 'Price monitor message ID cleanup', {
       operation: 'cleanup_message_ids',
       clearedCount: previousSize,
@@ -83,7 +81,6 @@ async function getRealTimeListingPrice(listing: IListing): Promise<number | null
 
     const price = parseFloat(ourListing.price.current.value) / Math.pow(10, ourListing.price.current.decimals);
     
-    // console.log(CYAN + `[PRICE MONITOR - Real-time] Token ${listing.tokenId} current price: ${price} ETH` + RESET);
     return price;
   } catch (error) {
     // console.log(YELLOW + `[PRICE MONITOR - Real-time] Failed to get price for token ${listing.tokenId}: ${error}` + RESET);
@@ -170,7 +167,6 @@ async function processListingUpdate(
 ): Promise<void> {
   const { contractAddress, tokenId, marketplace, price, seller } = data;
   
-  // console.log(CYAN + `[PRICE MONITOR - Process] Processing listing update for ${contractAddress}:${tokenId}` + RESET);
   
   try {
     // Find all active listings for this CONTRACT (not just token) with instant price matching enabled
@@ -339,14 +335,12 @@ async function shouldAdjustPrice(
     // Get our current listing price in REAL-TIME - no cache!
     const ourPrice = await getRealTimeListingPrice(listing) || 0;
 
-    // console.log(CYAN + `[PRICE CHECK] Token ${listing.tokenId} - Our real-time price: ${ourPrice} ETH` + RESET);
 
     // For listing wars: if we don't have a current listing price, we should still compete
     // Calculate what our competitive price would be
     const undercutMargin = parseFloat(listing.underCutMargin) || 0.000001;
     const targetCompetitivePrice = roundToNineDecimals(competitorPrice - undercutMargin);
     
-    // console.log(CYAN + `[PRICE CHECK] Token ${listing.tokenId} - Target competitive price: ${targetCompetitivePrice} ETH` + RESET);
 
     // If we don't have a current price, we should list competitively
     if (!ourPrice) {
@@ -372,7 +366,6 @@ async function shouldAdjustPrice(
     const minPrice = parseFloat(listing.minListingPrice) || 0;
     const newPrice = targetCompetitivePrice; // Use the already calculated competitive price
 
-    // console.log(CYAN + `[PRICE CHECK] Token ${listing.tokenId} - Calculated new price: ${newPrice} ETH (competitor: ${competitorPrice} - margin: ${undercutMargin})` + RESET);
 
     if (newPrice < minPrice) {
       // console.log(YELLOW + `[PRICE CHECK] Token ${listing.tokenId} - New price ${newPrice} < min price ${minPrice}, skipping adjustment` + RESET);
@@ -395,7 +388,6 @@ async function shouldAdjustPrice(
       const minimumProfit = parseFloat(listing.minimumProfit) || 0;
       const profit = newPrice - listing.buyPrice;
 
-      // console.log(CYAN + `[PRICE CHECK] Token ${listing.tokenId} - Profit check: ${profit} ETH (required: ${minimumProfit} ETH)` + RESET);
       if (profit < minimumProfit && minimumProfit > 0) {
         // console.log(YELLOW + `[PRICE CHECK] Token ${listing.tokenId} - Insufficient profit ${profit} < ${minimumProfit}, skipping adjustment` + RESET);
         logger.logWarning(ErrorCategory.BUSINESS_LOGIC, 'Price adjustment blocked by profit constraint', {
@@ -422,7 +414,6 @@ async function shouldAdjustPrice(
       // Use trait floor if trait-based pricing is enabled
       if ((listing.dynamicPricingBasis === 'HIGHEST_TRAIT_FLOOR' || listing.dynamicPricingBasis === 'SPECIFIC_TRAIT') 
           && listing.selectedTrait?.trait_type && listing.selectedTrait?.value !== undefined) {
-        // console.log(CYAN + `[PRICE CHECK] Token ${listing.tokenId} - Using trait floor for ${listing.selectedTrait.trait_type}:${listing.selectedTrait.value}` + RESET);
         floorPrice = await getOpenseaTraitFloor(listing.contract.slug, listing.selectedTrait.trait_type, listing.selectedTrait.value);
       } else {
         floorPrice = await getOpenseaFloor(listing.contract.slug);
@@ -521,7 +512,6 @@ export async function getFloorPrices(collectionSlug: string): Promise<{
  */
 export async function extendInstantPriceMatchingSession(listingId: string, durationMinutes: number = 10): Promise<void> {
   try {
-    // console.log(CYAN + `[PRICE MONITOR - Extend] Extending instant price matching session for listing ${listingId} by ${durationMinutes} minutes` + RESET);
     
     const newExpiration = new Date(Date.now() + durationMinutes * 60 * 1000);
     const result = await Listing.findByIdAndUpdate(listingId, {

@@ -21,7 +21,6 @@ import { cancellationTracker } from "../../utils/cancellation-tracker";
 
 
 const YELLOW = '\x1b[33m';
-const CYAN = '\x1b[36m';
 const GREEN = '\x1b[32m';
 
 // Helper function to extract meaningful error messages from MagicEden API responses

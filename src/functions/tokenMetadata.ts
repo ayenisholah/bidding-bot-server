@@ -9,7 +9,6 @@ const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
 const RED = '\x1b[31m';
 const BLUE = '\x1b[34m';
-const CYAN = '\x1b[36m';
 const RESET = '\x1b[0m';
 
 // GraphQL queries
@@ -132,7 +131,6 @@ export async function fetchTokenMetadata(
     return cached;
   }
 
-  // console.log(CYAN + `[TOKEN METADATA] Fetching traits from OpenSea for ${contractAddress}:${tokenId}` + RESET);
 
   try {
     const response = await limiter.schedule(() =>
@@ -234,7 +232,6 @@ export async function getTraitFloorPrice(
   traitType: string,
   traitValue: any
 ): Promise<number | null> {
-  // console.log(CYAN + `[TOKEN METADATA] Fetching floor price for trait ${traitType}:${traitValue} in ${collectionSlug}` + RESET);
 
   try {
     // Use the collection items query with trait filter
@@ -332,7 +329,6 @@ export async function getTraitFilteredListings(
   price: number;
   traits: TokenTrait[];
 }>> {
-  // console.log(CYAN + `[TOKEN METADATA] Fetching listings for trait ${traitType}:${traitValue} in ${collectionSlug}` + RESET);
 
   try {
     const response = await limiter.schedule(() =>
@@ -420,7 +416,6 @@ export async function getTraitFilteredListings(
 export async function prefetchTokenTraits(
   tokens: Array<{ contractAddress: string; tokenId: string }>
 ): Promise<void> {
-  // console.log(CYAN + `[TOKEN METADATA] Pre-fetching traits for ${tokens.length} tokens` + RESET);
 
   const fetchPromises = tokens.map(token =>
     fetchTokenMetadata(token.contractAddress, token.tokenId).catch(err => {
@@ -470,7 +465,6 @@ export async function getCollectionTraitFloors(
   collectionSlug: string,
   traits: Array<{ trait_type: string; value: any }>
 ): Promise<CollectionTraitStats> {
-  // console.log(CYAN + `[TOKEN METADATA] Fetching floor prices for ${traits.length} traits in ${collectionSlug}` + RESET);
 
   const traitFloors: TraitFloorInfo[] = [];
 

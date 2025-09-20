@@ -1,5 +1,0 @@
-I have made a trait task on Nakamigos.
-The trait is Shirt/Jacket Football-Johnny Footbal
-The highest highest trait is 0.139, and i have set my max bid to 0.1459
-The problem is that it is skipping all the tokens 
-let's diagnose this bug and find the root cause 

@@ -11,7 +11,6 @@ const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
 const RED = '\x1b[31m';
 const BLUE = '\x1b[34m';
-const CYAN = '\x1b[36m';
 const RESET = '\x1b[0m';
 
 // Use the main queue from index.ts
@@ -40,13 +39,11 @@ const activeJobs = new Map<string, string>();
  * Schedule a listing to run at specified intervals
  */
 export async function scheduleListing(listing: IListing): Promise<void> {
-  // console.log(CYAN + `\n=== [LISTING SCHEDULER] SCHEDULE LISTING CALLED ===` + RESET);
   // console.log(BLUE + `[LISTING SCHEDULER] Listing ID: ${listing._id}` + RESET);
   // console.log(BLUE + `[LISTING SCHEDULER] Token ID: ${listing.tokenId}` + RESET);
   // console.log(BLUE + `[LISTING SCHEDULER] Timestamp: ${new Date().toISOString()}` + RESET);
 
   try {
-    // console.log(CYAN + '[LISTING SCHEDULER] Schedule Step 1: Getting main queue...' + RESET);
     const queue = await getMainQueue();
     const listingId = listing._id.toString();
 
@@ -59,7 +56,6 @@ export async function scheduleListing(listing: IListing): Promise<void> {
       operation: 'schedule_listing_start'
     });
 
-    // console.log(CYAN + '[LISTING SCHEDULER] Schedule Step 2: Cancelling existing jobs...' + RESET);
     // Cancel existing job if any
     await cancelListingJob(listingId);
 
@@ -76,12 +72,10 @@ export async function scheduleListing(listing: IListing): Promise<void> {
       return;
     }
 
-    // console.log(CYAN + '[LISTING SCHEDULER] Schedule Step 3: Calculating delay...' + RESET);
     // Calculate delay in milliseconds
     const delayMs = convertToSeconds(listing.loopInterval.value, listing.loopInterval.unit) * 1000;
     // console.log(BLUE + `[LISTING SCHEDULER] Schedule Step 3.1: Delay in ms: ${delayMs}` + RESET);
 
-    // console.log(CYAN + '[LISTING SCHEDULER] Schedule Step 4: Adding job to queue...' + RESET);
     // Add a single repeating job with immediate execution
     const job = await queue.add(
       PROCESS_LISTING,
@@ -206,7 +200,6 @@ export async function updateListingSchedule(listing: IListing): Promise<void> {
  * Process a listing job - to be called from the main worker in index.ts
  */
 export async function processListingJob(job: Job): Promise<boolean> {
-  // console.log(CYAN + '\n=== [LISTING SCHEDULER] PROCESS LISTING JOB STARTED ===' + RESET);
   const { listingId } = job.data;
   // console.log(BLUE + `[LISTING SCHEDULER] Job ID: ${job.id}` + RESET);
   // console.log(BLUE + `[LISTING SCHEDULER] Listing ID: ${listingId}` + RESET);
@@ -219,15 +212,12 @@ export async function processListingJob(job: Job): Promise<boolean> {
       operation: 'process_listing_job_start'
     });
 
-    // console.log(CYAN + '[LISTING SCHEDULER] Step 1: Updating progress to 10...' + RESET);
     // Update progress to prevent stalling
     // Progress reporting removed - await job.updateProgress(10);
 
-    // console.log(CYAN + '[LISTING SCHEDULER] Step 3: Updating progress to 20...' + RESET);
     // Update progress
     // Progress reporting removed - await job.updateProgress(20);
 
-    // console.log(CYAN + '[LISTING SCHEDULER] Step 4: Fetching listing from database...' + RESET);
     // Fetch latest listing data
     const listing = await Listing.findById(listingId);
     // console.log(listing ? GREEN + '[LISTING SCHEDULER] Fetched listing: Found' + RESET : YELLOW + '[LISTING SCHEDULER] Fetched listing: Not found' + RESET);
