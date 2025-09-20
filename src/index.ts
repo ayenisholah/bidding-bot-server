@@ -452,7 +452,6 @@ function extendScheduledBidLock(taskId: string, marketplace: string, extensionMs
   const lock = taskLocks.get(lockKey);
 
   if (!lock || !lock.locked) {
-    // console.log(YELLOW + `[extendScheduledBidLock] No lock found for ${lockKey}` + RESET);
     return false;
   }
 
@@ -461,7 +460,6 @@ function extendScheduledBidLock(taskId: string, marketplace: string, extensionMs
   // Only extend if lock is about to expire (within 2 minutes)
   if (lock.lockUntil && (lock.lockUntil - now) < (2 * 60 * 1000)) {
     lock.lockUntil = now + extensionMs;
-    // console.log(GREEN + `[extendScheduledBidLock] Extended lock for ${lockKey} by ${extensionMs / 1000}s` + RESET);
     return true;
   }
 
@@ -496,11 +494,9 @@ class TimedLockManager {
     if (existingLock) {
       const elapsed = Date.now() - existingLock.acquired;
       if (elapsed > this.MAX_LOCK_DURATION) {
-        // console.log(YELLOW + `[TimedLockManager] Stale lock detected for ${lockKey}, elapsed: ${elapsed}ms, force releasing` + RESET);
         this.releaseLock(taskId, marketplace);
       } else {
         // Lock is still valid
-        // console.log(YELLOW + `[TimedLockManager] Lock already held for ${lockKey}, elapsed: ${elapsed}ms` + RESET);
         return false;
       }
     }
@@ -509,19 +505,15 @@ class TimedLockManager {
 
     // Set up warning timeouts at 50% and 75% of lock duration
     const fiftyPercentWarning = setTimeout(() => {
-      // console.log(YELLOW + `[TimedLockManager] WARNING: Lock for ${lockKey} has been held for ${Math.round(this.MAX_LOCK_DURATION * 0.5 / 1000)}s (50% of timeout)` + RESET);
     }, this.MAX_LOCK_DURATION * 0.5);
 
     const seventyFivePercentWarning = setTimeout(() => {
-      // console.log(YELLOW + `[TimedLockManager] WARNING: Lock for ${lockKey} has been held for ${Math.round(this.MAX_LOCK_DURATION * 0.75 / 1000)}s (75% of timeout)` + RESET);
-      // console.log(YELLOW + `[TimedLockManager] Task ${taskId} may be stuck - consider investigating` + RESET);
     }, this.MAX_LOCK_DURATION * 0.75);
 
     // Acquire new lock with auto-release timeout
     const timeout = setTimeout(() => {
       // Wrap everything in a try-catch to ensure we see any errors
       try {
-        // console.log(RED + `[TimedLockManager] Auto-releasing expired lock for ${lockKey} after ${this.MAX_LOCK_DURATION}ms` + RESET);
         this.releaseLock(taskId, marketplace);
 
         // When a lock expires, it means the scheduled bid processor got stuck or failed
@@ -530,13 +522,11 @@ class TimedLockManager {
         const lockParts = lockKey.split('-');
         if (lockParts.length >= 1) {
           const extractedTaskId = lockParts[0];
-          // console.log(RED + `[TimedLockManager] Lock expired for task ${extractedTaskId}, triggering task restart` + RESET);
 
           // Use setImmediate to ensure async execution
           setImmediate(async () => {
             try {
               await triggerTaskRestart(extractedTaskId);
-              // console.log(GREEN + `[TimedLockManager] Successfully triggered restart for task ${extractedTaskId}` + RESET);
             } catch (error) {
               logSystemError('TimedLockManager', `Failed to trigger task restart for task ${extractedTaskId}`, error);
             }
@@ -557,7 +547,6 @@ class TimedLockManager {
       }
     });
 
-    // console.log(GREEN + `[TimedLockManager] Acquired lock for ${lockKey}` + RESET);
     return true;
   }
 
@@ -574,7 +563,6 @@ class TimedLockManager {
       }
       this.locks.delete(lockKey);
       const heldDuration = Date.now() - lock.acquired;
-      // console.log(GREEN + `[TimedLockManager] Released lock for ${lockKey} after ${Math.round(heldDuration / 1000)}s` + RESET);
     }
   }
 
@@ -584,7 +572,6 @@ class TimedLockManager {
     const lock = this.locks.get(lockKey);
 
     if (!lock) {
-      // console.log(YELLOW + `[TimedLockManager] Cannot extend lock ${lockKey} - lock not found` + RESET);
       return false;
     }
 
@@ -605,32 +592,26 @@ class TimedLockManager {
     // Only set up warning timeouts for future events
     if (elapsed < this.MAX_LOCK_DURATION * 0.5) {
       lock.warningTimeouts!.fifty = setTimeout(() => {
-        // console.log(YELLOW + `[TimedLockManager] WARNING: Extended lock for ${lockKey} has been held for ${Math.round(this.MAX_LOCK_DURATION * 0.5 / 1000)}s (50% of timeout)` + RESET);
       }, this.MAX_LOCK_DURATION * 0.5 - elapsed);
     }
 
     if (elapsed < this.MAX_LOCK_DURATION * 0.75) {
       lock.warningTimeouts!.seventyFive = setTimeout(() => {
-        // console.log(YELLOW + `[TimedLockManager] WARNING: Extended lock for ${lockKey} has been held for ${Math.round(this.MAX_LOCK_DURATION * 0.75 / 1000)}s (75% of timeout)` + RESET);
-        // console.log(YELLOW + `[TimedLockManager] Task ${taskId} may be stuck - consider investigating` + RESET);
       }, this.MAX_LOCK_DURATION * 0.75 - elapsed);
     }
 
     // Set up new timeout for full duration from original acquisition time
     lock.timeout = setTimeout(() => {
       try {
-        // console.log(RED + `[TimedLockManager] Auto-releasing extended lock for ${lockKey} after ${this.MAX_LOCK_DURATION}ms total` + RESET);
         this.releaseLock(taskId, marketplace);
 
         const lockParts = lockKey.split('-');
         if (lockParts.length >= 1) {
           const extractedTaskId = lockParts[0];
-          // console.log(RED + `[TimedLockManager] Extended lock expired for task ${extractedTaskId}, triggering task restart` + RESET);
 
           setImmediate(async () => {
             try {
               await triggerTaskRestart(extractedTaskId);
-              // console.log(GREEN + `[TimedLockManager] Successfully triggered restart for task ${extractedTaskId}` + RESET);
             } catch (error) {
               logSystemError('TimedLockManager', `Failed to trigger task restart for task ${extractedTaskId}`, error);
             }
@@ -641,7 +622,6 @@ class TimedLockManager {
       }
     }, this.MAX_LOCK_DURATION);
 
-    // console.log(GREEN + `[TimedLockManager] Lock ${lockKey} extended for another ${Math.round(this.MAX_LOCK_DURATION / 1000)}s` + RESET);
     return true;
   }
 
@@ -686,7 +666,6 @@ class TaskStatusManager {
       if (!marketplaceStatus) return;
 
       if (marketplaceStatus.status === fromStatus) {
-        // console.log(YELLOW + `[StatusManager] Task ${taskId}/${marketplace} stuck in ${fromStatus} for ${timeoutMs}ms, forcing transition to ${toStatus}` + RESET);
 
         // Force status transition for this specific marketplace
         const transitioned = setTaskStatus(taskId, toStatus, 'forced progression timeout', marketplace);
@@ -718,7 +697,6 @@ class TaskStatusManager {
 
     const task = activeTasks.get(taskId);
     if (!task) {
-      // console.log(YELLOW + `[StatusManager] Task ${taskId} not found in activeTasks` + RESET);
       return;
     }
 
@@ -730,11 +708,9 @@ class TaskStatusManager {
 
     if (hasParentJob && totalJobs > 0) {
       // Parent job exists for this marketplace, safe to transition to RUNNING
-      // console.log(GREEN + `[StatusManager] Found ${totalJobs} jobs for ${marketplace}, transitioning ${taskId}/${marketplace} to RUNNING` + RESET);
       // Recovered from stuck STARTED - will transition to RUNNING when jobs are processed
     } else {
       // No parent job found for this marketplace, may need to restart
-      // console.log(YELLOW + `[StatusManager] No parent job found for ${taskId}/${marketplace}, may need restart` + RESET);
 
       // Set to SCHEDULED to trigger next loop for this marketplace
       setTaskStatus(taskId, 'SCHEDULED', 'no jobs found, scheduling next loop', marketplace);
@@ -1097,12 +1073,9 @@ async function handleRedisFailure() {
   // Check cooldown
   if (now - lastRedisRecovery < REDIS_RECOVERY_COOLDOWN) {
     const cooldownRemaining = Math.ceil((REDIS_RECOVERY_COOLDOWN - (now - lastRedisRecovery)) / 1000);
-    // console.log(YELLOW + `Redis recovery on cooldown (${cooldownRemaining}s remaining)` + RESET);
     return;
   }
 
-  // console.log(RED + '🚨 REDIS FAILURE DETECTED - Initiating recovery 🚨' + RESET);
-  // console.log(RED + `Consecutive failures: ${redisFailures}` + RESET);
 
   try {
     lastRedisRecovery = now;
@@ -1110,7 +1083,6 @@ async function handleRedisFailure() {
 
     // Reset failure counter after successful recovery
     redisFailures = 0;
-    // console.log(GREEN + '✅ Redis recovery completed' + RESET);
   } catch (error) {
     logSystemError('RedisRecovery', 'Failed to recover from Redis failure', error);
     // Don't reset failure counter if recovery fails
@@ -1122,7 +1094,6 @@ async function monitorHealth() {
     const isRedisHealthy = await checkRedisHealth();
     if (!isRedisHealthy) {
       redisFailures++;
-      // console.log(RED + `⚠️  Redis unhealthy - failure count: ${redisFailures}/${REDIS_FAILURE_THRESHOLD}` + RESET);
 
       if (redisFailures >= REDIS_FAILURE_THRESHOLD) {
         await handleRedisFailure();
@@ -1131,7 +1102,6 @@ async function monitorHealth() {
     } else {
       // Reset failure counter if Redis is healthy
       if (redisFailures > 0) {
-        // console.log(GREEN + '✅ Redis cluster recovered - resetting failure counter' + RESET);
         redisFailures = 0;
       }
     }
@@ -1160,66 +1130,47 @@ async function monitorHealth() {
 
     // Log high memory usage but don't pause the queue
     if (heapPercentOfMax > 75) {
-      // console.log(RED + `⚠️  HIGH MEMORY USAGE: ${heapUsedMB.toFixed(0)}MB / ${MAX_HEAP_MB}MB (${heapPercentOfMax.toFixed(1)}% of max heap) ⚠️` + RESET);
-      // console.log(RED + `⚠️  Heap allocation: ${heapTotalMB.toFixed(0)}MB (${heapPercentOfTotal.toFixed(1)}% used) ⚠️` + RESET);
       cleanupMemory();
     }
 
     const totalJobs = Object.values(counts).reduce((a, b) => a + b, 0);
 
-    // console.log('\n📊 ═══════ Health Monitor Stats ═══════ 📊');
 
-    // console.log(BLUE + '\n💾 Memory Usage:' + RESET);
     Object.entries(memoryStats).forEach(([key, value]) => {
-      // console.log(`${key}:${value}`);
     });
 
-    // console.log(BLUE + '\n📋 Queue Status:' + RESET);
 
     // Show password status first
     const hasPassword = !!getPassword();
     if (!hasPassword) {
-      // console.log(RED + '🔒 PASSWORD REQUIRED - Operations are paused' + RESET);
-      // console.log(YELLOW + '   Set password via POST /api/auth/password' + RESET);
     } else {
-      // console.log(GREEN + '🔓 Password is set' + RESET);
     }
 
     // Show paused status prominently
     if (isPaused) {
-      // console.log(RED + '⏸️  QUEUE IS PAUSED' + RESET);
     } else {
-      // console.log(GREEN + '▶️  QUEUE IS RUNNING' + RESET);
     }
 
     // Show waiting job monitor status
     if (counts.waiting > 0) {
-      // console.log(YELLOW + '⚡ Waiting Job Monitor: Active (failing waiting jobs for retry)' + RESET);
     }
 
     Object.entries(counts).forEach(([key, value]) => {
       const color = key === 'waiting' && value > 0 ? RED :
         value > RATE_LIMIT * 2 ? RED :
           value > RATE_LIMIT ? YELLOW : GREEN;
-      // console.log(`${key}: ${color}${value}${RESET}`);
     });
-    // console.log(`Total Jobs: ${totalJobs}`);
 
     // Show trading disabled cache stats
     const disabledStats = tradingDisabledCache.getStats();
     if (disabledStats.total > 0) {
-      // console.log(YELLOW + '\n🚫 Trading Disabled Cache:' + RESET);
-      // console.log(`Total Cached: ${disabledStats.total}`);
       Object.entries(disabledStats.byMarketplace).forEach(([marketplace, count]) => {
-        // console.log(`${marketplace}: ${count}`);
       });
 
       // Show cache details
       const cacheDetails = tradingDisabledCache.getCacheStats();
-      // console.log(`Cache TTL: ${Math.floor(cacheDetails.ttl / 1000 / 60)} minutes`);
       if (cacheDetails.oldestEntry) {
         const ageMinutes = Math.floor((Date.now() - cacheDetails.oldestEntry) / 1000 / 60);
-        // console.log(`Oldest entry: ${ageMinutes} minutes ago`);
       }
     }
 
@@ -1257,7 +1208,6 @@ async function checkPasswordAndResume() {
     // Try to recover password from Redis
     const recovered = await recoverPasswordFromRedis();
     if (recovered) {
-      // console.log(GREEN + '✅ Password recovered from Redis - resuming operations' + RESET);
       await resumeQueueAndWorkers();
     }
   } catch (error) {
@@ -1338,14 +1288,11 @@ async function clearQueueAndRestartJobs() {
     // Only start scheduled loop if password is available
     if (password) {
       // Wait 5 seconds before restarting scheduled loop
-      // console.log(YELLOW + 'Waiting 5 seconds before restarting scheduled loop...' + RESET);
       await new Promise(resolve => setTimeout(resolve, 5000));
 
       // Start the scheduled loop
-      // console.log(GREEN + 'Starting scheduled loop...' + RESET);
       await runScheduledLoop();
     } else {
-      // console.log(YELLOW + 'Scheduled loop not started - waiting for password' + RESET);
     }
 
   } catch (error) {
@@ -1375,37 +1322,30 @@ async function checkInternetConnectivity(): Promise<boolean> {
 }
 
 async function handleConnectivityRestored() {
-  // console.log(GREEN + '\n🌐 Internet connectivity restored!' + RESET);
 
   // Calculate how long connectivity was lost
   const downtime = connectivityLostAt ? Date.now() - connectivityLostAt : 0;
   const downtimeMinutes = Math.floor(downtime / 60000);
 
   if (downtime > 0) {
-    // console.log(YELLOW + `Connectivity was lost for ${downtimeMinutes} minutes ${Math.floor((downtime % 60000) / 1000)} seconds` + RESET);
   }
 
   // No need to resume queues - BullMQ handles retries automatically
-  // console.log(GREEN + 'Network restored - BullMQ will resume processing jobs' + RESET);
 
   // Only clear and restart jobs if connectivity was lost for more than 1 minute
   if (downtime > 60000) {
-    // console.log(YELLOW + 'Connectivity lost for more than 1 minute, clearing queue and restarting jobs...' + RESET);
     await clearQueueAndRestartJobs();
   } else {
-    // console.log(GREEN + 'Brief connectivity loss detected, skipping queue restart' + RESET);
   }
 
   // Always reconnect WebSocket
   if (wsManager) {
-    // console.log('Reconnecting WebSocket...');
     await connectWebSocket();
   }
 
   // Always reinitialize listing scheduler
   if (wsManager) {
     await initializeListingScheduler(wsManager);
-    // console.log('📋 Listing scheduler reinitialized');
   }
 
   // Reset connectivity lost timestamp
@@ -1438,18 +1378,15 @@ function startConnectivityMonitoring() {
       isConnected = false;
       connectivityLostAt = Date.now();
       logSystemError('ConnectivityMonitor', 'Internet connectivity lost!');
-      // console.log(YELLOW + 'BullMQ will automatically retry failed jobs when connection is restored' + RESET);
     }
   }, STANDARD_INTERVAL);
 
-  // console.log('🔌 Internet connectivity monitoring started');
 }
 
 function stopConnectivityMonitoring() {
   if (connectivityCheckInterval) {
     clearInterval(connectivityCheckInterval);
     connectivityCheckInterval = null;
-    // console.log('Internet connectivity monitoring stopped');
   }
 }
 
@@ -1576,7 +1513,6 @@ const scheduledJobLocks = new Map<string, boolean>();
 // Queue management for password-based security
 async function pauseQueueAndWorkers() {
   try {
-    // console.log(YELLOW + 'No password set - pausing queues and workers...' + RESET);
 
     // Pause both queues
     await queue.pause();
@@ -1587,7 +1523,6 @@ async function pauseQueueAndWorkers() {
       await Promise.all(workers.map(worker => worker.pause()));
     }
 
-    // console.log(YELLOW + 'All queues and workers paused. Waiting for password...' + RESET);
   } catch (error) {
     logSystemError('QueuePause', 'Error pausing queues and workers', error);
   }
@@ -1595,7 +1530,6 @@ async function pauseQueueAndWorkers() {
 
 async function resumeQueueAndWorkers() {
   try {
-    // console.log(GREEN + 'Password set - resuming queues and workers...' + RESET);
 
     // Resume both queues
     await queue.resume();
@@ -1606,7 +1540,6 @@ async function resumeQueueAndWorkers() {
       await Promise.all(workers.map(worker => worker.resume()));
     }
 
-    // console.log(GREEN + 'All queues and workers resumed.' + RESET);
 
     // Retry any failed jobs that were due to missing password
     try {
@@ -1623,12 +1556,10 @@ async function resumeQueueAndWorkers() {
       );
 
       if (passwordFailedJobs.length > 0) {
-        // console.log(GREEN + `Retrying ${passwordFailedJobs.length} main queue jobs that failed due to missing password` + RESET);
         await Promise.all(passwordFailedJobs.map(job => job.retry()));
       }
 
       if (blurPasswordFailedJobs.length > 0) {
-        // console.log(GREEN + `Retrying ${blurPasswordFailedJobs.length} blur queue jobs that failed due to missing password` + RESET);
         await Promise.all(blurPasswordFailedJobs.map(job => job.retry()));
       }
     } catch (retryError) {
@@ -1659,7 +1590,6 @@ const queueProcessingHistory = new Map<number, { processed: number; waiting: num
 let lastQueueClearForBacklog = 0;
 
 function startWorkerHealthMonitoring() {
-  // console.log(GREEN + '🏥 Starting worker health monitoring...' + RESET);
 
   // Initial health check
   checkWorkerHealth();
@@ -1675,7 +1605,6 @@ function startWorkerHealthMonitoring() {
 
 
 function startQueueDrainMonitoring() {
-  // console.log(GREEN + '💧 Starting queue drain monitoring...' + RESET);
 
   // Initial drain check
   monitorQueueDrain();
@@ -1744,10 +1673,8 @@ async function checkWorkerHealth() {
             shouldRestartAll = true;
           }
         } else if (workerStatus.paused) {
-          // console.log(YELLOW + `  Worker ${workerStatus.index} is paused, attempting to resume...` + RESET);
           try {
             await workers[workerStatus.index].resume();
-            // console.log(GREEN + `  ✅ Worker ${workerStatus.index} resumed successfully` + RESET);
           } catch (error) {
             logSystemError('HealthCheck', `Failed to resume worker ${workerStatus.index}`, error);
 
@@ -1771,13 +1698,10 @@ async function checkWorkerHealth() {
       if (shouldRestartAll) {
         const now = Date.now();
         if (now - lastWorkerRestartTime > WORKER_RESTART_COOLDOWN) {
-          // console.log(RED + '🚨 WORKER FAILURE THRESHOLD EXCEEDED 🚨' + RESET);
-          // console.log(YELLOW + 'Multiple workers have failed. Initiating full system restart...' + RESET);
 
           // Log failure details
           workerFailures.forEach((failure, index) => {
             if (failure.count >= WORKER_FAILURE_THRESHOLD) {
-              // console.log(RED + `Worker ${index}: ${failure.count} failures, last error types:` + RESET);
               failure.errorTypes.slice(-3).forEach(err => console.log(RED + `  - ${err}` + RESET));
             }
           });
@@ -1791,7 +1715,6 @@ async function checkWorkerHealth() {
           await clearQueueAndRestartJobs();
         } else {
           const cooldownRemaining = Math.ceil((WORKER_RESTART_COOLDOWN - (now - lastWorkerRestartTime)) / 1000);
-          // console.log(YELLOW + `Worker restart needed but cooldown active (${cooldownRemaining}s remaining)` + RESET);
         }
       }
     }
@@ -1841,9 +1764,7 @@ async function checkWorkerHealth() {
     if (unhealthyConnections.length > 0 || unhealthyWorkers.length > 0 || oldConnections.length > 0 || process.env.NODE_ENV === 'development') {
 
       if (oldConnections.length > 0) {
-        // console.log(YELLOW + `  ⚠️  ${oldConnections.length} connections older than 1 hour:` + RESET);
         oldConnections.forEach(conn => {
-          // console.log(YELLOW + `    - ${conn.id}: ${Math.floor(conn.age / 60)} minutes old` + RESET);
         });
       }
     }
@@ -1908,12 +1829,10 @@ function stopWorkerHealthMonitoring() {
   if (workerHealthInterval) {
     clearInterval(workerHealthInterval);
     workerHealthInterval = null;
-    // console.log('Worker health monitoring stopped');
   }
   if (queueDrainInterval) {
     clearInterval(queueDrainInterval);
     queueDrainInterval = null;
-    // console.log('Queue drain monitoring stopped');
   }
 }
 
@@ -2010,16 +1929,11 @@ async function monitorQueueDrain() {
 
     // Check cooldown before clearing
     if (shouldClearQueue && (now - lastQueueClearForBacklog) > CLEAR_COOLDOWN) {
-      // console.log(RED + '🚨 QUEUE BACKLOG DETECTED 🚨' + RESET);
-      // console.log(RED + `Reason: ${clearReason}` + RESET);
-      // console.log(YELLOW + `Queue stats - Waiting: ${totalWaiting}, Active: ${totalActive}` + RESET);
-      // console.log(YELLOW + 'Initiating queue clear and restart...' + RESET);
 
       lastQueueClearForBacklog = now;
       await clearQueueAndRestartJobs();
     } else if (shouldClearQueue) {
       const cooldownRemaining = Math.ceil((CLEAR_COOLDOWN - (now - lastQueueClearForBacklog)) / 1000);
-      // console.log(YELLOW + `Queue backlog detected but cooldown active (${cooldownRemaining}s remaining)` + RESET);
     }
 
     // Log drain status if high waiting count
@@ -2028,7 +1942,6 @@ async function monitorQueueDrain() {
         ? (historyEntries[historyEntries.length - 1][1].processed - historyEntries[0][1].processed) / (historyEntries.length - 1)
         : 0;
 
-      // console.log(YELLOW + `[Queue Drain Monitor] High waiting: ${totalWaiting}, Active: ${totalActive}, Rate: ${processingRate.toFixed(1)} jobs/check` + RESET);
     }
 
   } catch (error) {
@@ -2051,7 +1964,6 @@ async function startServer() {
 
 
     // Create separate BullMQ connections for each component
-    // console.log('Creating separate Redis connections for BullMQ components...');
 
     let mainQueueConnection: any;
     let mainQueueEventsConnection: any;
@@ -2062,22 +1974,18 @@ async function startServer() {
       // Main queue connection
       mainQueueConnection = await createBullMQConnection('main-queue');
       bullMQConnections.push(mainQueueConnection);
-      // console.log(GREEN + '✅ Created main queue connection' + RESET);
 
       // Main queue events connection
       mainQueueEventsConnection = await createBullMQConnection('main-queue-events');
       bullMQConnections.push(mainQueueEventsConnection);
-      // console.log(GREEN + '✅ Created main queue events connection' + RESET);
 
       // Blur queue connection
       blurQueueConnection = await createBullMQConnection('blur-queue');
       bullMQConnections.push(blurQueueConnection);
-      // console.log(GREEN + '✅ Created blur queue connection' + RESET);
 
       // Blur queue events connection
       blurQueueEventsConnection = await createBullMQConnection('blur-queue-events');
       bullMQConnections.push(blurQueueEventsConnection);
-      // console.log(GREEN + '✅ Created blur queue events connection' + RESET);
 
       // Verify all connections are healthy before proceeding
       const healthCheck = await checkBullMQConnectionsHealth();
@@ -2091,7 +1999,6 @@ async function startServer() {
         throw new Error('One or more Redis connections are unhealthy');
       }
 
-      // console.log(GREEN + '✅ All Redis connections verified healthy' + RESET);
     } catch (error) {
       logSystemError('BullMQInit', 'Failed to create BullMQ connections', error);
       // Close any connections that were created
@@ -2134,7 +2041,6 @@ async function startServer() {
       // Create a separate connection for each worker
       const workerConnection = await createBullMQConnection(`main-worker-${i + 1}`);
       bullMQConnections.push(workerConnection);
-      // console.log(GREEN + `✅ Created connection for worker ${i + 1}/${WORKER_COUNT}` + RESET);
 
       const worker = new Worker(
         QUEUE_NAME,
@@ -2180,7 +2086,6 @@ async function startServer() {
 
         // Check if this is a Redis error
         if (isRedisError(error)) {
-          // console.log(RED + '🚨 Redis error detected in worker' + RESET);
           redisFailures++;
 
           if (redisFailures >= REDIS_FAILURE_THRESHOLD) {
@@ -2202,7 +2107,6 @@ async function startServer() {
 
         // Handle failed bid jobs - immediately mark as processed
         if (job && job.id && typeof job.id === 'string' && job.id.startsWith('bid-')) {
-          // console.log(YELLOW + `[Worker ${i + 1}] Bid job ${job.id} failed - marking as processed immediately` + RESET);
 
           // Extract task and marketplace from job ID (format: bid-taskId-marketplace-...)
           const parts = job.id.split('-');
@@ -2223,7 +2127,6 @@ async function startServer() {
           const marketplace = job.name === CANCEL_OPENSEA_BID ? 'opensea' :
             job.name === CANCEL_MAGICEDEN_BID ? 'magiceden' : 'blur';
 
-          // console.log(YELLOW + `[Worker ${i + 1}] Cancellation job failed after all retries - marking as complete for tracking` + RESET);
 
           // Record the failed cancellation as a completion to ensure we reach 100%
           cancellationTracker.recordCompletion(taskId, 1, marketplace);
@@ -2268,7 +2171,6 @@ async function startServer() {
     // Create Blur worker with its own connection and rate limiting
     const blurWorkerConnection = await createBullMQConnection('blur-worker');
     bullMQConnections.push(blurWorkerConnection);
-    // console.log(GREEN + '✅ Created connection for Blur worker' + RESET);
 
     const blurWorker = new Worker(
       BLUR_BIDDING_QUEUE,
@@ -2323,7 +2225,6 @@ async function startServer() {
 
       // Check if this is a Redis error
       if (isRedisError(error)) {
-        // console.log(RED + '🚨 Redis error detected in blur worker' + RESET);
         // Single node Redis - no cluster failure tracking needed
       }
 
@@ -2340,7 +2241,6 @@ async function startServer() {
 
       // Handle failed bid jobs - immediately mark as processed
       if (job && job.id && typeof job.id === 'string' && job.id.startsWith('bid-')) {
-        // console.log(YELLOW + `[Blur Worker] Bid job ${job.id} failed - marking as processed immediately` + RESET);
 
         // Extract task and marketplace from job ID (format: bid-taskId-marketplace-...)
         const parts = job.id.split('-');
@@ -2359,7 +2259,6 @@ async function startServer() {
       if (job && job.name === CANCEL_BLUR_BID) {
         const { taskId } = job.data;
 
-        // console.log(YELLOW + `[Blur Worker] Cancellation job failed after all retries - marking as complete for tracking` + RESET);
 
         // Record the failed cancellation as a completion to ensure we reach 100%
         cancellationTracker.recordCompletion(taskId, 1, 'blur');
@@ -2409,7 +2308,6 @@ async function startServer() {
       });
     });
 
-    // console.log(`Created ${bullMQConnections.length} separate Redis connections for BullMQ components`);
 
     // Initialize worker health monitoring
     startWorkerHealthMonitoring();
@@ -2457,7 +2355,6 @@ async function startServer() {
         // Close MongoDB connection
         await mongoose.connection.close();
 
-        // console.log('Graceful shutdown completed');
       } catch (shutdownError) {
         logSystemError('Shutdown', 'Error during graceful shutdown', shutdownError);
       }
@@ -2471,7 +2368,6 @@ async function startServer() {
       throw new Error('MONGODB_URI environment variable is not set');
     }
 
-    // console.log('Connecting to MongoDB...');
     try {
       await mongoose.connect(mongoUri, {
         // Connection timeouts
@@ -2503,7 +2399,6 @@ async function startServer() {
           w: 1      // Wait for acknowledgment from primary only
         }
       });
-      // console.log('Connected to MongoDB successfully');
 
       // Add connection pool monitoring for high-throughput operations
       mongoose.connection.on('disconnected', () => {
@@ -2511,7 +2406,6 @@ async function startServer() {
       });
 
       mongoose.connection.on('reconnected', () => {
-        // console.log('🟢 MongoDB reconnected');
       });
 
       mongoose.connection.on('error', (err) => {
@@ -2523,7 +2417,6 @@ async function startServer() {
         setInterval(() => {
           const readyState = mongoose.connection.readyState;
           const stateMap = { 0: 'disconnected', 1: 'connected', 2: 'connecting', 3: 'disconnecting' };
-          // console.log(`📊 MongoDB Status: ${stateMap[readyState as keyof typeof stateMap]} | Max Pool: ${Number(process.env.MONGO_MAX_POOL_SIZE) || 50}`);
         }, STANDARD_INTERVAL);
       }
     } catch (error) {
@@ -2544,7 +2437,6 @@ async function startServer() {
 
       // Check Redis connection status
       if (!redisClient.isReady()) {
-        // console.log(YELLOW + 'Waiting for Redis connection...' + RESET);
         await new Promise(resolve => setTimeout(resolve, 1000));
         continue;
       }
@@ -2554,7 +2446,6 @@ async function startServer() {
       if (passwordRecovered) {
         break;
       } else if (attempt < maxRetries) {
-        // console.log(YELLOW + `Password not found in Redis, retrying in ${attempt} second(s)...` + RESET);
         await new Promise(resolve => setTimeout(resolve, attempt * 1000));
       }
     }
@@ -2562,14 +2453,10 @@ async function startServer() {
     // Check if password is set (either from Redis recovery or needs to be set)
     const currentPassword = getPassword();
     if (!currentPassword) {
-      // console.log(YELLOW + '⚠️  No password found after ' + maxRetries + ' attempts - all operations are paused' + RESET);
-      // console.log(YELLOW + 'Please set password via POST /api/auth/password to start operations' + RESET);
       // Don't start jobs if there's no password
     } else {
       if (passwordRecovered) {
-        // console.log(GREEN + '✅ Password recovered from Redis - operations will start' + RESET);
       } else {
-        // console.log(GREEN + '✅ Password is already set - operations will start' + RESET);
       }
     }
 
@@ -2579,7 +2466,6 @@ async function startServer() {
     // If no password was found, ensure queues and workers are paused
     if (!currentPassword) {
       await pauseQueueAndWorkers();
-      // console.log(YELLOW + '⚠️  Queues and workers are paused - waiting for password' + RESET);
     } else {
       // Verify all workers are ready before processing jobs
 
@@ -2611,14 +2497,12 @@ async function startServer() {
           if (!workerStatus.running || workerStatus.paused) {
             try {
               await workers[workerStatus.index].resume();
-              // console.log(GREEN + `  ✅ Worker ${workerStatus.index} resumed` + RESET);
             } catch (error) {
               logSystemError('WorkerResume', `Failed to resume worker ${workerStatus.index}`, error);
             }
           }
         }
       } else {
-        // console.log(GREEN + '✅ All workers are ready and healthy' + RESET);
       }
 
       // Verify Redis connections one more time
@@ -2631,7 +2515,6 @@ async function startServer() {
           logSystemError('HealthCheck', `Redis connection ${id}: ${status.error}`);
         });
       } else {
-        // console.log(GREEN + '✅ All Redis connections are healthy' + RESET);
       }
     }
 
@@ -2654,7 +2537,6 @@ async function startServer() {
       // Redis cluster monitoring disabled - using single node
       // try {
       //   startRedisClusterMonitoring(clearQueueAndRestartJobs);
-      // console.log('Redis cluster monitoring started with recovery callback');
       // } catch (error) {
       // console.error(RED + '[ERROR - Redis Monitor - Task: N/A] Failed to start Redis cluster monitoring:' + RESET, error);
       // }
@@ -2703,7 +2585,6 @@ async function startServer() {
 
     // Initialize expiration monitor
     expirationMonitorInterval = initializeExpirationMonitor();
-    // console.log('⏰ Expiration monitor initialized');
     await logger.logInfo(ErrorCategory.GENERAL, 'Expiration monitor initialized', {
       schedulerType: 'expiration_monitor',
       checkInterval: 5 * 60 * 1000 // 5 minutes
@@ -2711,7 +2592,6 @@ async function startServer() {
 
     // Initialize expired price cleanup
     expiredPriceCleanupInterval = initializeExpiredPriceCleanup();
-    // console.log('🧹 Expired price cleanup initialized');
     await logger.logInfo(ErrorCategory.GENERAL, 'Expired price cleanup initialized', {
       schedulerType: 'expired_price_cleanup',
       checkInterval: 5 * 60 * 1000 // 5 minutes
@@ -2719,7 +2599,6 @@ async function startServer() {
 
     // Initialize orphaned job recovery system
     orphanedJobRecovery.startRecovery(30000); // Check every 30 seconds
-    // console.log('🔧 Orphaned job recovery system initialized');
     await logger.logInfo(ErrorCategory.GENERAL, 'Orphaned job recovery initialized', {
       recoveryType: 'orphaned_jobs',
       checkInterval: 30000 // 30 seconds
@@ -2730,13 +2609,11 @@ async function startServer() {
 
     // Redis cluster monitoring disabled - using single node
     // startRedisClusterMonitoring();
-    // console.log('🔍 Redis cluster monitoring initialized');
 
     await fetchCurrentTasks()
 
     // Start all tasks that have running: true in database
     // This handles server restarts where tasks were previously running
-    // console.log(YELLOW + '🔄 Checking for tasks to restart...' + RESET);
     let tasksToRestart = 0;
     for (const [taskId, task] of activeTasks) {
       if (task.running) {
@@ -2753,20 +2630,16 @@ async function startServer() {
 
         // Start the task with a small delay to ensure everything is initialized
         setTimeout(() => {
-          // console.log(GREEN + `✅ Restarting task ${taskId} (${task.contract?.slug || 'Unknown collection'})` + RESET);
           startTask(task, true);
         }, tasksToRestart * 1000); // Stagger task starts by 1 second each
       }
     }
 
     if (tasksToRestart > 0) {
-      // console.log(GREEN + `✅ Found ${tasksToRestart} running tasks to restart` + RESET);
     } else {
-      // console.log(YELLOW + '⚠️  No running tasks found to restart' + RESET);
     }
 
     // Check for orphaned scheduled tasks (tasks stuck in SCHEDULED state without timers)
-    // console.log(YELLOW + '🔍 Checking for orphaned scheduled tasks...' + RESET);
     const orphanedScheduledTasks = Array.from(activeTasks.entries())
       .filter(([taskId, task]) => {
         const status = taskStatus[taskId];
@@ -2783,19 +2656,14 @@ async function startServer() {
       });
 
     if (orphanedScheduledTasks.length > 0) {
-      // console.log(YELLOW + `⚠️  Found ${orphanedScheduledTasks.length} orphaned scheduled tasks` + RESET);
 
       for (const [taskId, task] of orphanedScheduledTasks) {
         const timeSinceLastUpdate = taskStatus[taskId]?.lastUpdate ?
           Date.now() - taskStatus[taskId].lastUpdate : 'unknown';
 
-        // console.log(YELLOW + `📌 Orphaned task ${taskId} (${task.contract?.slug || 'Unknown'})` + RESET);
         const marketplaceStatuses = taskStatus[taskId]?.marketplaces;
-        // console.log(YELLOW + `   - Marketplace statuses: ${marketplaceStatuses ? Object.entries(marketplaceStatuses).map(([mp, status]) => `${mp}:${status?.status || 'N/A'}`).join(', ') : 'N/A'}` + RESET);
         const totalJobs = marketplaceStatuses ? Object.values(marketplaceStatuses).reduce((sum, mp) => sum + (mp?.totalJobs || 0), 0) : 0;
         const completedJobs = marketplaceStatuses ? Object.values(marketplaceStatuses).reduce((sum, mp) => sum + (mp?.completedJobs || 0), 0) : 0;
-        // console.log(YELLOW + `   - Total Jobs: ${completedJobs}/${totalJobs}` + RESET);
-        // console.log(YELLOW + `   - Time since last update: ${timeSinceLastUpdate}ms` + RESET);
 
         // Initialize task status if needed
         if (!taskStatus[taskId]) {
@@ -2808,31 +2676,26 @@ async function startServer() {
         }
 
         // Restart the orphaned task immediately
-        // console.log(GREEN + `✅ Restarting orphaned scheduled task ${taskId}` + RESET);
         setTimeout(() => {
           startTask(task, true);
         }, 500); // Small delay to ensure system is ready
       }
     } else {
-      // console.log(GREEN + '✅ No orphaned scheduled tasks found' + RESET);
     }
 
     // Start all listings that have running: true in database
     // This handles server restarts where listings were previously running
-    // console.log(YELLOW + '🔄 Checking for listings to restart...' + RESET);
     try {
       const runningListings = await Listing.find({ running: true });
       let listingsToRestart = runningListings.length;
 
       if (listingsToRestart > 0) {
-        // console.log(GREEN + `✅ Found ${listingsToRestart} running listings to restart` + RESET);
 
         for (let i = 0; i < runningListings.length; i++) {
           const listing = runningListings[i];
           // Stagger listing starts by 500ms each to avoid overwhelming the system
           setTimeout(async () => {
             try {
-              // console.log(GREEN + `✅ Restarting listing ${listing._id} (Token: ${listing.tokenId}, Collection: ${listing.contract?.slug || 'Unknown'})` + RESET);
               await scheduleListing(listing);
             } catch (error) {
               logSystemError('ListingRestart', `Failed to restart listing ${listing._id}`, error, { listingId: listing._id });
@@ -2840,7 +2703,6 @@ async function startServer() {
           }, i * 500);
         }
       } else {
-        // console.log(YELLOW + '⚠️  No running listings found to restart' + RESET);
       }
     } catch (error) {
       logSystemError('ListingFetch', 'Failed to fetch running listings', error);
@@ -2848,13 +2710,11 @@ async function startServer() {
 
     // Start password auto-recovery checker now that Redis is connected
     setInterval(checkPasswordAndResume, PASSWORD_CHECK_INTERVAL);
-    // console.log(GREEN + '✅ Password auto-recovery checker started (checking every 30s)' + RESET);
 
 
     // Start stuck task detection
     const STUCK_TASK_CHECK_INTERVAL = 30000; // 30 seconds
     setInterval(checkStuckTasks, STUCK_TASK_CHECK_INTERVAL);
-    // console.log(GREEN + '✅ Stuck task detection started (checking every 30s)' + RESET);
 
 
   } catch (error) {
@@ -2865,7 +2725,6 @@ async function startServer() {
 
 // Cleanup handler for graceful shutdown
 process.on('SIGINT', async () => {
-  // console.log('\nReceived SIGINT, cleaning up...');
 
   // Update all running tasks to not running
   try {
@@ -2873,7 +2732,6 @@ process.on('SIGINT', async () => {
       { running: true },
       { running: false }
     );
-    // console.log(`Updated ${result.modifiedCount} tasks to not running`);
   } catch (error) {
     logSystemError('TaskStateUpdate', 'Error updating task states', error);
   }
@@ -2883,44 +2741,36 @@ process.on('SIGINT', async () => {
 
   // Shutdown listing scheduler
   await shutdownListingScheduler();
-  // console.log('Listing scheduler shut down');
 
   // Stop expiration monitor
   if (expirationMonitorInterval) {
     stopExpirationMonitor(expirationMonitorInterval);
-    // console.log('Expiration monitor stopped');
   }
 
   // Stop expired price cleanup
   if (expiredPriceCleanupInterval) {
     stopExpiredPriceCleanup(expiredPriceCleanupInterval);
-    // console.log('Expired price cleanup stopped');
   }
 
   // Stop orphaned job recovery
   orphanedJobRecovery.stopRecovery();
-  // console.log('Orphaned job recovery stopped');
 
   // Stop job reconciliation service
 
   // Redis cluster monitoring disabled - using single node
   // stopRedisClusterMonitoring();
-  // console.log('Redis cluster monitoring stopped');
 
   // Stop validate bid count interval
   if (validateBidCountInterval) {
     clearInterval(validateBidCountInterval);
-    // console.log('Validate bid count interval stopped');
   }
 
   // Disconnect WebSocket
   if (wsManager) {
     wsManager.disconnect();
-    // console.log('WebSocket disconnected');
   }
 
   // Close all BullMQ connections
-  // console.log('Closing BullMQ connections...');
   for (const connection of bullMQConnections) {
     try {
       await connection.quit();
@@ -2928,7 +2778,6 @@ process.on('SIGINT', async () => {
       logSystemError('ConnectionClose', 'Error closing connection', error);
     }
   }
-  // console.log('All BullMQ connections closed');
 
   // Final cleanup before exit
   seenOrderHashes.clear();
@@ -2938,7 +2787,6 @@ process.on('SIGINT', async () => {
 });
 
 process.on('SIGTERM', async () => {
-  // console.log('\nReceived SIGTERM, cleaning up...');
 
   // Update all running tasks to not running
   try {
@@ -2946,7 +2794,6 @@ process.on('SIGTERM', async () => {
       { running: true },
       { running: false }
     );
-    // console.log(`Updated ${result.modifiedCount} tasks to not running`);
   } catch (error) {
     logSystemError('TaskStateUpdate', 'Error updating task states', error);
   }
@@ -2956,42 +2803,34 @@ process.on('SIGTERM', async () => {
 
   // Shutdown listing scheduler
   await shutdownListingScheduler();
-  // console.log('Listing scheduler shut down');
 
   // Stop expiration monitor
   if (expirationMonitorInterval) {
     stopExpirationMonitor(expirationMonitorInterval);
-    // console.log('Expiration monitor stopped');
   }
 
   // Stop expired price cleanup
   if (expiredPriceCleanupInterval) {
     stopExpiredPriceCleanup(expiredPriceCleanupInterval);
-    // console.log('Expired price cleanup stopped');
   }
 
   // Stop orphaned job recovery
   orphanedJobRecovery.stopRecovery();
-  // console.log('Orphaned job recovery stopped');
 
   // Redis cluster monitoring disabled - using single node
   // stopRedisClusterMonitoring();
-  // console.log('Redis cluster monitoring stopped');
 
   // Stop validate bid count interval
   if (validateBidCountInterval) {
     clearInterval(validateBidCountInterval);
-    // console.log('Validate bid count interval stopped');
   }
 
   // Disconnect WebSocket
   if (wsManager) {
     wsManager.disconnect();
-    // console.log('WebSocket disconnected');
   }
 
   // Close all BullMQ connections
-  // console.log('Closing BullMQ connections...');
   for (const connection of bullMQConnections) {
     try {
       await connection.quit();
@@ -2999,7 +2838,6 @@ process.on('SIGTERM', async () => {
       logSystemError('ConnectionClose', 'Error closing connection', error);
     }
   }
-  // console.log('All BullMQ connections closed');
 
   seenOrderHashes.clear();
   seenBids.clear();
@@ -3059,7 +2897,6 @@ async function shouldTaskBeStopped(taskId: string): Promise<boolean> {
       const activeOrderCount = await Order.countDocuments({ taskId, expiresAt: { $gt: new Date() } });
 
       if (activeOrderCount > 0) {
-        // console.log(YELLOW + `[shouldTaskBeStopped] Task ${taskId} at 100% but still has ${activeOrderCount} active orders, keeping CANCELLING status` + RESET);
         return false;
       }
     } catch (error) {
@@ -3070,10 +2907,8 @@ async function shouldTaskBeStopped(taskId: string): Promise<boolean> {
   }
 
   const shouldStop = isNotRunning && allMarketplacesCancelled;
-  // console.log(`[LEGACY-shouldTaskBeStopped] Task ${taskId}: FINAL DECISION: shouldStop = ${shouldStop} (isNotRunning: ${isNotRunning} && allMarketplacesCancelled: ${allMarketplacesCancelled})`);
 
   if (shouldStop) {
-    // console.log(RED + `[LEGACY-shouldTaskBeStopped] *** LEGACY SYSTEM WANTS TO STOP TASK ${taskId} ***` + RESET);
   }
 
   return shouldStop;
@@ -3081,13 +2916,11 @@ async function shouldTaskBeStopped(taskId: string): Promise<boolean> {
 
 // Helper function to ensure task transitions to STOPPED when cancellation is complete
 async function setTaskCancellationComplete(taskId: string) {
-  // console.log(RED + `[LEGACY-setTaskCancellationComplete] *** LEGACY SYSTEM ATTEMPTING TO COMPLETE TASK ${taskId} ***` + RESET);
 
   const task = activeTasks.get(taskId)
 
   // Only proceed if taskStatus exists (don't create new ones here)
   if (!taskStatus[taskId]) {
-    // console.log(YELLOW + `[LEGACY-setTaskCancellationComplete] taskStatus not found for ${taskId}, skipping` + RESET);
     return;
   }
 
@@ -3098,7 +2931,6 @@ async function setTaskCancellationComplete(taskId: string) {
     .filter(([_, status]) => status?.status === 'CANCELLING')
     .map(([mp, _]) => mp);
 
-  // console.log(RED + `[LEGACY-setTaskCancellationComplete] Task ${taskId} found ${cancellingMarketplaces.length} CANCELLING marketplaces: [${cancellingMarketplaces.join(', ')}]` + RESET);
 
   // CRITICAL BUG FIX: Only transition marketplaces that are actually at 100% completion
   const marketplacesToStop = [];
@@ -3106,22 +2938,17 @@ async function setTaskCancellationComplete(taskId: string) {
     const marketplaceStatus = taskStatus[taskId]?.marketplaces[mp as keyof typeof taskStatus[string]['marketplaces']];
     const cancellationPercentage = marketplaceStatus?.cancellationPercentage || 0;
 
-    // console.log(YELLOW + `[LEGACY-setTaskCancellationComplete] Checking ${mp}: ${cancellationPercentage}% complete` + RESET);
 
     // FIXED: Only transition when exactly 100% complete OR no orders to cancel (0 total jobs)
     if (cancellationPercentage === 100 || (marketplaceStatus?.totalJobs === 0 && marketplaceStatus?.completedJobs === 0)) {
-      // console.log(GREEN + `[LEGACY-setTaskCancellationComplete] ✅ ${mp.toUpperCase()} ready for STOPPED: ${cancellationPercentage}% (${marketplaceStatus?.completedJobs}/${marketplaceStatus?.totalJobs} jobs)` + RESET);
       marketplacesToStop.push(mp);
     } else {
-      // console.log(RED + `[LEGACY-setTaskCancellationComplete] ❌ ${mp.toUpperCase()} NOT ready for STOPPED: ${cancellationPercentage}% (need 100%)` + RESET);
     }
   }
 
-  // console.log(RED + `[LEGACY-setTaskCancellationComplete] Transitioning ${marketplacesToStop.length}/${cancellingMarketplaces.length} marketplaces to STOPPED: [${marketplacesToStop.join(', ')}]` + RESET);
 
   // Set only validated marketplaces to STOPPED
   for (const mp of marketplacesToStop) {
-    // console.log(GREEN + `[LEGACY-setTaskCancellationComplete] *** LEGACY SYSTEM SETTING ${mp.toUpperCase()} TO STOPPED FOR TASK ${taskId} *** (VALIDATED AT 100%)` + RESET);
     setTaskStatus(taskId, 'STOPPED', 'LEGACY: marketplace 100% complete', mp);
     if (taskStatus[taskId].marketplaces[mp as keyof typeof taskStatus[string]['marketplaces']]) {
       delete taskStatus[taskId].marketplaces[mp as keyof typeof taskStatus[string]['marketplaces']]!.nextLoopTime;
@@ -3142,11 +2969,6 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string, mark
   const stackTrace = new Error().stack?.split('\n').slice(2, 5).join('\n    ');
 
   if (!taskStatus[taskId]) {
-    // console.log(GREEN + `\n[TaskStatus-INIT] ${timestamp} Task ${taskId}` + RESET);
-    // console.log(GREEN + `  Status: NONE -> ${newStatus}` + RESET);
-    // console.log(GREEN + `  Context: ${context || 'Initial creation'}` + RESET);
-    // console.log(GREEN + `  Marketplace: ${marketplace || 'GLOBAL'}` + RESET);
-    // console.log(GREEN + `  Called from:\n    ${stackTrace}` + RESET);
 
     const task = activeTasks.get(taskId);
     const selectedMarketplaces = task?.selectedMarketplaces || [];
@@ -3231,25 +3053,12 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string, mark
 
     // CRITICAL DEBUG LOG FOR STOPPED TRANSITIONS
     if (newStatus === 'STOPPED') {
-      // console.log(RED + `\n*** LEGACY setTaskStatus: SETTING ${marketplace.toUpperCase()} TO STOPPED FOR TASK ${taskId} ***` + RESET);
-      // console.log(RED + `  Transition: ${currentMarketplaceStatus} -> ${newStatus}` + RESET);
-      // console.log(RED + `  Context: ${context || 'No context provided'}` + RESET);
-      // console.log(RED + `  Call Stack:` + RESET);
-      // console.log(RED + `    ${stackTrace}` + RESET);
 
       // Get current cancellation percentage
       const currentCancelPct = taskStatus[taskId].marketplaces[marketplaceName]?.cancellationPercentage || 0;
-      // console.log(RED + `  Current ${marketplace} cancellation: ${currentCancelPct}%` + RESET);
     }
 
-    // console.log(YELLOW + `\n[TaskStatus-UPDATE] ${timestamp} Task ${taskId} - ${marketplace.toUpperCase()}` + RESET);
-    // console.log(YELLOW + `  Marketplace Status: ${currentMarketplaceStatus} -> ${newStatus}` + RESET);
-    // console.log(YELLOW + `  Context: ${context || 'No context provided'}` + RESET);
-    // console.log(YELLOW + `  Enabled Marketplaces: ${enabledMarketplaces.join(', ')}` + RESET);
-    // console.log(YELLOW + `  Is ${marketplace} enabled: ${enabledMarketplaces.map(m => m.toLowerCase()).includes(marketplace.toLowerCase()) ? 'YES' : 'NO'}` + RESET);
     const loopInfo = loopCounterStats[taskId]?.[marketplace] ? ` (Loop #${loopCounterStats[taskId][marketplace]})` : '';
-    // console.log(YELLOW + `  Current marketplace state${loopInfo}: ${JSON.stringify(taskStatus[taskId].marketplaces[marketplaceName], null, 2)}` + RESET);
-    // console.log(YELLOW + `  Called from:\n    ${stackTrace}` + RESET);
 
     // Update marketplace status
     taskStatus[taskId].marketplaces[marketplaceName]!.status = newStatus as MarketplaceStatus;
@@ -3269,7 +3078,6 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string, mark
     });
 
     const loopCount = loopCounterStats[taskId]?.[marketplace] || 0;
-    // console.log(GREEN + `  ${marketplace.toUpperCase()} status transition successful: ${currentMarketplaceStatus} -> ${newStatus} (Loop #${loopCount})` + RESET);
 
     return true;
   }
@@ -3309,7 +3117,6 @@ function verifyTaskHasJobs(taskId: string): boolean {
 async function setMarketplaceCancellationComplete(taskId: string, marketplace?: string) {
   // Only proceed if taskStatus exists (don't create new ones here)
   if (!taskStatus[taskId]) {
-    // console.log(YELLOW + `[setMarketplaceCancellationComplete] taskStatus not found for ${taskId}, skipping` + RESET);
     return;
   }
 
@@ -3322,7 +3129,6 @@ async function setMarketplaceCancellationComplete(taskId: string, marketplace?: 
 
   if (hasCancellingMarketplace) {
     // This is a marketplace-specific cancellation
-    // console.log(GREEN + `[setMarketplaceCancellationComplete] Marketplace-specific cancellation complete for ${taskId}/${marketplace}` + RESET);
 
     // Verify no active orders remain for this marketplace
     if (marketplace) {
@@ -3330,7 +3136,6 @@ async function setMarketplaceCancellationComplete(taskId: string, marketplace?: 
         const activeOrderCount = await Order.countDocuments({ taskId, marketplace: marketplace.toLowerCase(), expiresAt: { $gt: new Date() } });
 
         if (activeOrderCount > 0) {
-          // console.log(YELLOW + `[setMarketplaceCancellationComplete] Task ${taskId}/${marketplace} still has ${activeOrderCount} active orders, not marking complete` + RESET);
           return;
         }
       } catch (error) {
@@ -3344,7 +3149,6 @@ async function setMarketplaceCancellationComplete(taskId: string, marketplace?: 
 
     // After cancellation is complete, transition back to STOPPED
     const task = activeTasks.get(taskId);
-    // console.log(YELLOW + `Task ${taskId} cancellation complete, transitioning to STOPPED` + RESET);
     setTaskStatus(taskId, 'STOPPED', 'marketplace-specific cancellation complete', marketplace);
     // Reset cancellation percentage
     await updateTaskCancellationPercentage(taskId, 0);
@@ -3353,7 +3157,6 @@ async function setMarketplaceCancellationComplete(taskId: string, marketplace?: 
     if (marketplace) {
       const wasRemoved = removeTaskFromBlacklist(taskId, marketplace);
       if (wasRemoved) {
-        // console.log(GREEN + `Task ${taskId} removed from blacklist for marketplace: ${marketplace}` + RESET);
       }
     }
 
@@ -3372,8 +3175,6 @@ async function setMarketplaceCancellationComplete(taskId: string, marketplace?: 
       // The task will transition to STOPPED when the aggregated percentage reaches 100%
     } else {
       // Edge case: no previous state and no task-level tracking
-      // console.log(YELLOW + `[setMarketplaceCancellationComplete] WARNING: No previous state or task-level tracking for ${taskId}` + RESET);
-      // console.log(YELLOW + `[setMarketplaceCancellationComplete] This might be an edge case - not marking as complete` + RESET);
     }
   }
 
@@ -3445,11 +3246,9 @@ function cleanupTaskResources(taskId: string, preserveWarnings = false): void {
 
   // Only clear warnings if not preserving them
   if (!preserveWarnings) {
-    // console.log(YELLOW + `[cleanupTaskResources] Clearing warnings for task ${taskId}` + RESET);
     delete warningBids[taskId];
     delete warningMessage[taskId];
   } else {
-    // console.log(YELLOW + `[cleanupTaskResources] Preserving warnings for task ${taskId}` + RESET);
   }
 
   delete bestOffers[taskId];
@@ -3512,7 +3311,6 @@ async function updateTaskRunningPercentage(taskId: string) {
     if (!marketplacesToCheck.includes(marketplace)) {
       const mpKey = marketplace as 'opensea' | 'magiceden' | 'blur';
       if (taskStatus[taskId].marketplaces[mpKey]) {
-        // console.log(YELLOW + `  - Clearing stale data for disabled marketplace: ${marketplace}` + RESET);
         // Reset percentage to 0 for disabled marketplaces
         taskStatus[taskId].marketplaces[mpKey]!.runningPercentage = 0;
         taskStatus[taskId].marketplaces[mpKey]!.totalJobs = 0;
@@ -3521,7 +3319,6 @@ async function updateTaskRunningPercentage(taskId: string) {
         // Clear parent job data for disabled marketplace
         const parentJobId = getParentJobId(taskId, marketplace);
         if (parentJobs.has(parentJobId)) {
-          // console.log(YELLOW + `    - Removing stale parent job: ${parentJobId}` + RESET);
           parentJobs.delete(parentJobId);
         }
       }
@@ -3544,7 +3341,6 @@ async function updateTaskRunningPercentage(taskId: string) {
 
         // Log if we're adjusting due to actualJobs exceeding expectedJobs
         if (parentJob.actualJobs > parentJob.expectedJobs) {
-          // console.log(YELLOW + `[updateTaskRunningPercentage] ${parentJobId}: Adjusting total from ${originalTotal} to ${mpTotal} (actualJobs=${parentJob.actualJobs} > expectedJobs=${parentJob.expectedJobs})` + RESET);
         }
       }
 
@@ -3554,12 +3350,10 @@ async function updateTaskRunningPercentage(taskId: string) {
         // Log partial queueing warning
         if (parentJob.actualJobs !== undefined && parentJob.expectedJobs !== undefined &&
           parentJob.actualJobs < parentJob.expectedJobs) {
-          // console.log(YELLOW + `    ⚠️  Partial queueing detected: ${parentJob.completedJobs}/${parentJob.actualJobs} completed (${parentJob.expectedJobs} expected)` + RESET);
         }
 
         // Detect stuck condition: allJobsQueued=true, totalJobs=0, but expectedJobs > 0
         if (mpTotal === 0 && parentJob.expectedJobs && parentJob.expectedJobs > 0) {
-          // console.log(RED + `[updateTaskRunningPercentage] STUCK CONDITION DETECTED: ${parentJobId} has 0 totalJobs but expectedJobs=${parentJob.expectedJobs}` + RESET);
 
           // Check if we haven't already scheduled a restart for this task
           const restartKey = `restart-scheduled:${taskId}`;
@@ -3576,7 +3370,6 @@ async function updateTaskRunningPercentage(taskId: string) {
               }
             }, 2000);
 
-            // console.log(YELLOW + `[updateTaskRunningPercentage] Scheduled restart for stuck task ${taskId} in 2 seconds` + RESET);
           }
         }
       } else {
@@ -3606,14 +3399,12 @@ async function updateTaskRunningPercentage(taskId: string) {
 
       // Additional safety check for individual marketplace overflow
       if (mpCompleted > mpTotal && mpTotal > 0) {
-        // console.log(RED + `[updateTaskRunningPercentage] MARKETPLACE OVERFLOW: ${marketplace} completed ${mpCompleted} exceeds total ${mpTotal}` + RESET);
       }
 
       // Check if this specific marketplace is complete
       if (mpTotal > 0 && mpCompleted >= mpTotal) {
         const marketplaceStatus = taskStatus[taskId]?.marketplaces?.[marketplace as 'opensea' | 'magiceden' | 'blur'];
         if (marketplaceStatus && marketplaceStatus.status === 'RUNNING') {
-          // console.log(GREEN + `[updateTaskRunningPercentage] Marketplace ${marketplace} completed (${mpCompleted}/${mpTotal})` + RESET);
           // Trigger marketplace-specific completion
           checkTaskCompletionAndScheduleNext(taskId, marketplace);
         }
@@ -3661,23 +3452,17 @@ async function updateTaskRunningPercentage(taskId: string) {
     runningPercentage = (completedJobs / totalJobs) * 100;
     // Additional safety check for total overflow
     if (completedJobs > totalJobs) {
-      // console.log(RED + `[updateTaskRunningPercentage] TOTAL OVERFLOW: completed ${completedJobs} exceeds total ${totalJobs}, percentage would be ${runningPercentage.toFixed(2)}%` + RESET);
     }
   }
 
   // Running percentage already calculated above
 
   // Log comprehensive task status update
-  // console.log(MAGENTA + `\n[updateTaskRunningPercentage] Task ${taskId} comprehensive status:` + RESET);
   // Global status removed - now using marketplace-specific status only
-  // console.log(YELLOW + `  - Global Running Percentage: ${runningPercentage.toFixed(2)}% (DEPRECATED - use marketplace-specific)` + RESET);
-  // console.log(MAGENTA + `  - Total Jobs Across All Marketplaces: ${completedJobs}/${totalJobs}` + RESET);
 
   // Log marketplace breakdown
-  // console.log(MAGENTA + `  - Marketplace Breakdown (PREFERRED DATA):` + RESET);
   for (const [mp, breakdown] of Object.entries(marketplaceBreakdown)) {
     const mpStatus = taskStatus[taskId].marketplaces[mp as 'opensea' | 'magiceden' | 'blur'];
-    // console.log(MAGENTA + `    * ${mp}: ${breakdown.completed}/${breakdown.total} (${breakdown.percentage.toFixed(2)}%) - Status: ${mpStatus?.status || 'N/A'}` + RESET);
   }
 
   // Update last update timestamp
@@ -3685,19 +3470,14 @@ async function updateTaskRunningPercentage(taskId: string) {
 
 
   // Summary section - Keep only TOTAL SUMMARY logs
-  // console.log(`\n${BLUE}[updateTaskRunningPercentage] TOTAL SUMMARY:${RESET}`);
-  // console.log(BLUE + `  Total Jobs: ${totalJobs} (` +
   // marketplacesToCheck.map(mp =>
   // `${mp.charAt(0).toUpperCase() + mp.slice(1)}: ${marketplaceBreakdown[mp]?.total || 0}`
   // ).join(', ') + `)` + RESET);
-  // console.log(BLUE + `  Completed: ${completedJobs}` + RESET);
-  // console.log(MAGENTA + `  Overall Progress: ${runningPercentage.toFixed(2)}%` + RESET);
 
   // Overall progress bar
   const overallBarLength = 30;
   const overallFilledLength = Math.min(overallBarLength, Math.round((runningPercentage / 100) * overallBarLength));
   const overallProgressBar = '█'.repeat(overallFilledLength) + '░'.repeat(Math.max(0, overallBarLength - overallFilledLength));
-  // console.log(MAGENTA + `  [${overallProgressBar}] ${runningPercentage.toFixed(2)}%` + RESET);
 
   // Note: Removed global task completion check - each marketplace completes independently
 
@@ -3723,24 +3503,16 @@ async function updateTaskRunningPercentage(taskId: string) {
     }
 
     if (hasPartialQueueingMismatch) {
-      // console.log(RED + `\n[PARTIAL QUEUEING MISMATCH DETECTED] Task ${taskId}` + RESET);
-      // console.log(RED + `  TaskStatus shows: ${completedJobs}/${totalJobs} (${runningPercentage.toFixed(1)}%)` + RESET);
-      // console.log(RED + `  Expected total: ${expectedTotal} jobs` + RESET);
-      // console.log(RED + `  Actual total: ${actualTotal} jobs` + RESET);
-      // console.log(RED + `  Mismatch details: ${mismatchDetails.join(', ')}` + RESET);
 
       // Check if we should trigger a restart
       const restartKey = `partial-queue-restart:${taskId}`;
       if (!tasksBeingRestarted.has(restartKey)) {
         tasksBeingRestarted.add(restartKey);
 
-        // console.log(YELLOW + `\n[RECOVERY] Scheduling automatic task restart for ${taskId} due to partial queueing mismatch` + RESET);
-        // console.log(YELLOW + `  This will retry queueing the missing ${expectedTotal - actualTotal} jobs` + RESET);
 
         // Schedule restart after a short delay
         setTimeout(async () => {
           try {
-            // console.log(MAGENTA + `\n[RECOVERY] Triggering task restart for ${taskId}` + RESET);
             await triggerTaskRestart(taskId);
           } catch (error) {
             logSystemError('TaskRecovery', `Failed to restart task ${taskId}`, error, { taskId });
@@ -3749,7 +3521,6 @@ async function updateTaskRunningPercentage(taskId: string) {
           }
         }, 5000); // 5 second delay
       } else {
-        // console.log(YELLOW + `[RECOVERY] Task restart already scheduled for ${taskId}` + RESET);
       }
     }
   }
@@ -3777,7 +3548,6 @@ async function checkTaskCompletionAndScheduleNext(taskId: string, marketplace?: 
 
   // Check if task/marketplace is already in completion process
   if (tasksInCompletionProcess.has(completionKey)) {
-    // console.log(YELLOW + `[Task Completion] ${completionKey} is already being completed, skipping duplicate call` + RESET);
     return;
   }
 
@@ -3795,31 +3565,21 @@ async function checkTaskCompletionAndScheduleNext(taskId: string, marketplace?: 
     const currentLoopCount = loopCounterStats[taskId]?.[marketplace] || 1;
 
     // Marketplace-specific completion only
-    // console.log(GREEN + `\n[Task Completion] Task ${taskId}/${marketplace} - Loop #${currentLoopCount} completed successfully` + RESET);
-    // console.log(GREEN + `[loopCounterStats] Completion - Task ${taskId} counters: ${JSON.stringify(loopCounterStats[taskId])}` + RESET);
 
     // Log current marketplace status before completion
     const mpStatus = taskStatus[taskId]?.marketplaces?.[marketplace as 'opensea' | 'magiceden' | 'blur'];
-    // console.log(GREEN + `[Task Completion] ${marketplace} status before completion:` + RESET);
-    // console.log(GREEN + `  - Status: ${mpStatus?.status}` + RESET);
-    // console.log(GREEN + `  - Running Percentage: ${mpStatus?.runningPercentage?.toFixed(2)}%` + RESET);
-    // console.log(GREEN + `  - Jobs: ${mpStatus?.completedJobs}/${mpStatus?.totalJobs}` + RESET);
 
     setTaskStatus(taskId, 'COMPLETED', `marketplace completion - Loop #${currentLoopCount}`, marketplace);
-    // console.log(GREEN + `[Task Completion] ${marketplace} status set to COMPLETED` + RESET);
 
     // Add 0.5-second delay before transitioning to SCHEDULED
-    // console.log(YELLOW + `[Task Completion] Waiting 0.5s before scheduling next loop...` + RESET);
     await new Promise(resolve => setTimeout(resolve, 500));
 
     // Schedule next loop for this marketplace
-    // console.log(YELLOW + `[Task Completion] Scheduling next loop for ${marketplace}...` + RESET);
     await scheduleNextLoop(taskId, marketplace);
 
     // Mark marketplace as scheduled
     const nextLoopCount = (loopCounterStats[taskId]?.[marketplace] || 0) + 1;
     setTaskStatus(taskId, 'SCHEDULED', `next loop scheduled - Loop #${nextLoopCount}`, marketplace);
-    // console.log(GREEN + `[Task Completion] ${marketplace} status set to SCHEDULED for Loop #${nextLoopCount}` + RESET);
 
     // Add delay to ensure scheduled processors see SCHEDULED status before parent jobs are cleared
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -3905,18 +3665,13 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
       const oldParentJob = parentJobs.get(oldParentJobId);
 
       if (oldParentJob) {
-        // console.log(YELLOW + `[markJobAsProcessed] Job ${jobId} is from loop ${jobLoop}, current loop is ${currentLoopCount}` + RESET);
         // Process it with the old parent job
         parentJob = oldParentJob;
         parentJobId = oldParentJobId;
       } else {
-        // console.log(YELLOW + `[markJobAsProcessed] Ignoring job ${jobId} - no parent job found for ${parentJobId} or ${oldParentJobId}` + RESET);
-        // console.log(YELLOW + `  Current loop: ${currentLoopCount}, Job loop: ${jobLoop}` + RESET);
         return;
       }
     } else {
-      // console.log(YELLOW + `[markJobAsProcessed] Ignoring job ${jobId} - no parent job found for ${parentJobId}` + RESET);
-      // console.log(YELLOW + `  Current loop: ${currentLoopCount}` + RESET);
       return;
     }
   }
@@ -3924,7 +3679,6 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
   // If we found an old parent job, skip loop validation
   // Otherwise validate the job belongs to the current loop
   if (parentJob.loopNumber !== currentLoopCount && parentJobId.includes(`loop${currentLoopCount}`)) {
-    // console.log(YELLOW + `[markJobAsProcessed] Job ${jobId} from loop ${parentJob.loopNumber} doesn't match current loop ${currentLoopCount}, ignoring` + RESET);
     return;
   }
 
@@ -3932,12 +3686,9 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
 
   // Check if parent job is already complete - prevent overflow
   if (parentJob.completedJobs >= parentJob.totalJobs && parentJob.totalJobs > 0) {
-    // console.log(YELLOW + `[markJobAsProcessed] Parent job ${parentJobId} already complete (${parentJob.completedJobs}/${parentJob.totalJobs})` + RESET);
-    // console.log(YELLOW + `  Ignoring late job: ${jobId}` + RESET);
 
     // Safety check: if allJobsQueued is false but we're already complete, something went wrong
     if (!parentJob.allJobsQueued) {
-      // console.log(RED + `  WARNING: Parent job complete but allJobsQueued=false - this indicates a tracking issue` + RESET);
       parentJob.allJobsQueued = true; // Fix the state
     }
     return;
@@ -3992,12 +3743,10 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
       // Increment both completed (for progress) and failed (for tracking) counters
       parentJob.completedJobs++;
       parentJob.failedJobs = (parentJob.failedJobs || 0) + 1;
-      // console.log(YELLOW + `[markJobAsProcessed] Failed job counted - completed: ${beforeCount} -> ${parentJob.completedJobs}, failed: ${beforeFailedCount} -> ${parentJob.failedJobs}` + RESET);
     }
 
     // Additional safety check to prevent overflow (should never happen with above logic)
     if (parentJob.completedJobs > parentJob.totalJobs) {
-      // console.log(RED + `[markJobAsProcessed] OVERFLOW DETECTED: ${parentJobId} completed ${parentJob.completedJobs} exceeds total ${parentJob.totalJobs}, capping to total` + RESET);
       parentJob.completedJobs = parentJob.totalJobs;
     }
   } finally {
@@ -4014,11 +3763,9 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
 
   // If this was the first job and totalJobs is 0, set it to 1
   if (parentJob.totalJobs === 0) {
-    // console.log(YELLOW + `[markJobAsProcessed] Parent job ${parentJobId} had 0 total jobs, setting to 1` + RESET);
     parentJob.totalJobs = 1;
   }
   // Update task running percentage
-  // console.log(MAGENTA + `[markJobAsProcessed] Updating task running percentage for ${taskId}` + RESET);
   try {
     await updateTaskRunningPercentage(taskId);
   } catch (error) {
@@ -4030,16 +3777,13 @@ async function markJobAsProcessed(taskId: string, marketplace: string, jobId: st
   // Check if all jobs are complete for this parent job
   if (parentJob.completedJobs >= parentJob.totalJobs) {
     const successCount = parentJob.completedJobs - (parentJob.failedJobs || 0);
-    // console.log(GREEN + `[Parent Job Complete] ${parentJobId}: All ${parentJob.totalJobs} jobs processed (${successCount} successful, ${parentJob.failedJobs || 0} failed)` + RESET);
 
     // Check if all parent jobs for this task are complete
     const allComplete = checkAllParentJobsComplete(taskId);
-    // console.log(GREEN + `[markJobAsProcessed] All parent jobs complete check: ${allComplete}` + RESET);
 
     if (allComplete) {
       const loopCounts = loopCounterStats[taskId] || {};
       const loopCountStr = Object.entries(loopCounts).map(([mp, count]) => `${mp}:${count}`).join(', ') || 'none';
-      // console.log(MAGENTA + `[All Jobs Complete] Task ${taskId} - Loop counts (${loopCountStr}): All marketplace jobs complete, checking percentage...` + RESET);
 
       // Do NOT force completion here - let updateTaskRunningPercentage handle it naturally
       // This prevents duplicate completion calls
@@ -4069,11 +3813,9 @@ function cleanupOldParentJobs(taskId: string, currentLoop: number, keepLoops: nu
   for (const parentJobId of parentJobsToRemove) {
     parentJobs.delete(parentJobId);
     processedJobsPerParent.delete(parentJobId);
-    // console.log(YELLOW + `[cleanupOldParentJobs] Removed old parent job: ${parentJobId}` + RESET);
   }
 
   if (parentJobsToRemove.length > 0) {
-    // console.log(GREEN + `[cleanupOldParentJobs] Cleaned up ${parentJobsToRemove.length} old parent jobs for task ${taskId}` + RESET);
   }
 }
 
@@ -4145,7 +3887,6 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
   // Enforce minimum loop interval to prevent rapid restarts
   const MIN_LOOP_INTERVAL = 2; // 2 seconds minimum
   if (loopInterval < MIN_LOOP_INTERVAL) {
-    // console.log(YELLOW + `[scheduleNextLoop] Loop interval ${loopInterval}s is below minimum, setting to ${MIN_LOOP_INTERVAL}s` + RESET);
     loopInterval = MIN_LOOP_INTERVAL;
   }
 
@@ -4170,18 +3911,11 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
   const nextLoopTime = new Date(Date.now() + loopInterval * 1000);
   const secondsUntilNextLoop = Math.floor((nextLoopTime.getTime() - Date.now()) / 1000);
 
-  // console.log(MAGENTA + `\n[scheduleNextLoop] Scheduling details:` + RESET);
-  // console.log(MAGENTA + `  - Task: ${taskId}` + RESET);
-  // console.log(MAGENTA + `  - Marketplace: ${marketplace || 'ALL'}` + RESET);
-  // console.log(MAGENTA + `  - Loop Interval: ${loopInterval}s` + RESET);
-  // console.log(MAGENTA + `  - Next Loop Time: ${nextLoopTime.toISOString()}` + RESET);
-  // console.log(MAGENTA + `  - Countdown: ${secondsUntilNextLoop}s` + RESET);
 
   // Update task status
   if (taskStatus[taskId]) {
     if (marketplace) {
       // Schedule specific marketplace
-      // console.log(MAGENTA + `  - Setting ${marketplace} to SCHEDULED status` + RESET);
       setTaskStatus(taskId, 'SCHEDULED', 'next loop scheduled', marketplace);
       const mpKey = marketplace as 'opensea' | 'magiceden' | 'blur';
       if (taskStatus[taskId].marketplaces && taskStatus[taskId].marketplaces[mpKey]) {
@@ -4189,17 +3923,14 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
         taskStatus[taskId].marketplaces[mpKey].nextLoopTime = nextLoopTime;
 
         // Log other marketplace statuses
-        // console.log(MAGENTA + `  - Other marketplace statuses:` + RESET);
         for (const [mp, status] of Object.entries(taskStatus[taskId].marketplaces)) {
           if (mp !== marketplace && status) {
             const waitingDisplay = status.waitingTime !== undefined ? `${status.waitingTime}s` : 'N/A';
-            // console.log(MAGENTA + `    * ${mp}: ${status.status} (waiting: ${waitingDisplay})` + RESET);
           }
         }
       }
     } else {
       // Schedule all marketplaces
-      // console.log(MAGENTA + `  - Setting ALL marketplaces to SCHEDULED status` + RESET);
       for (const mp of task.selectedMarketplaces) {
         const mpLower = mp.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
         setTaskStatus(taskId, 'SCHEDULED', 'next loop scheduled', mpLower);
@@ -4279,7 +4010,6 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
 
   // Validate task is still active before scheduling
   if (!activeTasks.has(taskId)) {
-    // console.log(YELLOW + `[scheduleNextLoop] ${timestamp} - Task ${taskId} no longer active, skipping loop scheduling` + RESET);
     cleanupTaskResources(taskId);
     lastScheduleTimes.delete(taskId);
     return;
@@ -4306,7 +4036,6 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
         const allMarketplacesStopped = currentStatus?.marketplaces &&
           Object.values(currentStatus.marketplaces).every(mp => mp?.status === 'STOPPED');
         if (allMarketplacesStopped) {
-          // console.log(YELLOW + `[scheduleNextLoop] Task ${taskId} all marketplaces are STOPPED, skipping startTask` + RESET);
           return;
         }
 
@@ -4346,16 +4075,13 @@ function initializeQueueEventHandlers() {
         // Extract task ID and marketplace from schedule job ID
         if (jobId.includes('-opensea-schedule')) {
           const taskId = jobId.replace('-opensea-schedule', '');
-          // console.log(GREEN + `[MarketplaceSequence] OpenSea schedule job completed for task ${taskId}` + RESET);
         } else if (jobId.includes('-blur-schedule')) {
           const taskId = jobId.replace('-blur-schedule', '');
-          // console.log(GREEN + `[MarketplaceSequence] Blur schedule job completed for task ${taskId}` + RESET);
         }
         return;
       }
 
       // Log all job completions for debugging
-      // console.log(BLUE + `[Queue Event] Job completed: ${jobId}` + RESET);
 
       // Skip cancellation jobs - they are handled in the cancel functions directly
       if (jobId.includes('CANCEL_OPENSEA_BID') ||
@@ -4414,7 +4140,6 @@ function initializeQueueEventHandlers() {
           await markJobAsProcessed(taskId, marketplace, jobId);
         }
       } else {
-        // console.log(YELLOW + `[Queue Event] Could not extract task/marketplace from job ID: ${jobId}` + RESET);
       }
     } catch (error) {
       // Extract taskId from jobId if possible
@@ -4463,8 +4188,6 @@ function initializeQueueEventHandlers() {
           data: job?.data
         };
 
-        // console.log(RED + `[Queue Event] Scheduled job failed: ${jobId}` + RESET);
-        // console.log(RED + `[Queue Event] Reason: ${failedReason}` + RESET);
 
         // Write to scheduled job failures log
         const logPath = path.join(logsDir, 'scheduled-job-failures.log');
@@ -4485,7 +4208,6 @@ function initializeQueueEventHandlers() {
             const lockAcquired = await lockManager.acquireLock(restartLockKey, 60);
             if (lockAcquired) {
               try {
-                // console.log(YELLOW + `[Queue Event] Schedule job timeout detected for task ${taskId}, triggering restart` + RESET);
 
                 // Get the task
                 const task = await Task.findById(taskId);
@@ -4495,7 +4217,6 @@ function initializeQueueEventHandlers() {
                   for (const mp of marketplaces) {
                     const parentJobId = getParentJobId(taskId, mp);
                     if (parentJobs.has(parentJobId)) {
-                      // console.log(YELLOW + `[Queue Event] Clearing stuck parent job ${parentJobId}` + RESET);
                       parentJobs.delete(parentJobId);
                       processedJobsPerParent.delete(parentJobId);
                     }
@@ -4514,7 +4235,6 @@ function initializeQueueEventHandlers() {
                   }
 
                   // Reset task status for all marketplaces and restart
-                  // console.log(GREEN + `[Queue Event] Restarting task ${taskId} after schedule job timeout` + RESET);
                   for (const mp of task.selectedMarketplaces) {
                     setTaskStatus(taskId, 'SCHEDULED', 'restarting after timeout', mp.toLowerCase());
                   }
@@ -4535,7 +4255,6 @@ function initializeQueueEventHandlers() {
                 await lockManager.releaseLock(restartLockKey);
               }
             } else {
-              // console.log(YELLOW + `[Queue Event] Another process is already restarting task ${taskId}` + RESET);
             }
           } catch (lockError) {
             logSystemError('QueueEvent', `Error acquiring restart lock for task ${taskId}`, lockError, { taskId });
@@ -4549,7 +4268,6 @@ function initializeQueueEventHandlers() {
         if (job && job.attemptsMade >= (job.opts?.attempts || 1)) {
           const taskId = job.data?._id;
           if (taskId && taskStatus[taskId]) {
-            // console.log(RED + `[Queue Event] Scheduled job ${jobId} exhausted all retries - recovering task ${taskId}` + RESET);
 
             // Extract marketplace from job ID (e.g., "taskId-opensea-schedule")
             let marketplace = 'unknown';
@@ -4567,7 +4285,6 @@ function initializeQueueEventHandlers() {
               parentJob.actualJobs = 0;
               parentJob.completedJobs = 0;
               parentJob.allJobsQueued = true;
-              // console.log(YELLOW + `[Queue Event] Created empty parent job for failed scheduled job: ${parentJobId}` + RESET);
             }
 
             // Transition marketplace out of stuck QUEUEING status
@@ -4577,7 +4294,6 @@ function initializeQueueEventHandlers() {
 
               // Check if this marketplace is complete to trigger next loop
               if (parentJob && parentJob.completedJobs >= parentJob.totalJobs) {
-                // console.log(GREEN + `[Queue Event] Marketplace ${marketplace} complete for task ${taskId}, triggering completion after scheduled job failure` + RESET);
                 await checkTaskCompletionAndScheduleNext(taskId, marketplace);
               }
             }
@@ -4620,7 +4336,6 @@ function initializeQueueEventHandlers() {
           const task = activeTasks.get(taskId);
           if (task) {
             // Cancellation tracking is now handled in the cancel functions directly
-            // console.log(YELLOW + `[Queue Event] Cancellation job failed but tracking is handled in cancel functions` + RESET);
           }
         }
       } else {
@@ -4664,7 +4379,6 @@ function initializeQueueEventHandlers() {
           }
           const task = activeTasks.get(taskId);
           if (task && task.running) {
-            // console.log(YELLOW + `[Queue Event - MAIN FAILED] Processing failure for task ${taskId}, marketplace ${marketplace}, jobId: ${jobId}` + RESET);
             await safeMarkJobAsProcessed(taskId, marketplace, jobId, false, async (tid, mp, increment) => {
               await markJobAsProcessed(tid, mp, jobId, false);
             });
@@ -4697,7 +4411,6 @@ function initializeQueueEventHandlers() {
   // Handle stalled jobs - critical for preventing stuck tasks
   queueEvents.on('stalled', async ({ jobId }) => {
     try {
-      // console.log(YELLOW + `[Queue Event] Job stalled: ${jobId}` + RESET);
 
       // Skip schedule jobs - they are orchestration jobs, not actual bid jobs
       if (jobId.includes('-schedule')) {
@@ -4736,7 +4449,6 @@ function initializeQueueEventHandlers() {
         if (taskId && marketplace) {
           const task = activeTasks.get(taskId);
           if (task) {
-            // console.log(YELLOW + `[Queue Event] Processing stalled cancellation for task ${taskId}, marketplace ${marketplace}` + RESET);
             // Cancellation tracking is now handled in the cancel functions directly
           }
         }
@@ -4779,13 +4491,11 @@ function initializeQueueEventHandlers() {
         if (taskId && marketplace) {
           const task = activeTasks.get(taskId);
           if (task && task.running) {
-            // console.log(YELLOW + `[Queue Event - STALLED] Processing stalled job as completed for task ${taskId}, marketplace ${marketplace}, jobId: ${jobId}` + RESET);
             await safeMarkJobAsProcessed(taskId, marketplace, jobId, true, async (tid, mp, increment) => {
               await markJobAsProcessed(tid, mp, jobId);
             });
           }
         } else {
-          // console.log(RED + `[Queue Event] Could not extract task/marketplace from stalled job ID: ${jobId}` + RESET);
         }
       }
     } catch (error) {
@@ -4813,7 +4523,6 @@ function initializeQueueEventHandlers() {
       if (jobId.includes('-schedule')) {
         if (jobId.includes('-blur-schedule')) {
           const taskId = jobId.replace('-blur-schedule', '');
-          // console.log(GREEN + `[MarketplaceSequence] Blur schedule job completed for task ${taskId}` + RESET);
         }
         return;
       }
@@ -4854,7 +4563,6 @@ function initializeQueueEventHandlers() {
       if (taskId) {
         const task = activeTasks.get(taskId);
         if (task && task.running) {
-          // console.log(GREEN + `[Blur Queue Event] Processing completion for task ${taskId}, marketplace ${marketplace}, jobId: ${jobId}` + RESET);
           await markJobAsProcessed(taskId, marketplace, jobId);
         }
       }
@@ -4881,7 +4589,6 @@ function initializeQueueEventHandlers() {
       }
 
       // Log all job failures for debugging
-      // console.log(RED + `[Blur Queue Event] Job failed: ${jobId} - ${failedReason}` + RESET);
 
       // Try to extract task and marketplace info from job ID
       let taskId: string | undefined;
@@ -4923,13 +4630,11 @@ function initializeQueueEventHandlers() {
         errorStats[taskId].blur++;
         const task = activeTasks.get(taskId);
         if (task && task.running) {
-          // console.log(YELLOW + `[Blur Queue Event - FAILED] Processing failure for task ${taskId}, marketplace ${marketplace}, jobId: ${jobId}` + RESET);
           await safeMarkJobAsProcessed(taskId, marketplace, jobId, false, async (tid, mp, increment) => {
             await markJobAsProcessed(tid, mp, jobId, false);
           });
         }
       } else {
-        // console.log(YELLOW + `[Blur Queue Event] Could not extract task ID from failed job ID: ${jobId}` + RESET);
       }
     } catch (error) {
       logSystemError('BlurQueueEvent', `Error handling job failure for job ${jobId}`, error, { jobId });
@@ -5047,7 +4752,6 @@ setInterval(() => {
   });
 
   if (activeConnections > 0) {
-    // console.log(BLUE + `[heartbeat] Sent to ${activeConnections} clients` + RESET);
   }
 }, HEARTBEAT_INTERVAL_MS);
 
@@ -5170,7 +4874,6 @@ wss.on('connection', async (ws) => {
   ws.onclose = () => {
     // Remove client when disconnected
     clients.delete(ws);
-    // console.log(YELLOW + 'Session disconnected' + RESET);
   };
 });
 
@@ -5238,12 +4941,10 @@ async function processBlurJob(job: Job) {
 
         logDecision('blur', taskId, 'processBlurJob', 'rate_limit', 'Wallet is rate limited', { walletAddress, waitTime, rescheduleTime: new Date(Date.now() + waitTime + 1000).toISOString() }, 'warn');
 
-        // console.log(RED + `[Blur Rate Limit] Wallet ${walletAddress} is rate limited. Wait time: ${waitTime}ms` + RESET);
 
         try {
           // Reschedule the job with a delay
           await job.moveToDelayed(Date.now() + waitTime + 1000); // Add 1s buffer
-          // console.log(YELLOW + `[Blur Rate Limit] Job ${job.id} rescheduled for ${new Date(Date.now() + waitTime + 1000).toISOString()}` + RESET);
 
           logRaw('blur', {
             taskId,
@@ -5258,7 +4959,6 @@ async function processBlurJob(job: Job) {
           });
         } catch (error) {
           // If we can't move to delayed (e.g., lock already released), job will be retried automatically
-          // console.log(YELLOW + `[Blur Rate Limit] Could not delay job ${job.id}, will be retried: ${error}` + RESET);
 
           logRaw('blur', {
             taskId,
@@ -5291,12 +4991,10 @@ async function processBlurJob(job: Job) {
           }
         });
 
-        // console.log(YELLOW + `[Blur Completion Rate] Wallet ${walletAddress} needs ${requiredDelay}ms delay based on completion rate` + RESET);
 
         try {
           // Reschedule the job with a delay
           await job.moveToDelayed(Date.now() + requiredDelay + 1000); // Add 1s buffer
-          // console.log(YELLOW + `[Blur Completion Rate] Job ${job.id} rescheduled for ${new Date(Date.now() + requiredDelay + 1000).toISOString()}` + RESET);
 
           logRaw('blur', {
             taskId,
@@ -5311,7 +5009,6 @@ async function processBlurJob(job: Job) {
           });
         } catch (error) {
           // If we can't move to delayed (e.g., lock already released), job will be retried automatically
-          // console.log(YELLOW + `[Blur Completion Rate] Could not delay job ${job.id}, will be retried: ${error}` + RESET);
 
           logRaw('blur', {
             taskId,
@@ -5359,20 +5056,12 @@ async function processBlurJob(job: Job) {
                 }
               });
 
-              // console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-              // console.log(RED + `[Blur Auth Block] Wallet: ${walletAddress}` + RESET);
-              // console.log(RED + `[Blur Auth Block] Status: BLOCKED` + RESET);
-              // console.log(RED + `[Blur Auth Block] Wait Time: ${waitSeconds} seconds` + RESET);
-              // console.log(RED + `[Blur Auth Block] Resume At: ${new Date(blockTime).toLocaleTimeString()}` + RESET);
-              // console.log(RED + `[Blur Auth Block] Job: ${job.id || 'unknown'}` + RESET);
-              // console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
               // Update progress periodically during wait
               // Progress reporting removed - was: const updateInterval = setInterval(() => job.updateProgress(20), 10000);
               await new Promise(resolve => setTimeout(resolve, waitTime + 2500));
               // Progress reporting removed - was: clearInterval(updateInterval);
 
-              // console.log(GREEN + `[Blur Auth Block] Resumed processing for wallet ${walletAddress.substring(0, 8)}...` + RESET);
 
               logRaw('blur', {
                 taskId,
@@ -5431,20 +5120,12 @@ async function processBlurJob(job: Job) {
               });
 
               // Enhanced logging with more details
-              // console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-              // console.log(YELLOW + `[Blur API Rate Limit] Wallet: ${walletAddress}` + RESET);
-              // console.log(YELLOW + `[Blur API Rate Limit] Status: PAUSED` + RESET);
-              // console.log(YELLOW + `[Blur API Rate Limit] Wait Time: ${waitSeconds} seconds (${waitTime}ms)` + RESET);
-              // console.log(YELLOW + `[Blur API Rate Limit] Resume At: ${new Date(pauseTime).toLocaleTimeString()}` + RESET);
-              // console.log(YELLOW + `[Blur API Rate Limit] Job: ${job.id || 'unknown'}` + RESET);
-              // console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
               // Update progress periodically during wait
               // Progress reporting removed - was: const updateInterval = setInterval(() => job.updateProgress(30), 10000);
               await new Promise(resolve => setTimeout(resolve, waitTime + 2500));
               // Progress reporting removed - was: clearInterval(updateInterval);
 
-              // console.log(GREEN + `[Blur API Rate Limit] Resumed processing for wallet ${walletAddress.substring(0, 8)}...` + RESET);
 
               logRaw('blur', {
                 taskId,
@@ -5758,7 +5439,6 @@ async function processListingUpdateJob(job: Job): Promise<boolean> {
 
     // Clear cache before creating listing to ensure fresh price comparison
     const { listingPriceCache } = await import('./utils/listing-price-cache');
-    // console.log(`[Listing Update] Clearing cache for ${freshListing.contract.contractAddress}:${freshListing.tokenId} before price adjustment`);
     await listingPriceCache.clearPrice(freshListing.contract.contractAddress, freshListing.tokenId);
 
     // Create listing with adjusted price
@@ -5775,7 +5455,6 @@ async function processListingUpdateJob(job: Job): Promise<boolean> {
     if (freshListing.running && freshListing.loopInterval) {
       try {
         await scheduleListing(freshListing);
-        // console.log(`Ensured listing ${listingId} has scheduled job for continuous listing`);
       } catch (scheduleError) {
         logSystemError('ListingSchedule', `Failed to ensure scheduled job for listing ${listingId}`, scheduleError, { listingId });
       }
@@ -5800,15 +5479,11 @@ async function processListingUpdateJob(job: Job): Promise<boolean> {
 
 async function runScheduledLoop() {
   if (!API_KEY) {
-    // console.log(RED + 'API_KEY is not set - queue operations disabled' + RESET);
-    // console.log(YELLOW + 'Please set API_KEY environment variable and restart' + RESET);
     // Don't pause queue, just skip task creation
     return
   }
 
   if (!RATE_LIMIT) {
-    // console.log(RED + 'RATE_LIMIT is not set - queue operations disabled' + RESET);
-    // console.log(YELLOW + 'Please set RATE_LIMIT environment variable and restart' + RESET);
     // Don't pause queue, just skip task creation
     return
   }
@@ -5822,10 +5497,8 @@ async function runScheduledLoop() {
 
 async function processImportedTasks(tasks: ITask[]) {
   try {
-    // console.log(BLUE + `\n===  Importing ${tasks.length} Tasks === ` + RESET);
 
     tasks.forEach(task => {
-      // console.log(`Collection: ${task.contract.slug}`);
       activeTasks.set(task._id, task);
       currentTasks.push(task);
     });
@@ -5837,10 +5510,8 @@ async function processImportedTasks(tasks: ITask[]) {
       await Promise.all(
         runningTasks.map(task => startTask(task, true))
       );
-      // console.log(GREEN + `Started ${runningTasks.length} tasks successfully` + RESET);
     }
 
-    // console.log(GREEN + `=== Imported Tasks Processing Complete ===\n` + RESET);
   } catch (error) {
     logSystemError('TaskImport', 'Error processing imported tasks', error);
   }
@@ -5853,7 +5524,6 @@ async function processNewTask(task: ITask) {
     currentTasks.push(task);
     updateTaskIndexes(currentTasks);
     await startTask(task, task.running)
-    // console.log(GREEN + `=== New Task Processing Complete ===\n` + RESET);
   } catch (error) {
     logSystemError('TaskProcessing', `Error processing new task: ${task.contract.slug}`, error, { contractSlug: task.contract.slug });
   }
@@ -5876,7 +5546,6 @@ async function processGlobalMarketplaces(incomingMarketplaces: string[]) {
 
     // Early return if no marketplaces to process
     if (marketplacesToProcess.length === 0) {
-      // console.log(YELLOW + `[processGlobalMarketplaces] No marketplaces to process` + RESET);
       return;
     }
 
@@ -5888,7 +5557,6 @@ async function processGlobalMarketplaces(incomingMarketplaces: string[]) {
     // Extract the marketplace to process: use the first new marketplace
     const marketplaceToProcess: string = newMarketplaces[0];
 
-    // console.log(GREEN + `[processGlobalMarketplaces] Processing new marketplace: ${marketplaceToProcess}` + RESET);
 
     // Filter tasks that have this marketplace selected and are running
     const tasksToProcess = tasks.filter(task =>
@@ -5973,9 +5641,6 @@ async function cancelRemovedTraitBids(traitsToRemove: string[], taskId: string, 
       identifier: { $in: traitsToRemove }
     })
 
-    // console.log(RED + '--------------------------------------------------------------' + RESET);
-    // console.log(RED + `OLD TRAIT BIDS TO CANCEL: ${ordersToCancel.length}`.toUpperCase() + RESET);
-    // console.log(RED + '--------------------------------------------------------------' + RESET);
 
     const blurOrders = ordersToCancel.filter(order => order.marketplace.toLowerCase() === BLUR.toLowerCase());
     const openseaOrders = ordersToCancel.filter(order => order.marketplace.toLowerCase() === OPENSEA.toLowerCase());
@@ -6077,7 +5742,6 @@ async function updateTaskData(task: ITask) {
     activeTasks.set(task._id, task);
     updateTaskIndexes(currentTasks);
 
-    // console.log(YELLOW + `Updated existing task: ${task.contract.slug}`.toUpperCase() + RESET);
 
     const filteredTasks = Object.fromEntries(
       Object.entries(task?.selectedTraits?.opensea || {}).filter(([_, traits]) => traits.length > 0)
@@ -6244,9 +5908,6 @@ async function updateTaskData(task: ITask) {
     await cancelRemovedTraitBids(traitsToRemove[task._id], task._id, task.walletId, currencySymbol)
     await cancelRemovedTokenBids(removedTokens[task._id], task._id, task.walletId, currencySymbol)
 
-    // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-    // console.log(GREEN + `NEW TRAIT BIDS TO ADD: ${addedTraits.length}`.toUpperCase() + RESET);
-    // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
     const newTask = { ...task, traits: {} } as ITask
     // Check cache first
@@ -6265,9 +5926,7 @@ async function updateTaskData(task: ITask) {
     }
 
     // Log full collection details for trait bid
-    // console.log(`[Trait Bid - Full Collection Details Retrieved] ${task.contract.slug}:`, JSON.stringify(collectionDetails, null, 2));
 
-    // console.log(`[Trait Bid - CreatorFees Construction] Before transformation:`, {
     // creator_fees: JSON.stringify(collectionDetails.creator_fees),
     // has_null: collectionDetails.creator_fees.null !== undefined,
     // null_value: collectionDetails.creator_fees.null,
@@ -6279,8 +5938,6 @@ async function updateTaskData(task: ITask) {
       Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)])
     );
 
-    // console.log(`[Trait Bid - CreatorFees Construction] After transformation:`, JSON.stringify(creatorFees));
-    // console.log(`[Trait Bid - CreatorFees Construction] enforceCreatorFee:`, collectionDetails.enforceCreatorFee);
 
     const bidDuration = currentTask && currentTask.bidDuration ? currentTask.bidDuration : task.bidDuration
     const expiration = getExpiry(bidDuration)
@@ -6430,7 +6087,6 @@ async function updateTaskData(task: ITask) {
         }
       }
 
-      // console.log(YELLOW + `  Found ${scheduledMarketplaces.length} scheduled marketplaces to reschedule: ${scheduledMarketplaces.join(', ')}` + RESET);
 
       // Cancel existing timers and reschedule for each scheduled marketplace
       for (const marketplace of scheduledMarketplaces) {
@@ -6441,9 +6097,7 @@ async function updateTaskData(task: ITask) {
         if (countdownTimer) {
           clearInterval(countdownTimer);
           taskCountdownTimers.delete(timerKey);
-          // console.log(GREEN + `  ✓ Cleared countdown timer for ${marketplace}` + RESET);
         } else {
-          // console.log(YELLOW + `  ! No countdown timer found for ${marketplace}` + RESET);
         }
 
         // Clear the scheduled timeout
@@ -6451,13 +6105,10 @@ async function updateTaskData(task: ITask) {
         if (timeoutId) {
           clearTimeout(timeoutId);
           taskTimeouts.delete(timerKey);
-          // console.log(GREEN + `  ✓ Cleared scheduled timeout for ${marketplace}` + RESET);
         } else {
-          // console.log(YELLOW + `  ! No scheduled timeout found for ${marketplace}` + RESET);
         }
 
         // Reschedule with new interval
-        // console.log(MAGENTA + `  Rescheduling ${marketplace} with new interval` + RESET);
         await scheduleNextLoop(task._id, marketplace);
       }
     }
@@ -6624,7 +6275,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
         try {
           // Acquire the scheduled bid lock first
           acquireScheduledBidLock(taskId, marketplace);
-          // console.log(GREEN + `[processBulkJobs] Acquired scheduled bid lock for ${taskId}-${marketplace}` + RESET);
 
           // Set up interval to extend the lock
           scheduledBidLockInterval = setInterval(() => {
@@ -6676,7 +6326,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
             const elapsedTime = Date.now() - startWaitTime;
 
 
-            // console.log(YELLOW + `[processBulkJobs] Task ${taskId}: Queue at capacity (${totalJobs}/${MAX_QUEUE_JOBS}, prioritized: ${prioritizedJobs}). ` +
             // `Waiting ${WAIT_INTERVAL / 1000} seconds before retry (iteration ${waitIterations}, elapsed: ${Math.round(elapsedTime / 1000)}s)...` + RESET);
 
             // Wait for 1 minute
@@ -6694,7 +6343,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
           }
 
           if (waitIterations > 0) {
-            // console.log(GREEN + `[processBulkJobs] Queue capacity available after ${waitIterations} iterations (${Math.round((Date.now() - startWaitTime) / 1000)}s)` + RESET);
           }
 
           // If we reach here, we have capacity to process the full chunk
@@ -6740,7 +6388,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
           });
 
           if (!validJobs.length) {
-            // console.log(YELLOW + `[processBulkJobs] Task ${taskId}: No valid jobs in chunk (${rejectedJobs.length} rejected)` + RESET);
 
             // Log rejection reasons summary
             if (rejectedJobs.length > 0) {
@@ -6756,13 +6403,11 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
                 return acc;
               }, {} as Record<string, number>);
 
-              // console.log(YELLOW + `[processBulkJobs] Chunk rejection reasons: ${JSON.stringify(rejectionSummary)}` + RESET);
 
               // Log first few rejected jobs for debugging
               const samplesToLog = Math.min(3, rejectedJobs.length);
               for (let i = 0; i < samplesToLog; i++) {
                 const { job, reason } = rejectedJobs[i];
-                // console.log(YELLOW + `[processBulkJobs] Rejected job sample: ${job?.name || 'no-name'} - ${reason}` + RESET);
               }
             }
             // No valid jobs, but we successfully processed the chunk
@@ -6776,7 +6421,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
                 rejectionReasonsSummary[reason] = (rejectionReasonsSummary[reason] || 0) + 1;
               });
 
-              // console.log(YELLOW + `[processBulkJobs] Processed chunk: ${validJobs.length} valid, ${rejectedJobs.length} rejected` + RESET);
             }
 
             // Separate Blur and non-Blur jobs
@@ -6814,7 +6458,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
               // Track cancellation jobs specifically
               const cancellationJobCount = uniqueJobs.filter(job => job.name.toLowerCase().includes('cancel')).length;
               if (cancellationJobCount > 0) {
-                // console.log(GOLD + `[processBulkJobs] Adding ${cancellationJobCount} cancellation jobs to queue for task ${taskId}` + RESET);
               }
 
               for (const jobChunk of rateLimitChunks) {
@@ -6825,7 +6468,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
                 // Log successful addition of cancellation jobs
                 const addedCancellationCount = addedJobs.filter(job => job.name.toLowerCase().includes('cancel')).length;
                 if (addedCancellationCount > 0) {
-                  // console.log(GREEN + `[processBulkJobs] Successfully queued ${addedCancellationCount} cancellation jobs` + RESET);
                 }
 
                 // Log current prioritized count to track target range
@@ -6953,11 +6595,9 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
             if (currentPrioritized < DRAIN_THRESHOLD) {
               // Within target range, retry immediately
-              // console.log(YELLOW + `[processBulkJobs] Timeout error but within range (${currentPrioritized}), retrying chunk immediately` + RESET);
               retryChunkIndex = chunkIndex;
               chunkIndex--; // Decrement to retry the same chunk
             } else {
-              // console.log(RED + `[processBulkJobs] Timeout error and queue full, waiting before retry` + RESET);
               // Calculate wait time based on queue processing rate
               const waitTimeSeconds = Math.ceil(currentPrioritized / RATE_LIMIT);
               const waitTimeMs = waitTimeSeconds * 1000;
@@ -6985,17 +6625,12 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
           // Only mark as allJobsQueued if we've met or exceeded expectedJobs
           if (parentJob.expectedJobs !== undefined && parentJob.actualJobs < parentJob.expectedJobs) {
-            // console.log(YELLOW + `[processBulkJobs] ${parentJobId}: Only queued ${parentJob.actualJobs}/${parentJob.expectedJobs} jobs - NOT marking as complete` + RESET);
-            // console.log(YELLOW + `  ⚠️  PARTIAL QUEUEING DETECTED - Missing ${parentJob.expectedJobs - parentJob.actualJobs} jobs` + RESET);
-            // console.log(YELLOW + `  This will trigger automatic task restart to queue missing jobs` + RESET);
             // Don't set allJobsQueued=true - this will allow the task to be restarted
           } else {
             parentJob.allJobsQueued = true;
-            // console.log(GREEN + `[processBulkJobs] Finalized ${parentJobId}: totalJobs=${parentJob.totalJobs} (was ${previousTotal})` + RESET);
 
             // Log if actualJobs exceeds expectedJobs (likely due to retries)
             if (parentJob.expectedJobs !== undefined && parentJob.actualJobs > parentJob.expectedJobs) {
-              // console.log(YELLOW + `  Note: actualJobs=${parentJob.actualJobs} exceeds expectedJobs=${parentJob.expectedJobs} (likely due to retries)` + RESET);
             }
           }
         }
@@ -7018,11 +6653,9 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
           // Only mark as queued if we've actually queued the expected number of jobs
           if (parentJob.expectedJobs !== undefined && parentJob.actualJobs < parentJob.expectedJobs) {
-            // console.log(YELLOW + `[processBulkJobs] WARNING: ${parentJobId} has only ${parentJob.actualJobs}/${parentJob.expectedJobs} jobs queued` + RESET);
             // Don't mark as allJobsQueued - this will trigger a restart
           } else {
             parentJob.allJobsQueued = true;
-            // console.log(YELLOW + `[processBulkJobs] Marked ${parentJobId} as complete with ${parentJob.actualJobs} jobs` + RESET);
           }
         }
       }
@@ -7063,9 +6696,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
       // Log summary with special attention to cancellation jobs
       const totalCancellationJobs = jobs.filter(job => job.name.toLowerCase().includes('cancel')).length;
       if (totalCancellationJobs > 0) {
-        // console.log(GREEN + `[processBulkJobs] Successfully queued all ${actuallyQueuedCount} jobs for task ${taskId} (including ${totalCancellationJobs} cancellation jobs)` + RESET);
       } else {
-        // console.log(GREEN + `[processBulkJobs] Successfully queued all ${actuallyQueuedCount} jobs for task ${taskId}` + RESET);
       }
 
       // Trigger percentage update now that all jobs are queued
@@ -7166,7 +6797,6 @@ async function checkForDuplicateJobs(queue: Queue, jobsToAdd: Array<{ name: stri
 
     const duplicatesFound = jobsToAdd.length - nonDuplicateJobs.length;
     if (duplicatesFound > 0 || process.env.DEBUG_JOB_KEYS === 'true') {
-      // console.log(GOLD + `[checkForDuplicateJobs] Checked ${jobsToAdd.length} jobs, found ${duplicatesFound} duplicates` + RESET);
     }
 
     return nonDuplicateJobs;
@@ -7203,7 +6833,6 @@ function createJobKey(job: Job) {
 
   // Log key creation start for debugging
   if (process.env.DEBUG_JOB_KEYS === 'true') {
-    // console.log(BLUE + `[createJobKey] Creating key for job type: ${job.name}` + RESET);
   }
 
   switch (job.name) {
@@ -7244,7 +6873,6 @@ function createJobKey(job: Job) {
       // Fix: Include marketplace in collection jobs
       uniqueKey = `${marketplace}-collection`;
       if (process.env.DEBUG_JOB_KEYS === 'true') {
-        // console.log(YELLOW + `[createJobKey] Warning: Using default case for job type: ${job.name}` + RESET);
       }
   }
   const baseKey = `${job?.data?._id}`
@@ -7256,12 +6884,6 @@ function createJobKey(job: Job) {
 
   // Enhanced debug logging for key generation
   if (process.env.DEBUG_JOB_KEYS === 'true') {
-    // console.log(BLUE + `[createJobKey] Generated key components:` + RESET);
-    // console.log(BLUE + `  - Job Type: ${job.name}` + RESET);
-    // console.log(BLUE + `  - Unique Key: ${uniqueKey}` + RESET);
-    // console.log(BLUE + `  - Slug: ${slug}` + RESET);
-    // console.log(BLUE + `  - Wallet: ${walletAddress.substring(0, 10)}...` + RESET);
-    // console.log(BLUE + `  - Final Key: ${key}` + RESET);
   }
 
   return key
@@ -7289,7 +6911,6 @@ function removeChar(str: string, char: string): string {
 async function triggerTaskRestart(taskId: string) {
   const task = activeTasks.get(taskId);
   if (!task) {
-    // console.log(YELLOW + `[triggerTaskRestart] Task ${taskId} not found in activeTasks` + RESET);
     return;
   }
 
@@ -7323,15 +6944,12 @@ async function triggerTaskRestart(taskId: string) {
     taskRestartCounts.set(taskId, { count: 1, lastRestart: now });
   }
 
-  // console.log(RED + `[triggerTaskRestart] Restarting stuck task ${taskId} due to queue capacity issue` + RESET);
-  // console.log(YELLOW + `  Restart count: ${taskRestartCounts.get(taskId)?.count || 1}/${MAX_RESTARTS_PER_HOUR}` + RESET);
 
   // Clear any stuck parent jobs for all marketplaces
   const marketplaces = ['opensea', 'magiceden', 'blur'];
   for (const marketplace of marketplaces) {
     const parentJobId = getParentJobId(taskId, marketplace);
     if (parentJobs.has(parentJobId)) {
-      // console.log(YELLOW + `[triggerTaskRestart] Clearing stuck parent job: ${parentJobId}` + RESET);
       parentJobs.delete(parentJobId);
     }
   }
@@ -7350,12 +6968,10 @@ async function triggerTaskRestart(taskId: string) {
   // Clear any preprocessing data
   taskPreprocessing.delete(taskId);
 
-  // console.log(GREEN + `[triggerTaskRestart] Triggering restart for task ${taskId}` + RESET);
 
   try {
     // Restart the task with isRestart=true to prevent loop counter increment
     await startTask(task, true, undefined, true);
-    // console.log(GREEN + `[triggerTaskRestart] Successfully restarted task ${taskId}` + RESET);
   } catch (error) {
     logSystemError('TaskRestart', `Failed to restart task ${taskId}`, error, { taskId });
     // Log the error but don't throw - we want to attempt recovery
@@ -7384,7 +7000,6 @@ async function startTask(task: ITask, start: boolean, marketplace?: string, isRe
       if (error instanceof Error &&
         error.message?.includes('Command timed out') &&
         attempt < MAX_RETRIES - 1) {
-        // console.log(YELLOW + `[startTask] Redis timeout for task ${task._id}, retry ${attempt + 1}/${MAX_RETRIES} after ${RETRY_DELAYS[attempt]}ms` + RESET);
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
         continue; // Retry
       }
@@ -7402,14 +7017,12 @@ async function startTask(task: ITask, start: boolean, marketplace?: string, isRe
 async function startTaskInternal(task: ITask, start: boolean, marketplace?: string, isRestart?: boolean) {
   // Check start parameter immediately to avoid any unnecessary processing
   if (!start) {
-    // console.log(YELLOW + `[startTask] Not starting task ${task._id} - start=false` + RESET);
     return { success: false, reason: 'start_false' };
   }
 
   const startTime = Date.now();
   const taskId = task._id.toString();
 
-  // console.log(GREEN + `[startTask] Called for task ${taskId}, start=${start}, marketplace=${marketplace}, isRestart=${isRestart}` + RESET);
 
 
   // If task is in CANCELLING state, we'll clean it up and allow the start
@@ -7418,12 +7031,10 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
     Object.values(taskStatus[taskId].marketplaces).some(mpStatus => mpStatus?.status === 'CANCELLING');
 
   if (hasCancellingMarketplace) {
-    // console.log(YELLOW + `[startTask] Task ${taskId} is in CANCELLING state, cleaning up and proceeding with start` + RESET);
 
     // Remove task from blacklist to allow new jobs
     const wasRemoved = removeTaskFromBlacklist(taskId);
     if (wasRemoved) {
-      // console.log(GREEN + `[startTask] Removed task ${taskId} from blacklist` + RESET);
     }
 
     // Reset cancellation percentage
@@ -7448,10 +7059,8 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
 
     // Starting task with marketplace-specific status tracking
     const timestamp = new Date().toISOString();
-    // console.log(MAGENTA + `  Selected marketplaces: ${task.selectedMarketplaces.join(', ')}` + RESET);
 
     if (taskStatus[taskId]) {
-      // console.log(MAGENTA + `  Previous marketplace statuses: ${JSON.stringify(taskStatus[taskId].marketplaces, null, 2)}` + RESET);
     }
 
     // Initialize task status
@@ -7476,16 +7085,13 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
         const isEnabled = enabledMarketplaces.map(em => em.toLowerCase()).includes(mpLower);
 
         if (isEnabled) {
-          // console.log(GREEN + `  ✓ Starting ${mp} (enabled)` + RESET);
           setTaskStatus(taskId, 'STARTED', `startTask called: isRestart=${isRestart}, marketplace=ALL`, mp);
         } else {
-          // console.log(YELLOW + `  ✗ Skipping ${mp} (not enabled)` + RESET);
           // Don't set STARTED status for disabled marketplaces
         }
       }
     }
 
-    // console.log(MAGENTA + `[startTask] Task ${taskId} initialized with ${task.selectedMarketplaces.length} marketplaces` + RESET);
 
     // Set up status progression monitoring for each marketplace
     if (marketplace) {
@@ -7527,8 +7133,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
       } else {
         // For restarts, keep the same loop count
         newLoopCount = loopCounterStats[taskId][marketplace] || 1;
-        // console.log(YELLOW + `[startTask] Restarting loop #${newLoopCount} for task ${taskId}/${marketplace} (not incrementing counter)` + RESET);
-        // console.log(YELLOW + `[loopCounterStats] Task ${taskId} counters: ${JSON.stringify(loopCounterStats[taskId])}` + RESET);
       }
     } else {
       // Starting all marketplaces - DO NOT increment counters here
@@ -7544,7 +7148,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
           }
         } else {
           const restartLoopCount = loopCounterStats[taskId][mpLower] || 1;
-          // console.log(YELLOW + `[startTask] Restarting task ${taskId}/${mpLower} (current loop: #${restartLoopCount})` + RESET);
         }
       }
 
@@ -7562,48 +7165,39 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
     // Clear all processed jobs for this task to ensure fresh tracking
     for (const [parentJobId, processedJobs] of processedJobsPerParent.entries()) {
       if (parentJobId.includes(taskId)) {
-        // console.log(YELLOW + `[startTask] Clearing processed jobs for parent: ${parentJobId} (${processedJobs.size} entries)` + RESET);
         processedJobsPerParent.delete(parentJobId);
       }
     }
 
     // Clear ALL parent jobs for this task from previous loops
-    // console.log(YELLOW + `[startTask] Clearing parent jobs from previous loops for task ${taskId}` + RESET);
     let clearedParentJobs = 0;
     for (const [parentJobId, parentJob] of parentJobs.entries()) {
       if (parentJobId.includes(taskId)) {
         // Delete all parent jobs for this task, regardless of loop number
         // They will be recreated fresh for the new loop
-        // console.log(YELLOW + `  - Clearing parent job ${parentJobId} (loop #${parentJob.loopNumber})` + RESET);
         parentJobs.delete(parentJobId);
         clearedParentJobs++;
       }
     }
     if (clearedParentJobs > 0) {
-      // console.log(GREEN + `[startTask] Cleared ${clearedParentJobs} parent jobs from previous loops` + RESET);
     }
 
     // Clear pending job creation promises for this task
-    // console.log(YELLOW + `[startTask] Clearing pending job creation promises for task ${taskId}` + RESET);
     let clearedPromises = 0;
     for (const [promiseKey] of pendingJobCreation.entries()) {
       if (promiseKey.includes(taskId)) {
-        // console.log(YELLOW + `  - Clearing pending promise: ${promiseKey}` + RESET);
         pendingJobCreation.delete(promiseKey);
         clearedPromises++;
       }
     }
     if (clearedPromises > 0) {
-      // console.log(GREEN + `[startTask] Cleared ${clearedPromises} pending job creation promises` + RESET);
     }
 
     // Clear any task-specific state in warningBids and warningMessage
     if (warningBids[taskId]) {
-      // console.log(YELLOW + `[startTask] Clearing warning bids for task ${taskId}` + RESET);
       delete warningBids[taskId];
     }
     if (warningMessage[taskId]) {
-      // console.log(YELLOW + `[startTask] Clearing warning messages for task ${taskId}` + RESET);
       delete warningMessage[taskId];
     }
   } else {
@@ -7617,7 +7211,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
     const parentJobId = getParentJobId(taskId, marketplace.toLowerCase());
     if (processedJobsPerParent.has(parentJobId)) {
       const processedJobsCount = processedJobsPerParent.get(parentJobId)?.size || 0;
-      // console.log(YELLOW + `[startTask] Clearing processed jobs for marketplace-specific parent: ${parentJobId} (${processedJobsCount} entries)` + RESET);
       processedJobsPerParent.delete(parentJobId);
     }
   }
@@ -7625,8 +7218,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
   await removeTaskFromBlacklist(taskId);
 
   if (!API_KEY) {
-    // console.log(RED + 'API_KEY is not set - cannot start task' + RESET);
-    // console.log(YELLOW + 'Please set API_KEY environment variable and restart' + RESET);
     return;
   }
 
@@ -7637,7 +7228,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
   try {
     const wallet = await walletCache.getWalletById(task.walletId);
     if (!wallet?.encryptedPrivateKey) {
-      // console.log(RED + `Cannot start task - wallet not found or missing private key: ${task.walletId}` + RESET);
       return;
     }
 
@@ -7659,10 +7249,8 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
           break;
         case "blur":
           // Blur doesn't require WETH approval - skip
-          // console.log(YELLOW + `Skipping approval for Blur - not required` + RESET);
           return { marketplace: mp, approved: true, cached: false };
         default:
-          // console.log(YELLOW + `Unknown marketplace: ${mp}, skipping approval` + RESET);
           return { marketplace: mp, approved: false, cached: false };
       }
 
@@ -7691,7 +7279,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
     const failedApprovals = approvalResults.filter(r => !r.approved);
 
     if (failedApprovals.length > 0) {
-      // console.log(YELLOW + `Warning: ${failedApprovals.length} marketplace(s) failed approval` + RESET);
     }
   } catch (error) {
     logSystemError('MarketplaceApproval', 'Error during marketplace approval check', error);
@@ -7700,8 +7287,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
 
   const RATE_LIMIT = process.env.RATE_LIMIT;
   if (!RATE_LIMIT) {
-    // console.log(RED + 'RATE_LIMIT is not set - cannot start task' + RESET);
-    // console.log(YELLOW + 'Please set RATE_LIMIT environment variable and restart' + RESET);
     return;
   }
 
@@ -7725,7 +7310,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
       // Subscribe to WebSocket collection (WebSocket should already be connected at startup)
       try {
         if (wsManager?.isConnected()) {
-          // console.log("subscribing to collection: ", task.contract.slug);
           const newTask = { ...task, running: true };
           subscribeToCollections([newTask]);
         }
@@ -7762,7 +7346,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
       }
 
       // Clear old jobs from queue to prevent state bleed
-      // console.log(YELLOW + `[startTask] Clearing old jobs for task ${taskId} from queue` + RESET);
     }
 
     // Calculate and store task-wide totals after parent job initialization
@@ -7773,7 +7356,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
       if (parentJob && taskStatus[taskId]) {
 
         // Global properties removed - all tracking is marketplace-specific
-        // console.log(YELLOW + `[DEPRECATED] Global percentage calculation removed - use marketplace-specific data` + RESET);
       }
     } else {
       // Full recalculation for new tasks or full restarts
@@ -7871,7 +7453,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
 
       // We'll add the delay when scheduling MagicEden jobs
       if (magicedenDelay > 0) {
-        // console.log(MAGENTA + `[Scheduling] Will add ${magicedenDelay}ms delay to MagicEden jobs (${totalMarketplaceCount} marketplaces total)` + RESET);
       }
 
       // For loop restarts (start=true), always add jobs without deduplication
@@ -7879,11 +7460,9 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
         // Schedule all jobs immediately (MagicEden with delay if applicable)
         if (openseaJobs.length > 0) {
           await queue.addBulk(openseaJobs);
-          // console.log(GREEN + `[Scheduling] Scheduled ${openseaJobs.length} OpenSea job(s) for task ${taskId}` + RESET);
         }
         if (blurJobs.length > 0) {
           await blurQueue.addBulk(blurJobs);
-          // console.log(GREEN + `[Scheduling] Scheduled ${blurJobs.length} Blur job(s) for task ${taskId}` + RESET);
         }
         if (magicedenJobs.length > 0) {
           if (magicedenDelay > 0) {
@@ -7891,14 +7470,12 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
             setTimeout(async () => {
               try {
                 await queue.addBulk(magicedenJobs);
-                // console.log(GREEN + `[Scheduling] Scheduled ${magicedenJobs.length} MagicEden job(s) for task ${taskId} after ${magicedenDelay}ms delay` + RESET);
               } catch (error) {
                 logSystemError('JobScheduling', `Failed to schedule MagicEden jobs for task ${taskId}`, error, { taskId, marketplace: 'magiceden' });
               }
             }, magicedenDelay);
           } else {
             await queue.addBulk(magicedenJobs);
-            // console.log(GREEN + `[Scheduling] Scheduled ${magicedenJobs.length} MagicEden job(s) for task ${taskId}` + RESET);
           }
         }
       } else {
@@ -7921,7 +7498,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
               }
             }
           } catch (err) {
-            // console.log(RED + `[startTask] Error checking job ${targetJobId}: ${err}` + RESET);
           }
         }
 
@@ -7935,11 +7511,9 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
           // Schedule all new jobs (MagicEden with delay if applicable)
           if (newOpenseaJobs.length > 0) {
             await queue.addBulk(newOpenseaJobs);
-            // console.log(GREEN + `[Scheduling] Scheduled ${newOpenseaJobs.length} new OpenSea job(s) for task ${taskId}` + RESET);
           }
           if (newBlurJobs.length > 0) {
             await blurQueue.addBulk(newBlurJobs);
-            // console.log(GREEN + `[Scheduling] Scheduled ${newBlurJobs.length} new Blur job(s) for task ${taskId}` + RESET);
           }
           if (newMagicedenJobs.length > 0) {
             if (magicedenDelay > 0) {
@@ -7947,14 +7521,12 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
               setTimeout(async () => {
                 try {
                   await queue.addBulk(newMagicedenJobs);
-                  // console.log(GREEN + `[Scheduling] Scheduled ${newMagicedenJobs.length} new MagicEden job(s) for task ${taskId} after ${magicedenDelay}ms delay` + RESET);
                 } catch (error) {
                   console.error(RED + `[Scheduling] Failed to schedule new MagicEden jobs for task ${taskId}:` + RESET, error);
                 }
               }, magicedenDelay);
             } else {
               await queue.addBulk(newMagicedenJobs);
-              // console.log(GREEN + `[Scheduling] Scheduled ${newMagicedenJobs.length} new MagicEden job(s) for task ${taskId}` + RESET);
             }
           }
         }
@@ -7990,7 +7562,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
 
     // Log warning if startup took too long
     if (duration > 5000) {
-      // console.log(YELLOW + `[Performance] Task startup took ${(duration / 1000).toFixed(1)}s - consider optimization` + RESET);
     }
   }
 
@@ -8038,7 +7609,6 @@ async function removeAllTaskJobsFromQueue(taskId: string, marketplace?: string) 
             }
             (marketplaceResult as any)[state]++;
             totalRemoved++;
-            // console.log(`Removed ${state} job: ${job.id}`);
           } catch (error) {
             console.error(`Failed to remove job ${job.id} from ${state}:`, error);
           }
@@ -8057,11 +7627,9 @@ async function removeAllTaskJobsFromQueue(taskId: string, marketplace?: string) 
     removalResults.push(marketplaceResult);
   }
 
-  // console.log(`Total jobs removed for task ${taskId}: ${totalRemoved}`);
 
   // Job state verification - wait and re-check for any missed jobs
   if (totalRemoved > 0) {
-    // console.log(YELLOW + `[removeAllTaskJobsFromQueue] Verifying job removal for task ${taskId}...` + RESET);
 
     // Wait a short time for jobs that might be transitioning between states
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -8077,7 +7645,6 @@ async function removeAllTaskJobsFromQueue(taskId: string, marketplace?: string) 
         const taskJobs = jobs.filter(job => job && job.id && job.id.startsWith(jobIdPrefix));
 
         if (taskJobs.length > 0) {
-          // console.log(YELLOW + `[removeAllTaskJobsFromQueue] Found ${taskJobs.length} remaining ${state} jobs for ${mp}` + RESET);
           remainingJobs += taskJobs.length;
 
           // Try to remove them again
@@ -8089,7 +7656,6 @@ async function removeAllTaskJobsFromQueue(taskId: string, marketplace?: string) 
                 await job.remove();
               }
               totalRemoved++;
-              // console.log(GREEN + `[removeAllTaskJobsFromQueue] Removed missed job: ${job.id}` + RESET);
             } catch (error) {
               console.error(RED + `[removeAllTaskJobsFromQueue] Failed to remove missed job ${job.id}:` + RESET, error);
             }
@@ -8099,9 +7665,7 @@ async function removeAllTaskJobsFromQueue(taskId: string, marketplace?: string) 
     }
 
     if (remainingJobs > 0) {
-      // console.log(YELLOW + `[removeAllTaskJobsFromQueue] Removed ${remainingJobs} additional jobs in verification pass` + RESET);
     } else {
-      // console.log(GREEN + `[removeAllTaskJobsFromQueue] Verification complete - no remaining jobs found` + RESET);
     }
   }
 
@@ -8119,7 +7683,6 @@ async function cancelMarketplaceRateLimiterJobs(taskId: string, marketplace?: st
     if (!marketplace || marketplace.toLowerCase() === 'blur') {
       // For now, just log that we would cancel Blur rate limiter requests
       // TODO: Implement cancelTaskRequests method in BlurRateLimiter if needed
-      // console.log(`Would cancel Blur rate limiter requests for task ${taskId}`);
     }
 
     // Add other marketplace rate limiter cancellations as needed
@@ -8132,7 +7695,6 @@ async function cancelMarketplaceRateLimiterJobs(taskId: string, marketplace?: st
 
 // Helper function to attempt cancellation of any remaining orders
 async function attemptRemainingCancellations(taskId: string, marketplace: string): Promise<number> {
-  // console.log(YELLOW + `[attemptRemainingCancellations] Attempting to cancel remaining orders for ${marketplace} on task ${taskId}` + RESET);
 
   try {
     // Fetch the remaining active orders
@@ -8143,25 +7705,20 @@ async function attemptRemainingCancellations(taskId: string, marketplace: string
     }).limit(500); // Limit to prevent overwhelming the system
 
     if (remainingOrders.length === 0) {
-      // console.log(GREEN + `[attemptRemainingCancellations] No remaining orders found` + RESET);
       return 0;
     }
 
-    // console.log(YELLOW + `[attemptRemainingCancellations] Found ${remainingOrders.length} remaining orders to cancel` + RESET);
 
     // Get the task to find wallet ID
     const task = await Task.findById(taskId);
     if (!task) {
-      // console.log(RED + `[attemptRemainingCancellations] Task ${taskId} not found` + RESET);
       return remainingOrders.length;
     }
 
     // Log specific order details for debugging
     remainingOrders.slice(0, 5).forEach((order, index) => {
-      // console.log(YELLOW + `  - Order ${index + 1}: ${order._id} (${order.orderHash})` + RESET);
     });
     if (remainingOrders.length > 5) {
-      // console.log(YELLOW + `  - ... and ${remainingOrders.length - 5} more orders` + RESET);
     }
 
     // Attempt to cancel based on marketplace
@@ -8179,11 +7736,9 @@ async function attemptRemainingCancellations(taskId: string, marketplace: string
         await cancelBlurBids(ordersArray, task.walletId, taskId);
         break;
       default:
-        // console.log(RED + `[attemptRemainingCancellations] Unknown marketplace: ${marketplace}` + RESET);
         return remainingOrders.length;
     }
 
-    // console.log(GREEN + `[attemptRemainingCancellations] Cancellation jobs queued for ${remainingOrders.length} orders` + RESET);
 
     // Wait a bit for jobs to be processed
     await new Promise(resolve => setTimeout(resolve, 5000));
@@ -8226,7 +7781,6 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
     if (activeOrderCount > 0) {
       // Still have active orders - check if we should retry or if this is expected
       if (retryCount < MAX_RETRIES) {
-        // console.log(YELLOW + `[validateAndTransitionToStopped] ${marketplaceName} has ${activeOrderCount} active orders, retrying in ${RETRY_DELAY}ms (attempt ${retryCount + 1}/${MAX_RETRIES + 1})` + RESET);
 
         // Wait for potential database updates to complete
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
@@ -8235,27 +7789,21 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
         return await validateAndTransitionToStopped(taskId, marketplace, marketplaceName, retryCount + 1);
       } else {
         // Max retries reached but still have orders - attempt to cancel them
-        // console.log(RED + `[validateAndTransitionToStopped] WARNING: ${marketplaceName} at 100% tracking but ${activeOrderCount} orders still active after ${MAX_RETRIES} retries!` + RESET);
-        // console.log(YELLOW + `[validateAndTransitionToStopped] Attempting to cancel remaining orders...` + RESET);
 
         // Attempt to cancel remaining orders
         const remainingAfterAttempt = await attemptRemainingCancellations(taskId, marketplace);
 
         if (remainingAfterAttempt === 0) {
           // Successfully cancelled all remaining orders
-          // console.log(GREEN + `[validateAndTransitionToStopped] Successfully cancelled all remaining orders, transitioning to STOPPED` + RESET);
           setTaskStatus(taskId, 'STOPPED', `${marketplaceName} cancellation complete after cleanup`, marketplace);
           return;
         } else if (remainingAfterAttempt > 0) {
           // Still have orders after cancellation attempt
-          // console.log(RED + `[validateAndTransitionToStopped] Still have ${remainingAfterAttempt} orders after cancellation attempt` + RESET);
-          // console.log(RED + `[validateAndTransitionToStopped] Keeping CANCELLING status - manual intervention may be required` + RESET);
 
           // Reset the cancellation percentage to reflect actual state
           if (trackingStatus && trackingStatus.totalBids > 0) {
             const actualCompleted = Math.max(0, trackingStatus.totalBids - remainingAfterAttempt);
             const actualPercentage = (actualCompleted / trackingStatus.totalBids) * 100;
-            // console.log(RED + `[validateAndTransitionToStopped] Adjusting ${marketplaceName} percentage to ${actualPercentage.toFixed(2)}% based on remaining orders` + RESET);
 
             if (taskStatus[taskId]?.marketplaces[marketplaceName as keyof typeof taskStatus[string]['marketplaces']]) {
               taskStatus[taskId].marketplaces[marketplaceName as keyof typeof taskStatus[string]['marketplaces']]!.cancellationPercentage = Math.floor(actualPercentage);
@@ -8269,22 +7817,16 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
 
     // No active orders found - safe to transition to STOPPED
     if (isTrackingComplete || activeOrderCount === 0) {
-      // console.log(GREEN + `[validateAndTransitionToStopped] ${marketplaceName} cancellation validated complete:` + RESET);
-      // console.log(GREEN + `  - No active orders remaining` + RESET);
-      // console.log(GREEN + `  - Tracking status complete: ${isTrackingComplete}` + RESET);
-      // console.log(GREEN + `  - Transitioning to STOPPED` + RESET);
 
       // Safe to transition to STOPPED
       setTaskStatus(taskId, 'STOPPED', `${marketplaceName} cancellation complete - validated with enhanced checks`, marketplace);
     } else {
-      // console.log(YELLOW + `[validateAndTransitionToStopped] ${marketplaceName} orders cleared but tracking incomplete - keeping CANCELLING status` + RESET);
     }
 
   } catch (error) {
     console.error(RED + `[validateAndTransitionToStopped] Error validating ${marketplaceName} cancellation completion:` + RESET, error);
 
     // On error, keep CANCELLING status to be safe
-    // console.log(RED + `[validateAndTransitionToStopped] Keeping CANCELLING status due to validation error` + RESET);
   }
 }
 
@@ -8336,7 +7878,6 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
       if (aggregatedPercentage !== null) {
         percentage = aggregatedPercentage;
       } else {
-        // console.log(YELLOW + `[updateTaskCancellationPercentage] No aggregated tracking data for ${taskId}` + RESET);
         return;
       }
     } else {
@@ -8345,7 +7886,6 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
       if (trackerPercentage !== null) {
         percentage = trackerPercentage;
       } else {
-        // console.log(YELLOW + `[updateTaskCancellationPercentage] No tracking data for ${taskId}, marketplace: ${marketplace || 'none'}` + RESET);
         return;
       }
     }
@@ -8384,7 +7924,6 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
     }
 
     // Log the global update (deprecated)
-    // console.log(YELLOW + `[updateTaskCancellationPercentage] DEPRECATED: Global cancellation: ${percentage}% (use marketplace-specific data)` + RESET);
   }
 
   // Log marketplace-specific cancellation status
@@ -8403,16 +7942,11 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
 
     // CRITICAL BUG FIX: Fixed >= 100 to === 100 to prevent premature transitions
     if (isCancellingThisMarketplace && marketplacePercentage === 100) {
-      // console.log(RED + `[updateTaskCancellationPercentage] *** MARKETPLACE REACHED THRESHOLD *** ${marketplaceName}: ${marketplacePercentage}%` + RESET);
-      // console.log(GREEN + `[updateTaskCancellationPercentage] BUG FIXED: Using === 100 (was >= 100)` + RESET);
-      // console.log(GREEN + `[updateTaskCancellationPercentage] Fixed logic: ${marketplacePercentage} === 100 = ${marketplacePercentage === 100}` + RESET);
 
       // FOR NOW: Keep the old logic but add extensive logging to prove this is the issue
-      // console.log(YELLOW + `[updateTaskCancellationPercentage] Marketplace ${marketplaceName} reached 100%, performing enhanced validation...` + RESET);
 
       await validateAndTransitionToStopped(taskId, marketplace, marketplaceName);
     } else {
-      // console.log(GREEN + `[updateTaskCancellationPercentage] ${marketplaceName} NOT triggering transition: isCancelling=${isCancellingThisMarketplace}, percentage=${marketplacePercentage}% (>= 100: ${marketplacePercentage >= 100})` + RESET);
     }
   } else if (percentage >= 100) {
     // Global cancellation - check all marketplaces
@@ -8428,15 +7962,12 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
         });
 
         if (activeOrderCount === 0) {
-          // console.log(GREEN + `[updateTaskCancellationPercentage] Global cancellation at 100% with no remaining active orders` + RESET);
           // Transition all marketplaces back to STOPPED
           for (const mp of cancellingMarketplaces) {
             setTaskStatus(taskId, 'STOPPED', 'global cancellation complete - 100% and no active orders', mp);
           }
         } else {
           // Still have active orders at 100% - attempt to cancel them
-          // console.log(YELLOW + `[updateTaskCancellationPercentage] Global cancellation at 100% but ${activeOrderCount} orders still active` + RESET);
-          // console.log(YELLOW + `[updateTaskCancellationPercentage] Attempting to cancel remaining orders across all marketplaces...` + RESET);
 
           // Attempt to cancel remaining orders for each marketplace
           let totalRemaining = 0;
@@ -8448,13 +7979,11 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
           }
 
           if (totalRemaining === 0) {
-            // console.log(GREEN + `[updateTaskCancellationPercentage] Successfully cancelled all remaining orders globally` + RESET);
             // Transition all marketplaces to STOPPED
             for (const mp of cancellingMarketplaces) {
               setTaskStatus(taskId, 'STOPPED', 'global cancellation complete after cleanup', mp);
             }
           } else {
-            // console.log(RED + `[updateTaskCancellationPercentage] Still have ${totalRemaining} orders remaining after cleanup attempt` + RESET);
             // Adjust percentages based on actual remaining orders
             const trackingStatus = cancellationTracker.getStatus(taskId);
             if (trackingStatus && trackingStatus.totalBids > 0) {
@@ -8486,7 +8015,6 @@ function updateCancellationProgress(taskId: string, completed: number, total: nu
   // This function is deprecated - cancellation progress is now tracked by the cancellationTracker
   // Log progress for debugging only, don't update the actual percentage
   const percentage = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 100;
-  // console.log(`[${taskId}] Cancellation steps progress: ${completed}/${total} (${percentage}%)`);
 }
 
 // Helper function to fetch orders for cancellation
@@ -8510,7 +8038,6 @@ async function fetchOrdersForCancellation(taskId: string, marketplace?: string):
         marketplace: marketplaceLower
       }).lean().exec();
 
-      // console.log(`[fetchOrdersForCancellation] Fetched ${orders.length} ${marketplaceLower} orders for task ${taskId}`);
 
       return {
         opensea: marketplaceLower === 'opensea' ? orders : [],
@@ -8534,7 +8061,6 @@ async function fetchOrdersForCancellation(taskId: string, marketplace?: string):
         }).lean().exec()
       ]);
 
-      // console.log(`[fetchOrdersForCancellation] Fetched orders for task ${taskId} - OpenSea: ${openseaOrders.length}, MagicEden: ${magicedenOrders.length}, Blur: ${blurOrders.length}`);
 
       return {
         opensea: openseaOrders,
@@ -8603,7 +8129,6 @@ async function
     } else {
       // Add task to complete blacklist
       isTaskBlacklisted(taskId);
-      // console.log(`Task ${taskId} fully blacklisted`);
     }
     totalOperations += 1;
     completedOperations += 1;
@@ -8675,15 +8200,10 @@ async function
 
     const fetchResult = await lockManager.withLock(lockKey, async () => {
       const fetchedOrders = await fetchOrdersForCancellation(taskId, marketplace);
-      // console.log(YELLOW + `[stopTask] Fetched orders for cancellation:` + RESET);
-      // console.log(YELLOW + `  OpenSea: ${fetchedOrders.opensea.length}` + RESET);
-      // console.log(YELLOW + `  MagicEden: ${fetchedOrders.magiceden.length}` + RESET);
-      // console.log(YELLOW + `  Blur: ${fetchedOrders.blur.length}` + RESET);
       return fetchedOrders;
     });
 
     if (!fetchResult) {
-      // console.log(YELLOW + `[stopTask] Could not acquire lock for cancellation (task: ${taskId}, wallet: ${wallet?.address}). Another process is handling it.` + RESET);
       return;
     }
 
@@ -8710,7 +8230,6 @@ async function
           marketplacesWithoutOrders.push(mp);
           setTaskStatus(taskId, "STOPPED", "No orders to cancel", marketplace);
         } else {
-          // console.log(YELLOW + `[stopTask] Skipping ${marketplace} - not enabled (enabled: ${enabledMarketplaces.join(', ')})` + RESET);
         }
       }
     } else {
@@ -8734,7 +8253,6 @@ async function
             marketplacesWithoutOrders.push(name);
             setTaskStatus(taskId, "STOPPED", "No orders to cancel", name);
           } else if (isSelected && !isEnabled) {
-            // console.log(YELLOW + `[stopTask] Skipping ${name} for task ${taskId} - selected but not enabled` + RESET);
           }
         }
       }
@@ -8771,7 +8289,6 @@ async function
     // Check if there are no orders to cancel
     const totalOrderCount = orders.opensea.length + orders.magiceden.length + orders.blur.length;
     if (totalOrderCount === 0) {
-      // console.log(GREEN + `[stopTask] No orders to cancel - task remains in STOPPED state` + RESET);
 
       // Task remains in STOPPED state since no cancellation work is needed
       if (taskStatus[taskId]) {
@@ -8812,7 +8329,6 @@ async function
     const trackingStatus = cancellationTracker.getStatus(taskId, marketplace);
     if (trackingStatus) {
     } else {
-      // console.log(YELLOW + `[stopTask] WARNING: Failed to get tracking status after initialization` + RESET);
     }
 
     // Set initial cancellation percentage
@@ -8820,7 +8336,6 @@ async function
       await updateTaskCancellationPercentage(taskId, 0);
     }
 
-    // console.log(YELLOW + `[stopTask] Total active bids to cancel: ${totalBids}` + RESET);
 
     // Get currency symbol for OpenSea cancellations
     let currencySymbol = 'WETH'; // Default to WETH
@@ -8835,11 +8350,9 @@ async function
       case 'opensea': {
         // Cancel active HTTP requests first
         const httpResult = await cancelOpenseaRequest(taskId);
-        // console.log(GOLD + `  HTTP Cancellation Result: ${JSON.stringify(httpResult)}` + RESET);
 
         // Now cancel actual orders
         if (orders.opensea.length > 0 && WALLET_PRIVATE_KEY) {
-          // console.log(GOLD + `  Cancelling ${orders.opensea.length} OpenSea orders...` + RESET);
 
 
           // Track cancellation operation
@@ -8854,15 +8367,12 @@ async function
 
           await cancelOpenseaBids(orders.opensea, task.walletId, taskId, currencySymbol);
         } else if (orders.opensea.length === 0) {
-          // console.log(GREEN + `  ✅ No orders to cancel` + RESET);
 
           // Let the cancellation tracker handle percentage updates naturally
 
           await setMarketplaceCancellationComplete(taskId, marketplace);
           completionHandled = true;
-          // console.log(GOLD + `  🏁 Completion handled flag set to true` + RESET);
         } else if (!WALLET_PRIVATE_KEY) {
-          // console.log(RED + `  ❌ Cannot cancel orders - wallet private key not available` + RESET);
           await setMarketplaceCancellationComplete(taskId, marketplace);
           completionHandled = true;
         }
@@ -8879,11 +8389,9 @@ async function
       case 'magiceden': {
         // Cancel active HTTP requests first
         const httpResult = await cancelMagicedenRequest(taskId);
-        // console.log(MAGENTA + `  HTTP Cancellation Result: ${JSON.stringify(httpResult)}` + RESET);
 
         // Now cancel actual orders
         if (orders.magiceden.length > 0 && WALLET_PRIVATE_KEY) {
-          // console.log(MAGENTA + `  Cancelling ${orders.magiceden.length} MagicEden orders...` + RESET);
 
 
           // Track cancellation operation
@@ -8898,15 +8406,12 @@ async function
 
           await cancelMagicedenBids(orders.magiceden, task.walletId, taskId);
         } else if (orders.magiceden.length === 0) {
-          // console.log(GREEN + `  ✅ No orders to cancel` + RESET);
 
           // Let the cancellation tracker handle percentage updates naturally
 
           setMarketplaceCancellationComplete(taskId, marketplace);
           completionHandled = true;
-          // console.log(MAGENTA + `  🏁 Completion handled flag set to true` + RESET);
         } else if (!WALLET_PRIVATE_KEY) {
-          // console.log(RED + `  ❌ Cannot cancel orders - wallet private key not available` + RESET);
           setMarketplaceCancellationComplete(taskId, marketplace);
           completionHandled = true;
         }
@@ -8923,11 +8428,9 @@ async function
       case 'blur': {
         // Cancel active HTTP requests first
         const httpResult = await cancelBlurRequest(taskId);
-        // console.log(BLUE + `  HTTP Cancellation Result: ${JSON.stringify(httpResult)}` + RESET);
 
         // Now cancel actual orders
         if (orders.blur.length > 0 && WALLET_PRIVATE_KEY) {
-          // console.log(BLUE + `  Cancelling ${orders.blur.length} Blur orders...` + RESET);
 
 
           // Track cancellation operation
@@ -8942,15 +8445,12 @@ async function
 
           await cancelBlurBids(orders.blur, task.walletId, taskId);
         } else if (orders.blur.length === 0) {
-          // console.log(GREEN + `  ✅ No orders to cancel` + RESET);
 
           // Let the cancellation tracker handle percentage updates naturally
 
           setMarketplaceCancellationComplete(taskId, marketplace);
           completionHandled = true;
-          // console.log(BLUE + `  🏁 Completion handled flag set to true` + RESET);
         } else if (!WALLET_PRIVATE_KEY) {
-          // console.log(RED + `  ❌ Cannot cancel orders - wallet private key not available` + RESET);
           setMarketplaceCancellationComplete(taskId, marketplace);
           completionHandled = true;
         }
@@ -8988,7 +8488,6 @@ async function
         const totalOrderCount = orders.opensea.length + orders.magiceden.length + orders.blur.length;
 
         if (totalOrderCount > 0 && WALLET_PRIVATE_KEY) {
-          // console.log(YELLOW + `[stopTask] Cancelling orders for all marketplaces...` + RESET);
 
 
           // Track cancellation operation
@@ -9005,29 +8504,24 @@ async function
           const cancellationPromises = [];
 
           if (orders.opensea.length > 0) {
-            // console.log(GOLD + `  Cancelling ${orders.opensea.length} OpenSea orders...` + RESET);
             cancellationPromises.push(cancelOpenseaBids(orders.opensea, task.walletId, taskId, currencySymbol));
           }
 
           if (orders.magiceden.length > 0) {
-            // console.log(MAGENTA + `  Cancelling ${orders.magiceden.length} MagicEden orders...` + RESET);
             cancellationPromises.push(cancelMagicedenBids(orders.magiceden, task.walletId, taskId));
           }
 
           if (orders.blur.length > 0) {
-            // console.log(BLUE + `  Cancelling ${orders.blur.length} Blur orders...` + RESET);
             cancellationPromises.push(cancelBlurBids(orders.blur, task.walletId, taskId));
           }
 
           await Promise.allSettled(cancellationPromises);
         } else if (totalOrderCount === 0) {
-          // console.log(GREEN + `  ✅ No orders to cancel` + RESET);
 
           // For global cancellation with no orders, let tracker handle it naturally
 
           await setTaskCancellationComplete(taskId);
         } else if (!WALLET_PRIVATE_KEY) {
-          // console.log(RED + `  ❌ Cannot cancel orders - wallet private key not available` + RESET);
           // Let the cancellation tracker handle percentage updates naturally
           await setTaskCancellationComplete(taskId);
         }
@@ -9141,7 +8635,6 @@ async function
     if (WALLET_PRIVATE_KEY) {
       cancellationResult = await cancelAllRelatedBids(task, marketplace);
     } else {
-      // console.log(YELLOW + `[StopTask] Skipping bid cancellation for task ${taskId} - no valid wallet key available` + RESET);
       logger.logWarning(ErrorCategory.MARKETPLACE, 'Skipping bid cancellation - no valid wallet key', {
         taskId: task._id,
         contractSlug: task.contract.slug,
@@ -9180,17 +8673,13 @@ async function
 
     if (!completionHandled) {
       if (marketplace) {
-        // console.log(GREEN + `  🎯 Calling setMarketplaceCancellationComplete` + RESET);
         await setMarketplaceCancellationComplete(taskId, marketplace);
       } else {
-        // console.log(GREEN + `  🛑 Calling setTaskCancellationComplete` + RESET);
         await setTaskCancellationComplete(taskId);
       }
     } else {
-      // console.log(YELLOW + `  ⏭️  Completion already handled, skipping` + RESET);
     }
 
-    // console.log(GREEN + `[stopTask] Enhanced cancellation complete for task ${taskId}` + RESET);
 
     // Clean up marketplace-specific resources for scheduleNextLoop
     if (marketplace) {
@@ -9261,25 +8750,19 @@ async function
     });
 
     // Force complete cancellation on error and leave task blacklisted
-    // console.log(RED + `  Error: ${error.message}` + RESET);
-    // console.log(RED + `  Marketplace: ${marketplace || 'ALL'}` + RESET);
 
     if (marketplace) {
-      // console.log(RED + `  🎯 Force calling setMarketplaceCancellationComplete` + RESET);
       await setMarketplaceCancellationComplete(taskId, marketplace);
     } else {
-      // console.log(RED + `  🛑 Force calling setTaskCancellationComplete` + RESET);
       await setTaskCancellationComplete(taskId);
     }
 
     // Log that task remains blacklisted due to error
-    // console.log(YELLOW + `[StopTask] Task ${taskId} remains blacklisted due to error - manual intervention may be required` + RESET);
 
     // Clean up marketplace-specific resources even on error
     if (marketplace) {
       try {
         const marketplaceLower = marketplace.toLowerCase();
-        // console.log(YELLOW + `[stopTask] Cleaning up marketplace-specific resources after error for ${marketplaceLower}` + RESET);
 
         // Clear marketplace-specific countdown timer
         const timerKey = `${taskId}-${marketplaceLower}`;
@@ -10638,13 +10121,11 @@ const magicedenOrdersBeingCancelled = new Set<string>();
 async function cancelMagicedenBids(orders: any[], walletId: string, taskId: string) {
   if (!orders.length) return;
 
-  // console.log(MAGENTA + `[cancelMagicedenBids] Starting cancellation for ${orders.length} MagicEden orders for task ${taskId}` + RESET);
 
   // Parent job tracking removed - now using cancellationTracker
 
   // Check cancellation tracker status
   const trackingStatus = cancellationTracker.getStatus(taskId, 'magiceden');
-  // console.log(MAGENTA + `[cancelMagicedenBids] Cancellation tracker status: ${trackingStatus ? `${trackingStatus.completedCancellations}/${trackingStatus.totalBids} (${cancellationTracker.getPercentage(taskId, 'magiceden')}%)` : 'Not initialized'}` + RESET);
 
   // Filter out orders that are already being cancelled
   const ordersToCancel = [];
@@ -10661,15 +10142,12 @@ async function cancelMagicedenBids(orders: any[], walletId: string, taskId: stri
   }
 
   if (duplicateOrders.length > 0) {
-    // console.log(YELLOW + `[cancelMagicedenBids] Skipping ${duplicateOrders.length} orders already being cancelled` + RESET);
   }
 
   if (!ordersToCancel.length) {
-    // console.log(YELLOW + `[cancelMagicedenBids] All ${orders.length} orders are already being cancelled, skipping` + RESET);
     return;
   }
 
-  // console.log(MAGENTA + `[cancelMagicedenBids] Queueing ${ordersToCancel.length} MagicEden cancellation orders for task ${taskId} (${duplicateOrders.length} duplicates filtered)` + RESET);
 
   for (let i = 0; i < ordersToCancel.length; i += 500) {
     const batchOrders = ordersToCancel.slice(i, i + 500);
@@ -10677,10 +10155,8 @@ async function cancelMagicedenBids(orders: any[], walletId: string, taskId: stri
     const orderKeys = batchOrders.map((order: any) => order._id)
     const batchId = `batch-${i / 500}-${Date.now()}`; // Unique batch identifier
 
-    // console.log(MAGENTA + `[cancelMagicedenBids] Adding batch ${i / 500 + 1} with ${batchOrders.length} orders` + RESET);
 
     const jobOptions = getCancellationJobOptions(taskId, batchId, CANCEL_MAGICEDEN_BID);
-    // console.log(MAGENTA + `[cancelMagicedenBids] Job options for batch: ${JSON.stringify(jobOptions)}` + RESET);
 
     await queue.add(CANCEL_MAGICEDEN_BID, {
       orderIds: extractedOrderIds,
@@ -10694,21 +10170,17 @@ async function cancelMagicedenBids(orders: any[], walletId: string, taskId: stri
   // Decrement the own bid counter by the number of cancelled orders
   decrementOwnBidCounter('magiceden', ordersToCancel.length);
 
-  // console.log(MAGENTA + `[cancelMagicedenBids] Successfully queued all MagicEden cancellation jobs. Total jobs created: ${Math.ceil(ordersToCancel.length / 500)}` + RESET);
 }
 
 async function cancelBlurBids(orders: any[], walletId: string, taskId: string) {
   if (!orders.length) return
 
-  // console.log(BLUE + `[cancelBlurBids] Starting cancellation for ${orders.length} Blur orders for task ${taskId}` + RESET);
 
   // Parent job tracking removed - now using cancellationTracker
 
   // Check cancellation tracker status
   const trackingStatus = cancellationTracker.getStatus(taskId, 'blur');
-  // console.log(BLUE + `[cancelBlurBids] Cancellation tracker status: ${trackingStatus ? `${trackingStatus.completedCancellations}/${trackingStatus.totalBids} (${cancellationTracker.getPercentage(taskId, 'blur')}%)` : 'Not initialized'}` + RESET);
 
-  // console.log(BLUE + `[cancelBlurBids] Queueing ${orders.length} Blur cancellation orders for task ${taskId}` + RESET);
 
   const cancelData = orders.map((order, index) => {
     const payload = JSON.parse(order.orderHash)
@@ -10720,17 +10192,14 @@ async function cancelBlurBids(orders: any[], walletId: string, taskId: string) {
     }
   }) as Job[]
 
-  // console.log(BLUE + `[cancelBlurBids] Created ${cancelData.length} cancellation job configurations` + RESET);
 
   await processBulkJobs(cancelData);
 
-  // console.log(BLUE + `[cancelBlurBids] Successfully queued all Blur cancellation jobs. Total jobs: ${cancelData.length}` + RESET);
 }
 
 async function cancelOpenseaBids(orders: any[], walletId: string, taskId: string, currencySymbol: string) {
   if (!orders.length) return;
 
-  // console.log(GOLD + `[cancelOpenseaBids] Starting cancellation for ${orders.length} OpenSea orders for task ${taskId}` + RESET);
 
   // Parent job tracking removed - now using cancellationTracker
 
@@ -10759,18 +10228,15 @@ async function cancelOpenseaBids(orders: any[], walletId: string, taskId: string
 
   // Track the job IDs we're about to create for reconciliation
   const expectedJobIds = cancelData.map(job => job.opts.jobId);
-  // console.log(GOLD + `[cancelOpenseaBids] Creating ${expectedJobIds.length} cancellation jobs for task ${taskId}` + RESET);
 
   // Expected job count tracking removed - using marketplace-specific counts
 
   await processBulkJobs(cancelData)
 
-  // console.log(GOLD + `[cancelOpenseaBids] Successfully queued all OpenSea cancellation jobs` + RESET);
 
   // Log current tracker state
   const trackingStatus = cancellationTracker.getStatus(taskId, 'opensea');
   if (trackingStatus) {
-    // console.log(GOLD + `[cancelOpenseaBids] Tracking status after queueing: ${trackingStatus.completedCancellations}/${trackingStatus.totalBids} (${cancellationTracker.getPercentage(taskId, 'opensea')}%)` + RESET);
   }
 
   // Decrement the own bid counter by the number of cancelled orders
@@ -10783,8 +10249,6 @@ async function updateStatus(task: ITask & { stoppedByWarning?: boolean }) {
 
     // If stopped by warning, ensure task is stopped but keep warning state
     if (stoppedByWarning) {
-      // console.log(YELLOW + `Task ${taskId} stopped due to floor price warning` + RESET);
-      // console.log(YELLOW + `Warning will persist until task is updated` + RESET);
 
       // DO NOT clear warning state - let it persist until task is updated
 
@@ -10834,7 +10298,6 @@ async function updateMarketplace(task: ITask) {
     const incoming = Array.from(newSet).find(m => !currentSet.has(m));
 
     if (outgoing) {
-      // console.log(RED + `Removing marketplace: ${outgoing.toUpperCase()} for collection: ${task.contract.slug}`.toUpperCase() + RESET);
     }
 
     currentTasks[taskIndex] = {
@@ -10858,7 +10321,6 @@ async function updateMarketplace(task: ITask) {
       const color = incoming.toLowerCase() === "magiceden" ? MAGENTA :
         incoming.toLowerCase() === "blur" ? GOLD : BLUE;
 
-      // console.log(color + `Adding marketplace: ${incoming.toUpperCase()} for collection: ${task.contract.slug}`.toUpperCase() + RESET);
 
       // Only create jobs if the task is actually running
       // This prevents jobs from being created when marketplaces are added to stopped tasks
@@ -10870,7 +10332,6 @@ async function updateMarketplace(task: ITask) {
           console.error(RED + `Error adding marketplace ${incoming} to task ${task._id}: ` + RESET, error);
         }
       } else {
-        // console.log(YELLOW + `Not starting jobs for marketplace ${incoming} - task ${task._id} is not running` + RESET);
       }
     }
 
@@ -10914,13 +10375,10 @@ async function updateMultipleTasksStatus(data: { tasks: ITask[], running: boolea
       const succeeded = results.filter(r => r?.result?.success);
 
       if (errors.length > 0 || aborted.length > 0) {
-        // console.log(YELLOW + `Started ${succeeded.length} tasks successfully, ${errors.length} failed, ${aborted.length} aborted` + RESET);
         if (aborted.length > 0) {
           const reasons = aborted.map(r => r.result?.reason || 'unknown').filter((v, i, a) => a.indexOf(v) === i);
-          // console.log(YELLOW + `Abort reasons: ${reasons.join(', ')}` + RESET);
         }
       } else {
-        // console.log(GREEN + `Successfully started all ${tasks.length} tasks` + RESET);
       }
     } else {
       // Process all tasks with coordination to prevent race conditions
@@ -10953,9 +10411,7 @@ async function updateMultipleTasksStatus(data: { tasks: ITask[], running: boolea
         return;
       }
       if (errors.length > 0) {
-        // console.log(YELLOW + `Stopped ${tasks.length - errors.length} tasks successfully, ${errors.length} failed` + RESET);
       } else {
-        // console.log(GREEN + `Successfully stopped all ${tasks.length} tasks` + RESET);
       }
 
       // Clean up any orphaned data for stopped tasks
@@ -11059,13 +10515,9 @@ function getCloseReason(code: number): string {
 }
 
 function logConnectionStats() {
-  // console.log(`Total Connections: ${connectionMetrics.totalConnections}`);
-  // console.log(`Total Disconnections: ${connectionMetrics.totalDisconnections}`);
-  // console.log(`Average Connection Duration: ${formatDuration(connectionMetrics.averageConnectionDuration)}`);
 
   if (connectionMetrics.connectionStartTime) {
     const currentDuration = Date.now() - connectionMetrics.connectionStartTime;
-    // console.log(`Current Connection Duration: ${formatDuration(currentDuration)}`);
   }
 
   // Recent disconnection reasons
@@ -11075,7 +10527,6 @@ function logConnectionStats() {
     return acc;
   }, {} as Record<string, number>);
 
-  // console.log(`Recent Disconnection Reasons:`, reasonCounts);
 }
 
 async function saveConnectionMetrics() {
@@ -11118,7 +10569,6 @@ function startConnectionMonitoring() {
 
       // Log every 5 minutes
       if (currentDuration % (5 * 60 * 1000) < 10000) { // Within 10 seconds of 5-minute mark
-        // console.log(BLUE + `🔗 WebSocket uptime: ${formatDuration(currentDuration)}` + RESET);
       }
 
       // Log connection stats every hour
@@ -11138,13 +10588,11 @@ let connectionPromise: Promise<void> | null = null;
 async function connectWebSocket(): Promise<void> {
   // Return existing connection attempt if already in progress
   if (isConnecting && connectionPromise) {
-    // console.log(YELLOW + 'WebSocket connection already in progress, waiting...' + RESET);
     return connectionPromise;
   }
 
   // If already connected, just return
   if (wsManager?.isConnected()) {
-    // console.log(BLUE + 'WebSocket already connected' + RESET);
     return;
   }
 
@@ -11162,8 +10610,6 @@ async function connectWebSocket(): Promise<void> {
 
 async function _doConnect(): Promise<void> {
   if (!wsManager) {
-    // console.log(GREEN + `Using deterministic client ID: ${clientId}` + RESET);
-    // console.log(GREEN + `Based on: ${process.env.API_KEY ? 'API_KEY' : process.env.CLIENT_ID ? 'CLIENT_ID' : 'default'}` + RESET);
 
     wsManager = new WebSocketManager({
       url: MARKETPLACE_WS_URL,
@@ -11177,7 +10623,6 @@ async function _doConnect(): Promise<void> {
 
     // Set up event handlers
     wsManager.on('connected', async (connectionId) => {
-      // console.log(GOLD + `CONNECTED TO MARKETPLACE EVENTS WEBSOCKET (ID: ${connectionId}) at ${new Date().toISOString()}` + RESET);
 
       await logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket connected to marketplace', {
         connectionId,
@@ -11194,7 +10639,6 @@ async function _doConnect(): Promise<void> {
 
       // Clear activeSubscriptions to sync with server
       activeSubscriptions.clear();
-      // console.log(YELLOW + "Cleared active subscriptions for fresh reconnect" + RESET);
 
       // Subscribe only running tasks after connection
       const runningTasks = currentTasks.filter(task => task.running);
@@ -11229,7 +10673,6 @@ async function _doConnect(): Promise<void> {
 
         updateConnectionStats(connectionMetrics.connectionDuration, getCloseReason(event.code));
 
-        // console.log(YELLOW + `WebSocket disconnected after ${formatDuration(connectionMetrics.connectionDuration)} (Code: ${event.code}) - cleared subscription cache` + RESET);
 
         await logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket disconnected', {
           connectionId: connectionMetrics.currentConnectionId || undefined,
@@ -11239,7 +10682,6 @@ async function _doConnect(): Promise<void> {
           totalDisconnections: connectionMetrics.totalDisconnections
         });
       } else {
-        // console.log(YELLOW + "WebSocket closed - cleared subscription cache" + RESET);
 
         await logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket closed unexpectedly', {
           disconnectCode: event.code,
@@ -11281,7 +10723,6 @@ async function _doConnect(): Promise<void> {
     });
 
     wsManager.on('server_status', (status: any) => {
-      // console.log(`Server Status Update: `, status);
       // Update any UI or metrics as needed
     });
 
@@ -11311,11 +10752,6 @@ async function _doConnect(): Promise<void> {
 async function handleMarketplaceMessage(message: any) {
   try {
     // Debug logging for message inspection
-    // console.log(YELLOW + `[DEBUG][handleMarketplaceMessage] Received message:` + RESET);
-    // console.log(YELLOW + `  - eventType: ${message.eventType}` + RESET);
-    // console.log(YELLOW + `  - marketplace: ${message.marketplace}` + RESET);
-    // console.log(YELLOW + `  - event: ${message.event}` + RESET);
-    // console.log(YELLOW + `  - Full message: ${JSON.stringify(message).substring(0, 500)}...` + RESET);
 
     if (message.eventType === 'BID_CREATED') {
       return handleCounterBid(message)
@@ -11355,7 +10791,6 @@ async function updateBalancesForItemSold(message: any) {
     const price = data.price; // Purchase price
 
     if (!toAddress || !contractAddress || !marketplace || !tokenId) {
-      // console.log(YELLOW + `Missing required fields in ITEM_SOLD event` + RESET);
       return;
     }
 
@@ -11365,7 +10800,6 @@ async function updateBalancesForItemSold(message: any) {
       `${contractAddress}:${tokenId}:${txHash}` :
       `${contractAddress}:${tokenId}:${marketplace}:${toAddress}:${price}:${data.createdAt || Date.now()}`;
 
-    // console.log(GOLD + JSON.stringify(data) + RESET);
 
     // Add to the set to prevent future duplicates
     recentItemSoldEvents.add(eventKey);
@@ -11375,7 +10809,6 @@ async function updateBalancesForItemSold(message: any) {
 
     if (!wallet) {
       // Not one of our wallets, ignore
-      // console.log(YELLOW + `Wallet ${toAddress} not found in our system, skipping auto-listing` + RESET);
       return;
     }
 
@@ -11384,8 +10817,6 @@ async function updateBalancesForItemSold(message: any) {
 
     const walletAddressKey = wallet.address.toLowerCase();
 
-    // console.log(GREEN + `💰 Item purchased by our wallet: ${wallet.address}` + RESET);
-    // console.log(GREEN + `   Contract: ${contractAddress}, Token: ${tokenId}, Marketplace: ${marketplace}` + RESET);
 
     // Initialize wallet balance structure if not exists
     if (!balances[walletAddressKey]) {
@@ -11443,17 +10874,14 @@ async function triggerAutoListingForPurchase(
     });
 
     if (autoListingTasks.length === 0) {
-      // console.log(`No auto-listing tasks found for contract ${contractAddress} and wallet ${wallet.address}`);
       return;
     }
 
-    // console.log(GREEN + `🚀 Found ${autoListingTasks.length} auto-listing task(s) for purchased item` + RESET);
 
     // Process each auto-listing task
     for (const task of autoListingTasks) {
       const listingConfig = task.listingConfig!;
 
-      // console.log(GREEN + `Creating auto-listing for token ${tokenId} based on task ${task._id}` + RESET);
 
       // Create listing data based on task configuration
       const listingData: Partial<IListing> = {
@@ -11490,7 +10918,6 @@ async function triggerAutoListingForPurchase(
         const minimumProfit = parseFloat(listingConfig.minimumProfit) || 0;
         const calculatedPrice = price + minimumProfit;
         listingData.basePrice = calculatedPrice.toString();
-        // console.log(`Using dynamic pricing based on buy price: ${price} + ${minimumProfit} = ${calculatedPrice}`);
       }
 
       try {
@@ -11505,7 +10932,6 @@ async function triggerAutoListingForPurchase(
         });
 
         if (existingListing) {
-          // console.log(YELLOW + `Listing already exists for token ${tokenId}, skipping auto-listing` + RESET);
           continue;
         }
 
@@ -11513,7 +10939,6 @@ async function triggerAutoListingForPurchase(
         const newListing = new Listing(listingData);
         await newListing.save();
 
-        // console.log(GREEN + `✅ Created auto-listing ${newListing._id} for token ${tokenId}` + RESET);
 
         // Schedule the listing for immediate processing
         await scheduleListing(newListing);
@@ -11578,26 +11003,20 @@ async function handleCounterBid(message: any) {
 }
 
 function getMarketplaceDetails(message: any): { contractAddress?: string, slug?: string } {
-  // console.log(GREEN + `[DEBUG][getMarketplaceDetails] Processing marketplace: ${message.marketplace}` + RESET);
-  // console.log(GREEN + `[DEBUG][getMarketplaceDetails] BLUR=${BLUR}, OPENSEA=${OPENSEA}, MAGICEDEN=${MAGICEDEN}` + RESET);
 
   let result: { contractAddress?: string, slug?: string } = {};
 
   switch (message.marketplace) {
     case BLUR:
       result = { contractAddress: handleBlurMessages(message) };
-      // console.log(GREEN + `[DEBUG][getMarketplaceDetails] BLUR result: ${JSON.stringify(result)}` + RESET);
       return result;
     case OPENSEA:
       result = handleOpenSeaMessages(message);
-      // console.log(GREEN + `[DEBUG][getMarketplaceDetails] OPENSEA result: ${JSON.stringify(result)}` + RESET);
       return result;
     case MAGICEDEN:
       result = handleMagicEdenMessages(message);
-      // console.log(GREEN + `[DEBUG][getMarketplaceDetails] MAGICEDEN result: ${JSON.stringify(result)}` + RESET);
       return result;
     default:
-      // console.log(`Unknown marketplace: ${message.marketplace}`);
       return {};
   }
 }
@@ -11616,7 +11035,6 @@ async function handleCounterBidForTask(task: any, message: any) {
     } else {
     }
   } catch (error: any) {
-    // console.log(`Counterbid error for task ${task._id}: ${error.message}`);
   }
 }
 
@@ -11625,13 +11043,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
   // Structured log: start
   try { logRaw('magiceden', { taskId: task._id.toString(), function: 'handleMagicEdenCounterbid', stage: 'start', level: 'info', message: 'Starting MagicEden counterbid handler', metadata: { slug: task.contract?.slug } }); } catch {}
   try {
-    // console.log(MAGENTA + `[MagicEden Counterbid] Starting counterbid handler for task ${task._id}` + RESET);
 
     const currentTask = activeTasks.get(task._id)
     if (!currentTask) {
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[MagicEden Counterbid] EARLY RETURN: Task ${task._id} not found in activeTasks` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       return;
     }
 
@@ -11641,52 +11055,36 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
     const taskMarketplaces = currentTask.selectedMarketplaces.map((market) => market.toLowerCase());
     if (!taskMarketplaces.includes("magiceden")) {
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[MagicEden Counterbid] EARLY RETURN: Task ${task._id} does not have MagicEden selected (selected: ${taskMarketplaces.join(', ')})` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       return;
     }
 
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) {
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[MagicEden Counterbid] EARLY RETURN: MagicEden is not enabled globally (enabled: ${enabledMarketplaces.join(', ')})` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       return;
     };
 
     const expiration = getExpiry(currentTask.bidDuration)
     const orderHash = data?.data?.id
-    // console.log(MAGENTA + `[MagicEden Counterbid] Order hash: ${orderHash}, expiration: ${expiration}` + RESET);
 
     // Include task ID in the hash to make it task-specific
     const taskSpecificHash = `${orderHash}-${task._id}`;
     if (hasSeenItem(seenOrderHashes, taskSpecificHash)) {
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[MagicEden Counterbid] EARLY RETURN: Already processed order hash ${taskSpecificHash}` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       return;
     }
     addSeenItem(seenOrderHashes, taskSpecificHash)
     const maker = data?.data?.maker?.toLowerCase()
-    // console.log(MAGENTA + `[MagicEden Counterbid] Incoming bid maker: ${maker}` + RESET);
 
     // Parallel fetch wallet data and all wallets
-    // console.log(MAGENTA + `[MagicEden Counterbid] Fetching wallet data for ${task.wallet}` + RESET);
     const [taskWallet, allWallets] = await Promise.all([
       walletCache.getWallet(task.wallet),
       walletCache.getAllWallets()
     ]);
 
     if (!taskWallet) {
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[MagicEden Counterbid] EARLY RETURN: Wallet not found for task ${task._id}: ${task.wallet}` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       await logger.logError(ErrorCategory.DATABASE, `Wallet not found for task ${task._id}: ${task.wallet}`, new Error('Wallet not found'));
       return;
     }
 
     const walletAddresses = allWallets.map((wallet) => wallet.address.toLowerCase())
-    // console.log(MAGENTA + `[MagicEden Counterbid] Total wallets in system: ${walletAddresses.length}` + RESET);
 
     // Extract bid data before wallet check
     const bidType = data?.data?.criteria?.kind
@@ -11694,7 +11092,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     const usdPrice = Number(data?.data?.price?.amount?.usd)
     const eth_price = Number(data?.data?.price?.amount?.native)
 
-    // console.log(MAGENTA + `[MagicEden Counterbid] Bid type: ${bidType}, Token ID: ${tokenId || 'N/A'}, ETH Price: ${eth_price}, USD Price: ${usdPrice}` + RESET);
 
     // Initialize bestOffers and currentTokenIds BEFORE any early returns
     if (!bestOffers[task._id]) {
@@ -11714,9 +11111,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
 
     if (walletAddresses.includes(maker)) {
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[MagicEden Counterbid] EARLY RETURN: Own bid detected from ${maker}` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       incrementOwnBidCounter('magiceden', orderHash);
       return
     }
@@ -11724,18 +11118,11 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     // Comprehensive logging for MagicEden counterbid
     const makerFormatted = maker ? `${maker.slice(0, 6)}...${maker.slice(-4)}` : 'unknown';
     const bidTypeDisplay = bidType === 'token' ? `Token #${tokenId}` : 'Collection';
-    // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-    // console.log(MAGENTA + `[MagicEden Counterbid] Task: ${task._id} | Collection: ${task.contract.slug} | Type: ${bidTypeDisplay} | Incoming: ${eth_price.toFixed(4)} ETH ($${usdPrice.toFixed(2)}) | Maker: ${makerFormatted}` + RESET);
-    // console.log(MAGENTA + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
     if (!currentTask.outbidOptions.counterbid) {
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[MagicEden Counterbid] EARLY RETURN: Counterbid is disabled for task ${task._id}` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       return;
     }
 
-    // console.log(MAGENTA + `[MagicEden Counterbid] Counterbid enabled, proceeding with bid processing` + RESET);
 
     // Only decrypt private key after checking if it's our own bid
     const WALLET_PRIVATE_KEY = await walletCache.getDecryptedPrivateKey(taskWallet);
@@ -11877,18 +11264,13 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         minBidPriceEth,
       }
 
-      // console.log(MAGENTA + `[MagicEden Counterbid] Queueing token counterbid job` + RESET);
 
       await queue.add(
         MAGICEDEN_TOKEN_BID_COUNTERBID,
         bidData
       );
-      // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Token: #${tokenId} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-      // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
       seenOrderHashes.delete(taskSpecificHash);
-      // console.log(MAGENTA + `[MagicEden Counterbid] Cleared seen hash ${taskSpecificHash} to allow future counterbids` + RESET);
 
       if (orders.length > 0) {
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
@@ -11902,19 +11284,14 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
     }
     else if (bidType === "attribute") {
-      // console.log(MAGENTA + `[MagicEden Counterbid] Processing attribute bid` + RESET);
 
       const trait = {
         attributeKey: data?.data?.criteria?.data?.attribute?.key,
         attributeValue: data?.data?.criteria?.data?.attribute?.value,
       }
-      // console.log(MAGENTA + `[MagicEden Counterbid] Trait: ${JSON.stringify(trait)}` + RESET);
 
       const hasTraits = checkMagicEdenTrait(selectedTraits, trait)
       if (!hasTraits || !trait.attributeKey || !trait.attributeValue) {
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[MagicEden Counterbid] EARLY RETURN: Trait not selected or invalid (hasTraits=${hasTraits}, key=${trait.attributeKey}, value=${trait.attributeValue})` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
@@ -12030,7 +11407,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
             // IMPORTANT: Check if the calculated offer price exceeds max bid price
             const tokenOfferPriceEth = tokenOfferPrice / Math.pow(10, decimal);
             if (maxBidPriceEth > 0 && tokenOfferPriceEth > maxBidPriceEth) {
-              // console.log(YELLOW + `[MagicEden] Skipping token #${tokenId} counterbid - price ${tokenOfferPriceEth.toFixed(4)} ${currencySymbol} exceeds max ${maxBidPriceEth.toFixed(4)} ${currencySymbol}` + RESET);
               continue; // Skip this token as it exceeds max bid price
             }
 
@@ -12053,15 +11429,11 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               MAGICEDEN_TOKEN_BID_COUNTERBID,
               tokenBidData
             );
-            // console.log(GREEN + `[MagicEden] Queued token counterbid for #${tokenId} at ${tokenOfferPriceEth.toFixed(4)} ${currencySymbol} (has trait ${trait.attributeKey}:${trait.attributeValue})` + RESET);
             tokenCounterbidsQueued++;
           }
         }
 
         if (tokenCounterbidsQueued > 0) {
-          // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-          // console.log(GREEN + `[MagicEden Trait-Triggered Token Counterbids] Task: ${task._id} | Queued ${tokenCounterbidsQueued} token counterbids for tokens with trait ${identifier}` + RESET);
-          // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         }
       } catch (error) {
         console.error(`[MagicEden] Error fetching tokens with trait ${trait.attributeKey}:${trait.attributeValue}:`, error);
@@ -12082,16 +11454,12 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           trait: JSON.stringify(trait),
         }
 
-        // console.log(MAGENTA + `[MagicEden Counterbid] Queueing trait counterbid job` + RESET);
 
         await queue.add(
           MAGICEDEN_TRAIT_BID_COUNTERBID,
           bidData
         );
 
-        // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(GREEN + `[MagicEden Trait Collection Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${traitDisplay} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-        // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       }
 
       seenOrderHashes.delete(taskSpecificHash);
@@ -12103,12 +11471,10 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
     }
     else if (bidType === "collection") {
-      // console.log(MAGENTA + `[MagicEden Counterbid] Processing collection bid` + RESET);
       // Allow all task types to respond to collection offers
       // Process each existing offer individually
 
       const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal);
-      // console.log(MAGENTA + `[MagicEden Counterbid] Collection bid amount: ${incomingBidAmountEth} ETH` + RESET);
 
       // Check cache first for floor price
       let floor_price = await collectionCache.getFloorPrice(task.contract.contractAddress, 'magiceden');
@@ -12245,7 +11611,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               counterbidData
             );
 
-            // console.log(GREEN + `[MagicEden collection] Queued trait counterbid for ${order.identifier} - Existing: ${(Number(order.offerPrice) / Math.pow(10, decimal)).toFixed(4)} ${currencySymbol} <= Incoming: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
             counterbidsQueued++;
             ordersToCancel.push(order);
 
@@ -12269,7 +11634,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               bidData
             );
 
-            // console.log(GREEN + `[MagicEden collection] Queued collection counterbid - Existing: ${(Number(order.offerPrice) / Math.pow(10, decimal)).toFixed(4)} ${currencySymbol} <= Incoming: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
             counterbidsQueued++;
             ordersToCancel.push(order);
 
@@ -12292,26 +11656,20 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               minBidPriceEth
             }
 
-            // console.log(MAGENTA + `[MagicEden Counterbid] Queueing collection->token counterbid for #${tokenId}` + RESET);
 
             await queue.add(
               MAGICEDEN_TOKEN_BID_COUNTERBID,
               bidData
             );
 
-            // console.log(GREEN + `[MagicEden collection] Queued token counterbid for #${tokenId} - Existing: ${(Number(order.offerPrice) / Math.pow(10, decimal)).toFixed(4)} ${currencySymbol} <= Incoming: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
             counterbidsQueued++;
             ordersToCancel.push(order);
           }
         } else {
-          // console.log(YELLOW + `[MagicEden collection] Skipping ${order.identifier} - Existing: ${(Number(order.offerPrice) / Math.pow(10, decimal)).toFixed(4)} ${currencySymbol} > Incoming: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
         }
       }
 
       if (counterbidsQueued > 0) {
-        // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(GREEN + `[MagicEden Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${baseOfferPriceEth.toFixed(4)} ${currencySymbol} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-        // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
         // Cancel the orders that we're counterbidding
         if (ordersToCancel.length > 0) {
@@ -12320,17 +11678,11 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
         }
       } else {
-        // console.log(YELLOW + `[MagicEden collection] Task ${task._id} - No offers to counterbid (all existing offers > incoming offer)` + RESET);
       }
 
       seenOrderHashes.delete(taskSpecificHash);
-      // console.log(MAGENTA + `[MagicEden Counterbid] Cleared seen hash for collection bid to allow future counterbids` + RESET);
     }
-    // console.log(MAGENTA + `[MagicEden Counterbid] Completed counterbid handler for task ${task._id}` + RESET);
   } catch (error) {
-    // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-    // console.log(RED + `[MagicEden Counterbid] ERROR: ${error instanceof Error ? error.message : String(error)}` + RESET);
-    // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
     try { logRaw('magiceden', { taskId: task._id.toString(), function: 'handleMagicEdenCounterbid', stage: 'error', level: 'error', message: 'Error in MagicEden counterbid handler', metadata: { error: error instanceof Error ? error.message : String(error) } }); } catch {}
   }
 }
@@ -12341,9 +11693,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const currentTask = activeTasks.get(task._id)
     if (!currentTask) {
       logEarlyReturn('opensea', task._id.toString(), 'handleOpenseaCounterbid', 'Task not found in activeTasks');
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Task ${task._id} not found in activeTasks` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       return;
     }
 
@@ -12357,17 +11706,11 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const taskMarketplaces = currentTask.selectedMarketplaces.map((market) => market.toLowerCase());
     if (!taskMarketplaces.includes("opensea")) {
       logEarlyReturn('opensea', task._id.toString(), 'handleOpenseaCounterbid', 'OpenSea not selected for task', { selected: taskMarketplaces });
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Task ${task._id} does not have OpenSea selected (selected: ${taskMarketplaces.join(', ')})` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       return;
     }
 
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) {
       logEarlyReturn('opensea', task._id.toString(), 'handleOpenseaCounterbid', 'OpenSea disabled globally', { enabledMarketplaces });
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: OpenSea is not enabled globally (enabled: ${enabledMarketplaces.join(', ')})` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       return;
     }
 
@@ -12383,7 +11726,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const usd_price = Number(data?.payload?.payload?.payment_token?.usd_price)
     const etherPrice = usd_price / eth_price
 
-    // console.log(GREEN + `[OpenSea Counterbid] Incoming bid data: maker=${maker}, symbol=${symbol}, base_price=${base_price}, eth_price=${eth_price}` + RESET);
 
     let incomingBidAmount = 0
     const { currencySymbol, decimal, currencyType } = await calculateBidPrice(currentTask, 0, "opensea")
@@ -12411,15 +11753,11 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     }
 
     if (!Number.isFinite(incomingBidAmount)) {
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid amount is not finite (${incomingBidAmount})` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       return;
     }
 
     const normalizedIncomingBidAmount = Math.ceil(incomingBidAmount);
     if (normalizedIncomingBidAmount !== incomingBidAmount) {
-      // console.log(YELLOW + `[OpenSea Counterbid] Normalized incoming bid amount from ${incomingBidAmount} to ${normalizedIncomingBidAmount}` + RESET);
     }
     incomingBidAmount = normalizedIncomingBidAmount;
 
@@ -12437,7 +11775,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const orderHash = data.payload.payload.order_hash
 
     const detectedBidType = tokenId ? 'token' : (trait ? 'trait' : 'collection');
-    // console.log(GREEN + `[OpenSea Counterbid] Bid type detected: ${detectedBidType}, Token ID: ${tokenId || 'N/A'}, Trait: ${trait ? JSON.stringify(trait) : 'N/A'}, Order hash: ${orderHash}` + RESET);
 
     // Initialize bestOffers and currentTokenIds BEFORE any early returns
     if (!bestOffers[task._id]) {
@@ -12462,36 +11799,23 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     // Include task ID in the hash to make it task-specific
     const taskSpecificHash = `${orderHash}-${task._id}`
     if (hasSeenItem(seenOrderHashes, taskSpecificHash)) {
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Already processed order hash ${taskSpecificHash}` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       return;
     }
     addSeenItem(seenOrderHashes, taskSpecificHash)
 
     if (walletAddresses.includes(maker)) {
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Own bid detected from ${maker}` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       incrementOwnBidCounter('opensea', orderHash);
       return
     }
 
     // Comprehensive logging for OpenSea counterbid
     const bidType = tokenId ? `Token #${tokenId}` : trait ? `Trait: ${trait.type}:${trait.value}` : 'Collection';
-    // console.log(BLUE + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-    // console.log(BLUE + `[OpenSea Counterbid] Task: ${task._id} | Collection: ${task.contract.slug} | Type: ${bidType} | Incoming: ${bidDetails} (${extraDetails}) | Quantity: ${quantity} | Maker: ${maker}` + RESET);
-    // console.log(BLUE + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
 
     if (!outbidOptions.counterbid) {
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Counterbid is disabled for task ${task._id}` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       return;
     }
 
-    // console.log(GREEN + `[OpenSea Counterbid] Counterbid enabled, proceeding with bid processing` + RESET);
 
     const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal);
     // Check cache first
@@ -12546,9 +11870,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       })
 
       if (!orders) {
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Token #${tokenId} has no active order yet` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return;
       }
 
@@ -12562,9 +11883,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       const tokenIds = [...task.tokenIds, ...currentTokens]
 
       if (!tokenIds.map((item) => +item).includes(+tokenId)) {
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Token #${tokenId} not in task's token list [${tokenIds.join(', ')}]` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return;
       }
 
@@ -12583,18 +11901,12 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         );
       }
       if (!floor_price) {
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: No floor price found for ${task.contract.slug} on OpenSea (item_received_bid)` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
       const { maxBidPriceEth, minBidPriceEth, currency } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
 
       if (incomingBidAmountEth < minBidPriceEth) {
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid ${incomingBidAmountEth} ${currencySymbol} < min bid price ${minBidPriceEth} ${currencySymbol} for token #${tokenId}` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       } else if (incomingBidAmountEth > maxBidPriceEth) {
         const reason = `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
@@ -12613,9 +11925,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             await queue.addBulk(cancelData)
           }
         }
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid ${incomingBidAmountEth} ${currencySymbol} > max bid price ${maxBidPriceEth} ${currencySymbol} for token #${tokenId}` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
       const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true)
@@ -12629,9 +11938,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           })
           await queue.addBulk(cancelData)
         }
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Stop option triggered for token #${tokenId} (floor: ${floor_price})` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
@@ -12639,9 +11945,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       const currentBidPrice = offers.length > 0 ? Math.max(...offers.map((offer) => Number(offer))) : 0
 
       if (incomingBidAmount < currentBidPrice) {
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} < current bid ${currentBidPrice / Math.pow(10, decimal)} ${currencySymbol} for token #${tokenId}` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return;
       }
 
@@ -12686,14 +11989,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             queue.addBulk(cancelData)
           }
         }
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Counter offer ${offerPriceEth} ${currencySymbol} > max bid price ${maxBidPriceEth} ${currencySymbol} for token #${tokenId}` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return;
       }
       const normalizedOfferPrice = Math.ceil(offerPrice)
       if (normalizedOfferPrice !== offerPrice) {
-        // console.log(YELLOW + `[OpenSea Counterbid] Normalized token offer price from ${offerPrice} to ${normalizedOfferPrice}` + RESET);
       }
       offerPrice = normalizedOfferPrice
       tokenOffer = BigInt(offerPrice)
@@ -12722,18 +12021,12 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       );
 
       // Log successful counterbid preparation
-      // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Token: #${tokenId} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-      // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
       seenOrderHashes.delete(taskSpecificHash);
     }
 
     if (data.event === "trait_offer") {
       if (!trait) {
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: No trait data found in trait_offer event` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
@@ -12742,9 +12035,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       const identifier = `${trait.type}:${trait.value}`
 
       if (!hasTraits) {
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Task does not have matching traits for ${identifier}` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
@@ -12765,9 +12055,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         );
       }
       if (!floor_price) {
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: No floor price found for ${task.contract.slug} on OpenSea (trait_offer)` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
@@ -12782,9 +12069,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       })
 
       if (incomingBidAmountEth < minBidPriceEth) {
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid ${incomingBidAmountEth} ${currencySymbol} < min bid price ${minBidPriceEth} ${currencySymbol} for trait ${identifier}` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       } else if (incomingBidAmountEth > maxBidPriceEth) {
         const reason = `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
@@ -12820,9 +12104,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             queue.addBulk(cancelData)
           }
         }
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid ${incomingBidAmountEth} ${currencySymbol} > max bid price ${maxBidPriceEth} ${currencySymbol} for trait ${identifier}` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
@@ -12856,9 +12137,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           
           queue.addBulk(cancelData)
         }
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Stop option triggered for trait ${identifier} (floor: ${floor_price}, trait floor: ${traitFloor || 'N/A'})` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
@@ -12866,9 +12144,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       const currentBidPrice = offers.length > 0 ? Math.max(...offers.map((offer) => Number(offer))) : 0
 
       if (incomingBidAmount < currentBidPrice) {
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid ${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol} < current bid ${currentBidPrice / Math.pow(10, decimal)} ${currencySymbol} for trait ${identifier}` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
@@ -12908,9 +12183,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             queue.addBulk(cancelData)
           }
         }
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Counter offer ${offerPriceEth} ${currencySymbol} > max bid price ${maxBidPriceEth} ${currencySymbol} for trait ${identifier}` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return;
       }
 
@@ -12958,7 +12230,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             // IMPORTANT: Check if the calculated offer price exceeds max bid price
             const tokenOfferPriceEth = tokenOfferPrice / Math.pow(10, decimal);
             if (maxBidPriceEth > 0 && tokenOfferPriceEth > maxBidPriceEth) {
-              // console.log(YELLOW + `[OpenSea] Skipping token #${tokenId} counterbid - price ${tokenOfferPriceEth.toFixed(4)} ${currencySymbol} exceeds max ${maxBidPriceEth.toFixed(4)} ${currencySymbol}` + RESET);
               continue; // Skip this token as it exceeds max bid price
             }
 
@@ -12979,15 +12250,11 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               OPENSEA_TOKEN_BID_COUNTERBID,
               tokenBidData
             );
-            // console.log(GREEN + `[OpenSea] Queued token counterbid for #${tokenId} at ${tokenOfferPriceEth.toFixed(4)} ${currencySymbol} (has trait ${trait.type}:${trait.value})` + RESET);
             tokenCounterbidsQueued++;
           }
         }
 
         if (tokenCounterbidsQueued > 0) {
-          // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-          // console.log(GREEN + `[OpenSea Trait-Triggered Token Counterbids] Task: ${task._id} | Queued ${tokenCounterbidsQueued} token counterbids for tokens with trait ${identifier}` + RESET);
-          // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         }
       } catch (error) {
         console.error(`[OpenSea] Error fetching tokens with trait ${trait.type}:${trait.value}:`, error);
@@ -13017,9 +12284,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         );
 
         // Log successful trait counterbid preparation
-        // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(GREEN + `[OpenSea Trait Collection Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${offerPriceEth.toFixed(4)} ${currencySymbol} | Trait: ${identifier} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-        // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       }
 
       seenOrderHashes.delete(taskSpecificHash);
@@ -13040,16 +12304,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         );
       }
       if (!floor_price) {
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: No floor price found for ${task.contract.slug} on OpenSea (collection_offer)` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return;
       }
       const { maxBidPriceEth, minBidPriceEth, currency } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
       if (incomingBidAmountEth < minBidPriceEth) {
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid ${incomingBidAmountEth} ${currencySymbol} < min bid price ${minBidPriceEth} ${currencySymbol} for collection` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       } else if (incomingBidAmountEth > maxBidPriceEth) {
         const reason = `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
@@ -13072,17 +12330,11 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             await queue.addBulk(cancelData)
           }
         }
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Incoming bid ${incomingBidAmountEth} ${currencySymbol} > max bid price ${maxBidPriceEth} ${currencySymbol} for collection` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
       const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true)
       if (stopBid) {
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Stop option triggered for collection (floor: ${floor_price})` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         const allOrders = await Order.find({
           taskId: task._id,
           marketplace: OPENSEA.toLowerCase()
@@ -13125,9 +12377,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             await queue.addBulk(cancelData)
           }
         }
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Counter offer ${baseOfferPriceEth} ${currencySymbol} > max bid price ${maxBidPriceEth} ${currencySymbol} for collection` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return;
       }
 
@@ -13169,7 +12418,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               trait: JSON.stringify(trait)
             }
 
-            // console.log(GREEN + `[OpenSea Counterbid] Queueing trait counterbid for ${order.identifier}` + RESET);
 
             await queue.add(
               OPENSEA_TRAIT_BID_COUNTERBID,
@@ -13191,7 +12439,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               expiry
             }
 
-            // console.log(GREEN + `[OpenSea Counterbid] Queueing collection counterbid` + RESET);
 
             await queue.add(
               OPENSEA_COLLECTION_BID_COUNTERBID,
@@ -13217,7 +12464,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               outbidOptions: outbidOptions
             }
 
-            // console.log(GREEN + `[OpenSea Counterbid] Queueing token counterbid for #${tokenId}` + RESET);
 
             await queue.add(
               OPENSEA_TOKEN_BID_COUNTERBID,
@@ -13229,20 +12475,12 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       }
 
       if (counterbidsQueued > 0) {
-        // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(GREEN + `[OpenSea Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${baseOfferPriceEth.toFixed(4)} ${currencySymbol} | Outbidding: ${incomingBidAmountEth.toFixed(4)} ${currencySymbol}` + RESET);
-        // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       }
       seenOrderHashes.delete(taskSpecificHash);
     }
     seenOrderHashes.delete(taskSpecificHash);
-    // console.log(GREEN + `[OpenSea Counterbid] Cleared seen hash ${taskSpecificHash} to allow future counterbids` + RESET);
-    // console.log(GREEN + `[OpenSea Counterbid] Completed counterbid handler for task ${task._id}` + RESET);
     logDecision('opensea', task._id.toString(), 'handleOpenseaCounterbid', 'completion', 'Completed OpenSea counterbid handler');
   } catch (error) {
-    // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-    // console.log(RED + `[OpenSea Counterbid] ERROR: ${error instanceof Error ? error.message : String(error)}` + RESET);
-    // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
     logError('opensea', task._id.toString(), 'handleOpenseaCounterbid', 'Error in OpenSea counterbid handler', error);
   }
 }
@@ -13268,7 +12506,6 @@ async function
   });
 
   try {
-    // console.log(GOLD + `[Blur Counterbid] Starting counterbid handler for task ${task._id}` + RESET);
 
     const bidHash = hashBid({ ...data, taskId: task._id });
     const currentTask = activeTasks.get(task._id)
@@ -13285,9 +12522,6 @@ async function
           duration: Date.now() - startTime
         }
       });
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[Blur Counterbid] EARLY RETURN: Task ${task._id} not found in activeTasks` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       return;
     }
 
@@ -13321,9 +12555,6 @@ async function
           duration: Date.now() - startTime
         }
       });
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[Blur Counterbid] EARLY RETURN: Task ${task._id} does not have Blur selected (selected: ${taskMarketplaces.join(', ')})` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       return;
     }
 
@@ -13341,9 +12572,6 @@ async function
           duration: Date.now() - startTime
         }
       });
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[Blur Counterbid] EARLY RETURN: Blur is not enabled globally (enabled: ${enabledMarketplaces.join(', ')})` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       return;
     }
     const expiry = getExpiry(currentTask?.bidDuration)
@@ -13365,9 +12593,6 @@ async function
     const makerAddress = incomingBid?.maker || bidInfo?.maker || 'unknown';
     const makerFormatted = makerAddress !== 'unknown' ? `${makerAddress.slice(0, 6)}...${makerAddress.slice(-4)}` : 'unknown';
     const bidTypeDisplay = criteriaType === 'trait' ? `Trait: ${JSON.stringify(criteriaValue)}` : criteriaType === 'token' ? `Token #${criteriaValue?.identifier || 'unknown'}` : 'Collection';
-    // console.log(GOLD + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-    // console.log(GOLD + `[Blur Counterbid] Task: ${task._id} | Collection: ${task.contract.slug} | Type: ${bidTypeDisplay} | Incoming: ${price} ETH | Maker: ${makerFormatted}` + RESET);
-    // console.log(GOLD + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
 
     if (!currentTask?.outbidOptions?.counterbid) {
       logRaw('blur', {
@@ -13382,13 +12607,9 @@ async function
           duration: Date.now() - startTime
         }
       });
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-      // console.log(RED + `[Blur Counterbid] EARLY RETURN: Counterbid is disabled for task ${task._id}` + RESET);
-      // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       return;
     }
 
-    // console.log(GOLD + `[Blur Counterbid] Counterbid enabled, processing bid data` + RESET);
 
     // Log validation passed
     logRaw('blur', {
@@ -13407,7 +12628,6 @@ async function
     });
 
     if (traitBid) {
-      // console.log(GOLD + `[Blur Counterbid] Processing trait bid` + RESET);
       const isTraitBid = currentTask?.bidType === "collection" && selectedTraits && Object.keys(selectedTraits)?.length > 0
       if (!isTraitBid) {
         logRaw('blur', {
@@ -13423,9 +12643,6 @@ async function
             duration: Date.now() - startTime
           }
         });
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[Blur Counterbid] EARLY RETURN: Task is not configured for trait bidding` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return;
       }
 
@@ -13599,7 +12816,6 @@ async function
           });
 
           if (orders.length > 0) {
-            // console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Stop condition met, cancelling ${orders.length} bids` + RESET);
             const cancelData = orders.map((order, index) => {
               const payload = JSON.parse(order.orderHash)
               return {
@@ -13650,7 +12866,6 @@ async function
         }
 
 
-        // console.log(GOLD + `[Blur Counterbid] Queueing trait counterbid for ${identifier}` + RESET);
 
         logRaw('blur', {
           taskId: task._id.toString(),
@@ -13674,13 +12889,9 @@ async function
           BLUR_TRAIT_BID_COUNTERBID,
           bidData
         );
-        // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(GREEN + `[Blur Counterbid SUCCESS] Task: ${task._id} | Placing bid: ${Number(offerPrice) / 1e18} ETH | Trait: ${identifier} | Outbidding: ${incomingPrice} ETH` + RESET);
-        // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       }
 
     } else {
-      // console.log(GOLD + `[Blur Counterbid] Processing collection bid` + RESET);
       const incomingBidDetails = incomingBid?.stats?.filter((item: any) => item?.criteriaType?.toLowerCase() === "collection") || incomingBid?.updates?.filter((item: any) => item?.criteriaType?.toLowerCase() === "collection")
 
       if (!incomingBidDetails || !incomingBidDetails?.length) {
@@ -13695,9 +12906,6 @@ async function
             duration: Date.now() - startTime
           }
         });
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(RED + `[Blur Counterbid] EARLY RETURN: No collection bid details found` + RESET);
-        // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         return
       }
 
@@ -13763,7 +12971,6 @@ async function
             taskId: task._id,
             marketplace: BLUR.toLowerCase()
           })
-          // console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Collection: Cancelling ${allOrders.length} existing bids due to max price exceeded` + RESET);
           const cancelData = allOrders.map((order) => {
             const payload = JSON.parse(order.orderHash)
             return {
@@ -13777,7 +12984,6 @@ async function
             }
           })
           await queue.addBulk(cancelData);
-          // console.log(GREEN + `[DEBUG][handleBlurCounterbid] Collection cancel jobs added` + RESET);
         }
         return
       }
@@ -13801,7 +13007,6 @@ async function
           marketplace: BLUR.toLowerCase()
         })
         if (allOrders.length > 0) {
-          // console.log(YELLOW + `[DEBUG][handleBlurCounterbid] Collection: Stop condition met, cancelling ${allOrders.length} bids` + RESET);
           const cancelData = allOrders.map((order) => {
             const payload = JSON.parse(order.orderHash)
             return {
@@ -13815,7 +13020,6 @@ async function
             }
           })
           await queue.addBulk(cancelData);
-          // console.log(GREEN + `[DEBUG][handleBlurCounterbid] Collection stop condition cancel jobs added` + RESET);
         }
         return
       }
@@ -13915,7 +13119,6 @@ async function
               counterbidData
             );
 
-            // console.log(GREEN + `[Blur collection] Queued trait counterbid for ${order.identifier} - Existing: ${(Number(order.offerPrice) / 1e18).toFixed(4)} ETH <= Incoming: ${bestPrice} ETH` + RESET);
             counterbidsQueued++;
 
           } else if (order.identifier === 'collection') {
@@ -13931,7 +13134,6 @@ async function
               expiry
             }
 
-            // console.log(GOLD + `[Blur Counterbid] Queueing collection counterbid` + RESET);
 
             logRaw('blur', {
               taskId: task._id.toString(),
@@ -13958,9 +13160,6 @@ async function
       }
 
       if (counterbidsQueued > 0) {
-        // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-        // console.log(GREEN + `[Blur Counterbid SUCCESS] Task: ${task._id} | Queued ${counterbidsQueued} counterbids | Base offer: ${Number(baseOfferPrice) / 1e18} ETH | Outbidding: ${bestPrice} ETH` + RESET);
-        // console.log(GREEN + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
       }
     }
 
@@ -13977,7 +13176,6 @@ async function
       }
     });
 
-    // console.log(GOLD + `[Blur Counterbid] Completed counterbid handler for task ${task._id}` + RESET);
   } catch (error: any) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     const errorStack = error instanceof Error ? error.stack : undefined;
@@ -13997,9 +13195,6 @@ async function
       }
     });
 
-    // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
-    // console.log(RED + `[Blur Counterbid] ERROR: ${error instanceof Error ? error.message : String(error)}` + RESET);
-    // console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
   }
 }
 
@@ -14012,11 +13207,7 @@ function handleMagicEdenMessages(message: any) {
     ) {
       slug = message.payload?.payload?.collection?.slug;
       contractAddress = message.tags?.contract || message.payload?.payload?.asset_contract_criteria?.address;
-      // console.log(MAGENTA + `[DEBUG][handleMagicEdenMessages] Extracted:` + RESET);
-      // console.log(MAGENTA + `  - slug: ${slug}` + RESET);
-      // console.log(MAGENTA + `  - contractAddress: ${contractAddress}` + RESET);
     } else {
-      // console.log(MAGENTA + `[DEBUG][handleMagicEdenMessages] Message event '${message.event}' not handled` + RESET);
     }
   } catch (error) {
     console.error("Error parsing MagicEden message:", error);
@@ -14025,8 +13216,6 @@ function handleMagicEdenMessages(message: any) {
 }
 
 function handleOpenSeaMessages(message: any) {
-  // console.log(MAGENTA + `[DEBUG][handleOpenSeaMessages] Processing message with event: ${message.event}` + RESET);
-  // console.log(MAGENTA + `[DEBUG][handleOpenSeaMessages] Message structure: ${JSON.stringify(message).substring(0, 300)}...` + RESET);
 
   let contractAddress, slug
 
@@ -14040,11 +13229,7 @@ function handleOpenSeaMessages(message: any) {
     ) {
       slug = message.payload?.payload?.collection?.slug;
       contractAddress = message.payload?.payload?.asset_contract_criteria?.address;
-      // console.log(MAGENTA + `[DEBUG][handleOpenSeaMessages] Extracted:` + RESET);
-      // console.log(MAGENTA + `  - slug: ${slug}` + RESET);
-      // console.log(MAGENTA + `  - contractAddress: ${contractAddress}` + RESET);
     } else {
-      // console.log(MAGENTA + `[DEBUG][handleOpenSeaMessages] Message event '${message.event}' not handled` + RESET);
     }
   } catch (err) {
     console.error("Error parsing OpenSea message:", err);
@@ -14220,9 +13405,7 @@ async function performMarketplacePreprocessing(
 
                 const items = await fetchOpenSeaCollectionItems(variable, [], undefined, taskId, expectedCount);
                 if (items.length === 0) {
-                  // console.log(YELLOW + `[WARN] No items returned for ${task.contract.slug} with traits. Collection may not support GraphQL.` + RESET);
                 } else if (items.length >= 2000) {
-                  // console.log(YELLOW + `[INFO] Retrieved ${items.length} items for ${task.contract.slug} with traits (API limit may apply)` + RESET);
                 }
                 traitTokens.push(...items);
               } catch (error) {
@@ -14253,9 +13436,7 @@ async function performMarketplacePreprocessing(
 
             const items = await fetchOpenSeaCollectionItems(variable, [], undefined, taskId, expectedCount);
             if (items.length === 0) {
-              // console.log(YELLOW + `[WARN] No items returned for ${task.contract.slug} with traits. Collection may not support GraphQL.` + RESET);
             } else if (items.length >= 2000) {
-              // console.log(YELLOW + `[INFO] Retrieved ${items.length} items for ${task.contract.slug} with traits (API limit may apply)` + RESET);
             }
             traitTokens.push(...items);
           } catch (error) {
@@ -14326,8 +13507,6 @@ async function performMarketplacePreprocessing(
             console.error(RED + `[ERROR] skipStats[${taskId}] is undefined when trying to update opensea/magiceden counts` + RESET);
           }
 
-          // console.log(YELLOW + `[INFO] Missing ${missingTraitTokenCount} trait tokens for ${task.contract.slug}` + RESET);
-          // console.log(YELLOW + `[DEBUG] Updated skipStats[${taskId}]: opensea=${skipStats[taskId].opensea}, magiceden=${skipStats[taskId].magiceden}` + RESET);
         }
 
         // Add trait tokens to both OpenSea and MagicEden lists
@@ -14335,7 +13514,6 @@ async function performMarketplacePreprocessing(
         magicedenTokens = [...magicedenTokens, ...traitTokens.map(id => Number(id))];
 
         if (traitTokens.length > 0) {
-          // console.log(GREEN + `[DEBUG] Added ${traitTokens.length} trait tokens for ${task.contract.slug}` + RESET);
         }
 
         // Reset processing percentage after trait token fetching is complete
@@ -14398,7 +13576,6 @@ async function performMarketplacePreprocessing(
             console.error(RED + `[ERROR] skipStats[${taskId}] is undefined when trying to update opensea duplicate count` + RESET);
           }
 
-          // console.log(YELLOW + `[INFO] Removed ${duplicateCount} duplicate tokens for OpenSea` + RESET);
         }
 
         // If amount was specified, calculate total missing tokens
@@ -14422,19 +13599,16 @@ async function performMarketplacePreprocessing(
             } else {
               console.error(RED + `[ERROR] skipStats[${taskId}] is undefined when trying to update opensea additional missing count` + RESET);
             }
-            // console.log(YELLOW + `[INFO] Total missing ${totalMissing} tokens to reach target amount of ${amount} for OpenSea` + RESET);
           }
         }
       } else {
         // Only throw error if API was called and returned empty (scenario 6)
         if (openseaApiCalled && openseaApiReturnedEmpty && !manualTokenIds.length && !traitTokens.length) {
-          // console.log(RED + `[ERROR] OpenSea API returned no listings for ${task.contract.slug}` + RESET);
           throw new Error(`No listings found on OpenSea for ${task.contract.slug}. Collection may have no active listings.`);
         }
         // Otherwise, just skip without error
         preprocessing.opensea.skipReason = `No tokens found for ${task.contract.slug}`;
         preprocessing.opensea.jobCount = 0;
-        // console.log(YELLOW + `[WARN] No tokens found for token bid on ${task.contract.slug}` + RESET);
       }
     } else if (traitBid) {
       // Trait bid - need to check if collection supports trait offers
@@ -14523,7 +13697,6 @@ async function performMarketplacePreprocessing(
           }
           skipStats[taskId].magiceden = (skipStats[taskId].magiceden || 0) + duplicateCount;
 
-          // console.log(YELLOW + `[INFO] Removed ${duplicateCount} duplicate tokens for MagicEden` + RESET);
         }
 
         // If amount was specified, calculate total missing tokens
@@ -14542,19 +13715,16 @@ async function performMarketplacePreprocessing(
             );
 
             skipStats[taskId].magiceden = (skipStats[taskId].magiceden || 0) + additionalMissing;
-            // console.log(YELLOW + `[INFO] Total missing ${totalMissing} tokens to reach target amount of ${amount} for MagicEden` + RESET);
           }
         }
       } else {
         // Only throw error if API was called and returned empty (scenario 6)
         if (magicedenApiCalled && magicedenApiReturnedEmpty && !manualTokenIds.length) {
-          // console.log(RED + `[ERROR] MagicEden API returned no tokens for ${task.contract.slug}` + RESET);
           throw new Error(`No tokens found on MagicEden for ${task.contract.slug}. Collection may have no active listings.`);
         }
         // Otherwise, just skip without error
         preprocessing.magiceden.skipReason = `No tokens found for ${task.contract.slug}`;
         preprocessing.magiceden.jobCount = 0;
-        // console.log(YELLOW + `[WARN] No tokens found for token bid on ${task.contract.slug} for MagicEden` + RESET);
       }
     } else if (traitBid) {
       // Trait bid
@@ -14660,7 +13830,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
         let preprocessing = taskPreprocessing.get(taskId);
 
         if (!preprocessing || !preprocessing.opensea.enabled) {
-          // console.log(`${BLUE}[processOpenseaScheduledBid] No preprocessing data found, performing preprocessing now${RESET}`);
 
           // Determine available marketplaces for this task
           const validMarketplaces = ["opensea", "magiceden", "blur"];
@@ -14683,7 +13852,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
         }
 
         if (preprocessing.opensea.skipReason) {
-          // console.log(`${YELLOW}[OPENSEA] Skipped: ${preprocessing.opensea.skipReason}${RESET}`);
           if (!warningBids[taskId]) {
             warningBids[taskId] = { opensea: false, magiceden: false, blur: false };
           }
@@ -14729,23 +13897,19 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
 
           lockAcquired = timedLockManager.acquireLock(taskId, 'opensea');
           if (!lockAcquired) {
-            // console.log(`${YELLOW}[LOCK] Task ${taskId} is already being processed by OpenSea scheduled bid - skipping${RESET}`);
             return;
           }
-          // console.log(`${GREEN}[LOCK] Acquired lock for task ${taskId} in OpenSea scheduled bid${RESET}`);
         } catch (lockError) {
           console.error(`${RED}[LOCK ERROR] Failed to acquire lock for task ${taskId}: ${lockError}${RESET}`);
 
           // If lock acquisition fails due to corruption, attempt cleanup
           if (lockError instanceof Error && lockError.message.includes('Missing lock')) {
-            // console.log(`${YELLOW}[LOCK RECOVERY] Attempting to clean up corrupted lock for task ${taskId}${RESET}`);
             try {
               // Clean up any stale locks
               timedLockManager.releaseLock(taskId, 'opensea');
               // Try once more
               lockAcquired = timedLockManager.acquireLock(taskId, 'opensea');
               if (lockAcquired) {
-                // console.log(`${GREEN}[LOCK RECOVERY] Successfully recovered lock for task ${taskId}${RESET}`);
               } else {
                 throw new Error('Lock recovery failed');
               }
@@ -14785,19 +13949,15 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
         }
 
         // Fetch fresh WETH balance with timeout protection
-        // console.log(`${BLUE}[OpenSea] Fetching WETH balance for ${WALLET_ADDRESS}...${RESET}`);
         let wethBalance = 0;
         try {
           const { fetchERC20BalanceFresh } = await import('./utils/balance');
           const { WETH } = await import('./utils/currencies');
           wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, WETH);
-          // console.log(`${BLUE}[OpenSea] Fresh WETH balance for ${WALLET_ADDRESS}: ${wethBalance}${RESET}`);
         } catch (error) {
           console.error(`${RED}[OpenSea] Failed to fetch WETH balance: ${error}${RESET}`);
-          // console.log(`${YELLOW}[OpenSea] Continuing with balance: 0.00${RESET}`);
         }
 
-        // console.log(`${BLUE}[OpenSea] Getting collection details for ${currentTask.contract.slug}...${RESET}`);
         // Get collection details for creator fees
         let currency, collectionDetails;
         try {
@@ -14807,7 +13967,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
           ]);
           currency = results[0].currency;
           collectionDetails = results[1];
-          // console.log(`${BLUE}[OpenSea] Successfully got collection details${RESET}`);
 
           // Log full collection details object
         } catch (error) {
@@ -14815,7 +13974,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
           throw error;
         }
 
-        // console.log(`[CreatorFees Construction] Before transformation:`, {
         // creator_fees: JSON.stringify(collectionDetails.creator_fees),
         // has_null: collectionDetails.creator_fees.null !== undefined,
         // null_value: collectionDetails.creator_fees.null,
@@ -14827,22 +13985,14 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
           Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)])
         );
 
-        // console.log(`[CreatorFees Construction] After transformation:`, JSON.stringify(creatorFees));
-        // console.log(`[CreatorFees Construction] enforceCreatorFee:`, collectionDetails.enforceCreatorFee);
 
         // Note: Status will be set to appropriate state after job creation is determined
         const newTask = { ...currentTask, traits: {} } as ITask
 
-        // console.log(`${BLUE}[OpenSea] Checking preprocessing results:${RESET}`);
-        // console.log(`${BLUE}[OpenSea] - tokens.length: ${preprocessing.opensea.tokens.length}${RESET}`);
-        // console.log(`${BLUE}[OpenSea] - traits.length: ${preprocessing.opensea.traits.length}${RESET}`);
-        // console.log(`${BLUE}[OpenSea] - jobCount: ${preprocessing.opensea.jobCount}${RESET}`);
 
         // Create jobs based on preprocessing results
         if (preprocessing.opensea.tokens.length > 0) {
           // Token bid
-          // console.log(`${BLUE}[OPENSEA] Creating ${preprocessing.opensea.tokens.length} token bid jobs${RESET}`);
-          // console.log(`${BLUE}[OPENSEA] Current loop count: ${loopCounterStats[taskId] || 1}${RESET}`);
 
           const jobs = preprocessing.opensea.tokens
             .map((token) => ({
@@ -14867,7 +14017,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
           if (parentJob) {
             parentJob.expectedJobs = preprocessing.opensea.tokens.length;
             parentJob.totalJobs = preprocessing.opensea.tokens.length; // Use expected count initially
-            // console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
           }
 
           try {
@@ -14885,7 +14034,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
             // Register for job creation verification
             registerJobCreationVerification(taskId, 'opensea', preprocessing.opensea.tokens.length);
 
-            // console.log(BLUE + `[OPENSEA] Started queueing ${preprocessing.opensea.tokens.length} token bid jobs` + RESET);
 
             // The task will transition to RUNNING when jobs start processing
 
@@ -14896,7 +14044,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
           }
         } else if (preprocessing.opensea.traits.length > 0) {
           // Trait bid
-          // console.log(`${BLUE}[OPENSEA] Creating ${preprocessing.opensea.traits.length} trait bid jobs${RESET}`);
 
           const traitJobs = preprocessing.opensea.traits.map((trait) => {
             const jobData = {
@@ -14924,7 +14071,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
           if (parentJob) {
             parentJob.expectedJobs = preprocessing.opensea.traits.length;
             parentJob.totalJobs = preprocessing.opensea.traits.length; // Use expected count initially
-            // console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
           }
 
           try {
@@ -14942,7 +14088,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
             // Register for job creation verification
             registerJobCreationVerification(taskId, 'opensea', preprocessing.opensea.traits.length);
 
-            // console.log(BLUE + `[OPENSEA] Started queueing ${preprocessing.opensea.traits.length} trait bid jobs` + RESET);
 
             // The task will transition to RUNNING when jobs start processing
 
@@ -14953,7 +14098,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
           }
         } else if (preprocessing.opensea.jobCount === 1) {
           // Collection bid
-          // console.log(`${BLUE}[OPENSEA] Creating 1 collection bid job${RESET}`);
           const jobId = `bid-${taskId}-opensea-${currentTask.contract.slug}-collection`
 
           // Ensure parent job exists BEFORE adding job
@@ -14965,7 +14109,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
             parentJob.totalJobs = 1;
             parentJob.actualJobs = 1;
             parentJob.allJobsQueued = true;
-            // console.log(`${BLUE}[OPENSEA] Set parent job ${parentJobId} for single collection bid${RESET}`);
           }
 
           // Transition to QUEUEING state before creating job
@@ -14977,7 +14120,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
             { jobId, attempts: 1 }
           );
 
-          // console.log(GREEN + `[OPENSEA] Successfully queued 1 collection bid job` + RESET);
 
           // Transition to QUEUED after job is queued (not RUNNING)
           setTaskStatus(taskId, 'QUEUED', 'opensea collection bid job queued', 'opensea');
@@ -14986,7 +14128,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
           await updateTaskRunningPercentage(taskId);
         } else {
           // No jobs to create - create empty parent job and complete the loop
-          // console.log(YELLOW + `[OPENSEA] No jobs to create for task ${taskId} - completing loop with 0 jobs` + RESET);
 
           await ensureParentJobExists(taskId, 'opensea');
           const parentJobId = getParentJobId(taskId, 'opensea');
@@ -14997,7 +14138,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
             parentJob.actualJobs = 0;
             parentJob.completedJobs = 0;
             parentJob.allJobsQueued = true;
-            // console.log(GREEN + `[OPENSEA] Marked parent job ${parentJobId} as complete with 0 jobs` + RESET);
           }
 
           // Update task status to trigger completion flow
@@ -15005,11 +14145,9 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
           await updateTaskRunningPercentage(taskId);
 
           // Trigger marketplace-specific completion for OpenSea
-          // console.log(GREEN + `[OPENSEA] No jobs for task ${taskId}, triggering OpenSea completion` + RESET);
           await checkTaskCompletionAndScheduleNext(taskId, 'opensea');
 
           // Don't throw error - let the loop complete normally
-          // console.log(YELLOW + `[OPENSEA] Loop will complete with 0 jobs and retry in next cycle` + RESET);
         }
       })(), // End of main processing logic
       timeoutPromise
@@ -15041,7 +14179,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
       if (lockAcquired) {
         try {
           timedLockManager.releaseLock(taskId, 'opensea');
-          // console.log(`${YELLOW}[TIMEOUT_CLEANUP] Released lock for timed out task ${taskId}${RESET}`);
         } catch (cleanupError) {
           logSystemError('TimeoutCleanup', `Failed to release lock for task ${taskId}`, cleanupError, { taskId });
         }
@@ -15057,7 +14194,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
         if (redis && scheduleJob) {
           const lockKey = `bull:BIDDING_BOT:${scheduleJob.id}:lock`;
           await redis.del(lockKey);
-          // console.log(`${YELLOW}[LOCK_CLEANUP] Cleaned up BullMQ lock ${lockKey}${RESET}`);
         }
       } catch (cleanupError) {
         logSystemError('LockCleanup', 'Failed to clean up BullMQ lock', cleanupError);
@@ -15104,7 +14240,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
 
     // Check if this is a Redis failure
     if (isRedisError(error)) {
-      // console.log(RED + '🚨 Redis error detected in OpenSea scheduled bid processor' + RESET);
 
       // Add detailed error information
       await logger.logGeneralError(
@@ -15121,7 +14256,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
     // Check if OpenSea marketplace is stuck in STARTED status
     const currentStatus = taskStatus[taskId]?.marketplaces?.opensea?.status;
     if (currentStatus === 'STARTED') {
-      // console.log(YELLOW + `[processOpenseaScheduledBid] Error while in STARTED status, checking state` + RESET);
 
       // Give other marketplaces a chance, then check
       setTimeout(() => {
@@ -15135,7 +14269,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
     // Always release lock if acquired
     if (lockAcquired) {
       timedLockManager.releaseLock(taskId, 'opensea');
-      // console.log(`${GREEN}[LOCK] Released lock for task ${taskId} in OpenSea scheduled bid${RESET}`);
     }
   }
 }
@@ -15209,7 +14342,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     const { collectionDetails } = data;
     const jobId = `opensea-collection-${currentTask.contract.slug}`;
 
-    // console.log(BLUE + `[OPENSEA COLLECTION] Processing collection: ${currentTask.contract.slug}` + RESET);
 
     // Initialize stats early
     if (!floorPrices[currentTask._id]) {
@@ -15228,7 +14360,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       }
     }
 
-    // console.log(BLUE + `[OPENSEA COLLECTION] Fetching floor price and existing orders...` + RESET);
 
     // Parallel fetch: floor price and orders (wallet will be fetched when needed)
     const [floor_price, orders] = await Promise.all([
@@ -15254,7 +14385,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     }
 
     floorPrices[currentTask._id].opensea = floor_price as number;
-    // console.log(BLUE + `[OPENSEA COLLECTION] Floor price: ${floor_price} ETH | Existing orders: ${orders.length}` + RESET);
 
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false)
     log("processing", "Evaluated collection stop option", { floor: floor_price, stopBid });
@@ -15274,7 +14404,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       decimal,
     });
 
-    // console.log(BLUE + `[OPENSEA COLLECTION] Bid calculation - Offer: ${offerPriceEth} ${currencySymbol} | Min: ${minBidPriceEth} ${currencySymbol} | Max: ${maxBidPriceEth} ${currencySymbol}` + RESET);
 
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
@@ -15286,7 +14415,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       requiredMin: minBidPriceEth,
     });
 
-    // console.log(BLUE + `[OPENSEA COLLECTION] Wallet balance: ${balance} ${currencySymbol} | Required: ${minBidPriceEth} ${currencySymbol}` + RESET);
 
     if (balance < minBidPriceEth) {
       log("validation", "Insufficient balance for collection bid", {
@@ -15324,11 +14452,9 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
         parentJob.totalJobs = 0;
         parentJob.allJobsQueued = true;
         parentJob.completedJobs = 0;
-        // console.log(`${YELLOW}[OPENSEA] Marked parent job ${parentJobId} as complete with 0 jobs due to insufficient balance${RESET}`);
       }
 
       // Trigger marketplace completion
-      // console.log(`${YELLOW}[OPENSEA] Insufficient balance for task ${taskId}, triggering OpenSea completion${RESET}`);
       await checkTaskCompletionAndScheduleNext(taskId, 'opensea');
 
       return;
@@ -15380,13 +14506,11 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
           orderExpiration,
           expiry,
         });
-        // console.log(RED + `[OPENSEA COLLECTION] SKIP - Existing order still valid. TTL: ${ttl}s, Price: ${currentPrice / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
         return;
       }
     }
     else {
       log("processing", "Outbid mode enabled, retrieving competing offers", {});
-      // console.log(BLUE + `[OPENSEA COLLECTION] Outbid mode enabled. Fetching offers...` + RESET);
       // Parallel fetch: wallets and offers
       const [walletsArr, offers] = await Promise.all([
         walletCache.getAllWallets(),
@@ -15419,9 +14543,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
-        // console.log(BLUE + `[OPENSEA COLLECTION] Own bid detected. Current bid: ${highestBidAmount / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
-        // console.log(BLUE + `[OPENSEA COLLECTION] Second bid: ${secondTopBidAmountEth} ${currencySymbol}, Spread: ${spread} ${currencySymbol}, Outbid margin: ${outbidMargin} ${currencySymbol}` + RESET);
-        // console.log(BLUE + `[OPENSEA COLLECTION] Min bid price: ${minBidPriceEth} ${currencySymbol}, Potential new bid: ${potentialNewBidEth} ${currencySymbol}` + RESET);
 
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
           log("bid_calculation", "Adjusting bid to beat second offer", {
@@ -15431,7 +14552,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
             minBidPriceEth,
           });
           colletionOffer = BigInt(Math.round(secondTopBidAmount + (outbidMargin * Math.pow(10, decimal))));
-          // console.log(BLUE + `[OPENSEA COLLECTION] Price correction applied - Adjusting bid to beat second offer: ${Number(colletionOffer) / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
           log("validation", "Skipping price correction - below minimum", {
@@ -15439,15 +14559,12 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
             potentialNewBidEth,
             minBidPriceEth,
           });
-          // console.log(YELLOW + `[OPENSEA COLLECTION] Price correction skipped - Potential bid ${potentialNewBidEth} ${currencySymbol} is below min bid ${minBidPriceEth} ${currencySymbol}` + RESET);
-          // console.log(BLUE + `[OPENSEA COLLECTION] Maintaining current bid at: ${highestBidAmount / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
         }
         else if (ttl > MIN_BID_DURATION) {
           log("validation", "Skipping bid because top offer is ours and still valid", {
             ttl,
             MIN_BID_DURATION,
           });
-          // console.log(RED + `[OPENSEA COLLECTION] SKIP - Own bid still valid with TTL: ${ttl}s` + RESET);
           return;
         }
         else {
@@ -15455,7 +14572,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
             highestBidAmount,
           });
           colletionOffer = BigInt(Math.round(highestBidAmount));
-          // console.log(BLUE + `[OPENSEA COLLECTION] Refreshing own bid at same price: ${Number(colletionOffer) / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
         }
       }
       else {
@@ -15464,7 +14580,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
           outbidMargin,
         });
         colletionOffer = BigInt(Math.round(highestBidAmount + (outbidMargin * Math.pow(10, decimal))));
-        // console.log(BLUE + `[OPENSEA COLLECTION] Outbidding highest offer: ${Number(colletionOffer) / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
       }
     }
     const bidCount = getIncrementedBidCount(OPENSEA, currentTask.contract.slug, currentTask._id)
@@ -15507,7 +14622,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       skipStats[currentTask._id]['opensea']++;
       const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${currentTask.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA.`.toUpperCase();
 
-      // console.log(RED + `[OPENSEA COLLECTION] SKIP - Offer exceeds floor price. Offer: ${offerEth} ${currencySymbol} > Floor: ${floor_price} ${currencySymbol}` + RESET);
 
       logBidError(currentTask._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "opensea"); // Non-blocking
       return;
@@ -15542,12 +14656,10 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       skipStats[currentTask._id]['opensea']++;
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${currentTask.contract.slug} collection bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR OPENSEA.Skipping ...`.toUpperCase()
 
-      // console.log(RED + `[OPENSEA COLLECTION] SKIP - Offer exceeds max bid price. Offer: ${offerEth} ${currencySymbol} > Max: ${maxBidPriceEth} ${currencySymbol}` + RESET);
 
       logBidError(currentTask._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea"); // Non-blocking
 
       if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-        // console.log(BLUE + `[OPENSEA COLLECTION] Cancelling existing orders due to max price exceeded...` + RESET);
         if (orders.length > 0) {
           const cancelData = orders.map((order, index) => {
             return {
@@ -15570,7 +14682,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
         minBidPriceEth,
       });
       colletionOffer = BigInt(Math.round(minBidPriceEth * Math.pow(10, decimal)));
-      // console.log(BLUE + `[OPENSEA COLLECTION] Adjusting offer to minimum bid price: ${minBidPriceEth} ${currencySymbol}` + RESET);
     }
 
     try {
@@ -15582,7 +14693,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
         hasWallet: !!wallet,
       });
 
-      // console.log(BLUE + `[OPENSEA COLLECTION] Placing bid - Amount: ${Number(colletionOffer) / Math.pow(10, decimal)} ${currencySymbol}, Expiry: ${expiry}s` + RESET);
       const bidMetadata = {
         bidCount,
         walletAddress: currentTask.wallet,
@@ -15611,13 +14721,11 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 
       log("completion", "bidOnOpensea resolved successfully for collection bid", bidMetadata);
 
-      // console.log(BLUE + `[OPENSEA COLLECTION] SUCCESS - Bid placed successfully for ${currentTask.contract.slug}` + RESET);
     } catch (bidError) {
       logError('opensea', taskId, 'processOpenseaCollectionBid', 'Failed to place collection bid', bidError, {
         bidCount,
         slug: currentTask.contract.slug,
       });
-      // console.log(RED + `[OPENSEA COLLECTION] ERROR - Bid failed: ${bidError instanceof Error ? bidError.message : String(bidError)}` + RESET);
       throw bidError; // Re-throw to be caught by outer catch
     }
 
@@ -15630,7 +14738,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       collection: data.collectionDetails?.slug,
     });
 
-    // console.log(RED + `[OPENSEA COLLECTION] FATAL ERROR - ${errorMessage}` + RESET);
 
     await logBidError(taskId, "OPENSEA COLLECTION BID ERROR", `Error processing OpenSea collection bid for task: ${taskId}: ${errorMessage}`, "error", "opensea");
 
@@ -15658,8 +14765,6 @@ async function processBlurScheduledBid(task: ITask) {
     }
   });
 
-  // console.log(`${GOLD}[processBlurScheduledBid] CALLED for task ${task._id} - Loop #${currentLoopCount}${RESET}`);
-  // console.log(`${GOLD}[loopCounterStats] Blur Loop ${currentLoopCount} - All counters: ${JSON.stringify(loopCounterStats[taskId])}${RESET}`);
 
   let lockAcquired = false;
 
@@ -15702,7 +14807,6 @@ async function processBlurScheduledBid(task: ITask) {
         }
       });
 
-      // console.log(`${GOLD}[processBlurScheduledBid] No preprocessing data found, performing preprocessing now${RESET}`);
 
       // Determine available marketplaces for this task
       const validMarketplaces = ["opensea", "magiceden", "blur"];
@@ -15760,7 +14864,6 @@ async function processBlurScheduledBid(task: ITask) {
         }
       });
 
-      // console.log(`${YELLOW}[BLUR] Skipped: ${preprocessing.blur.skipReason}${RESET}`);
       if (!warningBids[taskId]) {
         warningBids[taskId] = { opensea: false, magiceden: false, blur: false };
       }
@@ -15792,7 +14895,6 @@ async function processBlurScheduledBid(task: ITask) {
         // Use setTaskStatus for comprehensive logging
         setTaskStatus(taskId, 'PROCESSING', 'blur scheduled bid processing', 'blur');
       } else {
-        // console.log(YELLOW + `[processBlurScheduledBid] Skipping PROCESSING status update - blur enabled: ${isBlurEnabled}, selected: ${isBlurSelected}, running: ${isTaskRunning}` + RESET);
         return;
       }
     }
@@ -15812,7 +14914,6 @@ async function processBlurScheduledBid(task: ITask) {
         }
       });
 
-      // console.log(`${YELLOW}[LOCK] Task ${taskId} is already being processed by Blur scheduled bid - skipping${RESET}`);
       return;
     }
 
@@ -15827,7 +14928,6 @@ async function processBlurScheduledBid(task: ITask) {
       }
     });
 
-    // console.log(`${GREEN}[LOCK] Acquired lock for task ${taskId} in Blur scheduled bid${RESET}`);
 
     const { currencySymbol } = await calculateBidPrice(currentTask, 0, "blur")
 
@@ -15875,7 +14975,6 @@ async function processBlurScheduledBid(task: ITask) {
     }
 
     // Fetch fresh BETH balance with timeout protection
-    // console.log(`${CYAN}[Blur] Fetching BETH balance for ${WALLET_ADDRESS}...${RESET}`);
     let bethBalance = 0;
     try {
       logRaw('blur', {
@@ -15905,7 +15004,6 @@ async function processBlurScheduledBid(task: ITask) {
         }
       });
 
-      // console.log(`${CYAN}[Blur] Fresh BETH balance for ${WALLET_ADDRESS}: ${bethBalance}${RESET}`);
     } catch (error) {
       logRaw('blur', {
         taskId,
@@ -15920,7 +15018,6 @@ async function processBlurScheduledBid(task: ITask) {
       });
 
       console.error(`${RED}[Blur] Failed to fetch BETH balance: ${error}${RESET}`);
-      // console.log(`${YELLOW}[Blur] Continuing with balance: 0.00${RESET}`);
     }
 
     // Calculate minimum bid price to validate sufficient balance
@@ -15946,7 +15043,6 @@ async function processBlurScheduledBid(task: ITask) {
         }
       });
 
-      // console.log(`${YELLOW}[BLUR] ${errorMsg} - completing marketplace loop${RESET}`);
 
       // Increment skip stats
       if (!skipStats[taskId]) {
@@ -15981,7 +15077,6 @@ async function processBlurScheduledBid(task: ITask) {
           }
         });
 
-        // console.log(`${GREEN}[BLUR] Marked parent job ${parentJobId} as complete with 0 jobs due to insufficient balance${RESET}`);
       }
 
       // Update task status to trigger completion flow
@@ -15989,13 +15084,11 @@ async function processBlurScheduledBid(task: ITask) {
       await updateTaskRunningPercentage(taskId);
 
       // Trigger marketplace-specific completion for Blur
-      // console.log(`${GREEN}[BLUR] Insufficient balance for task ${taskId}, triggering Blur completion${RESET}`);
       await checkTaskCompletionAndScheduleNext(taskId, 'blur');
 
       return; // Exit function without throwing error
     }
 
-    // console.log(`${CYAN}[Blur] Processing for collection ${currentTask.contract.slug}...${RESET}`);
     const contractAddress = currentTask.contract.contractAddress
     const newTask = { ...currentTask, traits: {} } as ITask
 
@@ -16037,9 +15130,6 @@ async function processBlurScheduledBid(task: ITask) {
             }
           });
 
-          // console.log(RED + `[Blur Auth Block] Wallet ${WALLET_ADDRESS} is blocked from authentication` + RESET);
-          // console.log(RED + `[Blur Auth Block] Will resume at: ${new Date(blockTime).toLocaleTimeString()}` + RESET);
-          // console.log(RED + `[Blur Auth Block] Skipping task ${taskId} - wait ${waitSeconds} seconds` + RESET);
 
           if (!skipStats[taskId]) {
             skipStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
@@ -16068,7 +15158,6 @@ async function processBlurScheduledBid(task: ITask) {
       }
     });
 
-    // console.log(`${BLUE}[Blur Auth Warm-up] Pre-authenticating wallet ${WALLET_ADDRESS}...${RESET}`);
     try {
       const authStartTime = Date.now();
       const accessToken = await getAccessToken(WALLET_PRIVATE_KEY);
@@ -16086,7 +15175,6 @@ async function processBlurScheduledBid(task: ITask) {
             duration: authTime
           }
         });
-        // console.log(`${GREEN}[Blur Auth Warm-up] Successfully pre-authenticated wallet ${WALLET_ADDRESS} in ${authTime}ms${RESET}`);
       } else {
         logRaw('blur', {
           taskId,
@@ -16098,7 +15186,6 @@ async function processBlurScheduledBid(task: ITask) {
             walletAddress: WALLET_ADDRESS
           }
         });
-        // console.log(`${YELLOW}[Blur Auth Warm-up] Failed to pre-authenticate wallet ${WALLET_ADDRESS}${RESET}`);
       }
     } catch (authError: any) {
       logRaw('blur', {
@@ -16118,7 +15205,6 @@ async function processBlurScheduledBid(task: ITask) {
 
       // Check if error is due to authentication block
       if (authError.message && authError.message.includes('Authentication blocked until')) {
-        // console.log(RED + `[Blur Auth Block] Cannot create jobs for blocked wallet ${WALLET_ADDRESS}` + RESET);
         throw new Error(authError.message);
       }
       // Continue anyway - individual jobs will attempt auth if needed
@@ -16156,7 +15242,6 @@ async function processBlurScheduledBid(task: ITask) {
             validationReason: 'wallet_paused'
           }
         });
-        // console.log(YELLOW + `[Blur Job Creation] Wallet ${WALLET_ADDRESS.substring(0, 8)}... is paused for ${Math.round(waitTime / 1000)}s. Skipping job creation.` + RESET);
         throw new Error(`Wallet paused for ${Math.round(waitTime / 1000)}s`);
       }
     }
@@ -16191,8 +15276,6 @@ async function processBlurScheduledBid(task: ITask) {
         }
       });
 
-      // console.log(`${GOLD}[BLUR] Processing ${totalTraits} trait bids in ${totalBatches} batches (${batchSize} per batch)${RESET}`);
-      // console.log(`${GOLD}[BLUR] Rate limit: ${BLUR_RATE_LIMIT.maxBidsPerWindow} bids per ${BLUR_RATE_LIMIT.windowDuration / 1000} seconds${RESET}`);
 
       // Ensure parent job exists BEFORE processing jobs
       const parentJobId = `${taskId}-blur`;
@@ -16212,7 +15295,6 @@ async function processBlurScheduledBid(task: ITask) {
             expectedJobs: parentJob.expectedJobs
           }
         });
-        // console.log(`${GOLD}[BLUR] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
       }
 
       // Process traits in smaller batches that respect the rate limit
@@ -16237,7 +15319,6 @@ async function processBlurScheduledBid(task: ITask) {
           }
         });
 
-        // console.log(`${BLUE}[BLUR] Scheduling batch ${batchNumber}/${totalBatches} (${batchTraits.length} traits) with ${batchDelay / 1000}s delay${RESET}`);
 
         // Create jobs for this batch with staggered delays within the batch
         const traitJobs = batchTraits.map((trait, index) => {
@@ -16291,7 +15372,6 @@ async function processBlurScheduledBid(task: ITask) {
         });
 
         // Log batch scheduling
-        // console.log(`${GREEN}[BLUR] Batch ${batchNumber}/${totalBatches} scheduled (will start in ${batchDelay / 1000}s)${RESET}`);
       }
 
       const totalTime = (totalBatches - 1) * BLUR_RATE_LIMIT.batchDelay / 1000;
@@ -16313,9 +15393,6 @@ async function processBlurScheduledBid(task: ITask) {
         }
       });
 
-      // console.log(`${GREEN}[BLUR] All ${totalTraits} trait bids scheduled across ${totalBatches} batches${RESET}`);
-      // console.log(`${GREEN}[BLUR] Rate: ${effectiveBidsPerSecond} bids/second, ${BLUR_RATE_LIMIT.batchSize} bids/10s (${utilizationPercent}% of limit)${RESET}`);
-      // console.log(`${GREEN}[BLUR] Estimated completion time: ~${totalTime}s${RESET}`);
 
     } else if (preprocessing.blur.jobCount === 1) {
       // Collection bid
@@ -16331,7 +15408,6 @@ async function processBlurScheduledBid(task: ITask) {
         }
       });
 
-      // console.log(`${GOLD}[BLUR] Creating 1 collection bid job${RESET}`);
 
       const slug = removeChar(currentTask.contract.slug, "-")
       const jobId = `bid-${taskId}-blur-${slug}-collection-${WALLET_ADDRESS}`
@@ -16354,7 +15430,6 @@ async function processBlurScheduledBid(task: ITask) {
             expectedJobs: 1
           }
         });
-        // console.log(`${GOLD}[BLUR] Set parent job ${parentJobId} expectedJobs: 1${RESET}`);
       }
 
       await blurQueue.add(
@@ -16379,7 +15454,6 @@ async function processBlurScheduledBid(task: ITask) {
             actualJobs: 1
           }
         });
-        // console.log(GREEN + `[BLUR] Collection bid job added, marking ${parentJobId} as allJobsQueued` + RESET);
       }
 
       if (currentTask && currentTask.running) {
@@ -16406,7 +15480,6 @@ async function processBlurScheduledBid(task: ITask) {
         }
       });
 
-      // console.log(YELLOW + `[BLUR] No jobs to create for task ${taskId} - completing loop with 0 jobs` + RESET);
 
       const parentJobId = `${taskId}-blur`;
       await ensureParentJobExists(taskId, 'blur');
@@ -16417,7 +15490,6 @@ async function processBlurScheduledBid(task: ITask) {
         parentJob.actualJobs = 0;
         parentJob.completedJobs = 0;
         parentJob.allJobsQueued = true;
-        // console.log(GREEN + `[BLUR] Marked parent job ${parentJobId} as complete with 0 jobs` + RESET);
       }
 
       // Update task status to trigger completion flow
@@ -16425,7 +15497,6 @@ async function processBlurScheduledBid(task: ITask) {
       await updateTaskRunningPercentage(taskId);
 
       // Trigger marketplace-specific completion for Blur
-      // console.log(GREEN + `[BLUR] No jobs for task ${taskId}, triggering Blur completion` + RESET);
       await checkTaskCompletionAndScheduleNext(taskId, 'blur');
     }
   } catch (error) {
@@ -16496,7 +15567,6 @@ async function processBlurScheduledBid(task: ITask) {
         }
       });
 
-      // console.log(`${GREEN}[LOCK] Released lock for task ${taskId} in Blur scheduled bid${RESET}`);
     }
 
     logRaw('blur', {
@@ -16529,7 +15599,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
     }
   });
 
-  // console.log(GOLD + `[BLUR COLLECTION] Starting bid process - Task: ${taskId}` + RESET);
 
   // Check if task is blacklisted before processing
   if (isTaskBlacklisted(taskId)) {
@@ -16543,7 +15612,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
         validationReason: 'task_blacklisted'
       }
     });
-    // console.log(RED + `[BLUR COLLECTION] SKIP - Task blacklisted: ${taskId}` + RESET);
     return;
   }
 
@@ -16564,7 +15632,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
         validationReason: !currentTask ? 'task_not_found' : !currentTask.running ? 'task_not_running' : 'blur_not_selected'
       }
     });
-    // console.log(RED + `[BLUR COLLECTION] SKIP - Task not active or Blur not selected. Task: ${taskId} | Running: ${currentTask?.running} | Blur selected: ${currentTask?.selectedMarketplaces?.map(m => m.toLowerCase()).includes("blur")}` + RESET);
     return;
   }
 
@@ -16583,7 +15650,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
           validationReason: 'no_enabled_marketplaces'
         }
       });
-      // console.log(RED + `[BLUR COLLECTION] SKIP - No enabled marketplaces` + RESET);
       return;
     }
 
@@ -16613,7 +15679,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       }
     });
 
-    // console.log(GOLD + `[BLUR COLLECTION] Fetching floor price for ${currentTask.contract.slug}...` + RESET);
 
     const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
     if (!floor_price) {
@@ -16628,7 +15693,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
           errorCode: 'FLOOR_PRICE_FETCH_FAILED'
         }
       });
-      // console.log(RED + `[BLUR COLLECTION] ERROR - Failed to fetch floor price for ${currentTask.contract.slug}` + RESET);
       throw new Error(`Failed to fetch floor price for ${currentTask.contract.slug}`);
     }
 
@@ -16644,7 +15708,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       }
     });
 
-    // console.log(GOLD + `[BLUR COLLECTION] Floor price: ${floor_price} ETH` + RESET);
 
     logRaw('blur', {
       taskId,
@@ -16678,7 +15741,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       }
     });
 
-    // console.log(GOLD + `[BLUR COLLECTION] Existing orders: ${orders.length}` + RESET);
 
     logRaw('blur', {
       taskId,
@@ -16706,7 +15768,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
         }
       });
 
-      // console.log(RED + `[BLUR COLLECTION] SKIP - Stop condition met for task ${taskId}` + RESET);
       if (orders.length > 0) {
         logRaw('blur', {
           taskId,
@@ -16770,7 +15831,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       }
     });
 
-    // console.log(GOLD + `[BLUR COLLECTION] Bid calculation - Offer: ${offerPriceEth} BETH | Min: ${minBidPriceEth} BETH | Max: ${maxBidPriceEth} BETH` + RESET);
 
     // Fetch fresh BETH balance and check if sufficient for minimum bid
     logRaw('blur', {
@@ -16801,7 +15861,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       }
     });
 
-    // console.log(GOLD + `[BLUR COLLECTION] Wallet balance: ${balance} BETH | Required: ${minBidPriceEth} BETH` + RESET);
 
     if (balance < minBidPriceEth) {
       skipStats[currentTask._id]['blur']++;
@@ -16820,7 +15879,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
         }
       });
 
-      // console.log(RED + `[BLUR COLLECTION] SKIP - Insufficient balance: ${balance} BETH < ${minBidPriceEth} BETH` + RESET);
 
       await logBidError(
         taskId,
@@ -16855,9 +15913,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       });
 
       await logBidError(currentTask._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "blur");
-      // console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      // console.log(YELLOW + message + RESET);
-      // console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       return;
     }
 
@@ -16954,7 +16009,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
               validationReason: 'top_bid_sufficient_time'
             }
           });
-          // console.log(YELLOW + `Skipping blur collection bid for ${currentTask.contract.slug} - we have top bid(${topOfferAmount} ETH) with ${(ttl / 60).toFixed(2)} minutes remaining`.toUpperCase() + RESET);
 
           return;
         } else {
@@ -17055,7 +16109,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
         }
       });
 
-      // console.log(RED + `[BLUR COLLECTION] SKIP - Offer exceeds max bid price. Offer: ${collectionOfferEth} BETH > Max: ${maxBidPriceEth} BETH` + RESET);
 
       await logBidError(currentTask._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "blur");
 
@@ -17071,7 +16124,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
             cancelMaxWhenOutbid: true
           }
         });
-        // console.log(GOLD + `[BLUR COLLECTION] Cancelling existing orders due to max price exceeded...` + RESET);
         if (orders.length > 0) {
           const cancelData = orders.map((order) => {
             const payload = JSON.parse(order.orderHash)
@@ -17099,7 +16151,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
           adjustedOffer: minBidPriceEth.toString()
         }
       });
-      // console.log(GOLD + `[BLUR COLLECTION] Adjusting offer to minimum bid price: ${minBidPriceEth} BETH` + RESET);
     }
 
     // Validate offer amount meets Blur's minimum before calling bidOnBlur
@@ -17124,7 +16175,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
         }
       });
 
-      // console.log(RED + `[BLUR COLLECTION] SKIP - Offer below minimum. Offer: ${finalOfferEth} BETH < Min: ${BLUR_MIN_OFFER} BETH` + RESET);
 
       await logBidError(currentTask._id, "BELOW_MINIMUM_OFFER", message, "skipped", "blur");
       return;
@@ -17147,7 +16197,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
         }
       });
 
-      // console.log(GOLD + `[BLUR COLLECTION] Placing bid - Amount: ${Number(colletionOffer) / 1e18} BETH, Expiry: ${expiry}s` + RESET);
 
       await bidOnBlur(currentTask._id, bidCount, currentTask.wallet, privateKey, currentTask.contract.contractAddress, colletionOffer, currentTask.contract.slug, expiry);
 
@@ -17165,7 +16214,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
         }
       });
 
-      // console.log(GOLD + `[BLUR COLLECTION] SUCCESS - Bid placed successfully for ${currentTask.contract.slug}` + RESET);
     } catch (bidError: any) {
       logRaw('blur', {
         taskId,
@@ -17181,7 +16229,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
         }
       });
 
-      // console.log(RED + `[BLUR COLLECTION] ERROR - Bid failed: ${bidError instanceof Error ? bidError.message : String(bidError)}` + RESET);
       throw bidError; // Re-throw to be handled by outer catch
     }
   } catch (error: any) {
@@ -17198,7 +16245,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
           errorCode: 'RATE_LIMITED'
         }
       });
-      // console.log(`[Blur] Rate limited for collection bid ${currentTask.contract.slug} - will retry`);
       throw error; // Re-throw to let worker handle retry with delay
     }
     // Initialize errorStats if needed
@@ -17225,7 +16271,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
           errorMessage: error.message
         }
       });
-      // console.log(`Skipping Blur bid for ${currentTask.contract.slug} - transfer restricted collection`);
       await logBidError(currentTask._id, "BLUR TRANSFER RESTRICTION", error.message, "warning", "blur");
       // Update tracking for transfer restriction
       return;
@@ -17247,7 +16292,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       }
     });
 
-    // console.log(RED + `[BLUR COLLECTION] FATAL ERROR - ${error instanceof Error ? error.message : String(error)}` + RESET);
     await logBidError(currentTask._id, "BLUR COLLECTION BID ERROR", `Error processing Blur collection bid for task: ${currentTask._id}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)}`, "error", "blur");
 
     // Throw the error
@@ -17309,7 +16353,6 @@ async function processOpenseaTraitBid(data: {
     const currentTask = activeTasks.get(_id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Task not running or marketplace not selected', metadata: { running: currentTask?.running, selected: currentTask?.selectedMarketplaces } }); } catch {}; return; }
 
-    // console.log(`${BLUE}[OPENSEA TRAIT BID] Processing trait bid for ${parsedTrait.type}:${parsedTrait.value}${RESET}`);
 
     // Initialize stats early
     if (!floorPrices[_id]) {
@@ -17350,7 +16393,6 @@ async function processOpenseaTraitBid(data: {
     if (!floor_price) { try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTraitBid', stage: 'error', level: 'error', message: 'Failed to fetch floor price', metadata: { slug } }); } catch {}; throw new Error(`Failed to fetch floor price for ${slug}`); }
 
     floorPrices[_id].opensea = floor_price as number;
-    // console.log(`${BLUE}[OPENSEA TRAIT BID] Floor price: ${floor_price} ETH${RESET}`);
 
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false, traitFloor, identifier)
     if (stopBid) {
@@ -17382,11 +16424,9 @@ async function processOpenseaTraitBid(data: {
         "skipped",
         "opensea"
       );
-      // console.log(`${RED}[OPENSEA TRAIT BID] Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} - early return${RESET}`);
       return;
     }
 
-    // console.log(`${BLUE}[OPENSEA TRAIT BID] Balance check passed: ${balance} ${currencySymbol}${RESET}`);
 
     const outbidOptions = currentTask.outbidOptions
 
@@ -17427,20 +16467,13 @@ async function processOpenseaTraitBid(data: {
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
-        // console.log(BLUE + `[OPENSEA TRAIT] Own bid detected. Current bid: ${highestBidAmount / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
-        // console.log(BLUE + `[OPENSEA TRAIT] Second bid: ${secondTopBidAmountEth} ${currencySymbol}, Spread: ${spread} ${currencySymbol}, Outbid margin: ${outbidMargin} ${currencySymbol}` + RESET);
-        // console.log(BLUE + `[OPENSEA TRAIT] Min bid price: ${minBidPriceEth} ${currencySymbol}, Potential new bid: ${potentialNewBidEth} ${currencySymbol}` + RESET);
 
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
           traitOffer = BigInt(Math.round(+secondTopBidAmount + (outbidMargin * Math.pow(10, decimal))));
-          // console.log(BLUE + `[OPENSEA TRAIT] Price correction applied - Adjusting bid to beat second offer: ${Number(traitOffer) / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
-          // console.log(YELLOW + `[OPENSEA TRAIT] Price correction skipped - Potential bid ${potentialNewBidEth} ${currencySymbol} is below min bid ${minBidPriceEth} ${currencySymbol}` + RESET);
-          // console.log(BLUE + `[OPENSEA TRAIT] Maintaining current bid behaviour` + RESET);
         }
         else if (ttl > MIN_BID_DURATION) {
-          // console.log(YELLOW + `Skipping opensea trait bid for ${slug} ${trait} - we have top bid(${highestBidAmount / Math.pow(10, decimal)} ${currencySymbol}) with ${(ttl / 60).toFixed(2)} minutes remaining`.toUpperCase() + RESET);
           return;
         } else {
           traitOffer = BigInt(Math.round(highestBidAmount));
@@ -17504,9 +16537,6 @@ async function processOpenseaTraitBid(data: {
       skipStats[_id]['opensea']++;
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${slug} trait ${trait} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR OPENSEA.Skipping ...`.toUpperCase()
       logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea"); // Non-blocking
-      // console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      // console.log(RED + message + RESET);
-      // console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
       if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
         if (orders.length > 0) {
@@ -17559,7 +16589,6 @@ async function processOpenseaTraitBid(data: {
       );
 
       // Log successful bid placement
-      // console.log(`${BLUE}[OPENSEA TRAIT BID] Successfully placed trait bid: ${offerEth} ${currencySymbol} for ${parsedTrait.type}:${parsedTrait.value} on ${slug}${RESET}`);
 
     } catch (bidError: any) {
       // Format OpenSea error message for better readability
@@ -17614,7 +16643,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     // Check if token is cached as trading disabled
     if (tradingDisabledCache.isDisabled(asset.contractAddress, +asset.tokenId, 'opensea')) {
       const message = `Token ${asset.tokenId} is cached as trading disabled - skipping`;
-      // console.log(`${RED}[OPENSEA TOKEN BID] ${message} - early return${RESET}`);
 
       // Log the skip and update error stats
       logBidError(_id, "TRADING DISABLED (CACHED)", message, "skipped", "opensea"); // Non-blocking
@@ -17631,7 +16659,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     const currentTask = activeTasks.get(_id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) { try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Task not running or marketplace not selected', metadata: { running: currentTask?.running, selected: currentTask?.selectedMarketplaces } }); } catch {}; return; }
 
-    // console.log(`${BLUE}[OPENSEA TOKEN BID] Processing token bid for #${asset.tokenId}${RESET}`);
 
     // Initialize stats early
     if (!floorPrices[_id]) {
@@ -17664,7 +16691,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     if (!floor_price) { try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'error', level: 'error', message: 'Failed to fetch floor price', metadata: { slug } }); } catch {}; throw new Error(`Failed to fetch floor price for ${slug}`); }
 
     floorPrices[_id].opensea = floor_price as number;
-    // console.log(`${BLUE}[OPENSEA TOKEN BID] Floor price: ${floor_price} ETH${RESET}`);
 
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false)
     if (stopBid) {
@@ -17716,7 +16742,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         "skipped",
         "opensea"
       );
-      // console.log(`${YELLOW}[OPENSEA] Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} token ${asset.tokenId} - skipping${RESET}`);
       try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Insufficient balance', metadata: { balance, minBidPriceEth, tokenId: asset.tokenId, currencySymbol } }); } catch {}
       return;
     }
@@ -17759,20 +16784,13 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
-        // console.log(BLUE + `[OPENSEA TOKEN] Own bid detected. Current bid: ${highestBidAmount / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
-        // console.log(BLUE + `[OPENSEA TOKEN] Second bid: ${secondTopBidAmountEth} ${currencySymbol}, Spread: ${spread} ${currencySymbol}, Outbid margin: ${outbidMargin} ${currencySymbol}` + RESET);
-        // console.log(BLUE + `[OPENSEA TOKEN] Min bid price: ${minBidPriceEth} ${currencySymbol}, Potential new bid: ${potentialNewBidEth} ${currencySymbol}` + RESET);
 
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
           tokenOffer = BigInt(Math.round(+secondTopBidAmount + (outbidMargin * Math.pow(10, decimal))));
-          // console.log(BLUE + `[OPENSEA TOKEN] Price correction applied - Adjusting bid to beat second offer: ${Number(tokenOffer) / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
-          // console.log(YELLOW + `[OPENSEA TOKEN] Price correction skipped - Potential bid ${potentialNewBidEth} ${currencySymbol} is below min bid ${minBidPriceEth} ${currencySymbol}` + RESET);
-          // console.log(BLUE + `[OPENSEA TOKEN] Maintaining current bid behaviour` + RESET);
         }
         else if (ttl > MIN_BID_DURATION) {
-          // console.log(YELLOW + `Skipping opensea collection bid for ${slug} ${asset.tokenId} - we have top bid(${highestBidAmount / Math.pow(10, decimal)} ${currencySymbol}) with ${(ttl / 60).toFixed(2)} minutes remaining`.toUpperCase() + RESET);
           return;
         } else {
           tokenOffer = BigInt(Math.round(highestBidAmount));
@@ -17819,9 +16837,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       }
 
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${slug} ${asset.tokenId} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR OPENSEA.Skipping ...`.toUpperCase()
-      // console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      // console.log(RED + message + RESET);
-      // console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       skipStats[_id].opensea++;
       logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea");
       return;
@@ -17903,7 +16918,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
           }
 
           // Log as warning with updated message
-          // console.log(YELLOW + `Token ${data.asset.tokenId} marked as trading disabled and cached for 1 hour` + RESET);
           await logBidError(data._id, "OPENSEA TOKEN TRADING DISABLED",
             `Token ${data.asset.tokenId} in collection ${data.slug}: ${errorMsg} - Cached for 1 hour`,
             "warning", "opensea");
@@ -18143,9 +17157,6 @@ async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) 
 
 
       await logBidError(_id, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "magiceden");
-      // console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      // console.log(YELLOW + message + RESET);
-      // console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       return;
     }
 
@@ -18346,9 +17357,6 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
     });
 
     await logBidError(taskId, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "blur");
-    // console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-    // console.log(YELLOW + message + RESET);
-    // console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
     return;
   }
 
@@ -18401,7 +17409,6 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
         }
       });
 
-      // console.log(YELLOW + `[DEBUG][blurCollectionCounterBid] Found ${existingOrders.length} existing orders to cancel` + RESET);
 
       const cancelData = existingOrders.map((order) => {
         const payload = JSON.parse(order.orderHash);
@@ -18417,7 +17424,6 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
       });
 
       await queue.addBulk(cancelData);
-      // console.log(GREEN + `[DEBUG][blurCollectionCounterBid] Added ${cancelData.length} cancellation jobs to queue` + RESET);
     } else {
     }
 
@@ -18453,7 +17459,6 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
     });
 
     await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry);
-    // console.log(YELLOW + `[DEBUG][blurCollectionCounterBid] Checking for existing orders to cancel for ${identifier}` + RESET);
 
     // Initialize and increment counterbidCounts after successful bid
     if (!counterbidCounts[taskId]) {
@@ -18493,7 +17498,6 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
           errorCode: 'RATE_LIMITED'
         }
       });
-      // console.log(`[Blur] Rate limited for collection counter bid ${slug} - will retry`);
       throw error; // Re-throw to let worker handle retry with delay
     }
 
@@ -18512,7 +17516,6 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
           errorMessage: error.message
         }
       });
-      // console.log(`Skipping Blur counter bid for ${slug} - transfer restricted collection`);
       await logBidError(taskId, "BLUR TRANSFER RESTRICTION", error.message, "warning", "blur");
       return;
     }
@@ -18637,7 +17640,6 @@ async function blurTraitCounterBid(data: IBlurBidData) {
       }
     });
 
-    // console.log(YELLOW + `[DEBUG][blurTraitCounterBid] Checking for existing orders to cancel for ${identifier}` + RESET);
 
     const existingOrders = await Order.find({
       slug: slug,
@@ -18671,7 +17673,6 @@ async function blurTraitCounterBid(data: IBlurBidData) {
         }
       });
 
-      // console.log(YELLOW + `[DEBUG][blurTraitCounterBid] Found ${existingOrders.length} existing orders to cancel` + RESET);
       const cancelData = existingOrders.map((order) => {
         const payload = JSON.parse(order.orderHash);
         return {
@@ -18686,7 +17687,6 @@ async function blurTraitCounterBid(data: IBlurBidData) {
       });
 
       await queue.addBulk(cancelData);
-      // console.log(GREEN + `[DEBUG][blurTraitCounterBid] Added ${cancelData.length} cancellation jobs to queue` + RESET);
     } else {
     }
     // Fetch wallet and decrypt private key just before use
@@ -18770,7 +17770,6 @@ async function blurTraitCounterBid(data: IBlurBidData) {
           errorCode: 'RATE_LIMITED'
         }
       });
-      // console.log(`[Blur] Rate limited for trait counter bid ${slug} ${traits} - will retry`);
       throw error; // Re-throw to let worker handle retry with delay
     }
 
@@ -18789,7 +17788,6 @@ async function blurTraitCounterBid(data: IBlurBidData) {
           errorMessage: error.message
         }
       });
-      // console.log(`Skipping Blur trait counter bid for ${slug} - transfer restricted collection`);
       await logBidError(data.taskId, "BLUR TRANSFER RESTRICTION", error.message, "warning", "blur");
       return;
     }
@@ -19163,7 +18161,6 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
       const incomingOfferWei = BigInt(offerPrice);
 
       if (currentOfferWei >= incomingOfferWei) {
-        // console.log(YELLOW + `[magicedenTokenCounterBid] Current offer ${currentOfferWei} wei >= incoming offer ${incomingOfferWei} wei for token ${tokenId}. Skipping...` + RESET);
         return;
       }
 
@@ -19241,7 +18238,6 @@ async function processBlurTraitBid(data: {
     }
   });
 
-  // console.log(`${GOLD}[BLUR TRAIT BID] Starting bid process for task ${taskId}, trait: ${data.trait} in ${data.slug}${RESET}`);
 
   try {
     if (!enabledMarketplaces.length) {
@@ -19255,7 +18251,6 @@ async function processBlurTraitBid(data: {
           validationReason: 'no_enabled_marketplaces'
         }
       });
-      // console.log(`${RED}[BLUR TRAIT BID] No marketplaces enabled - early return${RESET}`);
       return;
     }
     const { address, walletId, contractAddress, slug, trait, _id } = data;
@@ -19297,7 +18292,6 @@ async function processBlurTraitBid(data: {
           validationReason: !currentTask ? 'task_not_found' : !currentTask.running ? 'task_not_running' : 'blur_not_selected'
         }
       });
-      // console.log(`${RED}[BLUR TRAIT BID] Current task validation failed - early return${RESET}`);
       return;
     }
     const outbidOptions = currentTask.outbidOptions
@@ -19334,7 +18328,6 @@ async function processBlurTraitBid(data: {
       }
     });
 
-    // console.log(`${GOLD}[BLUR TRAIT BID] Processing trait bid for ${identifier}${RESET}`);
 
     logRaw('blur', {
       taskId,
@@ -19398,7 +18391,6 @@ async function processBlurTraitBid(data: {
         }
       });
 
-      // console.log(`${RED}[BLUR TRAIT BID] Stop option triggered for trait ${identifier} - early return${RESET}`);
       if (orders.length > 0) {
         logRaw('blur', {
           taskId,
@@ -19452,7 +18444,6 @@ async function processBlurTraitBid(data: {
           errorCode: 'FLOOR_PRICE_FETCH_FAILED'
         }
       });
-      // console.log(`${RED}[BLUR TRAIT BID] Failed to fetch floor price for ${slug} - throwing error${RESET}`);
       throw new Error(`Failed to fetch floor price for ${slug}`);
     }
 
@@ -19468,7 +18459,6 @@ async function processBlurTraitBid(data: {
       }
     });
 
-    // console.log(`${GOLD}[BLUR TRAIT BID] Floor price: ${floor_price} ETH${RESET}`);
 
     if (!floorPrices[_id]) {
       floorPrices[_id] = {
@@ -19551,7 +18541,6 @@ async function processBlurTraitBid(data: {
         }
       });
 
-      // console.log(`${RED}[BLUR TRAIT BID] Insufficient BETH balance: ${balance} < ${minBidPriceEth} - early return${RESET}`);
       skipStats[_id]['blur']++;
       await logBidError(
         _id,
@@ -19563,7 +18552,6 @@ async function processBlurTraitBid(data: {
       return;
     }
 
-    // console.log(`${GOLD}[BLUR TRAIT BID] Balance check passed: ${balance} BETH${RESET}`);
 
     let traitOffer = BigInt(Math.round(Number(offerPriceEth * Math.pow(10, 18)) / 1e16) * 1e16);
 
@@ -19592,7 +18580,6 @@ async function processBlurTraitBid(data: {
             validationReason: 'existing_bid_valid'
           }
         });
-        // console.log(`${RED}[BLUR TRAIT BID] Current bid still valid (${(ttl / 60).toFixed(2)} min remaining) - early return${RESET}`);
         return;
       }
     }
@@ -19675,7 +18662,6 @@ async function processBlurTraitBid(data: {
               validationReason: 'top_bid_sufficient_time'
             }
           });
-          // console.log(`${RED}[BLUR TRAIT BID] We have top bid (${topOfferAmount} ETH) with ${(ttl / 60).toFixed(2)} min remaining - early return${RESET}`);
           return;
         } else {
           // Maintain our current bid price
@@ -19775,7 +18761,6 @@ async function processBlurTraitBid(data: {
       });
 
       await logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "blur");
-      // console.log(`${RED}[BLUR TRAIT BID] ${message} - early return${RESET}`);
       if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
         logRaw('blur', {
           taskId,
@@ -19855,7 +18840,6 @@ async function processBlurTraitBid(data: {
       }
     });
 
-    // console.log(`${GOLD}[BLUR TRAIT BID] Placing bid of ${offerEth} BETH for trait ${identifier}${RESET}`);
     await bidOnBlur(_id, bidCount, address, privateKey, contractAddress, traitOffer, slug, expiry, trait, data.batchInfo);
 
     logRaw('blur', {
@@ -19873,7 +18857,6 @@ async function processBlurTraitBid(data: {
       }
     });
 
-    // console.log(`${GOLD}[BLUR TRAIT BID] Successfully placed bid for trait ${identifier}${RESET}`);
   } catch (error: any) {
     const errorMessage = error?.message || String(error);
     const errorIdentifier = data.trait ? `${JSON.parse(data.trait).type || 'unknown'}:${JSON.parse(data.trait).value || 'unknown'}` : 'unknown';
@@ -19891,7 +18874,6 @@ async function processBlurTraitBid(data: {
           errorCode: 'RATE_LIMITED'
         }
       });
-      // console.log(`[Blur] Rate limited for trait bid ${data.slug} ${data.trait} - will retry`);
       throw error; // Re-throw to let worker handle retry with delay
     }
 
@@ -19910,7 +18892,6 @@ async function processBlurTraitBid(data: {
           errorMessage: error.message
         }
       });
-      // console.log(`Skipping Blur trait bid for ${data.slug} - transfer restricted collection`);
       await logBidError(data._id, "BLUR TRANSFER RESTRICTION", error.message, "warning", "blur");
       return;
     }
@@ -19949,12 +18930,9 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
   try { logRaw('magiceden', { taskId: task._id.toString(), function: 'processMagicedenScheduledBid', stage: 'start', level: 'info', message: 'Starting MagicEden scheduled bid loop', metadata: { scheduleJobId: scheduleJob?.id, jobId } }); } catch {}
   const taskId = task._id.toString();
   const currentLoopCount = loopCounterStats[taskId]?.magiceden || 1;
-  // console.log(`${MAGENTA}[processMagicedenScheduledBid] CALLED for task ${task._id} - Loop #${currentLoopCount}${RESET}`);
-  // console.log(`${MAGENTA}[loopCounterStats] MagicEden Loop ${currentLoopCount} - All counters: ${JSON.stringify(loopCounterStats[taskId])}${RESET}`);
 
   // Log if this appears to be a retry (job has an ID and attempt number)
   if (scheduleJob && scheduleJob.attemptsMade > 0) {
-    // console.log(`${YELLOW}[processMagicedenScheduledBid] This is retry attempt ${scheduleJob.attemptsMade + 1} for job ${scheduleJob.id}${RESET}`);
   }
 
   const checkpointStart = Date.now();
@@ -19986,7 +18964,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
         let preprocessing = taskPreprocessing.get(taskId);
 
         if (!preprocessing || !preprocessing.magiceden.enabled) {
-          // console.log(`${MAGENTA}[processMagicedenScheduledBid] No preprocessing data found, performing preprocessing now${RESET}`);
 
           // Determine available marketplaces for this task
           const validMarketplaces = ["opensea", "magiceden", "blur"];
@@ -20007,7 +18984,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
 
         if (preprocessing.magiceden.skipReason) {
           try { logRaw('magiceden', { taskId, function: 'processMagicedenScheduledBid', stage: 'early_return', level: 'warn', message: 'Preprocessing skip', metadata: { reason: preprocessing.magiceden.skipReason } }); } catch {}
-          // console.log(`${YELLOW}[MAGICEDEN] Skipped: ${preprocessing.magiceden.skipReason}${RESET}`);
           if (!warningBids[taskId]) {
             warningBids[taskId] = { opensea: false, magiceden: false, blur: false };
           }
@@ -20052,23 +19028,19 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
 
           lockAcquired = timedLockManager.acquireLock(taskId, 'magiceden');
           if (!lockAcquired) {
-            // console.log(`${YELLOW}[LOCK] Task ${taskId} is already being processed by MagicEden scheduled bid - skipping${RESET}`);
             return;
           }
-          // console.log(`${GREEN}[LOCK] Acquired lock for task ${taskId} in MagicEden scheduled bid${RESET}`);
         } catch (lockError) {
           console.error(`${RED}[LOCK ERROR] Failed to acquire lock for task ${taskId}: ${lockError}${RESET}`);
 
           // If lock acquisition fails due to corruption, attempt cleanup
           if (lockError instanceof Error && lockError.message.includes('Missing lock')) {
-            // console.log(`${YELLOW}[LOCK RECOVERY] Attempting to clean up corrupted lock for task ${taskId}${RESET}`);
             try {
               // Clean up any stale locks
               timedLockManager.releaseLock(taskId, 'magiceden');
               // Try once more
               lockAcquired = timedLockManager.acquireLock(taskId, 'magiceden');
               if (lockAcquired) {
-                // console.log(`${GREEN}[LOCK RECOVERY] Successfully recovered lock for task ${taskId}${RESET}`);
               } else {
                 throw new Error('Lock recovery failed');
               }
@@ -20098,34 +19070,25 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
         }
 
         // Fetch fresh WETH balance with timeout protection
-        // console.log(`${MAGENTA}[MagicEden] Fetching WETH balance for ${WALLET_ADDRESS}...${RESET}`);
         let wethBalance = 0;
         try {
           const { fetchERC20BalanceFresh } = await import('./utils/balance');
           const { WETH } = await import('./utils/currencies');
           wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, WETH);
-          // console.log(`${MAGENTA}[MagicEden] Fresh WETH balance for ${WALLET_ADDRESS}: ${wethBalance}${RESET}`);
         } catch (error) {
           console.error(`${RED}[MagicEden] Failed to fetch WETH balance: ${error}${RESET}`);
-          // console.log(`${YELLOW}[MagicEden] Continuing with balance: 0.00${RESET}`);
         }
 
-        // console.log(`${MAGENTA}[MagicEden] Processing for collection ${currentTask.contract.slug}...${RESET}`);
         const contractAddress = currentTask.contract.contractAddress
         const expiration = getExpiry(currentTask.bidDuration)
         const newTask = { ...currentTask, traits: {} } as ITask
 
         // Note: Status will be set to appropriate state after job creation is determined
 
-        // console.log(`${MAGENTA}[MagicEden] Checking preprocessing results:${RESET}`);
-        // console.log(`${MAGENTA}[MagicEden] - tokens.length: ${preprocessing.magiceden.tokens.length}${RESET}`);
-        // console.log(`${MAGENTA}[MagicEden] - traits.length: ${preprocessing.magiceden.traits.length}${RESET}`);
-        // console.log(`${MAGENTA}[MagicEden] - jobCount: ${preprocessing.magiceden.jobCount}${RESET}`);
 
         // Create jobs based on preprocessing results
         if (preprocessing.magiceden.tokens.length > 0) {
           // Token bid
-          // console.log(`${MAGENTA}[MAGICEDEN] Creating ${preprocessing.magiceden.tokens.length} token bid jobs${RESET}`);
 
           // Ensure parent job exists BEFORE processing jobs
           await ensureParentJobExists(taskId, 'magiceden');
@@ -20134,7 +19097,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
           if (parentJob) {
             parentJob.expectedJobs = preprocessing.magiceden.tokens.length;
             parentJob.totalJobs = preprocessing.magiceden.tokens.length; // Use expected count initially
-            // console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
           }
 
           const jobs = preprocessing.magiceden.tokens
@@ -20172,7 +19134,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
             // Register for job creation verification
             registerJobCreationVerification(taskId, 'magiceden', preprocessing.magiceden.tokens.length);
 
-            // console.log(MAGENTA + `[MAGICEDEN] Started queueing ${preprocessing.magiceden.tokens.length} token bid jobs` + RESET);
 
             // The task will transition to RUNNING when jobs start processing
 
@@ -20186,7 +19147,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
               parentJob.actualJobs = 0;
               parentJob.allJobsQueued = true; // Mark as queued even on failure
               parentJob.totalJobs = 0;
-              // console.log(RED + `[MAGICEDEN] Marked parent job ${parentJobId} as complete with 0 jobs due to queueing failure` + RESET);
             }
 
             // Update task status to reflect failure - but only if marketplace is still valid
@@ -20205,7 +19165,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
         }
         else if (preprocessing.magiceden.traits.length > 0) {
           // Trait bid
-          // console.log(`${MAGENTA}[MAGICEDEN] Creating ${preprocessing.magiceden.traits.length} trait bid jobs${RESET}`);
 
           // Ensure parent job exists BEFORE processing jobs
           await ensureParentJobExists(taskId, 'magiceden');
@@ -20214,7 +19173,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
           if (parentJob) {
             parentJob.expectedJobs = preprocessing.magiceden.traits.length;
             parentJob.totalJobs = preprocessing.magiceden.traits.length; // Use expected count initially
-            // console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} expectedJobs: ${parentJob.expectedJobs}${RESET}`);
           }
 
           const traitJobs = preprocessing.magiceden.traits.map((trait) => ({
@@ -20248,7 +19206,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
             // Register for job creation verification
             registerJobCreationVerification(taskId, 'magiceden', preprocessing.magiceden.traits.length);
 
-            // console.log(MAGENTA + `[MAGICEDEN] Started queueing ${preprocessing.magiceden.traits.length} trait bid jobs` + RESET);
 
             // The task will transition to RUNNING when jobs start processing
 
@@ -20262,7 +19219,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
               parentJob.actualJobs = 0;
               parentJob.allJobsQueued = true; // Mark as queued even on failure
               parentJob.totalJobs = 0;
-              // console.log(RED + `[MAGICEDEN] Marked parent job ${parentJobId} as complete with 0 jobs due to queueing failure` + RESET);
             }
 
             // Update task status to reflect failure - but only if marketplace is still valid
@@ -20281,7 +19237,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
         }
         else if (preprocessing.magiceden.jobCount === 1) {
           // Collection bid
-          // console.log(`${MAGENTA}[MAGICEDEN] Creating 1 collection bid job${RESET}`);
           const jobId = `bid-${taskId}-magiceden-${currentTask.contract.slug}-collection`
 
           // Ensure parent job exists BEFORE adding job
@@ -20291,7 +19246,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
           if (parentJob) {
             parentJob.expectedJobs = 1;
             parentJob.totalJobs = 1; // Use expected count initially
-            // console.log(`${MAGENTA}[MAGICEDEN] Set parent job ${parentJobId} expectedJobs: 1${RESET}`);
           }
 
           // Transition to QUEUEING state before creating job
@@ -20307,10 +19261,8 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
           if (parentJob) {
             parentJob.actualJobs = 1;
             parentJob.allJobsQueued = true;
-            // console.log(GREEN + `[MAGICEDEN] Collection bid job added, marking ${parentJobId} as allJobsQueued` + RESET);
           }
 
-          // console.log(GREEN + `[MAGICEDEN] Successfully queued 1 collection bid job` + RESET);
 
           // Transition to QUEUED after job is queued (not RUNNING)
           setTaskStatus(taskId, 'QUEUED', 'magiceden collection bid job queued', 'magiceden');
@@ -20319,7 +19271,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
           await updateTaskRunningPercentage(taskId);
         } else {
           // No jobs to create - create empty parent job and complete the loop
-          // console.log(YELLOW + `[MAGICEDEN] No jobs to create for task ${taskId} - completing loop with 0 jobs` + RESET);
 
           await ensureParentJobExists(taskId, 'magiceden');
           const parentJobId = getParentJobId(taskId, 'magiceden');
@@ -20330,7 +19281,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
             parentJob.actualJobs = 0;
             parentJob.completedJobs = 0;
             parentJob.allJobsQueued = true;
-            // console.log(GREEN + `[MAGICEDEN] Marked parent job ${parentJobId} as complete with 0 jobs` + RESET);
           }
 
           // Update task status to trigger completion flow
@@ -20338,11 +19288,9 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
           await updateTaskRunningPercentage(taskId);
 
           // Trigger marketplace-specific completion for MagicEden
-          // console.log(GREEN + `[MAGICEDEN] No jobs for task ${taskId}, triggering MagicEden completion` + RESET);
           await checkTaskCompletionAndScheduleNext(taskId, 'magiceden');
 
           // Don't throw error - let the loop complete normally
-          // console.log(YELLOW + `[MAGICEDEN] Loop will complete with 0 jobs and retry in next cycle` + RESET);
         }
       })(), // End of main processing logic
       timeoutPromise
@@ -20375,7 +19323,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
       if (lockAcquired) {
         try {
           timedLockManager.releaseLock(taskId, 'magiceden');
-          // console.log(`${YELLOW}[TIMEOUT_CLEANUP] Released lock for timed out task ${taskId}${RESET}`);
         } catch (cleanupError) {
           logSystemError('TimeoutCleanup', `Failed to release lock for task ${taskId}`, cleanupError, { taskId });
         }
@@ -20391,7 +19338,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
         if (redis && scheduleJob) {
           const lockKey = `bull:BIDDING_BOT:${scheduleJob.id}:lock`;
           await redis.del(lockKey);
-          // console.log(`${YELLOW}[LOCK_CLEANUP] Cleaned up BullMQ lock ${lockKey}${RESET}`);
         }
       } catch (cleanupError) {
         logSystemError('LockCleanup', 'Failed to clean up BullMQ lock', cleanupError);
@@ -20447,7 +19393,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
     // Always release lock if acquired
     if (lockAcquired) {
       timedLockManager.releaseLock(taskId, 'magiceden');
-      // console.log(`${GREEN}[LOCK] Released lock for task ${taskId} in MagicEden scheduled bid${RESET}`);
     }
   }
 }
@@ -20457,19 +19402,16 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
   logDecision('magiceden', taskId, 'processMagicedenCollectionBid', 'start', 'Starting MagicEden collection bid');
 
   // Entry log
-  // console.log(MAGENTA + `[MAGICEDEN COLLECTION] Starting bid process - Task: ${taskId}` + RESET);
 
   // Check if task is blacklisted before processing
   if (isTaskBlacklisted(taskId)) {
     logEarlyReturn('magiceden', taskId, 'processMagicedenCollectionBid', 'Task blacklisted');
-    // console.log(RED + `[MAGICEDEN COLLECTION] SKIP - Task blacklisted: ${taskId}` + RESET);
     return;
   }
 
   try {
     if (!enabledMarketplaces.length) {
       logEarlyReturn('magiceden', taskId, 'processMagicedenCollectionBid', 'No marketplaces enabled');
-      // console.log(RED + `[MAGICEDEN COLLECTION] SKIP - No enabled marketplaces` + RESET);
       return;
     }
 
@@ -20477,19 +19419,16 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
     const currentTask = activeTasks.get(taskId);
     if (!currentTask || !currentTask?.running) {
       logEarlyReturn('magiceden', taskId, 'processMagicedenCollectionBid', 'Task not running');
-      // console.log(RED + `[MAGICEDEN COLLECTION] SKIP - Task not running: ${taskId}` + RESET);
       return;
     }
 
     if (!currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden")) {
       logEarlyReturn('magiceden', taskId, 'processMagicedenCollectionBid', 'MagicEden not selected for task', { selected: currentTask.selectedMarketplaces });
-      // console.log(RED + `[MAGICEDEN COLLECTION] SKIP - MagicEden not selected for task: ${taskId}` + RESET);
       return;
     }
 
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) {
       logEarlyReturn('magiceden', taskId, 'processMagicedenCollectionBid', 'MagicEden disabled globally', { enabledMarketplaces });
-      // console.log(RED + `[MAGICEDEN COLLECTION] SKIP - MagicEden not enabled globally. Enabled: [${enabledMarketplaces.join(', ')}]` + RESET);
       return;
     }
 
@@ -20498,7 +19437,6 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
     const expiration = getExpiry(currentTask.bidDuration)
 
-    // console.log(MAGENTA + `[MAGICEDEN COLLECTION] Fetching floor price and existing orders...` + RESET);
 
     // Parallel data fetching (wallet will be fetched when needed)
     const [floor_price, orders] = await Promise.all([
@@ -20514,11 +19452,9 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
     // Early return for floor price
     if (!floor_price) {
       logError('magiceden', taskId, 'processMagicedenCollectionBid', 'Failed to fetch floor price', undefined, { slug: currentTask.contract.slug });
-      // console.log(RED + `[MAGICEDEN COLLECTION] ERROR - Failed to fetch floor price for ${currentTask.contract.slug}` + RESET);
       throw new Error(`Failed to fetch floor price for ${currentTask.contract.slug}`);
     }
 
-    // console.log(MAGENTA + `[MAGICEDEN COLLECTION] Floor price: ${floor_price} ETH | Existing orders: ${orders.length}` + RESET);
 
     if (!floorPrices[currentTask._id]) {
       floorPrices[currentTask._id] = {
@@ -20559,20 +19495,17 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
 
-    // console.log(MAGENTA + `[MAGICEDEN COLLECTION] Bid calculation - Offer: ${offerPriceEth} ${currencySymbol} | Min: ${minBidPriceEth} ${currencySymbol} | Max: ${maxBidPriceEth} ${currencySymbol}` + RESET);
 
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
     const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency);
 
-    // console.log(MAGENTA + `[MAGICEDEN COLLECTION] Wallet balance: ${balance} ${currencySymbol} | Required: ${minBidPriceEth} ${currencySymbol}` + RESET);
 
     if (balance < minBidPriceEth) {
       const errorMsg = balance <= 0
         ? `Insufficient ${currencySymbol} balance: ${balance} (zero or negative) for task ${taskId}`
         : `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId}`;
 
-      // console.log(RED + `[MAGICEDEN COLLECTION] SKIP - Insufficient balance: ${balance} ${currencySymbol} < ${minBidPriceEth} ${currencySymbol}` + RESET);
       try { logRaw('magiceden', { taskId, function: 'processMagicedenCollectionBid', stage: 'early_return', level: 'warn', message: 'Insufficient balance', metadata: { balance, minBidPriceEth, currencySymbol } }); } catch {}
 
       // Increment skip stats
@@ -20593,11 +19526,9 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
         parentJob.totalJobs = 0;
         parentJob.allJobsQueued = true;
         parentJob.completedJobs = 0;
-        // console.log(`${YELLOW}[MAGICEDEN] Marked parent job ${parentJobId} as complete with 0 jobs due to insufficient balance${RESET}`);
       }
 
       // Trigger marketplace completion
-      // console.log(`${YELLOW}[MAGICEDEN] Insufficient balance for task ${taskId}, triggering MagicEden completion${RESET}`);
       await checkTaskCompletionAndScheduleNext(taskId, 'magiceden');
 
       return;
@@ -20619,14 +19550,12 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
     if (!currentTask.outbidOptions.outbid) {
       if (ttl >= MIN_BID_DURATION && currentPrice === Number(offerPrice) && Math.abs(orderExpiration - expiration) < 30) {
-        // console.log(RED + `[MAGICEDEN COLLECTION] SKIP - Existing order still valid. TTL: ${ttl}s, Price: ${currentPrice / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
         try { logRaw('magiceden', { taskId, function: 'processMagicedenCollectionBid', stage: 'early_return', level: 'info', message: 'Existing order still valid', metadata: { ttl, currentPrice, orderExpiration, expiration } }); } catch {}
         return;
       }
     }
 
     else {
-      // console.log(MAGENTA + `[MAGICEDEN COLLECTION] Outbid mode enabled. Fetching offers...` + RESET);
       // Parallel offer fetching when outbidding
       const [[topOffer, secondOffer], walletsArr] = await Promise.all([
         fetchMagicEdenOffer("COLLECTION", currentTask.contract.contractAddress, "{}") as unknown as Promise<OpenseaOfferData[]>,
@@ -20648,31 +19577,22 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
-        // console.log(MAGENTA + `[MAGICEDEN COLLECTION] Own bid detected. Current bid: ${highestBidAmount / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
-        // console.log(MAGENTA + `[MAGICEDEN COLLECTION] Second bid: ${secondTopBidAmountEth} ${currencySymbol}, Spread: ${spread} ${currencySymbol}, Outbid margin: ${outbidMargin} ${currencySymbol}` + RESET);
-        // console.log(MAGENTA + `[MAGICEDEN COLLECTION] Min bid price: ${minBidPriceEth} ${currencySymbol}, Potential new bid: ${potentialNewBidEth} ${currencySymbol}` + RESET);
 
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
           colletionOffer = Number(secondTopBidAmount) + (outbidMargin * Math.pow(10, decimal))
-          // console.log(MAGENTA + `[MAGICEDEN COLLECTION] Price correction applied - Adjusting bid to beat second offer: ${Number(colletionOffer) / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
-          // console.log(YELLOW + `[MAGICEDEN COLLECTION] Price correction skipped - Potential bid ${potentialNewBidEth} ${currencySymbol} is below min bid ${minBidPriceEth} ${currencySymbol}` + RESET);
-          // console.log(MAGENTA + `[MAGICEDEN COLLECTION] Maintaining current bid behaviour` + RESET);
         }
         else if (ttl > MIN_BID_DURATION) {
-          // console.log(RED + `[MAGICEDEN COLLECTION] SKIP - Own bid still valid with TTL: ${ttl}s` + RESET);
           return
         }
         else {
           colletionOffer = highestBidAmount
-          // console.log(MAGENTA + `[MAGICEDEN COLLECTION] Refreshing own bid at same price: ${Number(colletionOffer) / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
         }
 
       }
       else {
         colletionOffer = highestBidAmount + (outbidMargin * Math.pow(10, decimal))
-        // console.log(MAGENTA + `[MAGICEDEN COLLECTION] Outbidding highest offer: ${Number(colletionOffer) / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
       }
     }
     const offerEth = Number(colletionOffer) / Math.pow(10, decimal);
@@ -20681,7 +19601,6 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
       skipStats[currentTask._id]['magiceden']++;
       const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${currentTask.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR MAGICEDEN.`.toUpperCase();
 
-      // console.log(RED + `[MAGICEDEN COLLECTION] SKIP - Offer exceeds floor price. Offer: ${offerEth} ${currencySymbol} > Floor: ${floor_price} ${currencySymbol}` + RESET);
 
       logBidError(currentTask._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "magiceden"); // Non-blocking
       return;
@@ -20724,12 +19643,10 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
       }
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${currentTask.contract.slug} COLLECTION bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase()
 
-      // console.log(RED + `[MAGICEDEN COLLECTION] SKIP - Offer exceeds max bid price. Offer: ${offerEth} ${currencySymbol} > Max: ${maxBidPriceEth} ${currencySymbol}` + RESET);
 
       logBidError(currentTask._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "magiceden"); // Non-blocking
 
       if (currentTask.outbidOptions.cancelMaxWhenOutbid && orders.length > 0) {
-        // console.log(MAGENTA + `[MAGICEDEN COLLECTION] Cancelling existing orders due to max price exceeded...` + RESET);
       }
 
       if (!skipStats[currentTask._id]) {
@@ -20743,7 +19660,6 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
       return;
     } else if (offerEth < minBidPriceEth) {
       colletionOffer = minBidPriceEth * Math.pow(10, decimal);
-      // console.log(MAGENTA + `[MAGICEDEN COLLECTION] Adjusting offer to minimum bid price: ${minBidPriceEth} ${currencySymbol}` + RESET);
     }
 
     try {
@@ -20751,18 +19667,14 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
       const wallet = await walletCache.getWalletById(currentTask.walletId);
       const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
-      // console.log(MAGENTA + `[MAGICEDEN COLLECTION] Placing bid - Amount: ${Number(colletionOffer) / Math.pow(10, decimal)} ${currencySymbol}, Expiry: ${expiration}s` + RESET);
 
       await bidOnMagiceden(currentTask._id, bidCount, currentTask.wallet, currentTask.contract.contractAddress, 1, colletionOffer.toString(), privateKey, currentTask.contract.slug, expiration, currency);
 
-      // console.log(MAGENTA + `[MAGICEDEN COLLECTION] SUCCESS - Bid placed successfully for ${currentTask.contract.slug}` + RESET);
     } catch (bidError) {
-      // console.log(RED + `[MAGICEDEN COLLECTION] ERROR - Bid failed: ${bidError instanceof Error ? bidError.message : String(bidError)}` + RESET);
       throw bidError; // Re-throw to be caught by outer catch
     }
 
   } catch (error: any) {
-    // console.log(RED + `[MAGICEDEN COLLECTION] FATAL ERROR - ${error instanceof Error ? error.message : String(error)}` + RESET);
 
     logBidError(taskId, "MAGICEDEN COLLECTION BID ERROR", `Error processing MagicEden collection bid for task: ${taskId}: ${error?.response?.data?.message || error?.message || String(error)}`, "error", "magiceden"); // Non-blocking
 
@@ -20887,20 +19799,13 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
-        // console.log(MAGENTA + `[MAGICEDEN TOKEN] Own bid detected. Current bid: ${highestBidAmount / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
-        // console.log(MAGENTA + `[MAGICEDEN TOKEN] Second bid: ${secondTopBidAmountEth} ${currencySymbol}, Spread: ${spread} ${currencySymbol}, Outbid margin: ${outbidMargin} ${currencySymbol}` + RESET);
-        // console.log(MAGENTA + `[MAGICEDEN TOKEN] Min bid price: ${minBidPriceEth} ${currencySymbol}, Potential new bid: ${potentialNewBidEth} ${currencySymbol}` + RESET);
 
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
           tokenOffer = Number(secondTopBidAmount) + (outbidMargin * Math.pow(10, decimal))
-          // console.log(MAGENTA + `[MAGICEDEN TOKEN] Price correction applied - Adjusting bid to beat second offer: ${tokenOffer / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
-          // console.log(YELLOW + `[MAGICEDEN TOKEN] Price correction skipped - Potential bid ${potentialNewBidEth} ${currencySymbol} is below min bid ${minBidPriceEth} ${currencySymbol}` + RESET);
-          // console.log(MAGENTA + `[MAGICEDEN TOKEN] Maintaining current bid behaviour` + RESET);
         }
         else if (ttl > MIN_BID_DURATION) {
-          // console.log(YELLOW + `Skipping magiceden token bid for ${slug} ${tokenId} - we have top bid(${highestBidAmount / Math.pow(10, decimal)} ETH) with ${(ttl / 60).toFixed(2)} minutes remaining`.toUpperCase() + RESET);
           return
         } else {
           tokenOffer = highestBidAmount
@@ -20912,20 +19817,13 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
         const highestBidAmountEth = Number(highestBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = highestBidAmountEth + outbidMargin;
 
-        // console.log(MAGENTA + `[MAGICEDEN TOKEN] Top bid detected. Our bid: ${Number(order.offerPrice) / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
-        // console.log(MAGENTA + `[MAGICEDEN TOKEN] Highest bid: ${highestBidAmountEth} ${currencySymbol}, Spread: ${spread} ${currencySymbol}, Outbid margin: ${outbidMargin} ${currencySymbol}` + RESET);
-        // console.log(MAGENTA + `[MAGICEDEN TOKEN] Min bid price: ${minBidPriceEth} ${currencySymbol}, Potential new bid: ${potentialNewBidEth} ${currencySymbol}` + RESET);
 
         if (spread > outbidMargin && Number(highestBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
           tokenOffer = Number(highestBidAmount) + (outbidMargin * Math.pow(10, decimal));
-          // console.log(MAGENTA + `[MAGICEDEN TOKEN] Price correction applied - Adjusting bid to beat highest offer: ${tokenOffer / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
         }
         else if (spread > outbidMargin && Number(highestBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
-          // console.log(YELLOW + `[MAGICEDEN TOKEN] Price correction skipped - Potential bid ${potentialNewBidEth} ${currencySymbol} is below min bid ${minBidPriceEth} ${currencySymbol}` + RESET);
-          // console.log(MAGENTA + `[MAGICEDEN TOKEN] Maintaining current bid behaviour` + RESET);
         }
         else if (ttl > MIN_BID_DURATION) {
-          // console.log(YELLOW + `Skipping magiceden token bid for ${slug} ${tokenId} - we have top bid(${Number(order.offerPrice) / Math.pow(10, decimal)} ETH) with ${(ttl / 60).toFixed(2)} minutes remaining`.toUpperCase() + RESET);
           return
         } else {
           tokenOffer = +order.offerPrice
@@ -20969,9 +19867,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
         }
       }
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${slug} ${tokenId} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase()
-      // console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      // console.log(RED + message + RESET);
-      // console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", `Offer price ${offerEth} ${currencySymbol} for ${slug} ${tokenId} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase(), "skipped", "magiceden");
 
       skipStats[_id].magiceden++;
@@ -21029,19 +19924,16 @@ async function processMagicedenTraitBid(data: {
   const taskId = data._id;
 
   // Log entry
-  // console.log(`${MAGENTA}[MAGICEDEN TRAIT BID] Starting bid process for task ${taskId}, trait: ${JSON.stringify(data.trait)} in ${data.slug}${RESET}`);
 
   // Early validation
   if (!enabledMarketplaces.length || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) {
     try { logRaw('magiceden', { taskId, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'MagicEden disabled or no marketplaces enabled', metadata: { enabledMarketplaces } }); } catch {}
-    // console.log(`${RED}[MAGICEDEN TRAIT BID] MagicEden not in enabled marketplaces - early return${RESET}`);
     return;
   }
 
   const activeTask = activeTasks.get(data._id);
   if (!activeTask?.running || taskStatus[data._id]?.marketplaces?.magiceden?.status === 'COMPLETED' || taskStatus[data._id]?.marketplaces?.magiceden?.status === 'STOPPED') {
     try { logRaw('magiceden', { taskId, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'Task not running or marketplace completed/stopped', metadata: { status: taskStatus[data._id]?.marketplaces?.magiceden?.status } }); } catch {}
-    // console.log(`${RED}[MAGICEDEN TRAIT BID] Task not running or marketplace completed/stopped - early return${RESET}`);
     return;
   }
 
@@ -21151,20 +20043,13 @@ async function processMagicedenTraitBid(data: {
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
-        // console.log(MAGENTA + `[MAGICEDEN TRAIT] Own bid detected. Current bid: ${highestBidAmount / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
-        // console.log(MAGENTA + `[MAGICEDEN TRAIT] Second bid: ${secondTopBidAmountEth} ${currencySymbol}, Spread: ${spread} ${currencySymbol}, Outbid margin: ${outbidMargin} ${currencySymbol}` + RESET);
-        // console.log(MAGENTA + `[MAGICEDEN TRAIT] Min bid price: ${minBidPriceEth} ${currencySymbol}, Potential new bid: ${potentialNewBidEth} ${currencySymbol}` + RESET);
 
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
           traitOffer = Number(secondTopBidAmount) + (outbidMargin * Math.pow(10, decimal));
-          // console.log(MAGENTA + `[MAGICEDEN TRAIT] Price correction applied - Adjusting bid to beat second offer: ${traitOffer / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
-          // console.log(YELLOW + `[MAGICEDEN TRAIT] Price correction skipped - Potential bid ${potentialNewBidEth} ${currencySymbol} is below min bid ${minBidPriceEth} ${currencySymbol}` + RESET);
-          // console.log(MAGENTA + `[MAGICEDEN TRAIT] Maintaining current bid behaviour` + RESET);
         }
         else if (ttl > MIN_BID_DURATION) {
-          // console.log(YELLOW + `Skipping magiceden token bid for ${slug} ${JSON.stringify(trait)} - we have top bid(${highestBidAmount / Math.pow(10, decimal)} ETH) with ${(ttl / 60).toFixed(2)} minutes remaining`.toUpperCase() + RESET);
           return
         } else {
           traitOffer = highestBidAmount
@@ -21175,17 +20060,11 @@ async function processMagicedenTraitBid(data: {
         const highestBidAmountEth = Number(highestBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = highestBidAmountEth + outbidMargin;
 
-        // console.log(MAGENTA + `[MAGICEDEN TRAIT] Top bid detected. Our bid: ${Number(order.offerPrice) / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
-        // console.log(MAGENTA + `[MAGICEDEN TRAIT] Highest bid: ${highestBidAmountEth} ${currencySymbol}, Spread: ${spread} ${currencySymbol}, Outbid margin: ${outbidMargin} ${currencySymbol}` + RESET);
-        // console.log(MAGENTA + `[MAGICEDEN TRAIT] Min bid price: ${minBidPriceEth} ${currencySymbol}, Potential new bid: ${potentialNewBidEth} ${currencySymbol}` + RESET);
 
         if (spread > outbidMargin && Number(highestBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
           traitOffer = Number(highestBidAmount) + (outbidMargin * Math.pow(10, decimal));
-          // console.log(MAGENTA + `[MAGICEDEN TRAIT] Price correction applied - Adjusting bid to beat highest offer: ${traitOffer / Math.pow(10, decimal)} ${currencySymbol}` + RESET);
         }
         else if (spread > outbidMargin && Number(highestBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
-          // console.log(YELLOW + `[MAGICEDEN TRAIT] Price correction skipped - Potential bid ${potentialNewBidEth} ${currencySymbol} is below min bid ${minBidPriceEth} ${currencySymbol}` + RESET);
-          // console.log(MAGENTA + `[MAGICEDEN TRAIT] Maintaining current bid behaviour` + RESET);
         }
         else if (ttl > MIN_BID_DURATION) { try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'info', message: 'Existing order still valid (trait)', metadata: { ttl, currentPrice: Number(order?.offerPrice), orderExpiration, expiration } }); } catch {}; return } else {
           traitOffer = +order.offerPrice
@@ -21238,9 +20117,6 @@ async function processMagicedenTraitBid(data: {
         }
       }
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${slug} ${JSON.stringify(trait)} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase()
-      // console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      // console.log(RED + message + RESET);
-      // console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", `Offer price ${offerEth} ${currencySymbol} for ${slug} ${JSON.stringify(trait)} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase(), "skipped", "magiceden");
 
       if (!skipStats[_id]) {
@@ -21287,14 +20163,12 @@ async function processMagicedenTraitBid(data: {
 async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, taskId: string, orderKey: string }) {
   const { walletId, orderId, taskId, orderKey } = data
 
-  // console.log(`🔐 [bulkCancelOpenseaBid] Starting cancellation for task ${taskId}, order ${orderId}, wallet ${walletId}`);
   
   // Add marketplace file logging
   try { logRaw('opensea', { taskId, function: 'bulkCancelOpenseaBid', stage: 'start', level: 'info', message: 'Starting order cancellation', metadata: { walletId, orderId, orderKey } }); } catch {}
 
   try {
     // Fetch wallet and decrypt private key
-    // console.log(`🔐 [bulkCancelOpenseaBid] Fetching wallet ${walletId}...`);
     const wallet = await walletCache.getWalletById(walletId);
 
     if (!wallet) {
@@ -21302,17 +20176,14 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
       throw new Error(`Wallet ${walletId} not found`);
     }
 
-    // console.log(`✅ [bulkCancelOpenseaBid] Wallet ${walletId} found, checking encryptedPrivateKey...`);
 
     if (!wallet.encryptedPrivateKey) {
       logSystemError('BulkCancelOpensea', `No encryptedPrivateKey found for wallet ${walletId}`, undefined, { walletId, taskId });
       throw new Error(`No encryptedPrivateKey found for wallet ${walletId}`);
     }
 
-    // console.log(`🔐 [bulkCancelOpenseaBid] EncryptedPrivateKey exists, proceeding with decryption for wallet ${walletId}`);
     const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
 
-    // console.log(`🔐 [bulkCancelOpenseaBid] Starting parallel operations for task ${taskId}: order deletion and cancellation`);
 
     // First, cancel the order with OpenSea API (but don't update tracking yet)
     await cancelOrderWithoutTracking(orderId, OPENSEA_PROTOCOL_ADDRESS, privateKey, taskId);
@@ -21323,14 +20194,12 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
     });
 
     // Finally, record completion and update percentage - now that DB is clean
-    // console.log(`🔐 [bulkCancelOpenseaBid] Recording completion for task ${taskId}, order ${orderId}`);
     cancellationTracker.recordCompletion(taskId, 1, 'opensea');
     await updateTaskCancellationPercentage(taskId, undefined, 'opensea');
 
     // Decrement ownBidCounts for the cancelled order
     decrementOwnBidCounter('opensea', 1);
 
-    // console.log(`✅ [bulkCancelOpenseaBid] Successfully completed cancellation for task ${taskId}, order ${orderId} with synchronized DB cleanup`);
     
     // Add marketplace file logging for successful cancellation
     try { logRaw('opensea', { taskId, function: 'bulkCancelOpenseaBid', stage: 'completion', level: 'info', message: 'Order cancelled successfully', metadata: { orderId, orderKey } }); } catch {}
@@ -21357,7 +20226,6 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
 async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: string, orderKeys: string[], taskId: string, batchSize?: number }) {
   const { orderIds, walletId, orderKeys, taskId, batchSize } = data
 
-  // console.log(`🔐 [bulkCancelMagicedenBid] Starting cancellation for task ${taskId}, ${orderIds.length} orders, wallet ${walletId}, batch size: ${batchSize || orderIds.length}`);
   
   // Add marketplace file logging
   try { logRaw('magiceden', { taskId, function: 'bulkCancelMagicedenBid', stage: 'start', level: 'info', message: 'Starting bulk order cancellation', metadata: { walletId, orderCount: orderIds.length, batchSize: batchSize || orderIds.length } }); } catch {}
@@ -21365,7 +20233,6 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
   try {
     if (orderIds.length > 0) {
       // Fetch wallet and decrypt private key
-      // console.log(`🔐 [bulkCancelMagicedenBid] Fetching wallet ${walletId}...`);
       const wallet = await walletCache.getWalletById(walletId);
 
       if (!wallet) {
@@ -21373,17 +20240,14 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
         throw new Error(`Wallet ${walletId} not found`);
       }
 
-      // console.log(`✅ [bulkCancelMagicedenBid] Wallet ${walletId} found, checking encryptedPrivateKey...`);
 
       if (!wallet.encryptedPrivateKey) {
         logSystemError('BulkCancelMagiceden', `No encryptedPrivateKey found for wallet ${walletId}`, undefined, { walletId, taskId });
         throw new Error(`No encryptedPrivateKey found for wallet ${walletId}`);
       }
 
-      // console.log(`🔐 [bulkCancelMagicedenBid] EncryptedPrivateKey exists, proceeding with decryption for wallet ${walletId}`);
       const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
 
-      // console.log(`🔐 [bulkCancelMagicedenBid] Starting parallel operations for task ${taskId}: ${orderIds.length} order cancellations and DB cleanup`);
 
       await Promise.all([
         cancelMagicEdenBid(orderIds, privateKey, taskId),
@@ -21392,11 +20256,9 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
         })
       ])
 
-      // console.log(`✅ [bulkCancelMagicedenBid] Successfully completed ${orderIds.length} cancellations for task ${taskId}`);
 
       // Record completion for the batch
       const completedCount = batchSize || orderIds.length;
-      // console.log(`🔐 [bulkCancelMagicedenBid] Recording completion for task ${taskId}, batch of ${completedCount} orders`);
       cancellationTracker.recordCompletion(taskId, completedCount, 'magiceden');
       await updateTaskCancellationPercentage(taskId, undefined, 'magiceden');
 
@@ -21406,11 +20268,9 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
       // Add marketplace file logging for successful cancellation
       try { logRaw('magiceden', { taskId, function: 'bulkCancelMagicedenBid', stage: 'completion', level: 'info', message: 'Orders cancelled successfully', metadata: { orderCount: orderIds.length, completedCount } }); } catch {}
     } else {
-      // console.log(`🔐 [bulkCancelMagicedenBid] No orders to cancel for task ${taskId}`);
     }
 
     // Clean up the tracking set after successful cancellation
-    // console.log(`🔐 [bulkCancelMagicedenBid] Cleaning up ${orderKeys.length} tracking entries for task ${taskId}`);
     orderKeys.forEach(orderKey => {
       magicedenOrdersBeingCancelled.delete(orderKey);
     });
@@ -21514,7 +20374,6 @@ async function validateBidCount() {
         const marketplace = group._id.toLowerCase();
         if (marketplace === 'opensea' || marketplace === 'magiceden') {
           decrementOwnBidCounter(marketplace as 'opensea' | 'magiceden', group.count);
-          // console.log(YELLOW + `[validateBidCount] Decremented ${group.count} expired ${marketplace} orders from ownBidCounts` + RESET);
         }
       }
 
@@ -21522,11 +20381,9 @@ async function validateBidCount() {
       await Order.deleteMany({
         _id: { $in: expiredOrders.map(o => o._id) }
       });
-      // console.log(YELLOW + `[validateBidCount] Deleted ${expiredOrders.length} expired orders` + RESET);
     }
   } catch (error: any) {
     // Handle database errors
-    // console.log(YELLOW + `Order collection doesn't exist in MongoDB.` + RESET);
     // Set all bid stats to 0 when table doesn't exist
     for (const task of currentTasks) {
       bidStats[task._id] = {
@@ -21544,7 +20401,6 @@ validateBidCountInterval = setInterval(validateBidCount, STANDARD_INTERVAL);
 async function bulkCancelBlurBid(data: BlurCancelPayload) {
   const { orderKey, walletId, taskId, payload } = data
 
-  // console.log(`🔐 [bulkCancelBlurBid] Starting cancellation for task ${taskId}, order ${orderKey}, wallet ${walletId}`);
   
   // Add marketplace file logging
   try { logRaw('blur', { taskId, function: 'bulkCancelBlurBid', stage: 'start', level: 'info', message: 'Starting order cancellation', metadata: { walletId, orderKey, hasPayload: !!payload } }); } catch {}
@@ -21553,7 +20409,6 @@ async function bulkCancelBlurBid(data: BlurCancelPayload) {
     if (!data) return
 
     // Fetch wallet and decrypt private key
-    // console.log(`🔐 [bulkCancelBlurBid] Fetching wallet ${walletId}...`);
     const wallet = await walletCache.getWalletById(walletId);
 
     if (!wallet) {
@@ -21566,10 +20421,8 @@ async function bulkCancelBlurBid(data: BlurCancelPayload) {
       throw new Error(`No encryptedPrivateKey found for wallet ${walletId}`);
     }
 
-    // console.log(`🔐 [bulkCancelBlurBid] Decrypting private key for wallet ${walletId}`);
     const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
 
-    // console.log(`🔐 [bulkCancelBlurBid] Starting parallel operations for task ${taskId}: order deletion and API cancellation`);
 
     await Promise.all([
       Order.deleteMany({
@@ -21578,10 +20431,8 @@ async function bulkCancelBlurBid(data: BlurCancelPayload) {
       cancelBlurBid({ payload, privateKey, taskId })
     ])
 
-    // console.log(`✅ [bulkCancelBlurBid] Successfully completed cancellation for task ${taskId}, order ${orderKey}`);
 
     // Record completion
-    // console.log(`🔐 [bulkCancelBlurBid] Recording completion for task ${taskId}, order ${orderKey}`);
     cancellationTracker.recordCompletion(taskId, 1, 'blur');
     await updateTaskCancellationPercentage(taskId, undefined, 'blur');
     
@@ -22467,7 +21318,6 @@ app.post('/api/auth/password', async (req, res) => {
     // If this is the first time setting password, resume queue and workers
     if (!wasPasswordSet) {
       await resumeQueueAndWorkers();
-      // console.log(GREEN + '✅ Password set - bidding operations have started' + RESET);
     }
 
     res.status(200).json({ success: true, message: 'Password stored successfully' });
@@ -22533,7 +21383,6 @@ app.post('/api/auth/change-password', async (req, res) => {
       return res.status(401).json({ error: 'Old password is incorrect' });
     }
 
-    // console.log(YELLOW + '🔐 Starting password change and wallet re-encryption...' + RESET);
 
     // Get all wallets from database
     const wallets = await Wallet.find({ encryptedPrivateKey: { $exists: true, $ne: null } });
@@ -22567,7 +21416,6 @@ app.post('/api/auth/change-password', async (req, res) => {
     // If all wallets were successfully re-encrypted, update the password
     if (failedWallets.length === 0) {
       await setPassword(newPassword);
-      // console.log(GREEN + '✅ Password changed successfully and all wallets re-encrypted' + RESET);
 
       res.status(200).json({
         success: true,
@@ -22602,7 +21450,6 @@ app.post('/api/auth/change-password', async (req, res) => {
 // Manual password recovery endpoint for debugging
 app.post('/api/auth/recover-password', async (req, res) => {
   try {
-    // console.log('Manual password recovery requested...');
 
     // Check Redis connection
     if (!redisClient.isReady()) {
@@ -22748,7 +21595,6 @@ app.post('/api/blur-auth/clear', async (req, res) => {
       clearedCount = keys.length;
     }
 
-    // console.log(`Cleared ${clearedCount} Blur authentication tokens`);
 
     res.status(200).json({
       success: true,
@@ -23390,7 +22236,6 @@ app.get('/api/queue-monitor/status', async (req, res) => {
 // Manual queue clear endpoint
 app.post('/api/queue-monitor/clear', async (req, res) => {
   try {
-    // console.log(YELLOW + '\n🔧 Manual queue clear requested via API' + RESET);
 
     // Clear the queues
     await clearQueueAndRestartJobs();
@@ -23477,7 +22322,6 @@ app.get('/api/debug/task-status/:taskId', (req, res) => {
   const status = taskStatus[taskId];
   const countdownTimerExists = taskCountdownTimers.has(taskId);
 
-  // console.log(`[DEBUG waitingTime] API request for task ${taskId} status`);
 
   res.status(200).json({
     taskId,
@@ -23584,7 +22428,6 @@ app.post('/api/debug/force-complete/:taskId', async (req, res) => {
       return res.status(400).json({ error: 'Task is not running' });
     }
 
-    // console.log(YELLOW + `[Force Complete] Manually forcing completion for task ${taskId}` + RESET);
 
     // Update status for all marketplaces
     if (taskStatus[taskId]) {
@@ -24252,7 +23095,6 @@ const fetchCollectionData = async (slug: string) => {
 export function getExpiry(bidDuration: { value: number; unit: string }) {
   // Handle invalid or zero values
   if (!bidDuration || bidDuration.value < 0) {
-    // console.log(YELLOW + `Invalid bid duration value: ${bidDuration?.value}, using default 900 seconds` + RESET);
     return 900; // Default to 15 minutes
   }
 
@@ -24312,7 +23154,6 @@ async function calculateBidPrice(task: ITask, floorPrice: number, marketplaceNam
       : (bidPrice.max || task.bidPrice.max || 0);
 
     if (maxBidPriceEth === hardCapValue && hardCapValue < calculatedMax) {
-      // console.log(`Hard cap of ${hardCapValue} ETH is limiting max bid for ${task.contract.slug} on ${marketplaceName}`);
     }
   }
 
@@ -24394,9 +23235,6 @@ async function stopOption(
     if (trait && traitFloor && traitFloor > 0 && (traitFloorMin > 0 || traitFloorMax > 0)) {
       if ((traitFloorMin > 0 && traitFloor < traitFloorMin) || (traitFloorMax > 0 && traitFloor > traitFloorMax)) {
         const message = `❌ Trait Floor price ${traitFloor} ETH for ${task.contract.slug} [${trait}] is outside the allowed range (${traitFloorMin} ETH - ${traitFloorMax} ETH). Skipping...`.toUpperCase()
-        // console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-        // console.log(RED + message + RESET);
-        // console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
         await logBidError(task._id, "TRAIT FLOOR OUT OF RANGE", message, 'skipped', marketplace)
 
@@ -24408,9 +23246,6 @@ async function stopOption(
     } else {
       // Check if floor price is outside allowed range
       if ((minFloorPrice > 0 && floorPrice < minFloorPrice) || (maxFloorPrice > 0 && floorPrice > maxFloorPrice)) {
-        // console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-        // console.log(RED + `❌ Floor price ${floorPrice} ETH for ${task.contract.slug} is outside the allowed range (${minFloorPrice} ETH - ${maxFloorPrice} ETH). Skipping...`.toUpperCase() + RESET);
-        // console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
         if (!counterBid) {
           skipStats[task._id][marketplace]++;
@@ -24435,9 +23270,6 @@ async function stopOption(
         `Current balance: ${currentBalance} items.`;
 
       // Log the warning
-      // console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-      // console.log(YELLOW + `⚠️ Purchase limit reached for ${task.contract.slug} on ${marketplace}. Current balance: ${currentBalance}/${maxPurchase}` + RESET);
-      // console.log(YELLOW + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       return true;
     }
 
@@ -24448,7 +23280,6 @@ async function stopOption(
       warningMessage[task._id][marketplace] = '';
     } else {
       // Task is stopped, preserve warnings
-      // console.log(YELLOW + `[stopOption] Task ${task._id} is stopped, preserving warning state` + RESET);
     }
     return false;
 
@@ -24513,11 +23344,9 @@ const activeSubscriptions = new Set<string>(); // Set of "slug:marketplace" comb
 
 function subscribeToCollections(tasks: ITask[]) {
   try {
-    // console.log(YELLOW + `subscribeToCollections called with ${tasks.length} tasks` + RESET);
 
     // Always subscribe all tasks to WebSocket
     if (!wsManager?.isConnected()) {
-      // console.log(YELLOW + `WebSocket not connected, skipping subscription` + RESET);
       return;
     }
 
@@ -24549,9 +23378,6 @@ function subscribeToCollections(tasks: ITask[]) {
 
         subscribedCollections.add(task.contract.slug);
 
-        // console.log('----------------------------------------------------------------------');
-        // console.log(`SUBSCRIBED TO COLLECTION: ${task.contract.slug} (ALL MARKETPLACES)`);
-        // console.log('----------------------------------------------------------------------');
 
         // Track subscriptions locally in activeSubscriptions for all marketplaces
         const hasOpenseaMarketplace = task.selectedMarketplaces.map(marketplace => marketplace.toLowerCase()).includes("opensea");
@@ -24583,7 +23409,6 @@ function subscribeToCollections(tasks: ITask[]) {
 async function subscribeToListingEvents(contractAddress: string, slug?: string) {
   try {
     if (!wsManager?.isConnected()) {
-      // console.log(YELLOW + `WebSocket not connected, skipping listing subscription` + RESET);
       return;
     }
 
@@ -24612,7 +23437,6 @@ async function resubscribeToListingCollections() {
   try {
 
     if (!wsManager?.isConnected()) {
-      // console.log(YELLOW + `WebSocket not connected, delaying listing re-subscription` + RESET);
       // Retry after a short delay
       setTimeout(() => {
         resubscribeToListingCollections();
@@ -24626,7 +23450,6 @@ async function resubscribeToListingCollections() {
       running: true
     });
 
-    // console.log(BLUE + `Found ${activeListings.length} active listings with instant price matching` + RESET);
 
     // Subscribe using the WebSocket manager's subscribe method with proper type
     for (const listing of activeListings) {
@@ -24644,16 +23467,13 @@ async function resubscribeToListingCollections() {
           );
         }
 
-        // console.log(GREEN + `Re-subscribed to listing events for ${contractSlug} (${contractAddress})` + RESET);
       } catch (error) {
         logSystemError('ListingResubscription', `Error re-subscribing to listing ${listing._id}`, error, { listingId: listing._id });
       }
     }
 
-    // console.log(GREEN + `Listing re-subscription complete` + RESET);
 
     // Check if any listings have been outbid while disconnected
-    // console.log(YELLOW + `Checking if any listings were outbid during disconnection...` + RESET);
     await processAllActiveListings();
   } catch (error) {
     logSystemError('ListingResubscription', 'Error in resubscribeToListingCollections', error);
@@ -24668,13 +23488,11 @@ async function processAllActiveListings() {
       running: true
     });
 
-    // console.log(BLUE + `Found ${activeListings.length} active listings to process` + RESET);
 
     // Process each listing
     for (const listing of activeListings) {
       try {
         const listingId = listing._id.toString();
-        // console.log(YELLOW + `Processing listing: ${listing.contract?.slug || 'Unknown'} (${listingId})` + RESET);
 
         // Add job to queue
         await queue.add(
@@ -24687,13 +23505,11 @@ async function processAllActiveListings() {
           }
         );
 
-        // console.log(GREEN + `Added listing ${listing.contract?.slug || 'Unknown'} to processing queue` + RESET);
       } catch (error) {
         logSystemError('ListingProcessing', `Error processing listing ${listing._id}`, error, { listingId: listing._id });
       }
     }
 
-    // console.log(GREEN + `All active listings have been queued for processing` + RESET);
   } catch (error) {
     logSystemError('ListingProcessing', 'Error in processAllActiveListings', error);
   }
@@ -24925,7 +23741,6 @@ async function withRetry<T>(fn: () => Promise<T>, retries = MAX_RETRIES): Promis
     return await fn();
   } catch (error: any) {
     if (retries > 0) {
-      // console.log(`Retrying operation, ${retries} attempts remaining...`);
       await delay(RETRY_DELAY);
       return withRetry(fn, retries - 1);
     }
@@ -25342,11 +24157,9 @@ export function trackBidRate(marketplace: 'opensea' | 'magiceden' | 'blur', task
  * Increments memory-based counter for our own bids when we detect we're the maker
  */
 export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', orderHash: string) {
-  // console.log(GREEN + `[DEBUG][incrementOwnBidCounter] CALLED - marketplace: ${marketplace}, orderHash: ${orderHash}` + RESET);
   try {
     // Check if we've already processed this bid
     if (processedOwnBids.has(orderHash)) {
-      // console.log(YELLOW + `[DEBUG][incrementOwnBidCounter] Already processed bid ${orderHash}, skipping increment` + RESET);
       return ownBidCounts[marketplace] || 0;
     }
 
@@ -25357,8 +24170,6 @@ export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
       ownBidCounts[marketplace] = 0;
     }
     ownBidCounts[marketplace]++;
-    // console.log(GREEN + `[DEBUG][incrementOwnBidCounter] Incremented ${marketplace} count to: ${ownBidCounts[marketplace]}` + RESET);
-    // console.log(GREEN + `[DEBUG][incrementOwnBidCounter] Current counts: ${JSON.stringify(ownBidCounts)}` + RESET);
 
     // Clean up old entries periodically (keep last 10000 entries)
     if (processedOwnBids.size > 10000) {
@@ -25387,7 +24198,6 @@ export function decrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
     // Update local ownBidCounts object for immediate broadcast
     if (ownBidCounts[marketplace] && ownBidCounts[marketplace] > 0) {
       ownBidCounts[marketplace] = Math.max(0, ownBidCounts[marketplace] - count);
-      // console.log(`🔻 Own bid cancelled - ${marketplace.toUpperCase()}: ${ownBidCounts[marketplace]} total bids remaining`);
       return ownBidCounts[marketplace];
     }
     return 0;
@@ -25422,7 +24232,6 @@ export function resetOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur'
     // Reset the marketplace counter to 0
     ownBidCounts[marketplace] = 0;
 
-    // console.log(`🔄 Reset own bid counter for ${marketplace.toUpperCase()} task ${taskId}`);
   } catch (error) {
     logSystemError('BidCounter', 'Failed to reset own bid counter', error);
   }
@@ -26079,43 +24888,27 @@ async function handleStartListing(data: { _id: string }, ws: WebSocket) {
     listing.running = true;
     await listing.save();
 
-    // console.log('handleStartListing Step 2: Calling createListing directly...');
     const createListingStart = Date.now();
     // Schedule the listing
     await createListing(listing)
-    // console.log(`handleStartListing Step 2.1: createListing completed in ${Date.now() - createListingStart}ms`);
 
-    // console.log('handleStartListing Step 3: Calling scheduleListing...');
     const scheduleStart = Date.now();
     await scheduleListing(listing);
-    // console.log(`handleStartListing Step 3.1: scheduleListing completed in ${Date.now() - scheduleStart}ms`);
 
     // Subscribe to WebSocket events if instant price matching is enabled
-    // console.log(`\n🔍 Checking WebSocket subscription conditions:`);
-    // console.log(`📋 listing.instantPriceMatching: ${listing.instantPriceMatching}`);
-    // console.log(`🌐 wsManager exists: ${!!wsManager}`);
-    // console.log(`📡 wsManager connected: ${wsManager?.isConnected?.() || 'N/A'}`);
-    // console.log(`🆔 clientId: ${clientId}`);
 
     if (listing.instantPriceMatching && wsManager) {
-      // console.log(`\n🔗 Subscribing to listings WebSocket for instant price matching:`);
-      // console.log(`🏷️  Collection: ${listing.contract.slug}`);
-      // console.log(`📄 Contract: ${listing.contract.contractAddress}`);
 
       try {
         // Use proper subscription management with listing type
         await wsManager.subscribe(listing.contract.slug, listing.contract.contractAddress, 'ALL', 'listing');
-        // console.log(`✅ WebSocket subscription successful`);
       } catch (error) {
         logSystemError('ListingWebSocket', 'WebSocket subscription failed', error);
       }
     } else {
-      // console.log(`❌ WebSocket subscription NOT sent - conditions not met`);
       if (!listing.instantPriceMatching) {
-        // console.log(`- Instant price matching is disabled`);
       }
       if (!wsManager) {
-        // console.log(`- WebSocket manager is not available`);
       }
     }
 
@@ -26125,7 +24918,6 @@ async function handleStartListing(data: { _id: string }, ws: WebSocket) {
       message: 'Listing started successfully'
     }));
 
-    // console.log(GREEN + `Started listing ${data._id}` + RESET);
   } catch (error) {
     logSystemError('ListingStart', 'Error starting listing', error);
     ws.send(JSON.stringify({
@@ -26159,7 +24951,6 @@ async function handleStopListing(data: { listingId: string }, ws: WebSocket) {
       try {
         // Use proper subscription management for unsubscription
         await wsManager.unsubscribe(listing.contract.slug, listing.contract.contractAddress, 'ALL');
-        // console.log(`✅ WebSocket unsubscription successful for cancelled listing`);
       } catch (error) {
         logSystemError('ListingWebSocket', 'WebSocket unsubscription failed for cancelled listing', error);
       }
@@ -26171,7 +24962,6 @@ async function handleStopListing(data: { listingId: string }, ws: WebSocket) {
       message: 'Listing stopped successfully'
     }));
 
-    // console.log(RED + `Stopped listing ${listing.contract.slug} #${listing.tokenId}` + RESET);
   } catch (error) {
     logSystemError('ListingStop', 'Error stopping listing', error);
     ws.send(JSON.stringify({
@@ -26205,25 +24995,18 @@ async function handleUpdateListing(data: { _id: string, updates: any }, ws: WebS
     // Handle instant price matching subscription changes
     if (data.updates.instantPriceMatching !== undefined && wsManager) {
       if (data.updates.instantPriceMatching && listing.running) {
-        // console.log(`\n🔗 Enabling instant price matching - subscribing to listings WebSocket:`);
-        // console.log(`🏷️  Collection: ${listing.contract.slug}`);
-        // console.log(`📄 Contract: ${listing.contract.contractAddress}`);
 
         try {
           // Subscribe to listing events using proper subscription management
           await wsManager.subscribe(listing.contract.slug, listing.contract.contractAddress, 'ALL', 'listing');
-          // console.log(`✅ WebSocket subscription successful`);
         } catch (error) {
           logSystemError('ListingWebSocket', 'WebSocket subscription failed', error);
         }
       } else {
-        // console.log(`\n🔗 Disabling instant price matching - unsubscribing from listings WebSocket:`);
-        // console.log(`🏷️  Collection: ${listing.contract.slug}`);
 
         try {
           // Unsubscribe from listing events
           await wsManager.unsubscribe(listing.contract.slug, listing.contract.contractAddress, 'ALL');
-          // console.log(`✅ WebSocket unsubscription successful`);
         } catch (error) {
           logSystemError('ListingWebSocket', 'WebSocket unsubscription failed', error);
         }
@@ -26236,7 +25019,6 @@ async function handleUpdateListing(data: { _id: string, updates: any }, ws: WebS
       message: 'Listing updated successfully'
     }));
 
-    // console.log(GREEN + `Updated listing ${data._id}` + RESET);
   } catch (error) {
     logSystemError('ListingUpdate', 'Error updating listing', error);
     ws.send(JSON.stringify({
@@ -26305,18 +25087,13 @@ async function logJobTrackingStatus() {
         const hasDiscrepancy = taskTotalJobs !== totalTracked || taskCompletedJobs !== completedTracked;
 
         if (hasDiscrepancy || overallRunningPercentage < 100) {
-          // console.log(`\n${YELLOW}[Task ${taskId}]${RESET}`);
-          // console.log(`  TaskStatus: ${taskCompletedJobs}/${taskTotalJobs} (${overallRunningPercentage?.toFixed(1)}%)`);
-          // console.log(`  ParentJobs: ${completedTracked}/${totalTracked}`);
 
           // Show breakdown by marketplace
           for (const [mp, details] of Object.entries(parentJobDetails)) {
             const percentage = details.total > 0 ? (details.completed / details.total * 100).toFixed(1) : '0.0';
-            // console.log(`    ${mp}: ${details.completed}/${details.total} (${percentage}%)`);
           }
 
           if (hasDiscrepancy) {
-            // console.log(RED + '  ⚠️  MISMATCH DETECTED!' + RESET);
 
             // Check for partial queueing mismatch (0 totalJobs but positive expected)
             if (taskTotalJobs === 0 && totalTracked === 0) {
@@ -26334,14 +25111,12 @@ async function logJobTrackingStatus() {
               }
 
               if (hasPartialQueueing) {
-                // console.log(MAGENTA + '  🔄 Partial queueing detected - will trigger recovery' + RESET);
               }
             }
           }
 
           // Check if all jobs are complete but percentage is not 100
           if (totalTracked > 0 && completedTracked === totalTracked && overallRunningPercentage < 100) {
-            // console.log(MAGENTA + '  🔍 All parent jobs complete but percentage < 100%' + RESET);
           }
 
           // Check for stuck task - low percentage with no queue activity
@@ -26351,15 +25126,12 @@ async function logJobTrackingStatus() {
             (blurCounts.waiting || 0) + (blurCounts.active || 0);
 
           if (overallRunningPercentage < 10 && totalQueueJobs === 0 && totalTracked > 0) {
-            // console.log(RED + '  🚨 STUCK TASK DETECTED - Low percentage with empty queue!' + RESET);
-            // console.log(YELLOW + '  Marking task as complete to allow restart...' + RESET);
 
             // Force mark all parent jobs as complete to unstick the task
             for (const mp of marketplaces) {
               const parentJobId = `${taskId}-${mp}`;
               const parentJob = parentJobs.get(parentJobId);
               if (parentJob && parentJob.completedJobs < parentJob.totalJobs) {
-                // console.log(YELLOW + `  Force completing ${parentJobId}: ${parentJob.completedJobs}/${parentJob.totalJobs}` + RESET);
                 parentJob.completedJobs = parentJob.totalJobs;
               }
             }
@@ -26430,22 +25202,15 @@ async function recoverPartialQueueingTasks(): Promise<void> {
         }
 
         if (hasPartialQueueing && totalJobs === 0) {
-          // console.log(RED + `\n[Partial Queueing Recovery] Task ${taskId} detected with partial queueing` + RESET);
-          // console.log(RED + `  Expected: ${totalExpected} jobs` + RESET);
-          // console.log(RED + `  Actual: ${totalActual} jobs` + RESET);
-          // console.log(RED + `  Missing: ${totalExpected - totalActual} jobs` + RESET);
-          // console.log(RED + `  Details: ${mismatchDetails.join(', ')}` + RESET);
 
           // Check if restart is already scheduled
           const restartKey = `recovery-restart:${taskId}`;
           if (!tasksBeingRestarted.has(restartKey)) {
             tasksBeingRestarted.add(restartKey);
 
-            // console.log(MAGENTA + `[Recovery] Triggering automatic task restart for ${taskId}` + RESET);
 
             try {
               await triggerTaskRestart(taskId);
-              // console.log(GREEN + `[Recovery] Successfully triggered restart for task ${taskId}` + RESET);
             } catch (error) {
               logSystemError('TaskRecovery', `Failed to restart task ${taskId}`, error, { taskId });
             } finally {
@@ -26455,7 +25220,6 @@ async function recoverPartialQueueingTasks(): Promise<void> {
               }, 30000);
             }
           } else {
-            // console.log(YELLOW + `[Recovery] Restart already in progress for task ${taskId}` + RESET);
           }
         }
       }
@@ -26543,13 +25307,11 @@ async function checkStuckTasks() {
         if (!firstSeenQueueing) {
           // First time seeing this task in QUEUEING
           taskCompletionTracking.set(`${taskId}-queueing`, now);
-          // console.log(YELLOW + `[Stuck Task Monitor] Task ${taskId} in QUEUEING status, monitoring...` + RESET);
         } else {
           // Check if stuck in QUEUEING for too long
           const stuckDuration = now - firstSeenQueueing;
 
           if (stuckDuration > 600000) { // 10 minutes in QUEUEING
-            // console.log(RED + `[Stuck Task] Task ${taskId} stuck in QUEUEING for ${(stuckDuration / 1000).toFixed(1)}s` + RESET);
 
             // Check parent jobs
             const marketplaces = ['opensea', 'magiceden', 'blur'];
@@ -26559,13 +25321,11 @@ async function checkStuckTasks() {
               const parentJobId = getParentJobId(taskId, mp);
               const parentJob = parentJobs.get(parentJobId);
               if (parentJob && parentJob.totalJobs === 0) {
-                // console.log(RED + `  ${mp}: Parent job exists with 0 totalJobs (failed job creation)` + RESET);
                 hasEmptyParentJobs = true;
               }
             }
 
             if (hasEmptyParentJobs) {
-              // console.log(YELLOW + `[Stuck Task] Task ${taskId} has empty parent jobs, likely due to timeout. Restart should be triggered by schedule job timeout handler.` + RESET);
             }
 
             // Clean up tracking after logging
@@ -26592,7 +25352,6 @@ async function checkStuckTasks() {
           taskCompletionTracking.set(`${taskId}-99`, now);
           // Calculate overall percentage from marketplaces at 99%
           const overallPercentage = marketplacesAt99.length > 0 ? marketplacesAt99[0][1].runningPercentage : 99;
-          // console.log(YELLOW + `[Stuck Task Monitor] Task ${taskId} at ${overallPercentage.toFixed(2)}%, monitoring...` + RESET);
 
           // Log detailed parent job status
           const marketplaces = ['opensea', 'magiceden', 'blur'];
@@ -26600,7 +25359,6 @@ async function checkStuckTasks() {
             const parentJobId = getParentJobId(taskId, mp);
             const parentJob = parentJobs.get(parentJobId);
             if (parentJob) {
-              // console.log(YELLOW + `  ${mp}: ${parentJob.completedJobs}/${parentJob.totalJobs} (${((parentJob.completedJobs / parentJob.totalJobs) * 100).toFixed(2)}%)` + RESET);
             }
           }
         } else {
@@ -26610,7 +25368,6 @@ async function checkStuckTasks() {
           if (stuckDuration > 120000) { // 2 minutes at 99%
             // Calculate overall percentage from marketplaces at 99%
             const stuckPercentage = marketplacesAt99.length > 0 ? marketplacesAt99[0][1].runningPercentage : 99;
-            // console.log(RED + `[Stuck Task] Task ${taskId} stuck at ${stuckPercentage.toFixed(2)}% for ${(stuckDuration / 1000).toFixed(1)}s` + RESET);
 
             // Reconcile actual job counts
             let totalExpected = 0;
@@ -26623,12 +25380,10 @@ async function checkStuckTasks() {
               if (parentJob) {
                 totalExpected += parentJob.totalJobs;
                 totalCompleted += parentJob.completedJobs;
-                // console.log(RED + `  ${mp}: ${parentJob.completedJobs}/${parentJob.totalJobs} jobs` + RESET);
               }
             }
 
             const actualPercentage = totalExpected > 0 ? (totalCompleted / totalExpected) * 100 : 0;
-            // console.log(RED + `  Actual completion: ${totalCompleted}/${totalExpected} = ${actualPercentage.toFixed(2)}%` + RESET);
 
             // Check for jobs in fallback store before forcing completion
             const expectedCounts: { [marketplace: string]: number } = {};
@@ -26649,7 +25404,6 @@ async function checkStuckTasks() {
               const parentJob = parentJobs.get(parentJobId);
               if (parentJob) {
                 parentJob.completedJobs = Math.min(parentJob.completedJobs + increment, parentJob.totalJobs);
-                // console.log(GREEN + `[Recovery] Recovered ${increment} ${mp} jobs from fallback store` + RESET);
               }
             });
 
@@ -26666,14 +25420,12 @@ async function checkStuckTasks() {
 
             // If we're actually very close to 100%, force completion
             if (actualPercentageAfterRecovery >= 99.0) { // Lower threshold to 99% for tolerance
-              // console.log(GREEN + `[Stuck Task] Forcing completion for task ${taskId} (${actualPercentageAfterRecovery.toFixed(2)}% complete)` + RESET);
 
               // Force all parent jobs to be marked as complete
               for (const mp of marketplaces) {
                 const parentJobId = getParentJobId(taskId, mp);
                 const parentJob = parentJobs.get(parentJobId);
                 if (parentJob && parentJob.completedJobs < parentJob.totalJobs) {
-                  // console.log(GREEN + `  Adjusting ${mp}: ${parentJob.completedJobs} -> ${parentJob.totalJobs}` + RESET);
                   parentJob.completedJobs = parentJob.totalJobs;
                 }
               }
@@ -26709,14 +25461,11 @@ async function checkStuckTasks() {
         if (!firstSeen) {
           // First time seeing this task as complete
           taskCompletionTracking.set(taskId, now);
-          // console.log(YELLOW + `[Stuck Task Monitor] Task ${taskId} appears complete, monitoring...` + RESET);
         } else {
           // Check if stuck for too long
           const stuckDuration = now - firstSeen;
 
           if (stuckDuration > 30000) { // 30 seconds
-            // console.log(RED + `[Stuck Task] Task ${taskId} has all jobs complete for ${(stuckDuration / 1000).toFixed(1)}s` + RESET);
-            // console.log(GREEN + `[Stuck Task] Forcing completion for task ${taskId}` + RESET);
 
             // Force percentage to 100 for all marketplaces
             if (status) {
@@ -26732,7 +25481,6 @@ async function checkStuckTasks() {
                 const parentJobId = getParentJobId(taskId, mp);
                 const parentJob = parentJobs.get(parentJobId);
                 if (parentJob) {
-                  // console.log(`  ${mp}: ${parentJob.completedJobs}/${parentJob.totalJobs}`);
                 }
               }
             }
@@ -26747,7 +25495,6 @@ async function checkStuckTasks() {
       } else {
         // Task is not complete, remove from tracking
         if (taskCompletionTracking.has(taskId)) {
-          // console.log(BLUE + `[Stuck Task Monitor] Task ${taskId} no longer complete, removing from monitoring` + RESET);
           taskCompletionTracking.delete(taskId);
         }
       }
@@ -26794,7 +25541,6 @@ async function healthCheckStuckTasks() {
         const firstStuckMarketplace = stuckMarketplaces[0];
         const lastUpdate = firstStuckMarketplace[1].lastUpdate || status.lastUpdate || now;
         const stuckDuration = now - lastUpdate;
-        // console.log(YELLOW + `[HealthCheck] Task ${taskId} has marketplaces stuck at 0% for ${(stuckDuration / 1000).toFixed(1)}s` + RESET);
 
         // Check parent jobs
         let hasParentJobs = false;
@@ -26813,7 +25559,6 @@ async function healthCheckStuckTasks() {
             // Check if parent job has expected jobs but no actual jobs
             if (parentJob.expectedJobs && parentJob.expectedJobs > 0 && (!parentJob.actualJobs || parentJob.actualJobs === 0)) {
               needsRecovery = true;
-              // console.log(RED + `  ${marketplace}: Parent job expects ${parentJob.expectedJobs} jobs but has 0 actual jobs!` + RESET);
             }
 
             if (parentJob.actualJobs && parentJob.actualJobs > 0) {
@@ -26824,7 +25569,6 @@ async function healthCheckStuckTasks() {
 
         // If we have parent jobs but no actual jobs, trigger recovery
         if (hasParentJobs && !hasActualJobs && needsRecovery) {
-          // console.log(RED + `[HealthCheck] Task ${taskId} has parent jobs but no actual jobs - triggering recovery` + RESET);
 
           // Log to error tracking
           await logger.logError(ErrorCategory.QUEUE, 'Task stuck at 0% with parent jobs but no actual jobs', {
@@ -26851,11 +25595,9 @@ async function healthCheckStuckTasks() {
 async function recoverStuckTask(taskId: string): Promise<void> {
   const task = activeTasks.get(taskId);
   if (!task) {
-    // console.log(YELLOW + `[RecoverTask] Task ${taskId} not found in activeTasks` + RESET);
     return;
   }
 
-  // console.log(YELLOW + `[RecoverTask] Attempting to recover stuck task ${taskId}` + RESET);
 
   let jobsCreated = false;
 
@@ -26866,7 +25608,6 @@ async function recoverStuckTask(taskId: string): Promise<void> {
     const parentJob = parentJobs.get(parentJobId);
 
     if (parentJob && parentJob.expectedJobs && parentJob.expectedJobs > 0 && (!parentJob.actualJobs || parentJob.actualJobs === 0)) {
-      // console.log(YELLOW + `[RecoverTask] Creating missing ${marketplace} jobs for task ${taskId}` + RESET);
 
       try {
         // Set task to QUEUEING to reflect that we're creating jobs
@@ -26894,7 +25635,6 @@ async function recoverStuckTask(taskId: string): Promise<void> {
             );
 
             jobsCreated = true;
-            // console.log(GREEN + `[RecoverTask] Created OpenSea recovery job` + RESET);
             break;
 
           case 'magiceden':
@@ -26913,7 +25653,6 @@ async function recoverStuckTask(taskId: string): Promise<void> {
             );
 
             jobsCreated = true;
-            // console.log(GREEN + `[RecoverTask] Created MagicEden recovery job` + RESET);
             break;
 
           case 'blur':
@@ -26932,7 +25671,6 @@ async function recoverStuckTask(taskId: string): Promise<void> {
             );
 
             jobsCreated = true;
-            // console.log(GREEN + `[RecoverTask] Created Blur recovery job` + RESET);
             break;
         }
 
@@ -26957,12 +25695,9 @@ async function recoverStuckTask(taskId: string): Promise<void> {
     // Force update task percentage after recovery
     await updateTaskRunningPercentage(taskId);
 
-    // console.log(GREEN + `[RecoverTask] Recovery complete for task ${taskId}` + RESET);
   } else {
-    // console.log(YELLOW + `[RecoverTask] No jobs were created during recovery for task ${taskId}` + RESET);
 
     // If no jobs could be created, might need to restart the task
-    // console.log(YELLOW + `[RecoverTask] Scheduling task restart for ${taskId}` + RESET);
     setTimeout(async () => {
       await triggerTaskRestart(taskId);
     }, 5000);
@@ -27016,14 +25751,12 @@ async function verifyJobCreation(): Promise<void> {
       );
 
       if (hasQueuingMarketplace) {
-        // console.log(YELLOW + `[JobVerification] Triggering recovery for stuck task ${taskId}` + RESET);
         await recoverStuckTask(taskId);
       }
 
       jobCreationVerificationMap.delete(key);
     } else if (parentJob.actualJobs && parentJob.actualJobs > 0) {
       // Jobs are being created, remove from verification
-      // console.log(GREEN + `[JobVerification] Task ${taskId} loop ${loopCount}: Jobs created (${parentJob.actualJobs}/${expectedJobs})` + RESET);
       jobCreationVerificationMap.delete(key);
     }
   }
@@ -27082,7 +25815,6 @@ async function ensureParentJobExists(taskId: string, marketplace: string): Promi
   const promise = (async () => {
     try {
       if (!parentJobs.has(parentJobId)) {
-        // console.log(BLUE + `[Parent Job] Creating parent job: ${parentJobId} at ${timestamp}` + RESET);
 
         // Validate task exists
         const task = activeTasks.get(taskId);
@@ -27146,7 +25878,6 @@ async function waitForParentJobReady(taskId: string, marketplace: string, maxWai
   while (Date.now() - startTime < maxWaitTime) {
     const parentJob = parentJobs.get(parentJobId);
     if (parentJob) {
-      // console.log(GREEN + `[waitForParentJobReady] Parent job ${parentJobId} is ready` + RESET);
       return true;
     }
 
@@ -27160,7 +25891,6 @@ async function waitForParentJobReady(taskId: string, marketplace: string, maxWai
     break;
   }
 
-  // console.log(YELLOW + `[waitForParentJobReady] Parent job ${parentJobId} not ready after ${maxWaitTime}ms` + RESET);
   return false;
 }
 
@@ -27188,7 +25918,6 @@ async function ensureParentJobExistsEnhanced(taskId: string, marketplace: string
   );
 
   if (allMarketplacesFinished) {
-    // console.log(YELLOW + `[ensureParentJobExistsEnhanced] Task ${taskId} has all marketplaces finished, skipping parent job creation` + RESET);
     return;
   }
 
@@ -27214,7 +25943,6 @@ class OrphanedJobRecovery {
       });
     }, intervalMs);
 
-    // console.log(GREEN + `[OrphanedJobRecovery] Started recovery checks every ${intervalMs}ms` + RESET);
   }
 
   stopRecovery() {
@@ -27254,7 +25982,6 @@ class OrphanedJobRecovery {
           if (jobLoop > 0 && jobLoop < currentLoop) {
             // Old loop job - should be removed
             orphanedJobs.push(job);
-            // console.log(YELLOW + `[OrphanedJobRecovery] Found old loop job: ${job.id} (loop ${jobLoop}, current ${currentLoop})` + RESET);
           } else {
             // Current loop job without parent - needs recovery
             if (!recoveryActions.has(parentJobId)) {
@@ -27267,7 +25994,6 @@ class OrphanedJobRecovery {
 
       // Remove old loop jobs
       if (orphanedJobs.length > 0) {
-        // console.log(YELLOW + `[OrphanedJobRecovery] Removing ${orphanedJobs.length} old loop jobs` + RESET);
 
         for (const job of orphanedJobs) {
           try {
@@ -27286,7 +26012,6 @@ class OrphanedJobRecovery {
         // Check if task is still active
         const task = activeTasks.get(taskId);
         if (!task || !task.running) {
-          // console.log(YELLOW + `[OrphanedJobRecovery] Task ${taskId} not active, removing orphaned jobs` + RESET);
           for (const job of jobs) {
             try {
               await job.remove();
@@ -27314,7 +26039,6 @@ class OrphanedJobRecovery {
         };
 
         parentJobs.set(parentJobId, newParentJob);
-        // console.log(GREEN + `[OrphanedJobRecovery] Created recovery parent job ${parentJobId} for ${jobs.length} jobs` + RESET);
 
         // Update task status if needed
         const status = taskStatus[taskId];
@@ -27339,7 +26063,6 @@ class OrphanedJobRecovery {
 
     const task = activeTasks.get(taskId);
     if (!task) {
-      // console.log(YELLOW + `[OrphanedJobRecovery] Task ${taskId} not found` + RESET);
       return;
     }
 
@@ -27374,7 +26097,6 @@ class OrphanedJobRecovery {
           };
 
           parentJobs.set(parentJobId, newParentJob);
-          // console.log(GREEN + `[OrphanedJobRecovery] Created parent job for ${matchingJobs.length} ${marketplace} jobs` + RESET);
         }
       }
     }
@@ -27414,7 +26136,6 @@ async function fixStuckTask(taskId: string) {
   // Update percentage
   await updateTaskRunningPercentage(taskId);
 
-  // console.log(GREEN + `[fixStuckTask] Recovery attempt completed for task ${taskId}` + RESET);
 }
 
 /**
@@ -27456,7 +26177,6 @@ async function checkCancellationJobStatus(taskId: string): Promise<{
               break;
             case 'failed':
               failedCancellationJobs++;
-              // console.log(RED + `[checkCancellationJobStatus] Failed job: ${job.id}, attempts: ${job.attemptsMade}/${job.opts.attempts}, error: ${job.failedReason}` + RESET);
               break;
             case 'active':
               activeCancellationJobs++;
@@ -27488,14 +26208,6 @@ async function checkCancellationJobStatus(taskId: string): Promise<{
       }
     };
 
-    // console.log(GREEN + `[checkCancellationJobStatus] Summary:` + RESET);
-    // console.log(`  Total: ${totalCancellationJobs}`);
-    // console.log(`  Completed: ${completedCancellationJobs}`);
-    // console.log(`  Failed: ${failedCancellationJobs}`);
-    // console.log(`  Active: ${activeCancellationJobs}`);
-    // console.log(`  Waiting: ${waitingCancellationJobs}`);
-    // console.log(`  Stalled: ${stalledCancellationJobs}`);
-    // console.log(`  Progress: ${cancellationProgress}%`);
 
     return result;
   } catch (error) {
@@ -27538,7 +26250,6 @@ async function recoverOrphanedJobs() {
                 // Only recover if task still exists and is active
                 const task = activeTasks.get(taskId);
                 if (task) {
-                  // console.log(YELLOW + `[Orphaned Job] Found: ${job.id} (${state})` + RESET);
 
                   // Create parent job retroactively
                   await ensureParentJobExists(taskId, marketplace);
@@ -27553,7 +26264,6 @@ async function recoverOrphanedJobs() {
                     }
 
                     recoveredCount++;
-                    // console.log(GREEN + `  ✓ Recovered and updated parent job tracking` + RESET);
                   }
                 }
               }
@@ -27566,9 +26276,7 @@ async function recoverOrphanedJobs() {
     }
 
     if (orphanedCount > 0) {
-      // console.log(`\nFound ${orphanedCount} orphaned jobs, recovered ${recoveredCount}`);
     } else {
-      // console.log('No orphaned jobs found');
     }
 
   } catch (error) {
