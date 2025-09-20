@@ -12750,7 +12750,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
             }
           })
-          queue.addBulk(cancelData)
+          await queue.addBulk(cancelData)
         }
         console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
         console.log(RED + `[OpenSea Counterbid] EARLY RETURN: Stop option triggered for token #${tokenId} (floor: ${floor_price})` + RESET);
@@ -13193,7 +13193,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                 data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
               }
             })
-            queue.addBulk(cancelData)
+            await queue.addBulk(cancelData)
           }
         }
         console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
@@ -13218,7 +13218,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
             }
           })
-          queue.addBulk(cancelData)
+          await queue.addBulk(cancelData)
         }
         return
       }
@@ -13246,7 +13246,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                 data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
               }
             })
-            queue.addBulk(cancelData)
+            await queue.addBulk(cancelData)
           }
         }
         console.log(RED + '══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════' + RESET);
@@ -15607,7 +15607,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
         jobs: cancelData.length,
         jobNames: cancelData.map((job) => job.name),
       });
-      queue.addBulk(cancelData); // Non-blocking
+      await queue.addBulk(cancelData);
       log("queueing", "Cancellation jobs enqueued", { jobs: cancelData.length });
     }
 
@@ -16853,7 +16853,7 @@ async function processBlurCollectionBid(data: { taskId: string }) {
             data: { walletId: currentTask.walletId, payload, taskId: currentTask._id, orderKey: order._id }
           }
         })
-        queue.addBulk(cancelData);
+        await queue.addBulk(cancelData);
       }
 
       return
@@ -17145,7 +17145,7 @@ async function processBlurCollectionBid(data: { taskId: string }) {
           data: { walletId: currentTask.walletId, payload, taskId: currentTask._id, orderKey: order._id }
         }
       })
-      queue.addBulk(cancelData);
+      await queue.addBulk(cancelData);
     }
 
     // Add tolerance for floating-point comparison (0.000001 = 1e-6)
@@ -17207,7 +17207,7 @@ async function processBlurCollectionBid(data: { taskId: string }) {
               data: { walletId: currentTask.walletId, payload, taskId: currentTask._id, orderKey: order._id }
             }
           })
-          queue.addBulk(cancelData);
+          await queue.addBulk(cancelData);
         }
       }
 
@@ -17488,7 +17488,7 @@ async function processOpenseaTraitBid(data: {
             data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id },
           }
         })
-        queue.addBulk(cancelData)
+        await queue.addBulk(cancelData)
       }
       return
     }
@@ -18244,6 +18244,22 @@ async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) 
   if (!floor_price) return
 
   try {
+    // Query and cancel existing collection orders
+    const orders = await Order.find({
+      slug: slug,
+      taskId: _id,
+      marketplace: MAGICEDEN.toLowerCase(),
+      identifier: "collection"
+    });
+
+    if (orders.length > 0) {
+      const cancelData = orders.map((order) => ({
+        name: CANCEL_MAGICEDEN_BID,
+        data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id }
+      }));
+      await queue.addBulk(cancelData);
+    }
+
     const { currencyType, currency, decimal, currencySymbol } = await calculateBidPrice(currentTask, floor_price, "magiceden")
     const offerEth = Number(offerPrice) / Math.pow(10, decimal);
 
@@ -18305,6 +18321,23 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
   }
 
   try {
+    // Query and cancel existing trait orders
+    const identifier = `${bidTrait.attributeKey}:${bidTrait.attributeValue}`;
+    const orders = await Order.find({
+      slug: slug,
+      taskId: taskId,
+      marketplace: MAGICEDEN.toLowerCase(),
+      identifier: identifier
+    });
+
+    if (orders.length > 0) {
+      const cancelData = orders.map((order) => ({
+        name: CANCEL_MAGICEDEN_BID,
+        data: { walletId, orderId: order.orderHash, taskId, orderKey: order._id }
+      }));
+      await queue.addBulk(cancelData);
+    }
+
     const { currencyType, currency } = await calculateBidPrice(currentTask, 0, "magiceden")
 
     // Fetch wallet and decrypt private key just before use
@@ -19014,9 +19047,8 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
         });
         return;
       }
-    }
 
-    if (orders.length > 0) {
+      // Cancel existing orders since we're placing a higher bid
       const cancelData = orders.map((order) => ({
         name: CANCEL_OPENSEA_BID,
         data: { walletId, orderId: order.orderHash, taskId, orderKey: order._id }
@@ -19262,6 +19294,13 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
         // console.log(YELLOW + `[magicedenTokenCounterBid] Current offer ${currentOfferWei} wei >= incoming offer ${incomingOfferWei} wei for token ${tokenId}. Skipping...` + RESET);
         return;
       }
+
+      // Cancel existing orders since we're placing a higher bid
+      const cancelData = orders.map((order) => ({
+        name: CANCEL_MAGICEDEN_BID,
+        data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id }
+      }));
+      await queue.addBulk(cancelData);
     }
 
     const { currency } = await calculateBidPrice(currentTask, 0, "magiceden")
@@ -22079,7 +22118,7 @@ app.post('/api/task/cancel/:taskId', async (req, res) => {
           data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id }
         }
       })
-      queue.addBulk(cancelData); // Non-blocking
+      await queue.addBulk(cancelData);
     }
 
     if (magicedenOrders.length > 0) {
@@ -22100,7 +22139,7 @@ app.post('/api/task/cancel/:taskId', async (req, res) => {
           data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id }
         }
       })
-      queue.addBulk(blurCancelData)
+      await queue.addBulk(blurCancelData)
     }
 
     res.status(200).json({ message: 'Task cancelled' });
@@ -23910,6 +23949,74 @@ app.get('/api/logs/export', async (req, res) => {
       format = 'json'
     } = req.query as any;
 
+    // Validate marketplace
+    const validMarketplaces = ['blur', 'opensea', 'magiceden'];
+    if (!validMarketplaces.includes(marketplace)) {
+      return res.status(400).json({ 
+        error: 'Invalid marketplace', 
+        message: `Marketplace must be one of: ${validMarketplaces.join(', ')}` 
+      });
+    }
+
+    // Validate format
+    const validFormats = ['json', 'csv'];
+    if (!validFormats.includes(format)) {
+      return res.status(400).json({ 
+        error: 'Invalid format', 
+        message: `Format must be one of: ${validFormats.join(', ')}` 
+      });
+    }
+
+    // Validate level
+    const validLevels = ['all', 'info', 'warn', 'error', 'debug'];
+    if (!validLevels.includes(level)) {
+      return res.status(400).json({ 
+        error: 'Invalid level', 
+        message: `Level must be one of: ${validLevels.join(', ')}` 
+      });
+    }
+
+    // Validate time range
+    const validTimeRanges = ['5m', '10m', '1h', '24h', 'custom'];
+    if (timeRange && !validTimeRanges.includes(timeRange)) {
+      return res.status(400).json({ 
+        error: 'Invalid time range', 
+        message: `Time range must be one of: ${validTimeRanges.join(', ')}` 
+      });
+    }
+
+    // Validate dates
+    let parsedStartTime: Date | undefined;
+    let parsedEndTime: Date | undefined;
+    
+    if (startTime) {
+      parsedStartTime = new Date(String(startTime));
+      if (isNaN(parsedStartTime.getTime())) {
+        return res.status(400).json({ 
+          error: 'Invalid start time', 
+          message: 'Start time must be a valid ISO date string' 
+        });
+      }
+    }
+    
+    if (endTime) {
+      parsedEndTime = new Date(String(endTime));
+      if (isNaN(parsedEndTime.getTime())) {
+        return res.status(400).json({ 
+          error: 'Invalid end time', 
+          message: 'End time must be a valid ISO date string' 
+        });
+      }
+    }
+
+    // Validate custom time range
+    if (timeRange === 'custom' && !parsedStartTime) {
+      return res.status(400).json({ 
+        error: 'Missing start time', 
+        message: 'Start time is required when using custom time range' 
+      });
+    }
+
     const logger = getMarketplaceLogger(marketplace);
 
     const options: any = {
@@ -23919,18 +24026,23 @@ app.get('/api/logs/export', async (req, res) => {
     if (taskId) options.taskId = taskId;
     if (timeRange) options.timeRange = timeRange;
     if (functionFilter) options.function = functionFilter;
-    if (startTime) options.startTime = new Date(String(startTime));
-    if (endTime) options.endTime = new Date(String(endTime));
+    if (parsedStartTime) options.startTime = parsedStartTime;
+    if (parsedEndTime) options.endTime = parsedEndTime;
 
     const buffer = await logger.exportLogs(options);
     const filename = `${marketplace}-logs-${new Date().toISOString().split('T')[0]}.${format}`;
     res.setHeader('Content-Type', format === 'json' ? 'application/json' : 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Length', buffer.length);
+    res.setHeader('Content-Length', String(buffer.length));
     res.send(buffer);
   } catch (error) {
     console.error('Error exporting marketplace logs:', error);
-    res.status(500).json({ error: 'Failed to export logs' });
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({ 
+      error: 'Failed to export logs',
+      message: errorMessage,
+      details: process.env.NODE_ENV === 'development' ? error : undefined
+    });
   }
 });
 
@@ -23949,18 +24061,95 @@ app.get('/api/logs', async (req, res) => {
       offset = 0
     } = req.query as any;
 
+    // Validate marketplace
+    const validMarketplaces = ['blur', 'opensea', 'magiceden'];
+    if (!validMarketplaces.includes(marketplace)) {
+      return res.status(400).json({ 
+        error: 'Invalid marketplace', 
+        message: `Marketplace must be one of: ${validMarketplaces.join(', ')}` 
+      });
+    }
+
+    // Validate level
+    const validLevels = ['all', 'info', 'warn', 'error', 'debug'];
+    if (!validLevels.includes(level)) {
+      return res.status(400).json({ 
+        error: 'Invalid level', 
+        message: `Level must be one of: ${validLevels.join(', ')}` 
+      });
+    }
+
+    // Validate pagination parameters
+    const parsedLimit = Number(limit);
+    const parsedOffset = Number(offset);
+    
+    if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 10000) {
+      return res.status(400).json({ 
+        error: 'Invalid limit', 
+        message: 'Limit must be a number between 1 and 10000' 
+      });
+    }
+    
+    if (isNaN(parsedOffset) || parsedOffset < 0) {
+      return res.status(400).json({ 
+        error: 'Invalid offset', 
+        message: 'Offset must be a non-negative number' 
+      });
+    }
+
+    // Validate time range
+    const validTimeRanges = ['5m', '10m', '1h', '24h', 'custom'];
+    if (timeRange && !validTimeRanges.includes(timeRange)) {
+      return res.status(400).json({ 
+        error: 'Invalid time range', 
+        message: `Time range must be one of: ${validTimeRanges.join(', ')}` 
+      });
+    }
+
+    // Validate dates
+    let parsedStartTime: Date | undefined;
+    let parsedEndTime: Date | undefined;
+    
+    if (startTime) {
+      parsedStartTime = new Date(String(startTime));
+      if (isNaN(parsedStartTime.getTime())) {
+        return res.status(400).json({ 
+          error: 'Invalid start time', 
+          message: 'Start time must be a valid ISO date string' 
+        });
+      }
+    }
+    
+    if (endTime) {
+      parsedEndTime = new Date(String(endTime));
+      if (isNaN(parsedEndTime.getTime())) {
+        return res.status(400).json({ 
+          error: 'Invalid end time', 
+          message: 'End time must be a valid ISO date string' 
+        });
+      }
+    }
+
+    // Validate custom time range
+    if (timeRange === 'custom' && !parsedStartTime) {
+      return res.status(400).json({ 
+        error: 'Missing start time', 
+        message: 'Start time is required when using custom time range' 
+      });
+    }
+
     const logger = getMarketplaceLogger(marketplace);
 
     const options: any = { level };
     if (taskId) options.taskId = taskId;
     if (timeRange) options.timeRange = timeRange;
     if (functionFilter) options.function = functionFilter;
-    if (startTime) options.startTime = new Date(String(startTime));
-    if (endTime) options.endTime = new Date(String(endTime));
+    if (parsedStartTime) options.startTime = parsedStartTime;
+    if (parsedEndTime) options.endTime = parsedEndTime;
 
     const allLogs = await logger.getLogs(options);
-    const start = Number(offset);
-    const end = start + Number(limit);
+    const start = parsedOffset;
+    const end = start + parsedLimit;
     const logs = allLogs.slice(start, end);
 
     const summary = {
@@ -23984,14 +24173,19 @@ app.get('/api/logs', async (req, res) => {
       summary,
       pagination: {
         total: allLogs.length,
-        limit: Number(limit),
-        offset: Number(offset),
+        limit: parsedLimit,
+        offset: parsedOffset,
         hasMore: end < allLogs.length,
       },
     });
   } catch (error) {
     console.error('Error fetching marketplace logs:', error);
-    res.status(500).json({ error: 'Failed to fetch logs' });
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({ 
+      error: 'Failed to fetch logs',
+      message: errorMessage,
+      details: process.env.NODE_ENV === 'development' ? error : undefined
+    });
   }
 });
 
