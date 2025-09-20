@@ -1793,7 +1793,6 @@ async function checkWorkerHealth() {
         connections: connectionAges
       });
     } else if (maxConnections >= connectionPoolWarningThreshold) {
-      // console.warn(YELLOW + `[WARNING - Connection Pool] Redis connection pool high: ${maxConnections} connections` + RESET);
       await logger.logWarning(ErrorCategory.DATABASE, 'Redis connection pool warning', {
         connectionCount: maxConnections,
         threshold: connectionPoolWarningThreshold,
@@ -1806,9 +1805,7 @@ async function checkWorkerHealth() {
     const possibleLeaks = connectionAges.filter(conn => conn.age > connectionLeakThreshold);
 
     if (possibleLeaks.length > 0) {
-      // console.warn(YELLOW + `[WARNING - Connection Pool] Possible connection leaks detected: ${possibleLeaks.length} connections older than 2 hours` + RESET);
       possibleLeaks.forEach(conn => {
-        // console.warn(YELLOW + `  - ${conn.id}: ${Math.floor(conn.age / 3600)} hours old` + RESET);
       });
 
       await logger.logWarning(ErrorCategory.DATABASE, 'Possible Redis connection leaks', {
@@ -2402,7 +2399,6 @@ async function startServer() {
 
       // Add connection pool monitoring for high-throughput operations
       mongoose.connection.on('disconnected', () => {
-        // console.warn('🔴 MongoDB disconnected');
       });
 
       mongoose.connection.on('reconnected', () => {
@@ -2538,7 +2534,6 @@ async function startServer() {
       // try {
       //   startRedisClusterMonitoring(clearQueueAndRestartJobs);
       // } catch (error) {
-      // console.error(RED + '[ERROR - Redis Monitor - Task: N/A] Failed to start Redis cluster monitoring:' + RESET, error);
       // }
     });
 
@@ -4859,7 +4854,6 @@ wss.on('connection', async (ws) => {
           break
 
         default:
-        // console.warn(YELLOW + `Unknown endpoint: ${message.endpoint}` + RESET);
       }
     } catch (error) {
       logger.logApiError("WebSocket message handler failed", {
@@ -5157,7 +5151,6 @@ async function processBlurJob(job: Job) {
           }
         }
       } catch (error) {
-        // console.warn(`Failed to check Redis for wallet status: ${error}`);
 
         logRaw('blur', {
           taskId,
@@ -6281,7 +6274,6 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
             try {
               const extended = extendScheduledBidLock(taskId, marketplace);
               if (!extended) {
-                // console.warn(YELLOW + `[processBulkJobs] Failed to extend scheduled bid lock for ${taskId}-${marketplace}` + RESET);
               }
             } catch (error) {
               logSystemError('BulkJobs', 'Error extending scheduled bid lock', error);
@@ -8343,7 +8335,6 @@ async function
       const { currencySymbol: cs } = await calculateBidPrice(task, 0, "opensea");
       currencySymbol = cs;
     } catch (error) {
-      // console.warn(`[stopTask] Failed to get currency symbol, using default WETH:`, error);
     }
 
     switch (marketplace?.toLowerCase()) {
@@ -13884,7 +13875,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
             if (redis) {
               const lockExists = await redis.get(lockKey);
               if (!lockExists) {
-                // console.warn(`${YELLOW}[LOCK WARNING] BullMQ lock missing for job ${scheduleJob.id}, proceeding with recovery${RESET}`);
                 // Continue processing but add monitoring
                 await logger.logError(ErrorCategory.QUEUE, 'Missing BullMQ lock detected in OpenSea scheduled bid', {
                   taskId,
@@ -19015,7 +19005,6 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
             if (redis) {
               const lockExists = await redis.get(lockKey);
               if (!lockExists) {
-                // console.warn(`${YELLOW}[LOCK WARNING] BullMQ lock missing for job ${scheduleJob.id}, proceeding with recovery${RESET}`);
                 // Continue processing but add monitoring
                 await logger.logError(ErrorCategory.QUEUE, 'Missing BullMQ lock detected in MagicEden scheduled bid', {
                   taskId,
@@ -20480,7 +20469,6 @@ app.get("/health", async (req, res) => {
         timeoutPromise
       ]) as any;
     } catch (error) {
-      // console.warn('Queue counts timeout, using defaults');
     }
 
     try {
@@ -20490,7 +20478,6 @@ app.get("/health", async (req, res) => {
         timeoutPromise
       ]) as any;
     } catch (error) {
-      // console.warn('Blur rate limits timeout, using defaults');
     }
 
     const metrics = {
@@ -20903,7 +20890,6 @@ app.post('/api/floor', async (req, res) => {
 
       // Validate taskId exists
       if (!taskId) {
-        // console.warn(`Skipping task with missing _id: ${JSON.stringify(task)}`);
         return;
       }
 
@@ -20931,7 +20917,6 @@ app.post('/api/floor', async (req, res) => {
         const topOfferAmount = Number(topOffer?.eth) || 0
         bestOffers[taskId]['opensea'] = topOfferAmount
       } catch (error: any) {
-        // console.warn(`Failed to fetch OpenSea data for ${slug}: ${error?.message || error}`);
         floorPrices[taskId]['opensea'] = 0;
         bestOffers[taskId]['opensea'] = 0;
       }
@@ -20944,7 +20929,6 @@ app.post('/api/floor', async (req, res) => {
         const bestOfferAmount = bestOffer?.priceLevels?.[0]?.price ? Number(bestOffer.priceLevels[0].price) : 0
         bestOffers[taskId]['blur'] = bestOfferAmount
       } catch (error: any) {
-        // console.warn(`Failed to fetch Blur data for ${slug}: ${error?.message || error}`);
         floorPrices[taskId]['blur'] = 0;
         bestOffers[taskId]['blur'] = 0;
       }
@@ -20958,7 +20942,6 @@ app.post('/api/floor', async (req, res) => {
         const bestOfferAmount = Number(bestOffer?.eth) || 0
         bestOffers[taskId]['magiceden'] = bestOfferAmount;
       } catch (error: any) {
-        // console.warn(`Failed to fetch Magic Eden data for ${contractAddress}: ${error?.message || error}`);
         floorPrices[taskId]['magiceden'] = 0;
         bestOffers[taskId]['magiceden'] = 0;
       }
@@ -25735,7 +25718,6 @@ async function verifyJobCreation(): Promise<void> {
     const parentJob = parentJobs.get(parentJobId);
 
     if (!parentJob) {
-      // console.warn(YELLOW + `[JobVerification] Parent job ${parentJobId} not found` + RESET);
       jobCreationVerificationMap.delete(key);
       continue;
     }
