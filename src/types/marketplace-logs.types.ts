@@ -22,7 +22,7 @@ export type MarketLogStage =
   | 'rate_limit'
   | 'scheduling';
 
-export type Marketplace = 'blur' | 'opensea' | 'magiceden';
+export type Marketplace = 'blur' | 'opensea' | 'magiceden' | 'system';
 
 export interface MarketLogMetadata {
   [key: string]: any;

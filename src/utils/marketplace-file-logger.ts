@@ -392,3 +392,74 @@ export function logError(
     }
   }
 }
+
+// System-level logging functions
+export function logSystemError(
+  fn: string,
+  message: string,
+  error?: unknown,
+  metadata: Record<string, any> = {}
+) {
+  try {
+    const err = error as any;
+    const meta = {
+      ...metadata,
+      errorMessage: err?.message || String(error ?? ''),
+      errorStack: err?.stack,
+      errorCode: err?.code,
+    };
+    getMarketplaceLogger('system').log({
+      taskId: 'N/A',
+      function: fn,
+      stage: 'error',
+      level: 'error',
+      message,
+      metadata: meta,
+    });
+  } catch (e) {
+    // Fallback to console if logging fails
+    console.error(`[SYSTEM] ${fn}: ${message}`, error);
+  }
+}
+
+export function logSystemInfo(
+  fn: string,
+  message: string,
+  metadata: Record<string, any> = {}
+) {
+  try {
+    getMarketplaceLogger('system').log({
+      taskId: 'N/A',
+      function: fn,
+      stage: 'processing',
+      level: 'info',
+      message,
+      metadata,
+    });
+  } catch (e) {
+    if (process.env.DEBUG === 'true') {
+      console.log(`[SYSTEM] ${fn}: ${message}`);
+    }
+  }
+}
+
+export function logSystemWarn(
+  fn: string,
+  message: string,
+  metadata: Record<string, any> = {}
+) {
+  try {
+    getMarketplaceLogger('system').log({
+      taskId: 'N/A',
+      function: fn,
+      stage: 'processing',
+      level: 'warn',
+      message,
+      metadata,
+    });
+  } catch (e) {
+    if (process.env.DEBUG === 'true') {
+      console.warn(`[SYSTEM] ${fn}: ${message}`);
+    }
+  }
+}
