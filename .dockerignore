@@ -12,4 +12,7 @@ yarn-error.log
 .gitignore
 .DS_Store
 dist
-coverage 
+coverage
+
+# Logs
+logs 
