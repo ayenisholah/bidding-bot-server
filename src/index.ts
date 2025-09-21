@@ -2528,13 +2528,6 @@ async function startServer() {
     server.listen(port, async () => {
       console.log(`Server running on port ${port}`);
       console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-
-
-      // Redis cluster monitoring disabled - using single node
-      // try {
-      //   startRedisClusterMonitoring(clearQueueAndRestartJobs);
-      // } catch (error) {
-      // }
     });
 
     // Initialize periodic cleanup for aborted tasks (every 30 minutes)
