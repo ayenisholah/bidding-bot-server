@@ -11684,9 +11684,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       return;
     }
 
-    // Structured log: start
-    logDecision('opensea', task._id.toString(), 'handleOpenseaCounterbid', 'start', 'Starting OpenSea counterbid handler', { slug: task.contract?.slug });
-
     const taskMarketplaces = currentTask.selectedMarketplaces.map((market) => market.toLowerCase());
     if (!taskMarketplaces.includes("opensea")) {
       logEarlyReturn('opensea', task._id.toString(), 'handleOpenseaCounterbid', 'OpenSea not selected for task', { selected: taskMarketplaces });
@@ -13794,7 +13791,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
     await Promise.race([
       (async () => {
         // Start log
-        logDecision('opensea', taskId, 'processOpenseaScheduledBid', 'start', 'Starting OpenSea scheduled bid loop', { scheduleJobId: scheduleJob?.id, attempts: scheduleJob?.attemptsMade });
         if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) {
           logEarlyReturn('opensea', taskId, 'processOpenseaScheduledBid', 'OpenSea disabled globally', { enabledMarketplaces });
           return;
@@ -16606,7 +16602,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
   const taskId = data._id;
 
   // Structured start
-  try { logRaw('opensea', { taskId, function: 'processOpenseaTokenBid', stage: 'start', level: 'info', message: 'Starting OpenSea token bid', metadata: { slug: data.slug, tokenId: data.asset?.tokenId } }); } catch {}
 
   // Check if task is blacklisted
   if (isTaskBlacklisted(taskId, 'opensea')) { try { logRaw('opensea', { taskId, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Task blacklisted', metadata: {} }); } catch {}; return; }

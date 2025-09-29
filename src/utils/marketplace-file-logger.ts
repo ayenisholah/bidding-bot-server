@@ -152,7 +152,7 @@ class MarketplaceFileLogger {
         try {
           const filePath = path.join(this.logsDir, file);
           const stats = fs.statSync(filePath);
-          
+
           // Skip very large files (> 100MB) with a warning
           if (stats.size > 100 * 1024 * 1024) {
             console.warn(`[${this.marketplace.toUpperCase()} Logger] Skipping large log file: ${file} (${(stats.size / 1024 / 1024).toFixed(2)}MB)`);
@@ -161,23 +161,23 @@ class MarketplaceFileLogger {
 
           const contents = fs.readFileSync(filePath, 'utf-8');
           const lines = contents.split('\n');
-          
+
           for (const line of lines) {
             if (!line.trim()) continue;
             try {
               const entry = JSON.parse(line) as MarketLogEntry;
               const t = new Date(entry.timestamp);
-              
+
               // Validate timestamp
               if (isNaN(t.getTime())) continue;
-              
+
               if (startTime && t < startTime) continue;
               if (endTime && t > endTime) continue;
               if (filter.taskId && entry.taskId !== filter.taskId) continue;
               if (filter.level && filter.level !== 'all' && entry.level !== filter.level) continue;
               if (filter.function && entry.function !== filter.function) continue;
               logs.push(entry);
-              
+
               // Keep only the latest 50,000 logs using sliding window
               if (logs.length > 50000) {
                 logs.shift(); // Remove oldest entry to maintain the limit
@@ -193,7 +193,7 @@ class MarketplaceFileLogger {
           console.error(`[${this.marketplace.toUpperCase()} Logger] Error reading file ${file}:`, fileErr);
         }
       }
-      
+
       // Log if we hit the limit
       if (logs.length === 50000) {
         console.warn(`[${this.marketplace.toUpperCase()} Logger] Returning latest 50,000 logs (sliding window applied)`);
@@ -209,7 +209,7 @@ class MarketplaceFileLogger {
   async exportLogs(options: MarketLogFilter & { format: 'json' | 'csv' }): Promise<Buffer> {
     try {
       const logs = await this.getLogs(options);
-      
+
       if (options.format === 'json') {
         // Sanitize logs to prevent XSS in JSON exports
         const sanitizedLogs = logs.map(log => ({
@@ -223,7 +223,7 @@ class MarketplaceFileLogger {
       // CSV export with proper escaping
       const headers = ['timestamp', 'marketplace', 'taskId', 'function', 'stage', 'level', 'message', 'metadata'];
       const lines: string[] = [headers.map(h => this.escapeCsvField(h)).join(',')];
-      
+
       for (const l of logs) {
         const row = [
           this.escapeCsvField(l.timestamp),
@@ -237,7 +237,7 @@ class MarketplaceFileLogger {
         ];
         lines.push(row.join(','));
       }
-      
+
       // Add BOM for Excel compatibility
       const bom = '\uFEFF';
       return Buffer.from(bom + lines.join('\n'), 'utf8');
@@ -250,7 +250,7 @@ class MarketplaceFileLogger {
   private escapeCsvField(field: string): string {
     // Convert to string and handle null/undefined
     const str = field != null ? String(field) : '';
-    
+
     // Check if field needs escaping
     if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
       // Escape double quotes by doubling them
@@ -258,7 +258,7 @@ class MarketplaceFileLogger {
       // Wrap in quotes
       return `"${escaped}"`;
     }
-    
+
     return str;
   }
 
@@ -416,9 +416,9 @@ export function logSystemError(
       message,
       metadata: meta,
     });
-  } catch (e) {
+  } catch (err) {
     // Fallback to console if logging fails
-    console.error(`[SYSTEM] ${fn}: ${message}`, error);
+    console.error(`[SYSTEM] ${fn}: ${message}`, error ?? err);
   }
 }
 
@@ -436,9 +436,9 @@ export function logSystemInfo(
       message,
       metadata,
     });
-  } catch (e) {
+  } catch (err) {
     if (process.env.DEBUG === 'true') {
-      console.log(`[SYSTEM] ${fn}: ${message}`);
+      console.log(`[SYSTEM] ${fn}: ${message}`, err);
     }
   }
 }
@@ -457,9 +457,9 @@ export function logSystemWarn(
       message,
       metadata,
     });
-  } catch (e) {
+  } catch (err) {
     if (process.env.DEBUG === 'true') {
-      console.warn(`[SYSTEM] ${fn}: ${message}`);
+      console.warn(`[SYSTEM] ${fn}: ${message}`, err);
     }
   }
 }

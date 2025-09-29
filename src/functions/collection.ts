@@ -138,22 +138,22 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
         if (collection?.fees && Array.isArray(collection.fees)) {
           // console.log(`[Fee Processing] ${slug} - Starting to process ${collection.fees.length} fees`);
 
-          // Process all fees except the OpenSea platform fee
+          // Process creator fees (exclude OpenSea platform fee and optional fees)
           for (const fee of collection.fees) {
             const isOpenSeaFee = fee.recipient.toLowerCase() === OPENSEA_FEE_ADDRESS_LOWER;
-
 
             // Skip OpenSea platform fee
             if (isOpenSeaFee) {
               continue;
             }
 
-            creator_fees[fee.recipient] = fee.fee * 100;
-
-            // If any creator fee is required, set enforceCreatorFee to true
-            if (fee.required) {
-              enforceCreatorFee = true;
+            // Skip optional creator fees (fulfiller can opt-in at fill time)
+            if (!fee.required) {
+              continue;
             }
+
+            creator_fees[fee.recipient] = fee.fee * 100;
+            enforceCreatorFee = true;
           }
         }
 
@@ -198,8 +198,6 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
       });
       throw new Error('Failed to acquire lock for collection details');
     }
-    console.log({ getCollectionDetails: result.fees });
-
     // {
     //   getCollectionDetails: [
     //     {
