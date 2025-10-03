@@ -3,7 +3,7 @@
 import { ethers, Wallet } from "ethers";
 import { BASE_URL, SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
-import { activeTasks, API_KEY, BLUE, decrementBidCount, pQueue, trackBidRate, updateTaskCancellationPercentage } from "../..";
+import { activeTasks, API_KEY, decrementBidCount, pQueue, trackBidRate, updateTaskCancellationPercentage } from "../..";
 import { config } from "dotenv";
 import axios from "axios";
 import Order from '../../models/order.model';
@@ -80,7 +80,6 @@ const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1F0DF003000390027140000fAa719"
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 const SEAPORT_CONTRACT = new ethers.Contract(SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI, provider);
-const RESET = '\x1b[0m';
 
 // Pre-calculated values for optimization
 const DIVIDER = 10000n;
@@ -421,8 +420,6 @@ export async function bidOnOpensea(
         trackBidRate('opensea', taskId);
 
         // Log successful token bid
-        const successMessage = `🎉 TOKEN OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${slug.toUpperCase()} TOKEN: ${asset.tokenId} ${offerPriceEthFinal} ${currencySymbol} 🎉`;
-        console.log(BLUE, successMessage, RESET);
       }
 
       else if (opensea_traits && typeof opensea_traits !== "undefined") {
@@ -550,7 +547,7 @@ export async function bidOnOpensea(
           return
         }
 
-        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry, opensea_traits)
+        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
       }
 
       else {
@@ -678,7 +675,7 @@ export async function bidOnOpensea(
         if (isTaskBlacklisted(taskId, 'opensea') || !task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
           return
         }
-        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry, opensea_traits)
+        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
       }
 
     } catch (error) {
@@ -693,7 +690,7 @@ export async function bidOnOpensea(
  * Posts an offer to OpenSea.
  * @param payload - The payload of the offer.
  */
-async function submitOfferToOpensea(decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900, opensea_traits?: string) {
+async function submitOfferToOpensea(decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900) {
   const [taskId] = bidCount.split(":")
   if (isTaskBlacklisted(taskId, 'opensea')) {
     return;
@@ -721,7 +718,6 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
   } catch (error) {
 
     // Check for merkle root error in submit response
-    const errorData = (error as any)?.response?.data;
     await logger.logOpenseaBidError('Failed to submit OpenSea offer', {
       taskId,
       collection: payload.criteria.collection.slug,
@@ -759,11 +755,6 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
   trackBidRate('opensea', taskId);
 
   // Log successful bid
-
-  const successMessage = opensea_traits ?
-    `🎉 TRAIT OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()}  TRAIT: ${opensea_traits} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
-    : `🎉 COLLECTION OFFER POSTED TO OPENSEA SUCCESSFULLY FOR: ${payload.criteria.collection.slug.toUpperCase()} ${(Number(offerPrice) / Math.pow(10, decimal))} ${currencySymbol} 🎉`
-  console.log(BLUE, successMessage, RESET);
 }
 
 /**
@@ -793,10 +784,6 @@ async function buildOffer(taskId: string, buildPayload: any) {
     if (axios.isCancel(error)) {
       return null;
     }
-
-
-    // Check for merkle root error
-    const errorData = error?.response?.data;
 
     await logger.logOpenseaBidError('Failed to build OpenSea offer', {
       taskId,

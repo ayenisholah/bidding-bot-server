@@ -302,19 +302,173 @@ function getTaskIdForLog(context: any): string {
     'N/A';
 }
 
-// Helper function to extract detailed OpenSea error messages
-function extractDetailedOpenSeaError(error: any): string {
-  // If we have response data, stringify it completely for debugging
-  if (error?.response?.data) {
-    const status = error.response.status;
-    const statusText = error.response.statusText;
-    const dataStr = JSON.stringify(error.response.data);
-
-    return `[HTTP ${status}${statusText ? ` ${statusText}` : ''}] ${dataStr}`;
+function parseOpenSeaResponseData(data: any): string | null {
+  if (!data) {
+    return null;
   }
 
-  // Fallback - stringify the entire error object
-  return JSON.stringify(error);
+  if (typeof data === 'string') {
+    const trimmed = data.trim();
+
+    const looksLikeJson = (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'));
+
+    if (looksLikeJson) {
+      try {
+        return parseOpenSeaResponseData(JSON.parse(trimmed));
+      } catch (_) {
+        // fall through to string handling if JSON.parse fails
+      }
+    }
+
+    const rayMatch = trimmed.match(/Ray ID:\s*<strong[^>]*>([^<]+)<\/strong>/i);
+    const ipMatch = trimmed.match(/id=["']cf-footer-ip["'][^>]*>\s*([^<\s]+)\s*<\/span>/i);
+    const headlineMatch = trimmed.match(/data-translate=["']block_headline["']>([^<]+)</i);
+    const targetMatch = trimmed.match(/data-translate=["']unable_to_access["'][^>]*><span[^>]*>.*?<\/span>\s*([^<]+)/i);
+    const reasonMatch = trimmed.match(/data-translate=["']blocked_why_detail["']>([^<]+)</i);
+
+    if (rayMatch || ipMatch || headlineMatch || reasonMatch) {
+      const parts: string[] = ['Cloudflare block detected'];
+      if (headlineMatch) {
+        parts.push(headlineMatch[1].trim());
+      }
+      if (targetMatch) {
+        parts.push(`target=${targetMatch[1].trim()}`);
+      }
+      if (rayMatch) {
+        parts.push(`ray=${rayMatch[1].trim()}`);
+      }
+      if (ipMatch) {
+        parts.push(`ip=${ipMatch[1].trim()}`);
+      }
+      if (reasonMatch) {
+        parts.push(reasonMatch[1].trim());
+      }
+      return parts.join(' | ');
+    }
+
+    const sanitized = trimmed.replace(/\s+/g, ' ');
+    return sanitized.length > 200 ? `${sanitized.slice(0, 200)}…` : sanitized;
+  }
+
+  if (Array.isArray(data)) {
+    const messages = data
+      .map((entry) => parseOpenSeaResponseData(entry))
+      .filter((value): value is string => Boolean(value));
+
+    return messages.length ? messages.join('; ') : null;
+  }
+
+  if (typeof data === 'object') {
+    const messages: string[] = [];
+
+    if (Array.isArray((data as any).errors)) {
+      const errorMessages = (data as any).errors
+        .map((err: any) => {
+          if (!err) {
+            return null;
+          }
+          if (typeof err === 'string') {
+            return err;
+          }
+          if (typeof err?.message === 'string') {
+            return err.message;
+          }
+          if (typeof err?.code === 'string' && typeof err?.description === 'string') {
+            return `${err.code}: ${err.description}`;
+          }
+          try {
+            const stringified = JSON.stringify(err);
+            return stringified.length > 200 ? `${stringified.slice(0, 200)}…` : stringified;
+          } catch (_) {
+            return String(err);
+          }
+        })
+        .filter((value: any): value is string => Boolean(value));
+
+      if (errorMessages.length) {
+        messages.push(`errors: ${errorMessages.join('; ')}`);
+      }
+    }
+
+    if (typeof (data as any).error === 'string') {
+      messages.push((data as any).error);
+    }
+
+    if (typeof (data as any).message === 'string') {
+      messages.push((data as any).message);
+    }
+
+    if (typeof (data as any).detail === 'string') {
+      messages.push((data as any).detail);
+    }
+
+    if (messages.length) {
+      return messages.join(' | ');
+    }
+
+    try {
+      const stringified = JSON.stringify(data);
+      if (stringified && stringified !== '{}') {
+        return stringified.length > 200 ? `${stringified.slice(0, 200)}…` : stringified;
+      }
+    } catch (_) {
+      return String(data);
+    }
+
+    return null;
+  }
+
+  return null;
+}
+
+function maskSensitiveIdentifier(value: string | undefined | null): string {
+  if (!value) {
+    return 'N/A';
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length <= 10) {
+    return trimmed;
+  }
+
+  return `${trimmed.slice(0, 6)}…${trimmed.slice(-4)}`;
+}
+
+// Helper function to extract detailed OpenSea error messages
+function extractDetailedOpenSeaError(error: any): string {
+  const parts: string[] = [];
+
+  const status = error?.response?.status;
+  const statusText = error?.response?.statusText;
+  if (status) {
+    parts.push(`HTTP ${status}${statusText ? ` ${statusText}` : ''}`);
+  }
+
+  const code = error?.code;
+  if (code) {
+    parts.push(`code=${code}`);
+  }
+
+  const url = error?.config?.url ?? error?.response?.config?.url;
+  if (url) {
+    parts.push(`url=${url}`);
+  }
+
+  const responseDetails = parseOpenSeaResponseData(error?.response?.data);
+  if (responseDetails) {
+    parts.push(responseDetails);
+  }
+
+  if (!parts.length && error?.message) {
+    parts.push(error.message);
+  }
+
+  if (!parts.length) {
+    return typeof error === 'string' ? error : 'Unknown OpenSea error';
+  }
+
+  return parts.join(' | ');
 }
 
 class RateLimiter {
@@ -3579,7 +3733,7 @@ async function checkTaskCompletionAndScheduleNext(taskId: string, marketplace?: 
         parentJobs.delete(parentJobId);
         // Also clear processed jobs tracking
         processedJobsPerParent.delete(parentJobId);
-  }
+      }
     } else {
       // Clear parent jobs for all marketplaces
       const marketplaces = ['opensea', 'magiceden', 'blur'];
@@ -5328,10 +5482,6 @@ async function processJob(job: Job, signal?: AbortSignal) {
           return { completed: true };
         case CANCEL_OPENSEA_BID:
           try {
-            // Log when CANCEL_OPENSEA_BID job is being processed
-            const { taskId, orderId } = job.data;
-            try { logRaw('opensea', { taskId, function: 'worker', stage: 'processing', level: 'info', message: 'Processing CANCEL_OPENSEA_BID job', metadata: { jobId: job.id, orderId } }); } catch {}
-            
             await bulkCancelOpenseaBid(job.data);
           } catch (error) {
             logSystemError('CancelOpenseaBid', 'Failed to cancel order', error);
@@ -5346,8 +5496,8 @@ async function processJob(job: Job, signal?: AbortSignal) {
           try {
             // Log when CANCEL_MAGICEDEN_BID job is being processed
             const { taskId, orderIds } = job.data;
-            try { logRaw('magiceden', { taskId, function: 'worker', stage: 'processing', level: 'info', message: 'Processing CANCEL_MAGICEDEN_BID job', metadata: { jobId: job.id, orderCount: orderIds?.length || 0 } }); } catch {}
-            
+            try { logRaw('magiceden', { taskId, function: 'worker', stage: 'processing', level: 'info', message: 'Processing CANCEL_MAGICEDEN_BID job', metadata: { jobId: job.id, orderCount: orderIds?.length || 0 } }); } catch { }
+
             await bulkCancelMagicedenBid(job.data);
           } catch (error) {
             logSystemError('CancelMagicedenBid', 'Failed to cancel order', error);
@@ -5361,8 +5511,8 @@ async function processJob(job: Job, signal?: AbortSignal) {
           try {
             // Log when CANCEL_BLUR_BID job is being processed
             const { taskId, orderKey } = job.data;
-            try { logRaw('blur', { taskId, function: 'worker', stage: 'processing', level: 'info', message: 'Processing CANCEL_BLUR_BID job', metadata: { jobId: job.id, orderKey } }); } catch {}
-            
+            try { logRaw('blur', { taskId, function: 'worker', stage: 'processing', level: 'info', message: 'Processing CANCEL_BLUR_BID job', metadata: { jobId: job.id, orderKey } }); } catch { }
+
             await bulkCancelBlurBid(job.data);
           } catch (error) {
             logSystemError('CancelBlurBid', 'Failed to cancel order', error);
@@ -5587,21 +5737,21 @@ async function cancelRemovedTokenBids(removedTokens: { opensea: string[]; magice
         };
       });
       // Log cancellation enqueue
-      try { 
-        logRaw('opensea', { 
-          taskId, 
-          function: 'cancelRemovedTokenBids', 
-          stage: 'queueing', 
-          level: 'info', 
-          message: 'Queueing cancellation jobs - removed tokens', 
-          metadata: { 
+      try {
+        logRaw('opensea', {
+          taskId,
+          function: 'cancelRemovedTokenBids',
+          stage: 'queueing',
+          level: 'info',
+          message: 'Queueing cancellation jobs - removed tokens',
+          metadata: {
             jobCount: cancelData.length,
             reason: 'tokens_removed',
             tokenCount: removedTokens.opensea.length
-          } 
-        }); 
-      } catch {}
-      
+          }
+        });
+      } catch { }
+
       await queue.addBulk(cancelData);
       totalJobsCreated += cancelData.length;
     }
@@ -5641,21 +5791,21 @@ async function cancelRemovedTraitBids(traitsToRemove: string[], taskId: string, 
         };
       });
       // Log cancellation enqueue
-      try { 
-        logRaw('blur', { 
-          taskId, 
-          function: 'cancelRemovedTraitBids', 
-          stage: 'queueing', 
-          level: 'info', 
-          message: 'Queueing cancellation jobs - removed traits', 
-          metadata: { 
+      try {
+        logRaw('blur', {
+          taskId,
+          function: 'cancelRemovedTraitBids',
+          stage: 'queueing',
+          level: 'info',
+          message: 'Queueing cancellation jobs - removed traits',
+          metadata: {
             jobCount: cancelData.length,
             reason: 'traits_removed',
             traitCount: traitsToRemove.length
-          } 
-        }); 
-      } catch {}
-      
+          }
+        });
+      } catch { }
+
       await queue.addBulk(cancelData);
       totalJobsCreated += cancelData.length;
     }
@@ -5668,21 +5818,21 @@ async function cancelRemovedTraitBids(traitsToRemove: string[], taskId: string, 
         };
       });
       // Log cancellation enqueue
-      try { 
-        logRaw('opensea', { 
-          taskId, 
-          function: 'cancelRemovedTraitBids', 
-          stage: 'queueing', 
-          level: 'info', 
-          message: 'Queueing cancellation jobs - removed traits', 
-          metadata: { 
+      try {
+        logRaw('opensea', {
+          taskId,
+          function: 'cancelRemovedTraitBids',
+          stage: 'queueing',
+          level: 'info',
+          message: 'Queueing cancellation jobs - removed traits',
+          metadata: {
             jobCount: cancelData.length,
             reason: 'traits_removed',
             traitCount: traitsToRemove.length
-          } 
-        }); 
-      } catch {}
-      
+          }
+        });
+      } catch { }
+
       await queue.addBulk(cancelData);
       totalJobsCreated += cancelData.length;
     }
@@ -10195,21 +10345,6 @@ async function cancelOpenseaBids(orders: any[], walletId: string, taskId: string
     }
   }) as Job[]
 
-  // Log cancellation enqueue
-  try { 
-    logRaw('opensea', { 
-      taskId, 
-      function: 'cancelOpenseaBids', 
-      stage: 'queueing', 
-      level: 'info', 
-      message: 'Queueing bulk cancellation jobs', 
-      metadata: { 
-        jobCount: cancelData.length,
-        reason: 'bulk_cancel_request'
-      } 
-    }); 
-  } catch {}
-
   // Track the job IDs we're about to create for reconciliation
   const expectedJobIds = cancelData.map(job => job.opts.jobId);
 
@@ -10225,6 +10360,58 @@ async function cancelOpenseaBids(orders: any[], walletId: string, taskId: string
 
   // Decrement the own bid counter by the number of cancelled orders
   decrementOwnBidCounter('opensea', orders.length);
+}
+
+async function cancelOpenseaOrdersDirectly({
+  taskId,
+  walletId,
+  privateKey,
+  orders,
+  source,
+  identifier,
+  reason
+}: {
+  taskId: string;
+  walletId: string;
+  privateKey: string;
+  orders: any[];
+  source: string;
+  identifier?: string;
+  reason?: string;
+}) {
+  if (!orders?.length) {
+    return;
+  }
+
+  const metadataBase = {
+    walletId,
+    identifier,
+    count: orders.length,
+    reason
+  };
+
+  try { logRaw('opensea', { taskId, function: source, stage: 'cancellation', level: 'info', message: 'Cancelling existing OpenSea orders before rebid', metadata: metadataBase }); } catch { }
+
+  let completed = 0;
+
+  try {
+    for (const order of orders) {
+      await cancelOrderWithoutTracking(order.orderHash, OPENSEA_PROTOCOL_ADDRESS, privateKey, taskId);
+      await Order.deleteOne({ _id: order._id });
+      completed += 1;
+    }
+  } catch (error) {
+    try { logRaw('opensea', { taskId, function: source, stage: 'error', level: 'error', message: 'Failed to cancel existing OpenSea orders before rebid', metadata: { ...metadataBase, completed } }); } catch { }
+    throw error;
+  }
+
+  if (completed > 0) {
+    cancellationTracker.recordCompletion(taskId, completed, 'opensea');
+    await updateTaskCancellationPercentage(taskId, undefined, 'opensea');
+    decrementOwnBidCounter('opensea', completed);
+  }
+
+  try { logRaw('opensea', { taskId, function: source, stage: 'completion', level: 'info', message: 'Finished cancelling OpenSea orders before rebid', metadata: { ...metadataBase, cancelled: completed } }); } catch { }
 }
 
 async function updateStatus(task: ITask & { stoppedByWarning?: boolean }) {
@@ -11025,7 +11212,7 @@ async function handleCounterBidForTask(task: any, message: any) {
 
 async function handleMagicEdenCounterbid(data: any, task: ITask) {
   // Structured log: start
-  try { logRaw('magiceden', { taskId: task._id.toString(), function: 'handleMagicEdenCounterbid', stage: 'start', level: 'info', message: 'Starting MagicEden counterbid handler', metadata: { slug: task.contract?.slug } }); } catch {}
+  try { logRaw('magiceden', { taskId: task._id.toString(), function: 'handleMagicEdenCounterbid', stage: 'start', level: 'info', message: 'Starting MagicEden counterbid handler', metadata: { slug: task.contract?.slug } }); } catch { }
   try {
 
     const currentTask = activeTasks.get(task._id)
@@ -11667,7 +11854,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       seenOrderHashes.delete(taskSpecificHash);
     }
   } catch (error) {
-    try { logRaw('magiceden', { taskId: task._id.toString(), function: 'handleMagicEdenCounterbid', stage: 'error', level: 'error', message: 'Error in MagicEden counterbid handler', metadata: { error: error instanceof Error ? error.message : String(error) } }); } catch {}
+    try { logRaw('magiceden', { taskId: task._id.toString(), function: 'handleMagicEdenCounterbid', stage: 'error', level: 'error', message: 'Error in MagicEden counterbid handler', metadata: { error: error instanceof Error ? error.message : String(error) } }); } catch { }
   }
 }
 
@@ -11950,23 +12137,23 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               }
             })
             // Log cancellation enqueue
-            try { 
-              logRaw('opensea', { 
-                taskId: task._id, 
-                function: 'handleOpenseaCounterbid', 
-                stage: 'queueing', 
-                level: 'info', 
-                message: 'Queueing cancellation jobs - max bid exceeded in counterbid', 
-                metadata: { 
+            try {
+              logRaw('opensea', {
+                taskId: task._id,
+                function: 'handleOpenseaCounterbid',
+                stage: 'queueing',
+                level: 'info',
+                message: 'Queueing cancellation jobs - max bid exceeded in counterbid',
+                metadata: {
                   jobCount: cancelData.length,
                   reason: 'counterbid_max_bid_exceeded',
                   offerPriceEth,
                   maxBidPriceEth,
                   tokenId
-                } 
-              }); 
-            } catch {}
-            
+                }
+              });
+            } catch { }
+
             queue.addBulk(cancelData)
           }
         }
@@ -12065,23 +12252,23 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               }
             })
             // Log cancellation enqueue
-            try { 
-              logRaw('opensea', { 
-                taskId: task._id, 
-                function: 'handleOpenseaCounterbid', 
-                stage: 'queueing', 
-                level: 'info', 
-                message: 'Queueing cancellation jobs - incoming bid exceeds max in trait offer', 
-                metadata: { 
+            try {
+              logRaw('opensea', {
+                taskId: task._id,
+                function: 'handleOpenseaCounterbid',
+                stage: 'queueing',
+                level: 'info',
+                message: 'Queueing cancellation jobs - incoming bid exceeds max in trait offer',
+                metadata: {
                   jobCount: cancelData.length,
                   reason: 'trait_offer_exceeds_max',
                   incomingBidAmountEth,
                   maxBidPriceEth,
                   trait: identifier
-                } 
-              }); 
-            } catch {}
-            
+                }
+              });
+            } catch { }
+
             queue.addBulk(cancelData)
           }
         }
@@ -12099,23 +12286,23 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             }
           })
           // Log cancellation enqueue
-          try { 
-            logRaw('opensea', { 
-              taskId: task._id, 
-              function: 'handleOpenseaCounterbid', 
-              stage: 'queueing', 
-              level: 'info', 
-              message: 'Queueing cancellation jobs - stop option triggered for trait', 
-              metadata: { 
+          try {
+            logRaw('opensea', {
+              taskId: task._id,
+              function: 'handleOpenseaCounterbid',
+              stage: 'queueing',
+              level: 'info',
+              message: 'Queueing cancellation jobs - stop option triggered for trait',
+              metadata: {
                 jobCount: cancelData.length,
                 reason: 'trait_stop_option_triggered',
                 floorPrice: floor_price,
                 traitFloor,
                 trait: identifier
-              } 
-            }); 
-          } catch {}
-          
+              }
+            });
+          } catch { }
+
           queue.addBulk(cancelData)
         }
         return
@@ -12144,23 +12331,23 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               }
             })
             // Log cancellation enqueue
-            try { 
-              logRaw('opensea', { 
-                taskId: task._id, 
-                function: 'handleOpenseaCounterbid', 
-                stage: 'queueing', 
-                level: 'info', 
-                message: 'Queueing cancellation jobs - counter offer exceeds max in trait', 
-                metadata: { 
+            try {
+              logRaw('opensea', {
+                taskId: task._id,
+                function: 'handleOpenseaCounterbid',
+                stage: 'queueing',
+                level: 'info',
+                message: 'Queueing cancellation jobs - counter offer exceeds max in trait',
+                metadata: {
                   jobCount: cancelData.length,
                   reason: 'trait_counterbid_exceeds_max',
                   offerPriceEth,
                   maxBidPriceEth,
                   trait: identifier
-                } 
-              }); 
-            } catch {}
-            
+                }
+              });
+            } catch { }
+
             queue.addBulk(cancelData)
           }
         }
@@ -14286,7 +14473,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
   const log = createOpenseaLogger(taskId, "processOpenseaCollectionBid");
 
   // Structured log: start
-  try { logRaw('opensea', { taskId, function: 'processOpenseaCollectionBid', stage: 'start', level: 'info', message: 'Starting OpenSea collection bid', metadata: { collection: data.collectionDetails?.slug } }); } catch {}
+  try { logRaw('opensea', { taskId, function: 'processOpenseaCollectionBid', stage: 'start', level: 'info', message: 'Starting OpenSea collection bid', metadata: { collection: data.collectionDetails?.slug } }); } catch { }
   log("start", "Starting OpenSea collection bid", { collection: data.collectionDetails?.slug });
 
   if (isTaskBlacklisted(taskId, 'opensea')) {
@@ -14608,26 +14795,26 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 
     if (currentTask.outbidOptions.outbid && offerEth >= maxBidPriceEth) {
       // Enhanced logging with bid configuration details
-      try { 
-        logRaw('opensea', { 
-          taskId: currentTask._id, 
-          function: 'processOpenseaCollectionBid', 
-          stage: 'bid_calculation', 
-          level: 'warn', 
-          message: 'Offer exceeds max bid price', 
-          metadata: { 
-            offerEth, 
-            maxBidPriceEth, 
+      try {
+        logRaw('opensea', {
+          taskId: currentTask._id,
+          function: 'processOpenseaCollectionBid',
+          stage: 'bid_calculation',
+          level: 'warn',
+          message: 'Offer exceeds max bid price',
+          metadata: {
+            offerEth,
+            maxBidPriceEth,
             currencySymbol,
             bidPriceConfig: currentTask.bidPrice,
             openseaBidPrice: currentTask.openseaBidPrice,
             bidPriceType: currentTask.bidPriceType,
             floorPrice: floor_price,
             cancelMaxWhenOutbid: currentTask.outbidOptions.cancelMaxWhenOutbid
-          } 
-        }); 
-      } catch {}
-      
+          }
+        });
+      } catch { }
+
       log("validation", "Offer exceeds max bid price", {
         offerEth,
         maxBidPriceEth,
@@ -16299,25 +16486,25 @@ async function processOpenseaTraitBid(data: {
   let errorMessage: string | undefined;
 
   // Structured start
-  try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'start', level: 'info', message: 'Starting OpenSea trait bid', metadata: { slug: data.slug, trait: data.trait } }); } catch {}
+  try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'start', level: 'info', message: 'Starting OpenSea trait bid', metadata: { slug: data.slug, trait: data.trait } }); } catch { }
   const traitInfo = JSON.parse(data.trait);
 
   // Check if task is blacklisted before processing
   if (isTaskBlacklisted(data._id)) {
-    try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Task blacklisted', metadata: {} }); } catch {}
+    try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Task blacklisted', metadata: {} }); } catch { }
     return;
   }
 
   try {
-    if (!enabledMarketplaces.length) { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'No marketplaces enabled', metadata: {} }); } catch {}; return; }
-    if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'OpenSea disabled globally', metadata: {} }); } catch {}; return; }
+    if (!enabledMarketplaces.length) { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'No marketplaces enabled', metadata: {} }); } catch { }; return; }
+    if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'OpenSea disabled globally', metadata: {} }); } catch { }; return; }
 
     // Check if task is still active
     const task = activeTasks.get(data._id);
-    if (!task || !task.running) { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Task not running', metadata: {} }); } catch {}; return; }
+    if (!task || !task.running) { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Task not running', metadata: {} }); } catch { }; return; }
 
     // Check if OpenSea marketplace status is COMPLETED or STOPPED
-    if (taskStatus[data._id]?.marketplaces?.opensea?.status === 'COMPLETED' || taskStatus[data._id]?.marketplaces?.opensea?.status === 'STOPPED') { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Marketplace status completed/stopped', metadata: { status: taskStatus[data._id]?.marketplaces?.opensea?.status } }); } catch {}; return; }
+    if (taskStatus[data._id]?.marketplaces?.opensea?.status === 'COMPLETED' || taskStatus[data._id]?.marketplaces?.opensea?.status === 'STOPPED') { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Marketplace status completed/stopped', metadata: { status: taskStatus[data._id]?.marketplaces?.opensea?.status } }); } catch { }; return; }
 
     const { address, walletId, slug, creatorFees, enforceCreatorFee, trait, contractAddress, _id } = data
 
@@ -16330,7 +16517,7 @@ async function processOpenseaTraitBid(data: {
     const parsedTrait = JSON.parse(trait);
 
     const currentTask = activeTasks.get(_id)
-    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Task not running or marketplace not selected', metadata: { running: currentTask?.running, selected: currentTask?.selectedMarketplaces } }); } catch {}; return; }
+    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Task not running or marketplace not selected', metadata: { running: currentTask?.running, selected: currentTask?.selectedMarketplaces } }); } catch { }; return; }
 
 
     // Initialize stats early
@@ -16369,13 +16556,13 @@ async function processOpenseaTraitBid(data: {
     ]);
 
 
-    if (!floor_price) { try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTraitBid', stage: 'error', level: 'error', message: 'Failed to fetch floor price', metadata: { slug } }); } catch {}; throw new Error(`Failed to fetch floor price for ${slug}`); }
+    if (!floor_price) { try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTraitBid', stage: 'error', level: 'error', message: 'Failed to fetch floor price', metadata: { slug } }); } catch { }; throw new Error(`Failed to fetch floor price for ${slug}`); }
 
     floorPrices[_id].opensea = floor_price as number;
 
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false, traitFloor, identifier)
     if (stopBid) {
-      try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Stop option triggered for trait', metadata: { identifier, floor: floor_price, traitFloor } }); } catch {}
+      try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Stop option triggered for trait', metadata: { identifier, floor: floor_price, traitFloor } }); } catch { }
       if (orders.length > 0) {
         const cancelData = orders.map((order, index) => {
           return {
@@ -16464,55 +16651,29 @@ async function processOpenseaTraitBid(data: {
     }
 
     const bidCount = getIncrementedBidCount(OPENSEA, slug, _id)
-    if (orders.length > 0) {
-      const cancelData = orders.map((order, index) => {
-        return {
-          name: CANCEL_OPENSEA_BID,
-          data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id },
-        }
-      })
-      
-      // Log cancellation enqueue
-      try { 
-        logRaw('opensea', { 
-          taskId: _id, 
-          function: 'processOpenseaTraitBid', 
-          stage: 'queueing', 
-          level: 'info', 
-          message: 'Queueing cancellation jobs before new bid', 
-          metadata: { 
-            jobCount: cancelData.length,
-            reason: 'placing_new_bid'
-          } 
-        }); 
-      } catch {}
-      
-      queue.addBulk(cancelData)
-    }
-
     const offerEth = Number(traitOffer) / Math.pow(10, decimal);
 
     if (outbidOptions.outbid && offerEth >= maxBidPriceEth) {
       // Log bid price configuration for debugging
-      try { 
-        logRaw('opensea', { 
-          taskId: _id, 
-          function: 'processOpenseaTraitBid', 
-          stage: 'bid_calculation', 
-          level: 'warn', 
-          message: 'Offer exceeds max bid price', 
-          metadata: { 
-            offerEth, 
-            maxBidPriceEth, 
+      try {
+        logRaw('opensea', {
+          taskId: _id,
+          function: 'processOpenseaTraitBid',
+          stage: 'bid_calculation',
+          level: 'warn',
+          message: 'Offer exceeds max bid price',
+          metadata: {
+            offerEth,
+            maxBidPriceEth,
             currencySymbol,
             bidPriceConfig: currentTask.bidPrice,
             openseaBidPrice: currentTask.openseaBidPrice,
             bidPriceType: currentTask.bidPriceType,
             floorPrice: floor_price,
             cancelMaxWhenOutbid: currentTask.outbidOptions.cancelMaxWhenOutbid
-          } 
-        }); 
-      } catch {}
+          }
+        });
+      } catch { }
       skipStats[_id]['opensea']++;
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${slug} trait ${trait} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR OPENSEA.Skipping ...`.toUpperCase()
       logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea"); // Non-blocking
@@ -16525,24 +16686,24 @@ async function processOpenseaTraitBid(data: {
               data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id },
             }
           })
-          
+
           // Log cancellation enqueue
-          try { 
-            logRaw('opensea', { 
-              taskId: _id, 
-              function: 'processOpenseaTraitBid', 
-              stage: 'queueing', 
-              level: 'info', 
-              message: 'Queueing cancellation jobs - max bid exceeded', 
-              metadata: { 
+          try {
+            logRaw('opensea', {
+              taskId: _id,
+              function: 'processOpenseaTraitBid',
+              stage: 'queueing',
+              level: 'info',
+              message: 'Queueing cancellation jobs - max bid exceeded',
+              metadata: {
                 jobCount: cancelData.length,
                 reason: 'max_bid_exceeded',
                 offerEth,
                 maxBidPriceEth
-              } 
-            }); 
-          } catch {}
-          
+              }
+            });
+          } catch { }
+
           queue.addBulk(cancelData)
         }
       }
@@ -16550,6 +16711,18 @@ async function processOpenseaTraitBid(data: {
       return;
     } else if (offerEth < minBidPriceEth) {
       traitOffer = BigInt(Math.round(minBidPriceEth * Math.pow(10, decimal)));
+    }
+
+    if (orders.length > 0) {
+      await cancelOpenseaOrdersDirectly({
+        taskId: _id,
+        walletId,
+        privateKey,
+        orders,
+        source: 'processOpenseaTraitBid',
+        identifier,
+        reason: 'placing_new_bid'
+      });
     }
 
     try {
@@ -16580,7 +16753,7 @@ async function processOpenseaTraitBid(data: {
     }
 
   } catch (error: any) {
-    try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'error', level: 'error', message: 'Error in OpenSea trait bid', metadata: { error: error instanceof Error ? error.message : String(error) } }); } catch {}
+    try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'error', level: 'error', message: 'Error in OpenSea trait bid', metadata: { error: error instanceof Error ? error.message : String(error) } }); } catch { }
 
     if (!errorMessage) {
       // Use the new detailed error extraction function
@@ -16604,19 +16777,19 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
   // Structured start
 
   // Check if task is blacklisted
-  if (isTaskBlacklisted(taskId, 'opensea')) { try { logRaw('opensea', { taskId, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Task blacklisted', metadata: {} }); } catch {}; return; }
+  if (isTaskBlacklisted(taskId, 'opensea')) { try { logRaw('opensea', { taskId, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Task blacklisted', metadata: {} }); } catch { }; return; }
 
   let errorMessage = ''
   try {
 
-    if (!enabledMarketplaces.length) { try { logRaw('opensea', { taskId, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'No marketplaces enabled', metadata: {} }); } catch {}; return; }
-    if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) { try { logRaw('opensea', { taskId, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'OpenSea disabled globally', metadata: {} }); } catch {}; return; }
+    if (!enabledMarketplaces.length) { try { logRaw('opensea', { taskId, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'No marketplaces enabled', metadata: {} }); } catch { }; return; }
+    if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) { try { logRaw('opensea', { taskId, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'OpenSea disabled globally', metadata: {} }); } catch { }; return; }
     const { address, walletId, slug, creatorFees, enforceCreatorFee, asset, _id } = data
 
     // Fetch wallet and decrypt private key
     const wallet = await walletCache.getWalletById(walletId);
 
-    if (!currentTokenIds[_id]?.opensea?.includes(asset.tokenId.toString())) { try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Token not in currentTokenIds', metadata: { tokenId: asset.tokenId } }); } catch {}; return; }
+    if (!currentTokenIds[_id]?.opensea?.includes(asset.tokenId.toString())) { try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Token not in currentTokenIds', metadata: { tokenId: asset.tokenId } }); } catch { }; return; }
 
     // Check if token is cached as trading disabled
     if (tradingDisabledCache.isDisabled(asset.contractAddress, +asset.tokenId, 'opensea')) {
@@ -16624,7 +16797,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
       // Log the skip and update error stats
       logBidError(_id, "TRADING DISABLED (CACHED)", message, "skipped", "opensea"); // Non-blocking
-      try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Trading disabled (cached)', metadata: { tokenId: asset.tokenId } }); } catch {}
+      try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Trading disabled (cached)', metadata: { tokenId: asset.tokenId } }); } catch { }
 
       if (!errorStats[_id]) {
         errorStats[_id] = { opensea: 0, magiceden: 0, blur: 0 };
@@ -16635,7 +16808,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     }
 
     const currentTask = activeTasks.get(_id)
-    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) { try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Task not running or marketplace not selected', metadata: { running: currentTask?.running, selected: currentTask?.selectedMarketplaces } }); } catch {}; return; }
+    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) { try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Task not running or marketplace not selected', metadata: { running: currentTask?.running, selected: currentTask?.selectedMarketplaces } }); } catch { }; return; }
 
 
     // Initialize stats early
@@ -16666,13 +16839,13 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       }).sort({ createdAt: -1 })
     ]);
 
-    if (!floor_price) { try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'error', level: 'error', message: 'Failed to fetch floor price', metadata: { slug } }); } catch {}; throw new Error(`Failed to fetch floor price for ${slug}`); }
+    if (!floor_price) { try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'error', level: 'error', message: 'Failed to fetch floor price', metadata: { slug } }); } catch { }; throw new Error(`Failed to fetch floor price for ${slug}`); }
 
     floorPrices[_id].opensea = floor_price as number;
 
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false)
     if (stopBid) {
-      try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Stop option triggered for token', metadata: { tokenId: asset.tokenId, floor: floor_price } }); } catch {}
+      try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Stop option triggered for token', metadata: { tokenId: asset.tokenId, floor: floor_price } }); } catch { }
       if (orders.length > 0) {
         const cancelData = orders.map((order, index) => {
           return {
@@ -16680,23 +16853,23 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
             data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id }
           }
         })
-        
+
         // Log cancellation enqueue
-        try { 
-          logRaw('opensea', { 
-            taskId: _id, 
-            function: 'processOpenseaTokenBid', 
-            stage: 'queueing', 
-            level: 'info', 
-            message: 'Queueing cancellation jobs - stop option triggered', 
-            metadata: { 
+        try {
+          logRaw('opensea', {
+            taskId: _id,
+            function: 'processOpenseaTokenBid',
+            stage: 'queueing',
+            level: 'info',
+            message: 'Queueing cancellation jobs - stop option triggered',
+            metadata: {
               jobCount: cancelData.length,
               reason: 'stop_option_triggered',
               tokenId: asset.tokenId
-            } 
-          }); 
-        } catch {}
-        
+            }
+          });
+        } catch { }
+
         queue.addBulk(cancelData)
       }
       return
@@ -16720,7 +16893,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         "skipped",
         "opensea"
       );
-      try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Insufficient balance', metadata: { balance, minBidPriceEth, tokenId: asset.tokenId, currencySymbol } }); } catch {}
+      try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Insufficient balance', metadata: { balance, minBidPriceEth, tokenId: asset.tokenId, currencySymbol } }); } catch { }
       return;
     }
 
@@ -16791,25 +16964,25 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
               data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id }
             }
           })
-          
+
           // Log cancellation enqueue
-          try { 
-            logRaw('opensea', { 
-              taskId: _id, 
-              function: 'processOpenseaTokenBid', 
-              stage: 'queueing', 
-              level: 'info', 
-              message: 'Queueing cancellation jobs - max bid exceeded', 
-              metadata: { 
+          try {
+            logRaw('opensea', {
+              taskId: _id,
+              function: 'processOpenseaTokenBid',
+              stage: 'queueing',
+              level: 'info',
+              message: 'Queueing cancellation jobs - max bid exceeded',
+              metadata: {
                 jobCount: cancelData.length,
                 reason: 'max_bid_exceeded',
                 tokenId: asset.tokenId,
                 offerEth,
                 maxBidPriceEth
-              } 
-            }); 
-          } catch {}
-          
+              }
+            });
+          } catch { }
+
           queue.addBulk(cancelData)
         }
       }
@@ -16830,23 +17003,23 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
           data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id }
         }
       })
-      
+
       // Log cancellation enqueue
-      try { 
-        logRaw('opensea', { 
-          taskId: _id, 
-          function: 'processOpenseaTokenBid', 
-          stage: 'queueing', 
-          level: 'info', 
-          message: 'Queueing cancellation jobs before new bid', 
-          metadata: { 
+      try {
+        logRaw('opensea', {
+          taskId: _id,
+          function: 'processOpenseaTokenBid',
+          stage: 'queueing',
+          level: 'info',
+          message: 'Queueing cancellation jobs before new bid',
+          metadata: {
             jobCount: cancelData.length,
             reason: 'placing_new_bid',
             tokenId: asset.tokenId
-          } 
-        }); 
-      } catch {}
-      
+          }
+        });
+      } catch { }
+
       queue.addBulk(cancelData)
     }
 
@@ -16872,19 +17045,22 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     } catch (bidError: any) {
 
       // Format OpenSea error message for better readability
-      let errorMsg = '';
+      let primaryMessage = '';
       if (bidError?.response?.data?.errors && Array.isArray(bidError.response.data.errors)) {
         // Extract the first error message from OpenSea API errors
-        errorMsg = bidError.response.data.errors[0]?.message || 'Unknown OpenSea error';
+        const extracted = bidError.response.data.errors[0];
+        primaryMessage = typeof extracted === 'string'
+          ? extracted
+          : extracted?.message || 'Unknown OpenSea error';
 
         // Special handling for "Trading is disabled" errors
-        if (errorMsg.includes('Trading is disabled')) {
+        if (primaryMessage.includes('Trading is disabled')) {
           // Cache the disabled token
           tradingDisabledCache.markAsDisabled(
             data.asset.contractAddress,
             +data.asset.tokenId,
             'opensea',
-            errorMsg
+            primaryMessage
           );
 
           // Remove token from the list to avoid repeated attempts
@@ -16897,18 +17073,28 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
           // Log as warning with updated message
           await logBidError(data._id, "OPENSEA TOKEN TRADING DISABLED",
-            `Token ${data.asset.tokenId} in collection ${data.slug}: ${errorMsg} - Cached for 1 hour`,
+            `Token ${data.asset.tokenId} in collection ${data.slug}: ${primaryMessage} - Cached for 1 hour`,
             "warning", "opensea");
 
-          errorMessage = errorMsg;
+          errorMessage = primaryMessage;
 
           return; // Exit early without re-throwing
         }
-      } else {
-        errorMsg = bidError?.message || String(bidError);
       }
 
-      errorMessage = errorMsg;
+      if (!primaryMessage) {
+        primaryMessage = bidError?.message || String(bidError);
+      }
+
+      const detailedError = extractDetailedOpenSeaError(bidError);
+      if (detailedError) {
+        errorMessage = primaryMessage && !detailedError.includes(primaryMessage)
+          ? `${primaryMessage} | ${detailedError}`
+          : detailedError;
+      } else {
+        errorMessage = primaryMessage || 'Unknown OpenSea error';
+      }
+
       console.error(RED + `OpenSea token bid failed for ${_id} token ${data.asset.tokenId}:`, errorMessage + RESET);
 
       // Re-throw to be caught by outer catch block
@@ -18043,26 +18229,24 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
     });
     log("processing", "Fetched existing trait orders", { orderCount: orders.length, identifier });
 
+    const wallet = await walletCache.getWalletById(walletId);
+    log("processing", "Loaded wallet for trait counterbid", { walletId, hasWallet: !!wallet });
+    const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
+
     if (orders.length > 0) {
-      const cancelData = orders.map((order) => ({
-        name: CANCEL_OPENSEA_BID,
-        data: { walletId, orderId: order.orderHash, taskId, orderKey: order._id }
-      }));
-      log("queueing", "Queueing cancellation jobs before trait counterbid", {
-        jobs: cancelData.length,
+      await cancelOpenseaOrdersDirectly({
+        taskId,
+        walletId,
+        privateKey,
+        orders,
+        source: 'openseaTraitCounterBid',
         identifier,
-        jobNames: cancelData.map((job) => job.name)
+        reason: 'counterbid_replace_existing'
       });
-      await queue.addBulk(cancelData);
-      log("queueing", "Cancellation jobs enqueued", { jobs: cancelData.length });
     }
 
     const { currency } = await calculateBidPrice(currentTask, 0, "opensea");
     log("processing", "Retrieved currency for trait counterbid", { currency });
-
-    const wallet = await walletCache.getWalletById(walletId);
-    log("processing", "Loaded wallet for trait counterbid", { walletId, hasWallet: !!wallet });
-    const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
     const bidMetadata = {
       bidCount,
@@ -18390,21 +18574,21 @@ async function processBlurTraitBid(data: {
           }
         })
         // Log cancellation enqueue
-        try { 
-          logRaw('blur', { 
-            taskId: _id, 
-            function: 'processBlurTraitBid', 
-            stage: 'queueing', 
-            level: 'info', 
-            message: 'Queueing cancellation jobs - stop condition', 
-            metadata: { 
+        try {
+          logRaw('blur', {
+            taskId: _id,
+            function: 'processBlurTraitBid',
+            stage: 'queueing',
+            level: 'info',
+            message: 'Queueing cancellation jobs - stop condition',
+            metadata: {
               jobCount: cancelData.length,
               reason: 'stop_condition_met',
               identifier
-            } 
-          }); 
-        } catch {}
-        
+            }
+          });
+        } catch { }
+
         queue.addBulk(cancelData);
       }
 
@@ -18692,21 +18876,21 @@ async function processBlurTraitBid(data: {
         }
       })
       // Log cancellation enqueue
-      try { 
-        logRaw('blur', { 
-          taskId: _id, 
-          function: 'processBlurTraitBid', 
-          stage: 'queueing', 
-          level: 'info', 
-          message: 'Queueing cancellation jobs - before new bid', 
-          metadata: { 
+      try {
+        logRaw('blur', {
+          taskId: _id,
+          function: 'processBlurTraitBid',
+          stage: 'queueing',
+          level: 'info',
+          message: 'Queueing cancellation jobs - before new bid',
+          metadata: {
             jobCount: cancelData.length,
             reason: 'placing_new_bid',
             identifier
-          } 
-        }); 
-      } catch {}
-      
+          }
+        });
+      } catch { }
+
       queue.addBulk(cancelData);
     }
 
@@ -18763,23 +18947,23 @@ async function processBlurTraitBid(data: {
             }
           })
           // Log cancellation enqueue
-          try { 
-            logRaw('blur', { 
-              taskId: _id, 
-              function: 'processBlurTraitBid', 
-              stage: 'queueing', 
-              level: 'info', 
-              message: 'Queueing cancellation jobs - max bid exceeded', 
-              metadata: { 
+          try {
+            logRaw('blur', {
+              taskId: _id,
+              function: 'processBlurTraitBid',
+              stage: 'queueing',
+              level: 'info',
+              message: 'Queueing cancellation jobs - max bid exceeded',
+              metadata: {
                 jobCount: cancelData.length,
                 reason: 'max_bid_exceeded',
                 offerEth,
                 maxBidPriceEth,
                 identifier
-              } 
-            }); 
-          } catch {}
-          
+              }
+            });
+          } catch { }
+
           queue.addBulk(cancelData);
         }
       }
@@ -18905,7 +19089,7 @@ async function processBlurTraitBid(data: {
 
 async function processMagicedenScheduledBid(task: ITask, jobId?: string, scheduleJob?: Job) {
   // Structured start
-  try { logRaw('magiceden', { taskId: task._id.toString(), function: 'processMagicedenScheduledBid', stage: 'start', level: 'info', message: 'Starting MagicEden scheduled bid loop', metadata: { scheduleJobId: scheduleJob?.id, jobId } }); } catch {}
+  try { logRaw('magiceden', { taskId: task._id.toString(), function: 'processMagicedenScheduledBid', stage: 'start', level: 'info', message: 'Starting MagicEden scheduled bid loop', metadata: { scheduleJobId: scheduleJob?.id, jobId } }); } catch { }
   const taskId = task._id.toString();
   const currentLoopCount = loopCounterStats[taskId]?.magiceden || 1;
 
@@ -18929,11 +19113,11 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
     await Promise.race([
       (async () => {
         // Early return consolidation
-        if (!enabledMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) { try { logRaw('magiceden', { taskId, function: 'processMagicedenScheduledBid', stage: 'early_return', level: 'warn', message: 'MagicEden disabled globally', metadata: { enabledMarketplaces } }); } catch {}; return; }
+        if (!enabledMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) { try { logRaw('magiceden', { taskId, function: 'processMagicedenScheduledBid', stage: 'early_return', level: 'warn', message: 'MagicEden disabled globally', metadata: { enabledMarketplaces } }); } catch { }; return; }
 
         const currentTask = activeTasks.get(task._id);
 
-        if (!currentTask?.running || !currentTask.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) { try { logRaw('magiceden', { taskId, function: 'processMagicedenScheduledBid', stage: 'early_return', level: 'warn', message: 'Task not running or MagicEden not selected', metadata: { running: currentTask?.running, selected: currentTask?.selectedMarketplaces } }); } catch {}; return; }
+        if (!currentTask?.running || !currentTask.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) { try { logRaw('magiceden', { taskId, function: 'processMagicedenScheduledBid', stage: 'early_return', level: 'warn', message: 'Task not running or MagicEden not selected', metadata: { running: currentTask?.running, selected: currentTask?.selectedMarketplaces } }); } catch { }; return; }
 
         // Transition from SCHEDULED to STARTED for this marketplace - AFTER validation
         setTaskStatus(taskId, 'STARTED', `magiceden scheduled bid starting - Loop #${currentLoopCount}`, 'magiceden');
@@ -18957,11 +19141,11 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
           taskPreprocessing.set(taskId, preprocessing);
 
           // If preprocessing didn't enable MagicEden, it means something went wrong
-          if (!preprocessing.magiceden.enabled) { try { logRaw('magiceden', { taskId, function: 'processMagicedenScheduledBid', stage: 'error', level: 'error', message: 'Preprocessing failed to enable MagicEden', metadata: {} }); } catch {}; throw new Error(`Preprocessing failed to enable MagicEden for task ${taskId}`); }
+          if (!preprocessing.magiceden.enabled) { try { logRaw('magiceden', { taskId, function: 'processMagicedenScheduledBid', stage: 'error', level: 'error', message: 'Preprocessing failed to enable MagicEden', metadata: {} }); } catch { }; throw new Error(`Preprocessing failed to enable MagicEden for task ${taskId}`); }
         }
 
         if (preprocessing.magiceden.skipReason) {
-          try { logRaw('magiceden', { taskId, function: 'processMagicedenScheduledBid', stage: 'early_return', level: 'warn', message: 'Preprocessing skip', metadata: { reason: preprocessing.magiceden.skipReason } }); } catch {}
+          try { logRaw('magiceden', { taskId, function: 'processMagicedenScheduledBid', stage: 'early_return', level: 'warn', message: 'Preprocessing skip', metadata: { reason: preprocessing.magiceden.skipReason } }); } catch { }
           if (!warningBids[taskId]) {
             warningBids[taskId] = { opensea: false, magiceden: false, blur: false };
           }
@@ -19450,21 +19634,21 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
         const orderKeys = orders.map(order => order._id)
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
         // Log cancellation enqueue
-        try { 
-          logRaw('magiceden', { 
-            taskId: currentTask._id, 
-            function: 'processMagicedenCollectionBid', 
-            stage: 'queueing', 
-            level: 'info', 
-            message: 'Queueing cancellation job - stop condition met', 
-            metadata: { 
+        try {
+          logRaw('magiceden', {
+            taskId: currentTask._id,
+            function: 'processMagicedenCollectionBid',
+            stage: 'queueing',
+            level: 'info',
+            message: 'Queueing cancellation job - stop condition met',
+            metadata: {
               jobCount: 1,
               reason: 'stop_condition_met',
               floorPrice: floor_price
-            } 
-          }); 
-        } catch {}
-        
+            }
+          });
+        } catch { }
+
         queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: currentTask.walletId, orderKeys: orderKeys, taskId: currentTask._id }); // Non-blocking
       }
       return
@@ -19483,7 +19667,7 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
         ? `Insufficient ${currencySymbol} balance: ${balance} (zero or negative) for task ${taskId}`
         : `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId}`;
 
-      try { logRaw('magiceden', { taskId, function: 'processMagicedenCollectionBid', stage: 'early_return', level: 'warn', message: 'Insufficient balance', metadata: { balance, minBidPriceEth, currencySymbol } }); } catch {}
+      try { logRaw('magiceden', { taskId, function: 'processMagicedenCollectionBid', stage: 'early_return', level: 'warn', message: 'Insufficient balance', metadata: { balance, minBidPriceEth, currencySymbol } }); } catch { }
 
       // Increment skip stats
       if (!skipStats[currentTask._id]) {
@@ -19527,7 +19711,7 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
     if (!currentTask.outbidOptions.outbid) {
       if (ttl >= MIN_BID_DURATION && currentPrice === Number(offerPrice) && Math.abs(orderExpiration - expiration) < 30) {
-        try { logRaw('magiceden', { taskId, function: 'processMagicedenCollectionBid', stage: 'early_return', level: 'info', message: 'Existing order still valid', metadata: { ttl, currentPrice, orderExpiration, expiration } }); } catch {}
+        try { logRaw('magiceden', { taskId, function: 'processMagicedenCollectionBid', stage: 'early_return', level: 'info', message: 'Existing order still valid', metadata: { ttl, currentPrice, orderExpiration, expiration } }); } catch { }
         return;
       }
     }
@@ -19599,22 +19783,22 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
           const orderKeys = orders.map((order: any) => order._id)
           const extractedOrderIds = await extractMagicedenOrderHash(orders)
           // Log cancellation enqueue
-          try { 
-            logRaw('magiceden', { 
-              taskId: currentTask._id, 
-              function: 'processMagicedenCollectionBid', 
-              stage: 'queueing', 
-              level: 'info', 
-              message: 'Queueing cancellation job - max bid exceeded', 
-              metadata: { 
+          try {
+            logRaw('magiceden', {
+              taskId: currentTask._id,
+              function: 'processMagicedenCollectionBid',
+              stage: 'queueing',
+              level: 'info',
+              message: 'Queueing cancellation job - max bid exceeded',
+              metadata: {
                 jobCount: 1,
                 reason: 'max_bid_exceeded',
                 offerEth,
                 maxBidPriceEth
-              } 
-            }); 
-          } catch {}
-          
+              }
+            });
+          } catch { }
+
           queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: currentTask.walletId, orderKeys, taskId: currentTask._id }); // Non-blocking
         }
       }
@@ -19662,7 +19846,7 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
 
 async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
-  try { logRaw('magiceden', { taskId: data._id, function: 'processMagicedenTokenBid', stage: 'start', level: 'info', message: 'Starting MagicEden token bid', metadata: { tokenId: data.tokenId, slug: data.slug } }); } catch {}
+  try { logRaw('magiceden', { taskId: data._id, function: 'processMagicedenTokenBid', stage: 'start', level: 'info', message: 'Starting MagicEden token bid', metadata: { tokenId: data.tokenId, slug: data.slug } }); } catch { }
   try {
     const { contractAddress, address, quantity, walletId, slug, tokenId, _id } = data
     if (!enabledMarketplaces.length) return
@@ -19712,7 +19896,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
     const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), false)
     if (stopBid) {
-      try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTokenBid', stage: 'early_return', level: 'warn', message: 'Stop condition met', metadata: { floor: floor_price, tokenId } }); } catch {}
+      try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTokenBid', stage: 'early_return', level: 'warn', message: 'Stop condition met', metadata: { floor: floor_price, tokenId } }); } catch { }
       if (orders.length > 0) {
         const orderKeys = orders.map((order: any) => order._id)
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
@@ -19736,7 +19920,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
         "skipped",
         "magiceden"
       );
-      try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTokenBid', stage: 'early_return', level: 'warn', message: 'Insufficient balance', metadata: { balance, minBidPriceEth, tokenId, currencySymbol } }); } catch {}
+      try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTokenBid', stage: 'early_return', level: 'warn', message: 'Insufficient balance', metadata: { balance, minBidPriceEth, tokenId, currencySymbol } }); } catch { }
       return;
     }
 
@@ -19755,7 +19939,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     const orderExpiration = order ? Math.round((expiredAt - createdAt) / 1000) : expiration
 
     if (!outbidOptions.outbid) {
-      if (ttl >= MIN_BID_DURATION && currentPrice === tokenOffer && Math.abs(orderExpiration - expiration) < 30) { try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTokenBid', stage: 'early_return', level: 'info', message: 'Existing order still valid', metadata: { ttl, currentPrice, orderExpiration, expiration } }); } catch {}; return; }
+      if (ttl >= MIN_BID_DURATION && currentPrice === tokenOffer && Math.abs(orderExpiration - expiration) < 30) { try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTokenBid', stage: 'early_return', level: 'info', message: 'Existing order still valid', metadata: { ttl, currentPrice, orderExpiration, expiration } }); } catch { }; return; }
 
     } else {
       const walletsArr = await walletCache.getAllWallets()
@@ -19816,16 +20000,16 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     const bidCount = getIncrementedBidCount(MAGICEDEN, slug, _id)
 
     if (outbidOptions.outbid && offerEth >= maxBidPriceEth) {
-      try { 
-        logRaw('magiceden', { 
-          taskId: _id, 
-          function: 'processMagicedenTokenBid', 
-          stage: 'bid_calculation', 
-          level: 'warn', 
-          message: 'Offer exceeds max bid price', 
-          metadata: { 
-            offerEth, 
-            maxBidPriceEth, 
+      try {
+        logRaw('magiceden', {
+          taskId: _id,
+          function: 'processMagicedenTokenBid',
+          stage: 'bid_calculation',
+          level: 'warn',
+          message: 'Offer exceeds max bid price',
+          metadata: {
+            offerEth,
+            maxBidPriceEth,
             currencySymbol,
             tokenId,
             bidPriceConfig: currentTask.bidPrice,
@@ -19833,9 +20017,9 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
             bidPriceType: currentTask.bidPriceType,
             floorPrice: floor_price,
             cancelMaxWhenOutbid: currentTask.outbidOptions.cancelMaxWhenOutbid
-          } 
-        }); 
-      } catch {}
+          }
+        });
+      } catch { }
       if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
         if (orders.length > 0) {
           const orderKeys = orders.map((order: any) => order._id)
@@ -19897,20 +20081,20 @@ async function processMagicedenTraitBid(data: {
   minBidPriceEth?: number;
   task: ITask;
 }) {
-  try { logRaw('magiceden', { taskId: data._id, function: 'processMagicedenTraitBid', stage: 'start', level: 'info', message: 'Starting MagicEden trait bid', metadata: { slug: data.slug, trait: data.trait } }); } catch {}
+  try { logRaw('magiceden', { taskId: data._id, function: 'processMagicedenTraitBid', stage: 'start', level: 'info', message: 'Starting MagicEden trait bid', metadata: { slug: data.slug, trait: data.trait } }); } catch { }
   const taskId = data._id;
 
   // Log entry
 
   // Early validation
   if (!enabledMarketplaces.length || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) {
-    try { logRaw('magiceden', { taskId, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'MagicEden disabled or no marketplaces enabled', metadata: { enabledMarketplaces } }); } catch {}
+    try { logRaw('magiceden', { taskId, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'MagicEden disabled or no marketplaces enabled', metadata: { enabledMarketplaces } }); } catch { }
     return;
   }
 
   const activeTask = activeTasks.get(data._id);
   if (!activeTask?.running || taskStatus[data._id]?.marketplaces?.magiceden?.status === 'COMPLETED' || taskStatus[data._id]?.marketplaces?.magiceden?.status === 'STOPPED') {
-    try { logRaw('magiceden', { taskId, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'Task not running or marketplace completed/stopped', metadata: { status: taskStatus[data._id]?.marketplaces?.magiceden?.status } }); } catch {}
+    try { logRaw('magiceden', { taskId, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'Task not running or marketplace completed/stopped', metadata: { status: taskStatus[data._id]?.marketplaces?.magiceden?.status } }); } catch { }
     return;
   }
 
@@ -19923,7 +20107,7 @@ async function processMagicedenTraitBid(data: {
     // The trait passed in the job data is already validated
 
     const currentTask = activeTasks.get(_id)
-    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden")) { try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'Task not running or MagicEden not selected', metadata: { running: currentTask?.running, selected: currentTask?.selectedMarketplaces } }); } catch {}; return; }
+    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden")) { try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'Task not running or MagicEden not selected', metadata: { running: currentTask?.running, selected: currentTask?.selectedMarketplaces } }); } catch { }; return; }
 
     const outbidOptions = currentTask.outbidOptions
     const identifier = `${trait.attributeKey}:${trait.attributeValue}`
@@ -19942,11 +20126,11 @@ async function processMagicedenTraitBid(data: {
       }).sort({ createdAt: -1 })
     ]);
 
-    if (!floor_price) { try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTraitBid', stage: 'error', level: 'error', message: 'Failed to fetch floor price', metadata: { slug } }); } catch {}; throw new Error(`Failed to fetch floor price for ${slug}`); }
+    if (!floor_price) { try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTraitBid', stage: 'error', level: 'error', message: 'Failed to fetch floor price', metadata: { slug } }); } catch { }; throw new Error(`Failed to fetch floor price for ${slug}`); }
 
     const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), false, traitFloor, identifier)
     if (stopBid) {
-      try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'Stop condition met for trait', metadata: { identifier, floor: floor_price, traitFloor } }); } catch {}
+      try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'Stop condition met for trait', metadata: { identifier, floor: floor_price, traitFloor } }); } catch { }
       if (orders.length > 0) {
         const orderKeys = orders.map((order: any) => order._id)
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
@@ -19975,7 +20159,7 @@ async function processMagicedenTraitBid(data: {
         "skipped",
         "magiceden"
       );
-      try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'Insufficient balance', metadata: { balance, minBidPriceEth, currencySymbol, identifier } }); } catch {}
+      try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'Insufficient balance', metadata: { balance, minBidPriceEth, currencySymbol, identifier } }); } catch { }
       return;
     }
     const expiration = getExpiry(currentTask.bidDuration)
@@ -20043,7 +20227,7 @@ async function processMagicedenTraitBid(data: {
         }
         else if (spread > outbidMargin && Number(highestBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
         }
-        else if (ttl > MIN_BID_DURATION) { try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'info', message: 'Existing order still valid (trait)', metadata: { ttl, currentPrice: Number(order?.offerPrice), orderExpiration, expiration } }); } catch {}; return } else {
+        else if (ttl > MIN_BID_DURATION) { try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'info', message: 'Existing order still valid (trait)', metadata: { ttl, currentPrice: Number(order?.offerPrice), orderExpiration, expiration } }); } catch { }; return } else {
           traitOffer = +order.offerPrice
         }
       }
@@ -20066,26 +20250,26 @@ async function processMagicedenTraitBid(data: {
       }); // Non-blocking
     }
     if (outbidOptions.outbid && offerEth >= maxBidPriceEth) {
-      try { 
-        logRaw('magiceden', { 
-          taskId: _id, 
-          function: 'processMagicedenTraitBid', 
-          stage: 'bid_calculation', 
-          level: 'warn', 
-          message: 'Offer exceeds max bid price (trait)', 
-          metadata: { 
-            offerEth, 
-            maxBidPriceEth, 
-            currencySymbol, 
+      try {
+        logRaw('magiceden', {
+          taskId: _id,
+          function: 'processMagicedenTraitBid',
+          stage: 'bid_calculation',
+          level: 'warn',
+          message: 'Offer exceeds max bid price (trait)',
+          metadata: {
+            offerEth,
+            maxBidPriceEth,
+            currencySymbol,
             identifier,
             bidPriceConfig: currentTask.bidPrice,
             magicEdenBidPrice: currentTask.magicEdenBidPrice,
             bidPriceType: currentTask.bidPriceType,
             floorPrice: floor_price,
             cancelMaxWhenOutbid: currentTask.outbidOptions.cancelMaxWhenOutbid
-          } 
-        }); 
-      } catch {}
+          }
+        });
+      } catch { }
       if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
         if (orders.length > 0) {
           const orderKeys = orders.map((order: any) => order._id)
@@ -20139,24 +20323,21 @@ async function processMagicedenTraitBid(data: {
 
 async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, taskId: string, orderKey: string }) {
   const { walletId, orderId, taskId, orderKey } = data
-
-  
-  // Add marketplace file logging
-  try { logRaw('opensea', { taskId, function: 'bulkCancelOpenseaBid', stage: 'start', level: 'info', message: 'Starting order cancellation', metadata: { walletId, orderId, orderKey } }); } catch {}
+  const safeWalletId = maskSensitiveIdentifier(walletId);
 
   try {
     // Fetch wallet and decrypt private key
     const wallet = await walletCache.getWalletById(walletId);
 
     if (!wallet) {
-      logSystemError('BulkCancelOpensea', `Wallet ${walletId} not found for task ${taskId}`, undefined, { walletId, taskId });
-      throw new Error(`Wallet ${walletId} not found`);
+      logSystemError('BulkCancelOpensea', `Wallet ${safeWalletId} not found for task ${taskId}`, undefined, { walletId: safeWalletId, taskId });
+      throw new Error(`Wallet ${safeWalletId} not found`);
     }
 
 
     if (!wallet.encryptedPrivateKey) {
-      logSystemError('BulkCancelOpensea', `No encryptedPrivateKey found for wallet ${walletId}`, undefined, { walletId, taskId });
-      throw new Error(`No encryptedPrivateKey found for wallet ${walletId}`);
+      logSystemError('BulkCancelOpensea', `No encryptedPrivateKey found for wallet ${safeWalletId}`, undefined, { walletId: safeWalletId, taskId });
+      throw new Error(`No encryptedPrivateKey found for wallet ${safeWalletId}`);
     }
 
     const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
@@ -20177,16 +20358,16 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
     // Decrement ownBidCounts for the cancelled order
     decrementOwnBidCounter('opensea', 1);
 
-    
+
     // Add marketplace file logging for successful cancellation
-    try { logRaw('opensea', { taskId, function: 'bulkCancelOpenseaBid', stage: 'completion', level: 'info', message: 'Order cancelled successfully', metadata: { orderId, orderKey } }); } catch {}
+    try { logRaw('opensea', { taskId, function: 'bulkCancelOpenseaBid', stage: 'completion', level: 'info', message: 'Order cancelled successfully', metadata: { orderId, orderKey } }); } catch { }
   } catch (error) {
     // Log detailed error information
     const errorMessage = error instanceof Error ? error.message : String(error);
     logSystemError('BulkCancelOpensea', `Failed to cancel OpenSea order ${orderId} for task ${taskId}`, error, { taskId, orderId, errorMessage });
-    
+
     // Add marketplace file logging for error
-    try { logRaw('opensea', { taskId, function: 'bulkCancelOpenseaBid', stage: 'error', level: 'error', message: 'Failed to cancel order', metadata: { orderId, orderKey, errorMessage } }); } catch {}
+    try { logRaw('opensea', { taskId, function: 'bulkCancelOpenseaBid', stage: 'error', level: 'error', message: 'Failed to cancel order', metadata: { orderId, orderKey, errorMessage } }); } catch { }
 
     // Log additional error details if available
     if (error instanceof Error && 'response' in error) {
@@ -20202,10 +20383,11 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
 
 async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: string, orderKeys: string[], taskId: string, batchSize?: number }) {
   const { orderIds, walletId, orderKeys, taskId, batchSize } = data
+  const safeWalletId = maskSensitiveIdentifier(walletId);
 
-  
+
   // Add marketplace file logging
-  try { logRaw('magiceden', { taskId, function: 'bulkCancelMagicedenBid', stage: 'start', level: 'info', message: 'Starting bulk order cancellation', metadata: { walletId, orderCount: orderIds.length, batchSize: batchSize || orderIds.length } }); } catch {}
+  try { logRaw('magiceden', { taskId, function: 'bulkCancelMagicedenBid', stage: 'start', level: 'info', message: 'Starting bulk order cancellation', metadata: { walletId: safeWalletId, orderCount: orderIds.length, batchSize: batchSize || orderIds.length } }); } catch { }
 
   try {
     if (orderIds.length > 0) {
@@ -20213,14 +20395,14 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
       const wallet = await walletCache.getWalletById(walletId);
 
       if (!wallet) {
-        logSystemError('BulkCancelMagiceden', `Wallet ${walletId} not found for task ${taskId}`, undefined, { walletId, taskId });
-        throw new Error(`Wallet ${walletId} not found`);
+        logSystemError('BulkCancelMagiceden', `Wallet ${safeWalletId} not found for task ${taskId}`, undefined, { walletId: safeWalletId, taskId });
+        throw new Error(`Wallet ${safeWalletId} not found`);
       }
 
 
       if (!wallet.encryptedPrivateKey) {
-        logSystemError('BulkCancelMagiceden', `No encryptedPrivateKey found for wallet ${walletId}`, undefined, { walletId, taskId });
-        throw new Error(`No encryptedPrivateKey found for wallet ${walletId}`);
+        logSystemError('BulkCancelMagiceden', `No encryptedPrivateKey found for wallet ${safeWalletId}`, undefined, { walletId: safeWalletId, taskId });
+        throw new Error(`No encryptedPrivateKey found for wallet ${safeWalletId}`);
       }
 
       const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
@@ -20241,9 +20423,9 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
 
       // Decrement ownBidCounts for the cancelled orders
       decrementOwnBidCounter('magiceden', completedCount);
-      
+
       // Add marketplace file logging for successful cancellation
-      try { logRaw('magiceden', { taskId, function: 'bulkCancelMagicedenBid', stage: 'completion', level: 'info', message: 'Orders cancelled successfully', metadata: { orderCount: orderIds.length, completedCount } }); } catch {}
+      try { logRaw('magiceden', { taskId, function: 'bulkCancelMagicedenBid', stage: 'completion', level: 'info', message: 'Orders cancelled successfully', metadata: { orderCount: orderIds.length, completedCount } }); } catch { }
     } else {
     }
 
@@ -20256,9 +20438,9 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     logSystemError('BulkCancelMagiceden', `Error processing Magiceden bid cancellation for task ${taskId}`, error, { taskId });
-    
+
     // Add marketplace file logging for error
-    try { logRaw('magiceden', { taskId, function: 'bulkCancelMagicedenBid', stage: 'error', level: 'error', message: 'Failed to cancel orders', metadata: { orderCount: orderIds.length, errorMessage } }); } catch {}
+    try { logRaw('magiceden', { taskId, function: 'bulkCancelMagicedenBid', stage: 'error', level: 'error', message: 'Failed to cancel orders', metadata: { orderCount: orderIds.length, errorMessage } }); } catch { }
 
     // Clean up the tracking set even on error to allow retry
     orderKeys.forEach(orderKey => {
@@ -20377,10 +20559,11 @@ validateBidCountInterval = setInterval(validateBidCount, STANDARD_INTERVAL);
 
 async function bulkCancelBlurBid(data: BlurCancelPayload) {
   const { orderKey, walletId, taskId, payload } = data
+  const safeWalletId = maskSensitiveIdentifier(walletId);
 
-  
+
   // Add marketplace file logging
-  try { logRaw('blur', { taskId, function: 'bulkCancelBlurBid', stage: 'start', level: 'info', message: 'Starting order cancellation', metadata: { walletId, orderKey, hasPayload: !!payload } }); } catch {}
+  try { logRaw('blur', { taskId, function: 'bulkCancelBlurBid', stage: 'start', level: 'info', message: 'Starting order cancellation', metadata: { walletId: safeWalletId, orderKey, hasPayload: !!payload } }); } catch { }
 
   try {
     if (!data) return
@@ -20389,13 +20572,13 @@ async function bulkCancelBlurBid(data: BlurCancelPayload) {
     const wallet = await walletCache.getWalletById(walletId);
 
     if (!wallet) {
-      logSystemError('BulkCancelBlur', `Wallet ${walletId} not found for task ${taskId}`, undefined, { walletId, taskId });
-      throw new Error(`Wallet ${walletId} not found`);
+      logSystemError('BulkCancelBlur', `Wallet ${safeWalletId} not found for task ${taskId}`, undefined, { walletId: safeWalletId, taskId });
+      throw new Error(`Wallet ${safeWalletId} not found`);
     }
 
     if (!wallet.encryptedPrivateKey) {
-      logSystemError('BulkCancelBlur', `No encryptedPrivateKey found for wallet ${walletId}`, undefined, { walletId, taskId });
-      throw new Error(`No encryptedPrivateKey found for wallet ${walletId}`);
+      logSystemError('BulkCancelBlur', `No encryptedPrivateKey found for wallet ${safeWalletId}`, undefined, { walletId: safeWalletId, taskId });
+      throw new Error(`No encryptedPrivateKey found for wallet ${safeWalletId}`);
     }
 
     const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
@@ -20412,17 +20595,17 @@ async function bulkCancelBlurBid(data: BlurCancelPayload) {
     // Record completion
     cancellationTracker.recordCompletion(taskId, 1, 'blur');
     await updateTaskCancellationPercentage(taskId, undefined, 'blur');
-    
+
     // Add marketplace file logging for successful cancellation
-    try { logRaw('blur', { taskId, function: 'bulkCancelBlurBid', stage: 'completion', level: 'info', message: 'Order cancelled successfully', metadata: { orderKey } }); } catch {}
+    try { logRaw('blur', { taskId, function: 'bulkCancelBlurBid', stage: 'completion', level: 'info', message: 'Order cancelled successfully', metadata: { orderKey } }); } catch { }
 
     // Cancellation tracking is now handled in cancelBlurBid directly
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     logSystemError('BulkCancelBlur', `Error processing Blur bid cancellation for task ${taskId}`, error, { taskId });
-    
+
     // Add marketplace file logging for error
-    try { logRaw('blur', { taskId, function: 'bulkCancelBlurBid', stage: 'error', level: 'error', message: 'Failed to cancel order', metadata: { orderKey, errorMessage } }); } catch {}
+    try { logRaw('blur', { taskId, function: 'bulkCancelBlurBid', stage: 'error', level: 'error', message: 'Failed to cancel order', metadata: { orderKey, errorMessage } }); } catch { }
 
     throw error; // Re-throw to maintain existing behavior
   }
@@ -22635,68 +22818,68 @@ app.get('/api/logs/export', async (req, res) => {
     // Validate marketplace
     const validMarketplaces = ['blur', 'opensea', 'magiceden'];
     if (!validMarketplaces.includes(marketplace)) {
-      return res.status(400).json({ 
-        error: 'Invalid marketplace', 
-        message: `Marketplace must be one of: ${validMarketplaces.join(', ')}` 
+      return res.status(400).json({
+        error: 'Invalid marketplace',
+        message: `Marketplace must be one of: ${validMarketplaces.join(', ')}`
       });
     }
 
     // Validate format
     const validFormats = ['json', 'csv'];
     if (!validFormats.includes(format)) {
-      return res.status(400).json({ 
-        error: 'Invalid format', 
-        message: `Format must be one of: ${validFormats.join(', ')}` 
+      return res.status(400).json({
+        error: 'Invalid format',
+        message: `Format must be one of: ${validFormats.join(', ')}`
       });
     }
 
     // Validate level
     const validLevels = ['all', 'info', 'warn', 'error', 'debug'];
     if (!validLevels.includes(level)) {
-      return res.status(400).json({ 
-        error: 'Invalid level', 
-        message: `Level must be one of: ${validLevels.join(', ')}` 
+      return res.status(400).json({
+        error: 'Invalid level',
+        message: `Level must be one of: ${validLevels.join(', ')}`
       });
     }
 
     // Validate time range
     const validTimeRanges = ['5m', '10m', '1h', '24h', 'custom'];
     if (timeRange && !validTimeRanges.includes(timeRange)) {
-      return res.status(400).json({ 
-        error: 'Invalid time range', 
-        message: `Time range must be one of: ${validTimeRanges.join(', ')}` 
+      return res.status(400).json({
+        error: 'Invalid time range',
+        message: `Time range must be one of: ${validTimeRanges.join(', ')}`
       });
     }
 
     // Validate dates
     let parsedStartTime: Date | undefined;
     let parsedEndTime: Date | undefined;
-    
+
     if (startTime) {
       parsedStartTime = new Date(String(startTime));
       if (isNaN(parsedStartTime.getTime())) {
-        return res.status(400).json({ 
-          error: 'Invalid start time', 
-          message: 'Start time must be a valid ISO date string' 
+        return res.status(400).json({
+          error: 'Invalid start time',
+          message: 'Start time must be a valid ISO date string'
         });
       }
     }
-    
+
     if (endTime) {
       parsedEndTime = new Date(String(endTime));
       if (isNaN(parsedEndTime.getTime())) {
-        return res.status(400).json({ 
-          error: 'Invalid end time', 
-          message: 'End time must be a valid ISO date string' 
+        return res.status(400).json({
+          error: 'Invalid end time',
+          message: 'End time must be a valid ISO date string'
         });
       }
     }
 
     // Validate custom time range
     if (timeRange === 'custom' && !parsedStartTime) {
-      return res.status(400).json({ 
-        error: 'Missing start time', 
-        message: 'Start time is required when using custom time range' 
+      return res.status(400).json({
+        error: 'Missing start time',
+        message: 'Start time is required when using custom time range'
       });
     }
 
@@ -22721,7 +22904,7 @@ app.get('/api/logs/export', async (req, res) => {
   } catch (error) {
     logSystemError('MarketplaceLogs', 'Error exporting marketplace logs', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to export logs',
       message: errorMessage,
       details: process.env.NODE_ENV === 'development' ? error : undefined
@@ -22747,77 +22930,77 @@ app.get('/api/logs', async (req, res) => {
     // Validate marketplace
     const validMarketplaces = ['blur', 'opensea', 'magiceden'];
     if (!validMarketplaces.includes(marketplace)) {
-      return res.status(400).json({ 
-        error: 'Invalid marketplace', 
-        message: `Marketplace must be one of: ${validMarketplaces.join(', ')}` 
+      return res.status(400).json({
+        error: 'Invalid marketplace',
+        message: `Marketplace must be one of: ${validMarketplaces.join(', ')}`
       });
     }
 
     // Validate level
     const validLevels = ['all', 'info', 'warn', 'error', 'debug'];
     if (!validLevels.includes(level)) {
-      return res.status(400).json({ 
-        error: 'Invalid level', 
-        message: `Level must be one of: ${validLevels.join(', ')}` 
+      return res.status(400).json({
+        error: 'Invalid level',
+        message: `Level must be one of: ${validLevels.join(', ')}`
       });
     }
 
     // Validate pagination parameters
     const parsedLimit = Number(limit);
     const parsedOffset = Number(offset);
-    
+
     if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 10000) {
-      return res.status(400).json({ 
-        error: 'Invalid limit', 
-        message: 'Limit must be a number between 1 and 10000' 
+      return res.status(400).json({
+        error: 'Invalid limit',
+        message: 'Limit must be a number between 1 and 10000'
       });
     }
-    
+
     if (isNaN(parsedOffset) || parsedOffset < 0) {
-      return res.status(400).json({ 
-        error: 'Invalid offset', 
-        message: 'Offset must be a non-negative number' 
+      return res.status(400).json({
+        error: 'Invalid offset',
+        message: 'Offset must be a non-negative number'
       });
     }
 
     // Validate time range
     const validTimeRanges = ['5m', '10m', '1h', '24h', 'custom'];
     if (timeRange && !validTimeRanges.includes(timeRange)) {
-      return res.status(400).json({ 
-        error: 'Invalid time range', 
-        message: `Time range must be one of: ${validTimeRanges.join(', ')}` 
+      return res.status(400).json({
+        error: 'Invalid time range',
+        message: `Time range must be one of: ${validTimeRanges.join(', ')}`
       });
     }
 
     // Validate dates
     let parsedStartTime: Date | undefined;
     let parsedEndTime: Date | undefined;
-    
+
     if (startTime) {
       parsedStartTime = new Date(String(startTime));
       if (isNaN(parsedStartTime.getTime())) {
-        return res.status(400).json({ 
-          error: 'Invalid start time', 
-          message: 'Start time must be a valid ISO date string' 
+        return res.status(400).json({
+          error: 'Invalid start time',
+          message: 'Start time must be a valid ISO date string'
         });
       }
     }
-    
+
     if (endTime) {
       parsedEndTime = new Date(String(endTime));
       if (isNaN(parsedEndTime.getTime())) {
-        return res.status(400).json({ 
-          error: 'Invalid end time', 
-          message: 'End time must be a valid ISO date string' 
+        return res.status(400).json({
+          error: 'Invalid end time',
+          message: 'End time must be a valid ISO date string'
         });
       }
     }
 
     // Validate custom time range
     if (timeRange === 'custom' && !parsedStartTime) {
-      return res.status(400).json({ 
-        error: 'Missing start time', 
-        message: 'Start time is required when using custom time range' 
+      return res.status(400).json({
+        error: 'Missing start time',
+        message: 'Start time is required when using custom time range'
       });
     }
 
@@ -22864,7 +23047,7 @@ app.get('/api/logs', async (req, res) => {
   } catch (error) {
     logSystemError('MarketplaceLogs', 'Error fetching marketplace logs', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to fetch logs',
       message: errorMessage,
       details: process.env.NODE_ENV === 'development' ? error : undefined
