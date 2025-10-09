@@ -1,0 +1,37 @@
+services:
+  redis:
+    image: "redis:latest"
+    container_name: "redis"
+    command: redis-server --port 6379
+      --bind 0.0.0.0
+      --maxmemory-policy noeviction
+      --appendonly yes
+      --save ""
+      --tcp-keepalive 60
+      --timeout 0
+      --activedefrag yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  mongodb:
+    image: "mongo:latest"
+    container_name: "mongodb_container"
+    mem_limit: 1024m
+    memswap_limit: 1280m
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+volumes:
+  redis_data:
+  mongodb_data:

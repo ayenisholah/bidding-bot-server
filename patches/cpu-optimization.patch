@@ -1,0 +1,16 @@
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -2715,8 +2715,11 @@
+   });
+ }
+ 
+-const BROADCAST_INTERVAL = 1000;
+-setInterval(broadcastBidRates, BROADCAST_INTERVAL);
++// Reduce broadcast frequency to lower CPU usage
++// Changed from 1000ms to 5000ms to reduce CPU load
++const BROADCAST_INTERVAL = process.env.BROADCAST_INTERVAL ? parseInt(process.env.BROADCAST_INTERVAL) : 5000;
++console.log(`Broadcasting bid rates every ${BROADCAST_INTERVAL}ms`);
++setInterval(broadcastBidRates, BROADCAST_INTERVAL);
+ 
+ function broadcastBidRates() {
+   const taskStats = getCachedTaskStatuses();

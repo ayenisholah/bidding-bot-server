@@ -1,0 +1,13 @@
+{
+	"watch": ["src"],
+	"ext": "ts",
+	"ignore": [
+		"src/**/*.spec.ts",
+		"src/**/*.test.ts",
+		"dist/*",
+		"coverage/*",
+		"node_modules/*"
+	],
+	"exec": "NODE_OPTIONS='--max-old-space-size=4096' node --expose-gc -r ts-node/register/transpile-only src/index.ts",
+	"delay": "1000"
+}

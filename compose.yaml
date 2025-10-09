@@ -1,0 +1,112 @@
+services:
+  server:
+    image: nfttools/bidding-bot-server-beta-single:beta-single
+    platform: linux/amd64
+    restart: always
+    ports:
+      - "3003:3003"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3003/health || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      NODE_ENV: "production"
+      PORT: 3003
+      NODE_OPTIONS: "--max-old-space-size=4096"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      ALCHEMY_API_KEY: "Vt4-KnmnLA7XAlfDkeWij"
+      MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
+      SERVER_IP: ${SERVER_IP}
+      USERNAME: ${USERNAME}
+      EMAIL: ${EMAIL}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      JWT_SECRET: "NFTTOOLS TO THE MOON"
+      AXIOM_DATASET: "nft-bidding-bot"
+      AXIOM_TOKEN: "xaat-30ecb9c3-ce16-42f6-b824-ba8ef5c50e7c"
+      API_KEY: ${API_KEY}
+      RATE_LIMIT: ${RATE_LIMIT}
+    depends_on:
+      - mongodb
+      - redis
+    volumes:
+      - server_data:/app/data
+      - /dev/null:/app/.env:ro
+
+  client:
+    image: nfttools/bidding-bot-client-beta-single:beta-single
+    platform: linux/amd64
+    restart: always
+    ports:
+      - "3001:3001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      PORT: 3001
+      BODY_SIZE_LIMIT: 104857600
+      NEXT_PUBLIC_ALCHEMY_API_KEY: "Vt4-KnmnLA7XAlfDkeWij"
+      NEXT_PUBLIC_API_KEY: ${API_KEY}
+      NEXT_PUBLIC_AXIOM_DATASET: "nft-bidding-bot"
+      NEXT_PUBLIC_AXIOM_TOKEN: "xaat-30ecb9c3-ce16-42f6-b824-ba8ef5c50e7c"
+      NEXT_PUBLIC_USERNAME: ${USERNAME}
+      NEXT_PUBLIC_MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
+      NEXT_PUBLIC_JWT_SECRET: "NFTTOOLS TO THE MOON"
+      NEXT_PUBLIC_SERVER_IP: ${SERVER_IP}
+      NEXT_PUBLIC_EMAIL: ${EMAIL}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3001/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      - mongodb
+      - server
+
+  mongodb:
+    image: "mongo:latest"
+    container_name: "mongodb_container"
+    command: mongod
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  redis:
+    image: "redis:latest"
+    container_name: "redis"
+    command: redis-server --port 6379
+      --bind 0.0.0.0
+      --maxmemory-policy noeviction
+      --appendonly yes
+      --save ""
+      --tcp-keepalive 60
+      --timeout 0
+      --activedefrag yes
+      --protected-mode no
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+volumes:
+  mongodb_data:
+  redis_data:
+  server_data:
