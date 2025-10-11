@@ -10,7 +10,7 @@ import Order from '../../models/order.model';
 import { withRetry } from '../../utils/db-retry'
 import { USDC, WETH } from "../../utils/currencies";
 import { CollectionItemsListQuery } from "../../queries";
-import { CollectionItemsQueryVariables, CollectionItemsResponse } from "../../functions";
+import { CollectionItemsQueryVariables, CollectionItemsResponse, getCollectionDetails, getCollectionTokenContractMap } from "../../functions";
 import { fetchERC20Balance } from "../../utils/balance";
 import { logger, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
 import { InsufficientBalanceError } from "../errors";
@@ -19,6 +19,7 @@ import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
 import fs from 'fs';
 import path from 'path';
+import { MAX_PAIN_OVERRIDE_ADDRESS, MAX_PAIN_SLUG, MAX_PAIN_TOKEN_OVERRIDES } from "./maxPainOverrides";
 
 // Performance timing utilitie
 // Ensure logs directory exists
@@ -80,6 +81,64 @@ const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1F0DF003000390027140000fAa719"
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 const SEAPORT_CONTRACT = new ethers.Contract(SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI, provider);
+
+
+const contractMapCache = new Map<string, Record<string, string>>();
+const multiContractSlugCache = new Map<string, boolean>();
+const contractMapPromises = new Map<string, Promise<Record<string, string>>>();
+
+async function resolveContractAddress(collectionSlug: string | undefined, tokenId: string | number, fallbackAddress: string) {
+  if (!collectionSlug) {
+    return fallbackAddress;
+  }
+
+  const normalizedSlug = collectionSlug.toLowerCase();
+  const tokenKey = tokenId.toString();
+
+  if (normalizedSlug === MAX_PAIN_SLUG && MAX_PAIN_TOKEN_OVERRIDES.has(tokenKey)) {
+    return MAX_PAIN_OVERRIDE_ADDRESS;
+  }
+
+  try {
+    if (!multiContractSlugCache.has(normalizedSlug)) {
+      const details = await getCollectionDetails(normalizedSlug);
+      const contractAddresses = Array.isArray(details?.contracts)
+        ? details.contracts
+            .map((contract: { address?: string | null }) => contract?.address?.toLowerCase())
+            .filter((address: string | null | undefined): address is string => Boolean(address))
+        : [];
+
+      multiContractSlugCache.set(normalizedSlug, new Set(contractAddresses).size > 1);
+    }
+
+    if (!multiContractSlugCache.get(normalizedSlug)) {
+      return fallbackAddress;
+    }
+
+    if (!contractMapCache.has(normalizedSlug)) {
+      let pendingPromise = contractMapPromises.get(normalizedSlug);
+      if (!pendingPromise) {
+        pendingPromise = getCollectionTokenContractMap(normalizedSlug)
+          .then((map) => {
+            contractMapCache.set(normalizedSlug, map);
+            contractMapPromises.delete(normalizedSlug);
+            return map;
+          })
+          .catch((error) => {
+            contractMapPromises.delete(normalizedSlug);
+            throw error;
+          });
+        contractMapPromises.set(normalizedSlug, pendingPromise);
+      }
+      await pendingPromise;
+    }
+
+    const contractMap = contractMapCache.get(normalizedSlug) || {};
+    return contractMap[tokenKey] ?? fallbackAddress;
+  } catch {
+    return fallbackAddress;
+  }
+}
 
 // Pre-calculated values for optimization
 const DIVIDER = 10000n;
@@ -213,8 +272,10 @@ async function buildItemOffer(taskId: string, offerSpecification: ItemOfferSpeci
   const task = activeTasks.get(taskId)
 
   if (!task) return
+  const slug = task.contract?.slug?.toLowerCase()
+  const resolvedContract = await resolveContractAddress(slug, tokenId, assetContractAddress)
   const consideration = getItemConsideration(
-    assetContractAddress,
+    resolvedContract,
     tokenId,
     quantity,
     walletAddress
@@ -905,8 +966,22 @@ const getOffer = (priceWei: bigint, currency: string) => {
 }
 
 async function postItemOffer(taskId: string, offer: unknown, signature: string) {
+  const task = activeTasks.get(taskId)
+  const slug = task?.contract?.slug?.toLowerCase()
+
+  const parameters = offer as any
+
+  if (slug && parameters?.consideration) {
+    for (const item of parameters.consideration) {
+      if (Number(item.itemType) === 2 && item?.token) {
+        const targetTokenId = item.identifierOrCriteria;
+        item.token = await resolveContractAddress(slug, targetTokenId, item.token);
+      }
+    }
+  }
+
   const payload = {
-    parameters: offer,
+    parameters,
     signature,
     protocol_address: SEAPORT_CONTRACT_ADDRESS,
   }

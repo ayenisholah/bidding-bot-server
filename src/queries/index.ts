@@ -10,6 +10,7 @@ export const CollectionItemsListQuery = `
         items {
           id
           tokenId
+          contractAddress
           name
           imageUrl
           bestListing {

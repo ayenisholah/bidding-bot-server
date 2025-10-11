@@ -14,6 +14,7 @@ import { setOpenseaMarketplaceFee } from "../utils/marketplace-fee-cache";
 config()
 
 const collectionCache: { [key: string]: ICollectionDetails } = {};
+const collectionTokenContractCache: Record<string, Record<string, string>> = {};
 const MAX_CACHE_ITEMS = 1000;
 
 const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1F0DF003000390027140000fAa719";
@@ -558,13 +559,51 @@ function hashData(data: any): string {
     .digest('hex');
 }
 
+export interface CollectionItemResult {
+  tokenId: string;
+  contractAddress: string;
+}
+
+export async function getCollectionTokenContractMap(slug: string): Promise<Record<string, string>> {
+  const normalizedSlug = slug.toLowerCase();
+  if (collectionTokenContractCache[normalizedSlug]) {
+    return collectionTokenContractCache[normalizedSlug];
+  }
+
+  try {
+    const items = await fetchOpenSeaCollectionItems({
+      collectionSlug: normalizedSlug,
+      limit: 200,
+      sort: { by: 'PRICE', direction: 'ASC' },
+    });
+
+    const tokenMap: Record<string, string> = {};
+    for (const item of items) {
+      if (item?.tokenId && item?.contractAddress) {
+        tokenMap[item.tokenId] = item.contractAddress;
+      }
+    }
+
+    collectionTokenContractCache[normalizedSlug] = tokenMap;
+    return tokenMap;
+  } catch (error) {
+    await logger.logOpenseaCollectionError('Error building token contract map', {
+      collection: slug,
+      operation: 'get_token_contract_map',
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
+    return {};
+  }
+}
+
 export async function fetchOpenSeaCollectionItems(
   variables: CollectionItemsQueryVariables,
-  allTokenIds: string[] = [],
+  allItems: CollectionItemResult[] = [],
   cursor?: string,
   taskId?: string,
   expectedCount?: number
-): Promise<string[]> {
+): Promise<CollectionItemResult[]> {
   const CACHE_TTL = 3600; // 1 hour cache
   const cacheKey = `opensea:collection-items:${hashData(variables)}`;
   const lockKey = `opensea:lock:collection-items:${variables.collectionSlug}:${hashData(variables)}`;
@@ -579,10 +618,8 @@ export async function fetchOpenSeaCollectionItems(
     try {
       const cachedData = getRedis() ? await getRedis().get(cacheKey) : null;
       if (cachedData) {
-        // console.log(`[DEBUG] Cache hit for ${variables.collectionSlug}`);
         return JSON.parse(cachedData);
       }
-      // console.log(`[DEBUG] Cache miss for ${variables.collectionSlug}`);
     } catch (error) {
       console.error('Error reading collection items from cache:', error);
     }
@@ -600,7 +637,7 @@ export async function fetchOpenSeaCollectionItems(
         }
 
         // Fetch data
-        return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount);
+        return await fetchCollectionItemsRecursive(variables, allItems, cursor, 1, taskId, expectedCount);
       });
 
       if (result) {
@@ -620,7 +657,7 @@ export async function fetchOpenSeaCollectionItems(
       throw new Error('Failed to acquire lock for collection items fetch');
     } else {
       // For paginated requests, fetch directly without lock
-      return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount);
+      return await fetchCollectionItemsRecursive(variables, allItems, cursor, 1, taskId, expectedCount);
     }
   } catch (error) {
     // Enhanced error logging
@@ -644,12 +681,12 @@ export async function fetchOpenSeaCollectionItems(
 // Helper function for recursive fetching
 async function fetchCollectionItemsRecursive(
   variables: CollectionItemsQueryVariables,
-  allTokenIds: string[] = [],
+  allItems: CollectionItemResult[] = [],
   cursor?: string,
   pageNumber: number = 1,
   taskId?: string,
   expectedCount?: number
-): Promise<string[]> {
+): Promise<CollectionItemResult[]> {
   const queryVariables = {
     ...variables,
     cursor: cursor
@@ -669,19 +706,22 @@ async function fetchCollectionItemsRecursive(
 
     // Check if collectionItems is null
     if (!data?.data?.collectionItems) {
-      if (allTokenIds.length > 0) {
-        return [...new Set(allTokenIds)];
+      if (allItems.length > 0) {
+        return dedupeCollectionItems(allItems);
       }
       return [];
     }
-    const tokenIds = data.data.collectionItems.items.map((item) => item.tokenId);
+    const pageItems: CollectionItemResult[] = data.data.collectionItems.items.map((item) => ({
+      tokenId: item.tokenId,
+      contractAddress: item.contractAddress,
+    }));
 
-    if (tokenIds.length === 0 && allTokenIds.length > 0) {
-      return [...new Set(allTokenIds)];
+    if (pageItems.length === 0 && allItems.length > 0) {
+      return dedupeCollectionItems(allItems);
     }
 
     // Add current page's token IDs to our accumulated list
-    const updatedTokenIds = [...allTokenIds, ...tokenIds];
+    const updatedItems = [...allItems, ...pageItems];
 
     // Update processing percentage if taskId is provided
     if (taskId) {
@@ -691,7 +731,7 @@ async function fetchCollectionItemsRecursive(
         // Calculate percentage based on tokens fetched vs expected
         let percentage = 0;
         if (expectedCount && expectedCount > 0) {
-          percentage = Math.min(95, (updatedTokenIds.length / expectedCount) * 100);
+          percentage = Math.min(95, (updatedItems.length / expectedCount) * 100);
         } else {
           // If no expected count, use a more conservative progress estimate
           // Assuming average collection size and 100 items per page
@@ -715,7 +755,7 @@ async function fetchCollectionItemsRecursive(
     const nextCursor = data.data.collectionItems.nextPageCursor;
 
     if (nextCursor) {
-      return fetchCollectionItemsRecursive(variables, updatedTokenIds, nextCursor, pageNumber + 1, taskId, expectedCount);
+      return fetchCollectionItemsRecursive(variables, updatedItems, nextCursor, pageNumber + 1, taskId, expectedCount);
     }
 
     // Reset processing percentage when done
@@ -730,17 +770,28 @@ async function fetchCollectionItemsRecursive(
       }
     }
 
-    const uniqueTokenIds = [...new Set(updatedTokenIds)];
-
-    return uniqueTokenIds;
+    return dedupeCollectionItems(updatedItems);
   } catch (error) {
     // Return what we have so far instead of failing completely
-    if (allTokenIds.length > 0) {
-      // console.log(`[WARN] Returning partial results (${allTokenIds.length} tokens) due to error`);
-      return [...new Set(allTokenIds)];
+    if (allItems.length > 0) {
+      return dedupeCollectionItems(allItems);
     }
     throw error;
   }
+}
+
+function dedupeCollectionItems(items: CollectionItemResult[]): CollectionItemResult[] {
+  const unique = new Map<string, CollectionItemResult>();
+  for (const item of items) {
+    if (!item?.tokenId) {
+      continue;
+    }
+    const key = `${item.contractAddress?.toLowerCase() ?? ''}:${item.tokenId}`;
+    if (!unique.has(key)) {
+      unique.set(key, item);
+    }
+  }
+  return Array.from(unique.values());
 }
 
 interface TraitValue {
@@ -873,6 +924,7 @@ async function fetchOpenseaTraitsRecursive(
       },
     })
   );
+
 
   if (!data?.data?.collectionBySlug?.attributes) {
     await logger.logOpenseaCollectionError(`No attributes found for collection ${slug}`, {
@@ -1149,6 +1201,7 @@ interface CollectionItem {
   name: string;
   imageUrl: string;
   tokenId: string;
+  contractAddress: string;
   bestListing: BestListing | null;
   lastSale: LastSale | null;
   rarity: Rarity;

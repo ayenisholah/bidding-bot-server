@@ -5982,8 +5982,8 @@ async function updateTaskData(task: ITask) {
             };
 
             const items = await fetchOpenSeaCollectionItems(variable);
-            openseaTokens.push(...items);
-            magicedenTokens.push(...items.map(id => Number(id)))
+            openseaTokens.push(...items.map((item) => item.tokenId));
+            magicedenTokens.push(...items.map((item) => Number(item.tokenId)))
           })
         )
       } else if (currentTask.traitsOperator.value === "and") {
@@ -6000,8 +6000,8 @@ async function updateTaskData(task: ITask) {
           },
         };
         const items = await fetchOpenSeaCollectionItems(variable);
-        openseaTokens.push(...items);
-        magicedenTokens.push(...items.map(id => Number(id)))
+        openseaTokens.push(...items.map((item) => item.tokenId));
+        magicedenTokens.push(...items.map((item) => Number(item.tokenId)))
       }
 
       openseaTokens = [...openseaBottonListings, ...taskTokenIds, ...openseaTokens];
@@ -11560,7 +11560,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         let tokenCounterbidsQueued = 0;
 
         // Check if we have existing token offers on any of these tokens
-        for (const tokenId of tokensWithTrait) {
+        for (const { tokenId } of tokensWithTrait) {
           const tokenOrders = await Order.find({
             slug: task.contract.slug,
             taskId: task._id,
@@ -11933,14 +11933,23 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const bidDetails = `${formattedBidAmout} ${symbol.toUpperCase()}`
     const extraDetails = `${incomingBidAmount / Math.pow(10, decimal)} ${currencySymbol.toUpperCase()}`
 
-    const tokenId = data.event === "item_received_bid" ? data.payload.payload.protocol_data.parameters.consideration.find((item: any) => item.token.toLowerCase() === task.contract.contractAddress.toLowerCase()).identifierOrCriteria : null
+    const considerationItems = data?.payload?.payload?.protocol_data?.parameters?.consideration
+    const tokenConsideration = data.event === "item_received_bid"
+      ? considerationItems?.find((item: any) => item?.token?.toLowerCase() === task.contract.contractAddress.toLowerCase())
+      : null
+    const rawTokenId = tokenConsideration?.identifierOrCriteria
+    const tokenId = rawTokenId !== undefined && rawTokenId !== null ? rawTokenId : null
 
     const trait = data.event === "trait_offer" ? {
       type: data.payload.payload.trait_criteria.trait_type,
       value: data.payload.payload.trait_criteria.trait_name
     } : null
 
-    const orderHash = data.payload.payload.order_hash
+    const orderHash = data?.payload?.payload?.order_hash
+
+    if (data.event === "item_received_bid" && tokenId === null) {
+      return;
+    }
 
     const detectedBidType = tokenId ? 'token' : (trait ? 'trait' : 'collection');
 
@@ -12375,7 +12384,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         let tokenCounterbidsQueued = 0;
 
         // Check if we have existing token offers on any of these tokens
-        for (const tokenId of tokensWithTrait) {
+        for (const { tokenId } of tokensWithTrait) {
           const tokenOrders = await Order.find({
             slug: task.contract.slug,
             taskId: task._id,
@@ -13575,7 +13584,7 @@ async function performMarketplacePreprocessing(
                 if (items.length === 0) {
                 } else if (items.length >= 2000) {
                 }
-                traitTokens.push(...items);
+                traitTokens.push(...items.map((item) => item.tokenId));
               } catch (error) {
                 console.error(RED + `[ERROR] Failed to fetch trait items for ${task.contract.slug}: ${error}` + RESET);
                 // Continue without trait tokens rather than failing completely
@@ -13606,7 +13615,7 @@ async function performMarketplacePreprocessing(
             if (items.length === 0) {
             } else if (items.length >= 2000) {
             }
-            traitTokens.push(...items);
+            traitTokens.push(...items.map((item) => item.tokenId));
           } catch (error) {
             console.error(RED + `[ERROR] Failed to fetch trait items for ${task.contract.slug}: ${error}` + RESET);
             // Continue without trait tokens rather than failing completely
