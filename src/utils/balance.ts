@@ -3,14 +3,16 @@ import { DistributedLockManager } from "./lock";
 import redisClient from "./redis";
 import { RED, RESET } from "..";
 import { logger, ErrorCategory } from "./logger";
+import { ChainValue, DEFAULT_CHAIN, getProviderForChain, normalizeChainValue } from "./chains";
 
 const getRedis = () => redisClient.getClient()
 
-export async function fetchERC20Balance(walletAddress: string, tokenAddress: string): Promise<number> {
+export async function fetchERC20Balance(walletAddress: string, tokenAddress: string, chain: ChainValue = DEFAULT_CHAIN): Promise<number> {
   const CACHE_EXPIRY_SECONDS = 60;
   const STALE_CACHE_EXPIRY_SECONDS = 3600; // Keep stale cache for 1 hour as fallback
-  const cacheKey = `{erc20_balance:${walletAddress}}:${tokenAddress}`;
-  const staleCacheKey = `{erc20_balance_stale:${walletAddress}}:${tokenAddress}`;
+  const resolvedChain = normalizeChainValue(chain);
+  const cacheKey = `{erc20_balance:${walletAddress}:${resolvedChain}}:${tokenAddress}`;
+  const staleCacheKey = `{erc20_balance_stale:${walletAddress}:${resolvedChain}}:${tokenAddress}`;
 
   // Try to get fresh cached balance first
   try {
@@ -30,7 +32,7 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
     defaultTTLSeconds: CACHE_EXPIRY_SECONDS
   });
 
-  const lockKey = `{erc20_${walletAddress}}_${tokenAddress}`;
+  const lockKey = `{erc20_${walletAddress}:${resolvedChain}}_${tokenAddress}`;
 
   try {
     const result = await lockManager.withLock(
@@ -49,14 +51,7 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
         }
 
         try {
-          // Use Alchemy provider with API key
-          const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY;
-          if (!ALCHEMY_API_KEY) {
-            throw new Error('ALCHEMY_API_KEY environment variable is not set');
-          }
-
-          const { AlchemyProvider } = await import('ethers');
-          const provider = new AlchemyProvider('mainnet', ALCHEMY_API_KEY);
+          const provider = getProviderForChain(resolvedChain);
 
           const tokenContract = new Contract(
             tokenAddress,
@@ -143,11 +138,12 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
   }
 }
 
-export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress: string): Promise<number> {
+export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress: string, chain: ChainValue = DEFAULT_CHAIN): Promise<number> {
   const CACHE_EXPIRY_SECONDS = 60;
   const STALE_CACHE_EXPIRY_SECONDS = 3600; // Keep stale cache for 1 hour as fallback
-  const cacheKey = `{erc20_balance:${walletAddress}}:${tokenAddress}`;
-  const staleCacheKey = `{erc20_balance_stale:${walletAddress}}:${tokenAddress}`;
+  const resolvedChain = normalizeChainValue(chain);
+  const cacheKey = `{erc20_balance:${walletAddress}:${resolvedChain}}:${tokenAddress}`;
+  const staleCacheKey = `{erc20_balance_stale:${walletAddress}:${resolvedChain}}:${tokenAddress}`;
   const startTime = Date.now();
 
   // console.log(`[fetchERC20BalanceFresh] Starting balance fetch for ${walletAddress}/${tokenAddress}`);
@@ -177,21 +173,14 @@ export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress
       defaultTTLSeconds: CACHE_EXPIRY_SECONDS
     });
 
-    const lockKey = `{erc20_${walletAddress}}_${tokenAddress}`;
+    const lockKey = `{erc20_${walletAddress}:${resolvedChain}}_${tokenAddress}`;
 
     try {
       const result = await lockManager.withLock(
         lockKey,
         async () => {
           try {
-            // Use Alchemy provider with API key
-            const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY;
-            if (!ALCHEMY_API_KEY) {
-              throw new Error('ALCHEMY_API_KEY environment variable is not set');
-            }
-
-            const { AlchemyProvider } = await import('ethers');
-            const provider = new AlchemyProvider('mainnet', ALCHEMY_API_KEY);
+            const provider = getProviderForChain(resolvedChain);
 
             const tokenContract = new Contract(
               tokenAddress,

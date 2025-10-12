@@ -20,6 +20,7 @@ import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
 import fs from 'fs';
 import path from 'path';
 import { MAX_PAIN_OVERRIDE_ADDRESS, MAX_PAIN_SLUG, MAX_PAIN_TOKEN_OVERRIDES } from "./maxPainOverrides";
+import { ChainValue, DEFAULT_CHAIN, getChainConfig, getCurrencyAddress, getMarketplaceAddress, getMarketplaceChainIdentifier, getProviderForChain } from "../../utils/chains";
 
 // Performance timing utilitie
 // Ensure logs directory exists
@@ -72,15 +73,16 @@ function extractOpenseaErrorMessage(error: any): string {
 config()
 
 // Pre-calculated constants for better performance
-const OPENSEA_ITEM_ZONE = "0x000056f7000000ece9003ca63978907a00ffd100"
-const OPENSEA_COLLECTION_ZONE = "0x004C00500000aD104D7DBd00e3ae0A5C00560C00"
-const ZONE_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000"
-const CONDUIT_KEY = "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000"
-const SEAPORT_1_6 = "0x0000000000000068f116a894984e2db1123eb395"
-const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1F0DF003000390027140000fAa719"
-const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
-const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
-const SEAPORT_CONTRACT = new ethers.Contract(SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI, provider);
+const OPENSEA_ITEM_ZONE = "0x000056f7000000ece9003ca63978907a00ffd100";
+const OPENSEA_COLLECTION_ZONE = "0x004C00500000aD104D7DBd00e3ae0A5C00560C00";
+const ZONE_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000";
+const CONDUIT_KEY = (
+  "0x0000007b02230091" +
+  "a7ed01230072f700" +
+  "6a004d60a8d4e71d" +
+  "599b8104250f0000"
+);
+const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1F0DF003000390027140000fAa719";
 
 
 const contractMapCache = new Map<string, Record<string, string>>();
@@ -144,23 +146,70 @@ async function resolveContractAddress(collectionSlug: string | undefined, tokenI
 const DIVIDER = 10000n;
 const BASIS_MAP: { [key: number]: number } = { 2: 1e16, 3: 1e15, 4: 1e14 };
 
-// Wallet cache to avoid recreating wallet instances
-const walletCache = new Map<string, Wallet>();
-function getWallet(privateKey: string): Wallet {
-  if (!walletCache.has(privateKey)) {
-    walletCache.set(privateKey, new Wallet(privateKey, provider));
-  }
-  return walletCache.get(privateKey)!;
+const providerCache = new Map<ChainValue, ethers.JsonRpcProvider>();
+const seaportContractCache = new Map<ChainValue, ethers.Contract>();
+const walletSignerCache = new Map<string, Wallet>();
+const domainCache = new Map<ChainValue, { name: string; version: string; chainId: string; verifyingContract: string }>();
+
+function resolveChainValue(chain?: ChainValue | null): ChainValue {
+  const config = getChainConfig(chain ?? DEFAULT_CHAIN);
+  return config.value;
 }
 
+function getSeaportAddress(chain: ChainValue): string {
+  return getMarketplaceAddress(chain, 'opensea') ?? SEAPORT_CONTRACT_ADDRESS;
+}
 
-const domain = {
-  name: 'Seaport',
-  version: '1.6',
-  chainId: '1',
-  verifyingContract: SEAPORT_1_6
-};
+function getOpenseaProvider(chain?: ChainValue | null): ethers.JsonRpcProvider {
+  const resolved = resolveChainValue(chain);
+  if (!providerCache.has(resolved)) {
+    providerCache.set(resolved, getProviderForChain(resolved));
+  }
+  return providerCache.get(resolved)!;
+}
 
+function getSeaportContract(chain?: ChainValue | null): ethers.Contract {
+  const resolved = resolveChainValue(chain);
+  if (!seaportContractCache.has(resolved)) {
+    const provider = getOpenseaProvider(resolved);
+    const seaportAddress = getSeaportAddress(resolved);
+    seaportContractCache.set(resolved, new ethers.Contract(seaportAddress, SEAPORT_MIN_ABI, provider));
+  }
+  return seaportContractCache.get(resolved)!;
+}
+
+function getSeaportDomain(chain?: ChainValue | null, verifyingContract?: string) {
+  const resolved = resolveChainValue(chain);
+  if (!domainCache.has(resolved)) {
+    const config = getChainConfig(resolved);
+    const contractAddress = verifyingContract ?? getSeaportAddress(resolved);
+    domainCache.set(resolved, {
+      name: 'Seaport',
+      version: '1.6',
+      chainId: config.provider.chainId.toString(),
+      verifyingContract: contractAddress
+    });
+  }
+
+  const domain = domainCache.get(resolved)!;
+  if (verifyingContract && domain.verifyingContract.toLowerCase() !== verifyingContract.toLowerCase()) {
+    return {
+      ...domain,
+      verifyingContract
+    };
+  }
+
+  return domain;
+}
+
+function getWallet(privateKey: string, chain?: ChainValue | null): Wallet {
+  const resolved = resolveChainValue(chain);
+  const cacheKey = `${resolved}:${privateKey}`;
+  if (!walletSignerCache.has(cacheKey)) {
+    walletSignerCache.set(cacheKey, new Wallet(privateKey, getOpenseaProvider(resolved)));
+  }
+  return walletSignerCache.get(cacheKey)!;
+}
 const types = {
   OrderComponents: [
     {
@@ -347,12 +396,20 @@ export async function bidOnOpensea(
         return
       }
 
+      const chain = (task.chain as ChainValue) ?? DEFAULT_CHAIN;
+      const seaportAddress = getSeaportAddress(chain);
+      const seaportContract = getSeaportContract(chain);
+      const currencyAddress = currency ?? getCurrencyAddress(chain, "weth") ?? WETH;
+      const usdcAddress = getCurrencyAddress(chain, "usdc") ?? USDC;
+      const currencyLower = currencyAddress.toLowerCase();
+      const isUsdc = currencyLower === usdcAddress.toLowerCase();
+      currency = currencyAddress;
       const openseaMarketplaceFeeBps = getOpenseaMarketplaceFee();
 
 
       // Pre-calculate values
-      const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
-      currencySymbol = currency.toLowerCase() === USDC.toLowerCase() ? "USDC" : "WETH"
+      const decimal = isUsdc ? 6 : 18
+      currencySymbol = isUsdc ? "USDC" : "WETH"
       const offerPriceEth = Number(offer_price) / Math.pow(10, decimal);
 
       let decimals;
@@ -364,18 +421,18 @@ export async function bidOnOpensea(
         decimals = 4;
       }
 
-      const roundedEth = currency.toLowerCase() === USDC.toLowerCase() ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
+      const roundedEth = isUsdc ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
       const basis = BASIS_MAP[decimals] || 1e14;
       const roundedWei = decimal === 18 ? Math.round(roundedEth * Math.pow(10, decimal) / basis) * basis : Math.round(roundedEth * Math.pow(10, decimal))
       const offerPrice = BigInt(roundedWei.toString());
       offerPriceEthFinal = Number(roundedWei) / Math.pow(10, decimal);
 
       // Get wallet from cache
-      const wallet = getWallet(private_key);
+      const wallet = getWallet(private_key, chain);
 
 
       // Fetch balance first
-      const wethBalance = await fetchERC20Balance(wallet_address, currency);
+      const wethBalance = await fetchERC20Balance(wallet_address, currency, chain);
 
       // Balance validation after parallel fetch
       if (offerPriceEthFinal > wethBalance) {
@@ -449,7 +506,7 @@ export async function bidOnOpensea(
 
         }
 
-        const itemSignature = await signOffer(wallet, offer)
+        const itemSignature = await signOffer(chain, wallet, offer)
 
         if (!itemSignature) {
           return
@@ -461,7 +518,7 @@ export async function bidOnOpensea(
           return
         }
 
-        const itemResponse = await postItemOffer(taskId, offer, itemSignature)
+        const itemResponse = await postItemOffer(taskId, offer, itemSignature, chain)
         const itemOrderHash = itemResponse?.order?.order_hash
 
         const sanitizedExpiry = expiry > 900 ? expiry : 900
@@ -516,7 +573,7 @@ export async function bidOnOpensea(
             },
             signature: '0x0'
           },
-          protocol_address: SEAPORT_1_6
+          protocol_address: seaportAddress
         }
         // reset consideration list and count
         payload.protocol_data.parameters.consideration = [];
@@ -536,13 +593,13 @@ export async function bidOnOpensea(
           quantity: 1,
           criteria: payload.criteria,
           offerer: wallet_address,
-          protocol_address: SEAPORT_1_6
+          protocol_address: seaportAddress
         };
 
         // Parallel operations for collection offers
         const [data, counter] = await Promise.all([
-          buildOffer(taskId, buildPayload),
-          SEAPORT_CONTRACT.getCounter(wallet_address)
+          buildOffer(taskId, buildPayload, chain),
+          seaportContract.getCounter(wallet_address)
         ]);
 
         if (!data || !data.partialParameters) {
@@ -597,18 +654,18 @@ export async function bidOnOpensea(
         payload.protocol_data.parameters.counter = counter.toString();
 
         const signObj = await wallet.signTypedData(
-          domain,
+          getSeaportDomain(chain, seaportAddress),
           types,
           payload.protocol_data.parameters
         );
         payload.protocol_data.signature = signObj;
-        payload.protocol_address = SEAPORT_1_6;
+        payload.protocol_address = seaportAddress;
 
         if (isTaskBlacklisted(taskId, 'opensea') || !task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
           return
         }
 
-        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
+        await submitOfferToOpensea(chain, decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
       }
 
       else {
@@ -643,7 +700,7 @@ export async function bidOnOpensea(
             },
             signature: '0x0'
           },
-          protocol_address: SEAPORT_1_6
+          protocol_address: seaportAddress
         }
         // reset consideration list and count
         payload.protocol_data.parameters.consideration = [];
@@ -655,7 +712,7 @@ export async function bidOnOpensea(
         delete payload.criteria.trait
 
 
-        const counter = await SEAPORT_CONTRACT.getCounter(wallet_address)
+        const counter = await seaportContract.getCounter(wallet_address)
 
         // Note: For collection bids without traits, we're using hardcoded data instead of calling buildOffer
         const data = {
@@ -726,17 +783,17 @@ export async function bidOnOpensea(
         payload.protocol_data.parameters.counter = counter.toString();
 
         const signObj = await wallet.signTypedData(
-          domain,
+          getSeaportDomain(chain, seaportAddress),
           types,
           payload.protocol_data.parameters
         );
         payload.protocol_data.signature = signObj;
-        payload.protocol_address = SEAPORT_1_6;
+        payload.protocol_address = seaportAddress;
 
         if (isTaskBlacklisted(taskId, 'opensea') || !task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
           return
         }
-        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
+        await submitOfferToOpensea(chain, decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
       }
 
     } catch (error) {
@@ -751,7 +808,7 @@ export async function bidOnOpensea(
  * Posts an offer to OpenSea.
  * @param payload - The payload of the offer.
  */
-async function submitOfferToOpensea(decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900) {
+async function submitOfferToOpensea(_chain: ChainValue, decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900) {
   const [taskId] = bidCount.split(":")
   if (isTaskBlacklisted(taskId, 'opensea')) {
     return;
@@ -822,7 +879,7 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
  * Builds an offer on OpenSea with request deduplication.
  * @param buildPayload - The payload to build the offer.
  */
-async function buildOffer(taskId: string, buildPayload: any) {
+async function buildOffer(taskId: string, buildPayload: any, _chain?: ChainValue) {
   const controller = new AbortController();
   addActiveRequest(taskId, controller);
 
@@ -873,7 +930,9 @@ async function cancelOrderInternal(orderHash: string, protocolAddress: string, p
 
     const offererSignature = await signCancelOrder(taskId, orderHash, protocolAddress, privateKey);
     if (!offererSignature) return;
-    const url = `${BASE_URL}/opensea/api/v2/orders/chain/ethereum/protocol/${protocolAddress}/${orderHash}/cancel`;
+    const task = activeTasks.get(taskId);
+    const chain = (task?.chain as ChainValue) ?? DEFAULT_CHAIN;
+    const url = `${BASE_URL}/opensea/api/v2/orders/chain/${chain}/protocol/${protocolAddress}/${orderHash}/cancel`;
     const headers = {
       'content-type': 'application/json',
       'x-api-key': API_KEY
@@ -929,14 +988,12 @@ export async function cancelOrderWithoutTracking(orderHash: string, protocolAddr
 async function signCancelOrder(taskId: string, orderHash: string, protocolAddress: string, privateKey: string) {
   if (!orderHash) return
 
-  const wallet = getWallet(privateKey);
-  const domain = {
-    name: 'Seaport',
-    version: '1.6',
-    chainId: '1',
-    verifyingContract: protocolAddress
-  };
-  const types = {
+  const task = activeTasks.get(taskId);
+  const chain = (task?.chain as ChainValue) ?? DEFAULT_CHAIN;
+
+  const wallet = getWallet(privateKey, chain);
+  const domain = getSeaportDomain(chain, protocolAddress);
+  const cancelTypes = {
     OrderHash: [
       { name: 'orderHash', type: 'bytes32' }
     ]
@@ -945,11 +1002,12 @@ async function signCancelOrder(taskId: string, orderHash: string, protocolAddres
   const value = {
     orderHash: orderHash
   };
-  const signature = await wallet.signTypedData(domain, types, value);
+  const signature = await wallet.signTypedData(domain, cancelTypes, value);
   return signature;
 }
 
-async function signOffer(wallet: ethers.Wallet, offer: Record<string, unknown>) {
+async function signOffer(chain: ChainValue, wallet: ethers.Wallet, offer: Record<string, unknown>) {
+  const domain = getSeaportDomain(chain);
   return await wallet.signTypedData(domain, types, offer)
 }
 
@@ -965,9 +1023,11 @@ const getOffer = (priceWei: bigint, currency: string) => {
   ]
 }
 
-async function postItemOffer(taskId: string, offer: unknown, signature: string) {
+async function postItemOffer(taskId: string, offer: unknown, signature: string, chain: ChainValue) {
   const task = activeTasks.get(taskId)
   const slug = task?.contract?.slug?.toLowerCase()
+  const seaportAddress = getSeaportAddress(chain);
+  const chainIdentifier = getMarketplaceChainIdentifier(chain, 'opensea');
 
   const parameters = offer as any
 
@@ -983,11 +1043,11 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string) 
   const payload = {
     parameters,
     signature,
-    protocol_address: SEAPORT_CONTRACT_ADDRESS,
+    protocol_address: seaportAddress,
   }
 
   try {
-    const { data } = await limiter.schedule(() => axiosInstance.post(`${BASE_URL}/opensea/api/v2/orders/ethereum/seaport/offers`, payload, {
+    const { data } = await limiter.schedule(() => axiosInstance.post(`${BASE_URL}/opensea/api/v2/orders/${chainIdentifier}/seaport/offers`, payload, {
       headers: {
         'content-type': 'application/json',
         'x-api-key': API_KEY,
@@ -1047,7 +1107,8 @@ const getItemTokenConsideration = (
   }
 }
 
-export async function fetchItemOffers(contractAddress: string, tokenId: string) {
+export async function fetchItemOffers(contractAddress: string, tokenId: string, chain: ChainValue | null = DEFAULT_CHAIN) {
+  const chainIdentifier = getMarketplaceChainIdentifier(chain, 'opensea');
   const query = {
     operationName: "UseItemOffersQuery",
     query: `query UseItemOffersQuery($filter: ItemOffersFilter, $cursor: String, $limit: Int!, $address: Address, $identifier: ItemIdentifierInput!) {
@@ -1155,12 +1216,12 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
     variables: {
       address: "0x1b8afd0de8a9368ce635be8b9572c65d8f590b21",
       filter: {
-        chain: "ethereum",
+        chain: chainIdentifier,
         contractAddress: contractAddress,
         tokenId: tokenId
       },
       identifier: {
-        chain: "ethereum",
+        chain: chainIdentifier,
         contractAddress: contractAddress,
         tokenId: tokenId
       },

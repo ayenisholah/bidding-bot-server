@@ -34,7 +34,7 @@ import Task, { ITask, SelectedTraits } from "./models/task.model";
 import { Queue, Worker, Job, JobType, JobsOptions, QueueEvents, QueueOptions } from "bullmq";
 import Wallet, { IWallet } from "./models/wallet.model";
 import redisClient, { createBullMQConnection, checkBullMQConnectionsHealth, closeAllBullMQConnections, getBullMQConnections } from "./utils/redis";
-import { BASE_URL, ERC20_MIN_ABI } from "./constants";
+import { BASE_URL, ERC20_MIN_ABI, OPENSEA_PROTOCOL_ADDRESS, SEAPORT_SPENDER_ADDRESS } from "./constants";
 import { Contract, ethers, Wallet as Web3Wallet, parseEther, MaxUint256 } from "ethers";
 import { DistributedLockManager } from "./utils/lock";
 import { TaskStateManager } from "./utils/task-state-manager";
@@ -45,6 +45,7 @@ import PQueue from "p-queue";
 import Order from "./models/order.model";
 import Approval from "./models/approval.model";
 import { USDC, WETH } from "./utils/currencies";
+import { ChainValue, DEFAULT_CHAIN, getCurrencyAddress, getCurrencyDecimals, getMarketplaceAddress, getMarketplaceSpender, getProviderForChain, normalizeChainValue, resolveOpenseaSpender } from "./utils/chains";
 import axios from "axios";
 import { decryptPrivateKey, setPassword, getPassword, decryptPassword, recoverPasswordFromRedis, renewPasswordTTL, reEncryptWallet, clearDecryptedKeyCache } from "./utils/crypto";
 import { fetchWalletNFTs } from "./utils/nft";
@@ -255,7 +256,6 @@ const allowedOrigins = [
   `https://${USERNAME}.nfttools.io`
 ];
 
-const SEAPORT = '0x1e0049783f008a0085193e00003d00cd54003c71';
 
 const TOKEN_BID_PRIORITY = {
   OPENSEA: 2,
@@ -1064,7 +1064,6 @@ function getCancellationJobOptions(taskId: string, orderId: string, jobType: str
 const MAGICEDEN_MARKETPLACE = "0x9A1D00bEd7CD04BCDA516d721A596eb22Aac6834"
 const MAX_RETRIES: number = 5;
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
-const OPENSEA_PROTOCOL_ADDRESS = "0x0000000000000068F116a894984e2DB1123eB395"
 const STANDARD_INTERVAL = 60000; // 60 seconds - standard interval for most timers
 const HEALTH_CHECK_INTERVAL = process.env.NODE_ENV === 'development' ? 5000 : 60000; // 5 seconds in dev, 60 seconds in prod
 // Initialize with default marketplaces - will be updated by WebSocket
@@ -7367,43 +7366,53 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
     }
 
     const privateKey = decryptPrivateKey(wallet.encryptedPrivateKey);
+    const chain = normalizeChainValue(task?.chain as ChainValue);
     const validMarketplaces = ["opensea", "magiceden", "blur"];
     const selectedMarketplaces = marketplace ? [marketplace.toLowerCase()] : task.selectedMarketplaces.map(m => m.toLowerCase());
     const marketplacesToApprove = selectedMarketplaces.filter(m => validMarketplaces.includes(m));
 
     // Parallel approval checks with caching
     const approvalPromises = marketplacesToApprove.map(async (mp) => {
-      let marketplaceAddress: string;
+      const normalizedMarketplace = mp.toLowerCase();
 
-      switch (mp) {
-        case "opensea":
-          marketplaceAddress = SEAPORT;
-          break;
-        case "magiceden":
-          marketplaceAddress = MAGICEDEN_MARKETPLACE;
-          break;
-        case "blur":
-          // Blur doesn't require WETH approval - skip
-          return { marketplace: mp, approved: true, cached: false };
-        default:
-          return { marketplace: mp, approved: false, cached: false };
+      if (normalizedMarketplace === "blur") {
+        return { marketplace: mp, approved: true, cached: false };
+      }
+
+      const marketplaceAddress = getMarketplaceAddress(chain, normalizedMarketplace as 'opensea' | 'magiceden');
+      if (!marketplaceAddress) {
+        return { marketplace: mp, approved: false, cached: false };
+      }
+
+      const currencyAddress = getCurrencyAddress(chain, "weth") ?? WETH;
+      let spender = marketplaceAddress;
+      if (normalizedMarketplace === "opensea") {
+        const keyOrAddress = getMarketplaceSpender(chain, 'opensea') ?? SEAPORT_SPENDER_ADDRESS;
+        const resolvedSpender = await resolveOpenseaSpender(chain, keyOrAddress);
+        spender = resolvedSpender ?? SEAPORT_SPENDER_ADDRESS;
       }
 
       // Check cache first
-      const cached = await approvalCache.isApproved(wallet.address, marketplaceAddress, WETH);
+      const cached = await approvalCache.isApproved(
+        wallet.address,
+        spender,
+        currencyAddress,
+        MaxUint256.toString(),
+        chain
+      );
       if (cached) {
         return { marketplace: mp, approved: true, cached: true };
       }
 
-      const approved = await approveMarketplace(marketplaceAddress, privateKey, WETH);
+      const approved = await approveMarketplace(spender, privateKey, chain, currencyAddress);
 
       if (approved) {
         // Update cache with successful approval
-        await approvalCache.setApproval(wallet.address, marketplaceAddress, WETH, {
+        await approvalCache.setApproval(wallet.address, spender, currencyAddress, {
           approved: true,
           timestamp: Date.now(),
           allowance: MaxUint256.toString()
-        });
+        }, chain);
       }
 
       return { marketplace: mp, approved, cached: false };
@@ -11867,6 +11876,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       return;
     }
 
+    const chain = normalizeChainValue(currentTask.chain as ChainValue);
+
     if (!currentTask?.running) {
       return;
     }
@@ -12125,7 +12136,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         return;
       }
 
-      const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth, currency)
+      const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth, currency, chain)
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
 
       offerPrice = Math.ceil((openseaOutbidMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)))
@@ -12324,7 +12335,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         return
       }
 
-      const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth, currency)
+      const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth, currency, chain)
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
       offerPrice = Math.ceil((openseaOutbidMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)))
       const offerPriceEth = offerPrice / Math.pow(10, decimal)
@@ -12533,7 +12544,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         marketplace: OPENSEA.toLowerCase()
       });
 
-      const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth, currency)
+      const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth, currency, chain)
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
       const baseOfferPrice = Math.ceil((openseaOutbidMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)))
       const baseOfferPriceEth = baseOfferPrice / Math.pow(10, decimal)
@@ -13435,8 +13446,39 @@ function hashBid(data: any): string {
     .digest('hex');
 }
 
-function calculateOutbidMargin(currentPrice: number, currency = WETH): number {
-  if (currency === USDC) return 0.01
+function isCurrencyMatch(currency: string, symbol: 'usdc' | 'weth', chain?: ChainValue | null): boolean {
+  const normalizedCurrency = currency?.toLowerCase?.() ?? '';
+  if (!normalizedCurrency) {
+    return false;
+  }
+
+  const chainsToCheck = new Set<ChainValue>([DEFAULT_CHAIN]);
+  if (chain) {
+    chainsToCheck.add(normalizeChainValue(chain));
+  }
+  const baseChain = 'base' as ChainValue;
+  chainsToCheck.add(baseChain);
+
+  const addresses = new Set<string>();
+  if (symbol === 'usdc') {
+    addresses.add(USDC.toLowerCase());
+  } else {
+    addresses.add(WETH.toLowerCase());
+  }
+
+  chainsToCheck.forEach((chainValue) => {
+    const chainAddress = getCurrencyAddress(chainValue, symbol);
+    if (chainAddress) {
+      addresses.add(chainAddress.toLowerCase());
+    }
+  });
+
+  return addresses.has(normalizedCurrency);
+}
+
+function calculateOutbidMargin(currentPrice: number, currency = WETH, chain?: ChainValue | null): number {
+  const normalizedChain = chain ? normalizeChainValue(chain) : DEFAULT_CHAIN;
+  if (isCurrencyMatch(currency, 'usdc', normalizedChain)) return 0.01;
   if (currentPrice < 0.1) {
     return 0.0001;
   } else if (currentPrice < 1) {
@@ -14117,6 +14159,7 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
 
         const WALLET_ADDRESS: string = currentTask.wallet;
         const wallets = await walletCache.getWalletById(currentTask.walletId);
+        const chain = normalizeChainValue(currentTask.chain as ChainValue);
 
         // Extend lock before fetching balances
         if (lockAcquired) {
@@ -14127,8 +14170,8 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
         let wethBalance = 0;
         try {
           const { fetchERC20BalanceFresh } = await import('./utils/balance');
-          const { WETH } = await import('./utils/currencies');
-          wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, WETH);
+          const chainWeth = getCurrencyAddress(chain, 'weth') ?? WETH;
+          wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, chainWeth, chain);
         } catch (error) {
           console.error(`${RED}[OpenSea] Failed to fetch WETH balance: ${error}${RESET}`);
         }
@@ -14514,6 +14557,8 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     }
 
 
+    const chain = normalizeChainValue(currentTask.chain as ChainValue);
+
     const { collectionDetails } = data;
     const jobId = `opensea-collection-${currentTask.contract.slug}`;
 
@@ -14582,7 +14627,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency);
+    const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency, chain);
     log("processing", "Fetched wallet balance for collection bid", {
       wallet: currentTask.wallet,
       balance,
@@ -14638,7 +14683,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     const expiry = getExpiry(currentTask.bidDuration)
     log("processing", "Calculated expiry for collection bid", { bidDuration: currentTask.bidDuration, expiry });
 
-    const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
+    const usdcBid = isCurrencyMatch(currency, 'usdc', chain);
     let offerPrice = BigInt(Math.ceil(roundToValidPrecision(offerPriceEth) * Math.pow(10, decimal)));
     log("bid_calculation", "Derived base offer price", {
       offerPriceEth,
@@ -14695,7 +14740,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
       const secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal)
 
-      const outbidMargin = calculateOutbidMargin(highestBidAmount ? highestBidAmount / Math.pow(10, decimal) : offerPriceEth, currency);
+      const outbidMargin = calculateOutbidMargin(highestBidAmount ? highestBidAmount / Math.pow(10, decimal) : offerPriceEth, currency, chain);
       log("bid_calculation", "Calculated outbid metrics", {
         highestBidAmount,
         secondTopBidAmount,
@@ -16528,6 +16573,8 @@ async function processOpenseaTraitBid(data: {
     const currentTask = activeTasks.get(_id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Task not running or marketplace not selected', metadata: { running: currentTask?.running, selected: currentTask?.selectedMarketplaces } }); } catch { }; return; }
 
+    const chain = normalizeChainValue(currentTask.chain as ChainValue);
+
 
     // Initialize stats early
     if (!floorPrices[_id]) {
@@ -16588,7 +16635,7 @@ async function processOpenseaTraitBid(data: {
 
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const balance = await fetchERC20BalanceFresh(address, currency);
+    const balance = await fetchERC20BalanceFresh(address, currency, chain);
 
     if (balance < minBidPriceEth) {
       skipStats[_id]['opensea']++;
@@ -16605,7 +16652,7 @@ async function processOpenseaTraitBid(data: {
 
     const outbidOptions = currentTask.outbidOptions
 
-    const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
+    const usdcBid = isCurrencyMatch(currency, 'usdc', chain);
     let traitOffer = BigInt(Math.round(roundToValidPrecision(offerPriceEth) * Math.pow(10, decimal)))
     const [order, ...remainingOrders] = orders
     const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
@@ -16629,7 +16676,7 @@ async function processOpenseaTraitBid(data: {
       const [topOffer, secondOffer] = offers as unknown as OpenseaOfferData[]
       const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
       const secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal)
-      const outbidMargin = calculateOutbidMargin(highestBidAmount ? highestBidAmount / Math.pow(10, decimal) : offerPriceEth, currency);
+      const outbidMargin = calculateOutbidMargin(highestBidAmount ? highestBidAmount / Math.pow(10, decimal) : offerPriceEth, currency, chain);
 
       const owner = topOffer && typeof topOffer === 'object' ? topOffer.owner?.toLowerCase() : '';
       const isOwnBid = walletsArr
@@ -16819,6 +16866,8 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     const currentTask = activeTasks.get(_id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) { try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Task not running or marketplace not selected', metadata: { running: currentTask?.running, selected: currentTask?.selectedMarketplaces } }); } catch { }; return; }
 
+    const chain = normalizeChainValue(currentTask.chain as ChainValue);
+
 
     // Initialize stats early
     if (!floorPrices[_id]) {
@@ -16887,11 +16936,11 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     const { maxBidPriceEth, offerPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
     const outbidOptions = currentTask.outbidOptions
     const expiry = getExpiry(currentTask.bidDuration)
-    const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
+    const usdcBid = isCurrencyMatch(currency, 'usdc', chain);
 
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const balance = await fetchERC20BalanceFresh(address, currency);
+    const balance = await fetchERC20BalanceFresh(address, currency, chain);
 
     if (balance < minBidPriceEth) {
       skipStats[_id]['opensea']++;
@@ -16926,13 +16975,13 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       // Parallel fetch: wallets and item offers
       const [walletsArr, highestBid] = await Promise.all([
         walletCache.getAllWallets(),
-        fetchItemOffers(asset.contractAddress, asset.tokenId.toString())
+        fetchItemOffers(asset.contractAddress, asset.tokenId.toString(), chain)
       ]);
       const [topOffer, secondOffer] = highestBid
 
       const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
       const secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal)
-      const outbidMargin = calculateOutbidMargin(highestBidAmount ? highestBidAmount / Math.pow(10, decimal) : offerPriceEth, currency);
+      const outbidMargin = calculateOutbidMargin(highestBidAmount ? highestBidAmount / Math.pow(10, decimal) : offerPriceEth, currency, chain);
 
       const owner = topOffer && typeof topOffer === 'object' ? topOffer.owner?.toLowerCase() : '';
       const isOwnBid = walletsArr
@@ -23274,6 +23323,7 @@ export function getExpiry(bidDuration: { value: number; unit: string }) {
 
 async function calculateBidPrice(task: ITask, floorPrice: number, marketplaceName: "opensea" | "magiceden" | "blur"):
   Promise<{ offerPriceEth: number; maxBidPriceEth: number, minBidPriceEth: number, currencyType: string, currency: string, decimal: number, currencySymbol: string }> {
+  const chain = normalizeChainValue(task.chain as ChainValue);
   const isGeneralBidPrice = task.bidPriceType === "GENERAL_BID_PRICE";
 
   const marketplaceBidPrice = marketplaceName.toLowerCase() === "blur" ? task.blurBidPrice
@@ -23336,10 +23386,10 @@ async function calculateBidPrice(task: ITask, floorPrice: number, marketplaceNam
     minBidPriceEth = Math.round(Math.round(minBidPriceEth * 1000000) / 1000000 * 100) / 100;
   }
   const currencyType = bidPrice.minType === "percentage" ? "eth" : bidPrice.minType
-  const currency = currencyType === "usdc" ? USDC : WETH
-
-  const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
-  const currencySymbol = currencyType === "usdc" ? "usdc" : "weth"
+  const currencyKey = currencyType === "usdc" ? "usdc" : "weth";
+  const currency = getCurrencyAddress(chain, currencyKey) ?? (currencyKey === "usdc" ? USDC : WETH);
+  const decimal = getCurrencyDecimals(chain, currencyKey) ?? (currencyKey === "usdc" ? 6 : 18);
+  const currencySymbol = currencyKey;
 
   return { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencyType, currency, decimal, currencySymbol: currencySymbol.toUpperCase() };
 }
@@ -23912,12 +23962,17 @@ async function withRetry<T>(fn: () => Promise<T>, retries = MAX_RETRIES): Promis
 }
 
 /**
- * Approves a marketplace contract to spend WETH on behalf of a wallet
- * @param marketplace The marketplace contract address to approve (e.g. Seaport, MagicEden)
+ * Approves a marketplace spender (e.g. Seaport conduit) to spend WETH on behalf of a wallet
+ * @param spender The spender contract address to approve (e.g. Seaport conduit, MagicEden)
  * @param privateKey The private key of the wallet to approve from
  * @returns Promise<boolean> Whether the approval was successful
  */
-async function approveMarketplace(marketplace: string, privateKey: string, currency = WETH): Promise<boolean> {
+async function approveMarketplace(
+  spender: string,
+  privateKey: string,
+  chain: ChainValue = DEFAULT_CHAIN,
+  currencyAddress?: string
+): Promise<boolean> {
 
   // Helper function to delay execution
 
@@ -23925,7 +23980,7 @@ async function approveMarketplace(marketplace: string, privateKey: string, curre
   try {
     // Set up provider and wallet with retry
     const provider = await withRetry(async () => {
-      const p = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
+      const p = getProviderForChain(chain);
       // Test the connection
       await p.getNetwork();
       return p;
@@ -23934,17 +23989,24 @@ async function approveMarketplace(marketplace: string, privateKey: string, curre
     const wallet = new Web3Wallet(privateKey, provider);
     const address = (await wallet.address).toLowerCase();
 
+    const currencyContractAddress = currencyAddress ?? getCurrencyAddress(chain, 'weth') ?? WETH;
+    const currencyKey = currencyContractAddress.toLowerCase();
+    const addressKey = chain === DEFAULT_CHAIN ? address : `${address}:${chain}`;
+
     // Create unique key for tracking approvals
-    const approvalKey = `{${address}}:${marketplace.toLowerCase()}:${currency.toLowerCase()}`;
+    const approvalKey = `{${address}}:${spender.toLowerCase()}:${currencyKey}:${chain}`;
 
     // Check if approval already exists in database
-    const existingApproval = await Approval.findOne({ address, currency });
+    const existingApproval = await Approval.findOne({ address: addressKey, currency: currencyContractAddress });
 
     // Return early if marketplace is already approved
-    if (marketplace.toLowerCase() === SEAPORT.toLowerCase() && existingApproval?.openseaApproval) {
+    const marketplaceSpender = getMarketplaceSpender(chain, 'opensea') ?? SEAPORT_SPENDER_ADDRESS;
+    const resolvedOpenSeaSpender = await resolveOpenseaSpender(chain, marketplaceSpender);
+    const isOpensea = !!resolvedOpenSeaSpender && ethers.isAddress(spender) && (spender.toLowerCase() === resolvedOpenSeaSpender.toLowerCase());
+    if (isOpensea && existingApproval?.openseaApproval) {
       return true;
     }
-    if (marketplace.toLowerCase() === MAGICEDEN.toLowerCase() && existingApproval?.magicedenApproval) {
+    if (!isOpensea && existingApproval?.magicedenApproval) {
       return true;
     }
 
@@ -23957,12 +24019,26 @@ async function approveMarketplace(marketplace: string, privateKey: string, curre
     const approvalPromise = (async () => {
       try {
         // Create WETH contract instance
-        const erc20Contract = new Contract(currency, ERC20_MIN_ABI, wallet);
+        const erc20Contract = new Contract(currencyContractAddress, ERC20_MIN_ABI, wallet);
 
         // Check if sufficient allowance already exists on blockchain with retry
         const allowance = await withRetry(async () => {
-          const result = await erc20Contract.allowance(address, marketplace);
-          return result;
+          try {
+            const result = await erc20Contract.allowance(address, spender);
+            return result;
+          } catch (error: any) {
+            if (error?.code === 'BAD_DATA') {
+              logSystemWarn('MarketplaceApproval', 'Allowance decode failed, retrying as zero', {
+                walletAddress: address,
+                spender,
+                chain,
+                currencyContractAddress,
+                errorMessage: error?.message
+              });
+              return 0n;
+            }
+            throw error;
+          }
         });
 
         if (allowance >= (MaxUint256 / 2n)) {
@@ -23973,7 +24049,7 @@ async function approveMarketplace(marketplace: string, privateKey: string, curre
 
         // Submit approval transaction for maximum amount with retry
         const tx = await withRetry(async () => {
-          const transaction = await erc20Contract.approve(marketplace, MaxUint256);
+          const transaction = await erc20Contract.approve(spender, MaxUint256);
           return transaction;
         });
 
@@ -23982,24 +24058,24 @@ async function approveMarketplace(marketplace: string, privateKey: string, curre
         });
 
         // Update database with new approval
-        const updateData = marketplace.toLowerCase() === SEAPORT.toLowerCase()
+        const updateData = isOpensea
           ? { openseaApproval: true }
           : { magicedenApproval: true };
 
         if (!existingApproval) {
           await Approval.create({
-            address,
-            currency: currency,
+            address: addressKey,
+            currency: currencyContractAddress,
             ...updateData
           });
         } else {
-          await Approval.updateOne({ address }, updateData);
+          await Approval.updateOne({ address: addressKey, currency: currencyContractAddress }, updateData);
         }
 
         return true;
       } catch (error: any) {
-        logSystemError('MarketplaceApproval', `Approval failed for ${marketplace}`, error, {
-          marketplace,
+        logSystemError('MarketplaceApproval', `Approval failed for ${spender}`, error, {
+          marketplace: spender,
           errorMessage: error.message,
           code: error.code,
           reason: error.reason,

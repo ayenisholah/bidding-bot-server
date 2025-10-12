@@ -7,7 +7,7 @@ import { getCollectionDetails } from "../../functions/collection";
 
 const BLUE = '\x1b[34m';
 const RESET = '\x1b[0m';
-import { BASE_URL, domain, minABI, NETWORK } from "../../constants";
+import { BASE_URL, OPENSEA_PROTOCOL_ADDRESS, domain, minABI, NETWORK } from "../../constants";
 import Listing from "../../models/listing.model";
 import { logger } from "../../utils/logger";
 import { convertDurationForOpenSea } from "../../utils/duration";
@@ -218,7 +218,7 @@ export const listOnOpensea = async (
       },
       signature: '0x0'
     },
-    protocol_address: '0x0000000000000068f116a894984e2db1123eb395'
+    protocol_address: OPENSEA_PROTOCOL_ADDRESS
   };
 
   listingPayload.parameters = listingPayload.protocol_data.parameters;

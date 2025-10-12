@@ -12,7 +12,7 @@ import { withRetry } from '../../utils/db-retry';
 import redisClient from '../../utils/redis';
 import axios from "axios";
 import { USDC, WETH } from "../../utils/currencies";
-import { BASE_URL } from "../../constants";
+import { BASE_URL, OPENSEA_PROTOCOL_ADDRESS } from "../../constants";
 import { fetchERC20Balance } from "../../utils/balance";
 import { convertBigNumbers } from "../../utils/bigNumberConverter";
 import { logger, DatabaseOperation, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
@@ -104,7 +104,7 @@ const domainCache = {
   name: "Seaport",
   version: "1.6",
   chainId: 1,
-  verifyingContract: "0x0000000000000068f116a894984e2db1123eb395"
+  verifyingContract: OPENSEA_PROTOCOL_ADDRESS
 };
 
 const typesCache = {

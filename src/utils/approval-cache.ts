@@ -1,10 +1,8 @@
 import { ethers } from 'ethers';
 import { ERC20_MIN_ABI } from '../constants';
 import { getRedisConnection } from './redis';
-
-// Create provider instance
-const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
-const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
+import { ChainValue, DEFAULT_CHAIN, getProviderForChain, normalizeChainValue } from './chains';
+import { logger, ErrorCategory } from './logger';
 
 interface ApprovalCacheEntry {
   approved: boolean;
@@ -21,8 +19,8 @@ class ApprovalCache {
   /**
    * Get cache key for wallet/marketplace/token combination
    */
-  private getCacheKey(walletAddress: string, marketplaceAddress: string, tokenAddress: string): string {
-    return `${walletAddress}:${marketplaceAddress}:${tokenAddress}`.toLowerCase();
+  private getCacheKey(walletAddress: string, spenderAddress: string, tokenAddress: string, chain: ChainValue): string {
+    return `${walletAddress}:${spenderAddress}:${tokenAddress}:${chain}`.toLowerCase();
   }
 
   /**
@@ -30,11 +28,13 @@ class ApprovalCache {
    */
   async isApproved(
     walletAddress: string,
-    marketplaceAddress: string,
+    spenderAddress: string,
     tokenAddress: string,
-    requiredAmount: string = ethers.MaxUint256.toString()
+    requiredAmount: string = ethers.MaxUint256.toString(),
+    chain: ChainValue = DEFAULT_CHAIN
   ): Promise<boolean> {
-    const key = this.getCacheKey(walletAddress, marketplaceAddress, tokenAddress);
+    const resolvedChain = normalizeChainValue(chain);
+    const key = this.getCacheKey(walletAddress, spenderAddress, tokenAddress, resolvedChain);
 
     // Check memory cache first
     const memoryCache = this.cache.get(key);
@@ -59,8 +59,25 @@ class ApprovalCache {
 
     // Cache miss - check on-chain
     try {
+      const provider = getProviderForChain(resolvedChain);
       const tokenContract = new ethers.Contract(tokenAddress, ERC20_MIN_ABI, provider);
-      const allowance = await tokenContract.allowance(walletAddress, marketplaceAddress);
+      let allowance: bigint;
+      try {
+        allowance = await tokenContract.allowance(walletAddress, spenderAddress);
+      } catch (error: any) {
+        if (error?.code === 'BAD_DATA') {
+          await logger.logWarning(ErrorCategory.BLOCKCHAIN, 'Allowance decode failed, treating as zero', {
+            walletAddress,
+            spenderAddress,
+            tokenAddress,
+            chain: resolvedChain,
+            errorMessage: error?.message
+          });
+          allowance = 0n;
+        } else {
+          throw error;
+        }
+      }
       const approved = BigInt(allowance) >= BigInt(requiredAmount);
 
       // Update both caches
@@ -70,7 +87,7 @@ class ApprovalCache {
         allowance: allowance.toString()
       };
 
-      await this.setApproval(walletAddress, marketplaceAddress, tokenAddress, entry);
+      await this.setApproval(walletAddress, spenderAddress, tokenAddress, entry, resolvedChain);
 
       return approved;
     } catch (error) {
@@ -84,11 +101,13 @@ class ApprovalCache {
    */
   async setApproval(
     walletAddress: string,
-    marketplaceAddress: string,
+    spenderAddress: string,
     tokenAddress: string,
-    entry: ApprovalCacheEntry
+    entry: ApprovalCacheEntry,
+    chain: ChainValue = DEFAULT_CHAIN
   ): Promise<void> {
-    const key = this.getCacheKey(walletAddress, marketplaceAddress, tokenAddress);
+    const resolvedChain = normalizeChainValue(chain);
+    const key = this.getCacheKey(walletAddress, spenderAddress, tokenAddress, resolvedChain);
 
     // Update memory cache
     this.cache.set(key, entry);
@@ -106,8 +125,9 @@ class ApprovalCache {
   /**
    * Invalidate cache for a specific approval
    */
-  async invalidate(walletAddress: string, marketplaceAddress: string, tokenAddress: string): Promise<void> {
-    const key = this.getCacheKey(walletAddress, marketplaceAddress, tokenAddress);
+  async invalidate(walletAddress: string, spenderAddress: string, tokenAddress: string, chain: ChainValue = DEFAULT_CHAIN): Promise<void> {
+    const resolvedChain = normalizeChainValue(chain);
+    const key = this.getCacheKey(walletAddress, spenderAddress, tokenAddress, resolvedChain);
 
     // Remove from memory cache
     this.cache.delete(key);
