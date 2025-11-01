@@ -137,13 +137,82 @@ const CHAIN_CONFIGS: Partial<Record<ChainValue, ChainConfig>> = {
       opensea: SEAPORT_SPENDER_ADDRESS,
     },
   },
+  arbitrum: {
+    value: "arbitrum",
+    label: "Arbitrum",
+    provider: {
+      chainId: 42161,
+      alchemyNetwork: "arb-mainnet",
+      rpcUrlEnv: "ARBITRUM_RPC_URL",
+    },
+    currencies: {
+      weth: {
+        symbol: "WETH",
+        address: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+        decimals: 18,
+      },
+      usdc: {
+        symbol: "USDC",
+        // Native USDC on Arbitrum
+        address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+        decimals: 6,
+      },
+    },
+    marketplaces: {
+      opensea: SEAPORT_CONTRACT_ADDRESS,
+    },
+    apiIdentifiers: {
+      opensea: "arbitrum",
+    },
+    marketplaceSpenders: {
+      opensea: SEAPORT_SPENDER_ADDRESS,
+    },
+  },
+  abstract: {
+    value: "abstract",
+    label: "Abstract",
+    provider: {
+      // TODO: Confirm Abstract mainnet chainId. Using env-driven RPC for safety.
+      // Replace with the correct chainId when confirmed.
+      chainId: Number(process.env.ABSTRACT_CHAIN_ID || 0),
+      rpcUrlEnv: "ABSTRACT_RPC_URL",
+    },
+    currencies: {
+      weth: {
+        symbol: "WETH",
+        address: "0x3439153eb7af838ad19d56e1571fbd09333c2809",
+        decimals: 18,
+      },
+      // Add stablecoins if needed once confirmed
+    },
+    marketplaces: {
+      opensea: SEAPORT_CONTRACT_ADDRESS,
+    },
+    apiIdentifiers: {
+      // Confirm identifier if/when OpenSea exposes it
+      opensea: "abstract",
+    },
+    marketplaceSpenders: {
+      opensea: SEAPORT_SPENDER_ADDRESS,
+    },
+  },
 };
 
 const providerCache = new Map<ChainValue, ethers.JsonRpcProvider>();
 
 const CHAIN_ALIAS_MAP: Record<string, ChainValue> = {
-  "base-mainnet": "base",
+  // Ethereum
   mainnet: "ethereum",
+  // Base
+  "base-mainnet": "base",
+  base: "base",
+  // Arbitrum
+  "arb-mainnet": "arbitrum",
+  arbitrum: "arbitrum",
+  "arbitrum-one": "arbitrum",
+  // Abstract
+  abstract: "abstract",
+  "abstract-mainnet": "abstract",
 };
 
 export function normalizeChainValue(chain?: ChainValue | string | null): ChainValue {
@@ -312,8 +381,9 @@ export async function resolveOpenseaSpender(
       const result: any = await controllerContract.getConduit(keyOrAddress);
       const conduitAddress = Array.isArray(result) ? result[0] : result;
       if (typeof conduitAddress === "string" && ethers.isAddress(conduitAddress)) return conduitAddress;
-    } catch (_) {
-      // Fallthrough to return the original value
+    } catch (error) {
+      // Log and fall through to return the original value
+      console.warn('[chains] resolveOpenseaSpender conduit resolution failed:', error);
     }
   }
 
