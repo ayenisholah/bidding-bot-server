@@ -11,7 +11,7 @@ export class DistributedLockManager {
     defaultTTLSeconds?: number;
   }) {
     this.lockPrefix = options?.lockPrefix ?? 'lock:';
-    this.defaultTTLSeconds = options?.defaultTTLSeconds ?? 30;
+    this.defaultTTLSeconds = options?.defaultTTLSeconds ?? 60;
   }
 
   private formatError(error: any): string {

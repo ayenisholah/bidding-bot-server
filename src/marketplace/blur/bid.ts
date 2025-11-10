@@ -510,7 +510,18 @@ export async function getAccessToken(private_key: string): Promise<string | unde
         }
 
         // Enhanced retry handling based on error type
-        if (error.response?.status === 403) {
+        if (error.response?.status === 401) {
+          // Unauthorized - token expired or invalid, clear cache and retry
+          if (redis) {
+            await redis.del(key);
+// console.log(`[Auth 401] Cleared cached token for ${wallet.address}, will retry authentication`);
+          }
+          // Clear auth in progress to allow fresh attempt
+          authInProgress.delete(wallet.address);
+          // Quick retry for token refresh
+          const waitTime = 500 + (retries * 500); // 500ms, 1s, 1.5s
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        } else if (error.response?.status === 403) {
           if (redis) {
             await redis.del(key);
           }

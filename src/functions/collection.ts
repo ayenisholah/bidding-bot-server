@@ -3,6 +3,7 @@ import stringify from 'json-stable-stringify';
 import crypto from 'crypto';
 import { axiosInstance, limiter } from "../init"; // Import Redis client
 import { DistributedLockManager } from "../utils/lock";
+import { CircuitBreaker } from "../utils/circuit-breaker";
 import { API_KEY } from "..";
 import redisClient from '../utils/redis';
 import { CollectionItemsListQuery } from "../queries";
@@ -70,6 +71,13 @@ const getRedis = () => redisClient.getClient();
 const lockManager = new DistributedLockManager({
   lockPrefix: 'collection:fetch:',
   defaultTTLSeconds: 300 // Reduced from 10 hours to 5 minutes
+});
+
+// Circuit breaker for OpenSea API calls to prevent retry storms
+const openseaCircuitBreaker = new CircuitBreaker({
+  failureThreshold: 5,    // Open circuit after 5 consecutive failures
+  resetTimeout: 60000,    // Wait 60s before attempting recovery
+  halfOpenRequests: 3     // Test recovery with 3 requests
 });
 
 // Helper function to add timeout to promises
@@ -274,7 +282,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
 export async function getOpenseaFloor(collectionSlug: string) {
   const CACHE_TTL = 60; // 1 minute cache (updated from 30 seconds)
   const cacheKey = `opensea:floor:${collectionSlug}`;
-  const lockKey = `floor:opensea}:${collectionSlug}`;
+  const lockKey = `floor:{opensea}:${collectionSlug}`;
 
   // Try to get from cache first
   try {
@@ -302,12 +310,14 @@ export async function getOpenseaFloor(collectionSlug: string) {
       return JSON.parse(cachedFloor);
     }
     try {
-      const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
-        `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
-        {
-          headers: { 'x-api-key': API_KEY }
-        }
-      ));
+      const { data } = await openseaCircuitBreaker.execute(() =>
+        limiter.schedule(() => axiosInstance.get<ListingsResponse>(
+          `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
+          {
+            headers: { 'x-api-key': API_KEY }
+          }
+        ))
+      );
       // Check if listings exist and has item
       const floor_price = Number(data?.listings[0]?.price?.current?.value) / 1e18 || 0;
       // Cache the result
@@ -355,25 +365,31 @@ export async function getOpenseaFloor(collectionSlug: string) {
   });
 
   if (!result) {
-    // If we couldn't acquire the lock, wait briefly and try cache again
-    await new Promise(resolve => setTimeout(resolve, 100));
-    try {
-      const cachedFloor = getRedis() ? await getRedis().get(cacheKey) : null;
-      if (cachedFloor) {
-        return JSON.parse(cachedFloor);
+    // If we couldn't acquire the lock, another request is fetching - wait with retries
+    const maxRetries = 5;
+    for (let i = 0; i < maxRetries; i++) {
+      const waitTime = Math.min(100 * Math.pow(2, i), 2000); // Exponential backoff, max 2s
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+
+      try {
+        const cachedFloor = getRedis() ? await getRedis().get(cacheKey) : null;
+        if (cachedFloor) {
+          return JSON.parse(cachedFloor);
+        }
+      } catch (error) {
+        await logger.logDatabaseError('Error reading from cache after lock failure', {
+          databaseOperation: DatabaseOperation.READ,
+          collection_name: 'getRedis()_cache',
+          collection: collectionSlug,
+          cacheKey,
+          error: error as Error,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
       }
-    } catch (error) {
-      await logger.logDatabaseError('Error reading from cache after lock failure', {
-        databaseOperation: DatabaseOperation.READ,
-        collection_name: 'getRedis()_cache',
-        collection: collectionSlug,
-        cacheKey,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
-      console.error('Error reading from cache after lock failure:', error);
     }
-    await logger.logOpenseaCollectionError('Failed to fetch OpenSea floor price', {
+
+    // After all retries, still no data - log and throw error
+    await logger.logOpenseaCollectionError('Failed to fetch OpenSea floor price after retries', {
       collection: collectionSlug,
       operation: 'get_floor_price',
       errorCode: 'FLOOR_PRICE_FETCH_FAILED'
@@ -386,8 +402,8 @@ export async function getOpenseaFloor(collectionSlug: string) {
 
 export async function getBlurFloor(collectionSlug: string): Promise<number> {
   const CACHE_TTL = 60; // 1 minute cache (updated from 30 seconds)
-  const cacheKey = `blur:floor}:${collectionSlug}`;
-  const lockKey = `floor:blur}:${collectionSlug}`;
+  const cacheKey = `blur:floor:{${collectionSlug}}`;
+  const lockKey = `floor:{blur}:${collectionSlug}`;
 
   // Try to get from cache first
   try {

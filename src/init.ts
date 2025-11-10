@@ -58,7 +58,7 @@ const retryConfig: IAxiosRetryConfig = {
       if (retryAfter) {
         return parseInt(retryAfter) * 1000;
       }
-      return Math.min(Math.pow(2, retryCount) * 500, 4000); // Faster backoff
+      return Math.min(Math.pow(2, retryCount) * 1000, 10000); // More aggressive backoff, max 10s
     }
 
     // Other 4xx/5xx errors - quick retry
@@ -77,7 +77,7 @@ const retryConfig: IAxiosRetryConfig = {
 
     // Retry on server errors (5xx) and specific client errors
     const status = error.response.status;
-    return status >= 500 || status === 429 || status === 408;
+    return status >= 500 || status === 429 || status === 430 || status === 408;
   },
   onRetry: (retryCount, error, requestConfig) => {
     // Only log retries in development mode or for specific debugging
@@ -88,7 +88,7 @@ const retryConfig: IAxiosRetryConfig = {
 };
 
 async function initialize(rateLimit: number) {
-  axiosInstance = axios.create({ timeout: 60000 });
+  axiosInstance = axios.create({ timeout: 30000 });
 
   limiter = new Bottleneck({
     minTime: 1000 / rateLimit, // Minimum time between job starts

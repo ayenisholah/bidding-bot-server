@@ -49,8 +49,7 @@ import axios from "axios";
 import { decryptPrivateKey, setPassword, getPassword, decryptPassword, recoverPasswordFromRedis, renewPasswordTTL, reEncryptWallet, clearDecryptedKeyCache } from "./utils/crypto";
 import { fetchWalletNFTs } from "./utils/nft";
 import { logger, ErrorCategory, DatabaseOperation } from "./utils/logger";
-import { getMarketplaceLogger, logEarlyReturn, logDecision, logError, logRaw, logSystemError, logSystemInfo, logSystemWarn } from './utils/marketplace-file-logger';
-import { MarketLogLevel, MarketLogStage } from "./types/marketplace-logs.types";
+import { getMarketplaceLogger, logError, logSystemError } from './utils/marketplace-file-logger';
 import WebSocketManager from "./utils/websocket-manager";
 import { initializeListingScheduler, shutdownListingScheduler, scheduleListing, cancelListingJob, processListingJob } from "./functions/listingScheduler";
 import { initializeExpirationMonitor, stopExpirationMonitor } from "./functions/relistExpired";
@@ -69,25 +68,11 @@ import { approvalCache } from "./utils/approval-cache";
 import { blurCompletionTracker } from "./utils/blur-completion-tracker";
 import { cancellationTracker } from "./utils/cancellation-tracker";
 
-const createOpenseaLogger = (taskId: string, fn: string) => (
-  stage: MarketLogStage,
-  message: string,
-  metadata: Record<string, any> = {},
-  level: MarketLogLevel = "info"
-) => {
-  logDecision("opensea", taskId, fn, stage, message, metadata, level);
-};
 import { listingPriceCache } from "./utils/listing-price-cache";
 import Listing from "./models/listing.model";
 
 const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
 
-// Initialize marketplace loggers (generic)
-const logs = {
-  blur: getMarketplaceLogger('blur'),
-  opensea: getMarketplaceLogger('opensea'),
-  magiceden: getMarketplaceLogger('magiceden'),
-};
 // Backward-compatible alias used across Blur codepaths
 // const MARKETPLACE_WS_URL = "ws://localhost:8080";
 
@@ -5028,14 +5013,6 @@ async function processBlurJob(job: Job) {
   const startTime = Date.now();
   const taskId = job.data?.taskId || job.data?._id || 'unknown';
 
-  // Log job start
-  logDecision('blur', taskId, 'processBlurJob', 'start', 'Starting Blur job processing', {
-    jobId: job.id,
-    jobName: job.name,
-    jobData: job.data,
-    queueName: job.queueName
-  });
-
   try {
     // Update progress to indicate job started
     // Progress reporting removed - await job.updateProgress(5);
@@ -5044,9 +5021,6 @@ async function processBlurJob(job: Job) {
     if (!getPassword()) {
       const error = new Error('No password available. Job will be retried when password is set.');
       (error as any).code = 'NO_PASSWORD';
-
-      logDecision('blur', taskId, 'processBlurJob', 'validation', 'No password available, job will be retried', { jobId: job.id, errorCode: 'NO_PASSWORD' }, 'warn');
-
       throw error;
     }
 
@@ -5067,10 +5041,6 @@ async function processBlurJob(job: Job) {
         throw new Error('Cannot determine wallet address for rate limiting');
       }
       walletAddress = parsedWallet; // Assign the parsed wallet
-
-      logDecision('blur', taskId, 'processBlurJob', 'wallet_selection', 'Wallet address parsed from job ID', { walletAddress, jobId: job.id });
-    } else {
-      logDecision('blur', taskId, 'processBlurJob', 'wallet_selection', 'Wallet address extracted from job data', { walletAddress });
     }
 
     // CRITICAL: Check rate limits BEFORE processing the job
@@ -5080,38 +5050,13 @@ async function processBlurJob(job: Job) {
       if (!canProceed) {
         const waitTime = blurRateLimiter.getWaitTime(walletAddress);
 
-        logDecision('blur', taskId, 'processBlurJob', 'rate_limit', 'Wallet is rate limited', { walletAddress, waitTime, rescheduleTime: new Date(Date.now() + waitTime + 1000).toISOString() }, 'warn');
-
-
         try {
           // Reschedule the job with a delay
           await job.moveToDelayed(Date.now() + waitTime + 1000); // Add 1s buffer
 
-          logRaw('blur', {
-            taskId,
-            function: 'processBlurJob',
-            stage: 'rate_limit',
-            level: 'info',
-            message: 'Job successfully rescheduled due to rate limit',
-            metadata: {
-              jobId: job.id,
-              rescheduleTime: new Date(Date.now() + waitTime + 1000).toISOString()
-            }
-          });
         } catch (error) {
           // If we can't move to delayed (e.g., lock already released), job will be retried automatically
 
-          logRaw('blur', {
-            taskId,
-            function: 'processBlurJob',
-            stage: 'rate_limit',
-            level: 'warn',
-            message: 'Could not reschedule job, will be retried',
-            metadata: {
-              jobId: job.id,
-              errorMessage: error instanceof Error ? error.message : String(error)
-            }
-          });
         }
         return; // Exit without processing
       }
@@ -5119,49 +5064,15 @@ async function processBlurJob(job: Job) {
       // Check completion-based rate limiting
       const requiredDelay = blurCompletionTracker.getRequiredDelay(walletAddress);
       if (requiredDelay > 0) {
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurJob',
-          stage: 'rate_limit',
-          level: 'warn',
-          message: 'Wallet needs delay based on completion rate',
-          metadata: {
-            walletAddress,
-            requiredDelay,
-            rescheduleTime: new Date(Date.now() + requiredDelay + 1000).toISOString()
-          }
-        });
 
 
         try {
           // Reschedule the job with a delay
           await job.moveToDelayed(Date.now() + requiredDelay + 1000); // Add 1s buffer
 
-          logRaw('blur', {
-            taskId,
-            function: 'processBlurJob',
-            stage: 'rate_limit',
-            level: 'info',
-            message: 'Job rescheduled due to completion rate',
-            metadata: {
-              jobId: job.id,
-              rescheduleTime: new Date(Date.now() + requiredDelay + 1000).toISOString()
-            }
-          });
         } catch (error) {
           // If we can't move to delayed (e.g., lock already released), job will be retried automatically
 
-          logRaw('blur', {
-            taskId,
-            function: 'processBlurJob',
-            stage: 'rate_limit',
-            level: 'warn',
-            message: 'Could not reschedule job for completion rate, will be retried',
-            metadata: {
-              jobId: job.id,
-              errorMessage: error instanceof Error ? error.message : String(error)
-            }
-          });
         }
         return; // Exit without processing
       }
@@ -5182,20 +5093,6 @@ async function processBlurJob(job: Job) {
               const waitTime = blockTime - Date.now();
               const waitSeconds = Math.round(waitTime / 1000);
 
-              logRaw('blur', {
-                taskId,
-                function: 'processBlurJob',
-                stage: 'validation',
-                level: 'warn',
-                message: 'Wallet authentication is blocked',
-                metadata: {
-                  walletAddress,
-                  waitTime,
-                  waitSeconds,
-                  resumeAt: new Date(blockTime).toISOString(),
-                  jobId: job.id
-                }
-              });
 
 
               // Update progress periodically during wait
@@ -5204,32 +5101,10 @@ async function processBlurJob(job: Job) {
               // Progress reporting removed - was: clearInterval(updateInterval);
 
 
-              logRaw('blur', {
-                taskId,
-                function: 'processBlurJob',
-                stage: 'validation',
-                level: 'info',
-                message: 'Resumed processing after auth block wait',
-                metadata: {
-                  walletAddress,
-                  waitedFor: waitTime
-                }
-              });
             } else {
               // Block has expired, clean it up
               await redis.del(authBlockKey);
 
-              logRaw('blur', {
-                taskId,
-                function: 'processBlurJob',
-                stage: 'validation',
-                level: 'info',
-                message: 'Cleaned up expired auth block',
-                metadata: {
-                  walletAddress,
-                  authBlockKey
-                }
-              });
             }
           }
 
@@ -5245,20 +5120,6 @@ async function processBlurJob(job: Job) {
               const waitTime = pauseTime - Date.now();
               const waitSeconds = Math.round(waitTime / 1000);
 
-              logRaw('blur', {
-                taskId,
-                function: 'processBlurJob',
-                stage: 'rate_limit',
-                level: 'warn',
-                message: 'Wallet is paused due to API rate limit',
-                metadata: {
-                  walletAddress,
-                  waitTime,
-                  waitSeconds,
-                  resumeAt: new Date(pauseTime).toISOString(),
-                  jobId: job.id
-                }
-              });
 
               // Enhanced logging with more details
 
@@ -5268,48 +5129,15 @@ async function processBlurJob(job: Job) {
               // Progress reporting removed - was: clearInterval(updateInterval);
 
 
-              logRaw('blur', {
-                taskId,
-                function: 'processBlurJob',
-                stage: 'rate_limit',
-                level: 'info',
-                message: 'Resumed processing after rate limit wait',
-                metadata: {
-                  walletAddress,
-                  waitedFor: waitTime
-                }
-              });
             } else {
               // Pause has expired, clean it up
               await redis.del(pauseKey);
 
-              logRaw('blur', {
-                taskId,
-                function: 'processBlurJob',
-                stage: 'rate_limit',
-                level: 'info',
-                message: 'Cleaned up expired rate limit pause',
-                metadata: {
-                  walletAddress,
-                  pauseKey
-                }
-              });
             }
           }
         }
       } catch (error) {
 
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurJob',
-          stage: 'validation',
-          level: 'warn',
-          message: 'Failed to check Redis for wallet status',
-          metadata: {
-            walletAddress,
-            errorMessage: error instanceof Error ? error.message : String(error)
-          }
-        });
       }
     }
 
@@ -5317,18 +5145,6 @@ async function processBlurJob(job: Job) {
     // Progress reporting removed - await job.updateProgress(40);
 
     // Process job based on type
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurJob',
-      stage: 'job_routing',
-      level: 'info',
-      message: `Routing job to handler: ${job.name}`,
-      metadata: {
-        jobName: job.name,
-        jobId: job.id,
-        walletAddress
-      }
-    });
 
     switch (job.name) {
       case BLUR_SCHEDULE:
@@ -5336,15 +5152,11 @@ async function processBlurJob(job: Job) {
         await processBlurScheduledBid(job.data);
         // Progress reporting removed - await job.updateProgress(95);
 
-        logDecision('blur', taskId, 'processBlurJob', 'completion', 'Successfully processed scheduled bid', { jobName: job.name, duration: Date.now() - startTime });
-
         return { completed: true };
       case BLUR_COLLECTION_BID:
         // Progress reporting removed - await job.updateProgress(45);
         await processBlurCollectionBid(job.data);
         // Progress reporting removed - await job.updateProgress(95);
-
-        logDecision('blur', taskId, 'processBlurJob', 'completion', 'Successfully processed collection bid', { jobName: job.name, duration: Date.now() - startTime });
 
         return { completed: true };
       case BLUR_TRAIT_BID:
@@ -5352,15 +5164,11 @@ async function processBlurJob(job: Job) {
         await processBlurTraitBid(job.data);
         // Progress reporting removed - await job.updateProgress(95);
 
-        logDecision('blur', taskId, 'processBlurJob', 'completion', 'Successfully processed trait bid', { jobName: job.name, duration: Date.now() - startTime });
-
         return { completed: true };
       case BLUR_COLLECTION_BID_COUNTERBID:
         // Progress reporting removed - await job.updateProgress(45);
         await blurCollectionCounterBid(job.data);
         // Progress reporting removed - await job.updateProgress(95);
-
-        logDecision('blur', taskId, 'processBlurJob', 'completion', 'Successfully processed collection counterbid', { jobName: job.name, duration: Date.now() - startTime });
 
         return { completed: true };
       case BLUR_TRAIT_BID_COUNTERBID:
@@ -5368,13 +5176,9 @@ async function processBlurJob(job: Job) {
         await blurTraitCounterBid(job.data);
         // Progress reporting removed - await job.updateProgress(95);
 
-        logDecision('blur', taskId, 'processBlurJob', 'completion', 'Successfully processed trait counterbid', { jobName: job.name, duration: Date.now() - startTime });
-
         return { completed: true };
       default:
         const unknownError = new Error(`Unknown Blur job type: ${job.name}`);
-
-        logDecision('blur', taskId, 'processBlurJob', 'job_routing', 'Unknown job type', { jobName: job.name, jobId: job.id }, 'error');
 
         throw unknownError;
     }
@@ -5400,17 +5204,6 @@ async function processBlurJob(job: Job) {
     if (walletAddress && walletAddress.startsWith('0x')) {
       blurCompletionTracker.trackCompletion(walletAddress);
 
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurJob',
-        stage: 'completion',
-        level: 'debug',
-        message: 'Job completion tracked for rate limiting',
-        metadata: {
-          walletAddress,
-          totalDuration: Date.now() - startTime
-        }
-      });
     }
 
     // Always update to 100% if we haven't already
@@ -5496,7 +5289,6 @@ async function processJob(job: Job, signal?: AbortSignal) {
           try {
             // Log when CANCEL_MAGICEDEN_BID job is being processed
             const { taskId, orderIds } = job.data;
-            try { logRaw('magiceden', { taskId, function: 'worker', stage: 'processing', level: 'info', message: 'Processing CANCEL_MAGICEDEN_BID job', metadata: { jobId: job.id, orderCount: orderIds?.length || 0 } }); } catch { }
 
             await bulkCancelMagicedenBid(job.data);
           } catch (error) {
@@ -5511,7 +5303,6 @@ async function processJob(job: Job, signal?: AbortSignal) {
           try {
             // Log when CANCEL_BLUR_BID job is being processed
             const { taskId, orderKey } = job.data;
-            try { logRaw('blur', { taskId, function: 'worker', stage: 'processing', level: 'info', message: 'Processing CANCEL_BLUR_BID job', metadata: { jobId: job.id, orderKey } }); } catch { }
 
             await bulkCancelBlurBid(job.data);
           } catch (error) {
@@ -5737,21 +5528,6 @@ async function cancelRemovedTokenBids(removedTokens: { opensea: string[]; magice
         };
       });
       // Log cancellation enqueue
-      try {
-        logRaw('opensea', {
-          taskId,
-          function: 'cancelRemovedTokenBids',
-          stage: 'queueing',
-          level: 'info',
-          message: 'Queueing cancellation jobs - removed tokens',
-          metadata: {
-            jobCount: cancelData.length,
-            reason: 'tokens_removed',
-            tokenCount: removedTokens.opensea.length
-          }
-        });
-      } catch { }
-
       await queue.addBulk(cancelData);
       totalJobsCreated += cancelData.length;
     }
@@ -5791,21 +5567,6 @@ async function cancelRemovedTraitBids(traitsToRemove: string[], taskId: string, 
         };
       });
       // Log cancellation enqueue
-      try {
-        logRaw('blur', {
-          taskId,
-          function: 'cancelRemovedTraitBids',
-          stage: 'queueing',
-          level: 'info',
-          message: 'Queueing cancellation jobs - removed traits',
-          metadata: {
-            jobCount: cancelData.length,
-            reason: 'traits_removed',
-            traitCount: traitsToRemove.length
-          }
-        });
-      } catch { }
-
       await queue.addBulk(cancelData);
       totalJobsCreated += cancelData.length;
     }
@@ -5818,21 +5579,6 @@ async function cancelRemovedTraitBids(traitsToRemove: string[], taskId: string, 
         };
       });
       // Log cancellation enqueue
-      try {
-        logRaw('opensea', {
-          taskId,
-          function: 'cancelRemovedTraitBids',
-          stage: 'queueing',
-          level: 'info',
-          message: 'Queueing cancellation jobs - removed traits',
-          metadata: {
-            jobCount: cancelData.length,
-            reason: 'traits_removed',
-            traitCount: traitsToRemove.length
-          }
-        });
-      } catch { }
-
       await queue.addBulk(cancelData);
       totalJobsCreated += cancelData.length;
     }
@@ -10390,7 +10136,7 @@ async function cancelOpenseaOrdersDirectly({
     reason
   };
 
-  try { logRaw('opensea', { taskId, function: source, stage: 'cancellation', level: 'info', message: 'Cancelling existing OpenSea orders before rebid', metadata: metadataBase }); } catch { }
+  
 
   let completed = 0;
 
@@ -10401,7 +10147,6 @@ async function cancelOpenseaOrdersDirectly({
       completed += 1;
     }
   } catch (error) {
-    try { logRaw('opensea', { taskId, function: source, stage: 'error', level: 'error', message: 'Failed to cancel existing OpenSea orders before rebid', metadata: { ...metadataBase, completed } }); } catch { }
     throw error;
   }
 
@@ -10411,7 +10156,6 @@ async function cancelOpenseaOrdersDirectly({
     decrementOwnBidCounter('opensea', completed);
   }
 
-  try { logRaw('opensea', { taskId, function: source, stage: 'completion', level: 'info', message: 'Finished cancelling OpenSea orders before rebid', metadata: { ...metadataBase, cancelled: completed } }); } catch { }
 }
 
 async function updateStatus(task: ITask & { stoppedByWarning?: boolean }) {
@@ -11212,7 +10956,6 @@ async function handleCounterBidForTask(task: any, message: any) {
 
 async function handleMagicEdenCounterbid(data: any, task: ITask) {
   // Structured log: start
-  try { logRaw('magiceden', { taskId: task._id.toString(), function: 'handleMagicEdenCounterbid', stage: 'start', level: 'info', message: 'Starting MagicEden counterbid handler', metadata: { slug: task.contract?.slug } }); } catch { }
   try {
 
     const currentTask = activeTasks.get(task._id)
@@ -11854,7 +11597,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       seenOrderHashes.delete(taskSpecificHash);
     }
   } catch (error) {
-    try { logRaw('magiceden', { taskId: task._id.toString(), function: 'handleMagicEdenCounterbid', stage: 'error', level: 'error', message: 'Error in MagicEden counterbid handler', metadata: { error: error instanceof Error ? error.message : String(error) } }); } catch { }
   }
 }
 
@@ -11863,7 +11605,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
     const currentTask = activeTasks.get(task._id)
     if (!currentTask) {
-      logEarlyReturn('opensea', task._id.toString(), 'handleOpenseaCounterbid', 'Task not found in activeTasks');
       return;
     }
 
@@ -11873,12 +11614,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
     const taskMarketplaces = currentTask.selectedMarketplaces.map((market) => market.toLowerCase());
     if (!taskMarketplaces.includes("opensea")) {
-      logEarlyReturn('opensea', task._id.toString(), 'handleOpenseaCounterbid', 'OpenSea not selected for task', { selected: taskMarketplaces });
       return;
     }
 
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) {
-      logEarlyReturn('opensea', task._id.toString(), 'handleOpenseaCounterbid', 'OpenSea disabled globally', { enabledMarketplaces });
       return;
     }
 
@@ -12137,23 +11876,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               }
             })
             // Log cancellation enqueue
-            try {
-              logRaw('opensea', {
-                taskId: task._id,
-                function: 'handleOpenseaCounterbid',
-                stage: 'queueing',
-                level: 'info',
-                message: 'Queueing cancellation jobs - max bid exceeded in counterbid',
-                metadata: {
-                  jobCount: cancelData.length,
-                  reason: 'counterbid_max_bid_exceeded',
-                  offerPriceEth,
-                  maxBidPriceEth,
-                  tokenId
-                }
-              });
-            } catch { }
-
             queue.addBulk(cancelData)
           }
         }
@@ -12252,23 +11974,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               }
             })
             // Log cancellation enqueue
-            try {
-              logRaw('opensea', {
-                taskId: task._id,
-                function: 'handleOpenseaCounterbid',
-                stage: 'queueing',
-                level: 'info',
-                message: 'Queueing cancellation jobs - incoming bid exceeds max in trait offer',
-                metadata: {
-                  jobCount: cancelData.length,
-                  reason: 'trait_offer_exceeds_max',
-                  incomingBidAmountEth,
-                  maxBidPriceEth,
-                  trait: identifier
-                }
-              });
-            } catch { }
-
             queue.addBulk(cancelData)
           }
         }
@@ -12286,23 +11991,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             }
           })
           // Log cancellation enqueue
-          try {
-            logRaw('opensea', {
-              taskId: task._id,
-              function: 'handleOpenseaCounterbid',
-              stage: 'queueing',
-              level: 'info',
-              message: 'Queueing cancellation jobs - stop option triggered for trait',
-              metadata: {
-                jobCount: cancelData.length,
-                reason: 'trait_stop_option_triggered',
-                floorPrice: floor_price,
-                traitFloor,
-                trait: identifier
-              }
-            });
-          } catch { }
-
           queue.addBulk(cancelData)
         }
         return
@@ -12331,23 +12019,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               }
             })
             // Log cancellation enqueue
-            try {
-              logRaw('opensea', {
-                taskId: task._id,
-                function: 'handleOpenseaCounterbid',
-                stage: 'queueing',
-                level: 'info',
-                message: 'Queueing cancellation jobs - counter offer exceeds max in trait',
-                metadata: {
-                  jobCount: cancelData.length,
-                  reason: 'trait_counterbid_exceeds_max',
-                  offerPriceEth,
-                  maxBidPriceEth,
-                  trait: identifier
-                }
-              });
-            } catch { }
-
             queue.addBulk(cancelData)
           }
         }
@@ -12647,7 +12318,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       seenOrderHashes.delete(taskSpecificHash);
     }
     seenOrderHashes.delete(taskSpecificHash);
-    logDecision('opensea', task._id.toString(), 'handleOpenseaCounterbid', 'completion', 'Completed OpenSea counterbid handler');
   } catch (error) {
     logError('opensea', task._id.toString(), 'handleOpenseaCounterbid', 'Error in OpenSea counterbid handler', error);
   }
@@ -12659,19 +12329,6 @@ async function
   const incomingBid = data
 
   // Log function start
-  logRaw('blur', {
-    taskId: task._id.toString(),
-    function: 'blurTraitCounterBid',
-    stage: 'start',
-    level: 'info',
-    message: `Starting Blur counterbid handler`,
-    metadata: {
-      contractAddress: task.contract?.contractAddress,
-      slug: task.contract?.slug,
-      incomingBidData: data,
-      startTime
-    }
-  });
 
   try {
 
@@ -12679,67 +12336,20 @@ async function
     const currentTask = activeTasks.get(task._id)
 
     if (!currentTask) {
-      logRaw('blur', {
-        taskId: task._id.toString(),
-        function: 'blurTraitCounterBid',
-        stage: 'early_return',
-        level: 'warn',
-        message: `Task not found in activeTasks`,
-        metadata: {
-          validationReason: 'Task not in activeTasks',
-          duration: Date.now() - startTime
-        }
-      });
       return;
     }
 
     if (!currentTask?.running) {
-      logRaw('blur', {
-        taskId: task._id.toString(),
-        function: 'blurTraitCounterBid',
-        stage: 'early_return',
-        level: 'warn',
-        message: `Task is not running`,
-        metadata: {
-          validationReason: 'Task not running',
-          taskRunning: currentTask?.running,
-          duration: Date.now() - startTime
-        }
-      });
       return;
     }
 
     const taskMarketplaces = currentTask?.selectedMarketplaces?.map((marketplace) => marketplace?.toLowerCase()) || [];
     if (!taskMarketplaces.includes("blur")) {
-      logRaw('blur', {
-        taskId: task._id.toString(),
-        function: 'blurTraitCounterBid',
-        stage: 'early_return',
-        level: 'warn',
-        message: `Blur not selected in task`,
-        metadata: {
-          validationReason: 'Blur not in selectedMarketplaces',
-          selectedMarketplaces: taskMarketplaces,
-          duration: Date.now() - startTime
-        }
-      });
       return;
     }
 
     const enabledMarketplacesLower = enabledMarketplaces?.map((marketplace) => marketplace?.toLowerCase()) || [];
     if (!enabledMarketplacesLower.includes("blur")) {
-      logRaw('blur', {
-        taskId: task._id.toString(),
-        function: 'blurTraitCounterBid',
-        stage: 'early_return',
-        level: 'warn',
-        message: `Blur not enabled globally`,
-        metadata: {
-          validationReason: 'Blur not in enabledMarketplaces',
-          enabledMarketplaces: enabledMarketplaces,
-          duration: Date.now() - startTime
-        }
-      });
       return;
     }
     const expiry = getExpiry(currentTask?.bidDuration)
@@ -12763,54 +12373,15 @@ async function
     const bidTypeDisplay = criteriaType === 'trait' ? `Trait: ${JSON.stringify(criteriaValue)}` : criteriaType === 'token' ? `Token #${criteriaValue?.identifier || 'unknown'}` : 'Collection';
 
     if (!currentTask?.outbidOptions?.counterbid) {
-      logRaw('blur', {
-        taskId: task._id.toString(),
-        function: 'blurTraitCounterBid',
-        stage: 'early_return',
-        level: 'warn',
-        message: `Counterbid disabled for task`,
-        metadata: {
-          validationReason: 'Counterbid option disabled',
-          outbidOptions: currentTask?.outbidOptions,
-          duration: Date.now() - startTime
-        }
-      });
       return;
     }
 
 
     // Log validation passed
-    logRaw('blur', {
-      taskId: task._id.toString(),
-      function: 'blurTraitCounterBid',
-      stage: 'validation',
-      level: 'info',
-      message: `Validation passed, processing bid`,
-      metadata: {
-        walletAddress: task.wallet,
-        collection: task.contract?.slug,
-        bidType: traitBid ? 'trait' : 'collection',
-        incomingPrice: price,
-        makerAddress: makerAddress
-      }
-    });
 
     if (traitBid) {
       const isTraitBid = currentTask?.bidType === "collection" && selectedTraits && Object.keys(selectedTraits)?.length > 0
       if (!isTraitBid) {
-        logRaw('blur', {
-          taskId: task._id.toString(),
-          function: 'blurTraitCounterBid',
-          stage: 'early_return',
-          level: 'warn',
-          message: `Task not configured for trait bidding`,
-          metadata: {
-            validationReason: 'Not configured for trait bidding',
-            bidType: currentTask?.bidType,
-            selectedTraits: selectedTraits,
-            duration: Date.now() - startTime
-          }
-        });
         return;
       }
 
@@ -12818,36 +12389,12 @@ async function
       const incomingTraitBids = incomingBid?.stats?.filter((item: any) => item?.criteriaType?.toLowerCase() === "trait") || incomingBid?.updates?.filter((item: any) => item?.criteriaType?.toLowerCase() === "trait")
 
       if (!incomingTraitBids) {
-        logRaw('blur', {
-          taskId: task._id.toString(),
-          function: 'blurTraitCounterBid',
-          stage: 'early_return',
-          level: 'warn',
-          message: `No incoming trait bids found`,
-          metadata: {
-            validationReason: 'No trait bids in incoming data',
-            duration: Date.now() - startTime
-          }
-        });
         return;
       }
 
       const hasMatchingTraits = checkBlurTraits(incomingTraitBids, traits);
 
       if (!hasMatchingTraits?.length) {
-        logRaw('blur', {
-          taskId: task._id.toString(),
-          function: 'blurTraitCounterBid',
-          stage: 'early_return',
-          level: 'info',
-          message: `No matching traits found`,
-          metadata: {
-            validationReason: 'No matching traits',
-            configuredTraits: traits,
-            incomingTraits: incomingTraitBids,
-            duration: Date.now() - startTime
-          }
-        });
         return;
       }
       const transformedTraits = selectedTraits && Object.keys(selectedTraits)?.length > 0 ? transformOpenseaTraits(selectedTraits) : []
@@ -12882,19 +12429,6 @@ async function
         });
 
         if (!activeTrait) {
-          logRaw('blur', {
-            taskId: task._id.toString(),
-            function: 'blurTraitCounterBid',
-            stage: 'trait_filtering',
-            level: 'info',
-            message: `Trait not active in task configuration`,
-            metadata: {
-              traitType: traitType,
-              traitValue: traitValue,
-              identifier: identifier,
-              duration: Date.now() - startTime
-            }
-          });
           return;
         }
 
@@ -12908,21 +12442,6 @@ async function
         })
 
         if (+totalOffer < minBidPriceEth) {
-          logRaw('blur', {
-            taskId: task._id.toString(),
-            function: 'blurTraitCounterBid',
-            stage: 'bid_calculation',
-            level: 'info',
-            message: `Total offer below minimum bid price`,
-            metadata: {
-              totalOffer: totalOffer,
-              minBidPriceEth: minBidPriceEth,
-              incomingPrice: incomingPrice,
-              blurOutbidMargin: blurOutbidMargin,
-              identifier: identifier,
-              duration: Date.now() - startTime
-            }
-          });
           // Return silently when incoming bid is less than min bid price
           return
         } else if (+totalOffer > maxBidPriceEth) {
@@ -12944,22 +12463,6 @@ async function
 
           await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "blur");
 
-          logRaw('blur', {
-            taskId: task._id.toString(),
-            function: 'blurTraitCounterBid',
-            stage: 'bid_calculation',
-            level: 'warn',
-            message: `Total offer exceeds maximum bid price`,
-            metadata: {
-              totalOffer: totalOffer,
-              maxBidPriceEth: maxBidPriceEth,
-              incomingPrice: incomingPrice,
-              identifier: identifier,
-              ordersCount: orders.length,
-              cancelMaxWhenOutbid: currentTask.outbidOptions.cancelMaxWhenOutbid,
-              duration: Date.now() - startTime
-            }
-          });
           return
         }
 
@@ -12968,20 +12471,6 @@ async function
         const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), true, traitFloor, identifier)
 
         if (stopBid) {
-          logRaw('blur', {
-            taskId: task._id.toString(),
-            function: 'blurTraitCounterBid',
-            stage: 'floor_price_check',
-            level: 'warn',
-            message: `Stop condition met for trait`,
-            metadata: {
-              identifier: identifier,
-              traitFloor: traitFloor ? String(traitFloor) : undefined,
-              floorPrice: String(floor_price),
-              ordersToCancel: orders.length,
-              duration: Date.now() - startTime
-            }
-          });
 
           if (orders.length > 0) {
             const cancelData = orders.map((order, index) => {
@@ -13000,19 +12489,6 @@ async function
         const currentBidPrice = !offers?.length ? 0 : Math.max(...offers?.map((offer) => Number(offer)))
         const currentBidPriceEth = currentBidPrice / 1e18
         if (incomingPrice <= currentBidPriceEth) {
-          logRaw('blur', {
-            taskId: task._id.toString(),
-            function: 'blurTraitCounterBid',
-            stage: 'bid_calculation',
-            level: 'info',
-            message: `Current bid price higher than incoming`,
-            metadata: {
-              currentBidPriceEth: currentBidPriceEth,
-              incomingPrice: incomingPrice,
-              identifier: identifier,
-              duration: Date.now() - startTime
-            }
-          });
           return;
         }
 
@@ -13035,23 +12511,6 @@ async function
 
 
 
-        logRaw('blur', {
-          taskId: task._id.toString(),
-          function: 'blurTraitCounterBid',
-          stage: 'queueing',
-          level: 'info',
-          message: `Queueing trait counterbid`,
-          metadata: {
-            identifier: identifier,
-            traitType: traitType,
-            traitValue: traitValue,
-            offerPrice: (Number(offerPrice) / 1e18).toString(),
-            incomingPrice: incomingPrice.toString(),
-            blurOutbidMargin: blurOutbidMargin,
-            bidCount: bidCount,
-            jobName: BLUR_TRAIT_BID_COUNTERBID
-          }
-        });
 
         await blurQueue.add(
           BLUR_TRAIT_BID_COUNTERBID,
@@ -13063,17 +12522,6 @@ async function
       const incomingBidDetails = incomingBid?.stats?.filter((item: any) => item?.criteriaType?.toLowerCase() === "collection") || incomingBid?.updates?.filter((item: any) => item?.criteriaType?.toLowerCase() === "collection")
 
       if (!incomingBidDetails || !incomingBidDetails?.length) {
-        logRaw('blur', {
-          taskId: task._id.toString(),
-          function: 'blurCollectionCounterBid',
-          stage: 'early_return',
-          level: 'warn',
-          message: `No collection bid details found`,
-          metadata: {
-            validationReason: 'No collection bids in incoming data',
-            duration: Date.now() - startTime
-          }
-        });
         return
       }
 
@@ -13100,18 +12548,6 @@ async function
 
       // Check if incoming bid is within valid range
       if (+bestPrice < minBidPriceEth) {
-        logRaw('blur', {
-          taskId: task._id.toString(),
-          function: 'blurCollectionCounterBid',
-          stage: 'bid_calculation',
-          level: 'info',
-          message: `Incoming bid below minimum bid price`,
-          metadata: {
-            bestPrice: bestPrice,
-            minBidPriceEth: minBidPriceEth,
-            duration: Date.now() - startTime
-          }
-        });
         // Return silently when incoming bid is less than min bid price
         return
       } else if (+bestPrice > maxBidPriceEth) {
@@ -13119,19 +12555,6 @@ async function
         const message = `incoming bid ${bestPrice} BETH for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "blur");
 
-        logRaw('blur', {
-          taskId: task._id.toString(),
-          function: 'blurCollectionCounterBid',
-          stage: 'bid_calculation',
-          level: 'warn',
-          message: `Incoming bid exceeds maximum bid price`,
-          metadata: {
-            bestPrice: bestPrice,
-            maxBidPriceEth: maxBidPriceEth,
-            cancelMaxWhenOutbid: currentTask.outbidOptions.cancelMaxWhenOutbid,
-            duration: Date.now() - startTime
-          }
-        });
 
         // Cancel all orders if configured
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
@@ -13158,17 +12581,6 @@ async function
 
       const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), true)
       if (stopBid) {
-        logRaw('blur', {
-          taskId: task._id.toString(),
-          function: 'blurCollectionCounterBid',
-          stage: 'floor_price_check',
-          level: 'warn',
-          message: `Stop condition met for collection`,
-          metadata: {
-            floorPrice: String(floor_price),
-            duration: Date.now() - startTime
-          }
-        });
 
         const allOrders = await Order.find({
           taskId: task._id,
@@ -13213,19 +12625,6 @@ async function
         const message = `counter Offer ${baseOfferPriceEth} BETH for ${task.contract.slug} exceeds max bid price ${maxBidPriceEth} BETH. Skipping ...`.toUpperCase()
         await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "blur");
 
-        logRaw('blur', {
-          taskId: task._id.toString(),
-          function: 'blurCollectionCounterBid',
-          stage: 'bid_calculation',
-          level: 'warn',
-          message: `Counter offer exceeds max bid price`,
-          metadata: {
-            baseOfferPriceEth: baseOfferPriceEth,
-            maxBidPriceEth: maxBidPriceEth,
-            cancelMaxWhenOutbid: currentTask.outbidOptions.cancelMaxWhenOutbid,
-            duration: Date.now() - startTime
-          }
-        });
 
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
           const taskOrders = allTaskOrders.filter((order: any) => order.taskId === currentTask._id);
@@ -13303,20 +12702,6 @@ async function
             }
 
 
-            logRaw('blur', {
-              taskId: task._id.toString(),
-              function: 'blurCollectionCounterBid',
-              stage: 'queueing',
-              level: 'info',
-              message: `Queueing collection counterbid`,
-              metadata: {
-                offerPrice: (Number(orderOfferPrice) / 1e18).toString(),
-                existingPrice: (Number(order.offerPrice) / 1e18).toString(),
-                incomingPrice: bestPrice,
-                bidCount: bidCount,
-                jobName: BLUR_COLLECTION_BID_COUNTERBID
-              }
-            });
 
             await blurQueue.add(
               BLUR_COLLECTION_BID_COUNTERBID,
@@ -13332,36 +12717,11 @@ async function
     }
 
     // Log completion
-    logRaw('blur', {
-      taskId: task._id.toString(),
-      function: 'blurTraitCounterBid',
-      stage: 'completion',
-      level: 'info',
-      message: `Completed Blur counterbid handler`,
-      metadata: {
-        duration: Date.now() - startTime,
-        bidType: 'counterbid'
-      }
-    });
 
   } catch (error: any) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     const errorStack = error instanceof Error ? error.stack : undefined;
 
-    logRaw('blur', {
-      taskId: task._id.toString(),
-      function: 'blurTraitCounterBid',
-      stage: 'error',
-      level: 'error',
-      message: `Error in Blur counterbid handler`,
-      metadata: {
-        errorMessage,
-        errorStack,
-        duration: Date.now() - startTime,
-        walletAddress: task.wallet,
-        collection: task.contract?.slug
-      }
-    });
 
   }
 }
@@ -13979,12 +13339,10 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
       (async () => {
         // Start log
         if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) {
-          logEarlyReturn('opensea', taskId, 'processOpenseaScheduledBid', 'OpenSea disabled globally', { enabledMarketplaces });
           return;
         }
         const currentTask = activeTasks.get(task._id);
         if (!currentTask || !currentTask.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
-          logEarlyReturn('opensea', taskId, 'processOpenseaScheduledBid', 'Task not running or OpenSea not selected', { running: currentTask?.running, selected: currentTask?.selectedMarketplaces });
           return;
         }
 
@@ -14027,7 +13385,6 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
           }
           warningBids[taskId].opensea = true;
           warningMessage[taskId].opensea = preprocessing.opensea.skipReason;
-          logEarlyReturn('opensea', taskId, 'processOpenseaScheduledBid', 'Preprocessing skip', { reason: preprocessing.opensea.skipReason });
           return;
         }
 
@@ -14470,15 +13827,10 @@ function transformSelectedTraitsToAttributes(selectedTraits: Record<string, stri
 
 async function processOpenseaCollectionBid(data: { taskId: string, collectionDetails: any }) {
   const taskId = data.taskId;
-  const log = createOpenseaLogger(taskId, "processOpenseaCollectionBid");
 
   // Structured log: start
-  try { logRaw('opensea', { taskId, function: 'processOpenseaCollectionBid', stage: 'start', level: 'info', message: 'Starting OpenSea collection bid', metadata: { collection: data.collectionDetails?.slug } }); } catch { }
-  log("start", "Starting OpenSea collection bid", { collection: data.collectionDetails?.slug });
 
   if (isTaskBlacklisted(taskId, 'opensea')) {
-    log("validation", "Task is blacklisted for OpenSea", {});
-    logEarlyReturn('opensea', taskId, 'processOpenseaCollectionBid', 'Task blacklisted');
     return;
   }
 
@@ -14486,21 +13838,9 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 
     // Fetch task from activeTasks
     const currentTask = activeTasks.get(taskId);
-    log("validation", "Fetched task for collection bid", {
-      taskFound: !!currentTask,
-      running: currentTask?.running,
-      selectedMarketplaces: currentTask?.selectedMarketplaces,
-      enabledMarketplaces,
-    });
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces
       .map((m) => m.toLowerCase())
       .includes("opensea")) {
-      log("validation", "Task not active or marketplace not selected", {
-        running: currentTask?.running,
-        selected: currentTask?.selectedMarketplaces,
-        enabled: enabledMarketplaces,
-      });
-      logEarlyReturn('opensea', taskId, 'processOpenseaCollectionBid', 'Task not active or marketplace not selected', { running: currentTask?.running, selected: currentTask?.selectedMarketplaces });
       return;
     }
 
@@ -14538,14 +13878,8 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       }).sort({ createdAt: -1 })
     ])
 
-    log("processing", "Fetched floor price and collection orders", {
-      slug: currentTask.contract.slug,
-      floor_price,
-      orderCount: orders.length,
-    });
 
     if (!floor_price) {
-      log("validation", "Floor price fetch returned empty", { slug: currentTask.contract.slug });
       logError('opensea', taskId, 'processOpenseaCollectionBid', 'Failed to fetch floor price', undefined, { slug: currentTask.contract.slug });
       throw new Error(`Failed to fetch floor price for ${currentTask.contract.slug}`);
     }
@@ -14553,53 +13887,23 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     floorPrices[currentTask._id].opensea = floor_price as number;
 
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false)
-    log("processing", "Evaluated collection stop option", { floor: floor_price, stopBid });
     if (stopBid) {
-      log("validation", "Stop condition triggered for collection", { floor_price });
-      logEarlyReturn('opensea', taskId, 'processOpenseaCollectionBid', 'Stop condition met', { floor: floor_price });
       return;
     }
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
-    log("bid_calculation", "Calculated collection bid pricing", {
-      offerPriceEth,
-      maxBidPriceEth,
-      minBidPriceEth,
-      currencySymbol,
-      currency,
-      decimal,
-    });
-
-
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
     const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency);
-    log("processing", "Fetched wallet balance for collection bid", {
-      wallet: currentTask.wallet,
-      balance,
-      currencySymbol,
-      requiredMin: minBidPriceEth,
-    });
-
-
     if (balance < minBidPriceEth) {
-      log("validation", "Insufficient balance for collection bid", {
-        balance,
-        minBidPriceEth,
-        currencySymbol,
-      });
       const errorMsg = balance <= 0
         ? `Insufficient ${currencySymbol} balance: ${balance} (zero or negative) for task ${taskId}`
         : `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId}`;
-
-
       // Increment skip stats
       if (!skipStats[currentTask._id]) {
         skipStats[currentTask._id] = { opensea: 0, magiceden: 0, blur: 0 };
       }
       skipStats[currentTask._id].opensea++;
-
-      logEarlyReturn('opensea', taskId, 'processOpenseaCollectionBid', 'Insufficient balance', { balance, currencySymbol, minBidPriceEth });
 
       // Log the insufficient balance
       await logBidError(taskId, "INSUFFICIENT_BALANCE", errorMsg, "skipped", "opensea");
@@ -14609,11 +13913,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       const parentJobId = getParentJobId(taskId, 'opensea');
       const parentJob = parentJobs.get(parentJobId);
       if (parentJob) {
-        log("queueing", "Marking parent job complete due to insufficient balance", {
-          parentJobId,
-          balance,
-          minBidPriceEth,
-        });
         parentJob.expectedJobs = 0;
         parentJob.totalJobs = 0;
         parentJob.allJobsQueued = true;
@@ -14627,17 +13926,8 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     }
 
     const expiry = getExpiry(currentTask.bidDuration)
-    log("processing", "Calculated expiry for collection bid", { bidDuration: currentTask.bidDuration, expiry });
-
     const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
     let offerPrice = BigInt(Math.ceil(roundToValidPrecision(offerPriceEth) * Math.pow(10, decimal)));
-    log("bid_calculation", "Derived base offer price", {
-      offerPriceEth,
-      roundedOffer: roundToValidPrecision(offerPriceEth),
-      offerPrice: offerPrice.toString(),
-      decimal,
-      usdcBid,
-    });
 
     let colletionOffer = BigInt(offerPrice)
     const [order, ...remainingOrders] = orders
@@ -14648,35 +13938,12 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     const createdAt = new Date(order?.createdAt).getTime()
     const expiredAt = new Date(order?.expiresAt).getTime()
     const orderExpiration = order ? Math.round((expiredAt - createdAt) / 1000) : expiry
-    log("processing", "Evaluated existing order window", {
-      hasOrder: !!order,
-      ttl,
-      currentPrice,
-      orderExpiration,
-      expiry,
-    });
-
     if (!currentTask.outbidOptions.outbid) {
-      log("validation", "Outbid disabled, checking existing order viability", {
-        ttl,
-        currentPrice,
-        colletionOffer: Number(colletionOffer),
-        orderExpiration,
-        expiry,
-      });
       if (ttl >= MIN_BID_DURATION && currentPrice === Number(colletionOffer) && Math.abs(orderExpiration - expiry) < 30) {
-        log("validation", "Skipping bid: existing order still valid", {
-          ttl,
-          currentPrice,
-          colletionOffer: Number(colletionOffer),
-          orderExpiration,
-          expiry,
-        });
         return;
       }
     }
     else {
-      log("processing", "Outbid mode enabled, retrieving competing offers", {});
       // Parallel fetch: wallets and offers
       const [walletsArr, offers] = await Promise.all([
         walletCache.getAllWallets(),
@@ -14687,21 +13954,11 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       const secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal)
 
       const outbidMargin = calculateOutbidMargin(highestBidAmount ? highestBidAmount / Math.pow(10, decimal) : offerPriceEth, currency);
-      log("bid_calculation", "Calculated outbid metrics", {
-        highestBidAmount,
-        secondTopBidAmount,
-        outbidMargin,
-        usdcBid,
-      });
 
       const owner = topOffer.owner.toLowerCase();
       const isOwnBid = walletsArr
         .map(addr => addr.address.toLowerCase())
         .includes(owner);
-      log("validation", "Assessed ownership of top offer", {
-        isOwnBid,
-        owner,
-      });
 
       // 2. Handle own bid case
       if (isOwnBid) {
@@ -14711,45 +13968,23 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 
 
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
-          log("bid_calculation", "Adjusting bid to beat second offer", {
-            spread,
-            secondTopBidAmount,
-            potentialNewBidEth,
-            minBidPriceEth,
-          });
           colletionOffer = BigInt(Math.round(secondTopBidAmount + (outbidMargin * Math.pow(10, decimal))));
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
-          log("validation", "Skipping price correction - below minimum", {
-            spread,
-            potentialNewBidEth,
-            minBidPriceEth,
-          });
+          // Skip price correction
         }
         else if (ttl > MIN_BID_DURATION) {
-          log("validation", "Skipping bid because top offer is ours and still valid", {
-            ttl,
-            MIN_BID_DURATION,
-          });
           return;
         }
         else {
-          log("processing", "Refreshing own bid at same price", {
-            highestBidAmount,
-          });
           colletionOffer = BigInt(Math.round(highestBidAmount));
         }
       }
       else {
-        log("bid_calculation", "Outbidding top offer", {
-          highestBidAmount,
-          outbidMargin,
-        });
         colletionOffer = BigInt(Math.round(highestBidAmount + (outbidMargin * Math.pow(10, decimal))));
       }
     }
     const bidCount = getIncrementedBidCount(OPENSEA, currentTask.contract.slug, currentTask._id)
-    log("processing", "Incremented bid count for collection bid", { bidCount });
 
     if (orders.length > 0) {
       const cancelData = orders.map((order, index) => {
@@ -14758,12 +13993,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
           data: { walletId: currentTask.walletId, orderId: order.orderHash, taskId: currentTask._id, orderKey: order._id },
         }
       })
-      log("queueing", "Queueing cancellation jobs before collection bid", {
-        jobs: cancelData.length,
-        jobNames: cancelData.map((job) => job.name),
-      });
       await queue.addBulk(cancelData);
-      log("queueing", "Cancellation jobs enqueued", { jobs: cancelData.length });
     }
 
     // Convert all creator fees to the IFee format (ensuring values are numbers)
@@ -14772,19 +14002,9 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     );
 
     const offerEth = Number(colletionOffer) / Math.pow(10, decimal);
-    log("bid_calculation", "Calculated offer amount for collection bid", {
-      colletionOffer: Number(colletionOffer),
-      offerEth,
-      decimal,
-    });
 
     // Check if offer exceeds floor price (only for WETH)
     if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
-      log("validation", "Offer exceeds floor price", {
-        offerEth,
-        floor_price,
-        currencySymbol,
-      });
       skipStats[currentTask._id]['opensea']++;
       const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${currentTask.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA.`.toUpperCase();
 
@@ -14795,30 +14015,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 
     if (currentTask.outbidOptions.outbid && offerEth >= maxBidPriceEth) {
       // Enhanced logging with bid configuration details
-      try {
-        logRaw('opensea', {
-          taskId: currentTask._id,
-          function: 'processOpenseaCollectionBid',
-          stage: 'bid_calculation',
-          level: 'warn',
-          message: 'Offer exceeds max bid price',
-          metadata: {
-            offerEth,
-            maxBidPriceEth,
-            currencySymbol,
-            bidPriceConfig: currentTask.bidPrice,
-            openseaBidPrice: currentTask.openseaBidPrice,
-            bidPriceType: currentTask.bidPriceType,
-            floorPrice: floor_price,
-            cancelMaxWhenOutbid: currentTask.outbidOptions.cancelMaxWhenOutbid
-          }
-        });
-      } catch { }
-
-      log("validation", "Offer exceeds max bid price", {
-        offerEth,
-        maxBidPriceEth,
-      });
       skipStats[currentTask._id]['opensea']++;
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${currentTask.contract.slug} collection bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR OPENSEA.Skipping ...`.toUpperCase()
 
@@ -14833,20 +14029,11 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
               data: { walletId: currentTask.walletId, orderId: order.orderHash, taskId: currentTask._id, orderKey: order._id },
             }
           })
-          log("queueing", "Queueing cancellation jobs due to max price exceed", {
-            jobs: cancelData.length,
-            jobNames: cancelData.map((job) => job.name),
-          });
           queue.addBulk(cancelData)
-          log("queueing", "Cancellation jobs enqueued", { jobs: cancelData.length });
         }
       }
       return;
     } else if (offerEth < minBidPriceEth) {
-      log("bid_calculation", "Adjusting offer to minimum bid price", {
-        offerEth,
-        minBidPriceEth,
-      });
       colletionOffer = BigInt(Math.round(minBidPriceEth * Math.pow(10, decimal)));
     }
 
@@ -14854,10 +14041,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       // Fetch wallet and decrypt private key just before use
       const wallet = await walletCache.getWalletById(currentTask.walletId);
       const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
-      log("processing", "Loaded wallet and decrypted key for collection bid", {
-        walletId: currentTask.walletId,
-        hasWallet: !!wallet,
-      });
 
       const bidMetadata = {
         bidCount,
@@ -14870,7 +14053,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
         contractAddress: currentTask.contract.contractAddress,
         creatorFees,
       };
-      log("api_call", "Calling bidOnOpensea for collection bid", bidMetadata);
 
       await bidOnOpensea(
         currentTask._id,
@@ -14884,8 +14066,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
         currency,
         currentTask.contract.contractAddress
       )
-
-      log("completion", "bidOnOpensea resolved successfully for collection bid", bidMetadata);
 
     } catch (bidError) {
       logError('opensea', taskId, 'processOpenseaCollectionBid', 'Failed to place collection bid', bidError, {
@@ -14918,18 +14098,6 @@ async function processBlurScheduledBid(task: ITask) {
   const startTime = Date.now();
 
   // Log function start
-  logRaw('blur', {
-    taskId,
-    function: 'processBlurScheduledBid',
-    stage: 'start',
-    level: 'info',
-    message: `Starting Blur scheduled bid processing - Loop #${currentLoopCount}`,
-    metadata: {
-      loopCount: currentLoopCount,
-      loopCounterStats: loopCounterStats[taskId],
-      taskData: task
-    }
-  });
 
 
   let lockAcquired = false;
@@ -14937,19 +14105,6 @@ async function processBlurScheduledBid(task: ITask) {
   try {
     const currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur") || !enabledMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur")) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurScheduledBid',
-        stage: 'validation',
-        level: 'warn',
-        message: 'Task validation failed - skipping',
-        metadata: {
-          currentTaskExists: !!currentTask,
-          running: currentTask?.running,
-          blurSelected: currentTask?.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur"),
-          blurEnabled: enabledMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur")
-        }
-      });
       return;
     }
 
@@ -14961,17 +14116,6 @@ async function processBlurScheduledBid(task: ITask) {
     let preprocessing = taskPreprocessing.get(taskId);
 
     if (!preprocessing || !preprocessing.blur.enabled) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurScheduledBid',
-        stage: 'preprocessing',
-        level: 'info',
-        message: 'No preprocessing data found, performing preprocessing now',
-        metadata: {
-          hasPreprocessing: !!preprocessing,
-          blurEnabled: preprocessing?.blur?.enabled
-        }
-      });
 
 
       // Determine available marketplaces for this task
@@ -14987,48 +14131,17 @@ async function processBlurScheduledBid(task: ITask) {
       // Store in Map for other marketplaces to use
       taskPreprocessing.set(taskId, preprocessing);
 
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurScheduledBid',
-        stage: 'preprocessing',
-        level: 'info',
-        message: 'Preprocessing completed',
-        metadata: {
-          blurEnabled: preprocessing.blur.enabled,
-          availableMarketplaces
-        }
-      });
 
       // If preprocessing didn't enable Blur, it means something went wrong
       if (!preprocessing.blur.enabled) {
         const error = new Error(`Preprocessing failed to enable Blur for task ${taskId}`);
 
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurScheduledBid',
-          stage: 'preprocessing',
-          level: 'error',
-          message: 'Preprocessing failed to enable Blur',
-          metadata: {
-            error: error.message
-          }
-        });
 
         throw error;
       }
     }
 
     if (preprocessing.blur.skipReason) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurScheduledBid',
-        stage: 'preprocessing',
-        level: 'warn',
-        message: 'Preprocessing indicated skip',
-        metadata: {
-          skipReason: preprocessing.blur.skipReason
-        }
-      });
 
       if (!warningBids[taskId]) {
         warningBids[taskId] = { opensea: false, magiceden: false, blur: false };
@@ -15069,46 +14182,15 @@ async function processBlurScheduledBid(task: ITask) {
     // Use timed lock manager for better timeout handling
     lockAcquired = timedLockManager.acquireLock(taskId, 'blur');
     if (!lockAcquired) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurScheduledBid',
-        stage: 'validation',
-        level: 'warn',
-        message: 'Task already being processed - skipping',
-        metadata: {
-          lockKey: `${taskId}-blur`
-        }
-      });
 
       return;
     }
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurScheduledBid',
-      stage: 'validation',
-      level: 'info',
-      message: 'Lock acquired successfully',
-      metadata: {
-        lockKey: `${taskId}-blur`
-      }
-    });
 
 
     const { currencySymbol } = await calculateBidPrice(currentTask, 0, "blur")
 
     if (currencySymbol.toLowerCase() !== "weth") {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurScheduledBid',
-        stage: 'validation',
-        level: 'warn',
-        message: 'Unsupported currency for Blur',
-        metadata: {
-          currencySymbol,
-          supportedCurrency: 'WETH'
-        }
-      });
 
       if (!warningMessage[taskId]) {
         warningMessage[taskId] = {
@@ -15143,45 +14225,13 @@ async function processBlurScheduledBid(task: ITask) {
     // Fetch fresh BETH balance with timeout protection
     let bethBalance = 0;
     try {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurScheduledBid',
-        stage: 'validation',
-        level: 'info',
-        message: 'Fetching BETH balance',
-        metadata: {
-          walletAddress: WALLET_ADDRESS
-        }
-      });
 
       const { fetchERC20BalanceFresh } = await import('./utils/balance');
       const { BETH } = await import('./utils/currencies');
       bethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, BETH);
 
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurScheduledBid',
-        stage: 'validation',
-        level: 'info',
-        message: 'BETH balance fetched successfully',
-        metadata: {
-          walletAddress: WALLET_ADDRESS,
-          bethBalance
-        }
-      });
 
     } catch (error) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurScheduledBid',
-        stage: 'validation',
-        level: 'error',
-        message: 'Failed to fetch BETH balance',
-        metadata: {
-          walletAddress: WALLET_ADDRESS,
-          errorMessage: error instanceof Error ? error.message : String(error)
-        }
-      });
 
       console.error(`${RED}[Blur] Failed to fetch BETH balance: ${error}${RESET}`);
     }
@@ -15195,19 +14245,6 @@ async function processBlurScheduledBid(task: ITask) {
         ? `Insufficient BETH balance: ${bethBalance} (zero or negative) for task ${taskId}`
         : `Insufficient BETH balance: ${bethBalance} < ${minBidPriceEth} for task ${taskId}`;
 
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurScheduledBid',
-        stage: 'validation',
-        level: 'warn',
-        message: 'Insufficient BETH balance',
-        metadata: {
-          walletAddress: WALLET_ADDRESS,
-          bethBalance,
-          minBidPriceEth,
-          errorMsg
-        }
-      });
 
 
       // Increment skip stats
@@ -15230,18 +14267,6 @@ async function processBlurScheduledBid(task: ITask) {
         parentJob.completedJobs = 0;
         parentJob.allJobsQueued = true;
 
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurScheduledBid',
-          stage: 'early_return',
-          level: 'info',
-          message: 'Marked parent job as complete due to insufficient balance',
-          metadata: {
-            parentJobId,
-            bethBalance,
-            minBidPriceEth
-          }
-        });
 
       }
 
@@ -15259,16 +14284,6 @@ async function processBlurScheduledBid(task: ITask) {
     const newTask = { ...currentTask, traits: {} } as ITask
 
     // Check authentication block status before pre-authenticating
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurScheduledBid',
-      stage: 'validation',
-      level: 'debug',
-      message: 'Checking authentication block status',
-      metadata: {
-        walletAddress: WALLET_ADDRESS
-      }
-    });
 
     const redis = redisClient.getClient();
     if (redis) {
@@ -15281,20 +14296,6 @@ async function processBlurScheduledBid(task: ITask) {
           const waitTime = blockTime - Date.now();
           const waitSeconds = Math.round(waitTime / 1000);
 
-          logRaw('blur', {
-            taskId,
-            function: 'processBlurScheduledBid',
-            stage: 'early_return',
-            level: 'warn',
-            message: 'Wallet is blocked from authentication',
-            metadata: {
-              walletAddress: WALLET_ADDRESS,
-              blockTime,
-              resumeAt: new Date(blockTime).toISOString(),
-              waitSeconds,
-              validationReason: 'auth_blocked'
-            }
-          });
 
 
           if (!skipStats[taskId]) {
@@ -15313,16 +14314,6 @@ async function processBlurScheduledBid(task: ITask) {
     }
 
     // Pre-authenticate for Blur before creating jobs
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurScheduledBid',
-      stage: 'preprocessing',
-      level: 'info',
-      message: 'Starting pre-authentication for wallet',
-      metadata: {
-        walletAddress: WALLET_ADDRESS
-      }
-    });
 
     try {
       const authStartTime = Date.now();
@@ -15330,42 +14321,9 @@ async function processBlurScheduledBid(task: ITask) {
 
       if (accessToken) {
         const authTime = Date.now() - authStartTime;
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurScheduledBid',
-          stage: 'preprocessing',
-          level: 'info',
-          message: 'Successfully pre-authenticated wallet',
-          metadata: {
-            walletAddress: WALLET_ADDRESS,
-            duration: authTime
-          }
-        });
       } else {
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurScheduledBid',
-          stage: 'preprocessing',
-          level: 'warn',
-          message: 'Failed to pre-authenticate wallet',
-          metadata: {
-            walletAddress: WALLET_ADDRESS
-          }
-        });
       }
     } catch (authError: any) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurScheduledBid',
-        stage: 'preprocessing',
-        level: 'error',
-        message: 'Error pre-authenticating wallet',
-        metadata: {
-          walletAddress: WALLET_ADDRESS,
-          errorMessage: authError.message,
-          errorStack: authError.stack
-        }
-      });
 
       console.error(`${RED}[Blur Auth Warm-up] Error pre-authenticating wallet ${WALLET_ADDRESS}: ${authError}${RESET}`);
 
@@ -15377,16 +14335,6 @@ async function processBlurScheduledBid(task: ITask) {
     }
 
     // Check wallet pause status before creating jobs
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurScheduledBid',
-      stage: 'validation',
-      level: 'debug',
-      message: 'Checking wallet pause status',
-      metadata: {
-        walletAddress: WALLET_ADDRESS
-      }
-    });
 
     const walletPauseKey = `blur:wallet:pause:${WALLET_ADDRESS}`;
     const walletPauseUntil = redis ? await redis.get(walletPauseKey) : null;
@@ -15395,19 +14343,6 @@ async function processBlurScheduledBid(task: ITask) {
       const pauseTime = parseInt(walletPauseUntil);
       if (pauseTime > Date.now()) {
         const waitTime = pauseTime - Date.now();
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurScheduledBid',
-          stage: 'early_return',
-          level: 'warn',
-          message: 'Wallet is paused',
-          metadata: {
-            walletAddress: WALLET_ADDRESS,
-            pauseUntil: pauseTime,
-            waitSeconds: Math.round(waitTime / 1000),
-            validationReason: 'wallet_paused'
-          }
-        });
         throw new Error(`Wallet paused for ${Math.round(waitTime / 1000)}s`);
       }
     }
@@ -15427,20 +14362,6 @@ async function processBlurScheduledBid(task: ITask) {
       const batchSize = BLUR_RATE_LIMIT.batchSize;
       const totalBatches = Math.ceil(totalTraits / batchSize);
 
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurScheduledBid',
-        stage: 'queueing',
-        level: 'info',
-        message: 'Processing trait bids in batches',
-        metadata: {
-          totalTraits,
-          batchSize,
-          totalBatches,
-          rateLimitWindow: BLUR_RATE_LIMIT.windowDuration,
-          maxBidsPerWindow: BLUR_RATE_LIMIT.maxBidsPerWindow
-        }
-      });
 
 
       // Ensure parent job exists BEFORE processing jobs
@@ -15450,17 +14371,6 @@ async function processBlurScheduledBid(task: ITask) {
       if (parentJob) {
         parentJob.expectedJobs = preprocessing.blur.traits.length;
         parentJob.totalJobs = preprocessing.blur.traits.length; // Use expected count initially
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurScheduledBid',
-          stage: 'queueing',
-          level: 'debug',
-          message: 'Set parent job expected jobs',
-          metadata: {
-            parentJobId,
-            expectedJobs: parentJob.expectedJobs
-          }
-        });
       }
 
       // Process traits in smaller batches that respect the rate limit
@@ -15469,21 +14379,6 @@ async function processBlurScheduledBid(task: ITask) {
         const batchTraits = preprocessing.blur.traits.slice(i, i + batchSize);
         const batchDelay = (batchNumber - 1) * BLUR_RATE_LIMIT.batchDelay;
 
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurScheduledBid',
-          stage: 'batch_processing',
-          level: 'info',
-          message: 'Scheduling trait batch',
-          metadata: {
-            batchNumber,
-            totalBatches,
-            batchSize: batchTraits.length,
-            batchDelaySeconds: batchDelay / 1000,
-            startIndex: i,
-            endIndex: i + batchTraits.length - 1
-          }
-        });
 
 
         // Create jobs for this batch with staggered delays within the batch
@@ -15523,19 +14418,6 @@ async function processBlurScheduledBid(task: ITask) {
         // Register for job creation verification (for this batch)
         registerJobCreationVerification(taskId, 'blur', batchSize);
 
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurScheduledBid',
-          stage: 'batch_processing',
-          level: 'debug',
-          message: 'Batch scheduled successfully',
-          metadata: {
-            batchNumber,
-            totalBatches,
-            jobsQueued: batchTraits.length,
-            estimatedStartTime: new Date(Date.now() + batchDelay).toISOString()
-          }
-        });
 
         // Log batch scheduling
       }
@@ -15544,35 +14426,10 @@ async function processBlurScheduledBid(task: ITask) {
       const effectiveBidsPerSecond = BLUR_RATE_LIMIT.batchSize / BLUR_RATE_LIMIT.windowDuration * 1000;
       const utilizationPercent = (BLUR_RATE_LIMIT.batchSize / BLUR_RATE_LIMIT.maxBidsPerWindow * 100).toFixed(1);
 
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurScheduledBid',
-        stage: 'queueing',
-        level: 'info',
-        message: 'All trait bids scheduled',
-        metadata: {
-          totalTraits,
-          totalBatches,
-          estimatedCompletionTime: totalTime,
-          effectiveBidsPerSecond,
-          utilizationPercent
-        }
-      });
 
 
     } else if (preprocessing.blur.jobCount === 1) {
       // Collection bid
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurScheduledBid',
-        stage: 'queueing',
-        level: 'info',
-        message: 'Creating collection bid job',
-        metadata: {
-          contractAddress,
-          slug: currentTask.contract.slug
-        }
-      });
 
 
       const slug = removeChar(currentTask.contract.slug, "-")
@@ -15585,17 +14442,6 @@ async function processBlurScheduledBid(task: ITask) {
       if (parentJob) {
         parentJob.expectedJobs = 1;
         parentJob.totalJobs = 1; // Use expected count initially
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurScheduledBid',
-          stage: 'queueing',
-          level: 'debug',
-          message: 'Set parent job for collection bid',
-          metadata: {
-            parentJobId,
-            expectedJobs: 1
-          }
-        });
       }
 
       await blurQueue.add(
@@ -15608,18 +14454,6 @@ async function processBlurScheduledBid(task: ITask) {
       if (parentJob) {
         parentJob.actualJobs = 1;
         parentJob.allJobsQueued = true;
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurScheduledBid',
-          stage: 'queueing',
-          level: 'info',
-          message: 'Collection bid job queued successfully',
-          metadata: {
-            jobId,
-            parentJobId,
-            actualJobs: 1
-          }
-        });
       }
 
       if (currentTask && currentTask.running) {
@@ -15633,18 +14467,6 @@ async function processBlurScheduledBid(task: ITask) {
       await updateTaskRunningPercentage(taskId);
     } else {
       // No jobs to create - create empty parent job and complete the loop
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurScheduledBid',
-        stage: 'early_return',
-        level: 'warn',
-        message: 'No jobs to create',
-        metadata: {
-          preprocessingJobCount: preprocessing.blur.jobCount,
-          traitCount: preprocessing.blur.traits.length,
-          validationReason: 'no_eligible_jobs'
-        }
-      });
 
 
       const parentJobId = `${taskId}-blur`;
@@ -15668,26 +14490,6 @@ async function processBlurScheduledBid(task: ITask) {
   } catch (error) {
     console.error(RED + `Error processing Blur scheduled bid for task: ${task._id}` + RESET, error);
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurScheduledBid',
-      stage: 'error',
-      level: 'error',
-      message: 'Error processing scheduled bid',
-      metadata: {
-        errorMessage: error instanceof Error ? error.message : String(error),
-        errorStack: error instanceof Error ? error.stack : undefined,
-        duration: Date.now() - startTime,
-        taskData: {
-          running: task.running,
-          selectedMarketplaces: task.selectedMarketplaces,
-          contract: task.contract,
-          selectedTraits: task.selectedTraits,
-          bidPrice: task.bidPrice,
-          loopInterval: task.loopInterval
-        }
-      }
-    });
 
     // Log to file
     const logsDir = path.join(process.cwd(), 'logs');
@@ -15721,30 +14523,9 @@ async function processBlurScheduledBid(task: ITask) {
     if (lockAcquired) {
       timedLockManager.releaseLock(taskId, 'blur');
 
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurScheduledBid',
-        stage: 'completion',
-        level: 'info',
-        message: 'Released lock',
-        metadata: {
-          lockKey: `${taskId}-blur`,
-          duration: Date.now() - startTime
-        }
-      });
 
     }
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurScheduledBid',
-      stage: 'completion',
-      level: 'info',
-      message: 'Scheduled bid processing completed',
-      metadata: {
-        totalDuration: Date.now() - startTime
-      }
-    });
   }
 }
 
@@ -15754,50 +14535,16 @@ async function processBlurCollectionBid(data: { taskId: string }) {
   const startTime = Date.now();
 
   // Entry log
-  logRaw('blur', {
-    taskId,
-    function: 'processBlurCollectionBid',
-    stage: 'start',
-    level: 'info',
-    message: 'Starting collection bid process',
-    metadata: {
-      startTime
-    }
-  });
 
 
   // Check if task is blacklisted before processing
   if (isTaskBlacklisted(taskId)) {
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurCollectionBid',
-      stage: 'early_return',
-      level: 'warn',
-      message: 'Task is blacklisted',
-      metadata: {
-        validationReason: 'task_blacklisted'
-      }
-    });
     return;
   }
 
   // Fetch task from activeTasks outside try block so it's accessible in catch
   const currentTask = activeTasks.get(taskId);
   if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((market) => market.toLowerCase()).includes("blur")) {
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurCollectionBid',
-      stage: 'validation',
-      level: 'warn',
-      message: 'Task validation failed',
-      metadata: {
-        taskExists: !!currentTask,
-        running: currentTask?.running,
-        blurSelected: currentTask?.selectedMarketplaces?.map(m => m.toLowerCase()).includes("blur"),
-        blurEnabled: enabledMarketplaces.map((market) => market.toLowerCase()).includes("blur"),
-        validationReason: !currentTask ? 'task_not_found' : !currentTask.running ? 'task_not_running' : 'blur_not_selected'
-      }
-    });
     return;
   }
 
@@ -15806,87 +14553,22 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
   try {
     if (!enabledMarketplaces.length) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'early_return',
-        level: 'warn',
-        message: 'No enabled marketplaces',
-        metadata: {
-          validationReason: 'no_enabled_marketplaces'
-        }
-      });
       return;
     }
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurCollectionBid',
-      stage: 'wallet_selection',
-      level: 'debug',
-      message: 'Fetching wallet',
-      metadata: {
-        walletId: currentTask.walletId
-      }
-    });
 
     const wallets = await walletCache.getWalletById(currentTask.walletId)
     const privateKey: string = decryptPrivateKey(wallets?.encryptedPrivateKey as string)
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurCollectionBid',
-      stage: 'floor_price_check',
-      level: 'info',
-      message: 'Fetching collection floor price',
-      metadata: {
-        collection: currentTask.contract.slug,
-        contractAddress: currentTask.contract.contractAddress
-      }
-    });
 
 
     const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
     if (!floor_price) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'error',
-        level: 'error',
-        message: 'Failed to fetch floor price',
-        metadata: {
-          collection: currentTask.contract.slug,
-          errorCode: 'FLOOR_PRICE_FETCH_FAILED'
-        }
-      });
       throw new Error(`Failed to fetch floor price for ${currentTask.contract.slug}`);
     }
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurCollectionBid',
-      stage: 'floor_price_check',
-      level: 'info',
-      message: 'Floor price fetched successfully',
-      metadata: {
-        collection: currentTask.contract.slug,
-        floorPrice: floor_price.toString()
-      }
-    });
 
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurCollectionBid',
-      stage: 'order_check',
-      level: 'debug',
-      message: 'Fetching existing orders',
-      metadata: {
-        collection: currentTask.contract.slug,
-        marketplace: BLUR.toLowerCase(),
-        identifier: 'collection'
-      }
-    });
 
     const orders = await Order.find({
       slug: currentTask.contract.slug,
@@ -15895,56 +14577,13 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       identifier: "collection"
     }).sort({ createdAt: -1 })
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurCollectionBid',
-      stage: 'order_check',
-      level: 'info',
-      message: 'Existing orders found',
-      metadata: {
-        orderCount: orders.length,
-        collection: currentTask.contract.slug
-      }
-    });
 
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurCollectionBid',
-      stage: 'validation',
-      level: 'debug',
-      message: 'Checking stop conditions',
-      metadata: {
-        floorPrice: floor_price.toString()
-      }
-    });
 
     const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), false)
     if (stopBid) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'early_return',
-        level: 'warn',
-        message: 'Stop condition met',
-        metadata: {
-          validationReason: 'stop_condition',
-          orderCount: orders.length,
-          floorPrice: floor_price.toString()
-        }
-      });
 
       if (orders.length > 0) {
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurCollectionBid',
-          stage: 'cancellation',
-          level: 'info',
-          message: 'Cancelling existing orders due to stop condition',
-          metadata: {
-            orderCount: orders.length
-          }
-        });
 
         const cancelData = orders.map((order) => {
           const payload = JSON.parse(order.orderHash)
@@ -15969,81 +14608,22 @@ async function processBlurCollectionBid(data: { taskId: string }) {
     }
     floorPrices[currentTask._id].blur = floor_price;
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurCollectionBid',
-      stage: 'bid_calculation',
-      level: 'info',
-      message: 'Calculating bid prices',
-      metadata: {
-        floorPrice: floor_price.toString(),
-        collection: currentTask.contract.slug
-      }
-    });
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "blur")
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurCollectionBid',
-      stage: 'bid_calculation',
-      level: 'info',
-      message: 'Bid prices calculated',
-      metadata: {
-        offerPriceEth: offerPriceEth.toString(),
-        minBidPriceEth: minBidPriceEth.toString(),
-        maxBidPriceEth: maxBidPriceEth.toString(),
-        collection: currentTask.contract.slug
-      }
-    });
 
 
     // Fetch fresh BETH balance and check if sufficient for minimum bid
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurCollectionBid',
-      stage: 'validation',
-      level: 'debug',
-      message: 'Fetching wallet BETH balance',
-      metadata: {
-        walletAddress: currentTask.wallet
-      }
-    });
 
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
     const { BETH } = await import('./utils/currencies');
     const balance = await fetchERC20BalanceFresh(currentTask.wallet, BETH);
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurCollectionBid',
-      stage: 'validation',
-      level: 'info',
-      message: 'Wallet balance fetched',
-      metadata: {
-        walletAddress: currentTask.wallet,
-        balance: balance.toString(),
-        requiredBalance: minBidPriceEth.toString()
-      }
-    });
 
 
     if (balance < minBidPriceEth) {
       skipStats[currentTask._id]['blur']++;
 
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'early_return',
-        level: 'warn',
-        message: 'Insufficient BETH balance',
-        metadata: {
-          walletAddress: currentTask.wallet,
-          balance: balance.toString(),
-          requiredBalance: minBidPriceEth.toString(),
-          validationReason: 'insufficient_balance'
-        }
-      });
 
 
       await logBidError(
@@ -16064,19 +14644,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       skipStats[currentTask._id]['blur']++;
       const message = `⚠️ Offer price ${offerEth} WETH for ${currentTask.contract.slug} collection bid exceeds floor price ${floor_price} WETH FOR BLUR.`.toUpperCase();
 
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'floor_price_check',
-        level: 'warn',
-        message: 'Offer exceeds floor price',
-        metadata: {
-          offerPrice: offerEth.toString(),
-          floorPrice: floor_price.toString(),
-          collection: currentTask.contract.slug,
-          validationReason: 'offer_exceeds_floor'
-        }
-      });
 
       await logBidError(currentTask._id, "OFFER EXCEEDS FLOOR PRICE", message, "warning", "blur");
       return;
@@ -16093,33 +14660,10 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
     if (!currentTask.outbidOptions.outbid) {
       if (ttl >= MIN_BID_DURATION && currentPrice === Number(colletionOffer) && Math.abs(orderExpiration - expiry) < 30) {
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurCollectionBid',
-          stage: 'early_return',
-          level: 'info',
-          message: 'Existing bid still valid',
-          metadata: {
-            ttl,
-            currentPrice: currentPrice.toString(),
-            offerPrice: (Number(colletionOffer) / 1e18).toString(),
-            validationReason: 'existing_bid_valid'
-          }
-        });
         return;
       }
     }
     else {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'counterbid',
-        level: 'info',
-        message: 'Checking for counterbid opportunity',
-        metadata: {
-          collection: currentTask.contract.slug
-        }
-      });
 
       const highestBid = await fetchBlurBid(currentTask.contract.slug, "COLLECTION", {});
       const [topOffer, secondOffer] = highestBid?.priceLevels?.sort((a, b) => +b.price - +a.price) || [{ price: "0" }, { price: "0" }];
@@ -16131,50 +14675,13 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       const isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(currentTask.wallet.toLowerCase())
       const blurOutbidMargin = currentTask.outbidOptions.blurOutbidMargin || 0.01
 
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'counterbid',
-        level: 'debug',
-        message: 'Bid analysis complete',
-        metadata: {
-          isTopBid,
-          topOfferAmount: topOfferAmount.toString(),
-          secondOfferAmount: secondOfferAmount.toString(),
-          numberBidders,
-          blurOutbidMargin
-        }
-      });
 
       if (isTopBid) {
         const spread = (Number(topOfferAmount) - Number(secondOfferAmount));
         if (+spread.toFixed(2) > blurOutbidMargin && Number(secondOfferAmount) > 0) {
           const bidPrice = secondOfferAmount + blurOutbidMargin
           colletionOffer = BigInt(Math.round(bidPrice * 1e18));
-          logRaw('blur', {
-            taskId,
-            function: 'processBlurCollectionBid',
-            stage: 'counterbid',
-            level: 'info',
-            message: 'Adjusting bid to maintain position',
-            metadata: {
-              spread: spread.toString(),
-              newBidPrice: bidPrice.toString()
-            }
-          });
         } else if (ttl > MIN_BID_DURATION) {
-          logRaw('blur', {
-            taskId,
-            function: 'processBlurCollectionBid',
-            stage: 'early_return',
-            level: 'info',
-            message: 'Already have top bid with sufficient time',
-            metadata: {
-              topOfferAmount: topOfferAmount.toString(),
-              ttlMinutes: (ttl / 60).toFixed(2),
-              validationReason: 'top_bid_sufficient_time'
-            }
-          });
 
           return;
         } else {
@@ -16183,18 +14690,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       }
       else {
         colletionOffer = BigInt(Math.round((topOfferAmount + blurOutbidMargin) * 1e18));
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurCollectionBid',
-          stage: 'counterbid',
-          level: 'info',
-          message: 'Setting counterbid amount',
-          metadata: {
-            topOfferAmount: topOfferAmount.toString(),
-            outbidMargin: blurOutbidMargin.toString(),
-            newBidAmount: ((topOfferAmount + blurOutbidMargin)).toString()
-          }
-        });
       }
     }
 
@@ -16203,33 +14698,11 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
     if (collectionOfferEth < minBidPriceEth) {
       colletionOffer = BigInt(Math.round(minBidPriceEth * 1e18))
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'bid_calculation',
-        level: 'info',
-        message: 'Adjusting offer to minimum bid price',
-        metadata: {
-          originalOffer: collectionOfferEth.toString(),
-          adjustedOffer: minBidPriceEth.toString()
-        }
-      });
     }
 
     const bidCount = getIncrementedBidCount(BLUR, currentTask.contract.slug, currentTask._id)
 
     if (orders.length > 0) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'cancellation',
-        level: 'info',
-        message: 'Cancelling existing orders before placing new bid',
-        metadata: {
-          orderCount: orders.length,
-          collection: currentTask.contract.slug
-        }
-      });
 
       const cancelData = orders.map((order) => {
         const payload = JSON.parse(order.orderHash)
@@ -16256,40 +14729,11 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       skipStats[currentTask._id]['blur']++;
       const message = `❌ Offer price ${collectionOfferEth} BETH for ${currentTask.contract.slug} collection bid exceeds max bid price ${maxBidPriceEth} BETH FOR BLUR BID.Skipping ...`.toUpperCase()
 
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'validation',
-        level: 'warn',
-        message: 'Offer exceeds maximum bid price',
-        metadata: {
-          offerPrice: collectionOfferEth.toString(),
-          maxBidPrice: maxBidPriceEth.toString(),
-          collection: currentTask.contract.slug,
-          validationReason: 'max_price_exceeded',
-          bidPriceConfig: currentTask.bidPrice,
-          blurBidPrice: currentTask.blurBidPrice,
-          bidPriceType: currentTask.bidPriceType,
-          floorPrice: floor_price,
-          cancelMaxWhenOutbid: currentTask.outbidOptions.cancelMaxWhenOutbid
-        }
-      });
 
 
       await logBidError(currentTask._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "blur");
 
       if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurCollectionBid',
-          stage: 'cancellation',
-          level: 'info',
-          message: 'Cancelling orders due to max price exceeded',
-          metadata: {
-            orderCount: orders.length,
-            cancelMaxWhenOutbid: true
-          }
-        });
         if (orders.length > 0) {
           const cancelData = orders.map((order) => {
             const payload = JSON.parse(order.orderHash)
@@ -16306,17 +14750,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       return;
     } else if (collectionOfferEth < minBidPriceEth) {
       colletionOffer = BigInt(Math.round(minBidPriceEth * 1e18));
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'bid_calculation',
-        level: 'info',
-        message: 'Adjusting offer to minimum bid price',
-        metadata: {
-          originalOffer: collectionOfferEth.toString(),
-          adjustedOffer: minBidPriceEth.toString()
-        }
-      });
     }
 
     // Validate offer amount meets Blur's minimum before calling bidOnBlur
@@ -16327,19 +14760,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       skipStats[currentTask._id]['blur']++;
       const message = `Offer price ${finalOfferEth} BETH is below minimum blur offer price (${BLUR_MIN_OFFER} BETH) for collection ${currentTask.contract.slug}`;
 
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'validation',
-        level: 'warn',
-        message: 'Offer below minimum allowed',
-        metadata: {
-          offerPrice: finalOfferEth.toString(),
-          minimumPrice: BLUR_MIN_OFFER.toString(),
-          collection: currentTask.contract.slug,
-          validationReason: 'below_minimum_offer'
-        }
-      });
 
 
       await logBidError(currentTask._id, "BELOW_MINIMUM_OFFER", message, "skipped", "blur");
@@ -16348,69 +14768,18 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
     // Wrap bidOnBlur call to track completion
     try {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'api_call',
-        level: 'info',
-        message: 'Placing collection bid',
-        metadata: {
-          bidAmount: (Number(colletionOffer) / 1e18).toString(),
-          expiry,
-          collection: currentTask.contract.slug,
-          contractAddress: currentTask.contract.contractAddress,
-          bidCount
-        }
-      });
 
 
       await bidOnBlur(currentTask._id, bidCount, currentTask.wallet, privateKey, currentTask.contract.contractAddress, colletionOffer, currentTask.contract.slug, expiry);
 
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'completion',
-        level: 'info',
-        message: 'Collection bid placed successfully',
-        metadata: {
-          bidAmount: (Number(colletionOffer) / 1e18).toString(),
-          collection: currentTask.contract.slug,
-          bidCount,
-          duration: Date.now() - startTime
-        }
-      });
 
     } catch (bidError: any) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'error',
-        level: 'error',
-        message: 'Failed to place collection bid',
-        metadata: {
-          errorMessage: bidError instanceof Error ? bidError.message : String(bidError),
-          errorStack: bidError instanceof Error ? bidError.stack : undefined,
-          collection: currentTask.contract.slug,
-          bidAmount: (Number(colletionOffer) / 1e18).toString()
-        }
-      });
 
       throw bidError; // Re-throw to be handled by outer catch
     }
   } catch (error: any) {
     // Handle rate limit errors
     if (error?.code === 'RATE_LIMITED') {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'rate_limit',
-        level: 'warn',
-        message: 'Rate limited',
-        metadata: {
-          collection: currentTask.contract.slug,
-          errorCode: 'RATE_LIMITED'
-        }
-      });
       throw error; // Re-throw to let worker handle retry with delay
     }
     // Initialize errorStats if needed
@@ -16425,38 +14794,11 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
     // Handle transfer restriction errors
     if (error.code === 'TRANSFER_RESTRICTED') {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurCollectionBid',
-        stage: 'error',
-        level: 'warn',
-        message: 'Transfer restricted collection',
-        metadata: {
-          collection: currentTask.contract.slug,
-          errorCode: 'TRANSFER_RESTRICTED',
-          errorMessage: error.message
-        }
-      });
       await logBidError(currentTask._id, "BLUR TRANSFER RESTRICTION", error.message, "warning", "blur");
       // Update tracking for transfer restriction
       return;
     }
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurCollectionBid',
-      stage: 'error',
-      level: 'error',
-      message: 'Fatal error processing collection bid',
-      metadata: {
-        errorMessage: error instanceof Error ? error.message : String(error),
-        errorStack: error instanceof Error ? error.stack : undefined,
-        errorCode: error?.code,
-        errorResponse: error?.response?.data,
-        collection: currentTask?.contract?.slug,
-        duration: Date.now() - startTime
-      }
-    });
 
     await logBidError(currentTask._id, "BLUR COLLECTION BID ERROR", `Error processing Blur collection bid for task: ${currentTask._id}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)}`, "error", "blur");
 
@@ -16486,25 +14828,23 @@ async function processOpenseaTraitBid(data: {
   let errorMessage: string | undefined;
 
   // Structured start
-  try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'start', level: 'info', message: 'Starting OpenSea trait bid', metadata: { slug: data.slug, trait: data.trait } }); } catch { }
   const traitInfo = JSON.parse(data.trait);
 
   // Check if task is blacklisted before processing
   if (isTaskBlacklisted(data._id)) {
-    try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Task blacklisted', metadata: {} }); } catch { }
     return;
   }
 
   try {
-    if (!enabledMarketplaces.length) { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'No marketplaces enabled', metadata: {} }); } catch { }; return; }
-    if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'OpenSea disabled globally', metadata: {} }); } catch { }; return; }
+    if (!enabledMarketplaces.length) { return; }
+    if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) { return; }
 
     // Check if task is still active
     const task = activeTasks.get(data._id);
-    if (!task || !task.running) { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Task not running', metadata: {} }); } catch { }; return; }
+    if (!task || !task.running) { return; }
 
     // Check if OpenSea marketplace status is COMPLETED or STOPPED
-    if (taskStatus[data._id]?.marketplaces?.opensea?.status === 'COMPLETED' || taskStatus[data._id]?.marketplaces?.opensea?.status === 'STOPPED') { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Marketplace status completed/stopped', metadata: { status: taskStatus[data._id]?.marketplaces?.opensea?.status } }); } catch { }; return; }
+    if (taskStatus[data._id]?.marketplaces?.opensea?.status === 'COMPLETED' || taskStatus[data._id]?.marketplaces?.opensea?.status === 'STOPPED') { return; }
 
     const { address, walletId, slug, creatorFees, enforceCreatorFee, trait, contractAddress, _id } = data
 
@@ -16517,7 +14857,7 @@ async function processOpenseaTraitBid(data: {
     const parsedTrait = JSON.parse(trait);
 
     const currentTask = activeTasks.get(_id)
-    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) { try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Task not running or marketplace not selected', metadata: { running: currentTask?.running, selected: currentTask?.selectedMarketplaces } }); } catch { }; return; }
+    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) { return; }
 
 
     // Initialize stats early
@@ -16556,13 +14896,12 @@ async function processOpenseaTraitBid(data: {
     ]);
 
 
-    if (!floor_price) { try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTraitBid', stage: 'error', level: 'error', message: 'Failed to fetch floor price', metadata: { slug } }); } catch { }; throw new Error(`Failed to fetch floor price for ${slug}`); }
+    if (!floor_price) { throw new Error(`Failed to fetch floor price for ${slug}`); }
 
     floorPrices[_id].opensea = floor_price as number;
 
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false, traitFloor, identifier)
     if (stopBid) {
-      try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTraitBid', stage: 'early_return', level: 'warn', message: 'Stop option triggered for trait', metadata: { identifier, floor: floor_price, traitFloor } }); } catch { }
       if (orders.length > 0) {
         const cancelData = orders.map((order, index) => {
           return {
@@ -16655,25 +14994,6 @@ async function processOpenseaTraitBid(data: {
 
     if (outbidOptions.outbid && offerEth >= maxBidPriceEth) {
       // Log bid price configuration for debugging
-      try {
-        logRaw('opensea', {
-          taskId: _id,
-          function: 'processOpenseaTraitBid',
-          stage: 'bid_calculation',
-          level: 'warn',
-          message: 'Offer exceeds max bid price',
-          metadata: {
-            offerEth,
-            maxBidPriceEth,
-            currencySymbol,
-            bidPriceConfig: currentTask.bidPrice,
-            openseaBidPrice: currentTask.openseaBidPrice,
-            bidPriceType: currentTask.bidPriceType,
-            floorPrice: floor_price,
-            cancelMaxWhenOutbid: currentTask.outbidOptions.cancelMaxWhenOutbid
-          }
-        });
-      } catch { }
       skipStats[_id]['opensea']++;
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${slug} trait ${trait} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR OPENSEA.Skipping ...`.toUpperCase()
       logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea"); // Non-blocking
@@ -16688,22 +15008,6 @@ async function processOpenseaTraitBid(data: {
           })
 
           // Log cancellation enqueue
-          try {
-            logRaw('opensea', {
-              taskId: _id,
-              function: 'processOpenseaTraitBid',
-              stage: 'queueing',
-              level: 'info',
-              message: 'Queueing cancellation jobs - max bid exceeded',
-              metadata: {
-                jobCount: cancelData.length,
-                reason: 'max_bid_exceeded',
-                offerEth,
-                maxBidPriceEth
-              }
-            });
-          } catch { }
-
           queue.addBulk(cancelData)
         }
       }
@@ -16746,6 +15050,7 @@ async function processOpenseaTraitBid(data: {
       // Format OpenSea error message for better readability
       errorMessage = extractDetailedOpenSeaError(bidError);
 
+      
       console.error(RED + `OpenSea trait bid failed for ${_id} ${trait}:`, errorMessage + RESET);
 
       // Re-throw to be caught by outer catch block
@@ -16753,7 +15058,6 @@ async function processOpenseaTraitBid(data: {
     }
 
   } catch (error: any) {
-    try { logRaw('opensea', { taskId: data._id, function: 'processOpenseaTraitBid', stage: 'error', level: 'error', message: 'Error in OpenSea trait bid', metadata: { error: error instanceof Error ? error.message : String(error) } }); } catch { }
 
     if (!errorMessage) {
       // Use the new detailed error extraction function
@@ -16777,19 +15081,19 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
   // Structured start
 
   // Check if task is blacklisted
-  if (isTaskBlacklisted(taskId, 'opensea')) { try { logRaw('opensea', { taskId, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Task blacklisted', metadata: {} }); } catch { }; return; }
+  if (isTaskBlacklisted(taskId, 'opensea')) { return; }
 
   let errorMessage = ''
   try {
 
-    if (!enabledMarketplaces.length) { try { logRaw('opensea', { taskId, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'No marketplaces enabled', metadata: {} }); } catch { }; return; }
-    if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) { try { logRaw('opensea', { taskId, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'OpenSea disabled globally', metadata: {} }); } catch { }; return; }
+    if (!enabledMarketplaces.length) { return; }
+    if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) { return; }
     const { address, walletId, slug, creatorFees, enforceCreatorFee, asset, _id } = data
 
     // Fetch wallet and decrypt private key
     const wallet = await walletCache.getWalletById(walletId);
 
-    if (!currentTokenIds[_id]?.opensea?.includes(asset.tokenId.toString())) { try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Token not in currentTokenIds', metadata: { tokenId: asset.tokenId } }); } catch { }; return; }
+    if (!currentTokenIds[_id]?.opensea?.includes(asset.tokenId.toString())) { return; }
 
     // Check if token is cached as trading disabled
     if (tradingDisabledCache.isDisabled(asset.contractAddress, +asset.tokenId, 'opensea')) {
@@ -16797,7 +15101,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
       // Log the skip and update error stats
       logBidError(_id, "TRADING DISABLED (CACHED)", message, "skipped", "opensea"); // Non-blocking
-      try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Trading disabled (cached)', metadata: { tokenId: asset.tokenId } }); } catch { }
 
       if (!errorStats[_id]) {
         errorStats[_id] = { opensea: 0, magiceden: 0, blur: 0 };
@@ -16808,7 +15111,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     }
 
     const currentTask = activeTasks.get(_id)
-    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) { try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Task not running or marketplace not selected', metadata: { running: currentTask?.running, selected: currentTask?.selectedMarketplaces } }); } catch { }; return; }
+    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) { return; }
 
 
     // Initialize stats early
@@ -16839,13 +15142,12 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       }).sort({ createdAt: -1 })
     ]);
 
-    if (!floor_price) { try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'error', level: 'error', message: 'Failed to fetch floor price', metadata: { slug } }); } catch { }; throw new Error(`Failed to fetch floor price for ${slug}`); }
+    if (!floor_price) { throw new Error(`Failed to fetch floor price for ${slug}`); }
 
     floorPrices[_id].opensea = floor_price as number;
 
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false)
     if (stopBid) {
-      try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Stop option triggered for token', metadata: { tokenId: asset.tokenId, floor: floor_price } }); } catch { }
       if (orders.length > 0) {
         const cancelData = orders.map((order, index) => {
           return {
@@ -16855,21 +15157,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         })
 
         // Log cancellation enqueue
-        try {
-          logRaw('opensea', {
-            taskId: _id,
-            function: 'processOpenseaTokenBid',
-            stage: 'queueing',
-            level: 'info',
-            message: 'Queueing cancellation jobs - stop option triggered',
-            metadata: {
-              jobCount: cancelData.length,
-              reason: 'stop_option_triggered',
-              tokenId: asset.tokenId
-            }
-          });
-        } catch { }
-
         queue.addBulk(cancelData)
       }
       return
@@ -16893,7 +15180,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         "skipped",
         "opensea"
       );
-      try { logRaw('opensea', { taskId: _id, function: 'processOpenseaTokenBid', stage: 'early_return', level: 'warn', message: 'Insufficient balance', metadata: { balance, minBidPriceEth, tokenId: asset.tokenId, currencySymbol } }); } catch { }
       return;
     }
 
@@ -16966,23 +15252,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
           })
 
           // Log cancellation enqueue
-          try {
-            logRaw('opensea', {
-              taskId: _id,
-              function: 'processOpenseaTokenBid',
-              stage: 'queueing',
-              level: 'info',
-              message: 'Queueing cancellation jobs - max bid exceeded',
-              metadata: {
-                jobCount: cancelData.length,
-                reason: 'max_bid_exceeded',
-                tokenId: asset.tokenId,
-                offerEth,
-                maxBidPriceEth
-              }
-            });
-          } catch { }
-
           queue.addBulk(cancelData)
         }
       }
@@ -17005,21 +15274,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       })
 
       // Log cancellation enqueue
-      try {
-        logRaw('opensea', {
-          taskId: _id,
-          function: 'processOpenseaTokenBid',
-          stage: 'queueing',
-          level: 'info',
-          message: 'Queueing cancellation jobs before new bid',
-          metadata: {
-            jobCount: cancelData.length,
-            reason: 'placing_new_bid',
-            tokenId: asset.tokenId
-          }
-        });
-      } catch { }
-
       queue.addBulk(cancelData)
     }
 
@@ -17129,31 +15383,14 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
 async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
   const { taskId, bidCount, walletAddress, walletId, slug, offerPrice, creatorFees, enforceCreatorFee, expiry } = data;
-  const log = createOpenseaLogger(taskId, "openseaCollectionCounterBid");
 
   if (!enabledMarketplaces.length) {
-    log("validation", "No enabled marketplaces available for counterbid", { enabledMarketplacesCount: enabledMarketplaces.length });
     return;
   }
 
-  log("start", "Starting OpenSea collection counterbid", {
-    slug,
-    bidCount,
-    expiry,
-    offerPrice,
-    enforceCreatorFee,
-  });
-
   const currentTask = activeTasks.get(taskId);
-  log("validation", "Fetched task state for counterbid", {
-    taskFound: !!currentTask,
-    running: currentTask?.running,
-    selectedMarketplaces: currentTask?.selectedMarketplaces,
-  });
 
   if (!currentTask) {
-    log("validation", "Task not found in activeTasks", {});
-    logEarlyReturn("opensea", taskId, "openseaCollectionCounterBid", "Task not found in active tasks");
     return;
   }
 
@@ -17163,48 +15400,27 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
 
   const selectedIncludesOpensea = currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea");
   if (!selectedIncludesOpensea) {
-    log("validation", "OpenSea not selected for task", { selectedMarketplaces: currentTask.selectedMarketplaces });
-    logEarlyReturn("opensea", taskId, "openseaCollectionCounterBid", "OpenSea not selected for task", {
-      selectedMarketplaces: currentTask.selectedMarketplaces,
-    });
     return;
   }
 
   const openseaGloballyEnabled = enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea");
   if (!openseaGloballyEnabled) {
-    log("validation", "OpenSea not enabled globally", { enabledMarketplaces });
-    logEarlyReturn("opensea", taskId, "openseaCollectionCounterBid", "OpenSea not enabled globally", { enabledMarketplaces });
     return;
   }
 
   const floor_price = await getOpenseaFloor(currentTask.contract.slug);
-  log("processing", "Fetched OpenSea floor price for collection", { slug: currentTask.contract.slug, floor_price });
 
   if (!floor_price) {
-    log("validation", "Missing floor price for collection", { slug: currentTask.contract.slug });
-    logEarlyReturn("opensea", taskId, "openseaCollectionCounterBid", "No floor price found", { slug: currentTask.contract.slug });
     return;
   }
 
   const { currency, decimal, currencySymbol } = await calculateBidPrice(currentTask, floor_price as number, "opensea");
-  log("bid_calculation", "Calculated bid parameters", { currency, decimal, currencySymbol, floor_price });
 
   const offerEth = Number(offerPrice) / Math.pow(10, decimal);
-  log("bid_calculation", "Derived offer in ETH", { offerEth, rawOfferPrice: offerPrice, decimal });
 
   if (currencySymbol.toLowerCase() === "weth" && offerEth > floor_price) {
-    log("validation", "Counterbid exceeds floor price", {
-      offerEth,
-      floor_price,
-      currencySymbol,
-    });
     const message = `⚠️ Counter bid offer price ${offerEth} ${currencySymbol} for ${slug} collection exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA.`.toUpperCase();
     await logBidError(taskId, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "opensea");
-    logEarlyReturn("opensea", taskId, "openseaCollectionCounterBid", "Offer exceeds floor price", {
-      offerEth,
-      floor_price,
-      currencySymbol,
-    });
     return;
   }
 
@@ -17215,38 +15431,17 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
       marketplace: "opensea",
       identifier: "collection",
     });
-    log("processing", "Fetched existing collection orders", { existingOrders: existingOrders.length });
 
     if (existingOrders.length > 0) {
       const cancelData = existingOrders.map((order) => ({
         name: CANCEL_OPENSEA_BID,
         data: { walletId: walletId, orderId: order.orderHash, taskId, orderKey: order._id },
       }));
-      log("queueing", "Queueing cancellation jobs before counterbid", {
-        jobs: cancelData.length,
-        jobNames: cancelData.map((job) => job.name),
-      });
       await queue.addBulk(cancelData);
-      log("queueing", "Cancellation jobs enqueued", { jobs: cancelData.length });
     }
 
     const wallet = await walletCache.getWalletById(walletId);
-    log("processing", "Loaded wallet for counterbid", { walletId, hasWallet: !!wallet });
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
-
-    const bidMetadata = {
-      bidCount,
-      walletAddress,
-      slug,
-      offerPrice,
-      offerEth,
-      expiry,
-      currency,
-      enforceCreatorFee,
-      creatorFees,
-      contractAddress: currentTask.contract.contractAddress,
-    };
-    log("api_call", "Calling bidOnOpensea for collection counterbid", bidMetadata);
 
     await bidOnOpensea(
       taskId,
@@ -17261,18 +15456,14 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
       currentTask.contract.contractAddress
     );
 
-    log("completion", "bidOnOpensea resolved successfully for collection counterbid", bidMetadata);
-
     if (!counterbidCounts[taskId]) {
       counterbidCounts[taskId] = {
         opensea: 0,
         magiceden: 0,
         blur: 0,
       };
-      log("processing", "Initialized counterbid counts for task", { taskId });
     }
     counterbidCounts[taskId]["opensea"]++;
-    log("completion", "Incremented OpenSea counterbid count", { count: counterbidCounts[taskId]["opensea"] });
   } catch (error: any) {
     const errorMessage = extractDetailedOpenSeaError(error);
     logError("opensea", taskId, "openseaCollectionCounterBid", "Error during OpenSea collection counterbid", error, {
@@ -17413,112 +15604,29 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
   const startTime = Date.now();
   const { taskId, bidCount, address, walletId, contractAddress, offerPrice, slug, expiry } = data
 
-  logRaw('blur', {
-    taskId,
-    function: 'blurCollectionCounterBid',
-    stage: 'start',
-    level: 'info',
-    message: 'Starting collection counterbid',
-    metadata: {
-      slug,
-      offerPrice: (Number(offerPrice) / 1e18).toString(),
-      contractAddress,
-      walletAddress: address,
-      startTime
-    }
-  });
 
   if (!enabledMarketplaces.length) {
-    logRaw('blur', {
-      taskId,
-      function: 'blurCollectionCounterBid',
-      stage: 'early_return',
-      level: 'warn',
-      message: 'No enabled marketplaces',
-      metadata: {
-        validationReason: 'no_enabled_marketplaces'
-      }
-    });
     return
   }
 
   const currentTask = activeTasks.get(taskId)
 
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur")) {
-    logRaw('blur', {
-      taskId,
-      function: 'blurCollectionCounterBid',
-      stage: 'validation',
-      level: 'warn',
-      message: 'Task validation failed',
-      metadata: {
-        taskExists: !!currentTask,
-        running: currentTask?.running,
-        blurSelected: currentTask?.selectedMarketplaces?.map(m => m.toLowerCase()).includes("blur"),
-        blurEnabled: enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur"),
-        validationReason: !currentTask ? 'task_not_found' : !currentTask.running ? 'task_not_running' : 'blur_not_selected'
-      }
-    });
     return
   }
 
-  logRaw('blur', {
-    taskId,
-    function: 'blurCollectionCounterBid',
-    stage: 'floor_price_check',
-    level: 'info',
-    message: 'Fetching floor price',
-    metadata: {
-      collection: currentTask.contract.slug
-    }
-  });
 
   const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
   if (!floor_price) {
-    logRaw('blur', {
-      taskId,
-      function: 'blurCollectionCounterBid',
-      stage: 'error',
-      level: 'error',
-      message: 'Failed to fetch floor price',
-      metadata: {
-        collection: currentTask.contract.slug,
-        errorCode: 'FLOOR_PRICE_FETCH_FAILED'
-      }
-    });
     return
   }
 
-  logRaw('blur', {
-    taskId,
-    function: 'blurCollectionCounterBid',
-    stage: 'floor_price_check',
-    level: 'info',
-    message: 'Floor price fetched successfully',
-    metadata: {
-      collection: currentTask.contract.slug,
-      floorPrice: floor_price.toString()
-    }
-  });
 
   const offerEth = Number(offerPrice) / 1e18;
 
   if (offerEth > floor_price) {
     const message = `⚠️ Counter bid offer price ${offerEth} WETH for ${slug} collection exceeds floor price ${floor_price} WETH FOR BLUR.Stopping bid...`.toUpperCase();
 
-    logRaw('blur', {
-      taskId,
-      function: 'blurCollectionCounterBid',
-      stage: 'floor_price_check',
-      level: 'warn',
-      message: 'Counterbid offer exceeds floor price',
-      metadata: {
-        offerPrice: offerEth.toString(),
-        floorPrice: floor_price.toString(),
-        collection: slug,
-        validationReason: 'offer_exceeds_floor'
-      }
-    });
 
     await logBidError(taskId, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "blur");
     return;
@@ -17528,18 +15636,6 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
     // Cancel existing orders for this collection before placing new counterbid
     const identifier = "collection";
 
-    logRaw('blur', {
-      taskId,
-      function: 'blurCollectionCounterBid',
-      stage: 'order_check',
-      level: 'debug',
-      message: 'Checking for existing orders to cancel',
-      metadata: {
-        slug,
-        identifier,
-        marketplace: "blur"
-      }
-    });
 
     const existingOrders = await Order.find({
       slug: slug,
@@ -17548,30 +15644,8 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
       identifier: identifier
     });
 
-    logRaw('blur', {
-      taskId,
-      function: 'blurCollectionCounterBid',
-      stage: 'order_check',
-      level: 'info',
-      message: 'Existing orders found',
-      metadata: {
-        orderCount: existingOrders.length,
-        identifier
-      }
-    });
 
     if (existingOrders.length > 0) {
-      logRaw('blur', {
-        taskId,
-        function: 'blurCollectionCounterBid',
-        stage: 'cancellation',
-        level: 'info',
-        message: 'Cancelling existing orders before counterbid',
-        metadata: {
-          orderCount: existingOrders.length,
-          identifier
-        }
-      });
 
 
       const cancelData = existingOrders.map((order) => {
@@ -17592,35 +15666,10 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
     }
 
     // Fetch wallet and decrypt private key just before use
-    logRaw('blur', {
-      taskId,
-      function: 'blurCollectionCounterBid',
-      stage: 'wallet_selection',
-      level: 'debug',
-      message: 'Fetching wallet',
-      metadata: {
-        walletId,
-        walletAddress: address
-      }
-    });
 
     const wallet = await walletCache.getWalletById(walletId);
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
-    logRaw('blur', {
-      taskId,
-      function: 'blurCollectionCounterBid',
-      stage: 'api_call',
-      level: 'info',
-      message: 'Placing collection counterbid',
-      metadata: {
-        bidAmount: offerEth.toString(),
-        expiry,
-        collection: slug,
-        contractAddress,
-        bidCount
-      }
-    });
 
     await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry);
 
@@ -17634,71 +15683,20 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
     }
     counterbidCounts[taskId]['blur']++;
 
-    logRaw('blur', {
-      taskId,
-      function: 'blurCollectionCounterBid',
-      stage: 'completion',
-      level: 'info',
-      message: 'Collection counterbid placed successfully',
-      metadata: {
-        bidAmount: offerEth.toString(),
-        collection: slug,
-        counterbidCount: counterbidCounts[taskId]['blur'],
-        duration: Date.now() - startTime
-      }
-    });
 
   } catch (error: any) {
     // Handle rate limit errors
     if (error?.code === 'RATE_LIMITED') {
-      logRaw('blur', {
-        taskId,
-        function: 'blurCollectionCounterBid',
-        stage: 'rate_limit',
-        level: 'warn',
-        message: 'Rate limited',
-        metadata: {
-          collection: slug,
-          errorCode: 'RATE_LIMITED'
-        }
-      });
       throw error; // Re-throw to let worker handle retry with delay
     }
 
 
     // Handle transfer restriction errors
     if (error.code === 'TRANSFER_RESTRICTED') {
-      logRaw('blur', {
-        taskId,
-        function: 'blurCollectionCounterBid',
-        stage: 'error',
-        level: 'warn',
-        message: 'Transfer restricted collection',
-        metadata: {
-          collection: slug,
-          errorCode: 'TRANSFER_RESTRICTED',
-          errorMessage: error.message
-        }
-      });
       await logBidError(taskId, "BLUR TRANSFER RESTRICTION", error.message, "warning", "blur");
       return;
     }
 
-    logRaw('blur', {
-      taskId,
-      function: 'blurCollectionCounterBid',
-      stage: 'error',
-      level: 'error',
-      message: 'Error processing collection counterbid',
-      metadata: {
-        errorMessage: error instanceof Error ? error.message : String(error),
-        errorStack: error instanceof Error ? error.stack : undefined,
-        errorCode: error?.code,
-        errorResponse: error?.response?.data,
-        collection: slug,
-        duration: Date.now() - startTime
-      }
-    });
 
     await logBidError(taskId, "BLUR COLLECTION COUNTER BID ERROR", `Error processing Blur collection counter bid for task: ${slug}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)}`, "error", "blur");
   }
@@ -17708,52 +15706,13 @@ async function blurTraitCounterBid(data: IBlurBidData) {
   const startTime = Date.now();
   const { taskId, bidCount, address, walletId, contractAddress, offerPrice, slug, expiry, traits } = data
 
-  logRaw('blur', {
-    taskId,
-    function: 'blurTraitCounterBid',
-    stage: 'start',
-    level: 'info',
-    message: 'Starting trait counterbid',
-    metadata: {
-      slug,
-      offerPrice: (Number(offerPrice) / 1e18).toString(),
-      contractAddress,
-      walletAddress: address,
-      traits,
-      startTime
-    }
-  });
 
   if (!enabledMarketplaces.length) {
-    logRaw('blur', {
-      taskId,
-      function: 'blurTraitCounterBid',
-      stage: 'early_return',
-      level: 'warn',
-      message: 'No enabled marketplaces',
-      metadata: {
-        validationReason: 'no_enabled_marketplaces'
-      }
-    });
     return
   }
 
   const currentTask = activeTasks.get(taskId)
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur")) {
-    logRaw('blur', {
-      taskId,
-      function: 'blurTraitCounterBid',
-      stage: 'validation',
-      level: 'warn',
-      message: 'Task validation failed',
-      metadata: {
-        taskExists: !!currentTask,
-        running: currentTask?.running,
-        blurSelected: currentTask?.selectedMarketplaces?.map(m => m.toLowerCase()).includes("blur"),
-        blurEnabled: enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur"),
-        validationReason: !currentTask ? 'task_not_found' : !currentTask.running ? 'task_not_running' : 'blur_not_selected'
-      }
-    });
     return
   }
 
@@ -17761,48 +15720,13 @@ async function blurTraitCounterBid(data: IBlurBidData) {
     // Cancel existing orders for this trait before placing new counterbid
 
     if (!traits) {
-      logRaw('blur', {
-        taskId,
-        function: 'blurTraitCounterBid',
-        stage: 'early_return',
-        level: 'warn',
-        message: 'No traits provided',
-        metadata: {
-          validationReason: 'no_traits'
-        }
-      });
       return
     }
     const traitsObj = JSON.parse(traits);
     const [traitType, traitValue] = Object.entries(traitsObj)[0] as string[];
     const identifier = `${traitType}:${traitValue}`;
 
-    logRaw('blur', {
-      taskId,
-      function: 'blurTraitCounterBid',
-      stage: 'trait_filtering',
-      level: 'info',
-      message: 'Processing trait counterbid',
-      metadata: {
-        identifier,
-        traitType,
-        traitValue: String(traitValue),
-        offerPrice: (Number(offerPrice) / 1e18).toString()
-      }
-    });
 
-    logRaw('blur', {
-      taskId,
-      function: 'blurTraitCounterBid',
-      stage: 'order_check',
-      level: 'debug',
-      message: 'Checking for existing trait orders to cancel',
-      metadata: {
-        slug,
-        identifier,
-        marketplace: "blur"
-      }
-    });
 
 
     const existingOrders = await Order.find({
@@ -17812,30 +15736,8 @@ async function blurTraitCounterBid(data: IBlurBidData) {
       identifier: identifier
     });
 
-    logRaw('blur', {
-      taskId,
-      function: 'blurTraitCounterBid',
-      stage: 'order_check',
-      level: 'info',
-      message: 'Existing trait orders found',
-      metadata: {
-        orderCount: existingOrders.length,
-        identifier
-      }
-    });
 
     if (existingOrders.length > 0) {
-      logRaw('blur', {
-        taskId,
-        function: 'blurTraitCounterBid',
-        stage: 'cancellation',
-        level: 'info',
-        message: 'Cancelling existing trait orders before counterbid',
-        metadata: {
-          orderCount: existingOrders.length,
-          identifier
-        }
-      });
 
       const cancelData = existingOrders.map((order) => {
         const payload = JSON.parse(order.orderHash);
@@ -17854,35 +15756,10 @@ async function blurTraitCounterBid(data: IBlurBidData) {
     } else {
     }
     // Fetch wallet and decrypt private key just before use
-    logRaw('blur', {
-      taskId,
-      function: 'blurTraitCounterBid',
-      stage: 'wallet_selection',
-      level: 'debug',
-      message: 'Fetching wallet',
-      metadata: {
-        walletId,
-        walletAddress: address
-      }
-    });
 
     const wallet = await walletCache.getWalletById(walletId);
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
-    logRaw('blur', {
-      taskId,
-      function: 'blurTraitCounterBid',
-      stage: 'api_call',
-      level: 'info',
-      message: 'Placing trait counterbid',
-      metadata: {
-        bidAmount: (Number(offerPrice) / 1e18).toString(),
-        expiry,
-        identifier,
-        contractAddress,
-        bidCount
-      }
-    });
 
     await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry, traits);
 
@@ -17896,19 +15773,6 @@ async function blurTraitCounterBid(data: IBlurBidData) {
     }
     counterbidCounts[taskId]['blur']++;
 
-    logRaw('blur', {
-      taskId,
-      function: 'blurTraitCounterBid',
-      stage: 'completion',
-      level: 'info',
-      message: 'Trait counterbid placed successfully',
-      metadata: {
-        bidAmount: (Number(offerPrice) / 1e18).toString(),
-        identifier,
-        counterbidCount: counterbidCounts[taskId]['blur'],
-        duration: Date.now() - startTime
-      }
-    });
   } catch (error: any) {
     const errorIdentifier = traits ? (() => {
       try {
@@ -17922,56 +15786,15 @@ async function blurTraitCounterBid(data: IBlurBidData) {
 
     // Handle rate limit errors
     if (error?.code === 'RATE_LIMITED') {
-      logRaw('blur', {
-        taskId,
-        function: 'blurTraitCounterBid',
-        stage: 'rate_limit',
-        level: 'warn',
-        message: 'Rate limited',
-        metadata: {
-          slug,
-          identifier: errorIdentifier,
-          errorCode: 'RATE_LIMITED'
-        }
-      });
       throw error; // Re-throw to let worker handle retry with delay
     }
 
     // Handle transfer restriction errors
     if (error.code === 'TRANSFER_RESTRICTED') {
-      logRaw('blur', {
-        taskId,
-        function: 'blurTraitCounterBid',
-        stage: 'error',
-        level: 'warn',
-        message: 'Transfer restricted collection',
-        metadata: {
-          slug,
-          identifier: errorIdentifier,
-          errorCode: 'TRANSFER_RESTRICTED',
-          errorMessage: error.message
-        }
-      });
       await logBidError(data.taskId, "BLUR TRANSFER RESTRICTION", error.message, "warning", "blur");
       return;
     }
 
-    logRaw('blur', {
-      taskId,
-      function: 'blurTraitCounterBid',
-      stage: 'error',
-      level: 'error',
-      message: 'Error processing trait counterbid',
-      metadata: {
-        errorMessage: error instanceof Error ? error.message : String(error),
-        errorStack: error instanceof Error ? error.stack : undefined,
-        errorCode: error?.code,
-        errorResponse: error?.response?.data,
-        slug,
-        identifier: errorIdentifier,
-        duration: Date.now() - startTime
-      }
-    });
 
     logBidError(data.taskId, "BLUR TRAIT COUNTER BID ERROR", `Error processing Blur trait counter bid for task: ${data.slug}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)}`, "error", "blur");
   }
@@ -18001,30 +15824,14 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
     asset
   } = data;
   const taskId = _id;
-  const log = createOpenseaLogger(taskId, "openseaTokenCounterBid");
 
   if (!enabledMarketplaces.length) {
-    log("validation", "No enabled marketplaces available for token counterbid", { enabledMarketplacesCount: enabledMarketplaces.length });
     return;
   }
 
-  log("start", "Starting OpenSea token counterbid", {
-    slug,
-    tokenId: asset.tokenId,
-    offerPrice,
-    enforceCreatorFee
-  });
-
   const currentTask = activeTasks.get(taskId);
-  log("validation", "Fetched task state for token counterbid", {
-    taskFound: !!currentTask,
-    running: currentTask?.running,
-    selectedMarketplaces: currentTask?.selectedMarketplaces
-  });
 
   if (!currentTask) {
-    log("validation", "Task not found in activeTasks", { taskId });
-    logEarlyReturn("opensea", taskId, "openseaTokenCounterBid", "Task not found in active tasks");
     return;
   }
 
@@ -18034,25 +15841,17 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
 
   const selectsOpensea = currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea");
   if (!selectsOpensea) {
-    log("validation", "OpenSea not selected for task", { selectedMarketplaces: currentTask.selectedMarketplaces });
-    logEarlyReturn("opensea", taskId, "openseaTokenCounterBid", "OpenSea not selected for task", {
-      selectedMarketplaces: currentTask.selectedMarketplaces
-    });
     return;
   }
 
   const openseaEnabled = enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea");
   if (!openseaEnabled) {
-    log("validation", "OpenSea not enabled globally", { enabledMarketplaces });
-    logEarlyReturn("opensea", taskId, "openseaTokenCounterBid", "OpenSea not enabled globally", { enabledMarketplaces });
     return;
   }
 
   const expiry = getExpiry(currentTask.bidDuration);
-  log("processing", "Calculated expiry for counterbid", { bidDuration: currentTask.bidDuration, expiry });
 
   const bidCount = getIncrementedBidCount(OPENSEA, slug, taskId);
-  log("processing", "Incremented bid count for token counterbid", { bidCount, slug });
 
   try {
     const orders = await Order.find({
@@ -18061,24 +15860,13 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
       marketplace: OPENSEA.toLowerCase(),
       identifier: asset.tokenId.toString()
     });
-    log("processing", "Fetched existing token orders", { orderCount: orders.length, tokenId: asset.tokenId });
 
     if (orders.length > 0) {
       const mostRecentOrder = orders.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
       const currentOfferWei = BigInt(mostRecentOrder.offerPrice);
       const incomingOfferWei = BigInt(offerPrice);
-      log("processing", "Compared existing offer with incoming offer", {
-        tokenId: asset.tokenId,
-        currentOfferWei: currentOfferWei.toString(),
-        incomingOfferWei: incomingOfferWei.toString()
-      });
 
       if (currentOfferWei >= incomingOfferWei) {
-        log("validation", "Skipping counterbid because existing offer is greater or equal", {
-          tokenId: asset.tokenId,
-          currentOfferWei: currentOfferWei.toString(),
-          incomingOfferWei: incomingOfferWei.toString()
-        });
         return;
       }
 
@@ -18087,35 +15875,13 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
         name: CANCEL_OPENSEA_BID,
         data: { walletId, orderId: order.orderHash, taskId, orderKey: order._id }
       }));
-      log("queueing", "Queueing cancellation jobs before placing counterbid", {
-        jobs: cancelData.length,
-        tokenId: asset.tokenId,
-        jobNames: cancelData.map((job) => job.name)
-      });
       await queue.addBulk(cancelData);
-      log("queueing", "Cancellation jobs enqueued", { jobs: cancelData.length });
     }
 
     const { currency } = await calculateBidPrice(currentTask, 0, "opensea");
-    log("processing", "Retrieved currency for counterbid", { currency });
 
     const wallet = await walletCache.getWalletById(walletId);
-    log("processing", "Loaded wallet for token counterbid", { walletId, hasWallet: !!wallet });
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
-
-    const bidMetadata = {
-      bidCount,
-      walletAddress: address,
-      slug,
-      offerPrice,
-      expiry,
-      currency,
-      tokenId: asset.tokenId,
-      contractAddress: currentTask.contract.contractAddress,
-      enforceCreatorFee,
-      creatorFees
-    };
-    log("api_call", "Calling bidOnOpensea for token counterbid", bidMetadata);
 
     await bidOnOpensea(
       taskId,
@@ -18132,18 +15898,14 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
       asset
     );
 
-    log("completion", "bidOnOpensea resolved successfully for token counterbid", bidMetadata);
-
     if (!counterbidCounts[taskId]) {
       counterbidCounts[taskId] = {
         opensea: 0,
         magiceden: 0,
         blur: 0
       };
-      log("processing", "Initialized counterbid counts for task", { taskId });
     }
     counterbidCounts[taskId]['opensea']++;
-    log("completion", "Incremented OpenSea counterbid count", { count: counterbidCounts[taskId]['opensea'], tokenId: asset.tokenId });
 
   } catch (error: any) {
     const errorMessage = extractDetailedOpenSeaError(error);
@@ -18161,32 +15923,13 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
 async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
   const { _id, bidCount, address, walletId, slug, offerPrice, creatorFees, enforceCreatorFee, expiry, trait } = data;
   const taskId = _id;
-  const log = createOpenseaLogger(taskId, "openseaTraitCounterBid");
-
   if (!enabledMarketplaces.length) {
-    log("validation", "No enabled marketplaces available for trait counterbid", { enabledMarketplacesCount: enabledMarketplaces.length });
     return;
   }
 
-  log("start", "Starting OpenSea trait counterbid", {
-    slug,
-    trait,
-    offerPrice,
-    bidCount,
-    expiry,
-    enforceCreatorFee
-  });
-
   const currentTask = activeTasks.get(taskId);
-  log("validation", "Fetched task state for trait counterbid", {
-    taskFound: !!currentTask,
-    running: currentTask?.running,
-    selectedMarketplaces: currentTask?.selectedMarketplaces
-  });
 
   if (!currentTask) {
-    log("validation", "Task not found in activeTasks", { taskId });
-    logEarlyReturn("opensea", taskId, "openseaTraitCounterBid", "Task not found in active tasks");
     return;
   }
 
@@ -18196,29 +15939,20 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
 
   const selectsOpensea = currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea");
   if (!selectsOpensea) {
-    log("validation", "OpenSea not selected for task", { selectedMarketplaces: currentTask.selectedMarketplaces });
-    logEarlyReturn("opensea", taskId, "openseaTraitCounterBid", "OpenSea not selected for task", {
-      selectedMarketplaces: currentTask.selectedMarketplaces
-    });
     return;
   }
 
   const openseaEnabled = enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea");
   if (!openseaEnabled) {
-    log("validation", "OpenSea not enabled globally", { enabledMarketplaces });
-    logEarlyReturn("opensea", taskId, "openseaTraitCounterBid", "OpenSea not enabled globally", { enabledMarketplaces });
     return;
   }
 
   if (!trait) {
-    log("validation", "Missing trait payload for counterbid", {});
-    logEarlyReturn("opensea", taskId, "openseaTraitCounterBid", "No trait provided for counterbid");
     return;
   }
 
   const parsedTrait: { type: string; value: string } = JSON.parse(trait);
   const identifier = `${parsedTrait.type}:${parsedTrait.value}`;
-  log("processing", "Parsed trait identifier", { identifier, parsedTrait });
 
   try {
     const orders = await Order.find({
@@ -18227,10 +15961,8 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
       marketplace: OPENSEA.toLowerCase(),
       identifier
     });
-    log("processing", "Fetched existing trait orders", { orderCount: orders.length, identifier });
 
     const wallet = await walletCache.getWalletById(walletId);
-    log("processing", "Loaded wallet for trait counterbid", { walletId, hasWallet: !!wallet });
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
     if (orders.length > 0) {
@@ -18246,21 +15978,6 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
     }
 
     const { currency } = await calculateBidPrice(currentTask, 0, "opensea");
-    log("processing", "Retrieved currency for trait counterbid", { currency });
-
-    const bidMetadata = {
-      bidCount,
-      walletAddress: address,
-      slug,
-      offerPrice,
-      expiry,
-      currency,
-      traitIdentifier: identifier,
-      contractAddress: currentTask.contract.contractAddress,
-      enforceCreatorFee,
-      creatorFees
-    };
-    log("api_call", "Calling bidOnOpensea for trait counterbid", bidMetadata);
 
     await bidOnOpensea(
       taskId,
@@ -18276,18 +15993,14 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
       trait
     );
 
-    log("completion", "bidOnOpensea resolved successfully for trait counterbid", bidMetadata);
-
     if (!counterbidCounts[taskId]) {
       counterbidCounts[taskId] = {
         opensea: 0,
         magiceden: 0,
         blur: 0
       };
-      log("processing", "Initialized counterbid counts for task", { taskId });
     }
     counterbidCounts[taskId]['opensea']++;
-    log("completion", "Incremented OpenSea counterbid count", { count: counterbidCounts[taskId]['opensea'], identifier });
   } catch (error: any) {
     const errorMessage = extractDetailedOpenSeaError(error);
     logError("opensea", taskId, "openseaTraitCounterBid", "Error processing OpenSea trait counterbid", error, {
@@ -18385,49 +16098,14 @@ async function processBlurTraitBid(data: {
   const startTime = Date.now();
 
   // Log entry
-  logRaw('blur', {
-    taskId,
-    function: 'processBlurTraitBid',
-    stage: 'start',
-    level: 'info',
-    message: 'Starting trait bid process',
-    metadata: {
-      trait: data.trait,
-      slug: data.slug,
-      contractAddress: data.contractAddress,
-      batchInfo: data.batchInfo,
-      startTime
-    }
-  });
 
 
   try {
     if (!enabledMarketplaces.length) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurTraitBid',
-        stage: 'early_return',
-        level: 'warn',
-        message: 'No marketplaces enabled',
-        metadata: {
-          validationReason: 'no_enabled_marketplaces'
-        }
-      });
       return;
     }
     const { address, walletId, contractAddress, slug, trait, _id } = data;
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurTraitBid',
-      stage: 'wallet_selection',
-      level: 'debug',
-      message: 'Fetching wallet',
-      metadata: {
-        walletId,
-        walletAddress: address
-      }
-    });
 
     // Fetch wallet and decrypt private key
     const wallet = await walletCache.getWalletById(walletId);
@@ -18440,34 +16118,10 @@ async function processBlurTraitBid(data: {
     const currentTask = activeTasks.get(_id)
 
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur")) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurTraitBid',
-        stage: 'validation',
-        level: 'warn',
-        message: 'Task validation failed',
-        metadata: {
-          taskExists: !!currentTask,
-          running: currentTask?.running,
-          blurSelected: currentTask?.selectedMarketplaces?.map(m => m.toLowerCase()).includes("blur"),
-          blurEnabled: enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur"),
-          validationReason: !currentTask ? 'task_not_found' : !currentTask.running ? 'task_not_running' : 'blur_not_selected'
-        }
-      });
       return;
     }
     const outbidOptions = currentTask.outbidOptions
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurTraitBid',
-      stage: 'floor_price_check',
-      level: 'info',
-      message: 'Fetching floor prices',
-      metadata: {
-        collection: currentTask.contract.slug
-      }
-    });
 
     const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
     const traitsObj = JSON.parse(trait);
@@ -18475,50 +16129,12 @@ async function processBlurTraitBid(data: {
     const identifier = `${traitType}:${traitValue}`
     const traitFloor = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices ? await fetchBlurTraitFloor(slug, { type: traitType, value: traitValue as string }) : undefined
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurTraitBid',
-      stage: 'trait_filtering',
-      level: 'info',
-      message: 'Processing trait bid',
-      metadata: {
-        identifier,
-        traitType,
-        traitValue: String(traitValue),
-        floorPrice: floor_price.toString(),
-        traitFloor: traitFloor ? traitFloor.toString() : undefined
-      }
-    });
 
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurTraitBid',
-      stage: 'validation',
-      level: 'debug',
-      message: 'Checking stop conditions',
-      metadata: {
-        identifier,
-        floorPrice: floor_price.toString(),
-        traitFloor: traitFloor ? traitFloor.toString() : undefined
-      }
-    });
 
     const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), false, traitFloor, identifier)
     const expiry = getExpiry(currentTask.bidDuration)
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurTraitBid',
-      stage: 'order_check',
-      level: 'debug',
-      message: 'Fetching existing orders',
-      metadata: {
-        slug,
-        identifier,
-        marketplace: BLUR.toLowerCase()
-      }
-    });
 
     const orders = await Order.find({
       slug: slug,
@@ -18527,44 +16143,10 @@ async function processBlurTraitBid(data: {
       identifier
     }).sort({ createdAt: -1 })
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurTraitBid',
-      stage: 'order_check',
-      level: 'info',
-      message: 'Existing orders found',
-      metadata: {
-        orderCount: orders.length,
-        identifier
-      }
-    });
 
     if (stopBid) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurTraitBid',
-        stage: 'early_return',
-        level: 'warn',
-        message: 'Stop condition met',
-        metadata: {
-          identifier,
-          validationReason: 'stop_condition',
-          orderCount: orders.length
-        }
-      });
 
       if (orders.length > 0) {
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurTraitBid',
-          stage: 'cancellation',
-          level: 'info',
-          message: 'Cancelling existing orders due to stop condition',
-          metadata: {
-            orderCount: orders.length,
-            identifier
-          }
-        });
 
         const cancelData = orders.map((order) => {
           const payload = JSON.parse(order.orderHash)
@@ -18574,52 +16156,15 @@ async function processBlurTraitBid(data: {
           }
         })
         // Log cancellation enqueue
-        try {
-          logRaw('blur', {
-            taskId: _id,
-            function: 'processBlurTraitBid',
-            stage: 'queueing',
-            level: 'info',
-            message: 'Queueing cancellation jobs - stop condition',
-            metadata: {
-              jobCount: cancelData.length,
-              reason: 'stop_condition_met',
-              identifier
-            }
-          });
-        } catch { }
-
         queue.addBulk(cancelData);
       }
 
       return;
     }
     if (!floor_price) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurTraitBid',
-        stage: 'error',
-        level: 'error',
-        message: 'Failed to fetch floor price',
-        metadata: {
-          slug,
-          errorCode: 'FLOOR_PRICE_FETCH_FAILED'
-        }
-      });
       throw new Error(`Failed to fetch floor price for ${slug}`);
     }
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurTraitBid',
-      stage: 'floor_price_check',
-      level: 'info',
-      message: 'Floor price fetched successfully',
-      metadata: {
-        slug,
-        floorPrice: floor_price.toString()
-      }
-    });
 
 
     if (!floorPrices[_id]) {
@@ -18630,78 +16175,16 @@ async function processBlurTraitBid(data: {
       }
     }
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurTraitBid',
-      stage: 'bid_calculation',
-      level: 'info',
-      message: 'Calculating bid prices',
-      metadata: {
-        floorPrice: floor_price.toString(),
-        identifier
-      }
-    });
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "blur")
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurTraitBid',
-      stage: 'bid_calculation',
-      level: 'info',
-      message: 'Bid prices calculated',
-      metadata: {
-        offerPriceEth: offerPriceEth.toString(),
-        minBidPriceEth: minBidPriceEth.toString(),
-        maxBidPriceEth: maxBidPriceEth.toString(),
-        identifier
-      }
-    })
-
-    // Fetch fresh BETH balance and check if sufficient for minimum bid
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurTraitBid',
-      stage: 'validation',
-      level: 'debug',
-      message: 'Fetching wallet BETH balance',
-      metadata: {
-        walletAddress: address
-      }
-    });
 
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
     const { BETH } = await import('./utils/currencies');
     const balance = await fetchERC20BalanceFresh(address, BETH);
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurTraitBid',
-      stage: 'validation',
-      level: 'info',
-      message: 'Wallet balance fetched',
-      metadata: {
-        walletAddress: address,
-        balance: balance.toString(),
-        requiredBalance: minBidPriceEth.toString()
-      }
-    });
 
     if (balance < minBidPriceEth) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurTraitBid',
-        stage: 'early_return',
-        level: 'warn',
-        message: 'Insufficient BETH balance',
-        metadata: {
-          walletAddress: address,
-          balance: balance.toString(),
-          requiredBalance: minBidPriceEth.toString(),
-          identifier,
-          validationReason: 'insufficient_balance'
-        }
-      });
 
       skipStats[_id]['blur']++;
       await logBidError(
@@ -18728,35 +16211,10 @@ async function processBlurTraitBid(data: {
 
     if (!outbidOptions.outbid) {
       if (ttl >= MIN_BID_DURATION && currentPrice === Number(traitOffer) && Math.abs(orderExpiration - expiry) < 30) {
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurTraitBid',
-          stage: 'early_return',
-          level: 'info',
-          message: 'Existing bid still valid',
-          metadata: {
-            ttl,
-            currentPrice: currentPrice.toString(),
-            offerPrice: (Number(traitOffer) / 1e18).toString(),
-            identifier,
-            validationReason: 'existing_bid_valid'
-          }
-        });
         return;
       }
     }
     else {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurTraitBid',
-        stage: 'counterbid',
-        level: 'info',
-        message: 'Checking for trait counterbid opportunity',
-        metadata: {
-          identifier,
-          slug
-        }
-      });
 
       const bids = await fetchBlurBid(slug, "TRAIT", JSON.parse(trait));
       const [topOffer, secondOffer] = bids?.priceLevels?.sort((a, b) => +b.price - +a.price) || [{ price: "0" }, { price: "0" }];
@@ -18776,21 +16234,6 @@ async function processBlurTraitBid(data: {
 
       const isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(currentTask.wallet.toLowerCase())
 
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurTraitBid',
-        stage: 'counterbid',
-        level: 'debug',
-        message: 'Trait bid analysis complete',
-        metadata: {
-          isTopBid,
-          topOfferAmount: topOfferAmount.toString(),
-          secondOfferAmount: secondOfferAmount.toString(),
-          numberBidders,
-          blurOutbidMargin,
-          identifier
-        }
-      });
 
       if (isTopBid) {
         const spread = (Number(topOfferAmount) - Number(secondOfferAmount));
@@ -18798,32 +16241,7 @@ async function processBlurTraitBid(data: {
           const bidPrice = secondOfferAmount + blurOutbidMargin
 
           traitOffer = BigInt(Math.round((bidPrice * 1e18) / 1e16) * 1e16);
-          logRaw('blur', {
-            taskId,
-            function: 'processBlurTraitBid',
-            stage: 'counterbid',
-            level: 'info',
-            message: 'Adjusting trait bid to maintain position',
-            metadata: {
-              spread: spread.toString(),
-              newBidPrice: bidPrice.toString(),
-              identifier
-            }
-          });
         } else if (ttl > MIN_BID_DURATION) {
-          logRaw('blur', {
-            taskId,
-            function: 'processBlurTraitBid',
-            stage: 'early_return',
-            level: 'info',
-            message: 'Already have top bid with sufficient time',
-            metadata: {
-              topOfferAmount: topOfferAmount.toString(),
-              ttlMinutes: (ttl / 60).toFixed(2),
-              identifier,
-              validationReason: 'top_bid_sufficient_time'
-            }
-          });
           return;
         } else {
           // Maintain our current bid price
@@ -18833,19 +16251,6 @@ async function processBlurTraitBid(data: {
       else {
         const bidPrice = topOfferAmount + blurOutbidMargin
         traitOffer = BigInt(Math.round(bidPrice * 1e18));
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurTraitBid',
-          stage: 'counterbid',
-          level: 'info',
-          message: 'Setting trait counterbid amount',
-          metadata: {
-            topOfferAmount: topOfferAmount.toString(),
-            outbidMargin: blurOutbidMargin.toString(),
-            newBidAmount: bidPrice.toString(),
-            identifier
-          }
-        });
       }
     }
 
@@ -18855,17 +16260,6 @@ async function processBlurTraitBid(data: {
     const bidCount = getIncrementedBidCount(BLUR, slug, _id)
 
     if (orders.length > 0) {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurTraitBid',
-        stage: 'cancellation',
-        level: 'info',
-        message: 'Cancelling existing trait orders before placing new bid',
-        metadata: {
-          orderCount: orders.length,
-          identifier
-        }
-      });
 
       const cancelData = orders.map((order) => {
         const payload = JSON.parse(order.orderHash)
@@ -18876,21 +16270,6 @@ async function processBlurTraitBid(data: {
         }
       })
       // Log cancellation enqueue
-      try {
-        logRaw('blur', {
-          taskId: _id,
-          function: 'processBlurTraitBid',
-          stage: 'queueing',
-          level: 'info',
-          message: 'Queueing cancellation jobs - before new bid',
-          metadata: {
-            jobCount: cancelData.length,
-            reason: 'placing_new_bid',
-            identifier
-          }
-        });
-      } catch { }
-
       queue.addBulk(cancelData);
     }
 
@@ -18908,34 +16287,9 @@ async function processBlurTraitBid(data: {
       skipStats[_id]['blur']++;
       const message = `❌ Offer price ${offerEth} BETH for ${slug} trait ${trait} bid exceeds max bid price ${maxBidPriceEth} BETH FOR BLUR BID.Skipping ...`.toUpperCase()
 
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurTraitBid',
-        stage: 'validation',
-        level: 'warn',
-        message: 'Offer exceeds maximum bid price',
-        metadata: {
-          offerPrice: offerEth.toString(),
-          maxBidPrice: maxBidPriceEth.toString(),
-          identifier,
-          validationReason: 'max_price_exceeded'
-        }
-      });
 
       await logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "blur");
       if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-        logRaw('blur', {
-          taskId,
-          function: 'processBlurTraitBid',
-          stage: 'cancellation',
-          level: 'info',
-          message: 'Cancelling orders due to max price exceeded',
-          metadata: {
-            orderCount: orders.length,
-            cancelMaxWhenOutbid: true,
-            identifier
-          }
-        });
 
         if (orders.length > 0) {
           const cancelData = orders.map((order) => {
@@ -18947,23 +16301,6 @@ async function processBlurTraitBid(data: {
             }
           })
           // Log cancellation enqueue
-          try {
-            logRaw('blur', {
-              taskId: _id,
-              function: 'processBlurTraitBid',
-              stage: 'queueing',
-              level: 'info',
-              message: 'Queueing cancellation jobs - max bid exceeded',
-              metadata: {
-                jobCount: cancelData.length,
-                reason: 'max_bid_exceeded',
-                offerEth,
-                maxBidPriceEth,
-                identifier
-              }
-            });
-          } catch { }
-
           queue.addBulk(cancelData);
         }
       }
@@ -18971,53 +16308,12 @@ async function processBlurTraitBid(data: {
       return;
     } else if (offerEth < minBidPriceEth) {
       traitOffer = BigInt(Math.round(minBidPriceEth * 1e18));
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurTraitBid',
-        stage: 'bid_calculation',
-        level: 'info',
-        message: 'Adjusting trait offer to minimum bid price',
-        metadata: {
-          originalOffer: offerEth.toString(),
-          adjustedOffer: minBidPriceEth.toString(),
-          identifier
-        }
-      });
     }
 
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurTraitBid',
-      stage: 'api_call',
-      level: 'info',
-      message: 'Placing trait bid',
-      metadata: {
-        bidAmount: offerEth.toString(),
-        expiry,
-        identifier,
-        contractAddress,
-        bidCount,
-        batchInfo: data.batchInfo
-      }
-    });
 
     await bidOnBlur(_id, bidCount, address, privateKey, contractAddress, traitOffer, slug, expiry, trait, data.batchInfo);
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurTraitBid',
-      stage: 'completion',
-      level: 'info',
-      message: 'Trait bid placed successfully',
-      metadata: {
-        bidAmount: offerEth.toString(),
-        identifier,
-        bidCount,
-        duration: Date.now() - startTime,
-        batchInfo: data.batchInfo
-      }
-    });
 
   } catch (error: any) {
     const errorMessage = error?.message || String(error);
@@ -19025,55 +16321,15 @@ async function processBlurTraitBid(data: {
 
     // Handle rate limit errors
     if (error?.code === 'RATE_LIMITED') {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurTraitBid',
-        stage: 'rate_limit',
-        level: 'warn',
-        message: 'Rate limited',
-        metadata: {
-          identifier: errorIdentifier,
-          errorCode: 'RATE_LIMITED'
-        }
-      });
       throw error; // Re-throw to let worker handle retry with delay
     }
 
     // Handle transfer restriction errors
     if (error.code === 'TRANSFER_RESTRICTED') {
-      logRaw('blur', {
-        taskId,
-        function: 'processBlurTraitBid',
-        stage: 'error',
-        level: 'warn',
-        message: 'Transfer restricted collection',
-        metadata: {
-          slug: data.slug,
-          identifier: errorIdentifier,
-          errorCode: 'TRANSFER_RESTRICTED',
-          errorMessage: error.message
-        }
-      });
       await logBidError(data._id, "BLUR TRANSFER RESTRICTION", error.message, "warning", "blur");
       return;
     }
 
-    logRaw('blur', {
-      taskId,
-      function: 'processBlurTraitBid',
-      stage: 'error',
-      level: 'error',
-      message: 'Error processing trait bid',
-      metadata: {
-        errorMessage,
-        errorStack: error instanceof Error ? error.stack : undefined,
-        errorCode: error?.code,
-        errorResponse: error?.response?.data,
-        identifier: errorIdentifier,
-        slug: data.slug,
-        duration: Date.now() - startTime
-      }
-    });
 
     console.error(`${RED}[BLUR TRAIT BID] Error:${RESET}`, error instanceof Error ? error.message : String(error));
 
@@ -19089,7 +16345,6 @@ async function processBlurTraitBid(data: {
 
 async function processMagicedenScheduledBid(task: ITask, jobId?: string, scheduleJob?: Job) {
   // Structured start
-  try { logRaw('magiceden', { taskId: task._id.toString(), function: 'processMagicedenScheduledBid', stage: 'start', level: 'info', message: 'Starting MagicEden scheduled bid loop', metadata: { scheduleJobId: scheduleJob?.id, jobId } }); } catch { }
   const taskId = task._id.toString();
   const currentLoopCount = loopCounterStats[taskId]?.magiceden || 1;
 
@@ -19113,11 +16368,11 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
     await Promise.race([
       (async () => {
         // Early return consolidation
-        if (!enabledMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) { try { logRaw('magiceden', { taskId, function: 'processMagicedenScheduledBid', stage: 'early_return', level: 'warn', message: 'MagicEden disabled globally', metadata: { enabledMarketplaces } }); } catch { }; return; }
+        if (!enabledMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) { return; }
 
         const currentTask = activeTasks.get(task._id);
 
-        if (!currentTask?.running || !currentTask.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) { try { logRaw('magiceden', { taskId, function: 'processMagicedenScheduledBid', stage: 'early_return', level: 'warn', message: 'Task not running or MagicEden not selected', metadata: { running: currentTask?.running, selected: currentTask?.selectedMarketplaces } }); } catch { }; return; }
+        if (!currentTask?.running || !currentTask.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) { return; }
 
         // Transition from SCHEDULED to STARTED for this marketplace - AFTER validation
         setTaskStatus(taskId, 'STARTED', `magiceden scheduled bid starting - Loop #${currentLoopCount}`, 'magiceden');
@@ -19141,11 +16396,10 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
           taskPreprocessing.set(taskId, preprocessing);
 
           // If preprocessing didn't enable MagicEden, it means something went wrong
-          if (!preprocessing.magiceden.enabled) { try { logRaw('magiceden', { taskId, function: 'processMagicedenScheduledBid', stage: 'error', level: 'error', message: 'Preprocessing failed to enable MagicEden', metadata: {} }); } catch { }; throw new Error(`Preprocessing failed to enable MagicEden for task ${taskId}`); }
+          if (!preprocessing.magiceden.enabled) { throw new Error(`Preprocessing failed to enable MagicEden for task ${taskId}`); }
         }
 
         if (preprocessing.magiceden.skipReason) {
-          try { logRaw('magiceden', { taskId, function: 'processMagicedenScheduledBid', stage: 'early_return', level: 'warn', message: 'Preprocessing skip', metadata: { reason: preprocessing.magiceden.skipReason } }); } catch { }
           if (!warningBids[taskId]) {
             warningBids[taskId] = { opensea: false, magiceden: false, blur: false };
           }
@@ -19560,36 +16814,29 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
 
 async function processMagicedenCollectionBid(data: { taskId: string }) {
   const taskId = data.taskId;
-  logDecision('magiceden', taskId, 'processMagicedenCollectionBid', 'start', 'Starting MagicEden collection bid');
-
   // Entry log
 
   // Check if task is blacklisted before processing
   if (isTaskBlacklisted(taskId)) {
-    logEarlyReturn('magiceden', taskId, 'processMagicedenCollectionBid', 'Task blacklisted');
     return;
   }
 
   try {
     if (!enabledMarketplaces.length) {
-      logEarlyReturn('magiceden', taskId, 'processMagicedenCollectionBid', 'No marketplaces enabled');
       return;
     }
 
     // Fetch task from activeTasks
     const currentTask = activeTasks.get(taskId);
     if (!currentTask || !currentTask?.running) {
-      logEarlyReturn('magiceden', taskId, 'processMagicedenCollectionBid', 'Task not running');
       return;
     }
 
     if (!currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden")) {
-      logEarlyReturn('magiceden', taskId, 'processMagicedenCollectionBid', 'MagicEden not selected for task', { selected: currentTask.selectedMarketplaces });
       return;
     }
 
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) {
-      logEarlyReturn('magiceden', taskId, 'processMagicedenCollectionBid', 'MagicEden disabled globally', { enabledMarketplaces });
       return;
     }
 
@@ -19629,26 +16876,10 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
     const stopBid = await stopOption(currentTask, 'magiceden', floor_price, false)
     if (stopBid) {
-      logEarlyReturn('magiceden', taskId, 'processMagicedenCollectionBid', 'Stop condition met', { floor: floor_price });
       if (orders.length > 0) {
         const orderKeys = orders.map(order => order._id)
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
         // Log cancellation enqueue
-        try {
-          logRaw('magiceden', {
-            taskId: currentTask._id,
-            function: 'processMagicedenCollectionBid',
-            stage: 'queueing',
-            level: 'info',
-            message: 'Queueing cancellation job - stop condition met',
-            metadata: {
-              jobCount: 1,
-              reason: 'stop_condition_met',
-              floorPrice: floor_price
-            }
-          });
-        } catch { }
-
         queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: currentTask.walletId, orderKeys: orderKeys, taskId: currentTask._id }); // Non-blocking
       }
       return
@@ -19667,7 +16898,6 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
         ? `Insufficient ${currencySymbol} balance: ${balance} (zero or negative) for task ${taskId}`
         : `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId}`;
 
-      try { logRaw('magiceden', { taskId, function: 'processMagicedenCollectionBid', stage: 'early_return', level: 'warn', message: 'Insufficient balance', metadata: { balance, minBidPriceEth, currencySymbol } }); } catch { }
 
       // Increment skip stats
       if (!skipStats[currentTask._id]) {
@@ -19711,7 +16941,6 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
     if (!currentTask.outbidOptions.outbid) {
       if (ttl >= MIN_BID_DURATION && currentPrice === Number(offerPrice) && Math.abs(orderExpiration - expiration) < 30) {
-        try { logRaw('magiceden', { taskId, function: 'processMagicedenCollectionBid', stage: 'early_return', level: 'info', message: 'Existing order still valid', metadata: { ttl, currentPrice, orderExpiration, expiration } }); } catch { }
         return;
       }
     }
@@ -19783,22 +17012,6 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
           const orderKeys = orders.map((order: any) => order._id)
           const extractedOrderIds = await extractMagicedenOrderHash(orders)
           // Log cancellation enqueue
-          try {
-            logRaw('magiceden', {
-              taskId: currentTask._id,
-              function: 'processMagicedenCollectionBid',
-              stage: 'queueing',
-              level: 'info',
-              message: 'Queueing cancellation job - max bid exceeded',
-              metadata: {
-                jobCount: 1,
-                reason: 'max_bid_exceeded',
-                offerEth,
-                maxBidPriceEth
-              }
-            });
-          } catch { }
-
           queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: currentTask.walletId, orderKeys, taskId: currentTask._id }); // Non-blocking
         }
       }
@@ -19836,9 +17049,7 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
     }
 
   } catch (error: any) {
-
     logBidError(taskId, "MAGICEDEN COLLECTION BID ERROR", `Error processing MagicEden collection bid for task: ${taskId}: ${error?.response?.data?.message || error?.message || String(error)}`, "error", "magiceden"); // Non-blocking
-
     // Throw the error
     throw error;
   }
@@ -19846,7 +17057,6 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
 
 async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
-  try { logRaw('magiceden', { taskId: data._id, function: 'processMagicedenTokenBid', stage: 'start', level: 'info', message: 'Starting MagicEden token bid', metadata: { tokenId: data.tokenId, slug: data.slug } }); } catch { }
   try {
     const { contractAddress, address, quantity, walletId, slug, tokenId, _id } = data
     if (!enabledMarketplaces.length) return
@@ -19896,7 +17106,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
     const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), false)
     if (stopBid) {
-      try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTokenBid', stage: 'early_return', level: 'warn', message: 'Stop condition met', metadata: { floor: floor_price, tokenId } }); } catch { }
       if (orders.length > 0) {
         const orderKeys = orders.map((order: any) => order._id)
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
@@ -19920,7 +17129,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
         "skipped",
         "magiceden"
       );
-      try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTokenBid', stage: 'early_return', level: 'warn', message: 'Insufficient balance', metadata: { balance, minBidPriceEth, tokenId, currencySymbol } }); } catch { }
       return;
     }
 
@@ -19939,7 +17147,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     const orderExpiration = order ? Math.round((expiredAt - createdAt) / 1000) : expiration
 
     if (!outbidOptions.outbid) {
-      if (ttl >= MIN_BID_DURATION && currentPrice === tokenOffer && Math.abs(orderExpiration - expiration) < 30) { try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTokenBid', stage: 'early_return', level: 'info', message: 'Existing order still valid', metadata: { ttl, currentPrice, orderExpiration, expiration } }); } catch { }; return; }
+      if (ttl >= MIN_BID_DURATION && currentPrice === tokenOffer && Math.abs(orderExpiration - expiration) < 30) { return; }
 
     } else {
       const walletsArr = await walletCache.getAllWallets()
@@ -20000,26 +17208,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     const bidCount = getIncrementedBidCount(MAGICEDEN, slug, _id)
 
     if (outbidOptions.outbid && offerEth >= maxBidPriceEth) {
-      try {
-        logRaw('magiceden', {
-          taskId: _id,
-          function: 'processMagicedenTokenBid',
-          stage: 'bid_calculation',
-          level: 'warn',
-          message: 'Offer exceeds max bid price',
-          metadata: {
-            offerEth,
-            maxBidPriceEth,
-            currencySymbol,
-            tokenId,
-            bidPriceConfig: currentTask.bidPrice,
-            magicEdenBidPrice: currentTask.magicEdenBidPrice,
-            bidPriceType: currentTask.bidPriceType,
-            floorPrice: floor_price,
-            cancelMaxWhenOutbid: currentTask.outbidOptions.cancelMaxWhenOutbid
-          }
-        });
-      } catch { }
       if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
         if (orders.length > 0) {
           const orderKeys = orders.map((order: any) => order._id)
@@ -20081,20 +17269,17 @@ async function processMagicedenTraitBid(data: {
   minBidPriceEth?: number;
   task: ITask;
 }) {
-  try { logRaw('magiceden', { taskId: data._id, function: 'processMagicedenTraitBid', stage: 'start', level: 'info', message: 'Starting MagicEden trait bid', metadata: { slug: data.slug, trait: data.trait } }); } catch { }
   const taskId = data._id;
 
   // Log entry
 
   // Early validation
   if (!enabledMarketplaces.length || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) {
-    try { logRaw('magiceden', { taskId, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'MagicEden disabled or no marketplaces enabled', metadata: { enabledMarketplaces } }); } catch { }
     return;
   }
 
   const activeTask = activeTasks.get(data._id);
   if (!activeTask?.running || taskStatus[data._id]?.marketplaces?.magiceden?.status === 'COMPLETED' || taskStatus[data._id]?.marketplaces?.magiceden?.status === 'STOPPED') {
-    try { logRaw('magiceden', { taskId, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'Task not running or marketplace completed/stopped', metadata: { status: taskStatus[data._id]?.marketplaces?.magiceden?.status } }); } catch { }
     return;
   }
 
@@ -20107,7 +17292,7 @@ async function processMagicedenTraitBid(data: {
     // The trait passed in the job data is already validated
 
     const currentTask = activeTasks.get(_id)
-    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden")) { try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'Task not running or MagicEden not selected', metadata: { running: currentTask?.running, selected: currentTask?.selectedMarketplaces } }); } catch { }; return; }
+    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden")) { return; }
 
     const outbidOptions = currentTask.outbidOptions
     const identifier = `${trait.attributeKey}:${trait.attributeValue}`
@@ -20126,11 +17311,10 @@ async function processMagicedenTraitBid(data: {
       }).sort({ createdAt: -1 })
     ]);
 
-    if (!floor_price) { try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTraitBid', stage: 'error', level: 'error', message: 'Failed to fetch floor price', metadata: { slug } }); } catch { }; throw new Error(`Failed to fetch floor price for ${slug}`); }
+    if (!floor_price) { throw new Error(`Failed to fetch floor price for ${slug}`); }
 
     const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), false, traitFloor, identifier)
     if (stopBid) {
-      try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'Stop condition met for trait', metadata: { identifier, floor: floor_price, traitFloor } }); } catch { }
       if (orders.length > 0) {
         const orderKeys = orders.map((order: any) => order._id)
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
@@ -20159,7 +17343,6 @@ async function processMagicedenTraitBid(data: {
         "skipped",
         "magiceden"
       );
-      try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'warn', message: 'Insufficient balance', metadata: { balance, minBidPriceEth, currencySymbol, identifier } }); } catch { }
       return;
     }
     const expiration = getExpiry(currentTask.bidDuration)
@@ -20227,7 +17410,7 @@ async function processMagicedenTraitBid(data: {
         }
         else if (spread > outbidMargin && Number(highestBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
         }
-        else if (ttl > MIN_BID_DURATION) { try { logRaw('magiceden', { taskId: _id, function: 'processMagicedenTraitBid', stage: 'early_return', level: 'info', message: 'Existing order still valid (trait)', metadata: { ttl, currentPrice: Number(order?.offerPrice), orderExpiration, expiration } }); } catch { }; return } else {
+        else if (ttl > MIN_BID_DURATION) { return } else {
           traitOffer = +order.offerPrice
         }
       }
@@ -20250,26 +17433,6 @@ async function processMagicedenTraitBid(data: {
       }); // Non-blocking
     }
     if (outbidOptions.outbid && offerEth >= maxBidPriceEth) {
-      try {
-        logRaw('magiceden', {
-          taskId: _id,
-          function: 'processMagicedenTraitBid',
-          stage: 'bid_calculation',
-          level: 'warn',
-          message: 'Offer exceeds max bid price (trait)',
-          metadata: {
-            offerEth,
-            maxBidPriceEth,
-            currencySymbol,
-            identifier,
-            bidPriceConfig: currentTask.bidPrice,
-            magicEdenBidPrice: currentTask.magicEdenBidPrice,
-            bidPriceType: currentTask.bidPriceType,
-            floorPrice: floor_price,
-            cancelMaxWhenOutbid: currentTask.outbidOptions.cancelMaxWhenOutbid
-          }
-        });
-      } catch { }
       if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
         if (orders.length > 0) {
           const orderKeys = orders.map((order: any) => order._id)
@@ -20360,14 +17523,12 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
 
 
     // Add marketplace file logging for successful cancellation
-    try { logRaw('opensea', { taskId, function: 'bulkCancelOpenseaBid', stage: 'completion', level: 'info', message: 'Order cancelled successfully', metadata: { orderId, orderKey } }); } catch { }
   } catch (error) {
     // Log detailed error information
     const errorMessage = error instanceof Error ? error.message : String(error);
     logSystemError('BulkCancelOpensea', `Failed to cancel OpenSea order ${orderId} for task ${taskId}`, error, { taskId, orderId, errorMessage });
 
     // Add marketplace file logging for error
-    try { logRaw('opensea', { taskId, function: 'bulkCancelOpenseaBid', stage: 'error', level: 'error', message: 'Failed to cancel order', metadata: { orderId, orderKey, errorMessage } }); } catch { }
 
     // Log additional error details if available
     if (error instanceof Error && 'response' in error) {
@@ -20387,7 +17548,6 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
 
 
   // Add marketplace file logging
-  try { logRaw('magiceden', { taskId, function: 'bulkCancelMagicedenBid', stage: 'start', level: 'info', message: 'Starting bulk order cancellation', metadata: { walletId: safeWalletId, orderCount: orderIds.length, batchSize: batchSize || orderIds.length } }); } catch { }
 
   try {
     if (orderIds.length > 0) {
@@ -20425,7 +17585,6 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
       decrementOwnBidCounter('magiceden', completedCount);
 
       // Add marketplace file logging for successful cancellation
-      try { logRaw('magiceden', { taskId, function: 'bulkCancelMagicedenBid', stage: 'completion', level: 'info', message: 'Orders cancelled successfully', metadata: { orderCount: orderIds.length, completedCount } }); } catch { }
     } else {
     }
 
@@ -20440,7 +17599,6 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
     logSystemError('BulkCancelMagiceden', `Error processing Magiceden bid cancellation for task ${taskId}`, error, { taskId });
 
     // Add marketplace file logging for error
-    try { logRaw('magiceden', { taskId, function: 'bulkCancelMagicedenBid', stage: 'error', level: 'error', message: 'Failed to cancel orders', metadata: { orderCount: orderIds.length, errorMessage } }); } catch { }
 
     // Clean up the tracking set even on error to allow retry
     orderKeys.forEach(orderKey => {
@@ -20563,7 +17721,6 @@ async function bulkCancelBlurBid(data: BlurCancelPayload) {
 
 
   // Add marketplace file logging
-  try { logRaw('blur', { taskId, function: 'bulkCancelBlurBid', stage: 'start', level: 'info', message: 'Starting order cancellation', metadata: { walletId: safeWalletId, orderKey, hasPayload: !!payload } }); } catch { }
 
   try {
     if (!data) return
@@ -20597,7 +17754,6 @@ async function bulkCancelBlurBid(data: BlurCancelPayload) {
     await updateTaskCancellationPercentage(taskId, undefined, 'blur');
 
     // Add marketplace file logging for successful cancellation
-    try { logRaw('blur', { taskId, function: 'bulkCancelBlurBid', stage: 'completion', level: 'info', message: 'Order cancelled successfully', metadata: { orderKey } }); } catch { }
 
     // Cancellation tracking is now handled in cancelBlurBid directly
   } catch (error) {
@@ -20605,7 +17761,6 @@ async function bulkCancelBlurBid(data: BlurCancelPayload) {
     logSystemError('BulkCancelBlur', `Error processing Blur bid cancellation for task ${taskId}`, error, { taskId });
 
     // Add marketplace file logging for error
-    try { logRaw('blur', { taskId, function: 'bulkCancelBlurBid', stage: 'error', level: 'error', message: 'Failed to cancel order', metadata: { orderKey, errorMessage } }); } catch { }
 
     throw error; // Re-throw to maintain existing behavior
   }
