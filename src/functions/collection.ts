@@ -1,6 +1,7 @@
 import { config } from "dotenv";
 import stringify from 'json-stable-stringify';
 import crypto from 'crypto';
+import { AxiosResponse } from 'axios';
 import { axiosInstance, limiter } from "../init"; // Import Redis client
 import { DistributedLockManager } from "../utils/lock";
 import { CircuitBreaker } from "../utils/circuit-breaker";
@@ -8,7 +9,7 @@ import { API_KEY } from "..";
 import redisClient from '../utils/redis';
 import { CollectionItemsListQuery } from "../queries";
 import { BASE_URL } from "../constants";
-import { logger, DatabaseOperation } from "../utils/logger";
+import { logger, DatabaseOperation, ErrorCategory, MarketplaceSubCategory } from "../utils/logger";
 import { ICollectionDetails, ICollectionFee } from "../types/collection.types";
 import { setOpenseaMarketplaceFee } from "../utils/marketplace-fee-cache";
 
@@ -1277,4 +1278,122 @@ interface Listing {
 interface ListingsResponse {
   listings: Listing[];
   next: string;
+}
+
+// GraphQL response types for collection token query
+interface CollectionTokenItem {
+  tokenId: string;
+  assetContract?: {
+    address: string;
+  };
+}
+
+interface CollectionTokensQueryResponse {
+  data: {
+    collectionItems: {
+      items: CollectionTokenItem[];
+      nextPageCursor: string | null;
+    };
+  };
+}
+
+/**
+ * Fetches token ID to contract address mapping for a collection.
+ * Used for multi-contract collections where different tokens may belong to different contracts.
+ *
+ * @param collectionSlug - The OpenSea collection slug
+ * @returns Record mapping token IDs to their contract addresses
+ */
+export async function getCollectionTokenContractMap(collectionSlug: string): Promise<Record<string, string>> {
+  const map: Record<string, string> = {};
+
+  try {
+    // GraphQL query to fetch token items with contract information
+    const query = `
+      query CollectionTokensQuery($collectionSlug: String!, $cursor: String, $limit: Int) {
+        collectionItems(
+          collectionSlug: $collectionSlug
+          cursor: $cursor
+          sort: { by: TOKEN_ID, direction: ASC }
+          limit: $limit
+        ) {
+          items {
+            tokenId
+            assetContract {
+              address
+            }
+          }
+          nextPageCursor
+        }
+      }
+    `;
+
+    let cursor: string | null = null;
+    let hasMore = true;
+    const BATCH_SIZE = 200; // Fetch in batches
+    const MAX_TOKENS = 10000; // Safety limit to prevent infinite loops
+    let totalFetched = 0;
+
+    // Paginate through all tokens in the collection
+    while (hasMore && totalFetched < MAX_TOKENS) {
+      const payload: {
+        query: string;
+        variables: {
+          collectionSlug: string;
+          cursor: string | null;
+          limit: number;
+        };
+      } = {
+        query,
+        variables: {
+          collectionSlug,
+          cursor,
+          limit: BATCH_SIZE
+        }
+      };
+
+      const { data } = await limiter.schedule((): Promise<AxiosResponse<CollectionTokensQueryResponse>> =>
+        axiosInstance.post<CollectionTokensQueryResponse>(
+          `${BASE_URL}/opensea/graphql`,
+          payload,
+          {
+            headers: {
+              'x-api-key': API_KEY
+            }
+          }
+        )
+      );
+
+      const items: CollectionTokenItem[] = data?.data?.collectionItems?.items || [];
+      const nextCursor: string | null = data?.data?.collectionItems?.nextPageCursor ?? null;
+
+      // Build the mapping
+      for (const item of items) {
+        if (item?.tokenId && item?.assetContract?.address) {
+          map[item.tokenId] = item.assetContract.address.toLowerCase();
+          totalFetched++;
+        }
+      }
+
+      // Check if there are more items to fetch
+      if (!nextCursor || items.length === 0) {
+        hasMore = false;
+      } else {
+        cursor = nextCursor;
+      }
+    }
+
+    return map;
+  } catch (error) {
+    // Log error but return empty map to allow graceful degradation
+    await logger.logMarketplaceError('Error fetching collection token contract map', {
+      errorCategory: ErrorCategory.MARKETPLACE,
+      marketplaceSubCategory: MarketplaceSubCategory.OPENSEA,
+      collection: collectionSlug,
+      error: error as Error,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
+
+    return map; // Return whatever we've collected so far
+  }
 }

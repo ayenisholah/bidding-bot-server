@@ -4,6 +4,7 @@ import { ethers, Wallet } from "ethers";
 import { BASE_URL, SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
 import { activeTasks, API_KEY, decrementBidCount, pQueue, trackBidRate, updateTaskCancellationPercentage } from "../..";
+import { getCollectionDetails, getCollectionTokenContractMap } from "../../functions/collection";
 import { config } from "dotenv";
 import axios from "axios";
 import Order from '../../models/order.model';
@@ -19,6 +20,7 @@ import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
 import fs from 'fs';
 import path from 'path';
+import { MAX_PAIN_OVERRIDE_ADDRESS, MAX_PAIN_SLUG, MAX_PAIN_TOKEN_OVERRIDES } from "../../maxPainOverrides";
 
 // Performance timing utilitie
 // Ensure logs directory exists
@@ -94,6 +96,10 @@ function getWallet(privateKey: string): Wallet {
   return walletCache.get(privateKey)!;
 }
 
+// Caching infrastructure for multi-contract collection resolution
+const multiContractSlugCache = new Map<string, boolean>();
+const contractMapCache = new Map<string, Record<string, string>>();
+const contractMapPromises = new Map<string, Promise<Record<string, string>>>();
 
 const domain = {
   name: 'Seaport',
@@ -201,7 +207,89 @@ const types = {
 
 const activeRequests = new Map<string, AbortController[]>();
 
-async function buildItemOffer(taskId: string, offerSpecification: ItemOfferSpecification, currency: string) {
+/**
+ * Resolves the correct contract address for a given token ID in a collection.
+ *
+ * Priority:
+ * 1. Max Pain override (if applicable)
+ * 2. Multi-contract collection mapping (cached)
+ * 3. Fallback to provided address
+ *
+ * @param collectionSlug - The OpenSea collection slug
+ * @param tokenId - The token ID to resolve
+ * @param fallbackAddress - Default contract address to use
+ * @returns The resolved contract address
+ */
+async function resolveContractAddress(
+  collectionSlug: string | undefined,
+  tokenId: string | number,
+  fallbackAddress: string
+): Promise<string> {
+  // Early return if no slug provided
+  if (!collectionSlug) {
+    return fallbackAddress;
+  }
+
+  const normalizedSlug = collectionSlug.toLowerCase();
+  const tokenKey = tokenId.toString();
+
+  // STEP 1: Check Max Pain Override (Priority: Highest)
+  // This check happens FIRST for optimal performance
+  if (normalizedSlug === MAX_PAIN_SLUG && MAX_PAIN_TOKEN_OVERRIDES.has(tokenKey)) {
+    return MAX_PAIN_OVERRIDE_ADDRESS;
+  }
+
+  try {
+    // STEP 2: Check if collection has multiple contracts
+    if (!multiContractSlugCache.has(normalizedSlug)) {
+      const details = await getCollectionDetails(normalizedSlug);
+      const contractAddresses = Array.isArray(details?.contracts)
+        ? details.contracts
+            .map((contract: { address?: string | null }) => contract?.address?.toLowerCase())
+            .filter((address: string | null | undefined): address is string => Boolean(address))
+        : [];
+
+      multiContractSlugCache.set(normalizedSlug, new Set(contractAddresses).size > 1);
+    }
+
+    // STEP 3: If not a multi-contract collection, use fallback
+    if (!multiContractSlugCache.get(normalizedSlug)) {
+      return fallbackAddress;
+    }
+
+    // STEP 4: Fetch token-to-contract mapping for multi-contract collections
+    if (!contractMapCache.has(normalizedSlug)) {
+      let pendingPromise = contractMapPromises.get(normalizedSlug);
+
+      if (!pendingPromise) {
+        pendingPromise = getCollectionTokenContractMap(normalizedSlug)
+          .then((map) => {
+            contractMapCache.set(normalizedSlug, map);
+            contractMapPromises.delete(normalizedSlug);
+            return map;
+          })
+          .catch((error) => {
+            contractMapPromises.delete(normalizedSlug);
+            throw error;
+          });
+
+        contractMapPromises.set(normalizedSlug, pendingPromise);
+      }
+
+      await pendingPromise;
+    }
+
+    // STEP 5: Return mapped contract or fallback
+    const contractMap = contractMapCache.get(normalizedSlug) || {};
+    return contractMap[tokenKey] ?? fallbackAddress;
+
+  } catch {
+    // Silent failure - always return a valid address
+    return fallbackAddress;
+  }
+}
+
+async function buildItemOffer(taskId: string, offerSpecification: ItemOfferSpecification, currency: string, slug?: string) {
   const {
     assetContractAddress,
     tokenId,
@@ -213,8 +301,16 @@ async function buildItemOffer(taskId: string, offerSpecification: ItemOfferSpeci
   const task = activeTasks.get(taskId)
 
   if (!task) return
+
+  // Apply contract resolution with override logic
+  const resolvedContract = await resolveContractAddress(
+    slug,
+    tokenId,
+    assetContractAddress
+  );
+
   const consideration = getItemConsideration(
-    assetContractAddress,
+    resolvedContract,  // Use resolved contract instead of original
     tokenId,
     quantity,
     walletAddress
@@ -347,7 +443,7 @@ export async function bidOnOpensea(
           quantity: 1,
           expirationSeconds: BigInt(expiry),
           priceWei: BigInt(roundedWei)
-        }, currency)
+        }, currency, slug)
 
         if (!offer) {
           return
@@ -400,7 +496,7 @@ export async function bidOnOpensea(
           return
         }
 
-        const itemResponse = await postItemOffer(taskId, offer, itemSignature)
+        const itemResponse = await postItemOffer(taskId, offer, itemSignature, slug)
         const itemOrderHash = itemResponse?.order?.order_hash
 
         const sanitizedExpiry = expiry > 900 ? expiry : 900
@@ -904,9 +1000,31 @@ const getOffer = (priceWei: bigint, currency: string) => {
   ]
 }
 
-async function postItemOffer(taskId: string, offer: unknown, signature: string) {
+async function postItemOffer(taskId: string, offer: unknown, signature: string, slug?: string) {
+  const task = activeTasks.get(taskId);
+  const collectionSlug = slug || task?.contract?.slug?.toLowerCase();
+
+  const parameters = offer as any;
+
+  // Fix contract addresses in consideration items
+  if (collectionSlug && parameters?.consideration) {
+    for (const item of parameters.consideration) {
+      // itemType 2 = ERC721 token
+      if (Number(item.itemType) === 2 && item?.token) {
+        const targetTokenId = item.identifierOrCriteria;
+
+        // Apply override logic
+        item.token = await resolveContractAddress(
+          collectionSlug,
+          targetTokenId,
+          item.token
+        );
+      }
+    }
+  }
+
   const payload = {
-    parameters: offer,
+    parameters,
     signature,
     protocol_address: SEAPORT_CONTRACT_ADDRESS,
   }
