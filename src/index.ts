@@ -163,6 +163,13 @@ interface MarketplaceTaskStatus {
   expectedCancellationJobs?: number;
   remainingOrders?: number;
   lastCancellationCheck?: number;
+  insufficientBalance?: boolean;
+  balanceErrorDetails?: {
+    wallet: string;
+    requiredAmount: number;
+    availableAmount: number;
+    currency: string;
+  };
 }
 
 interface TaskStatus {
@@ -3410,8 +3417,64 @@ function cleanupTaskResources(taskId: string, preserveWarnings = false): void {
 }
 
 /**
+ * Helper function to complete a task marketplace due to insufficient balance
+ * Sets status to COMPLETED with 100% progress and adds error details
+ */
+async function completeTaskDueToInsufficientBalance(
+  taskId: string,
+  marketplace: string,
+  details: {
+    wallet: string;
+    requiredAmount: number;
+    availableAmount: number;
+    currency: string;
+  }
+): Promise<void> {
+  if (!taskStatus[taskId]) {
+    return;
+  }
+
+  const mpKey = marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
+  const mpStatus = taskStatus[taskId].marketplaces[mpKey];
+
+  if (!mpStatus) {
+    return;
+  }
+
+  // Get parent job to set completion counts
+  const parentJobId = getParentJobId(taskId, marketplace);
+  const parentJob = parentJobs.get(parentJobId);
+
+  if (parentJob) {
+    // Set completedJobs to totalJobs to show 100% completion
+    if (parentJob.totalJobs > 0) {
+      parentJob.completedJobs = parentJob.totalJobs;
+    }
+  }
+
+  // Update marketplace status
+  mpStatus.status = 'COMPLETED';
+  mpStatus.runningPercentage = 100;
+  mpStatus.completedJobs = mpStatus.totalJobs || 0;
+  mpStatus.insufficientBalance = true;
+  mpStatus.balanceErrorDetails = details;
+  mpStatus.completionTimestamp = Date.now();
+  mpStatus.lastUpdate = Date.now();
+
+  taskStatus[taskId].lastUpdate = Date.now();
+
+  // Log the event
+  console.log(`[INSUFFICIENT_BALANCE] Task ${taskId} marketplace ${marketplace} completed due to insufficient balance:`, {
+    wallet: details.wallet,
+    required: `${details.requiredAmount} ${details.currency}`,
+    available: `${details.availableAmount} ${details.currency}`,
+    deficit: `${(details.requiredAmount - details.availableAmount).toFixed(6)} ${details.currency}`
+  });
+}
+
+/**
  * Helper function to update task running percentage
- * 
+ *
  * Fixed bug where tasks would get stuck when actualJobs > expectedJobs:
  * - Uses Math.min(actualJobs, expectedJobs) for percentage calculation
  * - Prevents tasks from being unable to reach 100% completion
@@ -3514,6 +3577,13 @@ async function updateTaskRunningPercentage(taskId: string) {
       // Update marketplace-specific runningPercentage
       const mpKey = marketplace as 'opensea' | 'magiceden' | 'blur';
       if (taskStatus[taskId].marketplaces[mpKey]) {
+        // Skip updating if marketplace was completed due to insufficient balance
+        // Keep it at 100% with balance error details
+        if (taskStatus[taskId].marketplaces[mpKey]!.insufficientBalance) {
+          // Keep existing values (100%, COMPLETED status, balance error details)
+          continue;
+        }
+
         taskStatus[taskId].marketplaces[mpKey]!.runningPercentage = mpPercentage;
         taskStatus[taskId].marketplaces[mpKey]!.totalJobs = mpTotal;
         taskStatus[taskId].marketplaces[mpKey]!.completedJobs = mpCompleted;
@@ -4492,6 +4562,40 @@ function initializeQueueEventHandlers() {
 
         // Process bid job failure
         if (taskId && marketplace) {
+          // Check if this is an insufficient balance error
+          if (failedReason && (failedReason.includes('InsufficientBalanceError') || failedReason.includes('INSUFFICIENT_BALANCE'))) {
+            // Parse the error message to extract balance details
+            // Message format: "Insufficient {currency} balance: required {X} {currency}, available {Y} {currency} for wallet {address} on collection {slug}"
+            const currencyMatch = failedReason.match(/Insufficient (\w+) balance/);
+            const requiredMatch = failedReason.match(/required ([\d.]+) \w+/);
+            const availableMatch = failedReason.match(/available ([\d.]+) \w+/);
+            const walletMatch = failedReason.match(/for wallet (0x[a-fA-F0-9]{40})/);
+
+            if (currencyMatch && requiredMatch && availableMatch && walletMatch) {
+              const currency = currencyMatch[1];
+              const requiredAmount = parseFloat(requiredMatch[1]);
+              const availableAmount = parseFloat(availableMatch[1]);
+              const wallet = walletMatch[1];
+
+              // Immediately complete the marketplace due to insufficient balance
+              await completeTaskDueToInsufficientBalance(taskId, marketplace, {
+                wallet,
+                requiredAmount,
+                availableAmount,
+                currency
+              });
+
+              // Don't increment error stats for balance errors (it's not really an error in job processing)
+              // Just mark the job as processed and return
+              const task = activeTasks.get(taskId);
+              if (task && task.running) {
+                await safeMarkJobAsProcessed(taskId, marketplace, jobId, false, async (tid, mp, increment) => {
+                  await markJobAsProcessed(tid, mp, jobId, false);
+                });
+              }
+              return; // Skip normal error handling
+            }
+          }
 
           if (!errorStats[taskId]) {
             errorStats[taskId] = {
@@ -4745,6 +4849,40 @@ function initializeQueueEventHandlers() {
       // Process if we found a task ID
 
       if (taskId) {
+        // Check if this is an insufficient balance error
+        if (failedReason && (failedReason.includes('InsufficientBalanceError') || failedReason.includes('INSUFFICIENT_BALANCE'))) {
+          // Parse the error message to extract balance details
+          // Message format: "Insufficient {currency} balance: required {X} {currency}, available {Y} {currency} for wallet {address} on collection {slug}"
+          const currencyMatch = failedReason.match(/Insufficient (\w+) balance/);
+          const requiredMatch = failedReason.match(/required ([\d.]+) \w+/);
+          const availableMatch = failedReason.match(/available ([\d.]+) \w+/);
+          const walletMatch = failedReason.match(/for wallet (0x[a-fA-F0-9]{40})/);
+
+          if (currencyMatch && requiredMatch && availableMatch && walletMatch) {
+            const currency = currencyMatch[1];
+            const requiredAmount = parseFloat(requiredMatch[1]);
+            const availableAmount = parseFloat(availableMatch[1]);
+            const wallet = walletMatch[1];
+
+            // Immediately complete the marketplace due to insufficient balance
+            await completeTaskDueToInsufficientBalance(taskId, marketplace, {
+              wallet,
+              requiredAmount,
+              availableAmount,
+              currency
+            });
+
+            // Don't increment error stats for balance errors (it's not really an error in job processing)
+            // Just mark the job as processed and return
+            const task = activeTasks.get(taskId);
+            if (task && task.running) {
+              await safeMarkJobAsProcessed(taskId, marketplace, jobId, false, async (tid, mp, increment) => {
+                await markJobAsProcessed(tid, mp, jobId, false);
+              });
+            }
+            return; // Skip normal error handling
+          }
+        }
 
         if (!errorStats[taskId]) {
           errorStats[taskId] = {
