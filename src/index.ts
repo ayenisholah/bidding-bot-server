@@ -1963,6 +1963,74 @@ async function checkWorkerHealth() {
       });
     }
 
+    // MongoDB connection pool monitoring
+    try {
+      const mongoClient = mongoose.connection.getClient();
+      // @ts-ignore - Access internal connection pool stats
+      const poolStats = mongoClient?.topology?.s?.pool;
+
+      if (poolStats) {
+        const maxPoolSize = Number(process.env.MONGO_MAX_POOL_SIZE) || 100;
+        const minPoolSize = Number(process.env.MONGO_MIN_POOL_SIZE) || 30;
+
+        // Calculate current pool metrics
+        const totalConnections = poolStats.totalConnectionCount || 0;
+        const availableConnections = poolStats.availableConnectionCount || 0;
+        const activeConnections = totalConnections - availableConnections;
+        const poolUtilization = totalConnections > 0 ? (activeConnections / maxPoolSize) * 100 : 0;
+
+        // Log MongoDB pool statistics
+        await logger.logInfo(ErrorCategory.GENERAL, 'MongoDB connection pool statistics', {
+          totalConnections,
+          availableConnections,
+          activeConnections,
+          maxPoolSize,
+          minPoolSize,
+          utilizationPercent: Math.round(poolUtilization * 100) / 100,
+          poolState: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+        });
+
+        // Warning threshold: 80% of maxPoolSize
+        const warningThreshold = maxPoolSize * 0.8;
+        // Critical threshold: 90% of maxPoolSize
+        const criticalThreshold = maxPoolSize * 0.9;
+
+        if (activeConnections >= criticalThreshold) {
+          logSystemError('MongoDBPool', `MongoDB connection pool at critical level: ${activeConnections}/${maxPoolSize} connections in use (${Math.round(poolUtilization)}%)`);
+          await logger.logDatabaseError('MongoDB connection pool critical', {
+            databaseOperation: DatabaseOperation.CONNECTION,
+            collection_name: 'mongodb_pool',
+            activeConnections,
+            totalConnections,
+            maxPoolSize,
+            utilizationPercent: Math.round(poolUtilization),
+            warningMessage: 'Connection pool near exhaustion - consider increasing MONGO_MAX_POOL_SIZE'
+          });
+        } else if (activeConnections >= warningThreshold) {
+          await logger.logWarning(ErrorCategory.DATABASE, 'MongoDB connection pool warning', {
+            activeConnections,
+            totalConnections,
+            maxPoolSize,
+            utilizationPercent: Math.round(poolUtilization),
+            threshold: Math.round(warningThreshold),
+            recommendation: 'Monitor pool usage closely - may need to increase MONGO_MAX_POOL_SIZE'
+          });
+        }
+
+        // Check if pool is below minimum (possible connection issues)
+        if (totalConnections < minPoolSize && mongoose.connection.readyState === 1) {
+          await logger.logWarning(ErrorCategory.DATABASE, 'MongoDB pool below minimum size', {
+            totalConnections,
+            minPoolSize,
+            warningMessage: 'Connection pool not maintaining minimum connections'
+          });
+        }
+      }
+    } catch (mongoMonitorError) {
+      // Don't let MongoDB monitoring errors crash the health check
+      logSystemError('MongoDBPoolMonitoring', 'Error monitoring MongoDB pool', mongoMonitorError);
+    }
+
   } catch (error) {
     logSystemError('WorkerHealthCheck', 'Error during worker health check', error);
   }
@@ -2216,8 +2284,8 @@ async function startServer() {
         {
           connection: workerConnection,
           concurrency: concurrencyPerWorker,
-          lockDuration: 90000, // 90 seconds lock (1.5x job timeout)
-          stalledInterval: 90000, // Check for stalled jobs every 90 seconds
+          lockDuration: 960000, // 16 minutes lock (covers 15-minute scheduled job timeout + buffer)
+          stalledInterval: 120000, // Check for stalled jobs every 2 minutes
           maxStalledCount: 1 // Move to failed after 1 stall
         }
       );
@@ -2350,8 +2418,8 @@ async function startServer() {
       {
         connection: blurWorkerConnection,
         concurrency: concurrencyPerWorker, // Reduce concurrency for Blur to prevent rate limit issues
-        lockDuration: 90000, // 90 seconds lock (1.5x job timeout)
-        stalledInterval: 90000, // Check for stalled jobs every 90 seconds
+        lockDuration: 960000, // 16 minutes lock (covers 15-minute scheduled job timeout + buffer)
+        stalledInterval: 120000, // Check for stalled jobs every 2 minutes
         maxStalledCount: 1 // Move to failed after 1 stall
       }
     );
@@ -2519,8 +2587,8 @@ async function startServer() {
         socketTimeoutMS: 45000,
 
         // Connection pool optimization for high throughput (100+ QPS)
-        maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE) || 30, // Reduced to prevent overload
-        minPoolSize: Number(process.env.MONGO_MIN_POOL_SIZE) || 10, // More warm connections
+        maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE) || 100, // Increased to handle high concurrency
+        minPoolSize: Number(process.env.MONGO_MIN_POOL_SIZE) || 30, // More warm connections for faster startup
         maxIdleTimeMS: 60000, // Keep connections open longer for frequent queries
         waitQueueTimeoutMS: 10000, // Max wait time for connection from pool
 
