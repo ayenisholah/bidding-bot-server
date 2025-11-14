@@ -21312,6 +21312,11 @@ async function approveMarketplace(marketplace: string, privateKey: string, curre
 
 export async function logBidError(taskId: string, title: string, message: string, type: "skipped" | "warning" | "error", marketplace: "opensea" | "magiceden" | "blur") {
   try {
+    // Filter out circuit breaker errors - they're expected during high-failure periods
+    if (message.includes('Circuit breaker is OPEN')) {
+      return;
+    }
+
     // Create a hash of the message for comparison (to handle long messages)
     const messageHash = crypto.createHash('md5').update(message).digest('hex');
 
