@@ -25,7 +25,7 @@ import stringify from 'json-stable-stringify';
 import WebSocket, { Server as WebSocketServer } from 'ws';
 import http from 'http';
 import { axiosInstance, initialize, limiter, removeTaskFromBlacklist, isTaskBlacklisted } from "./init";
-import { bidOnOpensea, cancelOpenseaRequest, cancelOrderWithoutTracking, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor } from "./marketplace/opensea";
+import { bidOnOpensea, cancelOpenseaRequest, cancelOrderWithoutTracking, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor, resolveContractAddress } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor, getAccessToken, getAuthMetrics, getTimeoutMetrics } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
 import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, fetchOpenseaTraits, getCollectionDetails, getOpenseaFloor } from "./functions";
@@ -15406,10 +15406,17 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         return;
       }
     } else {
+      // Resolve contract address for Max Pain collection override support
+      const resolvedContractAddress = await resolveContractAddress(
+        slug,
+        asset.tokenId,
+        asset.contractAddress
+      );
+
       // Parallel fetch: wallets and item offers
       const [walletsArr, highestBid] = await Promise.all([
         walletCache.getAllWallets(),
-        fetchItemOffers(asset.contractAddress, asset.tokenId.toString())
+        fetchItemOffers(resolvedContractAddress, asset.tokenId.toString())
       ]);
       const [topOffer, secondOffer] = highestBid
 

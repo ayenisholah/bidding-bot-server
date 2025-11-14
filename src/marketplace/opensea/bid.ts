@@ -220,7 +220,7 @@ const activeRequests = new Map<string, AbortController[]>();
  * @param fallbackAddress - Default contract address to use
  * @returns The resolved contract address
  */
-async function resolveContractAddress(
+export async function resolveContractAddress(
   collectionSlug: string | undefined,
   tokenId: string | number,
   fallbackAddress: string
