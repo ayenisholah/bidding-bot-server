@@ -1497,7 +1497,7 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
   }
 }
 
-export async function fetchMagicEdenCollectionStats(contractAddress: string) {
+export async function fetchMagicEdenCollectionStats(contractAddress: string): Promise<string> {
   const CACHE_TTL = 30; // 30 seconds cache
   const cacheKey = `magiceden:stats:${contractAddress}`;
   const lockKey = `stats:${contractAddress}`;
@@ -1549,26 +1549,26 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
     }
 
     const queryParams = {
-      includeQuantity: true,
-      includeLastSale: true,
-      excludeSpam: true,
-      excludeBurnt: true,
-      collection: contractAddress,
-      sortBy: 'floorAskPrice',
-      sortDirection: 'asc',
+      includeCollectionStats: true,
+      includeMarket: true,
+      sortBy: 'price',
+      sortDir: 'asc',
       limit: 1,
-      includeAttributes: false,
+      chain: 'ethereum',
+      collectionId: contractAddress,
+      includeTopBid: false,
+      offset: 0
     };
 
     const { data } = await limiter.schedule(() =>
-      axiosInstance.get(`${BASE_URL}/magiceden/v3/rtp/ethereum/tokens/v7`, {
+      axiosInstance.get(`${BASE_URL}/magiceden/v4/assets`, {
         params: queryParams,
         headers: {
           'x-api-key': API_KEY
         }
       })
     );
-    const stats = data?.tokens[0]?.market?.floorAsk?.price?.amount?.decimal || 0;
+    const stats = data?.tokens[0]?.market?.floorAsk?.priceV2?.amount?.native || "0";
     // Cache the result
     if (stats !== undefined) {
       try {
