@@ -474,8 +474,7 @@ export async function getMagicEdenFloor(collectionSlug: string): Promise<number>
       const { fetchMagicEdenCollectionStats } = await import('../marketplace/magiceden');
       const stats = await fetchMagicEdenCollectionStats(collectionSlug);
 
-      const floor_price = stats?.floorPrice?.amount ?
-        Number(stats.floorPrice.amount) / 1e18 : 0;
+      const floor_price = stats ? Number(stats) : 0;
 
       // Cache the result
       if (getRedis()) {

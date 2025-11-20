@@ -18475,7 +18475,7 @@ app.post('/api/floor', async (req, res) => {
       // Magic Eden
       try {
         const magicEdenFloorPrice = await fetchMagicEdenCollectionStats(contractAddress);
-        floorPrices[taskId]['magiceden'] = magicEdenFloorPrice;
+        floorPrices[taskId]['magiceden'] = Number(magicEdenFloorPrice);
 
         const [bestOffer] = await fetchMagicEdenOffer("COLLECTION", contractAddress, "{}") as unknown as OpenseaOfferData[]
         const bestOfferAmount = Number(bestOffer?.eth) || 0
