@@ -2676,9 +2676,28 @@ async function startServer() {
     const currentPassword = getPassword();
     if (!currentPassword) {
       // Don't start jobs if there's no password
+      // Stop all running tasks and listings to prevent auto-start attempts
+      try {
+        const stoppedTasks = await Task.updateMany(
+          { running: true },
+          { $set: { running: false } }
+        );
+
+        const stoppedListings = await Listing.updateMany(
+          { running: true },
+          { $set: { running: false } }
+        );
+
+        console.log(`⏸️  No password available - stopped ${stoppedTasks.modifiedCount} running tasks and ${stoppedListings.modifiedCount} running listings`);
+        console.log('💡 Server will remain in paused state until password is provided via API');
+      } catch (error) {
+        logSystemError('PasswordCheck', 'Error stopping tasks/listings without password', error);
+      }
     } else {
       if (passwordRecovered) {
+        console.log('✅ Password recovered - operations will resume');
       } else {
+        console.log('✅ Password available - operations will resume');
       }
     }
 
@@ -2783,17 +2802,25 @@ async function startServer() {
       logSystemError('WebSocket', 'WebSocket connection failed', error);
     }
 
-    // Initialize listing scheduler with WebSocket manager
-    try {
-      await initializeListingScheduler(wsManager);
-      await logger.logInfo(ErrorCategory.GENERAL, 'Listing scheduler initialized', {
+    // Initialize listing scheduler with WebSocket manager (only if password available)
+    if (currentPassword) {
+      try {
+        await initializeListingScheduler(wsManager);
+        await logger.logInfo(ErrorCategory.GENERAL, 'Listing scheduler initialized', {
+          schedulerType: 'listing_scheduler',
+          hasWebSocketManager: !!wsManager
+        });
+      } catch (error) {
+        await logger.logGeneralError('Failed to initialize listing scheduler', {
+          error: error as Error,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
+      }
+    } else {
+      console.log('⏸️  Listing scheduler skipped - password required');
+      await logger.logInfo(ErrorCategory.GENERAL, 'Listing scheduler skipped - no password', {
         schedulerType: 'listing_scheduler',
-        hasWebSocketManager: !!wsManager
-      });
-    } catch (error) {
-      await logger.logGeneralError('Failed to initialize listing scheduler', {
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
+        reason: 'no_password'
       });
     }
 
@@ -7262,6 +7289,16 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
   // Check start parameter immediately to avoid any unnecessary processing
   if (!start) {
     return { success: false, reason: 'start_false' };
+  }
+
+  // Check if password is available before starting task
+  const password = getPassword();
+  if (!password) {
+    logSystemError('TaskStart', `Cannot start task ${task.contract?.slug || 'unknown'} - password required`, undefined, {
+      taskId: task._id,
+      reason: 'no_password'
+    });
+    return { success: false, reason: 'no_password' };
   }
 
   const startTime = Date.now();

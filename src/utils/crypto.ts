@@ -20,6 +20,10 @@ const PASSWORD_TTL = 604800; // Default 7 days (7 * 24 * 60 * 60)
 let PASSWORD: string | undefined = undefined
 // console.log('🔑 [crypto module] Initialized with PASSWORD =', PASSWORD ? 'SET' : 'UNDEFINED')
 
+// Rate limiter for no password error logging
+let lastNoPasswordLogTime = 0;
+const NO_PASSWORD_LOG_INTERVAL = 60000; // Log once per minute max
+
 // Try to recover password from Redis on startup (development only)
 export async function recoverPasswordFromRedis(): Promise<boolean> {
   // Only attempt recovery in development
@@ -173,7 +177,14 @@ function getEncryptionKey(): Buffer {
   }
 
   // No password available - throw error
-  console.error('🔑 [getEncryptionKey] No password available!');
+  // Rate-limited logging to prevent spam
+  const now = Date.now();
+  if (now - lastNoPasswordLogTime > NO_PASSWORD_LOG_INTERVAL) {
+    console.error('🔑 [getEncryptionKey] No password available! Operations requiring wallet encryption are paused.');
+    console.error('💡 Provide password via API to resume operations.');
+    lastNoPasswordLogTime = now;
+  }
+
   const error = new Error("No password available. Please provide a password for encryption.");
   (error as any).code = 'NO_PASSWORD';
   throw error;

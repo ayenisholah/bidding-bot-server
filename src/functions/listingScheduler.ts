@@ -5,6 +5,7 @@ import { logger, ErrorCategory } from '../utils/logger';
 import WebSocketManager from '../utils/websocket-manager';
 import { PROCESS_LISTING, queue } from '..';
 import { prefetchTokenTraits } from '../functions/tokenMetadata';
+import { getPassword } from '../utils/crypto';
 
 // Color constants for console output
 const GREEN = '\x1b[32m';
@@ -205,6 +206,19 @@ export async function processListingJob(job: Job): Promise<boolean> {
   // console.log(BLUE + `[LISTING SCHEDULER] Listing ID: ${listingId}` + RESET);
 
   try {
+    // Check if password is available before processing
+    const password = getPassword();
+    if (!password) {
+      await logger.logInfo(ErrorCategory.QUEUE, 'Listing job skipped - no password available', {
+        jobId: job.id,
+        listingId,
+        component: 'listing_scheduler',
+        operation: 'process_listing_job_skip',
+        reason: 'no_password'
+      });
+      return true; // Return true to mark job as completed (not failed)
+    }
+
     logger.logInfo(ErrorCategory.QUEUE, 'Processing listing job started', {
       jobId: job.id,
       listingId,
@@ -327,6 +341,17 @@ export async function processListingJob(job: Job): Promise<boolean> {
  */
 export async function initializeListingScheduler(wsManager?: WebSocketManager): Promise<void> {
   try {
+    // Check if password is available before initializing
+    const password = getPassword();
+    if (!password) {
+      console.log('⏸️  Listing scheduler initialization skipped - no password available');
+      await logger.logInfo(ErrorCategory.GENERAL, 'Listing scheduler skipped during initialization', {
+        reason: 'no_password',
+        component: 'listing_scheduler'
+      });
+      return;
+    }
+
     // Initializing listing scheduler
 
     // Get the main queue

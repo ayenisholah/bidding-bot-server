@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Password-Gated Startup System**: Server now waits gracefully for password before starting operations
+  - Server automatically stops all running tasks and listings if no password is available on startup
+  - Auto-stops prevent tasks/listings from attempting decryption operations without password
+  - Listing scheduler initialization skipped when no password available
+  - Task starting operations blocked until password is provided
+  - Password checks added to `initializeListingScheduler()`, `processListingJob()`, and `startTask()`
+  - Rate-limited error logging prevents console spam (max 1 log per minute)
+  - Clear startup messages indicate server is in "paused" state awaiting password
+  - Operations automatically resume when password is set via API
+  - Files modified: `src/index.ts`, `src/functions/listingScheduler.ts`, `src/utils/crypto.ts`
+  - Resolves: Console log spam with "No password available" errors, unauthorized decryption attempts
+
 - **Bulletproof Task Update System**: Implemented comprehensive reliability improvements for bid price updates
   - Added MongoDB transaction support in `updateTaskData()` for atomic database-memory synchronization
   - Database updates now persist BEFORE in-memory state changes, ensuring data consistency
