@@ -48,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Files modified: `src/index.ts`, `src/functions/collection.ts`
   - Helps diagnose HTTP 401 Unauthorized errors related to missing or invalid API keys
 
+### Changed
+- **Debug Log Cleanup**: Removed redundant debug logging from collection functions
+  - Removed all 20 `console.log` and `console.error` statements from collection.ts
+  - Cleaned up 14 active debug logs and 6 commented-out debug logs
+  - All error tracking now uses the centralized logger utility for consistency
+  - Cache errors now fail silently with inline comments instead of console spam
+  - Files modified: `src/functions/collection.ts`
+  - Improves: Log cleanliness, reduces console noise, maintains consistent error tracking
+
 ## [2025-11-20]
 
 ### Fixed

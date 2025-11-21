@@ -142,8 +142,6 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
         let creator_fees: { [key: string]: number } = {};
         let enforceCreatorFee = false;
         if (collection?.fees && Array.isArray(collection.fees)) {
-          // console.log(`[Fee Processing] ${slug} - Starting to process ${collection.fees.length} fees`);
-
           // Process creator fees (exclude OpenSea platform fee and optional fees)
           for (const fee of collection.fees) {
             const isOpenSeaFee = fee.recipient.toLowerCase() === OPENSEA_FEE_ADDRESS_LOWER;
@@ -186,7 +184,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
           try {
             await redis.setex(cacheKey, 3600, JSON.stringify(result));
           } catch (error) {
-            console.log(error);
+            // Cache write error - silently continue
           }
         }
         return result;
@@ -297,7 +295,6 @@ export async function getOpenseaFloor(collectionSlug: string) {
       error: error as Error,
       errorMessage: error instanceof Error ? error.message : String(error)
     });
-    console.error('Error reading from cache:', error);
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -310,10 +307,6 @@ export async function getOpenseaFloor(collectionSlug: string) {
     try {
       // Debug logging for API key and request
       const apiUrl = `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`;
-      console.log(`[DEBUG] OpenSea Floor Request - Collection: ${collectionSlug}`);
-      console.log(`[DEBUG] URL: ${apiUrl}`);
-      console.log(`[DEBUG] API_KEY present: ${API_KEY ? 'YES' : 'NO'}, starts with: ${API_KEY ? API_KEY.substring(0, 8) + '...' : 'UNDEFINED'}`);
-
       const { data } = await openseaCircuitBreaker.execute(() =>
         limiter.schedule(() => axiosInstance.get<ListingsResponse>(
           apiUrl,
@@ -416,7 +409,7 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
       return JSON.parse(cachedFloor);
     }
   } catch (error) {
-    console.error('Error reading Blur floor from cache:', error);
+    // Cache read error - continue to fetch from API
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -441,7 +434,7 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
       }
       return floor_price;
     } catch (error) {
-      console.error('Error fetching Blur floor price:', error);
+      // Error fetching Blur floor price - return 0
       return 0;
     }
   });
@@ -461,7 +454,7 @@ export async function getMagicEdenFloor(collectionSlug: string): Promise<number>
       return JSON.parse(cachedFloor);
     }
   } catch (error) {
-    console.error('Error reading Magic Eden floor from cache:', error);
+    // Cache read error - continue to fetch from API
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -485,7 +478,7 @@ export async function getMagicEdenFloor(collectionSlug: string): Promise<number>
       }
       return floor_price;
     } catch (error) {
-      console.error('Error fetching Magic Eden floor price:', error);
+      // Error fetching Magic Eden floor price - return 0
       return 0;
     }
   });
@@ -566,7 +559,6 @@ export async function getCollectionEvents(
       errorCode: (error as any)?.response?.status,
       errorMessage: (error as any)?.response?.data || (error instanceof Error ? error.message : String(error))
     });
-    console.error('Error fetching collection events:', error);
     throw error;
   }
 }
@@ -588,22 +580,15 @@ export async function fetchOpenSeaCollectionItems(
   const cacheKey = `opensea:collection-items:${hashData(variables)}`;
   const lockKey = `opensea:lock:collection-items:${variables.collectionSlug}:${hashData(variables)}`;
 
-  // Debug log the initial request
-  if (!cursor) {
-    // console.log(`[DEBUG] Fetching OpenSea collection items for ${variables.collectionSlug} with filter:`, JSON.stringify(variables.filter));
-  }
-
   // Try to get from cache first (only for initial request)
   if (!cursor) {
     try {
       const cachedData = getRedis() ? await getRedis().get(cacheKey) : null;
       if (cachedData) {
-        // console.log(`[DEBUG] Cache hit for ${variables.collectionSlug}`);
         return JSON.parse(cachedData);
       }
-      // console.log(`[DEBUG] Cache miss for ${variables.collectionSlug}`);
     } catch (error) {
-      console.error('Error reading collection items from cache:', error);
+      // Cache read error - continue to fetch from API
     }
   }
 
@@ -642,13 +627,6 @@ export async function fetchOpenSeaCollectionItems(
       return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount);
     }
   } catch (error) {
-    // Enhanced error logging
-    console.error(`[ERROR] OpenSea API error for ${variables.collectionSlug}:`);
-    console.error(`  Status: ${(error as any)?.response?.status}`);
-    console.error(`  Data: ${JSON.stringify((error as any)?.response?.data)}`);
-    console.error(`  Headers: ${JSON.stringify((error as any)?.response?.headers)}`);
-    console.error(`  Message: ${error instanceof Error ? error.message : String(error)}`);
-
     await logger.logOpenseaCollectionError('Error fetching OpenSea collection items', {
       collectionSlug: variables.collectionSlug,
       operation: 'fetch_collection_items',
@@ -723,8 +701,6 @@ async function fetchCollectionItemsRecursive(
         if (updateTaskProcessingPercentage) {
           updateTaskProcessingPercentage(taskId, percentage);
         }
-
-        // console.log(`[fetchCollectionItems] Task ${taskId}: Page ${pageNumber}, ${updatedTokenIds.length} tokens, ${percentage.toFixed(1)}% complete`);
       } catch {
         // Silently continue if update fails
       }
@@ -755,7 +731,6 @@ async function fetchCollectionItemsRecursive(
   } catch (error) {
     // Return what we have so far instead of failing completely
     if (allTokenIds.length > 0) {
-      // console.log(`[WARN] Returning partial results (${allTokenIds.length} tokens) due to error`);
       return [...new Set(allTokenIds)];
     }
     throw error;
@@ -819,7 +794,6 @@ export async function fetchOpenseaTraits(
         error: error as Error,
         errorMessage: error instanceof Error ? error.message : String(error)
       });
-      console.error('Error reading traits from cache:', error);
     }
   }
 
@@ -864,7 +838,6 @@ export async function fetchOpenseaTraits(
       errorCode: (error as any)?.response?.status,
       errorMessage: (error as any)?.response?.data || (error instanceof Error ? error.message : String(error))
     });
-    console.error(`Error fetching OpenSea traits for ${slug}:`, error);
     throw new Error(`Failed to fetch traits for collection ${slug}: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
@@ -973,7 +946,7 @@ export async function fetchOpenseaTraitFloors(
       return JSON.parse(cachedData);
     }
   } catch (error) {
-    console.error('Error reading trait floors from cache:', error);
+    // Cache read error - continue to fetch from API
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -1099,7 +1072,6 @@ export async function fetchOpenseaTraitFloors(
         errorCode: (error as any)?.response?.status,
         errorMessage: (error as any)?.response?.data || (error instanceof Error ? error.message : String(error))
       });
-      console.error(`Error fetching OpenSea trait floors for ${slug}:`, error);
       throw error;
     }
   });
@@ -1113,7 +1085,7 @@ export async function fetchOpenseaTraitFloors(
         return JSON.parse(cachedData);
       }
     } catch (error) {
-      console.error('Error reading from cache after lock failure:', error);
+      // Cache read error after lock failure
     }
     throw new Error(`Failed to fetch trait floors for collection ${slug}: Could not acquire lock`);
   }
