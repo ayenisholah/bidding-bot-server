@@ -112,6 +112,10 @@ interface TaskStatusChange {
 }
 const taskStatusHistory: { [taskId: string]: TaskStatusChange[] } = {};
 
+// Message idempotency tracking
+const processedMessages = new Map<string, number>();
+const MESSAGE_TTL = 5 * 60 * 1000; // 5 minutes
+
 // Blur rate limiting is now handled by BlurRateLimiter class
 const QUEUE_NAME = 'BIDDING_BOT';
 const BLUR_BIDDING_QUEUE = 'BLUR_BIDDING_QUEUE';
@@ -5156,58 +5160,160 @@ wss.on('connection', async (ws) => {
     ws.send(initialMessage);
   }
 
+  // Helper functions for message idempotency
+  function isDuplicateMessage(messageId: string): boolean {
+    const timestamp = processedMessages.get(messageId);
+    if (!timestamp) return false;
+
+    // Check if message is still within TTL
+    if (Date.now() - timestamp > MESSAGE_TTL) {
+      processedMessages.delete(messageId);
+      return false;
+    }
+
+    return true;
+  }
+
+  function markMessageProcessed(messageId: string): void {
+    processedMessages.set(messageId, Date.now());
+
+    // Cleanup old entries
+    if (processedMessages.size > 10000) {
+      const cutoff = Date.now() - MESSAGE_TTL;
+      for (const [id, timestamp] of processedMessages.entries()) {
+        if (timestamp < cutoff) {
+          processedMessages.delete(id);
+        }
+      }
+    }
+  }
+
   ws.onmessage = async (event: WebSocket.MessageEvent) => {
+    let messageId: string | undefined;
+    let endpoint: string = 'unknown';
+
     try {
       const message = JSON.parse(event.data as string);
-      switch (message.endpoint) {
-        case 'new-task':
-          await processNewTask(message.data);
-          break;
-        case "import-tasks":
-          await processImportedTasks(message.data);
-          break;
+      messageId = message._id;
+      endpoint = message.endpoint;
+
+      // Validate message structure
+      if (!endpoint) {
+        throw new Error("Invalid message structure: missing endpoint");
+      }
+
+      // Check for duplicate (idempotency)
+      if (messageId && isDuplicateMessage(messageId)) {
+        // Send acknowledgment for duplicate
+        ws.send(JSON.stringify({
+          type: 'ack',
+          messageId,
+          endpoint,
+          status: 'duplicate',
+          timestamp: Date.now()
+        }));
+        return;
+      }
+
+      // Store message ID to prevent duplicates
+      if (messageId) {
+        markMessageProcessed(messageId);
+      }
+
+      let result: any;
+
+      switch (endpoint) {
         case 'updated-task':
-          await updateTaskData(message.data);
+          // Validate task data
+          if (!message.data || !message.data._id) {
+            throw new Error("Missing task data or task ID in update");
+          }
+          result = await updateTaskData(message.data);
           break;
+
+        case 'new-task':
+          result = await processNewTask(message.data);
+          break;
+
+        case "import-tasks":
+          result = await processImportedTasks(message.data);
+          break;
+
         case 'toggle-status':
-          await updateStatus(message.data);
+          result = await updateStatus(message.data);
           break;
+
         case 'stop-task':
-          await stopTask(message.data, false);
+          result = await stopTask(message.data, false);
           break;
+
         case 'delete-task':
-          await deleteTask(message.data)
+          result = await deleteTask(message.data);
           break;
+
         case 'update-multiple-tasks-status':
-          await updateMultipleTasksStatus(message.data);
+          result = await updateMultipleTasksStatus(message.data);
           break;
+
         case 'globalMarketplaces':
-          processGlobalMarketplaces(message.data)
-          break
+          result = processGlobalMarketplaces(message.data);
+          break;
+
         case 'update-marketplace':
-          await updateMarketplace(message.data)
-          break
+          result = await updateMarketplace(message.data);
+          break;
 
         case 'create-listing':
-          await handleStartListing(message.data, ws)
-          break
+          result = await handleStartListing(message.data, ws);
+          break;
+
         case 'stop-listing':
-          await handleStopListing(message.data, ws)
-          break
+          result = await handleStopListing(message.data, ws);
+          break;
 
         case 'update-listing':
-          await handleUpdateListing(message.data, ws)
-          break
+          result = await handleUpdateListing(message.data, ws);
+          break;
 
         default:
+          throw new Error(`Unknown endpoint: ${endpoint}`);
       }
+
+      // Send success acknowledgment
+      ws.send(JSON.stringify({
+        type: 'ack',
+        messageId,
+        endpoint,
+        status: 'success',
+        result,
+        timestamp: Date.now()
+      }));
+
     } catch (error) {
       logger.logApiError("WebSocket message handler failed", {
         error: error as Error,
-        endpoint: 'unknown',
+        endpoint,
+        messageId,
         messageType: typeof event?.data,
-        rawData: event?.data?.toString()?.substring(0, 100) // First 100 chars for debugging
+        rawData: event?.data?.toString()?.substring(0, 100)
       });
+
+      // Send error acknowledgment to client
+      try {
+        ws.send(JSON.stringify({
+          type: 'ack',
+          messageId,
+          endpoint,
+          status: 'error',
+          error: (error as Error).message,
+          timestamp: Date.now()
+        }));
+      } catch (sendError) {
+        // WebSocket might be closed
+        logger.logApiError("Failed to send error acknowledgment", {
+          error: sendError as Error
+        });
+      }
     }
   };
 
@@ -5812,6 +5918,9 @@ async function cancelRemovedTraitBids(traitsToRemove: string[], taskId: string, 
 
 
 async function updateTaskData(task: ITask) {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const existingTaskIndex = currentTasks.findIndex(t => t._id === task._id);
     const existingTask = getActiveTaskWithIdByIndex(existingTaskIndex)?.task
@@ -5827,15 +5936,42 @@ async function updateTaskData(task: ITask) {
       delete warningMessage[task._id];
     }
 
-    if (existingTaskIndex === -1 || !existingTask) return
+    if (existingTaskIndex === -1 || !existingTask) {
+      await session.abortTransaction();
+      session.endSession();
+      return { success: false, error: "Task not found" };
+    }
 
+    // 1. UPDATE DATABASE FIRST with optimistic locking
+    const dbTask = await Task.findOneAndUpdate(
+      { _id: task._id },
+      { $set: task },
+      {
+        new: true,
+        session,
+        runValidators: true
+      }
+    );
+
+    if (!dbTask) {
+      await session.abortTransaction();
+      session.endSession();
+      logSystemError('TaskUpdate', `Task not found in database: ${task._id}`, undefined, { taskId: task._id });
+      return { success: false, error: "Task not found in database" };
+    }
+
+    // 2. Commit transaction to ensure database persistence
+    await session.commitTransaction();
+    session.endSession();
+
+    // 3. NOW update in-memory state after database confirms
     // Check if loopInterval has changed
     const loopIntervalChanged = existingTask.loopInterval.value !== task.loopInterval.value ||
       existingTask.loopInterval.unit !== task.loopInterval.unit;
 
     const wallet = await walletCache.getWalletById(task.walletId)
-    currentTasks.splice(existingTaskIndex, 1, task);
-    activeTasks.set(task._id, task);
+    currentTasks.splice(existingTaskIndex, 1, dbTask.toObject());
+    activeTasks.set(task._id, dbTask.toObject());
     updateTaskIndexes(currentTasks);
 
 
@@ -6219,8 +6355,21 @@ async function updateTaskData(task: ITask) {
     if (stop) {
       await stopTask(task, false)
     }
+
+    return { success: true, data: dbTask.toObject() };
   } catch (error) {
-    logSystemError('TaskUpdate', `Error processing updated task: ${task.contract.slug}`, error, { contractSlug: task.contract.slug });
+    // Rollback transaction if it's still active
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
+    session.endSession();
+
+    logSystemError('TaskUpdate', `Error processing updated task: ${task.contract?.slug || 'unknown'}`, error, {
+      contractSlug: task.contract?.slug,
+      taskId: task._id
+    });
+
+    return { success: false, error: (error as Error).message };
   }
 }
 
