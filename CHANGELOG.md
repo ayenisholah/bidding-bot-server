@@ -57,6 +57,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Files modified: `src/functions/collection.ts`
   - Improves: Log cleanliness, reduces console noise, maintains consistent error tracking
 
+- **Enhanced Cache Error Logging**: Added detailed error logging for cache operations
+  - Added console.error logging for 7 cache-related catch blocks in collection.ts
+  - Each error log includes source file identifier, cache key, collection slug, and detailed error information
+  - Logs include error message and stack trace where appropriate
+  - Format: `[collection.ts] Error description: { contextual details }`
+  - Fixed ESLint @typescript-eslint/no-unused-vars warnings for unused error variables
+  - Files modified: `src/functions/collection.ts`
+  - Affected functions: Redis cache write, Blur floor cache/fetch, Magic Eden floor cache/fetch, collection items cache, trait floors cache
+  - Improves: Error visibility for cache operations, debugging capabilities
+
 ## [2025-11-20]
 
 ### Fixed

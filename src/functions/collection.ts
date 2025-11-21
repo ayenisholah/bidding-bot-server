@@ -184,7 +184,11 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
           try {
             await redis.setex(cacheKey, 3600, JSON.stringify(result));
           } catch (error) {
-            // Cache write error - silently continue
+            console.error('[collection.ts] Error caching collection details to Redis:', {
+              cacheKey,
+              slug,
+              error: error instanceof Error ? error.message : String(error)
+            });
           }
         }
         return result;
@@ -409,7 +413,11 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
       return JSON.parse(cachedFloor);
     }
   } catch (error) {
-    // Cache read error - continue to fetch from API
+    console.error('[collection.ts] Error reading Blur floor from cache:', {
+      cacheKey,
+      collectionSlug,
+      error: error instanceof Error ? error.message : String(error)
+    });
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -434,7 +442,11 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
       }
       return floor_price;
     } catch (error) {
-      // Error fetching Blur floor price - return 0
+      console.error('[collection.ts] Error fetching Blur floor price:', {
+        collectionSlug,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined
+      });
       return 0;
     }
   });
@@ -454,7 +466,11 @@ export async function getMagicEdenFloor(collectionSlug: string): Promise<number>
       return JSON.parse(cachedFloor);
     }
   } catch (error) {
-    // Cache read error - continue to fetch from API
+    console.error('[collection.ts] Error reading Magic Eden floor from cache:', {
+      cacheKey,
+      collectionSlug,
+      error: error instanceof Error ? error.message : String(error)
+    });
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -478,7 +494,11 @@ export async function getMagicEdenFloor(collectionSlug: string): Promise<number>
       }
       return floor_price;
     } catch (error) {
-      // Error fetching Magic Eden floor price - return 0
+      console.error('[collection.ts] Error fetching Magic Eden floor price:', {
+        collectionSlug,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined
+      });
       return 0;
     }
   });
@@ -588,7 +608,11 @@ export async function fetchOpenSeaCollectionItems(
         return JSON.parse(cachedData);
       }
     } catch (error) {
-      // Cache read error - continue to fetch from API
+      console.error('[collection.ts] Error reading collection items from cache:', {
+        cacheKey,
+        collectionSlug: variables.collectionSlug,
+        error: error instanceof Error ? error.message : String(error)
+      });
     }
   }
 
@@ -946,7 +970,11 @@ export async function fetchOpenseaTraitFloors(
       return JSON.parse(cachedData);
     }
   } catch (error) {
-    // Cache read error - continue to fetch from API
+    console.error('[collection.ts] Error reading trait floors from cache:', {
+      cacheKey,
+      slug,
+      error: error instanceof Error ? error.message : String(error)
+    });
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -1085,7 +1113,11 @@ export async function fetchOpenseaTraitFloors(
         return JSON.parse(cachedData);
       }
     } catch (error) {
-      // Cache read error after lock failure
+      console.error('[collection.ts] Error reading trait floors from cache after lock failure:', {
+        cacheKey,
+        slug,
+        error: error instanceof Error ? error.message : String(error)
+      });
     }
     throw new Error(`Failed to fetch trait floors for collection ${slug}: Could not acquire lock`);
   }
