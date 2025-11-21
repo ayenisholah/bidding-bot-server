@@ -78,6 +78,14 @@ const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
+
+// Validate API_KEY is loaded from environment
+if (!API_KEY) {
+  console.error('[FATAL] API_KEY environment variable is not set! Check .env file.');
+  throw new Error('API_KEY is required but not found in environment variables');
+}
+console.log(`[STARTUP] API_KEY loaded successfully (${API_KEY.substring(0, 8)}...)`);
+
 const bidStats: BidCounts = {};
 const ownBidCounts: { [marketplace: string]: number } = {};
 const processedOwnBids: Set<string> = new Set(); // Track processed own bid hashes

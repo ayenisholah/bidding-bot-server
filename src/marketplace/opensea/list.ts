@@ -12,11 +12,12 @@ import Listing from "../../models/listing.model";
 import { logger } from "../../utils/logger";
 import { convertDurationForOpenSea } from "../../utils/duration";
 import { roundToNineDecimals } from "../../utils/decimal-precision";
+import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
 
 config()
 
 const divider = 10000;
-const openseaFee = 50;
+const openseaFee = Number(getOpenseaMarketplaceFee());
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY
 const API_KEY = process.env.API_KEY;
 const types = {
@@ -291,8 +292,8 @@ export const listOnOpensea = async (
     itemType: 0,
     token: "0x0000000000000000000000000000000000000000",
     identifierOrCriteria: 0,
-    startAmount: ((offerPrice * BigInt(50)) / BigInt(divider)).toString(),
-    endAmount: ((offerPrice * BigInt(50)) / BigInt(divider)).toString(),
+    startAmount: ((offerPrice * BigInt(openseaFee)) / BigInt(divider)).toString(),
+    endAmount: ((offerPrice * BigInt(openseaFee)) / BigInt(divider)).toString(),
     recipient: '0x0000a26b00c1F0DF003000390027140000fAa719'
   };
 

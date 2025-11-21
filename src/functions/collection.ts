@@ -1,4 +1,3 @@
-import { config } from "dotenv";
 import stringify from 'json-stable-stringify';
 import crypto from 'crypto';
 import { AxiosResponse } from 'axios';
@@ -12,8 +11,6 @@ import { BASE_URL } from "../constants";
 import { logger, DatabaseOperation, ErrorCategory, MarketplaceSubCategory } from "../utils/logger";
 import { ICollectionDetails, ICollectionFee } from "../types/collection.types";
 import { setOpenseaMarketplaceFee } from "../utils/marketplace-fee-cache";
-
-config()
 
 const collectionCache: { [key: string]: ICollectionDetails } = {};
 const MAX_CACHE_ITEMS = 1000;
@@ -311,9 +308,15 @@ export async function getOpenseaFloor(collectionSlug: string) {
       return JSON.parse(cachedFloor);
     }
     try {
+      // Debug logging for API key and request
+      const apiUrl = `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`;
+      console.log(`[DEBUG] OpenSea Floor Request - Collection: ${collectionSlug}`);
+      console.log(`[DEBUG] URL: ${apiUrl}`);
+      console.log(`[DEBUG] API_KEY present: ${API_KEY ? 'YES' : 'NO'}, starts with: ${API_KEY ? API_KEY.substring(0, 8) + '...' : 'UNDEFINED'}`);
+
       const { data } = await openseaCircuitBreaker.execute(() =>
         limiter.schedule(() => axiosInstance.get<ListingsResponse>(
-          `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
+          apiUrl,
           {
             headers: { 'x-api-key': API_KEY }
           }
