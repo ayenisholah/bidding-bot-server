@@ -13208,7 +13208,7 @@ function roundToValidPrecision(priceEth: number): number {
 }
 
 export const pQueue = new PQueue({
-  concurrency: RATE_LIMIT * 2,
+  concurrency: RATE_LIMIT,
 })
 
 function getTraitCount(traitsJson: any, attribute: any) {

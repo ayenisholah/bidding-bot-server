@@ -79,10 +79,10 @@ const retryConfig: IAxiosRetryConfig = {
     const status = error.response.status;
     return status >= 500 || status === 429 || status === 430 || status === 408;
   },
-  onRetry: (retryCount, error, requestConfig) => {
+  onRetry: (_retryCount, _error, _requestConfig) => {
     // Only log retries in development mode or for specific debugging
     if (process.env.DEBUG_AXIOS_RETRY === 'true') {
-// console.log(`[Axios Retry] Attempt ${retryCount} for ${requestConfig.url} - Status: ${error.response?.status || 'Network Error'}`);
+// console.log(`[Axios Retry] Attempt ${_retryCount} for ${_requestConfig.url} - Status: ${_error.response?.status || 'Network Error'}`);
     }
   }
 };
@@ -92,6 +92,10 @@ async function initialize(rateLimit: number) {
 
   limiter = new Bottleneck({
     minTime: 1000 / rateLimit, // Minimum time between job starts
+    maxConcurrent: rateLimit, // Maximum concurrent API calls
+    reservoir: rateLimit, // Token bucket: start with rateLimit tokens
+    reservoirRefreshAmount: rateLimit, // Refill rateLimit tokens
+    reservoirRefreshInterval: 1000, // Every 1000ms (1 second)
     trackDoneStatus: true,
   });
 
@@ -124,8 +128,7 @@ export function startCountsLogger(intervalMs = 1000) {
   }
 
   countLoggerInterval = setInterval(() => {
-    const counts = getLimiterCounts();
-// console.log('Limiter Counts:', counts);
+// console.log('Limiter Counts:', getLimiterCounts());
   }, intervalMs);
 
 // console.log(`Started logging limiter counts every ${intervalMs}ms`);
