@@ -2650,6 +2650,26 @@ async function startServer() {
       throw error;
     }
 
+    // Reset all running tasks and listings on server restart
+    // This ensures a clean state regardless of how the server was stopped
+    try {
+      const stoppedTasks = await Task.updateMany(
+        { running: true },
+        { $set: { running: false } }
+      );
+
+      const stoppedListings = await Listing.updateMany(
+        { running: true },
+        { $set: { running: false } }
+      );
+
+      if (stoppedTasks.modifiedCount > 0 || stoppedListings.modifiedCount > 0) {
+        console.log(`🔄 Server restart detected - stopped ${stoppedTasks.modifiedCount} running tasks and ${stoppedListings.modifiedCount} running listings`);
+        console.log('💡 Tasks/listings must be manually restarted via the dashboard');
+      }
+    } catch (error) {
+      logSystemError('ServerRestart', 'Error stopping tasks/listings on server restart', error);
+    }
 
     // Try to recover password from Redis BEFORE starting jobs
     let passwordRecovered = false;
@@ -2676,23 +2696,8 @@ async function startServer() {
     const currentPassword = getPassword();
     if (!currentPassword) {
       // Don't start jobs if there's no password
-      // Stop all running tasks and listings to prevent auto-start attempts
-      try {
-        const stoppedTasks = await Task.updateMany(
-          { running: true },
-          { $set: { running: false } }
-        );
-
-        const stoppedListings = await Listing.updateMany(
-          { running: true },
-          { $set: { running: false } }
-        );
-
-        console.log(`⏸️  No password available - stopped ${stoppedTasks.modifiedCount} running tasks and ${stoppedListings.modifiedCount} running listings`);
-        console.log('💡 Server will remain in paused state until password is provided via API');
-      } catch (error) {
-        logSystemError('PasswordCheck', 'Error stopping tasks/listings without password', error);
-      }
+      console.log('⏸️  No password available - server in paused state');
+      console.log('💡 Server will remain in paused state until password is provided via API');
     } else {
       if (passwordRecovered) {
         console.log('✅ Password recovered - operations will resume');

@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Auto-Stop Running Tasks/Listings on Server Restart**: Ensures clean state on every server restart
+  - All tasks with `running: true` automatically set to `running: false` on server startup
+  - All listings with `running: true` automatically set to `running: false` on server startup
+  - Executes unconditionally immediately after MongoDB connection is established
+  - Prevents orphaned running tasks/listings from previous server sessions
+  - Users must manually restart tasks/listings via dashboard after server restart
+  - Removed redundant password-gated stop logic (now runs unconditionally regardless of password)
+  - Files modified: `src/index.ts`
+  - Improves: Server state consistency, prevents race conditions, clearer restart behavior
+  - Impact: Clean slate on every restart - no tasks/listings run until user explicitly restarts them
+
 - **Rarity Bid Type Support**: Server now recognizes and processes rarity bid types
   - Added "rarity" to bidType enum in task model (collection | token | rarity)
   - Added rarityCategory field to task schema (LEGENDARY | EPIC | RARE)
