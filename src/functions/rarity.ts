@@ -1,10 +1,17 @@
-import { limiter, axiosInstance, getRedis } from "../init";
+import { limiter, axiosInstance } from "../init";
 import { API_KEY } from "..";
 import { BASE_URL } from "../constants";
 import { CollectionItemsListQuery } from "../queries";
 import RarityCache from "../models/rarityCache.model";
-import { lockManager } from "../utils/lockManager";
-import crypto from "crypto";
+import { DistributedLockManager } from "../utils/lock";
+import redisClient from '../utils/redis';
+
+const getRedis = () => redisClient.getClient();
+
+const lockManager = new DistributedLockManager({
+  lockPrefix: 'rarity:fetch:',
+  defaultTTLSeconds: 300 // 5 minutes
+});
 
 interface GraphQLItem {
   id: string;
@@ -117,13 +124,6 @@ async function fetchRarityTokensRecursive(
     console.error("[RARITY FETCH] Error:", error);
     throw error;
   }
-}
-
-/**
- * Hash data for cache key generation
- */
-function hashData(data: any): string {
-  return crypto.createHash("md5").update(JSON.stringify(data)).digest("hex");
 }
 
 /**
