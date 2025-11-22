@@ -30,7 +30,7 @@ const retryConfig: IAxiosRetryConfig = {
         const baseDelay = 30000; // 30 seconds for Blur
         const progressiveDelay = baseDelay + (retryCount - 1) * 10000; // +10s each retry (30s, 40s, 50s)
         const jitter = 1000 + Math.random() * 2000; // 1-3s jitter
-// console.log(`[Blur 408] Retrying Blur endpoint after 408 (attempt ${retryCount}), waiting ${progressiveDelay + jitter}ms`);
+        // console.log(`[Blur 408] Retrying Blur endpoint after 408 (attempt ${retryCount}), waiting ${progressiveDelay + jitter}ms`);
         return progressiveDelay + jitter;
       }
 
@@ -40,14 +40,14 @@ const retryConfig: IAxiosRetryConfig = {
         const baseDelay = 5000; // 5 seconds
         const exponentialDelay = Math.min(baseDelay * Math.pow(2, retryCount - 1), 40000); // Max 40 seconds
         const jitter = 500 + Math.random() * 1500; // 500-2000ms jitter
-// console.log(`[Auth Backoff] Retrying auth endpoint after 408 (attempt ${retryCount}), waiting ${exponentialDelay + jitter}ms`);
+        // console.log(`[Auth Backoff] Retrying auth endpoint after 408 (attempt ${retryCount}), waiting ${exponentialDelay + jitter}ms`);
         return exponentialDelay + jitter;
       } else {
         // Progressive delay for other 408 errors
         const delays = [20000, 30000, 40000]; // 20s, 30s, 40s
         const delay = delays[Math.min(retryCount - 1, delays.length - 1)];
         const jitter = 200 + Math.random() * 800; // 200-1000ms jitter
-// console.log(`Retrying after 408 error (attempt ${retryCount}), waiting ${delay + jitter}ms`);
+        // console.log(`Retrying after 408 error (attempt ${retryCount}), waiting ${delay + jitter}ms`);
         return delay + jitter;
       }
     }
@@ -82,7 +82,7 @@ const retryConfig: IAxiosRetryConfig = {
   onRetry: (_retryCount, _error, _requestConfig) => {
     // Only log retries in development mode or for specific debugging
     if (process.env.DEBUG_AXIOS_RETRY === 'true') {
-// console.log(`[Axios Retry] Attempt ${_retryCount} for ${_requestConfig.url} - Status: ${_error.response?.status || 'Network Error'}`);
+      // console.log(`[Axios Retry] Attempt ${_retryCount} for ${_requestConfig.url} - Status: ${_error.response?.status || 'Network Error'}`);
     }
   }
 };
@@ -128,10 +128,10 @@ export function startCountsLogger(intervalMs = 1000) {
   }
 
   countLoggerInterval = setInterval(() => {
-// console.log('Limiter Counts:', getLimiterCounts());
+    // console.log('Limiter Counts:', getLimiterCounts());
   }, intervalMs);
 
-// console.log(`Started logging limiter counts every ${intervalMs}ms`);
+  // console.log(`Started logging limiter counts every ${intervalMs}ms`);
   return countLoggerInterval;
 }
 
@@ -140,12 +140,12 @@ export function stopCountsLogger() {
   if (countLoggerInterval) {
     clearInterval(countLoggerInterval);
     countLoggerInterval = null;
-// console.log('Stopped logging limiter counts');
+    // console.log('Stopped logging limiter counts');
   }
 }
 setInterval(() => {
   const counts = getLimiterCounts();
-// console.log('Current Limiter Stats:', counts);
+  // console.log('Current Limiter Stats:', counts);
   // Calculate instantaneous RPS based on completed requests
   const completedInLastSecond = counts.DONE ? counts.DONE - previousDoneCount : 0;
   previousDoneCount = counts.DONE || 0;
@@ -168,7 +168,7 @@ setInterval(() => {
     : 0;
   trueRPS = Math.min(RATE_LIMIT, Math.max(executing, averageRPS));
 
-// console.log('Average RPS:', averageRPS.toFixed(2), 'Executing:', executing.toFixed(2), 'True RPS:', trueRPS.toFixed(2));
+  // console.log('Average RPS:', averageRPS.toFixed(2), 'Executing:', executing.toFixed(2), 'True RPS:', trueRPS.toFixed(2));
 
   rps.currentRPS = trueRPS
 
@@ -189,18 +189,18 @@ export function cancelTaskJobs(taskId: string, marketplace?: string) {
   if (marketplace) {
     // Marketplace-specific blacklist
     taskBlacklist.get(taskId)!.add(marketplace.toLowerCase());
-// console.log(`Task ${taskId} blacklisted for marketplace: ${marketplace}`);
+    // console.log(`Task ${taskId} blacklisted for marketplace: ${marketplace}`);
   } else {
     // Full task blacklist - add special marker
     taskBlacklist.get(taskId)!.add('*');
-// console.log(`Task ${taskId} fully blacklisted`);
+    // console.log(`Task ${taskId} fully blacklisted`);
   }
 
   // Get current limiter queue size for reporting
   const counts = limiter.counts();
   const queuedJobs = counts.RECEIVED + counts.QUEUED;
 
-// console.log(`Current limiter queue: ${queuedJobs} jobs`);
+  // console.log(`Current limiter queue: ${queuedJobs} jobs`);
 
   return { cancelled: 0, blacklisted: true, queuedJobs };
 }
@@ -215,7 +215,7 @@ export function removeTaskFromBlacklist(taskId: string, marketplace?: string) {
     // Remove specific marketplace from blacklist
     wasRemoved = taskEntry.delete(marketplace.toLowerCase());
     if (wasRemoved) {
-// console.log(`Task ${taskId} removed from blacklist for marketplace: ${marketplace}`);
+      // console.log(`Task ${taskId} removed from blacklist for marketplace: ${marketplace}`);
     }
     // Clean up empty entries
     if (taskEntry.size === 0) {
@@ -225,7 +225,7 @@ export function removeTaskFromBlacklist(taskId: string, marketplace?: string) {
     // Remove entire task from blacklist
     taskBlacklist.delete(taskId);
     wasRemoved = true;
-// console.log(`Task ${taskId} fully removed from blacklist - all marketplaces can execute again`);
+    // console.log(`Task ${taskId} fully removed from blacklist - all marketplaces can execute again`);
   }
 
   return wasRemoved;
@@ -250,7 +250,7 @@ export function isTaskBlacklisted(taskId: string, marketplace?: string): boolean
 // Enhanced limiter scheduling with task validation
 export function scheduleWithTaskValidation(fn: () => PromiseLike<any>, taskId: string) {
   if (isTaskBlacklisted(taskId)) {
-// console.log(`Blocked job execution for stopped task: ${taskId}`);
+    // console.log(`Blocked job execution for stopped task: ${taskId}`);
     return Promise.reject(new Error(`Task ${taskId} is stopped`));
   }
   return limiter.schedule(fn);

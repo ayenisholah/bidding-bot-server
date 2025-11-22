@@ -71,15 +71,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Files modified: `src/index.ts`, `src/functions/collection.ts`
   - Helps diagnose HTTP 401 Unauthorized errors related to missing or invalid API keys
 
-- **OpenSea Rate Limiting (HTTP 429) Errors**: Fixed excessive concurrent API calls causing rate limit violations
-  - Root cause: Bottleneck had no maxConcurrent limit, allowing unlimited simultaneous API calls
-  - Root cause: pQueue concurrency set to 200 (RATE_LIMIT * 2) created burst traffic
-  - Added `maxConcurrent: RATE_LIMIT` (100) to Bottleneck configuration in `src/init.ts`
-  - Added reservoir token bucket: 100 tokens refreshing every 1 second for burst protection
-  - Reduced pQueue concurrency from 200 to 100 (RATE_LIMIT) in `src/index.ts`
-  - Files modified: `src/init.ts:93-100`, `src/index.ts:13210-13212`
-  - Resolves: "Rate limit exceeded" HTTP 429 errors from OpenSea API during bidding operations
-  - Impact: Ensures all concurrent execution respects RATE_LIMIT environment variable
+- **OpenSea Rate Limiting (HTTP 429/430) Errors**: Restored missing Bottleneck rate limiter configuration
+  - Root cause: Previous rate limiting fixes (documented 2025-11-20) were lost or reverted in codebase
+  - Root cause: Bottleneck limiter was missing `maxConcurrent` setting, allowing unlimited concurrent API calls
+  - Root cause: Missing `reservoir` token bucket allowed burst traffic exceeding OpenSea rate limits
+  - Re-added `maxConcurrent: RATE_LIMIT` (100) to Bottleneck configuration in `src/init.ts`
+  - Re-added reservoir token bucket: 100 tokens refreshing every 1 second for burst protection
+  - Limits concurrent OpenSea API calls to 100 matching RATE_LIMIT environment variable
+  - Files modified: `src/init.ts:93-100`
+  - Resolves: HTTP 429 "Rate limit exceeded" and HTTP 430 "API rate limit exceeded" errors from OpenSea API
+  - Impact: Ensures all concurrent execution respects RATE_LIMIT environment variable with proper burst protection
 
 ### Changed
 - **Debug Log Cleanup**: Removed redundant debug logging from collection functions
