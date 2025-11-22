@@ -68,19 +68,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Resolves: "Rate limit exceeded" HTTP 429 errors from OpenSea API during bidding operations
   - Impact: Ensures all concurrent execution respects RATE_LIMIT environment variable
 
-- **Cascading Concurrency Multiplication**: Fixed worker concurrency calculation causing 200-400+ concurrent API calls
-  - Root cause: WORKER_COUNT hardcoded to 1 but 2 workers actually run (Main + Blur)
-  - Root cause: Each worker had concurrency=100, totaling 200 concurrent jobs
-  - Root cause: Each job spawns 2+ parallel API calls via pQueue.addAll(), multiplying actual API calls
-  - Result: 2 workers × 100 concurrency × 2 parallel tasks = 400 concurrent API calls (4× RATE_LIMIT)
-  - Updated WORKER_COUNT from 1 to 2 to accurately reflect Main Worker + Blur Worker
-  - Added PARALLEL_TASKS_PER_JOB constant (2) to account for parallel API calls within each job
-  - Updated concurrency formula: `RATE_LIMIT / WORKER_COUNT / PARALLEL_TASKS_PER_JOB = 100 / 2 / 2 = 25`
-  - New calculation: 2 workers × 25 concurrency × 2 parallel tasks = 100 concurrent API calls ✓
-  - Files modified: `src/index.ts:223`, `src/index.ts:2261-2265`
-  - Resolves: Persistent HTTP 429 "Rate limit exceeded" errors despite individual component configuration
-  - Impact: Total concurrent API calls now accurately match RATE_LIMIT environment variable
-
 ### Changed
 - **Debug Log Cleanup**: Removed redundant debug logging from collection functions
   - Removed all 20 `console.log` and `console.error` statements from collection.ts
