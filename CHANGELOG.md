@@ -42,6 +42,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Files modified: `src/index.ts`
   - Resolves: Message loss on WebSocket disconnect, database-memory state divergence, duplicate message processing
 
+- **Centralized Rarity Token Fetching API**: Migrated rarity token fetching from client to server with rate limiting
+  - Created server-side `/api/rarity` Express endpoint to fetch rarity tokens from OpenSea GraphQL API
+  - Integrated Bottleneck rate limiter to prevent OpenSea HTTP 429 rate limit errors
+  - Implemented two-tier caching: Redis (1-hour TTL) + MongoDB (persistent) for rarity token results
+  - Added distributed locking with `lockManager.withLock()` to prevent duplicate expensive API calls
+  - Preserved early stopping optimization: stops fetching when lower rarity tiers appear (LEGENDARY → EPIC → RARE)
+  - Migrated `RarityCache` MongoDB model from client to server for persistent caching
+  - Recursive pagination with cursor-based fetching to retrieve all tokens for a rarity category
+  - Files created: `src/models/rarityCache.model.ts`, `src/functions/rarity.ts`
+  - Files modified: `src/functions/index.ts`, `src/index.ts`
+  - Resolves: Client-side API calls bypassing rate limiter, potential HTTP 429 errors during rarity bidding setup
+  - Impact: All OpenSea API calls now centralized through server rate limiter for consistent rate limiting
+
 ### Fixed
 - **OpenSea Listing Fee Validation Error**: Fixed OpenSea marketplace listing failures caused by incorrect fee configuration
   - Updated hardcoded OpenSea fee from 50 basis points (0.5%) to 100 basis points (1%)

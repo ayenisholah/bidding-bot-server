@@ -28,7 +28,7 @@ import { axiosInstance, initialize, limiter, removeTaskFromBlacklist, isTaskBlac
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrderWithoutTracking, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor, resolveContractAddress } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor, getAccessToken, getAuthMetrics, getTimeoutMetrics } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
-import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, fetchOpenseaTraits, getCollectionDetails, getOpenseaFloor } from "./functions";
+import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, fetchOpenseaTraits, fetchRarityTokens, getCollectionDetails, getOpenseaFloor } from "./functions";
 import mongoose from 'mongoose';
 import Task, { ITask, SelectedTraits } from "./models/task.model";
 import { Queue, Worker, Job, JobType, JobsOptions, QueueEvents, QueueOptions } from "bullmq";
@@ -18432,6 +18432,47 @@ app.post("/api/traits/count", async (req, res) => {
     res.status(500).json(err)
   }
 })
+
+app.post("/api/rarity", async (req, res) => {
+  try {
+    const { collectionSlug, contractAddress, rarityCategory } = req.body;
+
+    if (!collectionSlug || !rarityCategory) {
+      return res.status(400).json({
+        error: "Missing required fields: collectionSlug, rarityCategory"
+      });
+    }
+
+    if (!["LEGENDARY", "EPIC", "RARE"].includes(rarityCategory)) {
+      return res.status(400).json({
+        error: "Invalid rarity category. Must be LEGENDARY, EPIC, or RARE"
+      });
+    }
+
+    const result = await fetchRarityTokens(
+      collectionSlug,
+      contractAddress || "",
+      rarityCategory as "LEGENDARY" | "EPIC" | "RARE"
+    );
+
+    res.status(200).json(result);
+  } catch (error: any) {
+    const err = error?.response?.data || error?.message;
+    await logger.logApiError('Failed to fetch rarity tokens', {
+      endpoint: '/api/rarity',
+      method: 'POST',
+      collectionSlug: req.body?.collectionSlug,
+      rarityCategory: req.body?.rarityCategory,
+      error: error,
+      errorMessage: err,
+      statusCode: error?.response?.status || 500
+    });
+    res.status(500).json({
+      error: "Failed to fetch rarity tokens",
+      details: err
+    });
+  }
+});
 
 app.get("/api/task/:taskId", async (req, res) => {
   try {
