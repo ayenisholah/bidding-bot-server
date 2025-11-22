@@ -159,10 +159,7 @@ setInterval(() => {
   }
 
   // Calculate average RPS over the history window
-  // Use RATE_LIMIT as capacity ceiling (reflects Bottleneck maxConcurrent: 100)
-  // Worker jobs make API calls intermittently, so instantaneous limiter counts
-  // show 25-50 but actual concurrent capacity is 100 API calls
-  const executing = RATE_LIMIT;
+  const executing = counts.EXECUTING + counts.RUNNING + counts.RECEIVED + counts.QUEUED
   // Filter out 0 values before calculating the average
   const nonZeroRpsHistory = rpsHistory.filter(val => val > 0);
 
