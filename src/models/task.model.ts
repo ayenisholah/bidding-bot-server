@@ -89,7 +89,8 @@ export interface ITask {
   };
   walletId: string;
   tokenIds: (number | string)[];
-  bidType: "collection" | "token";
+  bidType: "collection" | "token" | "rarity";
+  rarityCategory?: "LEGENDARY" | "EPIC" | "RARE";
   bidPriceType: "GENERAL_BID_PRICE" | "MARKETPLACE_BID_PRICE";
   slugValid: boolean;
   magicEdenValid: boolean;
@@ -214,8 +215,13 @@ const TaskSchema: Schema = new Schema(
     tokenIds: { type: [Schema.Types.Mixed], required: false },
     bidType: {
       type: String,
-      enum: ["collection", "token"],
+      enum: ["collection", "token", "rarity"],
       default: "collection"
+    },
+    rarityCategory: {
+      type: String,
+      enum: ["LEGENDARY", "EPIC", "RARE"],
+      required: false
     },
     bidPriceType: {
       type: String,

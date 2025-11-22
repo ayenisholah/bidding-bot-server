@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Rarity Bid Type Support**: Server now recognizes and processes rarity bid types
+  - Added "rarity" to bidType enum in task model (collection | token | rarity)
+  - Added rarityCategory field to task schema (LEGENDARY | EPIC | RARE)
+  - Server treats rarity bids identically to token bids for processing
+  - Updated 9 bid type checks in preprocessing and job creation logic
+  - Rarity tokens fetched by client are processed like regular token bids
+  - OpenSea and MagicEden support rarity bids; Blur correctly skips them
+  - Files modified: `src/models/task.model.ts`, `src/index.ts`
+  - Enables: Users can create bids targeting specific rarity tiers (LEGENDARY/EPIC/RARE)
+
 - **Password-Gated Startup System**: Server now waits gracefully for password before starting operations
   - Server automatically stops all running tasks and listings if no password is available on startup
   - Auto-stops prevent tasks/listings from attempting decryption operations without password

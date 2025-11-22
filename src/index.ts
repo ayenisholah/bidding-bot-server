@@ -6054,7 +6054,7 @@ async function updateTaskData(task: ITask) {
     if (!currentTask) return
 
     const traitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
-    const tokenBid = task.bidType === "token"
+    const tokenBid = task.bidType === "token" || task.bidType === "rarity"
     const taskTokenIds = (currentTask?.tokenIds ?? []).map(id => id.toString())
 
     const autoIds = existingTask.tokenIds
@@ -6082,7 +6082,7 @@ async function updateTaskData(task: ITask) {
     const openseaBottonListings = autoIds ? await fetchOpenseaListings(task._id, task.contract.slug, amount) ?? [] : []
     const magicedenBottomListings = amount ? await fetchMagicEdenTokens(task._id, task.contract.contractAddress, amount) ?? [] : []
 
-    if (task.bidType === "token" && selectedTraits && Object.keys(selectedTraits).length > 0) {
+    if ((task.bidType === "token" || task.bidType === "rarity") && selectedTraits && Object.keys(selectedTraits).length > 0) {
       const attributes = transformSelectedTraitsToAttributes(selectedTraits)
       const expandedAttributes = expandAttributes(attributes)
       // Initialize tokens with bottomListings and taskTokenIds
@@ -6133,7 +6133,7 @@ async function updateTaskData(task: ITask) {
       magicedenTokens = [...magicedenBottomListings, ...taskTokenIds.map((token) => +token), ...magicedenTokens]
       magicedenTokenIds = [...new Set(magicedenTokens)]
 
-    } else if (task.bidType === "token") {
+    } else if (task.bidType === "token" || task.bidType === "rarity") {
       openseaTokenIds = [...new Set([...openseaBottonListings, ...taskTokenIds])];
       magicedenTokenIds = [...new Set([...magicedenBottomListings, ...taskTokenIds.map((token) => +token)])];
     }
@@ -9436,7 +9436,7 @@ function getJobIds(marketplace: string, task: ITask) {
   const selectedTraits = transformNewTask(task.selectedTraits?.[marketplace.toLowerCase()])
   const isTraitBid = task.bidType === "collection" && selectedTraits && Object.keys(selectedTraits).length > 0
 
-  const tokenBid = task.bidType === "token"
+  const tokenBid = task.bidType === "token" || task.bidType === "rarity"
   const traits = transformOpenseaTraits(selectedTraits);
 
   if (isTraitBid) {
@@ -11487,7 +11487,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
       const currentTokens = currentTokenIds[task._id].magiceden
       const tokenIds = [...task.tokenIds.filter(id => !isNaN(Number(id))), ...currentTokens];
-      const tokenBid = task.bidType === "token"
+      const tokenBid = task.bidType === "token" || task.bidType === "rarity"
 
       if (!tokenBid || !tokenIds.includes(tokenId)) return
 
@@ -13269,7 +13269,7 @@ async function performMarketplacePreprocessing(
   // Extract manual token IDs (needed for error checking)
   const manualTokenIds = task.tokenIds.filter(id => !isNaN(Number(id)) && !id.toString().toLowerCase().includes('bot')).map(id => id.toString());
 
-  if (task.bidType === "token") {
+  if (task.bidType === "token" || task.bidType === "rarity") {
     // First, fetch bottom listings if autoIds are present
     if (amount) {
       const [openseaListings, magicedenListings] = await Promise.all([
@@ -13461,7 +13461,7 @@ async function performMarketplacePreprocessing(
     const selectedTraits = transformNewTask(filteredTraits);
     const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0;
 
-    if (task.bidType === "token") {
+    if (task.bidType === "token" || task.bidType === "rarity") {
       if (openseaTokens.length > 0) {
         // Track duplicates before deduplication
         const originalCount = openseaTokens.length;
@@ -13556,7 +13556,7 @@ async function performMarketplacePreprocessing(
     preprocessing.blur.enabled = true;
 
     // Check if Blur supports this bid type
-    if (task.bidType === "token") {
+    if (task.bidType === "token" || task.bidType === "rarity") {
       preprocessing.blur.skipReason = "Token bids not supported on Blur";
       preprocessing.blur.jobCount = 0;
     } else {
@@ -13586,7 +13586,7 @@ async function performMarketplacePreprocessing(
     const selectedTraits = transformNewTask(filteredTraits);
     const traitBid = selectedTraits && Object.keys(selectedTraits).length > 0;
 
-    if (task.bidType === "token") {
+    if (task.bidType === "token" || task.bidType === "rarity") {
       if (magicedenTokens.length > 0) {
         // Token bid
         // Track duplicates before deduplication
