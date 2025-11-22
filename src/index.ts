@@ -219,8 +219,8 @@ interface WarningMessage {
 }
 
 
-// Dynamically allocate up to 75% of available CPU cores
-export const WORKER_COUNT = 1
+// Account for both Main Worker and Blur Worker (2 total workers)
+export const WORKER_COUNT = 2
 let traitsToRemove: { [key: string]: string[] } = {}
 let removedTokens: { [key: string]: { opensea: string[]; magiceden: string[] } } = {}
 
@@ -2258,7 +2258,11 @@ async function startServer() {
     initializeQueueEventHandlers();
 
 
-    const concurrencyPerWorker = Number(RATE_LIMIT) / WORKER_COUNT;
+    // Each job typically spawns 2 parallel API calls via pQueue.addAll()
+    const PARALLEL_TASKS_PER_JOB = 2;
+    // Calculate concurrency accounting for: workers × concurrency × parallel tasks = RATE_LIMIT
+    // Formula: 2 workers × 25 concurrency × 2 parallel tasks = 100 concurrent API calls
+    const concurrencyPerWorker = Math.floor(Number(RATE_LIMIT) / WORKER_COUNT / PARALLEL_TASKS_PER_JOB);
 
     for (let i = 0; i < WORKER_COUNT; i++) {
       // Create a separate connection for each worker
