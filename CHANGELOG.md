@@ -148,6 +148,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Files modified: `src/marketplace/opensea/list.ts`
   - Resolves error: "Validation error: An incorrect OpenSea fee has been provided. Expecting 100 basis points, but received 50."
 
+- **Counterbid Race Condition**: Fixed critical race condition where new bids were placed before old bids were cancelled
+  - Root cause: 6 of 7 counterbid functions used asynchronous cancellation (queued jobs), allowing new bids to be placed before old bids finished cancelling
+  - Result: Multiple active bids could exist simultaneously on the same item/trait/collection, wasting gas fees and risking unexpected bid acceptances
+  - Created `cancelMagicEdenOrdersDirectly()` and `cancelBlurOrdersDirectly()` helper functions for synchronous order cancellation
+  - Standardized all counterbid functions to use synchronous cancellation (matching `openseaTraitCounterBid` pattern)
+  - Updated 6 counterbid functions to cancel orders synchronously BEFORE placing new bids:
+    - `openseaTokenCounterBid` - now uses `cancelOpenseaOrdersDirectly()`
+    - `openseaCollectionCounterBid` - now uses `cancelOpenseaOrdersDirectly()`
+    - `magicedenTokenCounterBid` - now uses `cancelMagicEdenOrdersDirectly()`
+    - `magicedenTraitCounterBid` - now uses `cancelMagicEdenOrdersDirectly()`
+    - `blurTraitCounterBid` - now uses `cancelBlurOrdersDirectly()`
+    - `blurCollectionCounterBid` - now uses `cancelBlurOrdersDirectly()`
+  - `openseaTraitCounterBid` already used synchronous cancellation (was the correct pattern)
+  - Files modified: `src/index.ts:10662-10749` (new helper functions), `src/index.ts:16079-16173,16252-16301,16308-16407,16410-16505,16510-16616,16725-16778` (counterbid functions)
+  - Resolves: Race conditions causing double-bidding, wasted gas fees, unpredictable bid state
+  - Impact: All marketplaces now guarantee clean state (old bid cancelled) before placing new counterbids
+
+- **Task Update Index Mismatch**: Fixed contradictory error in `updateTaskData()` causing task update failures
+  - Root cause: Function used index from `currentTasks` array to lookup task in `activeTasks` Map
+  - The index position in the array doesn't correspond to the Map's entry order, causing lookup failures
+  - Error manifested as: "Found existing task at index 19" followed immediately by "ERROR: Task not found in memory at index 19"
+  - Changed from index-based lookup `getActiveTaskWithIdByIndex(existingTaskIndex)?.task` to direct Map lookup `activeTasks.get(task._id)`
+  - Enhanced debug logging to show both array index and Map existence status for better diagnostics
+  - Files modified: `src/index.ts:5980-6000`
+  - Resolves: Task update failures when `currentTasks` and `activeTasks` become desynchronized
+  - Impact: Task updates now reliably find tasks using consistent ID-based lookups instead of unreliable index-based lookups
+
 - **API Key Validation and Debugging**: Enhanced API key configuration validation and debugging capabilities
   - Added startup validation to ensure `API_KEY` environment variable is properly loaded
   - Added startup logging showing first 8 characters of loaded API key for verification
