@@ -17,7 +17,7 @@ const rpsHistory: number[] = [];
 const RPS_HISTORY_SECONDS = 10; // Keep a 10-second history for averaging
 
 const retryConfig: IAxiosRetryConfig = {
-  retries: 3, // Reduced to 1 retry for 408 errors
+  retries: 3,
   retryDelay: (retryCount, error) => {
     limiter.schedule(() => Promise.resolve());
 
@@ -92,10 +92,6 @@ async function initialize(rateLimit: number) {
 
   limiter = new Bottleneck({
     minTime: 1000 / rateLimit, // Minimum time between job starts
-    maxConcurrent: rateLimit, // Maximum concurrent API calls
-    reservoir: rateLimit, // Token bucket: start with rateLimit tokens
-    reservoirRefreshAmount: rateLimit, // Refill rateLimit tokens
-    reservoirRefreshInterval: 1000, // Every 1000ms (1 second)
     trackDoneStatus: true,
   });
 
@@ -145,7 +141,6 @@ export function stopCountsLogger() {
 }
 setInterval(() => {
   const counts = getLimiterCounts();
-  // console.log('Current Limiter Stats:', counts);
   // Calculate instantaneous RPS based on completed requests
   const completedInLastSecond = counts.DONE ? counts.DONE - previousDoneCount : 0;
   previousDoneCount = counts.DONE || 0;
@@ -167,8 +162,6 @@ setInterval(() => {
     ? nonZeroRpsHistory.reduce((sum, val) => sum + val, 0) / nonZeroRpsHistory.length
     : 0;
   trueRPS = Math.min(RATE_LIMIT, Math.max(executing, averageRPS));
-
-  // console.log('Average RPS:', averageRPS.toFixed(2), 'Executing:', executing.toFixed(2), 'True RPS:', trueRPS.toFixed(2));
 
   rps.currentRPS = trueRPS
 

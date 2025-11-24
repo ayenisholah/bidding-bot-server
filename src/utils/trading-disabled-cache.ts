@@ -11,14 +11,15 @@ export interface TradingDisabledInfo {
 /**
  * Cache for tracking NFT tokens that have "Trading is disabled" errors.
  * Prevents repeated bid attempts on tokens that OpenSea has restricted.
- * Cache entries expire after 1 hour to allow retry in case restrictions are lifted.
+ * Cache entries expire after 24 hours to allow retry in case restrictions are lifted.
+ * (Increased from 1 hour as trading restrictions rarely change quickly)
  */
 class TradingDisabledCache {
   private cache: BoundedCache<string, TradingDisabledInfo>;
-  private readonly CACHE_TTL = 60 * 60 * 1000; // 1 hour
+  private readonly CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours (increased from 1 hour for better efficiency)
 
   constructor() {
-    // Max 5000 tokens with 1 hour TTL
+    // Max 5000 tokens with 24 hour TTL
     this.cache = new BoundedCache<string, TradingDisabledInfo>(5000, this.CACHE_TTL);
   }
 

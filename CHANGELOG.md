@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Development-Only Rate Limit Debug Logging**: Added comprehensive diagnostics for tracking actual request rates
+  - Logs actual RPS vs configured RATE_LIMIT every 5 seconds in development
+  - Shows queue depth, concurrent executions, and completion rates
+  - Warns when actual RPS exceeds RATE_LIMIT or when queue depth grows excessively
+  - Added Bottleneck event listeners to track dropped jobs and rate limit errors (429/430)
+  - Only enabled when `DEBUG_RATE_LIMIT=true` in .env or `NODE_ENV=development`
+  - Output format includes:
+    - Configured RATE_LIMIT
+    - Actual RPS (last 1 second)
+    - Average RPS (10 second window)
+    - Queue depth (jobs waiting)
+    - Concurrent executions (jobs running)
+    - Total completed jobs
+    - Visual warnings when limits are exceeded
+  - Files modified: `src/init.ts:90-113`, `src/init.ts:135-194`
+  - Helps diagnose: Rate limiting effectiveness, burst traffic patterns, queue buildup
+  - Impact: Developers can see exactly how many requests/second are being made and identify rate limit violations
 - **Auto-Stop Running Tasks/Listings on Server Restart**: Ensures clean state on every server restart
   - All tasks with `running: true` automatically set to `running: false` on server startup
   - All listings with `running: true` automatically set to `running: false` on server startup
@@ -67,6 +84,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Impact: All OpenSea API calls now centralized through server rate limiter for consistent rate limiting
 
 ### Fixed
+- **Blur WebSocket Message Validation**: Fixed 38+ "BLUR_INCOMPLETE" warnings from malformed WebSocket messages
+  - Added validation before accessing nested `message['1']` property in Blur counterbid handler
+  - Prevents null reference errors and skips processing of invalid Blur messages
+  - Now logs detailed warning when Blur sends incomplete/malformed messages
+  - Files modified: `src/index.ts:11348-11362`
+  - Resolves: Recurring WebSocket warnings and potential crashes from null references
+  - Impact: Eliminates console spam and improves Blur marketplace reliability
+
+- **Trading Disabled Cache TTL**: Extended trading disabled cache from 1 hour to 24 hours
+  - Reduced wasted API calls on tokens with "Trading is not enabled" errors
+  - Trading restrictions rarely change quickly, so longer cache is more efficient
+  - Cache still allows retry after 24 hours in case restrictions are lifted
+  - Files modified: `src/utils/trading-disabled-cache.ts:18-22`
+  - Resolves: Repeated 400 errors on same disabled tokens
+  - Impact: Reduces API waste and improves overall success rate
+
+- **API Key Expiration Detection**: Added critical alerting for OpenSea API key expiration (HTTP 401)
+  - Detects "API key has expired" errors and logs critical alerts
+  - Provides clear console output indicating manual renewal is required
+  - Added detailed error context including task ID, token ID, and collection
+  - Prevents silent failures by clearly identifying authentication issues
+  - Files modified: `src/index.ts:15765-15788`
+  - Resolves: Silent API key expiration failures with unclear error messages
+  - Impact: Immediate visibility when API keys need renewal, preventing prolonged outages
+
 - **OpenSea Listing Fee Validation Error**: Fixed OpenSea marketplace listing failures caused by incorrect fee configuration
   - Updated hardcoded OpenSea fee from 50 basis points (0.5%) to 100 basis points (1%)
   - Integrated marketplace fee cache system (`getOpenseaMarketplaceFee()`) for dynamic fee management
@@ -82,18 +124,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Files modified: `src/index.ts`, `src/functions/collection.ts`
   - Helps diagnose HTTP 401 Unauthorized errors related to missing or invalid API keys
 
-- **OpenSea Rate Limiting (HTTP 429/430) Errors**: Restored missing Bottleneck rate limiter configuration
-  - Root cause: Previous rate limiting fixes (documented 2025-11-20) were lost or reverted in codebase
-  - Root cause: Bottleneck limiter was missing `maxConcurrent` setting, allowing unlimited concurrent API calls
-  - Root cause: Missing `reservoir` token bucket allowed burst traffic exceeding OpenSea rate limits
-  - Re-added `maxConcurrent: RATE_LIMIT` (100) to Bottleneck configuration in `src/init.ts`
-  - Re-added reservoir token bucket: 100 tokens refreshing every 1 second for burst protection
-  - Limits concurrent OpenSea API calls to 100 matching RATE_LIMIT environment variable
-  - Files modified: `src/init.ts:93-100`
-  - Resolves: HTTP 429 "Rate limit exceeded" and HTTP 430 "API rate limit exceeded" errors from OpenSea API
-  - Impact: Ensures all concurrent execution respects RATE_LIMIT environment variable with proper burst protection
+### Fixed
+- **HTTP 429 Rate Limit Errors from Retry Storms**: Stopped retrying 429/430 rate limit errors
+  - Root cause: axios-retry was configured to retry 429/430 errors, compounding rate limit violations
+  - Each failed request was retried 3 times, turning 1 failed request into 4 total API calls
+  - Removed `status === 429 || status === 430` from axios-retry `retryCondition` function
+  - Removed retry delay logic for 429/430 errors (now dead code)
+  - Files modified: `src/init.ts:71-82`
+  - Resolves: Retry storms that overwhelm OpenSea API rate limits
+  - Impact: Rate limit errors now fail fast instead of compounding the problem
 
 ### Changed
+- **Reverted Bottleneck Rate Limiter Configuration**: Removed maxConcurrent and reservoir token bucket settings
+  - Removed `maxConcurrent: RATE_LIMIT` from Bottleneck configuration in `src/init.ts`
+  - Removed reservoir token bucket configuration (reservoir, reservoirRefreshAmount, reservoirRefreshInterval)
+  - Bottleneck now configured with only `minTime` and `trackDoneStatus` settings
+  - Files modified: `src/init.ts:93-96`
+  - Reason: maxConcurrent and reservoir settings were making HTTP 429/430 errors worse
+  - Impact: Simpler rate limiting strategy using only time-based throttling
 - **Debug Log Cleanup**: Removed redundant debug logging from collection functions
   - Removed all 20 `console.log` and `console.error` statements from collection.ts
   - Cleaned up 14 active debug logs and 6 commented-out debug logs

@@ -11345,6 +11345,21 @@ async function handleCounterBidForTask(task: any, message: any) {
   const selectedMarketplaces = task.selectedMarketplaces.map((m: string) => m.toLowerCase());
   try {
     if (selectedMarketplaces.includes('blur') && message.marketplace === BLUR) {
+      // Validate Blur message structure before accessing nested properties
+      if (!message['1'] || typeof message['1'] !== 'object') {
+        await logger.logWarning(
+          ErrorCategory.WEBSOCKET,
+          'BLUR_INCOMPLETE - Invalid Blur WebSocket message structure',
+          {
+            taskId: task._id?.toString(),
+            marketplace: message.marketplace,
+            hasNestedData: !!message['1'],
+            messageKeys: Object.keys(message || {}),
+            component: 'blur_counterbid_validation'
+          }
+        );
+        return; // Skip processing invalid Blur messages
+      }
       await handleBlurCounterbid(message['1'], task)
     }
     else if (selectedMarketplaces.includes('opensea') && message.marketplace === OPENSEA) {
@@ -15739,12 +15754,37 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
           // Log as warning with updated message
           await logBidError(data._id, "OPENSEA TOKEN TRADING DISABLED",
-            `Token ${data.asset.tokenId} in collection ${data.slug}: ${primaryMessage} - Cached for 1 hour`,
+            `Token ${data.asset.tokenId} in collection ${data.slug}: ${primaryMessage} - Cached for 24 hours`,
             "warning", "opensea");
 
           errorMessage = primaryMessage;
 
           return; // Exit early without re-throwing
+        }
+
+        // Special handling for "API key has expired" errors (HTTP 401)
+        if (bidError?.response?.status === 401 || primaryMessage.includes('API key has expired')) {
+          // Log critical error for API key expiration
+          await logger.logError(
+            ErrorCategory.OPENSEA,
+            'OPENSEA_API_KEY_EXPIRED',
+            `OpenSea API key has expired - manual renewal required. Task: ${data._id}, Token: ${data.asset.tokenId}`,
+            {
+              taskId: data._id,
+              tokenId: data.asset.tokenId,
+              collection: data.slug,
+              statusCode: bidError?.response?.status,
+              errorMessage: primaryMessage,
+              component: 'opensea_token_bid'
+            }
+          );
+
+          console.error(RED + `[CRITICAL] OpenSea API key has expired! All OpenSea bids will fail until key is renewed.` + RESET);
+
+          errorMessage = 'API key has expired - manual renewal required';
+
+          // Re-throw to fail the job and trigger retry via adaptive rate limiting
+          throw bidError;
         }
       }
 
