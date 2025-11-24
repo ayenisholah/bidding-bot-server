@@ -25,6 +25,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Files modified: `src/init.ts:90-113`, `src/init.ts:135-194`
   - Helps diagnose: Rate limiting effectiveness, burst traffic patterns, queue buildup
   - Impact: Developers can see exactly how many requests/second are being made and identify rate limit violations
+
+- **WebSocket Debug Logging**: Added comprehensive debug logging throughout the entire WebSocket message pipeline
+  - Logs connection establishment to MARKETPLACE_WS_URL with connection metadata (URL, clientId, connectionId)
+  - Tracks subscription operations when tasks start (bidding tasks and listing collections)
+  - Logs message reception with eventType, message size in bytes, and timestamp
+  - Shows pQueue state when messages are added (pending count, queue size)
+  - Logs message processing start with eventType and timestamp
+  - Tracks routing decisions for each eventType (BID_CREATED, LISTING_CREATED, ITEM_SOLD)
+  - Adds entry logs to marketplace-specific handlers (handleBlurMessages, handleOpenSeaMessages, handleMagicEdenMessages)
+  - Shows extracted data from each marketplace (collection slug, contract address)
+  - Logs message completion with total processing time in milliseconds
+  - Enhanced error logging throughout the pipeline with context and timing
+  - Only enabled when `DEBUG_WEBSOCKET=true` in .env or `NODE_ENV=development`
+  - Log format: `[WebSocket][Phase] Details` for easy filtering and grep
+  - Files modified: `src/index.ts:10994-11157` (connection phase), `src/index.ts:11099-11134` (reception), `src/index.ts:11181-11236` (processing), `src/index.ts:13293-13372` (marketplace handlers)
+  - Helps diagnose: WebSocket connectivity issues, message processing delays, marketplace-specific parsing failures, queue buildup
+  - Impact: Complete visibility into WebSocket pipeline from connection through message completion
+
 - **Auto-Stop Running Tasks/Listings on Server Restart**: Ensures clean state on every server restart
   - All tasks with `running: true` automatically set to `running: false` on server startup
   - All listings with `running: true` automatically set to `running: false` on server startup
@@ -84,6 +102,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Impact: All OpenSea API calls now centralized through server rate limiter for consistent rate limiting
 
 ### Fixed
+- **MongoDB Transaction Error for Task Updates**: Fixed "Transaction numbers are only allowed on a replica set member" error
+  - Root cause: MongoDB was configured as standalone instance, but transactions require replica set configuration
+  - Error occurred when WebSocket received bidPrice.max updates and called `updateTaskData()` with session parameter
+  - Added `--replSet rs0` flag to MongoDB command in `compose.optimized.yaml`
+  - Updated `.env.example` to include `?replicaSet=rs0` parameter in MONGODB_URI connection string
+  - Added comprehensive debug logging throughout `updateTaskData()` transaction flow (12 checkpoints)
+  - Debug logs track session creation, transaction lifecycle, database updates, and in-memory synchronization
+  - Created `REPLICA_SET_INIT.md` guide with one-time initialization command for Docker deployments
+  - Files modified: `compose.optimized.yaml:109-116`, `.env.example:1-5`, `src/index.ts:5952-6467`
+  - Files created: `REPLICA_SET_INIT.md`
+  - Resolves: Transaction failures when updating task bid prices via WebSocket
+  - Impact: Bulletproof Task Update System now works correctly with atomic database-memory synchronization
+  - Required action: Run one-time replica set initialization after first Docker container start (see REPLICA_SET_INIT.md)
+
 - **Blur WebSocket Message Validation**: Fixed 38+ "BLUR_INCOMPLETE" warnings from malformed WebSocket messages
   - Added validation before accessing nested `message['1']` property in Blur counterbid handler
   - Prevents null reference errors and skips processing of invalid Blur messages

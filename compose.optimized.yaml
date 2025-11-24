@@ -107,7 +107,8 @@ services:
     cpus: "0.75"
     cpu_shares: 768
     command: >
-      mongod 
+      mongod
+      --replSet rs0
       --wiredTigerCacheSizeGB 1.5
       --wiredTigerJournalCompressor snappy
       --wiredTigerCollectionBlockCompressor snappy

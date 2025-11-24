@@ -84,7 +84,9 @@ if (!API_KEY) {
   console.error('[FATAL] API_KEY environment variable is not set! Check .env file.');
   throw new Error('API_KEY is required but not found in environment variables');
 }
-console.log(`[STARTUP] API_KEY loaded successfully (${API_KEY.substring(0, 8)}...)`);
+if (process.env.NODE_ENV === 'development') {
+  console.log(`[STARTUP] API_KEY loaded successfully (${API_KEY.substring(0, 8)}...)`);
+}
 
 const bidStats: BidCounts = {};
 const ownBidCounts: { [marketplace: string]: number } = {};
@@ -5950,12 +5952,37 @@ async function cancelRemovedTraitBids(traitsToRemove: string[], taskId: string, 
 
 
 async function updateTaskData(task: ITask) {
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[TaskUpdate][${task._id}] Starting task update - Contract: ${task.contract?.slug || 'unknown'}`);
+    console.log(`[TaskUpdate][${task._id}] Update payload:`, {
+      bidPrice: task.bidPrice,
+      openseaBidPrice: task.openseaBidPrice,
+      blurBidPrice: task.blurBidPrice,
+      magicEdenBidPrice: task.magicEdenBidPrice,
+      running: task.running,
+      walletId: task.walletId
+    });
+
+    console.log(`[TaskUpdate][${task._id}] Step 1: Creating MongoDB session...`);
+  }
   const session = await mongoose.startSession();
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[TaskUpdate][${task._id}] Step 2: MongoDB session created successfully`);
+
+    console.log(`[TaskUpdate][${task._id}] Step 3: Starting transaction...`);
+  }
   session.startTransaction();
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[TaskUpdate][${task._id}] Step 4: Transaction started successfully`);
+  }
 
   try {
     const existingTaskIndex = currentTasks.findIndex(t => t._id === task._id);
     const existingTask = getActiveTaskWithIdByIndex(existingTaskIndex)?.task
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[TaskUpdate][${task._id}] Step 5: Found existing task at index ${existingTaskIndex}`);
+    }
 
     // Clear both warningBids and warningMessage when task is updated
     warningBids[task._id] = {
@@ -5969,12 +5996,24 @@ async function updateTaskData(task: ITask) {
     }
 
     if (existingTaskIndex === -1 || !existingTask) {
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[TaskUpdate][${task._id}] ERROR: Task not found in memory at index ${existingTaskIndex}`);
+      }
       await session.abortTransaction();
       session.endSession();
       return { success: false, error: "Task not found" };
     }
 
     // 1. UPDATE DATABASE FIRST with optimistic locking
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[TaskUpdate][${task._id}] Step 6: Updating database with transaction session...`);
+      console.log(`[TaskUpdate][${task._id}] MongoDB connection state:`, {
+      readyState: mongoose.connection.readyState,
+      host: mongoose.connection.host,
+      name: mongoose.connection.name
+    });
+    }
+
     const dbTask = await Task.findOneAndUpdate(
       { _id: task._id },
       { $set: task },
@@ -5985,7 +6024,14 @@ async function updateTaskData(task: ITask) {
       }
     );
 
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[TaskUpdate][${task._id}] Step 7: Database update completed successfully`);
+    }
+
     if (!dbTask) {
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[TaskUpdate][${task._id}] ERROR: Database returned null after update`);
+      }
       await session.abortTransaction();
       session.endSession();
       logSystemError('TaskUpdate', `Task not found in database: ${task._id}`, undefined, { taskId: task._id });
@@ -5993,10 +6039,22 @@ async function updateTaskData(task: ITask) {
     }
 
     // 2. Commit transaction to ensure database persistence
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[TaskUpdate][${task._id}] Step 8: Committing transaction...`);
+    }
     await session.commitTransaction();
-    session.endSession();
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[TaskUpdate][${task._id}] Step 9: Transaction committed successfully`);
+    }
 
-    // 3. NOW update in-memory state after database confirms
+    session.endSession();
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[TaskUpdate][${task._id}] Step 10: Session ended successfully`);
+
+      // 3. NOW update in-memory state after database confirms
+      console.log(`[TaskUpdate][${task._id}] Step 11: Starting in-memory state synchronization...`);
+    }
+
     // Check if loopInterval has changed
     const loopIntervalChanged = existingTask.loopInterval.value !== task.loopInterval.value ||
       existingTask.loopInterval.unit !== task.loopInterval.unit;
@@ -6005,6 +6063,10 @@ async function updateTaskData(task: ITask) {
     currentTasks.splice(existingTaskIndex, 1, dbTask.toObject());
     activeTasks.set(task._id, dbTask.toObject());
     updateTaskIndexes(currentTasks);
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[TaskUpdate][${task._id}] Step 12: In-memory state updated successfully`);
+    }
 
 
     const filteredTasks = Object.fromEntries(
@@ -6388,11 +6450,45 @@ async function updateTaskData(task: ITask) {
       await stopTask(task, false)
     }
 
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[TaskUpdate][${task._id}] SUCCESS: Task update completed successfully`);
+    }
     return { success: true, data: dbTask.toObject() };
   } catch (error) {
+    const errorObj = error as any;
+    console.error(`[TaskUpdate][${task._id}] CRITICAL ERROR in transaction:`, {
+      errorName: errorObj.name,
+      errorMessage: errorObj.message,
+      errorCode: errorObj.code,
+      errorCodeName: errorObj.codeName,
+      isMongoError: errorObj.name?.includes('Mongo'),
+      stack: errorObj.stack?.split('\n').slice(0, 5).join('\n')
+    });
+
+    if (process.env.NODE_ENV === 'development') {
+      const connectionStateMap: Record<number, string> = {
+        0: 'disconnected',
+        1: 'connected',
+        2: 'connecting',
+        3: 'disconnecting'
+      };
+      console.log(`[TaskUpdate][${task._id}] MongoDB state at error:`, {
+        connectionState: mongoose.connection.readyState,
+        connectionStateDescription: connectionStateMap[mongoose.connection.readyState] || 'unknown',
+        host: mongoose.connection.host,
+        inTransaction: session.inTransaction()
+      });
+    }
+
     // Rollback transaction if it's still active
     if (session.inTransaction()) {
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[TaskUpdate][${task._id}] Rolling back transaction...`);
+      }
       await session.abortTransaction();
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[TaskUpdate][${task._id}] Transaction rolled back successfully`);
+      }
     }
     session.endSession();
 
@@ -10930,7 +11026,6 @@ async function connectWebSocket(): Promise<void> {
 
 async function _doConnect(): Promise<void> {
   if (!wsManager) {
-
     wsManager = new WebSocketManager({
       url: MARKETPLACE_WS_URL,
       clientId: clientId,
@@ -10943,7 +11038,6 @@ async function _doConnect(): Promise<void> {
 
     // Set up event handlers
     wsManager.on('connected', async (connectionId) => {
-
       await logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket connected to marketplace', {
         connectionId,
         url: MARKETPLACE_WS_URL,
@@ -11015,7 +11109,6 @@ async function _doConnect(): Promise<void> {
 
     wsManager.on('message', async (message: any) => {
       try {
-
         // Handle initial data request synchronously
         if (message.endpoint === "get-initial-data") {
           const initialDataMessage = {
@@ -11025,11 +11118,12 @@ async function _doConnect(): Promise<void> {
           wsManager.sendMessage(initialDataMessage);
           return;
         }
+
         // All messages use the queue
         pQueue.add(() => handleMarketplaceMessage(message))
 
       } catch (error) {
-        console.error('Error in message handler:', error);
+        console.error('[WebSocket][Reception] Error in message handler:', error);
       }
     });
 
@@ -11070,9 +11164,10 @@ async function _doConnect(): Promise<void> {
  * Handles both counterbid messages and listing price updates
  */
 async function handleMarketplaceMessage(message: any) {
-  try {
-    // Debug logging for message inspection
+  const processingStartTime = Date.now();
+  const eventType = message.eventType || message.event || 'unknown';
 
+  try {
     if (message.eventType === 'BID_CREATED') {
       return handleCounterBid(message)
     }
@@ -12231,7 +12326,21 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         return
       }
 
+      // VALIDATION: Ensure floor price is reasonable (not negative, not zero, not suspiciously low)
+      if (floor_price <= 0 || floor_price < 0.001) {
+        if (process.env.NODE_ENV === 'development') {
+          console.warn(`[Counterbid] Suspicious floor price detected: ${floor_price} ETH for ${task.contract.slug} - Skipping counterbid`);
+        }
+        await logBidError(task._id, "INVALID FLOOR PRICE", `Floor price ${floor_price} ETH is invalid or suspiciously low for ${task.contract.slug}:${tokenId}. Skipping counterbid.`, "skipped", "opensea");
+        return;
+      }
+
       const { maxBidPriceEth, minBidPriceEth, currency } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+
+      // VALIDATION: Log floor price and calculated limits for debugging
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[Counterbid] OpenSea Token Bid - Slug: ${task.contract.slug}, Token: ${tokenId}, Floor: ${floor_price} ETH, Min: ${minBidPriceEth} ETH, Max: ${maxBidPriceEth} ETH`);
+      }
 
       if (incomingBidAmountEth < minBidPriceEth) {
         return
@@ -12280,6 +12389,23 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       offerPrice = Math.ceil((openseaOutbidMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)))
       const offerPriceEth = offerPrice / Math.pow(10, decimal)
+
+      // VALIDATION: Log outbid calculation details
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[Counterbid] Outbid Calculation - Incoming: ${incomingBidAmountEth} ETH, Margin: ${openseaOutbidMargin} ETH, Rounded: ${roundedEth} ETH, Counter: ${offerPriceEth} ETH`);
+      }
+
+      // VALIDATION: Ensure calculated bid is not suspiciously different from incoming bid
+      const bidDifferenceRatio = Math.abs(offerPriceEth - incomingBidAmountEth) / incomingBidAmountEth;
+      if (bidDifferenceRatio > 0.5) {
+        // If counter bid is >50% different from incoming bid, something is wrong
+        const message = `Counter bid ${offerPriceEth} ETH differs significantly from incoming bid ${incomingBidAmountEth} ETH (${(bidDifferenceRatio * 100).toFixed(1)}% difference) for ${task.contract.slug}:${tokenId}. Possible calculation error.`.toUpperCase();
+        await logBidError(task._id, "SUSPICIOUS BID CALCULATION", message, "skipped", "opensea");
+        if (process.env.NODE_ENV === 'development') {
+          console.error(`[Counterbid] ${message}`);
+        }
+        return;
+      }
 
 
 
@@ -12368,7 +12494,21 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         return
       }
 
+      // VALIDATION: Ensure floor price is reasonable (not negative, not zero, not suspiciously low)
+      if (floor_price <= 0 || floor_price < 0.001) {
+        if (process.env.NODE_ENV === 'development') {
+          console.warn(`[Counterbid] Suspicious floor price detected: ${floor_price} ETH for ${task.contract.slug} trait ${identifier} - Skipping counterbid`);
+        }
+        await logBidError(task._id, "INVALID FLOOR PRICE", `Floor price ${floor_price} ETH is invalid or suspiciously low for ${task.contract.slug}:${identifier}. Skipping counterbid.`, "skipped", "opensea");
+        return;
+      }
+
       const { maxBidPriceEth, minBidPriceEth, currency } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+
+      // VALIDATION: Log floor price and calculated limits for debugging
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[Counterbid] OpenSea Trait Bid - Slug: ${task.contract.slug}, Trait: ${identifier}, Floor: ${floor_price} ETH, Min: ${minBidPriceEth} ETH, Max: ${maxBidPriceEth} ETH`);
+      }
       const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal)
 
       const orders = await Order.find({
@@ -12427,6 +12567,23 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
       offerPrice = Math.ceil((openseaOutbidMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)))
       const offerPriceEth = offerPrice / Math.pow(10, decimal)
+
+      // VALIDATION: Log outbid calculation details
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[Counterbid] Trait Outbid Calculation - Incoming: ${incomingBidAmountEth} ETH, Margin: ${openseaOutbidMargin} ETH, Rounded: ${roundedEth} ETH, Counter: ${offerPriceEth} ETH`);
+      }
+
+      // VALIDATION: Ensure calculated bid is not suspiciously different from incoming bid
+      const bidDifferenceRatio = Math.abs(offerPriceEth - incomingBidAmountEth) / incomingBidAmountEth;
+      if (bidDifferenceRatio > 0.5) {
+        // If counter bid is >50% different from incoming bid, something is wrong
+        const message = `Counter bid ${offerPriceEth} ETH differs significantly from incoming bid ${incomingBidAmountEth} ETH (${(bidDifferenceRatio * 100).toFixed(1)}% difference) for ${task.contract.slug}:${identifier}. Possible calculation error.`.toUpperCase();
+        await logBidError(task._id, "SUSPICIOUS BID CALCULATION", message, "skipped", "opensea");
+        if (process.env.NODE_ENV === 'development') {
+          console.error(`[Counterbid] ${message}`);
+        }
+        return;
+      }
 
       if (maxBidPriceEth > 0 && offerPriceEth >= maxBidPriceEth) {
 
@@ -13147,7 +13304,6 @@ async function
 }
 
 function handleMagicEdenMessages(message: any) {
-
   let slug, contractAddress;
   try {
     if (
@@ -13164,7 +13320,6 @@ function handleMagicEdenMessages(message: any) {
 }
 
 function handleOpenSeaMessages(message: any) {
-
   let contractAddress, slug
 
   try {
@@ -15766,14 +15921,13 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         if (bidError?.response?.status === 401 || primaryMessage.includes('API key has expired')) {
           // Log critical error for API key expiration
           await logger.logError(
-            ErrorCategory.OPENSEA,
-            'OPENSEA_API_KEY_EXPIRED',
-            `OpenSea API key has expired - manual renewal required. Task: ${data._id}, Token: ${data.asset.tokenId}`,
+            ErrorCategory.API,
+            `OPENSEA_API_KEY_EXPIRED - OpenSea API key has expired - manual renewal required. Task: ${data._id}, Token: ${data.asset.tokenId}`,
             {
-              taskId: data._id,
-              tokenId: data.asset.tokenId,
+              taskId: data._id ? data._id.toString() : undefined,
+              tokenId: data.asset.tokenId ? data.asset.tokenId.toString() : undefined,
               collection: data.slug,
-              statusCode: bidError?.response?.status,
+              statusCode: bidError?.response?.status ? bidError.response.status.toString() : undefined,
               errorMessage: primaryMessage,
               component: 'opensea_token_bid'
             }
