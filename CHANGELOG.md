@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **MongoDB Transaction Error ("Transaction numbers are only allowed on a replica set member")**: Fixed error when updating tasks via WebSocket
+  - **Root Cause**: `updateTaskData()` function used MongoDB transactions (`startSession`/`startTransaction`) which require replica set configuration
+  - **Symptom**: Error `MongoServerError: Transaction numbers are only allowed on a replica set member or mongos` when client updates task settings
+  - **Solution**: Removed unnecessary transaction code - single-document updates are atomic by MongoDB design, making transactions redundant
+  - **Changes**:
+    - Removed `mongoose.startSession()` and `session.startTransaction()` calls
+    - Removed `session` parameter from `Task.findOneAndUpdate()` options
+    - Removed `session.commitTransaction()`, `session.abortTransaction()`, and `session.endSession()` calls
+    - Removed transaction-related error handling and rollback logic
+    - Simplified debug logging (removed ~30 lines of transaction boilerplate)
+  - Files modified: `src/index.ts:6253-6722`
+  - Resolves: Task update failures when MongoDB is running as standalone instance
+  - Impact: Task updates now work with both standalone MongoDB and replica sets without requiring manual `rs.initiate()` command
+
 - **Excessive InsufficientBalanceError Logging (Docker Log Flooding)**: Fixed log flooding when wallet has insufficient balance for bulk token bids
   - **Root Cause**: When a task started with insufficient balance, thousands of bid jobs were already queued. Each job failed with `InsufficientBalanceError` and logged separately, generating 6000+ log entries in seconds.
   - **Symptom**: Docker logs filling with identical balance error messages, potentially exhausting disk space and crashing the bot

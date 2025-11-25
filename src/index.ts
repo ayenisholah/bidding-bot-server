@@ -6261,111 +6261,77 @@ async function updateTaskData(task: ITask) {
       running: task.running,
       walletId: task.walletId
     });
-
-    console.log(`[TaskUpdate][${task._id}] Step 1: Creating MongoDB session...`);
   }
-  const session = await mongoose.startSession();
+
+  // Note: No MongoDB session/transaction needed - single document updates are atomic by MongoDB design
+  const existingTaskIndex = currentTasks.findIndex(t => t._id === task._id);
+  const existingTask = activeTasks.get(task._id);
+
   if (process.env.NODE_ENV === 'development') {
-    console.log(`[TaskUpdate][${task._id}] Step 2: MongoDB session created successfully`);
-
-    console.log(`[TaskUpdate][${task._id}] Step 3: Starting transaction...`);
+    console.log(`[TaskUpdate][${task._id}] Task lookup - Array index: ${existingTaskIndex}, Map exists: ${!!existingTask}`);
   }
-  session.startTransaction();
+
+  // Clear both warningBids and warningMessage when task is updated
+  warningBids[task._id] = {
+    opensea: false,
+    magiceden: false,
+    blur: false
+  };
+
+  if (warningMessage[task._id]) {
+    delete warningMessage[task._id];
+  }
+
+  if (existingTaskIndex === -1 || !existingTask) {
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[TaskUpdate][${task._id}] ERROR: Task not found - Array index: ${existingTaskIndex}, Map exists: ${!!existingTask}`);
+    }
+    return { success: false, error: "Task not found" };
+  }
+
+  // Update database (single document update is atomic - no transaction needed)
   if (process.env.NODE_ENV === 'development') {
-    console.log(`[TaskUpdate][${task._id}] Step 4: Transaction started successfully`);
+    console.log(`[TaskUpdate][${task._id}] Updating database...`);
   }
 
-  try {
-    const existingTaskIndex = currentTasks.findIndex(t => t._id === task._id);
-    const existingTask = activeTasks.get(task._id);
+  const dbTask = await Task.findOneAndUpdate(
+    { _id: task._id },
+    { $set: task },
+    {
+      new: true,
+      runValidators: true
+    }
+  );
 
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[TaskUpdate][${task._id}] Database update completed`);
+  }
+
+  if (!dbTask) {
     if (process.env.NODE_ENV === 'development') {
-      console.log(`[TaskUpdate][${task._id}] Step 5: Task lookup - Array index: ${existingTaskIndex}, Map exists: ${!!existingTask}`);
+      console.log(`[TaskUpdate][${task._id}] ERROR: Database returned null after update`);
     }
+    logSystemError('TaskUpdate', `Task not found in database: ${task._id}`, undefined, { taskId: task._id });
+    return { success: false, error: "Task not found in database" };
+  }
 
-    // Clear both warningBids and warningMessage when task is updated
-    warningBids[task._id] = {
-      opensea: false,
-      magiceden: false,
-      blur: false
-    };
+  // Update in-memory state after database confirms
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[TaskUpdate][${task._id}] Synchronizing in-memory state...`);
+  }
 
-    if (warningMessage[task._id]) {
-      delete warningMessage[task._id];
-    }
+  // Check if loopInterval has changed
+  const loopIntervalChanged = existingTask.loopInterval.value !== task.loopInterval.value ||
+    existingTask.loopInterval.unit !== task.loopInterval.unit;
 
-    if (existingTaskIndex === -1 || !existingTask) {
-      if (process.env.NODE_ENV === 'development') {
-        console.log(`[TaskUpdate][${task._id}] ERROR: Task not found - Array index: ${existingTaskIndex}, Map exists: ${!!existingTask}`);
-      }
-      await session.abortTransaction();
-      session.endSession();
-      return { success: false, error: "Task not found" };
-    }
+  const wallet = await walletCache.getWalletById(task.walletId)
+  currentTasks.splice(existingTaskIndex, 1, dbTask.toObject());
+  activeTasks.set(task._id, dbTask.toObject());
+  updateTaskIndexes(currentTasks);
 
-    // 1. UPDATE DATABASE FIRST with optimistic locking
-    if (process.env.NODE_ENV === 'development') {
-      console.log(`[TaskUpdate][${task._id}] Step 6: Updating database with transaction session...`);
-      console.log(`[TaskUpdate][${task._id}] MongoDB connection state:`, {
-      readyState: mongoose.connection.readyState,
-      host: mongoose.connection.host,
-      name: mongoose.connection.name
-    });
-    }
-
-    const dbTask = await Task.findOneAndUpdate(
-      { _id: task._id },
-      { $set: task },
-      {
-        new: true,
-        session,
-        runValidators: true
-      }
-    );
-
-    if (process.env.NODE_ENV === 'development') {
-      console.log(`[TaskUpdate][${task._id}] Step 7: Database update completed successfully`);
-    }
-
-    if (!dbTask) {
-      if (process.env.NODE_ENV === 'development') {
-        console.log(`[TaskUpdate][${task._id}] ERROR: Database returned null after update`);
-      }
-      await session.abortTransaction();
-      session.endSession();
-      logSystemError('TaskUpdate', `Task not found in database: ${task._id}`, undefined, { taskId: task._id });
-      return { success: false, error: "Task not found in database" };
-    }
-
-    // 2. Commit transaction to ensure database persistence
-    if (process.env.NODE_ENV === 'development') {
-      console.log(`[TaskUpdate][${task._id}] Step 8: Committing transaction...`);
-    }
-    await session.commitTransaction();
-    if (process.env.NODE_ENV === 'development') {
-      console.log(`[TaskUpdate][${task._id}] Step 9: Transaction committed successfully`);
-    }
-
-    session.endSession();
-    if (process.env.NODE_ENV === 'development') {
-      console.log(`[TaskUpdate][${task._id}] Step 10: Session ended successfully`);
-
-      // 3. NOW update in-memory state after database confirms
-      console.log(`[TaskUpdate][${task._id}] Step 11: Starting in-memory state synchronization...`);
-    }
-
-    // Check if loopInterval has changed
-    const loopIntervalChanged = existingTask.loopInterval.value !== task.loopInterval.value ||
-      existingTask.loopInterval.unit !== task.loopInterval.unit;
-
-    const wallet = await walletCache.getWalletById(task.walletId)
-    currentTasks.splice(existingTaskIndex, 1, dbTask.toObject());
-    activeTasks.set(task._id, dbTask.toObject());
-    updateTaskIndexes(currentTasks);
-
-    if (process.env.NODE_ENV === 'development') {
-      console.log(`[TaskUpdate][${task._id}] Step 12: In-memory state updated successfully`);
-    }
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[TaskUpdate][${task._id}] In-memory state updated successfully`);
+  }
 
 
     const filteredTasks = Object.fromEntries(
@@ -6753,51 +6719,6 @@ async function updateTaskData(task: ITask) {
       console.log(`[TaskUpdate][${task._id}] SUCCESS: Task update completed successfully`);
     }
     return { success: true, data: dbTask.toObject() };
-  } catch (error) {
-    const errorObj = error as any;
-    console.error(`[TaskUpdate][${task._id}] CRITICAL ERROR in transaction:`, {
-      errorName: errorObj.name,
-      errorMessage: errorObj.message,
-      errorCode: errorObj.code,
-      errorCodeName: errorObj.codeName,
-      isMongoError: errorObj.name?.includes('Mongo'),
-      stack: errorObj.stack?.split('\n').slice(0, 5).join('\n')
-    });
-
-    if (process.env.NODE_ENV === 'development') {
-      const connectionStateMap: Record<number, string> = {
-        0: 'disconnected',
-        1: 'connected',
-        2: 'connecting',
-        3: 'disconnecting'
-      };
-      console.log(`[TaskUpdate][${task._id}] MongoDB state at error:`, {
-        connectionState: mongoose.connection.readyState,
-        connectionStateDescription: connectionStateMap[mongoose.connection.readyState] || 'unknown',
-        host: mongoose.connection.host,
-        inTransaction: session.inTransaction()
-      });
-    }
-
-    // Rollback transaction if it's still active
-    if (session.inTransaction()) {
-      if (process.env.NODE_ENV === 'development') {
-        console.log(`[TaskUpdate][${task._id}] Rolling back transaction...`);
-      }
-      await session.abortTransaction();
-      if (process.env.NODE_ENV === 'development') {
-        console.log(`[TaskUpdate][${task._id}] Transaction rolled back successfully`);
-      }
-    }
-    session.endSession();
-
-    logSystemError('TaskUpdate', `Error processing updated task: ${task.contract?.slug || 'unknown'}`, error, {
-      contractSlug: task.contract?.slug,
-      taskId: task._id
-    });
-
-    return { success: false, error: (error as Error).message };
-  }
 }
 
 const DRAIN_THRESHOLD = RATE_LIMIT * 9; // Queue drain threshold
