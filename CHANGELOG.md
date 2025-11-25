@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Duplicate Bid Spamming (17+ bids on same token)**: Fixed critical race condition causing duplicate counterbids
+  - **Root Cause 1 - Fire-and-Forget Task Processing**: `relevantTasks.map()` in `handleCounterBid()` created promises without awaiting them, allowing multiple WebSocket messages to race through deduplication
+  - **Root Cause 2 - Non-Atomic Deduplication**: The `hasSeenItem()` + `addSeenItem()` pattern had a race window between check and add
+  - **Root Cause 3 - Missing await on processBulkJobs**: Blur trait batch processing didn't await job queueing (line 15441)
+  - **Fix 1**: Wrapped `relevantTasks.map()` with `await Promise.all()` to ensure sequential message processing (line 11777)
+  - **Fix 2**: Added atomic `addIfNotExists()` method to `BoundedCache` for race-free deduplication
+  - **Fix 3**: Added `markSeenIfNew()` helper that atomically checks and adds in one operation
+  - **Fix 4**: Updated MagicEden and OpenSea counterbid handlers to use atomic deduplication
+  - **Fix 5**: Added `await` to `processBulkJobs()` call in Blur trait batch processing
+  - Files modified: `src/index.ts`, `src/utils/bounded-cache.ts`
+  - Resolves: 17+ duplicate bids on same token within seconds, wasted gas fees, unexpected bid acceptances
+  - Impact: Each incoming competitor bid now results in exactly ONE counterbid, not 17+
+
 - **Fast Balance Drop Detection**: Fixed slow detection (up to 30 minutes) when wallet balance drops suddenly
   - **Root Cause**: Bot only stopped marketplace when its own `InsufficientBalanceError` was thrown from pre-bid balance checks, not when OpenSea API returned balance errors
   - **Symptom**: Hundreds of failed bids with OpenSea error "does not have enough balance of payment asset... found: X, require: Y" before bot detected the issue

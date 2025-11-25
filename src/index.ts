@@ -395,6 +395,15 @@ function hasSeenItem(cache: BoundedCache<string, number>, key: string): boolean 
   // BoundedCache.get() handles expiry check automatically
   return cache.has(key);
 }
+
+/**
+ * Atomic check-and-add for deduplication: returns true if this is a NEW item (not seen before),
+ * false if it was already seen. This prevents race conditions in concurrent handlers.
+ */
+function markSeenIfNew(cache: BoundedCache<string, number>, key: string): boolean {
+  const now = Date.now();
+  return cache.addIfNotExists(key, now);
+}
 // Set up periodic intervals
 let expirationMonitorInterval: NodeJS.Timeout | null = null;
 let expiredPriceCleanupInterval: NodeJS.Timeout | null = null;
@@ -11773,7 +11782,8 @@ async function handleCounterBid(message: any) {
       return;
     }
 
-    relevantTasks.map(task => handleCounterBidForTask(task, message))
+    // Await all task handlers to ensure deduplication cache is updated before processing next message
+    await Promise.all(relevantTasks.map(task => handleCounterBidForTask(task, message)))
 
   } catch (error) {
     console.error("Error in handleCounterBid:", error);
@@ -11859,11 +11869,11 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     const orderHash = data?.data?.id
 
     // Include task ID in the hash to make it task-specific
+    // Use atomic check-and-add to prevent race conditions in concurrent handlers
     const taskSpecificHash = `${orderHash}-${task._id}`;
-    if (hasSeenItem(seenOrderHashes, taskSpecificHash)) {
-      return;
+    if (!markSeenIfNew(seenOrderHashes, taskSpecificHash)) {
+      return;  // Already being processed by another handler
     }
-    addSeenItem(seenOrderHashes, taskSpecificHash)
     const maker = data?.data?.maker?.toLowerCase()
 
     // Parallel fetch wallet data and all wallets
@@ -12610,11 +12620,11 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const walletAddresses = wallets.map((wallet) => wallet.address.toLowerCase())
 
     // Include task ID in the hash to make it task-specific
+    // Use atomic check-and-add to prevent race conditions in concurrent handlers
     const taskSpecificHash = `${orderHash}-${task._id}`
-    if (hasSeenItem(seenOrderHashes, taskSpecificHash)) {
-      return;
+    if (!markSeenIfNew(seenOrderHashes, taskSpecificHash)) {
+      return;  // Already being processed by another handler
     }
-    addSeenItem(seenOrderHashes, taskSpecificHash)
 
     if (walletAddresses.includes(maker)) {
       incrementOwnBidCounter('opensea', orderHash);
@@ -15428,7 +15438,7 @@ async function processBlurScheduledBid(task: ITask) {
           };
         }) as Job[]
 
-        processBulkJobs(traitJobs, true);
+        await processBulkJobs(traitJobs, true);
 
         // Register for job creation verification (for this batch)
         registerJobCreationVerification(taskId, 'blur', batchSize);
