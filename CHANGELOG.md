@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Duplicate Token Counterbid Spamming (20+ bids on same token)**: Fixed critical race condition where multiple competitors bidding on the same token caused 20+ duplicate counterbids
+  - **Root Cause**: Existing deduplication used `orderHash` (unique per competitor bid), not `tokenId`. When 20 competitors bid on token #6375, each had a unique orderHash → all 20 passed deduplication → 20 duplicate counterbids placed
+  - **Solution**: Added token-level deduplication using `pendingCounterbids` BoundedCache to ensure only ONE counterbid job per token at a time
+  - **Implementation Details**:
+    - Added `pendingCounterbids` cache with 60-second TTL and 10k item capacity
+    - Added `markCounterbidPending()` and `clearCounterbidPending()` helper functions
+    - OpenSea token counterbid: Added deduplication check before job queue, try/catch around queue.add, finally block in job handler
+    - MagicEden token counterbid: Added deduplication check before job queue, try/catch around queue.add, clearCounterbidPending on all early returns, finally block in job handler
+  - Files modified: `src/index.ts:386-405` (cache), `src/index.ts:12808-12842` (OS handler), `src/index.ts:11947-12071` (ME handler), `src/index.ts:17001-17010` (OS job), `src/index.ts:17174-17177` (ME job)
+  - Resolves: 20+ duplicate bids on same token within seconds, wasted gas fees
+  - Impact: Maximum 1 counterbid per token per ~60 seconds instead of unlimited duplicates
+
 - **MongoDB Transaction Error ("Transaction numbers are only allowed on a replica set member")**: Fixed error when updating tasks via WebSocket
   - **Root Cause**: `updateTaskData()` function used MongoDB transactions (`startSession`/`startTransaction`) which require replica set configuration
   - **Symptom**: Error `MongoServerError: Transaction numbers are only allowed on a replica set member or mongos` when client updates task settings

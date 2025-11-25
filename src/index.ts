@@ -383,6 +383,27 @@ const seenBids = new BoundedCache<string, number>(10000, 30 * 60 * 1000); // 10k
 // Track logged balance errors to prevent log flooding (only log first error per task/marketplace)
 const loggedBalanceErrors = new BoundedCache<string, number>(1000, 30 * 60 * 1000); // 1k items, 30 min TTL
 
+// Track tokens with pending counterbid jobs to prevent duplicate bids on same token
+// Key format: "counterbid-{taskId}-{marketplace}-{tokenId}" → timestamp
+const pendingCounterbids = new BoundedCache<string, number>(10000, 60 * 1000); // 10k items, 60 second TTL
+
+/**
+ * Mark a token as having a pending counterbid job. Returns true if marked successfully,
+ * false if another counterbid for this token is already pending.
+ */
+function markCounterbidPending(taskId: string, marketplace: string, tokenId: string): boolean {
+  const key = `counterbid-${taskId}-${marketplace}-${tokenId}`;
+  return pendingCounterbids.addIfNotExists(key, Date.now());
+}
+
+/**
+ * Clear the pending counterbid status for a token after the job completes.
+ */
+function clearCounterbidPending(taskId: string, marketplace: string, tokenId: string): void {
+  const key = `counterbid-${taskId}-${marketplace}-${tokenId}`;
+  pendingCounterbids.delete(key);
+}
+
 // Helper functions for seen items management
 function addSeenItem(cache: BoundedCache<string, number>, key: string): void {
   const now = Date.now();
@@ -11923,6 +11944,13 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       if (!tokenBid || !tokenIds.includes(tokenId)) return
 
+      // Token-level deduplication: only one counterbid job per token at a time
+      // This prevents 20+ duplicate bids when multiple competitors bid on the same token
+      if (!markCounterbidPending(task._id, 'magiceden', tokenId.toString())) {
+        // Another counterbid for this token is already pending - skip
+        return;
+      }
+
       // Check cache first
       let floor_price = await collectionCache.getFloorPrice(task.contract.contractAddress, 'magiceden');
 
@@ -11937,18 +11965,23 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           }
         );
       }
-      if (!floor_price) return
+      if (!floor_price) {
+        clearCounterbidPending(task._id, 'magiceden', tokenId.toString());
+        return;
+      }
 
       const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
       const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal)
       if (incomingBidAmountEth < minBidPriceEth) {
         // Return silently when incoming bid is less than min bid price
-        return
+        clearCounterbidPending(task._id, 'magiceden', tokenId.toString());
+        return;
       }
       if (incomingBidAmountEth > maxBidPriceEth) {
         const message = `incoming bid ${incomingBidAmountEth} ${currencySymbol} for ${task.contract.slug}: ${tokenId} is greater than max bid price ${maxBidPriceEth} ${currencySymbol}. Skipping ...`.toUpperCase()
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "magiceden");
-        return
+        clearCounterbidPending(task._id, 'magiceden', tokenId.toString());
+        return;
       }
 
       const orders = await Order.find({
@@ -11964,7 +11997,8 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           const extractedOrderIds = await extractMagicedenOrderHash(orders)
           queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
         }
-        return
+        clearCounterbidPending(task._id, 'magiceden', tokenId.toString());
+        return;
       }
 
 
@@ -11977,6 +12011,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         if (process.env.DEBUG_TOP_BIDS === 'true') {
           console.log(`[Counterbid] Skipping ME token ${tokenId} - incoming ${incomingBidAmount} <= our top bid ${ourTopBidPrice}`);
         }
+        clearCounterbidPending(task._id, 'magiceden', tokenId.toString());
         return;
       }
 
@@ -11999,6 +12034,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           }
         }
 
+        clearCounterbidPending(task._id, 'magiceden', tokenId.toString());
         return;
       }
 
@@ -12018,10 +12054,16 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
 
 
-      await queue.add(
-        MAGICEDEN_TOKEN_BID_COUNTERBID,
-        bidData
-      );
+      try {
+        await queue.add(
+          MAGICEDEN_TOKEN_BID_COUNTERBID,
+          bidData
+        );
+      } catch (error) {
+        // Clear pending status if queueing fails
+        clearCounterbidPending(task._id, 'magiceden', tokenId.toString());
+        throw error;
+      }
 
       // Removed: seenOrderHashes.delete(taskSpecificHash) - let TTL handle expiration to prevent duplicate bids
 
@@ -12784,6 +12826,13 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       offerPrice = normalizedOfferPrice
       tokenOffer = BigInt(offerPrice)
 
+      // Token-level deduplication: only one counterbid job per token at a time
+      // This prevents 20+ duplicate bids when multiple competitors bid on the same token
+      if (!markCounterbidPending(task._id, 'opensea', tokenId.toString())) {
+        // Another counterbid for this token is already pending - skip
+        return;
+      }
+
       const asset = {
         contractAddress: task.contract.contractAddress,
         tokenId: tokenId
@@ -12802,10 +12851,16 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         outbidOptions: outbidOptions
       }
 
-      await queue.add(
-        OPENSEA_TOKEN_BID_COUNTERBID,
-        bidData
-      );
+      try {
+        await queue.add(
+          OPENSEA_TOKEN_BID_COUNTERBID,
+          bidData
+        );
+      } catch (error) {
+        // Clear pending status if queueing fails
+        clearCounterbidPending(task._id, 'opensea', tokenId.toString());
+        throw error;
+      }
 
       // Log successful counterbid preparation
 
@@ -16950,6 +17005,9 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
       errorMessage
     });
     await logBidError(data._id, "OPENSEA TOKEN COUNTER BID ERROR", `Error bidding on token ${data.asset.tokenId} in collection ${data.slug}: ${errorMessage}`, "error", "opensea");
+  } finally {
+    // Always clear pending counterbid status when job completes (success or failure)
+    clearCounterbidPending(taskId, 'opensea', asset.tokenId.toString());
   }
 }
 
@@ -17113,6 +17171,9 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
     counterbidCounts[_id]['magiceden']++;
   } catch (error: any) {
     await logBidError(data._id, "MAGICEDEN TOKEN COUNTER BID ERROR", `Error bidding on token ${data.tokenId} in collection ${data.slug}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)}`, "error", "magiceden");
+  } finally {
+    // Always clear pending counterbid status when job completes (success or failure)
+    clearCounterbidPending(data._id, 'magiceden', data.tokenId.toString());
   }
 }
 
