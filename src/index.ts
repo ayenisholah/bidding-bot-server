@@ -380,6 +380,9 @@ let removedTokens: { [key: string]: { opensea: string[]; magiceden: string[] } }
 const seenOrderHashes = new BoundedCache<string, number>(10000, 30 * 60 * 1000); // 10k items, 30 min TTL
 const seenBids = new BoundedCache<string, number>(10000, 30 * 60 * 1000); // 10k items, 30 min TTL
 
+// Track logged balance errors to prevent log flooding (only log first error per task/marketplace)
+const loggedBalanceErrors = new BoundedCache<string, number>(1000, 30 * 60 * 1000); // 1k items, 30 min TTL
+
 // Helper functions for seen items management
 function addSeenItem(cache: BoundedCache<string, number>, key: string): void {
   const now = Date.now();
@@ -403,6 +406,25 @@ function hasSeenItem(cache: BoundedCache<string, number>, key: string): boolean 
 function markSeenIfNew(cache: BoundedCache<string, number>, key: string): boolean {
   const now = Date.now();
   return cache.addIfNotExists(key, now);
+}
+
+/**
+ * Check if a marketplace is stopped due to insufficient balance.
+ * Used to skip processing queued jobs after balance error is detected.
+ */
+function isMarketplaceStoppedDueToBalance(taskId: string, marketplace: string): boolean {
+  const mpKey = marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
+  const mpStatus = taskStatus[taskId]?.marketplaces?.[mpKey];
+  return mpStatus?.insufficientBalance === true;
+}
+
+/**
+ * Log a balance error only once per task/marketplace to prevent log flooding.
+ * Returns true if this is the first occurrence (should be logged), false if already logged.
+ */
+function shouldLogBalanceError(taskId: string, marketplace: string): boolean {
+  const key = `balance-${taskId}-${marketplace.toLowerCase()}`;
+  return loggedBalanceErrors.addIfNotExists(key, Date.now());
 }
 // Set up periodic intervals
 let expirationMonitorInterval: NodeJS.Timeout | null = null;
@@ -15561,6 +15583,8 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
   // Entry log
 
+  // Early exit if marketplace already stopped due to insufficient balance
+  if (isMarketplaceStoppedDueToBalance(taskId, 'blur')) { return; }
 
   // Check if task is blacklisted before processing
   if (isTaskBlacklisted(taskId)) {
@@ -15853,6 +15877,9 @@ async function processOpenseaTraitBid(data: {
     counterbid: boolean;
   }
 }) {
+  // Early exit if marketplace already stopped due to insufficient balance
+  if (isMarketplaceStoppedDueToBalance(data._id, 'opensea')) { return; }
+
   let errorMessage: string | undefined;
 
   // Structured start
@@ -16112,6 +16139,10 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
   // Check if task is blacklisted
   if (isTaskBlacklisted(taskId, 'opensea')) { return; }
+
+  // Early exit if marketplace already stopped due to insufficient balance
+  // This prevents thousands of redundant error logs when balance is exhausted
+  if (isMarketplaceStoppedDueToBalance(taskId, 'opensea')) { return; }
 
   let errorMessage = ''
   try {
@@ -16415,7 +16446,14 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         errorMessage = primaryMessage || 'Unknown OpenSea error';
       }
 
-      console.error(RED + `OpenSea token bid failed for ${_id} token ${data.asset.tokenId}:`, errorMessage + RESET);
+      // Throttle logging for balance errors to prevent log flooding
+      const isBalanceError = errorMessage.includes('InsufficientBalanceError') ||
+                             errorMessage.includes('INSUFFICIENT_BALANCE') ||
+                             errorMessage.includes('Insufficient') && errorMessage.includes('balance');
+
+      if (!isBalanceError || shouldLogBalanceError(_id, 'opensea')) {
+        console.error(RED + `OpenSea token bid failed for ${_id} token ${data.asset.tokenId}:`, errorMessage + RESET);
+      }
 
       // Re-throw to be caught by outer catch block
       throw bidError;
@@ -17181,6 +17219,9 @@ async function processBlurTraitBid(data: {
     batchSize?: number;
   };
 }) {
+  // Early exit if marketplace already stopped due to insufficient balance
+  if (isMarketplaceStoppedDueToBalance(data._id, 'blur')) { return; }
+
   const taskId = data._id;
   const startTime = Date.now();
 
@@ -18151,6 +18192,9 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
 
 async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
+  // Early exit if marketplace already stopped due to insufficient balance
+  if (isMarketplaceStoppedDueToBalance(data._id, 'magiceden')) { return; }
+
   try {
     const { contractAddress, address, quantity, walletId, slug, tokenId, _id } = data
     if (!enabledMarketplaces.length) return
@@ -18368,6 +18412,9 @@ async function processMagicedenTraitBid(data: {
   minBidPriceEth?: number;
   task: ITask;
 }) {
+  // Early exit if marketplace already stopped due to insufficient balance
+  if (isMarketplaceStoppedDueToBalance(data._id, 'magiceden')) { return; }
+
   const taskId = data._id;
 
   // Log entry

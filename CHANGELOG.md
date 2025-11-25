@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Excessive InsufficientBalanceError Logging (Docker Log Flooding)**: Fixed log flooding when wallet has insufficient balance for bulk token bids
+  - **Root Cause**: When a task started with insufficient balance, thousands of bid jobs were already queued. Each job failed with `InsufficientBalanceError` and logged separately, generating 6000+ log entries in seconds.
+  - **Symptom**: Docker logs filling with identical balance error messages, potentially exhausting disk space and crashing the bot
+  - **Solution**: Two-part fix to prevent log flooding and skip unnecessary job processing:
+  - **Fix 1 - Early Exit on Balance Stop**: Added `isMarketplaceStoppedDueToBalance()` check at the start of all bid handlers
+    - Jobs exit immediately if marketplace already marked with `insufficientBalance: true`
+    - Prevents thousands of redundant balance checks and error logs
+  - **Fix 2 - Log Throttling**: Added `loggedBalanceErrors` BoundedCache to track logged balance errors
+    - `shouldLogBalanceError()` returns true only for FIRST error per task/marketplace
+    - Subsequent balance errors for same task/marketplace are suppressed from console
+  - **Updated Handlers** (8 total):
+    - `processOpenseaTokenBid`, `processOpenseaTraitBid` - early exit + log throttling
+    - `processMagicedenTokenBid`, `processMagicedenTraitBid` - early exit only (uses `logBidError` which dedupes in DB)
+    - `processBlurCollectionBid`, `processBlurTraitBid` - early exit only
+  - Files modified: `src/index.ts`
+  - Resolves: Docker log flooding, disk space exhaustion, wasted CPU cycles on doomed jobs
+  - Impact: Maximum ~1-3 balance error logs per task/marketplace instead of thousands
+
 - **Duplicate Bid Spamming (17+ bids on same token)**: Fixed critical race condition causing duplicate counterbids
   - **Root Cause 1 - Fire-and-Forget Task Processing**: `relevantTasks.map()` in `handleCounterBid()` created promises without awaiting them, allowing multiple WebSocket messages to race through deduplication
   - **Root Cause 2 - Non-Atomic Deduplication**: The `hasSeenItem()` + `addSeenItem()` pattern had a race window between check and add
