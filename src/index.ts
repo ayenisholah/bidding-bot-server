@@ -3680,6 +3680,73 @@ function cleanupTaskResources(taskId: string, preserveWarnings = false): void {
 
 }
 
+// ============================================================================
+// Balance Error Detection & Currency-Based Marketplace Mapping
+// ============================================================================
+
+/**
+ * Regex to detect OpenSea's balance error and extract amounts.
+ * Matches: "does not have enough balance of payment asset... found: 849900000000000000, require: 851000000000000000"
+ */
+const OPENSEA_BALANCE_ERROR_REGEX = /does not have enough balance of payment asset.*found:\s*(\d+),\s*require:\s*(\d+)/i;
+
+/**
+ * Parse OpenSea's balance error message to extract found/required amounts.
+ * Returns null if the error message doesn't match the expected format.
+ */
+function parseOpenseaBalanceError(errorMessage: string): { found: bigint; required: bigint; currency: string } | null {
+  const match = errorMessage.match(OPENSEA_BALANCE_ERROR_REGEX);
+  if (match) {
+    // Extract currency from the error message (look for WETH/BETH in the message)
+    let currency = 'WETH'; // Default to WETH since most errors are WETH-related
+    if (errorMessage.toLowerCase().includes('beth') || errorMessage.includes('0x0000000000A39bb272e79075ade125fd351887Ac')) {
+      currency = 'BETH';
+    } else if (errorMessage.toLowerCase().includes('usdc') || errorMessage.includes('0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48')) {
+      currency = 'USDC';
+    }
+
+    return {
+      found: BigInt(match[1]),
+      required: BigInt(match[2]),
+      currency
+    };
+  }
+  return null;
+}
+
+/**
+ * Get marketplaces that use a specific currency.
+ * When a balance error is detected for a currency, all marketplaces using that currency should be stopped.
+ */
+function getMarketplacesForCurrency(currency: string): ('opensea' | 'magiceden' | 'blur')[] {
+  switch (currency.toUpperCase()) {
+    case 'WETH':
+      return ['opensea', 'magiceden']; // Both OpenSea and MagicEden use WETH
+    case 'BETH':
+      return ['blur']; // Only Blur uses BETH (Blur Pool)
+    case 'USDC':
+      return ['magiceden']; // MagicEden supports USDC bids
+    default:
+      return [];
+  }
+}
+
+/**
+ * Get the token address for a currency symbol
+ */
+function getTokenAddressForCurrency(currency: string): string | null {
+  switch (currency.toUpperCase()) {
+    case 'WETH':
+      return '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2';
+    case 'BETH':
+      return '0x0000000000A39bb272e79075ade125fd351887Ac';
+    case 'USDC':
+      return '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48';
+    default:
+      return null;
+  }
+}
+
 /**
  * Helper function to complete a task marketplace due to insufficient balance
  * Sets status to COMPLETED with 100% progress and adds error details
@@ -4858,6 +4925,57 @@ function initializeQueueEventHandlers() {
                 });
               }
               return; // Skip normal error handling
+            }
+          }
+
+          // Check for OpenSea's API balance error (e.g., "does not have enough balance of payment asset")
+          // This catches balance drops that weren't detected by pre-bid balance checks
+          if (failedReason && failedReason.includes('does not have enough balance')) {
+            const balanceError = parseOpenseaBalanceError(failedReason);
+            if (balanceError) {
+              const { found, required, currency } = balanceError;
+              const foundEther = Number(found) / 1e18;
+              const requiredEther = Number(required) / 1e18;
+
+              console.log(`[Balance Error] Detected OpenSea balance error for ${currency}: found ${foundEther.toFixed(6)}, required ${requiredEther.toFixed(6)}`);
+
+              // Get wallet address from job data
+              const failedJob = await safeGetJob(queue, jobId);
+              const walletAddress = failedJob?.data?.walletId ? await (async () => {
+                const wallet = await walletCache.getWalletById(failedJob.data.walletId);
+                return wallet?.address;
+              })() : null;
+
+              if (walletAddress) {
+                // Invalidate the balance cache immediately so next check gets fresh data
+                const tokenAddress = getTokenAddressForCurrency(currency);
+                if (tokenAddress) {
+                  const { invalidateBalanceCache } = await import('./utils/balance');
+                  await invalidateBalanceCache(walletAddress, tokenAddress);
+                }
+
+                // Stop all marketplaces that use this currency
+                const affectedMarketplaces = getMarketplacesForCurrency(currency);
+                console.log(`[Balance Error] Stopping marketplaces for ${currency}: ${affectedMarketplaces.join(', ')}`);
+
+                for (const mp of affectedMarketplaces) {
+                  await completeTaskDueToInsufficientBalance(taskId, mp, {
+                    wallet: walletAddress,
+                    requiredAmount: requiredEther,
+                    availableAmount: foundEther,
+                    currency
+                  });
+                }
+
+                // Mark job as processed
+                const task = activeTasks.get(taskId);
+                if (task && task.running) {
+                  await safeMarkJobAsProcessed(taskId, marketplace, jobId, false, async (tid, mp, _increment) => {
+                    await markJobAsProcessed(tid, mp, jobId, false);
+                  });
+                }
+                return; // Skip normal error handling
+              }
             }
           }
 

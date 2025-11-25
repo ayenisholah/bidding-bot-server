@@ -6,6 +6,27 @@ import { logger, ErrorCategory } from "./logger";
 
 const getRedis = () => redisClient.getClient()
 
+/**
+ * Invalidate the balance cache for a specific wallet/token combination.
+ * Called when we receive a balance error from marketplace APIs to ensure
+ * the next balance check fetches fresh data.
+ */
+export async function invalidateBalanceCache(walletAddress: string, tokenAddress: string): Promise<void> {
+  const cacheKey = `{erc20_balance:${walletAddress}}:${tokenAddress}`;
+  const staleCacheKey = `{erc20_balance_stale:${walletAddress}}:${tokenAddress}`;
+
+  try {
+    const redis = getRedis();
+    if (redis) {
+      await redis.del(cacheKey);
+      await redis.del(staleCacheKey);
+      console.log(`[Balance] Invalidated cache for ${walletAddress.slice(0, 10)}.../${tokenAddress.slice(0, 10)}...`);
+    }
+  } catch (error) {
+    console.warn('[Balance] Failed to invalidate cache:', error);
+  }
+}
+
 export async function fetchERC20Balance(walletAddress: string, tokenAddress: string): Promise<number> {
   const CACHE_EXPIRY_SECONDS = 60;
   const STALE_CACHE_EXPIRY_SECONDS = 3600; // Keep stale cache for 1 hour as fallback
@@ -217,8 +238,6 @@ export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress
                   console.warn('Failed to cache balance:', error);
                 }
 
-                const elapsed = Date.now() - startTime;
-                // console.log(`[fetchERC20BalanceFresh] Fresh balance for ${walletAddress}/${tokenAddress}: ${formattedBalance} (took ${elapsed}ms)`);
                 return formattedBalance;
               } catch (error: any) {
                 lastError = error;

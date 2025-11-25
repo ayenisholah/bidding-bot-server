@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Fast Balance Drop Detection**: Fixed slow detection (up to 30 minutes) when wallet balance drops suddenly
+  - **Root Cause**: Bot only stopped marketplace when its own `InsufficientBalanceError` was thrown from pre-bid balance checks, not when OpenSea API returned balance errors
+  - **Symptom**: Hundreds of failed bids with OpenSea error "does not have enough balance of payment asset... found: X, require: Y" before bot detected the issue
+  - **Solution**: Parse OpenSea's API balance error message in job failure handler, invalidate cache, and stop affected marketplaces immediately
+  - **Implementation Details**:
+    - Added `invalidateBalanceCache()` function to `src/utils/balance.ts` for immediate cache clearing
+    - Added `parseOpenseaBalanceError()` to extract found/required amounts and detect currency from error message
+    - Added `getMarketplacesForCurrency()` mapping: WETH → [opensea, magiceden], BETH → [blur], USDC → [magiceden]
+    - Added `getTokenAddressForCurrency()` for cache invalidation with correct token address
+    - Updated job failure handler (lines 4931-4980) to detect balance errors and stop all affected marketplaces
+    - Currency detection from error message: checks for BETH/USDC token addresses, defaults to WETH
+  - **Currency-Based Marketplace Stopping**:
+    - WETH balance error → stops both OpenSea AND MagicEden (both use WETH)
+    - BETH balance error → stops only Blur
+    - USDC balance error → stops only MagicEden
+  - Files modified: `src/utils/balance.ts`, `src/index.ts`
+  - Resolves: Slow balance drop detection, hundreds of wasted failed bid attempts
+  - Impact: Balance drops detected in < 1 second (vs previous 30+ minutes), immediate marketplace stopping
+
 - **Counterbid Wasted Gas on Non-Winning Bids**: Fixed critical inefficiency where counterbidding would place bids even when not becoming the top bidder
   - **Root Cause**: Counterbid handlers only compared incoming bids against our OWN bids in the database, not against the marketplace's actual top offer
   - **Scenario**: If marketplace top offer is 1.0 ETH and we bid 0.8 ETH, any incoming bid (e.g., 0.85 ETH) would trigger a counterbid even though we'd still be outbid
