@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Counterbid Wasted Gas on Non-Winning Bids**: Fixed critical inefficiency where counterbidding would place bids even when not becoming the top bidder
+  - **Root Cause**: Counterbid handlers only compared incoming bids against our OWN bids in the database, not against the marketplace's actual top offer
+  - **Scenario**: If marketplace top offer is 1.0 ETH and we bid 0.8 ETH, any incoming bid (e.g., 0.85 ETH) would trigger a counterbid even though we'd still be outbid
+  - **Solution**: Implemented local `ourTopBids` store that tracks our confirmed top bids per task/marketplace/identifier
+  - **Implementation Details**:
+    - Added `TopBidStore` interface and `ourTopBids` Map to track bid state in memory
+    - Helper functions: `getOurTopBid()`, `updateOurTopBid()`, `clearOurTopBid()`, `clearTaskTopBids()`
+    - `initializeTopBidsFromDatabase()` loads active orders on task start
+    - Updated all 7 counterbid handlers to check store before proceeding:
+      - OpenSea: token, trait, collection handlers
+      - MagicEden: token, trait, collection handlers
+      - Blur: trait, collection handlers
+    - Updated all 8 scheduled bid jobs to update store after successful bids:
+      - `processOpenseaTokenBid`, `processOpenseaTraitBid`, `processOpenseaCollectionBid`
+      - `processMagicedenTokenBid`, `processMagicedenTraitBid`, `processMagicedenCollectionBid`
+      - `processBlurCollectionBid`, `processBlurTraitBid`
+    - Updated all 7 counterbid job processors to update store after successful counterbids:
+      - `openseaTokenCounterBid`, `openseaTraitCounterBid`
+      - `magicedenTokenCounterBid`, `magicedenTraitCounterBid`
+      - `blurCollectionCounterBid`, `blurTraitCounterBid`
+    - Store cleanup on task stop via `clearTaskTopBids()` in `stopTask()`
+    - Blur price handling: Store uses wei, Blur uses ETH - conversion applied in handlers
+  - Debug logging available with `DEBUG_TOP_BIDS=true` environment variable
+  - Files modified: `src/index.ts` (lines 223-372 for store, multiple counterbid handlers)
+  - Resolves: Wasted gas fees on bids that won't win, unnecessary API calls, inefficient counterbid behavior
+  - Impact: Counterbids only placed when we'll actually become the new top bidder, significantly reducing wasted gas
+
 - **Duplicate Bids / Bid Spamming Issue**: Fixed critical bug causing multiple bids on the same NFT tokens within seconds
   - **Root Cause 1 - Premature Cache Deletion**: `seenOrderHashes.delete()` was called immediately after queuing counterbid jobs, allowing duplicate WebSocket messages to bypass deduplication before the job completed
   - **Root Cause 2 - Missing `await` on Counterbid Handlers**: `handleOpenseaCounterbid()` and `handleMagicEdenCounterbid()` were called without `await`, creating race conditions where multiple concurrent messages could race through deduplication

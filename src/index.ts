@@ -220,6 +220,156 @@ interface WarningMessage {
   };
 }
 
+// ============================================================
+// LOCAL TOP BID TRACKING STORE
+// Tracks our placed bids to avoid counterbidding non-top offers
+// ============================================================
+
+interface TopBidEntry {
+  price: number;           // Our bid price in wei/smallest unit
+  timestamp: number;       // When we placed this bid
+  orderHash: string;       // Reference to Order document
+}
+
+interface TopBidMarketplace {
+  collection?: TopBidEntry;
+  tokens: { [tokenId: string]: TopBidEntry };
+  traits: { [traitKey: string]: TopBidEntry };
+}
+
+interface TopBidStore {
+  [taskId: string]: {
+    [marketplace: string]: TopBidMarketplace;
+  }
+}
+
+// Store for tracking our top bids per task/marketplace/identifier
+const ourTopBids: TopBidStore = {};
+
+// Get our current top bid for a specific item
+function getOurTopBid(
+  taskId: string,
+  marketplace: string,
+  bidType: 'collection' | 'token' | 'trait',
+  identifier?: string  // tokenId or traitKey
+): TopBidEntry | null {
+  const taskBids = ourTopBids[taskId]?.[marketplace];
+  if (!taskBids) return null;
+
+  if (bidType === 'collection') {
+    return taskBids.collection || null;
+  } else if (bidType === 'token') {
+    return taskBids.tokens?.[identifier!] || null;
+  } else {
+    return taskBids.traits?.[identifier!] || null;
+  }
+}
+
+// Update our top bid after successful bid placement
+function updateOurTopBid(
+  taskId: string,
+  marketplace: string,
+  bidType: 'collection' | 'token' | 'trait',
+  identifier: string | undefined,
+  price: number,
+  orderHash: string
+): void {
+  // Initialize nested structure if needed
+  if (!ourTopBids[taskId]) {
+    ourTopBids[taskId] = {};
+  }
+  if (!ourTopBids[taskId][marketplace]) {
+    ourTopBids[taskId][marketplace] = { tokens: {}, traits: {} };
+  }
+
+  const entry: TopBidEntry = {
+    price,
+    timestamp: Date.now(),
+    orderHash
+  };
+
+  if (bidType === 'collection') {
+    ourTopBids[taskId][marketplace].collection = entry;
+  } else if (bidType === 'token') {
+    ourTopBids[taskId][marketplace].tokens[identifier!] = entry;
+  } else {
+    ourTopBids[taskId][marketplace].traits[identifier!] = entry;
+  }
+
+  if (process.env.DEBUG_TOP_BIDS === 'true') {
+    console.log(`[TopBids] Updated ${marketplace}/${bidType}/${identifier || 'collection'} for task ${taskId}: ${price}`);
+  }
+}
+
+// Clear our top bid (e.g., when bid is cancelled or expires)
+function clearOurTopBid(
+  taskId: string,
+  marketplace: string,
+  bidType: 'collection' | 'token' | 'trait',
+  identifier?: string
+): void {
+  const taskBids = ourTopBids[taskId]?.[marketplace];
+  if (!taskBids) return;
+
+  if (bidType === 'collection') {
+    delete taskBids.collection;
+  } else if (bidType === 'token' && identifier) {
+    delete taskBids.tokens[identifier];
+  } else if (bidType === 'trait' && identifier) {
+    delete taskBids.traits[identifier];
+  }
+
+  if (process.env.DEBUG_TOP_BIDS === 'true') {
+    console.log(`[TopBids] Cleared ${marketplace}/${bidType}/${identifier || 'collection'} for task ${taskId}`);
+  }
+}
+
+// Clean up when task stops
+function clearTaskTopBids(taskId: string): void {
+  delete ourTopBids[taskId];
+  if (process.env.DEBUG_TOP_BIDS === 'true') {
+    console.log(`[TopBids] Cleared all bids for task ${taskId}`);
+  }
+}
+
+// Initialize store from database for a task (called on task start)
+async function initializeTopBidsFromDatabase(taskId: string, marketplaces: string[]): Promise<void> {
+  try {
+    const activeOrders = await Order.find({
+      taskId,
+      marketplace: { $in: marketplaces },
+      expiresAt: { $gt: new Date() }
+    });
+
+    for (const order of activeOrders) {
+      const marketplace = order.marketplace.toLowerCase();
+      const identifier = order.identifier;
+
+      // Detect bid type from identifier
+      // Token IDs are numeric, trait keys contain ':', collection is 'collection'
+      let bidType: 'collection' | 'token' | 'trait';
+      if (identifier === 'collection' || !identifier) {
+        bidType = 'collection';
+      } else if (identifier.includes(':')) {
+        bidType = 'trait';
+      } else {
+        bidType = 'token';
+      }
+
+      updateOurTopBid(taskId, marketplace, bidType, identifier, Number(order.offerPrice), order.orderHash);
+    }
+
+    if (process.env.DEBUG_TOP_BIDS === 'true') {
+      console.log(`[TopBids] Initialized ${activeOrders.length} bids from database for task ${taskId}`);
+    }
+  } catch (error) {
+    console.error(`[TopBids] Error initializing from database for task ${taskId}:`, error);
+  }
+}
+
+// ============================================================
+// END LOCAL TOP BID TRACKING STORE
+// ============================================================
 
 // Dynamically allocate up to 75% of available CPU cores
 export const WORKER_COUNT = 1
@@ -7430,6 +7580,10 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
 
   clearTaskTimers(taskId, marketplace)
 
+  // Initialize top bids store from database for counterbid optimization
+  // This loads any existing active orders so counterbid handlers can compare properly
+  await initializeTopBidsFromDatabase(taskId, task.selectedMarketplaces);
+
   if (!marketplace) {
     skipStats[task._id] = {
       opensea: 0,
@@ -8556,6 +8710,9 @@ async function
         magiceden: 0,
         blur: 0
       };
+
+      // Clear top bids store for this task
+      clearTaskTopBids(taskId);
     }
 
     if (!marketplace && !stoppedByWarning) {
@@ -11740,10 +11897,17 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
 
 
-      const offers = orders.map((order: any) => order.offerPrice)
-      const currentBidPrice = !offers.length ? 0 : Math.max(...offers.map((offer) => Number(offer)))
+      // Get our top bid from local store (populated by scheduled bids)
+      const ourTopBid = getOurTopBid(task._id, 'magiceden', 'token', tokenId.toString());
+      const ourTopBidPrice = ourTopBid?.price || 0;
 
-      if (incomingBidAmount < currentBidPrice) return
+      // Only counterbid if incoming bid is HIGHER than our top bid
+      if (incomingBidAmount <= ourTopBidPrice) {
+        if (process.env.DEBUG_TOP_BIDS === 'true') {
+          console.log(`[Counterbid] Skipping ME token ${tokenId} - incoming ${incomingBidAmount} <= our top bid ${ourTopBidPrice}`);
+        }
+        return;
+      }
 
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
 
@@ -11863,10 +12027,17 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
 
 
-      const offers = orders.map((order: any) => order.offerPrice)
-      const currentBidPrice = !offers.length ? 0 : Math.max(...offers.map((offer) => Number(offer)))
+      // Get our top bid from local store (populated by scheduled bids)
+      const ourTopBid = getOurTopBid(task._id, 'magiceden', 'trait', identifier);
+      const ourTopBidPrice = ourTopBid?.price || 0;
 
-      if (incomingBidAmount < currentBidPrice) return
+      // Only counterbid if incoming bid is HIGHER than our top bid
+      if (incomingBidAmount <= ourTopBidPrice) {
+        if (process.env.DEBUG_TOP_BIDS === 'true') {
+          console.log(`[Counterbid] Skipping ME trait ${identifier} - incoming ${incomingBidAmount} <= our top bid ${ourTopBidPrice}`);
+        }
+        return;
+      }
 
       offerPrice = Math.ceil((magicedenOutbidMargin * Math.pow(10, decimal)) + incomingBidAmount)
       const offerPriceEth = offerPrice / Math.pow(10, decimal)
@@ -12084,6 +12255,19 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       const ordersToCancel = [];
 
       for (const order of allTaskOrders) {
+        // Get our top bid from local store for this specific identifier
+        const bidType = order.identifier.includes(':') ? 'trait' : (order.identifier === 'collection' ? 'collection' : 'token');
+        const ourTopBid = getOurTopBid(task._id, 'magiceden', bidType, order.identifier);
+        const ourTopBidPrice = ourTopBid?.price || 0;
+
+        // Only counterbid if incoming bid is HIGHER than our top bid for this identifier
+        if (incomingBidAmount <= ourTopBidPrice) {
+          if (process.env.DEBUG_TOP_BIDS === 'true') {
+            console.log(`[Counterbid] Skipping ME collection counterbid for ${order.identifier} - incoming ${incomingBidAmount} <= our top bid ${ourTopBidPrice}`);
+          }
+          continue;
+        }
+
         // Only counterbid orders that are <= incoming collection offer
         if (Number(order.offerPrice) <= incomingBidAmount) {
           const bidCount = getIncrementedBidCount(MAGICEDEN, currentTask.contract.slug, currentTask._id)
@@ -12466,10 +12650,17 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         return
       }
 
-      const offers = orders.map((order: any) => order.offerPrice)
-      const currentBidPrice = offers.length > 0 ? Math.max(...offers.map((offer) => Number(offer))) : 0
+      // Get our top bid from local store (populated by scheduled bids)
+      const ourTopBid = getOurTopBid(task._id, 'opensea', 'token', tokenId.toString());
+      const ourTopBidPrice = ourTopBid?.price || 0;
 
-      if (incomingBidAmount < currentBidPrice) {
+      // Only counterbid if incoming bid is HIGHER than our top bid
+      // This means someone outbid us and we need to respond
+      if (incomingBidAmount <= ourTopBidPrice) {
+        // Incoming bid is not higher than our bid - we're still on top or it's irrelevant
+        if (process.env.DEBUG_TOP_BIDS === 'true') {
+          console.log(`[Counterbid] Skipping OS token ${tokenId} - incoming ${incomingBidAmount} <= our top bid ${ourTopBidPrice}`);
+        }
         return;
       }
 
@@ -12645,11 +12836,16 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         return
       }
 
-      const offers = orders.map((order: any) => order.offerPrice)
-      const currentBidPrice = offers.length > 0 ? Math.max(...offers.map((offer) => Number(offer))) : 0
+      // Get our top bid from local store (populated by scheduled bids)
+      const ourTopBid = getOurTopBid(task._id, 'opensea', 'trait', identifier);
+      const ourTopBidPrice = ourTopBid?.price || 0;
 
-      if (incomingBidAmount < currentBidPrice) {
-        return
+      // Only counterbid if incoming bid is HIGHER than our top bid
+      if (incomingBidAmount <= ourTopBidPrice) {
+        if (process.env.DEBUG_TOP_BIDS === 'true') {
+          console.log(`[Counterbid] Skipping OS trait ${identifier} - incoming ${incomingBidAmount} <= our top bid ${ourTopBidPrice}`);
+        }
+        return;
       }
 
       const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth, currency)
@@ -12888,6 +13084,19 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       // Process each existing order
       let counterbidsQueued = 0;
       for (const order of allTaskOrders) {
+        // Get our top bid from local store for this specific identifier
+        const bidType = order.identifier.includes(':') ? 'trait' : (order.identifier === 'collection' ? 'collection' : 'token');
+        const ourTopBid = getOurTopBid(task._id, 'opensea', bidType, order.identifier);
+        const ourTopBidPrice = ourTopBid?.price || 0;
+
+        // Only counterbid if incoming bid is HIGHER than our top bid for this identifier
+        if (incomingBidAmount <= ourTopBidPrice) {
+          if (process.env.DEBUG_TOP_BIDS === 'true') {
+            console.log(`[Counterbid] Skipping OS collection counterbid for ${order.identifier} - incoming ${incomingBidAmount} <= our top bid ${ourTopBidPrice}`);
+          }
+          continue;
+        }
+
         if (Number(order.offerPrice) <= incomingBidAmount) {
           const bidCount = getIncrementedBidCount(OPENSEA, task.contract.slug, task._id)
           let orderOfferPrice: number;
@@ -13151,10 +13360,16 @@ async function
           return
         }
 
-        const offers = orders?.map((order: any) => order?.offerPrice)
-        const currentBidPrice = !offers?.length ? 0 : Math.max(...offers?.map((offer) => Number(offer)))
-        const currentBidPriceEth = currentBidPrice / 1e18
-        if (incomingPrice <= currentBidPriceEth) {
+        // Get our top bid from local store (populated by scheduled bids)
+        // Blur stores prices in ETH, but ourTopBids stores in wei - convert for comparison
+        const ourTopBid = getOurTopBid(task._id, 'blur', 'trait', identifier);
+        const ourTopBidPriceEth = ourTopBid ? ourTopBid.price / 1e18 : 0;
+
+        // Only counterbid if incoming bid is HIGHER than our top bid
+        if (incomingPrice <= ourTopBidPriceEth) {
+          if (process.env.DEBUG_TOP_BIDS === 'true') {
+            console.log(`[Counterbid] Skipping Blur trait ${identifier} - incoming ${incomingPrice} <= our top bid ${ourTopBidPriceEth}`);
+          }
           return;
         }
 
@@ -13317,6 +13532,20 @@ async function
       let counterbidsQueued = 0;
 
       for (const order of allTaskOrders) {
+        // Get our top bid from local store for this specific identifier
+        const bidType = order.identifier.includes(':') ? 'trait' : (order.identifier === 'collection' ? 'collection' : 'token');
+        const ourTopBid = getOurTopBid(task._id, 'blur', bidType, order.identifier);
+        const ourTopBidPrice = ourTopBid?.price || 0;
+
+        // Only counterbid if incoming bid is HIGHER than our top bid for this identifier
+        // Note: incomingPriceWei is already in wei, ourTopBidPrice is also in wei
+        if (incomingPriceWei <= ourTopBidPrice) {
+          if (process.env.DEBUG_TOP_BIDS === 'true') {
+            console.log(`[Counterbid] Skipping Blur collection counterbid for ${order.identifier} - incoming ${incomingPriceWei} <= our top bid ${ourTopBidPrice}`);
+          }
+          continue;
+        }
+
         // Only counterbid orders that are <= incoming collection offer
         if (Number(order.offerPrice) <= incomingPriceWei) {
           const bidCount = getIncrementedBidCount(BLUR, task.contract.slug, task._id)
@@ -14731,6 +14960,10 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
         currentTask.contract.contractAddress
       )
 
+      // Update ourTopBids store with the successful bid
+      // This scheduled bid has verified we are now the top bidder
+      updateOurTopBid(currentTask._id, 'opensea', 'collection', 'collection', Number(colletionOffer), '');
+
     } catch (bidError) {
       logError('opensea', taskId, 'processOpenseaCollectionBid', 'Failed to place collection bid', bidError, {
         bidCount,
@@ -15436,6 +15669,9 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
       await bidOnBlur(currentTask._id, bidCount, currentTask.wallet, privateKey, currentTask.contract.contractAddress, colletionOffer, currentTask.contract.slug, expiry);
 
+      // Update ourTopBids store with the successful bid
+      // This scheduled bid has verified we are now the top bidder
+      updateOurTopBid(currentTask._id, 'blur', 'collection', 'collection', Number(colletionOffer), '');
 
     } catch (bidError: any) {
 
@@ -15708,7 +15944,9 @@ async function processOpenseaTraitBid(data: {
         trait
       );
 
-      // Log successful bid placement
+      // Update ourTopBids store with the successful bid
+      // This scheduled bid has verified we are now the top bidder
+      updateOurTopBid(_id, 'opensea', 'trait', identifier, Number(traitOffer), '');
 
     } catch (bidError: any) {
       // Format OpenSea error message for better readability
@@ -15967,6 +16205,11 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         undefined,
         asset
       )
+
+      // Update ourTopBids store with the successful bid
+      // This scheduled bid has verified we are now the top bidder
+      updateOurTopBid(_id, 'opensea', 'token', asset.tokenId.toString(), Number(tokenOffer), '');
+
     } catch (bidError: any) {
 
       // Format OpenSea error message for better readability
@@ -16291,6 +16534,9 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
 
     await bidOnMagiceden(taskId, bidCount, address, contractAddress, quantity, offerPrice.toString(), privateKey, slug, expiration, currency, bidTrait);
 
+    // Update ourTopBids store with the successful counterbid
+    updateOurTopBid(taskId, 'magiceden', 'trait', identifier, Number(offerPrice), '');
+
     // Initialize and increment counterbidCounts after successful bid
     if (!counterbidCounts[taskId]) {
       counterbidCounts[taskId] = {
@@ -16367,6 +16613,9 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
 
 
     await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry);
+
+    // Update ourTopBids store with the successful counterbid (store in wei)
+    updateOurTopBid(taskId, 'blur', 'collection', 'collection', Number(offerPrice), '');
 
     // Initialize and increment counterbidCounts after successful bid
     if (!counterbidCounts[taskId]) {
@@ -16446,6 +16695,9 @@ async function blurTraitCounterBid(data: IBlurBidData) {
 
 
     await bidOnBlur(taskId, bidCount, address, privateKey, contractAddress, BigInt(offerPrice), slug, expiry, traits);
+
+    // Update ourTopBids store with the successful counterbid (store in wei)
+    updateOurTopBid(taskId, 'blur', 'trait', identifier, Number(offerPrice), '');
 
     // Initialize and increment counterbidCounts after successful bid
     if (!counterbidCounts[taskId]) {
@@ -16589,6 +16841,9 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
       asset
     );
 
+    // Update ourTopBids store with the successful counterbid
+    updateOurTopBid(taskId, 'opensea', 'token', asset.tokenId.toString(), Number(offerPrice), '');
+
     if (!counterbidCounts[taskId]) {
       counterbidCounts[taskId] = {
         opensea: 0,
@@ -16684,6 +16939,9 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
       trait
     );
 
+    // Update ourTopBids store with the successful counterbid
+    updateOurTopBid(taskId, 'opensea', 'trait', identifier, Number(offerPrice), '');
+
     if (!counterbidCounts[taskId]) {
       counterbidCounts[taskId] = {
         opensea: 0,
@@ -16753,6 +17011,9 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
     }
 
     await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, (offerPrice as number).toString(), privateKey, slug, expiration, currency, undefined, tokenId)
+
+    // Update ourTopBids store with the successful counterbid
+    updateOurTopBid(_id, 'magiceden', 'token', tokenId.toString(), Number(offerPrice), '');
 
     // Initialize and increment counterbidCounts after successful bid
     if (!counterbidCounts[_id]) {
@@ -17012,6 +17273,9 @@ async function processBlurTraitBid(data: {
 
     await bidOnBlur(_id, bidCount, address, privateKey, contractAddress, traitOffer, slug, expiry, trait, data.batchInfo);
 
+    // Update ourTopBids store with the successful bid
+    // This scheduled bid has verified we are now the top bidder
+    updateOurTopBid(_id, 'blur', 'trait', identifier, Number(traitOffer), '');
 
   } catch (error: any) {
     const errorMessage = error?.message || String(error);
@@ -17742,6 +18006,10 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
       await bidOnMagiceden(currentTask._id, bidCount, currentTask.wallet, currentTask.contract.contractAddress, 1, colletionOffer.toString(), privateKey, currentTask.contract.slug, expiration, currency);
 
+      // Update ourTopBids store with the successful bid
+      // This scheduled bid has verified we are now the top bidder
+      updateOurTopBid(currentTask._id, 'magiceden', 'collection', 'collection', colletionOffer, '');
+
     } catch (bidError) {
       throw bidError; // Re-throw to be caught by outer catch
     }
@@ -17934,6 +18202,11 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
     await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, tokenOffer.toString(), privateKey, slug, expiration, currency, undefined, tokenId);
+
+    // Update ourTopBids store with the successful bid
+    // This scheduled bid has verified we are now the top bidder
+    updateOurTopBid(_id, 'magiceden', 'token', tokenId.toString(), tokenOffer, '');
+
   } catch (error: any) {
 
     logBidError(data._id, "MAGICEDEN TOKEN BID ERROR", `Error bidding on token ${data.tokenId} in collection ${data.slug}: ${error?.response?.data?.message || error?.message || String(error)}`, "error", "magiceden"); // Non-blocking
@@ -18160,6 +18433,11 @@ async function processMagicedenTraitBid(data: {
       const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
       await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, traitOffer.toString(), privateKey, slug, expiration, currency, trait)
+
+      // Update ourTopBids store with the successful bid
+      // This scheduled bid has verified we are now the top bidder
+      updateOurTopBid(_id, 'magiceden', 'trait', identifier, traitOffer, '');
+
     } catch (bidError) {
       logSystemError('MagicEdenTraitBid', `MagicEden trait bid failed for task ${_id}`, bidError, { taskId: _id });
       throw bidError; // Re-throw to be caught by outer catch
