@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Duplicate Bids / Bid Spamming Issue**: Fixed critical bug causing multiple bids on the same NFT tokens within seconds
+  - **Root Cause 1 - Premature Cache Deletion**: `seenOrderHashes.delete()` was called immediately after queuing counterbid jobs, allowing duplicate WebSocket messages to bypass deduplication before the job completed
+  - **Root Cause 2 - Missing `await` on Counterbid Handlers**: `handleOpenseaCounterbid()` and `handleMagicEdenCounterbid()` were called without `await`, creating race conditions where multiple concurrent messages could race through deduplication
+  - **Root Cause 3 - Rate Limiter at 2x Configured Limit**: Internal rate limiter was set to `RATE_LIMIT * 2`, effectively doubling the actual API request rate
+  - **Root Cause 4 - Fire-and-Forget processBulkJobs**: Initial token/trait bid jobs were queued without `await`, flooding the queue with hundreds of jobs simultaneously
+  - **Fix 1**: Removed all 7 `seenOrderHashes.delete()` calls across MagicEden and OpenSea counterbid handlers - now relies on 30-minute TTL for cache expiration
+    - Lines removed: 11791 (ME token), 11983 (ME trait), 12201 (ME collection), 12550 (OS token), 12794 (OS trait), 12984/12986 (OS collection - had duplicate delete calls)
+  - **Fix 2**: Added `await` to `handleOpenseaCounterbid()` and `handleMagicEdenCounterbid()` calls to ensure sequential processing per task
+  - **Fix 3**: Changed rate limiter from `RATE_LIMIT * 2` to `RATE_LIMIT` at line 6590
+  - **Fix 4**: Added `await` to all 4 `processBulkJobs()` calls (OpenSea token/trait at lines 14219/14273, MagicEden token/trait at lines 17245/17317)
+  - Files modified: `src/index.ts`
+  - Resolves: Duplicate bids on same tokens, HTTP 429 rate limit errors, bid spamming during counterbid scenarios
+  - Impact: Each incoming competitor bid now results in exactly one counterbid, not 4-5 duplicates
+
 ### Added
 - **Development-Only Rate Limit Debug Logging**: Added comprehensive diagnostics for tracking actual request rates
   - Logs actual RPS vs configured RATE_LIMIT every 5 seconds in development

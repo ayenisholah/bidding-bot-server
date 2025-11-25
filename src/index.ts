@@ -6587,7 +6587,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
   const progressUpdateInterval = 10000; // Update every 10 seconds
 
   // Create a simple rate limiter for queueing jobs at RATE_LIMIT per second
-  const rateLimiter = new RateLimiter(RATE_LIMIT * 2);
+  const rateLimiter = new RateLimiter(RATE_LIMIT);
 
   try {
     // Check Redis health before attempting bulk operations
@@ -11547,10 +11547,10 @@ async function handleCounterBidForTask(task: any, message: any) {
       await handleBlurCounterbid(message['1'], task)
     }
     else if (selectedMarketplaces.includes('opensea') && message.marketplace === OPENSEA) {
-      handleOpenseaCounterbid(message, task)
+      await handleOpenseaCounterbid(message, task)
     }
     else if (selectedMarketplaces.includes('magiceden') && message.marketplace === MAGICEDEN) {
-      handleMagicEdenCounterbid(message, task)
+      await handleMagicEdenCounterbid(message, task)
     } else {
     }
   } catch (error: any) {
@@ -11788,7 +11788,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         bidData
       );
 
-      seenOrderHashes.delete(taskSpecificHash);
+      // Removed: seenOrderHashes.delete(taskSpecificHash) - let TTL handle expiration to prevent duplicate bids
 
       if (orders.length > 0) {
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
@@ -11980,7 +11980,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       }
 
-      seenOrderHashes.delete(taskSpecificHash);
+      // Removed: seenOrderHashes.delete(taskSpecificHash) - let TTL handle expiration to prevent duplicate bids
 
       if (orders.length > 0) {
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
@@ -12198,7 +12198,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       } else {
       }
 
-      seenOrderHashes.delete(taskSpecificHash);
+      // Removed: seenOrderHashes.delete(taskSpecificHash) - let TTL handle expiration to prevent duplicate bids
     }
   } catch (error) {
   }
@@ -12547,7 +12547,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       // Log successful counterbid preparation
 
-      seenOrderHashes.delete(taskSpecificHash);
+      // Removed: seenOrderHashes.delete(taskSpecificHash) - let TTL handle expiration to prevent duplicate bids
     }
 
     if (data.event === "trait_offer") {
@@ -12791,7 +12791,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         // Log successful trait counterbid preparation
       }
 
-      seenOrderHashes.delete(taskSpecificHash);
+      // Removed: seenOrderHashes.delete(taskSpecificHash) - let TTL handle expiration to prevent duplicate bids
     }
 
     if (data.event === "collection_offer") {
@@ -12981,9 +12981,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
       if (counterbidsQueued > 0) {
       }
-      seenOrderHashes.delete(taskSpecificHash);
+      // Removed: seenOrderHashes.delete(taskSpecificHash) - let TTL handle expiration to prevent duplicate bids
     }
-    seenOrderHashes.delete(taskSpecificHash);
+    // Removed: seenOrderHashes.delete(taskSpecificHash) - duplicate deletion removed
   } catch (error) {
     logError('opensea', task._id.toString(), 'handleOpenseaCounterbid', 'Error in OpenSea counterbid handler', error);
   }
@@ -14215,8 +14215,8 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
             // Transition to QUEUEING state before creating jobs
             setTaskStatus(taskId, 'QUEUEING', 'queueing opensea token bid jobs', 'opensea');
 
-            // Fire-and-forget: processBulkJobs runs asynchronously to prevent timeout
-            processBulkJobs(jobs, true, scheduleJob);
+            // Wait for jobs to be queued with proper rate limiting
+            await processBulkJobs(jobs, true, scheduleJob);
 
             // Register for job creation verification
             registerJobCreationVerification(taskId, 'opensea', preprocessing.opensea.tokens.length);
@@ -14269,8 +14269,8 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
             // Transition to QUEUEING state before creating jobs
             setTaskStatus(taskId, 'QUEUEING', 'queueing opensea trait bid jobs', 'opensea');
 
-            // Fire-and-forget: processBulkJobs runs asynchronously to prevent timeout
-            processBulkJobs(traitJobs, true, scheduleJob);
+            // Wait for jobs to be queued with proper rate limiting
+            await processBulkJobs(traitJobs, true, scheduleJob);
 
             // Register for job creation verification
             registerJobCreationVerification(taskId, 'opensea', preprocessing.opensea.traits.length);
@@ -17241,8 +17241,8 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
             // Transition to QUEUEING state before creating jobs
             setTaskStatus(taskId, 'QUEUEING', 'queueing magiceden token bid jobs', 'magiceden');
 
-            // Fire-and-forget: processBulkJobs runs asynchronously to prevent timeout
-            processBulkJobs(jobs, true, scheduleJob);
+            // Wait for jobs to be queued with proper rate limiting
+            await processBulkJobs(jobs, true, scheduleJob);
 
             // Register for job creation verification
             registerJobCreationVerification(taskId, 'magiceden', preprocessing.magiceden.tokens.length);
@@ -17313,8 +17313,8 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
             // Transition to QUEUEING state before creating jobs
             setTaskStatus(taskId, 'QUEUEING', 'queueing magiceden trait bid jobs', 'magiceden');
 
-            // Fire-and-forget: processBulkJobs runs asynchronously to prevent timeout
-            processBulkJobs(traitJobs, true, scheduleJob);
+            // Wait for jobs to be queued with proper rate limiting
+            await processBulkJobs(traitJobs, true, scheduleJob);
 
             // Register for job creation verification
             registerJobCreationVerification(taskId, 'magiceden', preprocessing.magiceden.traits.length);
