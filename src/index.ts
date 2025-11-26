@@ -49,7 +49,7 @@ import axios from "axios";
 import { decryptPrivateKey, setPassword, getPassword, decryptPassword, recoverPasswordFromRedis, renewPasswordTTL, reEncryptWallet, clearDecryptedKeyCache } from "./utils/crypto";
 import { fetchWalletNFTs } from "./utils/nft";
 import { logger, ErrorCategory, DatabaseOperation } from "./utils/logger";
-import { getMarketplaceLogger, logError, logSystemError } from './utils/marketplace-file-logger';
+import { getMarketplaceLogger, logError, logSystemError, logSystemWarn } from './utils/marketplace-file-logger';
 import WebSocketManager from "./utils/websocket-manager";
 import { initializeListingScheduler, shutdownListingScheduler, scheduleListing, cancelListingJob, processListingJob } from "./functions/listingScheduler";
 import { initializeExpirationMonitor, stopExpirationMonitor } from "./functions/relistExpired";
@@ -7641,6 +7641,28 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
       reason: 'no_password'
     });
     return { success: false, reason: 'no_password' };
+  }
+
+  // Validate wallet exists before starting task (Fix #3: prevents wallet-not-found cascade errors)
+  const taskWallet = await walletCache.getWalletById(task.walletId);
+  if (!taskWallet) {
+    const safeWalletId = maskSensitiveIdentifier(task.walletId);
+    logSystemError('TaskStart', `Cannot start task ${task.contract?.slug || 'unknown'} - wallet ${safeWalletId} not found`, undefined, {
+      taskId: task._id,
+      walletId: safeWalletId,
+      reason: 'wallet_not_found'
+    });
+    return { success: false, reason: 'wallet_not_found' };
+  }
+
+  if (!taskWallet.encryptedPrivateKey) {
+    const safeWalletId = maskSensitiveIdentifier(task.walletId);
+    logSystemError('TaskStart', `Cannot start task ${task.contract?.slug || 'unknown'} - wallet ${safeWalletId} has no private key`, undefined, {
+      taskId: task._id,
+      walletId: safeWalletId,
+      reason: 'wallet_no_private_key'
+    });
+    return { success: false, reason: 'wallet_no_private_key' };
   }
 
   const startTime = Date.now();
@@ -18626,14 +18648,26 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
     const wallet = await walletCache.getWalletById(walletId);
 
     if (!wallet) {
-      logSystemError('BulkCancelOpensea', `Wallet ${safeWalletId} not found for task ${taskId}`, undefined, { walletId: safeWalletId, taskId });
-      throw new Error(`Wallet ${safeWalletId} not found`);
+      // Graceful handling: Log warning (not error), clean up DB order, and return without throwing
+      logSystemWarn('BulkCancelOpensea', `Wallet ${safeWalletId} not found for task ${taskId} - cleaning up order from DB`, { walletId: safeWalletId, taskId, orderId });
+      // Clean up the order from DB even though we can't cancel on marketplace
+      await Order.deleteMany({ _id: orderKey });
+      // Record completion since we've cleaned up our side
+      cancellationTracker.recordCompletion(taskId, 1, 'opensea');
+      await updateTaskCancellationPercentage(taskId, undefined, 'opensea');
+      decrementOwnBidCounter('opensea', 1);
+      return; // Don't throw - gracefully skip this order
     }
 
 
     if (!wallet.encryptedPrivateKey) {
-      logSystemError('BulkCancelOpensea', `No encryptedPrivateKey found for wallet ${safeWalletId}`, undefined, { walletId: safeWalletId, taskId });
-      throw new Error(`No encryptedPrivateKey found for wallet ${safeWalletId}`);
+      // Graceful handling: Log warning, clean up DB order, and return without throwing
+      logSystemWarn('BulkCancelOpensea', `No encryptedPrivateKey found for wallet ${safeWalletId} - cleaning up order from DB`, { walletId: safeWalletId, taskId, orderId });
+      await Order.deleteMany({ _id: orderKey });
+      cancellationTracker.recordCompletion(taskId, 1, 'opensea');
+      await updateTaskCancellationPercentage(taskId, undefined, 'opensea');
+      decrementOwnBidCounter('opensea', 1);
+      return; // Don't throw - gracefully skip this order
     }
 
     const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
@@ -18688,14 +18722,28 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
       const wallet = await walletCache.getWalletById(walletId);
 
       if (!wallet) {
-        logSystemError('BulkCancelMagiceden', `Wallet ${safeWalletId} not found for task ${taskId}`, undefined, { walletId: safeWalletId, taskId });
-        throw new Error(`Wallet ${safeWalletId} not found`);
+        // Graceful handling: Log warning, clean up DB orders, and return without throwing
+        logSystemWarn('BulkCancelMagiceden', `Wallet ${safeWalletId} not found for task ${taskId} - cleaning up orders from DB`, { walletId: safeWalletId, taskId });
+        await Order.deleteMany({ _id: { $in: orderKeys } });
+        const completedCount = batchSize || orderIds.length;
+        cancellationTracker.recordCompletion(taskId, completedCount, 'magiceden');
+        await updateTaskCancellationPercentage(taskId, undefined, 'magiceden');
+        decrementOwnBidCounter('magiceden', completedCount);
+        orderKeys.forEach(orderKey => magicedenOrdersBeingCancelled.delete(orderKey));
+        return; // Don't throw - gracefully skip these orders
       }
 
 
       if (!wallet.encryptedPrivateKey) {
-        logSystemError('BulkCancelMagiceden', `No encryptedPrivateKey found for wallet ${safeWalletId}`, undefined, { walletId: safeWalletId, taskId });
-        throw new Error(`No encryptedPrivateKey found for wallet ${safeWalletId}`);
+        // Graceful handling: Log warning, clean up DB orders, and return without throwing
+        logSystemWarn('BulkCancelMagiceden', `No encryptedPrivateKey found for wallet ${safeWalletId} - cleaning up orders from DB`, { walletId: safeWalletId, taskId });
+        await Order.deleteMany({ _id: { $in: orderKeys } });
+        const completedCount = batchSize || orderIds.length;
+        cancellationTracker.recordCompletion(taskId, completedCount, 'magiceden');
+        await updateTaskCancellationPercentage(taskId, undefined, 'magiceden');
+        decrementOwnBidCounter('magiceden', completedCount);
+        orderKeys.forEach(orderKey => magicedenOrdersBeingCancelled.delete(orderKey));
+        return; // Don't throw - gracefully skip these orders
       }
 
       const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
@@ -18748,101 +18796,114 @@ async function validateBidCount() {
     return;
   }
 
-  try {
-    const taskIds = currentTasks.map(task => task._id);
-    const now = new Date();
+  // Retry configuration for database resilience (Fix #4)
+  const MAX_RETRIES = 3;
+  const RETRY_DELAYS = [1000, 2000, 4000]; // exponential backoff: 1s, 2s, 4s
 
-    // Batch process all tasks in a single query using Mongodb's aggregate
-    const [orderCounts, expiredOrders] = await Promise.all([
-      // Get counts for all tasks grouped by taskId and marketplace
-      Order.aggregate([
-        {
-          $match: {
-            taskId: { $in: taskIds },
-            expiresAt: { $gt: now }  // Only count non-expired orders
-          }
-        },
-        {
-          $group: {
-            _id: { taskId: '$taskId', marketplace: '$marketplace' },
-            _count: { $sum: 1 }
-          }
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      await validateBidCountInternal();
+      return; // Success - exit the function
+    } catch (error) {
+      if (attempt < MAX_RETRIES - 1) {
+        // Log retry attempt and wait before retrying
+        logSystemWarn('ValidateBidCount', `Database operation failed, retrying (attempt ${attempt + 1}/${MAX_RETRIES})`, { attempt: attempt + 1 });
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
+        continue;
+      }
+      // Final attempt failed - log error and set defaults
+      for (const task of currentTasks) {
+        bidStats[task._id] = { opensea: 0, magiceden: 0, blur: 0 };
+      }
+      await logger.logError(ErrorCategory.DATABASE, 'Failed to validate bid counts after retries', { error: error instanceof Error ? error : new Error(String(error)) });
+      return;
+    }
+  }
+}
+
+async function validateBidCountInternal() {
+  const taskIds = currentTasks.map(task => task._id);
+  const now = new Date();
+
+  // Batch process all tasks in a single query using Mongodb's aggregate
+  const [orderCounts, expiredOrders] = await Promise.all([
+    // Get counts for all tasks grouped by taskId and marketplace
+    Order.aggregate([
+      {
+        $match: {
+          taskId: { $in: taskIds },
+          expiresAt: { $gt: now }  // Only count non-expired orders
         }
-      ]),
+      },
+      {
+        $group: {
+          _id: { taskId: '$taskId', marketplace: '$marketplace' },
+          _count: { $sum: 1 }
+        }
+      }
+    ]),
 
-      // Get all expired orders
-      Order.find({
-        taskId: { $in: taskIds },
-        expiresAt: { $lte: now }  // Already expired
-      }, '_id')  // Only need _id for deletion
+    // Get all expired orders
+    Order.find({
+      taskId: { $in: taskIds },
+      expiresAt: { $lte: now }  // Already expired
+    }, '_id')  // Only need _id for deletion
+  ]);
+
+  // Process order counts
+  const bidStatsMap: { [taskId: string]: { opensea: number; magiceden: number; blur: number } } = {};
+
+  // Initialize all tasks with zero counts
+  for (const task of currentTasks) {
+    bidStatsMap[task._id] = {
+      opensea: 0,
+      magiceden: 0,
+      blur: 0
+    };
+  }
+
+  // Populate counts from grouped results
+  for (const group of orderCounts) {
+    const marketplace = group._id.marketplace.toLowerCase();
+    const taskId = group._id.taskId;
+    if (bidStatsMap[taskId] && (marketplace === 'opensea' || marketplace === 'magiceden' || marketplace === 'blur')) {
+      bidStatsMap[taskId][marketplace as 'opensea' | 'magiceden' | 'blur'] = group._count;
+    }
+  }
+
+  // Update global bidStats
+  Object.assign(bidStats, bidStatsMap);
+
+  // Delete expired orders and update ownBidCounts
+  if (expiredOrders.length > 0) {
+    // First, count expired orders by marketplace for ownBidCounts
+    const expiredByMarketplace = await Order.aggregate([
+      {
+        $match: {
+          _id: { $in: expiredOrders.map(o => o._id) },
+          marketplace: { $in: ['opensea', 'magiceden'] } // Only track these two
+        }
+      },
+      {
+        $group: {
+          _id: '$marketplace',
+          count: { $sum: 1 }
+        }
+      }
     ]);
 
-    // Process order counts
-    const bidStatsMap: { [taskId: string]: { opensea: number; magiceden: number; blur: number } } = {};
-
-    // Initialize all tasks with zero counts
-    for (const task of currentTasks) {
-      bidStatsMap[task._id] = {
-        opensea: 0,
-        magiceden: 0,
-        blur: 0
-      };
-    }
-
-    // Populate counts from grouped results
-    for (const group of orderCounts) {
-      const marketplace = group._id.marketplace.toLowerCase();
-      const taskId = group._id.taskId;
-      if (bidStatsMap[taskId] && (marketplace === 'opensea' || marketplace === 'magiceden' || marketplace === 'blur')) {
-        bidStatsMap[taskId][marketplace as 'opensea' | 'magiceden' | 'blur'] = group._count;
+    // Decrement ownBidCounts for expired orders
+    for (const group of expiredByMarketplace) {
+      const marketplace = group._id.toLowerCase();
+      if (marketplace === 'opensea' || marketplace === 'magiceden') {
+        decrementOwnBidCounter(marketplace as 'opensea' | 'magiceden', group.count);
       }
     }
 
-    // Update global bidStats
-    Object.assign(bidStats, bidStatsMap);
-
-    // Delete expired orders and update ownBidCounts
-    if (expiredOrders.length > 0) {
-      // First, count expired orders by marketplace for ownBidCounts
-      const expiredByMarketplace = await Order.aggregate([
-        {
-          $match: {
-            _id: { $in: expiredOrders.map(o => o._id) },
-            marketplace: { $in: ['opensea', 'magiceden'] } // Only track these two
-          }
-        },
-        {
-          $group: {
-            _id: '$marketplace',
-            count: { $sum: 1 }
-          }
-        }
-      ]);
-
-      // Decrement ownBidCounts for expired orders
-      for (const group of expiredByMarketplace) {
-        const marketplace = group._id.toLowerCase();
-        if (marketplace === 'opensea' || marketplace === 'magiceden') {
-          decrementOwnBidCounter(marketplace as 'opensea' | 'magiceden', group.count);
-        }
-      }
-
-      // Now delete the expired orders
-      await Order.deleteMany({
-        _id: { $in: expiredOrders.map(o => o._id) }
-      });
-    }
-  } catch (error: any) {
-    // Handle database errors
-    // Set all bid stats to 0 when table doesn't exist
-    for (const task of currentTasks) {
-      bidStats[task._id] = {
-        opensea: 0,
-        magiceden: 0,
-        blur: 0
-      };
-    }
-    await logger.logError(ErrorCategory.DATABASE, 'Failed to validate bid counts', error);
+    // Now delete the expired orders
+    await Order.deleteMany({
+      _id: { $in: expiredOrders.map(o => o._id) }
+    });
   }
 }
 

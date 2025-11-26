@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Wallet Not Found Error Cascade Prevention**: Fixed cascade of 800+ errors triggered by deleted/missing wallets during bulk cancel operations
+  - **Root Cause**: When a wallet was deleted from MongoDB but tasks still referenced it, `bulkCancelOpenseaBid` and `bulkCancelMagicedenBid` threw errors that cascaded into multiple downstream failures
+  - **Error Cascade Pattern**: `Wallet not found` (199 errors) → `Failed to cancel OpenSea order` (204 errors) → `Failed to cancel order` (213 errors) → `Worker Job failed` (213 errors)
+  - **Solution**: Multi-layer fix to prevent wallet-related cascades:
+  - **Fix 1 - Graceful Handling in bulkCancelOpenseaBid**: Changed from throwing error to graceful handling
+    - Log warning instead of error when wallet not found
+    - Clean up order from database anyway (prevents orphaned orders)
+    - Update cancellation tracker and bid counter
+    - Return early without throwing (prevents cascade)
+  - **Fix 2 - Graceful Handling in bulkCancelMagicedenBid**: Applied same pattern for MagicEden
+  - **Fix 3 - Task Start Wallet Validation**: Added pre-flight wallet check in `startTaskInternal`
+    - Validates wallet exists before starting any task
+    - Validates wallet has `encryptedPrivateKey`
+    - Returns `{ success: false, reason: 'wallet_not_found' }` with structured error logging
+    - Prevents tasks from starting if wallet is missing
+  - **Fix 4 - Database Retry Logic**: Added retry mechanism to `validateBidCount`
+    - 3 retries with exponential backoff (1s, 2s, 4s delays)
+    - Extracted logic to `validateBidCountInternal()` for clean retry wrapper
+    - Falls back to zero counts on persistent failure (prevents crash)
+    - Reduces `titan_SERVER_DATABASE_FAILED` errors from transient DB issues
+  - Files modified: `src/index.ts` (bulkCancelOpenseaBid, bulkCancelMagicedenBid, startTaskInternal, validateBidCount)
+  - Files created: `docs/ERROR_TRACKING.md` (error catalog and troubleshooting guide)
+  - Resolves: 829 cascading errors from single root cause (wallet not found)
+  - Impact: Wallet lookup failures now handled gracefully without cascade, tasks cannot start with missing wallets
+
 - **Duplicate Token Counterbid Spamming (20+ bids on same token)**: Fixed critical race condition where multiple competitors bidding on the same token caused 20+ duplicate counterbids
   - **Root Cause**: Existing deduplication used `orderHash` (unique per competitor bid), not `tokenId`. When 20 competitors bid on token #6375, each had a unique orderHash → all 20 passed deduplication → 20 duplicate counterbids placed
   - **Solution**: Added token-level deduplication using `pendingCounterbids` BoundedCache to ensure only ONE counterbid job per token at a time
