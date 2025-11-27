@@ -15307,7 +15307,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
           colletionOffer = BigInt(Math.round(roundToValidPrecision(potentialNewBidEth) * Math.pow(10, decimal)));
           if (DEBUG_SCHEDULED_BID) {
-            console.log(`[ScheduledBid][OS-Collection] ${currentTask.contract.slug} | OwnBid: Lowering to ${potentialNewBidEth} (spread: ${spread} > margin: ${outbidMargin})`);
+            console.log(`[ScheduledBid][OS-Collection] ${currentTask.contract.slug} | OwnBid: Lowering to ${roundToValidPrecision(potentialNewBidEth)} (spread: ${roundToValidPrecision(spread)} > margin: ${outbidMargin})`);
           }
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
@@ -15337,7 +15337,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
         const newBidEth = (highestBidAmount / Math.pow(10, decimal)) + outbidMargin;
         colletionOffer = BigInt(Math.round(roundToValidPrecision(newBidEth) * Math.pow(10, decimal)));
         if (DEBUG_SCHEDULED_BID) {
-          console.log(`[ScheduledBid][OS-Collection] ${currentTask.contract.slug} | NotOwnBid: Outbidding at ${(highestBidAmount + outbidMargin * Math.pow(10, decimal)) / Math.pow(10, decimal)}`);
+          console.log(`[ScheduledBid][OS-Collection] ${currentTask.contract.slug} | NotOwnBid: Outbidding at ${roundToValidPrecision(newBidEth)}`);
         }
       }
     }
@@ -16560,7 +16560,7 @@ async function processOpenseaTraitBid(data: {
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
           traitOffer = BigInt(Math.round(roundToValidPrecision(potentialNewBidEth) * Math.pow(10, decimal)));
           if (DEBUG_SCHEDULED_BID) {
-            console.log(`[ScheduledBid][OS-Trait] ${slug}:${identifier} | OwnBid: Lowering to ${potentialNewBidEth} (spread: ${spread} > margin: ${outbidMargin})`);
+            console.log(`[ScheduledBid][OS-Trait] ${slug}:${identifier} | OwnBid: Lowering to ${roundToValidPrecision(potentialNewBidEth)} (spread: ${roundToValidPrecision(spread)} > margin: ${outbidMargin})`);
           }
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
@@ -16585,7 +16585,7 @@ async function processOpenseaTraitBid(data: {
         const newBidEth = (highestBidAmount / Math.pow(10, decimal)) + outbidMargin;
         traitOffer = BigInt(Math.round(roundToValidPrecision(newBidEth) * Math.pow(10, decimal)));
         if (DEBUG_SCHEDULED_BID) {
-          console.log(`[ScheduledBid][OS-Trait] ${slug}:${identifier} | NotOwnBid: Outbidding at ${(highestBidAmount + outbidMargin * Math.pow(10, decimal)) / Math.pow(10, decimal)}`);
+          console.log(`[ScheduledBid][OS-Trait] ${slug}:${identifier} | NotOwnBid: Outbidding at ${roundToValidPrecision(newBidEth)}`);
         }
       }
     }
@@ -16940,7 +16940,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
           // Large spread: lower our bid to just above second place
           tokenOffer = BigInt(Math.round(roundToValidPrecision(potentialNewBidEth) * Math.pow(10, decimal)));
           if (DEBUG_SCHEDULED_BID) {
-            console.log(`[ScheduledBid][OS-Token] ${slug}:${asset.tokenId} | OwnBid: Lowering to ${potentialNewBidEth} (spread: ${spread} > margin: ${outbidMargin})`);
+            console.log(`[ScheduledBid][OS-Token] ${slug}:${asset.tokenId} | OwnBid: Lowering to ${roundToValidPrecision(potentialNewBidEth)} (spread: ${roundToValidPrecision(spread)} > margin: ${outbidMargin})`);
           }
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
@@ -16969,7 +16969,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         const newBidEth = (highestBidAmount / Math.pow(10, decimal)) + outbidMargin;
         tokenOffer = BigInt(Math.round(roundToValidPrecision(newBidEth) * Math.pow(10, decimal)));
         if (DEBUG_SCHEDULED_BID) {
-          console.log(`[ScheduledBid][OS-Token] ${slug}:${asset.tokenId} | NotOwnBid: Outbidding at ${(highestBidAmount + (outbidMargin * Math.pow(10, decimal))) / Math.pow(10, decimal)}`);
+          console.log(`[ScheduledBid][OS-Token] ${slug}:${asset.tokenId} | NotOwnBid: Outbidding at ${roundToValidPrecision(newBidEth)}`);
         }
       }
 

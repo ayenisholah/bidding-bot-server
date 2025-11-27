@@ -17,6 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Files modified: `src/utils/balance.ts`
 
 ### Fixed
+- **Floating Point Precision in Debug Log Display**: Fixed debug log output showing ugly floating point values like `0.017499999999999998` instead of clean values like `0.0175`
+  - **Root Cause**: JavaScript floating point arithmetic produced values with excessive decimal places in debug log console.log statements
+  - **Solution**: Applied `roundToValidPrecision()` to all bid price values displayed in debug logs
+  - **Fixes Applied** (6 locations across 3 functions):
+    - `processOpenseaCollectionBid`: Lowering bid log (line 15310), Outbidding log (line 15340)
+    - `processOpenseaTraitBid`: Lowering bid log (line 16563), Outbidding log (line 16588)
+    - `processOpenseaTokenBid`: Lowering bid log (line 16943), Outbidding log (line 16972)
+  - Files modified: `src/index.ts`
+  - Resolves: Unreadable debug log output with 17+ decimal places
+  - Impact: Debug logs now display clean, human-readable bid prices
+
 - **OpenSea Offer Precision Compliance for Trait and Collection Bids**: Applied `roundToValidPrecision()` to all bid calculations in `processOpenseaTraitBid` and `processOpenseaCollectionBid`
   - **Root Cause**: While `processOpenseaTokenBid` was already fixed, trait and collection bid functions were missing precision rounding, violating OpenSea's requirements (January 28, 2025)
   - **Precision Rules**:
