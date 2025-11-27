@@ -7,7 +7,194 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **WETH Balance Debug Logging**: Added comprehensive debug logging for WETH balance fetch operations
+  - Enable via `DEBUG_WETH_BALANCE=true` environment variable
+  - Logs cache hits (fresh and stale), cache misses, and fresh fetch results
+  - Shows wallet address (truncated for privacy), balance in wei and ETH, and elapsed time
+  - Log format: `[WETH Balance] {action}: wallet={truncated}, balance={wei} ({eth} ETH), elapsed={ms}ms`
+  - Helps diagnose balance fetch issues and cache behavior
+  - Files modified: `src/utils/balance.ts`
+
 ### Fixed
+- **OpenSea Offer Precision Compliance for Trait and Collection Bids**: Applied `roundToValidPrecision()` to all bid calculations in `processOpenseaTraitBid` and `processOpenseaCollectionBid`
+  - **Root Cause**: While `processOpenseaTokenBid` was already fixed, trait and collection bid functions were missing precision rounding, violating OpenSea's requirements (January 28, 2025)
+  - **Precision Rules**:
+    - 0.0001-0.0999 ETH: 4 decimals allowed
+    - 0.100-0.999 ETH: 3 decimals allowed
+    - 1.00+ ETH: 2 decimals allowed
+  - **Bugs Fixed in `processOpenseaTraitBid`** (4 locations):
+    - Line 16560: Lowering bid - now uses `roundToValidPrecision(potentialNewBidEth)`
+    - Line 16577: Refresh same price - now uses `roundToValidPrecision(highestBidAmount / Math.pow(10, decimal))`
+    - Line 16584-16585: Outbid competitor - now calculates `newBidEth` and applies `roundToValidPrecision()`
+    - Line 16617: Min bid fallback - now uses `roundToValidPrecision(minBidPriceEth)`
+  - **Bugs Fixed in `processOpenseaCollectionBid`** (3 locations):
+    - Line 15308: Lowering bid - now uses `roundToValidPrecision(potentialNewBidEth)`
+    - Line 15330: Refresh same price - now uses `roundToValidPrecision(highestBidAmount / Math.pow(10, decimal))`
+    - Line 15337-15338: Outbid competitor - now calculates `newBidEth` and applies `roundToValidPrecision()`
+  - Files modified: `src/index.ts`
+  - Resolves: "Invalid bid precision" errors for trait and collection bids
+  - Impact: All OpenSea bid types (token, trait, collection) now comply with precision requirements
+
+- **OpenSea Offer Precision Compliance (January 28, 2025)**: Applied `roundToValidPrecision()` to all token bid price calculations in `processOpenseaTokenBid`
+  - **Root Cause**: OpenSea is enforcing new price-based decimal place limits for all offers starting January 28, 2025
+  - **Precision Rules**:
+    - 0.0001-0.0999 ETH: 4 decimals allowed (e.g., 0.0542 ETH valid, 0.00992 invalid)
+    - 0.100-0.999 ETH: 3 decimals allowed (e.g., 0.235 ETH valid, 0.1001 invalid)
+    - 1.00+ ETH: 2 decimals allowed (e.g., 1.05 ETH valid, 1.003 invalid)
+  - **Changes Applied**:
+    - Initial offer calculation now rounds via `roundToValidPrecision(offerPriceEth)`
+    - Lowering bid (spread > margin) now rounds `potentialNewBidEth` before conversion
+    - Renewing bid at same price now rounds `highestBidAmount` before conversion
+    - Outbidding competitor now rounds `newBidEth` before conversion
+    - Min bid price fallback now rounds `minBidPriceEth` before conversion
+  - Files modified: `src/index.ts:16874,16939,16959,16967-16968,16998`
+  - Resolves: Potential "invalid bid precision" errors from OpenSea API after January 28, 2025
+  - Impact: All OpenSea token bids will comply with new precision requirements
+
+### Changed
+- **Balance API Requests Get Highest Priority**: Balance fetch requests now use priority 0 (highest) in Bottleneck limiter
+  - Balance checks jump to the front of the queue even when bid requests are backed up
+  - Uses `limiter.schedule({ priority: 0 }, ...)` instead of default priority 5
+  - Files modified: `src/utils/balance.ts:47`
+  - Impact: Faster balance detection, prevents delayed insufficient balance errors when queue is busy
+
+- **WETH Balance Fetching via OpenSea GraphQL**: Replaced slow Alchemy RPC balance fetching with fast OpenSea GraphQL API
+  - **Root Cause**: Alchemy RPC calls for WETH balance were timing out massively (10+ seconds), causing cascading job failures and log flooding
+  - **Solution**: Use OpenSea's `addressBalances` GraphQL query which is faster and more reliable (already used for bids)
+  - **Lean GraphQL Query**: Minimal query fetching only `contractAddress`, `chain.identifier`, and `quantity` fields
+  - **Changes**:
+    - Created `fetchWethBalanceGraphQL()` function using OpenSea GraphQL API
+    - Updated `fetchERC20Balance()` to use GraphQL instead of Alchemy RPC
+    - Updated `fetchERC20BalanceFresh()` to use GraphQL instead of Alchemy RPC
+    - Integrated with existing Bottleneck rate limiter via `limiter.schedule()`
+    - Maintained existing Redis caching (60s fresh, 1hr stale fallback)
+    - Removed ethers `Contract` and `formatEther` imports (no longer needed)
+  - Files modified: `src/utils/balance.ts`
+  - Resolves: Balance fetch timeouts, log flooding, cascading job failures
+  - Impact: Balance fetching now uses OpenSea API (same as bids), eliminating Alchemy RPC timeout issues
+
+### Added
+- **Comprehensive Bid Trace Logging System**: Created production-ready bid trace logging for diagnosing duplicate bid issues (17-20+ bids on same token within seconds)
+  - **Purpose**: Track every bid attempt through its complete lifecycle with correlation IDs, enabling root cause analysis of duplicate bid issues
+  - **Type Definitions** (`src/types/bid-trace.types.ts`):
+    - `BidTraceEntry`: Complete bid event record with traceId, correlationId, stage, marketplace, taskId, tokenId, etc.
+    - `BidTraceStage`: Comprehensive stages - ws_received, dedup_orderhash_check/passed/blocked, dedup_pending_check/passed/blocked, top_bid_check/skip, job_queued/started/completed/failed, bid_api_start/success/error, cancel_start/complete, early_return
+    - `BidTraceFilter`, `BidTraceSummary`, `BidTraceContext` for querying and correlation
+  - **Logger Class** (`src/utils/bid-trace-logger.ts`):
+    - File-based JSON logging to `logs/bid-traces/bid-traces-{YYYY-MM-DD}.log`
+    - 1-day retention with automatic cleanup of old log files
+    - In-memory trace contexts with 5-minute TTL for elapsed time calculation
+    - Helper methods: `createTrace()`, `log()`, `logDedupCheck()`, `logJobQueued()`, `logBidResult()`, `logEarlyReturn()`, `logTopBidCheck()`
+    - Query methods: `getTraces()`, `findDuplicates()`, `exportTraces()` (JSON/CSV)
+    - Environment config: `BID_TRACE_ENABLED` (default true), `BID_TRACE_LEVEL` (default info)
+  - **WebSocket Handler Instrumentation**:
+    - `handleCounterBidForTask`: Creates trace with correlationId based on orderHash
+    - `handleOpenseaCounterbid`: Logs seenOrderHashes dedup, pendingCounterbids dedup, ourTopBids check, job queuing
+    - `handleMagicEdenCounterbid`: Same trace logging pattern
+    - `handleBlurCounterbid`: Key traces for dedup and job queuing
+  - **Job Processor Instrumentation** (all counterbid processors):
+    - `openseaTokenCounterBid`: Full lifecycle logging (job_started, early_return, cancel_start/complete, bid_api_start/success/error, job_completed/failed)
+    - `magicedenTokenCounterBid`: Same pattern
+    - `magicedenTraitCounterBid`: Same pattern
+    - `blurCollectionCounterBid`: Same pattern
+    - `blurTraitCounterBid`: Same pattern
+  - **Scheduled Bid Processor Instrumentation** (all 9 scheduled bid functions):
+    - `processOpenseaTokenBid`: Full lifecycle logging (job_started, all early_return reasons, bid_api_start/success/error, job_completed/failed)
+    - `processOpenseaTraitBid`: Same pattern with trait-specific traitKey tracking
+    - `processOpenseaCollectionBid`: Same pattern for collection-level bids
+    - `processMagicedenTokenBid`: Same pattern with tokenId tracking
+    - `processMagicedenTraitBid`: Same pattern with traitKey tracking
+    - `processMagicedenCollectionBid`: Same pattern for collection-level bids
+    - `processBlurCollectionBid`: Same pattern for collection-level bids
+    - `processBlurTraitBid`: Same pattern with traitKey tracking
+    - Early return reasons tracked: marketplace_stopped_insufficient_balance, no_enabled_marketplaces, task_not_active_or_marketplace_disabled, task_blacklisted, marketplace_not_selected, marketplace_disabled, stop_option_triggered, insufficient_balance, bid_still_valid, own_bid_still_valid_ttl, max_bid_price_exceeded, offer_exceeds_floor, below_minimum_offer
+  - **API Endpoints**:
+    - `GET /api/bid-traces?taskId=&tokenId=&marketplace=&stage=&startTime=&endTime=&limit=&offset=`: Query traces with filtering and pagination
+    - `GET /api/bid-traces/export?taskId=&format=json|csv`: Export traces for download
+    - `GET /api/bid-traces/duplicates?taskId=&tokenId=&timeWindowMs=`: Find duplicate bid groups for debugging
+  - **Interface Updates**: Added `traceContext?: BidTraceContext` to `IProcessOpenseaTokenBidData`, `IMagicedenTokenBidData`, `IMagicedenTraitBidData`, `IBlurBidData`
+  - Files created: `src/types/bid-trace.types.ts`, `src/utils/bid-trace-logger.ts`
+  - Files modified: `src/index.ts` (counterbid handlers, job processors, API endpoints)
+  - Resolves: Diagnosis of 17-20+ duplicate bids on same token, visibility into deduplication failures and race conditions
+  - Impact: Complete visibility into bid lifecycle from WebSocket receipt through API completion
+
+### Fixed
+- **Truncated Trace IDs in Console Output**: Fixed trace IDs being truncated to first 12 characters in console logs
+  - Root cause: `bid-trace-logger.ts` line 208 used `traceId.substring(0, 12)...` for console output
+  - Now displays full trace ID for easier correlation and debugging
+  - Files modified: `src/utils/bid-trace-logger.ts:208`
+  - Resolves: Difficulty correlating log entries when trace IDs appear truncated
+
+- **Balance Fetch Timeout Too Aggressive**: Increased balance fetch timeout from 5s to 10s to reduce timeout errors
+  - Root cause: 5-second timeout was too short for some Alchemy RPC responses under load
+  - Logs showed ~50 `[fetchERC20BalanceFresh] Failed` timeout errors in production
+  - Increased timeout to 10 seconds to account for network latency
+  - Improved error message to include actual error reason (not just elapsed time)
+  - Files modified: `src/utils/balance.ts:191-192,278-279`
+  - Resolves: Excessive balance fetch timeouts causing unnecessary stale cache fallbacks
+
+- **processOpenseaTokenBid Reliability Improvements**: Fixed multiple bugs and added comprehensive debug logging
+  - **Bug Fixes**:
+    - Order query now filters by `expiresAt: { $gt: new Date() }` to exclude expired orders (line 16729)
+    - Fixed duplicate wallet fetch - now validates wallet early and reuses for privateKey decryption
+    - Added proper null guards for TTL calculations when no active orders exist (prevents NaN/Invalid Date)
+    - Removed duplicate `errorStats` initialization (dead code)
+  - **Debug Logging**: Added `DEBUG_SCHEDULED_BID` environment variable for development debugging
+    - Logs order state: active orders count, TTL, current price, new offer
+    - Logs TTL skip decisions with reason
+    - Logs outbid logic decisions: isOwnBid, topBid, secondBid, margin
+    - Logs each outbid branch: lowering bid, cannot lower, skip, renew, outbid competitor
+  - **Trace Logging**: Added bid trace logging for:
+    - `wallet_not_found` early return
+    - `bid_still_valid` TTL skip with metadata (ttl, currentPrice, tokenOffer, expiry)
+  - Files modified: `src/index.ts`
+  - Enable debug: `DEBUG_SCHEDULED_BID=true`
+
+- **Reliable Top Bid Comparison for OpenSea Token Counterbids**: Fixed unreliable bid comparison that could skip valid counterbid opportunities
+  - **Root Cause**: The `handleOpenseaCounterbid` function used an in-memory `ourTopBids` store to compare incoming bids against our current bids. This store could become stale because:
+    1. Orders expire naturally but the store was never cleared on expiration
+    2. Store was not synchronized with the database
+    3. Could result in skipping valid counterbid opportunities when we thought we had a top bid that had actually expired
+  - **Solution**: Replace in-memory store lookup with Order model queries (source of truth)
+  - **Changes**:
+    - Handler Order query (line 12851): Added `expiresAt: { $gt: new Date() }` filter to only consider active orders
+    - Top bid check (line 12945): Replaced `getOurTopBid()` in-memory lookup with derivation from the already-queried `orders` array
+    - Job processor Order query (line 17731): Added `expiresAt: { $gt: new Date() }` filter for consistency
+    - Reduced `seenOrderHashes` cache TTL from 30 minutes to 5 minutes (line 381)
+  - Files modified: `src/index.ts`
+  - Resolves: Missed counterbid opportunities due to stale in-memory bid data
+  - Impact: Counterbid decisions now use reliable database queries filtered by order expiration
+
+- **processOpenseaTraitBid Reliability Improvements**: Fixed multiple bugs and added comprehensive debug logging
+  - **Bug Fixes**:
+    - Order query now filters by `expiresAt: { $gt: new Date() }` to exclude expired orders (line 16406)
+    - Added early wallet validation with `wallet_not_found` trace logging (prevents late cryptic errors)
+    - Added proper null guards for TTL calculations using `hasActiveOrder` check (prevents NaN/Invalid Date)
+  - **Debug Logging**: Uses same `DEBUG_SCHEDULED_BID` environment variable
+    - Logs order state: active orders count, TTL, current price, new offer
+    - Logs TTL skip decisions with reason
+    - Logs outbid logic decisions: isOwnBid, topBid, secondBid, margin
+    - Logs each outbid branch: lowering bid, cannot lower (below min), TTL skip, renew, outbid competitor
+  - **Trace Logging**: Added bid trace logging for:
+    - `wallet_not_found` early return with wallet metadata
+    - `bid_still_valid` TTL skip with metadata (ttl, currentPrice, traitOffer, expiry)
+  - Files modified: `src/index.ts` (processOpenseaTraitBid function lines 16269-16616)
+
+- **processOpenseaCollectionBid Reliability Improvements**: Fixed multiple bugs and added comprehensive debug logging
+  - **Bug Fixes**:
+    - Order query now filters by `expiresAt: { $gt: new Date() }` to exclude expired orders (line 15177)
+    - Added early wallet validation with `wallet_not_found` trace logging after task validation
+    - Removed duplicate wallet fetch - now validates early and reuses for privateKey decryption
+    - Added proper null guards for TTL calculations using `hasActiveOrder` check (prevents NaN/Invalid Date)
+  - **Debug Logging**: Uses same `DEBUG_SCHEDULED_BID` environment variable
+    - Logs order state: active orders count, TTL, current price, new offer
+    - Logs TTL skip decisions with reason
+    - Logs outbid logic decisions: isOwnBid, topBid, secondBid, margin
+    - Logs each outbid branch: lowering bid, cannot lower (below min), TTL skip, renew, outbid competitor
+  - **Trace Logging**: Added bid trace logging for `bid_still_valid` TTL skip with metadata
+  - Files modified: `src/index.ts` (processOpenseaCollectionBid function lines 15109-15453)
+
 - **Wallet Not Found Error Cascade Prevention**: Fixed cascade of 800+ errors triggered by deleted/missing wallets during bulk cancel operations
   - **Root Cause**: When a wallet was deleted from MongoDB but tasks still referenced it, `bulkCancelOpenseaBid` and `bulkCancelMagicedenBid` threw errors that cascaded into multiple downstream failures
   - **Error Cascade Pattern**: `Wallet not found` (199 errors) → `Failed to cancel OpenSea order` (204 errors) → `Failed to cancel order` (213 errors) → `Worker Job failed` (213 errors)
