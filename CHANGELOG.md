@@ -17,6 +17,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Files modified: `src/utils/balance.ts`
 
 ### Fixed
+- **Balance Log Display Format**: Fixed balance logs showing incorrect ETH values
+  - **Root Cause**: OpenSea GraphQL API returns balance in ETH format, but logs were applying `formatWeiToEth()` which divided by 1e18 again
+  - **Symptom**: Logs showed `balance=0.05 (0.000000 ETH)` instead of `balance=0.05 ETH`
+  - **Solution**: Removed redundant `formatWeiToEth()` calls from all 8 balance log statements
+  - Files modified: `src/utils/balance.ts` (lines 85, 125, 152, 177, 210, 239, 282, 316)
+  - Resolves: Confusing balance display in debug logs
+  - Impact: Balance logs now correctly show ETH values
+
+- **Redundant Redis Configuration Logging**: Fixed Redis config being logged 6 times on startup
+  - **Root Cause**: `getRedisConfig()` logs configuration but is called once per Redis client creation (6 clients)
+  - **Solution**: Added static flag `redisConfigLogged` to ensure config is logged only once
+  - Files modified: `src/utils/redis.ts`
+  - Resolves: Log noise during server startup
+  - Impact: Redis configuration logged once instead of 6 times
+
+
 - **Floating Point Precision in Debug Log Display**: Fixed debug log output showing ugly floating point values like `0.017499999999999998` instead of clean values like `0.0175`
   - **Root Cause**: JavaScript floating point arithmetic produced values with excessive decimal places in debug log console.log statements
   - **Solution**: Applied `roundToValidPrecision()` to all bid price values displayed in debug logs

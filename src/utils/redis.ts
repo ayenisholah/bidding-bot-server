@@ -4,18 +4,25 @@ import { logger, DatabaseOperation } from './logger';
 
 config()
 
+// Track if Redis config has been logged to avoid duplicate logs
+let redisConfigLogged = false;
+
 // Read Redis configuration at runtime to ensure Docker env vars are available
 export const getRedisConfig = () => {
   const host = process.env.REDIS_HOST || 'localhost';
   const port = parseInt(process.env.REDIS_PORT || '6379', 10);
-  
+
   // In production Docker environment, ensure we use the service name
   if (process.env.NODE_ENV === 'production' && host === 'localhost') {
     console.warn('[Redis] Production environment detected but REDIS_HOST not set, using "redis" service name');
     return { host: 'redis', port };
   }
-  
-  console.log(`[Redis] Configuration: host=${host}, port=${port}, env=${process.env.NODE_ENV}`);
+
+  // Only log config once to avoid duplicate log entries
+  if (!redisConfigLogged) {
+    console.log(`[Redis] Configuration: host=${host}, port=${port}, env=${process.env.NODE_ENV}`);
+    redisConfigLogged = true;
+  }
   return { host, port };
 };
 
