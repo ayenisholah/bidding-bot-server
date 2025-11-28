@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Active Bid Count Shows 0 After Server Restart**: Fixed "Active: 0 / 1" display bug where UI showed 0 active bids despite orders existing in database
+  - **Root Cause**: `bidStats` object was empty after server restart because `validateBidCount()` only runs every 60 seconds via setInterval. Clients connecting before the first interval tick received empty counts.
+  - **Solution**: Two-part fix ensures bidStats is always populated:
+    1. **Server Startup**: Call `validateBidCount()` immediately after `fetchCurrentTasks()` to populate bidStats before clients connect
+    2. **Task Start**: Initialize bidStats for each task when it starts by querying active orders from database
+  - **Changes**:
+    - Added `await validateBidCount()` call after `fetchCurrentTasks()` in server initialization (line ~3068)
+    - Added Order.aggregate query in `startTaskInternal()` to populate bidStats when task starts (lines ~7706-7726)
+    - Added fallback to empty counts with error logging if query fails
+  - Files modified: `src/index.ts`
+  - Resolves: Active count showing 0 even when bids were placed successfully
+  - Impact: UI immediately shows correct active bid counts after server restart and when tasks start
+
 ### Added
 - **WETH Balance Debug Logging**: Added comprehensive debug logging for WETH balance fetch operations
   - Enable via `DEBUG_WETH_BALANCE=true` environment variable

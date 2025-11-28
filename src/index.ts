@@ -3063,6 +3063,11 @@ async function startServer() {
 
     await fetchCurrentTasks()
 
+    // Initialize bid counts from database immediately after loading tasks
+    // This ensures bidStats is populated before clients connect (fixes Active:0 bug on server restart)
+    await validateBidCount();
+    console.log('✅ Bid counts initialized from database');
+
     // Start all tasks that have running: true in database
     // This handles server restarts where tasks were previously running
     let tasksToRestart = 0;
@@ -7697,6 +7702,28 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
   // Initialize top bids store from database for counterbid optimization
   // This loads any existing active orders so counterbid handlers can compare properly
   await initializeTopBidsFromDatabase(taskId, task.selectedMarketplaces);
+
+  // Initialize bidStats for this task from database (fixes Active:0 bug when task starts)
+  // This ensures the UI shows correct active bid count immediately
+  try {
+    const counts = await Order.aggregate([
+      { $match: { taskId: task._id, expiresAt: { $gt: new Date() } } },
+      { $group: { _id: '$marketplace', count: { $sum: 1 } } }
+    ]);
+    bidStats[task._id] = { opensea: 0, magiceden: 0, blur: 0 };
+    for (const c of counts) {
+      const mp = c._id?.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
+      if (mp === 'opensea' || mp === 'magiceden' || mp === 'blur') {
+        bidStats[task._id][mp] = c.count;
+      }
+    }
+  } catch (error) {
+    // Non-fatal: bidStats will be populated by periodic validateBidCount()
+    logSystemError('TaskStart', `Failed to initialize bidStats for task ${task.contract?.slug}`, error);
+    if (!bidStats[task._id]) {
+      bidStats[task._id] = { opensea: 0, magiceden: 0, blur: 0 };
+    }
+  }
 
   if (!marketplace) {
     skipStats[task._id] = {
