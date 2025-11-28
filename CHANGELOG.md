@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Unified Debug Logging System**: Consolidated 6 separate debug environment variables into a single `DEBUG=true` variable
+  - **Previous State**: 6 different debug variables across 5 files:
+    - `DEBUG_SCHEDULED_BID` (27 uses in index.ts)
+    - `DEBUG_TOP_BIDS` (11 uses in index.ts)
+    - `DEBUG_JOB_KEYS` (5 uses in index.ts)
+    - `DEBUG_WETH_BALANCE` (10 uses in balance.ts)
+    - `DEBUG_AXIOS_RETRY` (1 use in init.ts)
+    - `DEBUG` (9 uses in logger files)
+  - **Solution**: All replaced with single `const DEBUG = process.env.DEBUG === 'true'` at top of each file
+  - **Log Prefixes**: Consistent prefixes to distinguish log sources when DEBUG=true:
+    - `[ScheduledBid][OS-Token]` / `[ScheduledBid][OS-Trait]` - Scheduled bid decisions
+    - `[TopBids]` - Top bid store operations
+    - `[WETH Balance]` - Balance fetching
+    - `[JobKeys]` - Job deduplication
+    - `[BidFlow][OS-Token]` / `[BidFlow][OS-Trait]` - New comprehensive bid flow logs
+  - Files modified: `src/index.ts`, `src/utils/balance.ts`, `src/init.ts`, `.env`
+  - Resolves: Confusing multiple debug variables, inconsistent debug behavior
+  - Impact: Single `DEBUG=true` in .env now enables all debug logging across the codebase
+
+### Added
+- **Comprehensive BidFlow Debug Logging**: Added new `[BidFlow]` prefixed logs to track complete bid execution lifecycle
+  - **processOpenseaTokenBid** (~10 new log points):
+    - `[BidFlow][OS-Token] {slug}:{tokenId} | SKIP: Token not in active list`
+    - `[BidFlow][OS-Token] {slug}:{tokenId} | SKIP: Trading disabled (cached)`
+    - `[BidFlow][OS-Token] {slug}:{tokenId} | SKIP: Task not running or marketplace disabled`
+    - `[BidFlow][OS-Token] {slug}:{tokenId} | Floor: {price} ETH`
+    - `[BidFlow][OS-Token] {slug}:{tokenId} | STOP: Floor outside configured range`
+    - `[BidFlow][OS-Token] {slug}:{tokenId} | PriceCalc: offer={x} min={y} max={z} {currency}`
+    - `[BidFlow][OS-Token] {slug}:{tokenId} | SKIP: Insufficient balance`
+    - `[BidFlow][OS-Token] {slug}:{tokenId} | SKIP: Bid exceeds max`
+    - `[BidFlow][OS-Token] {slug}:{tokenId} | Cancelling {n} existing orders`
+    - `[BidFlow][OS-Token] {slug}:{tokenId} | PLACING BID: {amount} {currency}`
+  - **processOpenseaTraitBid** (~12 new log points):
+    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: Marketplace stopped (insufficient balance)`
+    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: Task blacklisted`
+    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: No marketplaces enabled`
+    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: OpenSea not enabled`
+    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: Task not running`
+    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: Marketplace completed or stopped`
+    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: Wallet not found`
+    - `[BidFlow][OS-Trait] {slug}:{trait} | Floor: {price} ETH | TraitFloor: {price} ETH`
+    - `[BidFlow][OS-Trait] {slug}:{trait} | STOP: Floor outside configured range`
+    - `[BidFlow][OS-Trait] {slug}:{trait} | PriceCalc: offer={x} min={y} max={z} {currency}`
+    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: Insufficient balance`
+    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: Bid exceeds max`
+    - `[BidFlow][OS-Trait] {slug}:{trait} | Cancelling {n} existing orders`
+    - `[BidFlow][OS-Trait] {slug}:{trait} | PLACING BID: {amount} {currency}`
+  - Files modified: `src/index.ts`
+  - Resolves: Missing visibility into early exit reasons and bid flow decisions
+  - Impact: Complete visibility into why bids are skipped, stopped, or placed
+
 ### Fixed
 - **Active Bid Count Shows 0 After Server Restart**: Fixed "Active: 0 / 1" display bug where UI showed 0 active bids despite orders existing in database
   - **Root Cause**: `bidStats` object was empty after server restart because `validateBidCount()` only runs every 60 seconds via setInterval. Clients connecting before the first interval tick received empty counts.

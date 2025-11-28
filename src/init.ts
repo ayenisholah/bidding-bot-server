@@ -7,6 +7,9 @@ import { wrapAxiosInstance, jobContext } from "./utils/axios-wrapper";
 
 config()
 
+// Debug logging controlled by single environment variable
+const DEBUG = process.env.DEBUG === 'true';
+
 let limiter: Bottleneck;
 let axiosInstance: AxiosInstance;
 let countLoggerInterval: NodeJS.Timeout | null = null;
@@ -81,7 +84,7 @@ const retryConfig: IAxiosRetryConfig = {
   },
   onRetry: (_retryCount, _error, _requestConfig) => {
     // Only log retries in development mode or for specific debugging
-    if (process.env.DEBUG_AXIOS_RETRY === 'true') {
+    if (DEBUG) {
       // console.log(`[Axios Retry] Attempt ${_retryCount} for ${_requestConfig.url} - Status: ${_error.response?.status || 'Network Error'}`);
     }
   }

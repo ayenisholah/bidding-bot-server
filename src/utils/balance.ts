@@ -9,8 +9,8 @@ const getRedis = () => redisClient.getClient()
 
 const WETH_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2".toLowerCase();
 
-// Debug logging controlled by environment variable
-const DEBUG_WETH_BALANCE = process.env.DEBUG_WETH_BALANCE === 'true';
+// Debug logging controlled by single environment variable
+const DEBUG = process.env.DEBUG === 'true';
 
 function formatWeiToEth(wei: number): string {
   return (wei / 1e18).toFixed(6);
@@ -41,7 +41,7 @@ interface BalanceResponse {
 async function fetchWethBalanceGraphQL(walletAddress: string): Promise<number> {
   const startTime = Date.now();
 
-  if (DEBUG_WETH_BALANCE) {
+  if (DEBUG) {
     console.log(`[WETH Balance] GraphQL fetch starting: wallet=${truncateAddress(walletAddress)}`);
   }
 
@@ -80,7 +80,7 @@ async function fetchWethBalanceGraphQL(walletAddress: string): Promise<number> {
 
   const balance = wethBalance ? Number(wethBalance.quantity) : 0;
 
-  if (DEBUG_WETH_BALANCE) {
+  if (DEBUG) {
     const elapsed = Date.now() - startTime;
     console.log(`[WETH Balance] GraphQL fetch complete: wallet=${truncateAddress(walletAddress)}, balance=${balance} ETH, elapsed=${elapsed}ms`);
   }
@@ -121,7 +121,7 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
     if (redis) {
       const cachedBalance = await redis.get(cacheKey);
       if (cachedBalance) {
-        if (DEBUG_WETH_BALANCE) {
+        if (DEBUG) {
           console.log(`[WETH Balance] Cache hit (fresh): wallet=${truncateAddress(walletAddress)}, balance=${cachedBalance} ETH`);
         }
         return Number(cachedBalance);
@@ -148,7 +148,7 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
           if (redis) {
             const cachedBalanceAfterLock = await redis.get(cacheKey);
             if (cachedBalanceAfterLock) {
-              if (DEBUG_WETH_BALANCE) {
+              if (DEBUG) {
                 console.log(`[WETH Balance] Cache hit (after lock): wallet=${truncateAddress(walletAddress)}, balance=${cachedBalanceAfterLock} ETH`);
               }
               return Number(cachedBalanceAfterLock);
@@ -173,7 +173,7 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
             console.warn('Failed to cache balance:', error);
           }
 
-          if (DEBUG_WETH_BALANCE) {
+          if (DEBUG) {
             console.log(`[WETH Balance] Fresh fetch success: wallet=${truncateAddress(walletAddress)}, balance=${balance} ETH`);
           }
 
@@ -206,7 +206,7 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
       console.warn('Failed to get stale cache:', error);
     }
     if (staleBalance) {
-      if (DEBUG_WETH_BALANCE) {
+      if (DEBUG) {
         console.log(`[WETH Balance] Stale cache fallback: wallet=${truncateAddress(walletAddress)}, balance=${staleBalance} ETH`);
       }
       return Number(staleBalance);
@@ -235,7 +235,7 @@ export async function fetchERC20BalanceFresh(walletAddress: string, _tokenAddres
     if (redis) {
       const cachedBalance = await redis.get(cacheKey);
       if (cachedBalance) {
-        if (DEBUG_WETH_BALANCE) {
+        if (DEBUG) {
           console.log(`[WETH Balance Fresh] Cache hit: wallet=${truncateAddress(walletAddress)}, balance=${cachedBalance} ETH`);
         }
         return Number(cachedBalance);
@@ -277,7 +277,7 @@ export async function fetchERC20BalanceFresh(walletAddress: string, _tokenAddres
               console.warn('Failed to cache balance:', error);
             }
 
-            if (DEBUG_WETH_BALANCE) {
+            if (DEBUG) {
               const elapsed = Date.now() - startTime;
               console.log(`[WETH Balance Fresh] Fresh fetch success: wallet=${truncateAddress(walletAddress)}, balance=${balance} ETH, elapsed=${elapsed}ms`);
             }
@@ -312,7 +312,7 @@ export async function fetchERC20BalanceFresh(walletAddress: string, _tokenAddres
       if (redis) {
         const staleBalance = await redis.get(staleCacheKey);
         if (staleBalance) {
-          if (DEBUG_WETH_BALANCE) {
+          if (DEBUG) {
             console.log(`[WETH Balance Fresh] Stale cache fallback: wallet=${truncateAddress(walletAddress)}, balance=${staleBalance} ETH`);
           }
           return Number(staleBalance);

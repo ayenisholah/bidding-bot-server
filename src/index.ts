@@ -89,6 +89,10 @@ if (process.env.NODE_ENV === 'development') {
   console.log(`[STARTUP] API_KEY loaded successfully (${API_KEY.substring(0, 8)}...)`);
 }
 
+// Debug configuration - single variable controls all debug logging
+// Replaces: DEBUG_SCHEDULED_BID, DEBUG_TOP_BIDS, DEBUG_JOB_KEYS, DEBUG_WETH_BALANCE, DEBUG_AXIOS_RETRY
+const DEBUG = process.env.DEBUG === 'true';
+
 const bidStats: BidCounts = {};
 const ownBidCounts: { [marketplace: string]: number } = {};
 const processedOwnBids: Set<string> = new Set(); // Track processed own bid hashes
@@ -297,7 +301,7 @@ function updateOurTopBid(
     ourTopBids[taskId][marketplace].traits[identifier!] = entry;
   }
 
-  if (process.env.DEBUG_TOP_BIDS === 'true') {
+  if (DEBUG) {
     console.log(`[TopBids] Updated ${marketplace}/${bidType}/${identifier || 'collection'} for task ${taskId}: ${price}`);
   }
 }
@@ -320,7 +324,7 @@ function clearOurTopBid(
     delete taskBids.traits[identifier];
   }
 
-  if (process.env.DEBUG_TOP_BIDS === 'true') {
+  if (DEBUG) {
     console.log(`[TopBids] Cleared ${marketplace}/${bidType}/${identifier || 'collection'} for task ${taskId}`);
   }
 }
@@ -328,7 +332,7 @@ function clearOurTopBid(
 // Clean up when task stops
 function clearTaskTopBids(taskId: string): void {
   delete ourTopBids[taskId];
-  if (process.env.DEBUG_TOP_BIDS === 'true') {
+  if (DEBUG) {
     console.log(`[TopBids] Cleared all bids for task ${taskId}`);
   }
 }
@@ -360,7 +364,7 @@ async function initializeTopBidsFromDatabase(taskId: string, marketplaces: strin
       updateOurTopBid(taskId, marketplace, bidType, identifier, Number(order.offerPrice), order.orderHash);
     }
 
-    if (process.env.DEBUG_TOP_BIDS === 'true') {
+    if (DEBUG) {
       console.log(`[TopBids] Initialized ${activeOrders.length} bids from database for task ${taskId}`);
     }
   } catch (error) {
@@ -7415,7 +7419,7 @@ async function checkForDuplicateJobs(queue: Queue, jobsToAdd: Array<{ name: stri
     });
 
     const duplicatesFound = jobsToAdd.length - nonDuplicateJobs.length;
-    if (duplicatesFound > 0 || process.env.DEBUG_JOB_KEYS === 'true') {
+    if (duplicatesFound > 0 || DEBUG) {
     }
 
     return nonDuplicateJobs;
@@ -7451,7 +7455,7 @@ function createJobKey(job: Job) {
   const marketplace = jobNameParts[0]?.toLowerCase() || 'unknown';
 
   // Log key creation start for debugging
-  if (process.env.DEBUG_JOB_KEYS === 'true') {
+  if (DEBUG) {
   }
 
   switch (job.name) {
@@ -7491,7 +7495,7 @@ function createJobKey(job: Job) {
     default:
       // Fix: Include marketplace in collection jobs
       uniqueKey = `${marketplace}-collection`;
-      if (process.env.DEBUG_JOB_KEYS === 'true') {
+      if (DEBUG) {
       }
   }
   const baseKey = `${job?.data?._id}`
@@ -7502,7 +7506,7 @@ function createJobKey(job: Job) {
   const key = `bid-${baseKey}-${uniqueKey}-${slug}-${walletAddress}`
 
   // Enhanced debug logging for key generation
-  if (process.env.DEBUG_JOB_KEYS === 'true') {
+  if (DEBUG) {
   }
 
   return key
@@ -7516,7 +7520,7 @@ function generateJobKey(job: any): string {
   const key = `${taskId}-${contractSlug}-${name}`;
 
   // Log generateJobKey usage
-  if (process.env.DEBUG_JOB_KEYS === 'true') {
+  if (DEBUG) {
   }
 
   return key;
@@ -12154,7 +12158,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
 
       // Only counterbid if incoming bid is HIGHER than our top bid
       if (incomingBidAmount <= ourTopBidPrice) {
-        if (process.env.DEBUG_TOP_BIDS === 'true') {
+        if (DEBUG) {
           console.log(`[Counterbid] Skipping ME token ${tokenId} - incoming ${incomingBidAmount} <= our top bid ${ourTopBidPrice}`);
         }
         if (traceId) {
@@ -12334,7 +12338,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
 
       // Only counterbid if incoming bid is HIGHER than our top bid
       if (incomingBidAmount <= ourTopBidPrice) {
-        if (process.env.DEBUG_TOP_BIDS === 'true') {
+        if (DEBUG) {
           console.log(`[Counterbid] Skipping ME trait ${identifier} - incoming ${incomingBidAmount} <= our top bid ${ourTopBidPrice}`);
         }
         return;
@@ -12563,7 +12567,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
 
         // Only counterbid if incoming bid is HIGHER than our top bid for this identifier
         if (incomingBidAmount <= ourTopBidPrice) {
-          if (process.env.DEBUG_TOP_BIDS === 'true') {
+          if (DEBUG) {
             console.log(`[Counterbid] Skipping ME collection counterbid for ${order.identifier} - incoming ${incomingBidAmount} <= our top bid ${ourTopBidPrice}`);
           }
           continue;
@@ -12982,7 +12986,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
       // This means someone outbid us and we need to respond
       if (BigInt(incomingBidAmount) <= ourTopBidPrice) {
         // Incoming bid is not higher than our bid - we're still on top or it's irrelevant
-        if (process.env.DEBUG_TOP_BIDS === 'true') {
+        if (DEBUG) {
           console.log(`[Counterbid] Skipping OS token ${tokenId} - incoming ${incomingBidAmount} <= our active order ${ourTopBidPrice}`);
         }
         if (traceId) {
@@ -13230,7 +13234,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
 
       // Only counterbid if incoming bid is HIGHER than our top bid
       if (incomingBidAmount <= ourTopBidPrice) {
-        if (process.env.DEBUG_TOP_BIDS === 'true') {
+        if (DEBUG) {
           console.log(`[Counterbid] Skipping OS trait ${identifier} - incoming ${incomingBidAmount} <= our top bid ${ourTopBidPrice}`);
         }
         return;
@@ -13479,7 +13483,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
 
         // Only counterbid if incoming bid is HIGHER than our top bid for this identifier
         if (incomingBidAmount <= ourTopBidPrice) {
-          if (process.env.DEBUG_TOP_BIDS === 'true') {
+          if (DEBUG) {
             console.log(`[Counterbid] Skipping OS collection counterbid for ${order.identifier} - incoming ${incomingBidAmount} <= our top bid ${ourTopBidPrice}`);
           }
           continue;
@@ -13760,7 +13764,7 @@ async function
 
         // Only counterbid if incoming bid is HIGHER than our top bid
         if (incomingPrice <= ourTopBidPriceEth) {
-          if (process.env.DEBUG_TOP_BIDS === 'true') {
+          if (DEBUG) {
             console.log(`[Counterbid] Skipping Blur trait ${identifier} - incoming ${incomingPrice} <= our top bid ${ourTopBidPriceEth}`);
           }
           if (traceId) {
@@ -13955,7 +13959,7 @@ async function
         // Only counterbid if incoming bid is HIGHER than our top bid for this identifier
         // Note: incomingPriceWei is already in wei, ourTopBidPrice is also in wei
         if (incomingPriceWei <= ourTopBidPrice) {
-          if (process.env.DEBUG_TOP_BIDS === 'true') {
+          if (DEBUG) {
             console.log(`[Counterbid] Skipping Blur collection counterbid for ${order.identifier} - incoming ${incomingPriceWei} <= our top bid ${ourTopBidPrice}`);
           }
           continue;
@@ -15284,8 +15288,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       : expiry;
 
     // Debug logging for order state
-    const DEBUG_SCHEDULED_BID = process.env.DEBUG_SCHEDULED_BID === 'true';
-    if (DEBUG_SCHEDULED_BID) {
+    if (DEBUG) {
       console.log(`[ScheduledBid][OS-Collection] ${currentTask.contract.slug} | Active orders: ${orders.length} | TTL: ${ttl.toFixed(0)}s | CurrentPrice: ${currentPrice} | NewOffer: ${colletionOffer}`);
     }
 
@@ -15296,7 +15299,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
           correlationId, marketplace: 'opensea', taskId, collectionSlug: currentTask.contract.slug, bidType: 'collection',
           metadata: { ttl: ttl.toFixed(0), currentPrice, colletionOffer: colletionOffer.toString(), orderExpiration, expiry }
         });
-        if (DEBUG_SCHEDULED_BID) {
+        if (DEBUG) {
           console.log(`[ScheduledBid][OS-Collection] ${currentTask.contract.slug} | SKIP: Bid still valid (TTL: ${ttl.toFixed(0)}s >= ${MIN_BID_DURATION}s)`);
         }
         return;
@@ -15320,7 +15323,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
         .includes(owner);
 
       // Debug logging for outbid decisions
-      if (DEBUG_SCHEDULED_BID) {
+      if (DEBUG) {
         console.log(`[ScheduledBid][OS-Collection] ${currentTask.contract.slug} | Outbid: isOwnBid=${isOwnBid} | TopBid: ${highestBidAmount / Math.pow(10, decimal)} | SecondBid: ${secondTopBidAmount / Math.pow(10, decimal)} | Margin: ${outbidMargin}`);
       }
 
@@ -15333,18 +15336,18 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
           colletionOffer = BigInt(Math.round(roundToValidPrecision(potentialNewBidEth) * Math.pow(10, decimal)));
-          if (DEBUG_SCHEDULED_BID) {
+          if (DEBUG) {
             console.log(`[ScheduledBid][OS-Collection] ${currentTask.contract.slug} | OwnBid: Lowering to ${roundToValidPrecision(potentialNewBidEth)} (spread: ${roundToValidPrecision(spread)} > margin: ${outbidMargin})`);
           }
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
           // Large spread but potential bid below min: keep current offer (don't lower below min)
-          if (DEBUG_SCHEDULED_BID) {
+          if (DEBUG) {
             console.log(`[ScheduledBid][OS-Collection] ${currentTask.contract.slug} | OwnBid: Cannot lower - potentialBid ${potentialNewBidEth} < minBid ${minBidPriceEth}`);
           }
         }
         else if (ttl > MIN_BID_DURATION) {
-          if (DEBUG_SCHEDULED_BID) {
+          if (DEBUG) {
             console.log(`[ScheduledBid][OS-Collection] ${currentTask.contract.slug} | OwnBid: SKIP - TTL ${ttl.toFixed(0)}s > ${MIN_BID_DURATION}s`);
           }
           bidTraceLogger.logEarlyReturn(traceId, 'own_bid_still_valid_ttl', {
@@ -15355,7 +15358,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
         }
         else {
           colletionOffer = BigInt(Math.round(roundToValidPrecision(highestBidAmount / Math.pow(10, decimal)) * Math.pow(10, decimal)));
-          if (DEBUG_SCHEDULED_BID) {
+          if (DEBUG) {
             console.log(`[ScheduledBid][OS-Collection] ${currentTask.contract.slug} | OwnBid: Refreshing bid at same price ${highestBidAmount / Math.pow(10, decimal)}`);
           }
         }
@@ -15363,7 +15366,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       else {
         const newBidEth = (highestBidAmount / Math.pow(10, decimal)) + outbidMargin;
         colletionOffer = BigInt(Math.round(roundToValidPrecision(newBidEth) * Math.pow(10, decimal)));
-        if (DEBUG_SCHEDULED_BID) {
+        if (DEBUG) {
           console.log(`[ScheduledBid][OS-Collection] ${currentTask.contract.slug} | NotOwnBid: Outbidding at ${roundToValidPrecision(newBidEth)}`);
         }
       }
@@ -16379,6 +16382,9 @@ async function processOpenseaTraitBid(data: {
     bidTraceLogger.logEarlyReturn(traceId, 'marketplace_stopped_insufficient_balance', {
       correlationId, marketplace: 'opensea', taskId: data._id, collectionSlug: data.slug, bidType: 'trait', traitKey
     });
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Trait] ${data.slug}:${traitKey} | SKIP: Marketplace stopped (insufficient balance)`);
+    }
     return;
   }
 
@@ -16392,6 +16398,9 @@ async function processOpenseaTraitBid(data: {
     bidTraceLogger.logEarlyReturn(traceId, 'task_blacklisted', {
       correlationId, marketplace: 'opensea', taskId: data._id, collectionSlug: data.slug, bidType: 'trait', traitKey
     });
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Trait] ${data.slug}:${traitKey} | SKIP: Task blacklisted`);
+    }
     return;
   }
 
@@ -16400,12 +16409,18 @@ async function processOpenseaTraitBid(data: {
       bidTraceLogger.logEarlyReturn(traceId, 'no_enabled_marketplaces', {
         correlationId, marketplace: 'opensea', taskId: data._id, collectionSlug: data.slug, bidType: 'trait', traitKey
       });
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Trait] ${data.slug}:${traitKey} | SKIP: No marketplaces enabled`);
+      }
       return;
     }
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) {
       bidTraceLogger.logEarlyReturn(traceId, 'opensea_not_enabled', {
         correlationId, marketplace: 'opensea', taskId: data._id, collectionSlug: data.slug, bidType: 'trait', traitKey
       });
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Trait] ${data.slug}:${traitKey} | SKIP: OpenSea not enabled`);
+      }
       return;
     }
 
@@ -16415,6 +16430,9 @@ async function processOpenseaTraitBid(data: {
       bidTraceLogger.logEarlyReturn(traceId, 'task_not_running', {
         correlationId, marketplace: 'opensea', taskId: data._id, collectionSlug: data.slug, bidType: 'trait', traitKey
       });
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Trait] ${data.slug}:${traitKey} | SKIP: Task not running`);
+      }
       return;
     }
 
@@ -16423,6 +16441,9 @@ async function processOpenseaTraitBid(data: {
       bidTraceLogger.logEarlyReturn(traceId, 'marketplace_completed_or_stopped', {
         correlationId, marketplace: 'opensea', taskId: data._id, collectionSlug: data.slug, bidType: 'trait', traitKey
       });
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Trait] ${data.slug}:${traitKey} | SKIP: Marketplace completed or stopped`);
+      }
       return;
     }
 
@@ -16436,6 +16457,9 @@ async function processOpenseaTraitBid(data: {
         traitKey,
         metadata: { walletId, hasWallet: !!wallet, hasPrivateKey: !!wallet?.encryptedPrivateKey }
       });
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Trait] ${slug}:${traitKey} | SKIP: Wallet not found`);
+      }
       return;
     }
     const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
@@ -16445,7 +16469,12 @@ async function processOpenseaTraitBid(data: {
     const parsedTrait = JSON.parse(trait);
 
     const currentTask = activeTasks.get(_id)
-    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) { return; }
+    if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) {
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Trait] ${slug}:${traitKey} | SKIP: Task not running or marketplace disabled`);
+      }
+      return;
+    }
 
 
     // Initialize stats early
@@ -16489,21 +16518,35 @@ async function processOpenseaTraitBid(data: {
 
     floorPrices[_id].opensea = floor_price as number;
 
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Trait] ${slug}:${identifier} | Floor: ${floor_price} ETH${traitFloor ? ` | TraitFloor: ${traitFloor} ETH` : ''}`);
+    }
+
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false, traitFloor, identifier)
     if (stopBid) {
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Trait] ${slug}:${identifier} | STOP: Floor ${floor_price} outside configured range`);
+      }
       if (orders.length > 0) {
-        const cancelData = orders.map((order, index) => {
+        const cancelData = orders.map((order) => {
           return {
             name: CANCEL_OPENSEA_BID,
             data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id },
           }
         })
         await queue.addBulk(cancelData)
+        if (DEBUG) {
+          console.log(`[BidFlow][OS-Trait] ${slug}:${identifier} | Cancelling ${orders.length} existing orders`);
+        }
       }
       return
     }
 
     const { maxBidPriceEth, offerPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Trait] ${slug}:${identifier} | PriceCalc: offer=${offerPriceEth} min=${minBidPriceEth} max=${maxBidPriceEth} ${currencySymbol}`);
+    }
 
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
@@ -16518,6 +16561,9 @@ async function processOpenseaTraitBid(data: {
         "skipped",
         "opensea"
       );
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Trait] ${slug}:${identifier} | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} ${currencySymbol}`);
+      }
       return;
     }
 
@@ -16537,8 +16583,7 @@ async function processOpenseaTraitBid(data: {
       : expiry;
 
     // Debug logging for order state
-    const DEBUG_SCHEDULED_BID = process.env.DEBUG_SCHEDULED_BID === 'true';
-    if (DEBUG_SCHEDULED_BID) {
+    if (DEBUG) {
       console.log(`[ScheduledBid][OS-Trait] ${slug}:${identifier} | Active orders: ${orders.length} | TTL: ${ttl.toFixed(0)}s | CurrentPrice: ${currentPrice} | NewOffer: ${traitOffer}`);
     }
 
@@ -16550,7 +16595,7 @@ async function processOpenseaTraitBid(data: {
           traitKey: identifier,
           metadata: { ttl: ttl.toFixed(0), currentPrice, traitOffer: traitOffer.toString(), orderExpiration, expiry }
         });
-        if (DEBUG_SCHEDULED_BID) {
+        if (DEBUG) {
           console.log(`[ScheduledBid][OS-Trait] ${slug}:${identifier} | SKIP: Bid still valid (TTL: ${ttl.toFixed(0)}s >= ${MIN_BID_DURATION}s)`);
         }
         return;
@@ -16574,7 +16619,7 @@ async function processOpenseaTraitBid(data: {
         .includes(owner as string);
 
       // Debug logging for outbid decisions
-      if (DEBUG_SCHEDULED_BID) {
+      if (DEBUG) {
         console.log(`[ScheduledBid][OS-Trait] ${slug}:${identifier} | Outbid: isOwnBid=${isOwnBid} | TopBid: ${highestBidAmount / Math.pow(10, decimal)} | SecondBid: ${secondTopBidAmount / Math.pow(10, decimal)} | Margin: ${outbidMargin}`);
       }
 
@@ -16586,24 +16631,24 @@ async function processOpenseaTraitBid(data: {
 
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
           traitOffer = BigInt(Math.round(roundToValidPrecision(potentialNewBidEth) * Math.pow(10, decimal)));
-          if (DEBUG_SCHEDULED_BID) {
+          if (DEBUG) {
             console.log(`[ScheduledBid][OS-Trait] ${slug}:${identifier} | OwnBid: Lowering to ${roundToValidPrecision(potentialNewBidEth)} (spread: ${roundToValidPrecision(spread)} > margin: ${outbidMargin})`);
           }
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
           // Large spread but potential bid below min: keep current offer (don't lower below min)
-          if (DEBUG_SCHEDULED_BID) {
+          if (DEBUG) {
             console.log(`[ScheduledBid][OS-Trait] ${slug}:${identifier} | OwnBid: Cannot lower - potentialBid ${potentialNewBidEth} < minBid ${minBidPriceEth}`);
           }
         }
         else if (ttl > MIN_BID_DURATION) {
-          if (DEBUG_SCHEDULED_BID) {
+          if (DEBUG) {
             console.log(`[ScheduledBid][OS-Trait] ${slug}:${identifier} | OwnBid: SKIP - TTL ${ttl.toFixed(0)}s > ${MIN_BID_DURATION}s`);
           }
           return;
         } else {
           traitOffer = BigInt(Math.round(roundToValidPrecision(highestBidAmount / Math.pow(10, decimal)) * Math.pow(10, decimal)));
-          if (DEBUG_SCHEDULED_BID) {
+          if (DEBUG) {
             console.log(`[ScheduledBid][OS-Trait] ${slug}:${identifier} | OwnBid: Refreshing bid at same price ${highestBidAmount / Math.pow(10, decimal)}`);
           }
         }
@@ -16611,7 +16656,7 @@ async function processOpenseaTraitBid(data: {
       else {
         const newBidEth = (highestBidAmount / Math.pow(10, decimal)) + outbidMargin;
         traitOffer = BigInt(Math.round(roundToValidPrecision(newBidEth) * Math.pow(10, decimal)));
-        if (DEBUG_SCHEDULED_BID) {
+        if (DEBUG) {
           console.log(`[ScheduledBid][OS-Trait] ${slug}:${identifier} | NotOwnBid: Outbidding at ${roundToValidPrecision(newBidEth)}`);
         }
       }
@@ -16625,10 +16670,13 @@ async function processOpenseaTraitBid(data: {
       skipStats[_id]['opensea']++;
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${slug} trait ${trait} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR OPENSEA.Skipping ...`.toUpperCase()
       logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea"); // Non-blocking
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Trait] ${slug}:${identifier} | SKIP: Bid ${offerEth} exceeds max ${maxBidPriceEth} ${currencySymbol}`);
+      }
 
       if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
         if (orders.length > 0) {
-          const cancelData = orders.map((order, index) => {
+          const cancelData = orders.map((order) => {
             return {
               name: CANCEL_OPENSEA_BID,
               data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id },
@@ -16646,6 +16694,9 @@ async function processOpenseaTraitBid(data: {
     }
 
     if (orders.length > 0) {
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Trait] ${slug}:${identifier} | Cancelling ${orders.length} existing orders before new bid`);
+      }
       await cancelOpenseaOrdersDirectly({
         taskId: _id,
         walletId,
@@ -16655,6 +16706,11 @@ async function processOpenseaTraitBid(data: {
         identifier,
         reason: 'placing_new_bid'
       });
+    }
+
+    if (DEBUG) {
+      const finalOfferEth = Number(traitOffer) / Math.pow(10, decimal);
+      console.log(`[BidFlow][OS-Trait] ${slug}:${identifier} | PLACING BID: ${finalOfferEth} ${currencySymbol}`);
     }
 
     try {
@@ -16799,6 +16855,9 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       bidTraceLogger.logEarlyReturn(traceId, 'token_not_in_currentTokenIds', {
         correlationId, marketplace: 'opensea', taskId: _id, collectionSlug: slug, bidType: 'token', tokenId: asset.tokenId.toString()
       });
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Token] ${slug}:${asset.tokenId} | SKIP: Token not in active list`);
+      }
       return;
     }
 
@@ -16818,6 +16877,9 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       }
       // Error tracking is now handled in queue event handlers
 
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Token] ${slug}:${asset.tokenId} | SKIP: Trading disabled (cached)`);
+      }
       return;
     }
 
@@ -16826,6 +16888,9 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       bidTraceLogger.logEarlyReturn(traceId, 'task_not_running_or_marketplace_disabled', {
         correlationId, marketplace: 'opensea', taskId: _id, collectionSlug: slug, bidType: 'token', tokenId: asset.tokenId.toString()
       });
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Token] ${slug}:${asset.tokenId} | SKIP: Task not running or marketplace disabled`);
+      }
       return;
     }
 
@@ -16863,8 +16928,15 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
     floorPrices[_id].opensea = floor_price as number;
 
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Token] ${slug}:${asset.tokenId} | Floor: ${floor_price} ETH`);
+    }
+
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false)
     if (stopBid) {
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Token] ${slug}:${asset.tokenId} | STOP: Floor ${floor_price} outside configured range`);
+      }
       if (orders.length > 0) {
         const cancelData = orders.map((order, index) => {
           return {
@@ -16875,11 +16947,19 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
         // Log cancellation enqueue
         queue.addBulk(cancelData)
+        if (DEBUG) {
+          console.log(`[BidFlow][OS-Token] ${slug}:${asset.tokenId} | Cancelling ${orders.length} existing orders`);
+        }
       }
       return
     }
 
     const { maxBidPriceEth, offerPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Token] ${slug}:${asset.tokenId} | PriceCalc: offer=${offerPriceEth} min=${minBidPriceEth} max=${maxBidPriceEth} ${currencySymbol}`);
+    }
+
     const outbidOptions = currentTask.outbidOptions
     const expiry = getExpiry(currentTask.bidDuration)
     const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
@@ -16897,6 +16977,9 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         "skipped",
         "opensea"
       );
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Token] ${slug}:${asset.tokenId} | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} ${currencySymbol}`);
+      }
       return;
     }
 
@@ -16912,8 +16995,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       : expiry;
 
     // Debug logging for order state
-    const DEBUG_SCHEDULED_BID = process.env.DEBUG_SCHEDULED_BID === 'true';
-    if (DEBUG_SCHEDULED_BID) {
+    if (DEBUG) {
       console.log(`[ScheduledBid][OS-Token] ${slug}:${asset.tokenId} | Active orders: ${orders.length} | TTL: ${ttl.toFixed(0)}s | CurrentPrice: ${currentPrice} | NewOffer: ${tokenOffer}`);
     }
 
@@ -16925,7 +17007,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
           tokenId: asset.tokenId.toString(),
           metadata: { ttl: ttl.toFixed(0), currentPrice, tokenOffer: tokenOffer.toString(), orderExpiration, expiry }
         });
-        if (DEBUG_SCHEDULED_BID) {
+        if (DEBUG) {
           console.log(`[ScheduledBid][OS-Token] ${slug}:${asset.tokenId} | SKIP: Bid still valid (TTL: ${ttl.toFixed(0)}s >= ${MIN_BID_DURATION}s)`);
         }
         return;
@@ -16954,7 +17036,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         .map(addr => addr.address.toLowerCase())
         .includes(owner);
 
-      if (DEBUG_SCHEDULED_BID) {
+      if (DEBUG) {
         console.log(`[ScheduledBid][OS-Token] ${slug}:${asset.tokenId} | Outbid: isOwnBid=${isOwnBid} | TopBid: ${highestBidAmount / Math.pow(10, decimal)} | SecondBid: ${secondTopBidAmount / Math.pow(10, decimal)} | Margin: ${outbidMargin}`);
       }
 
@@ -16966,27 +17048,27 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
           // Large spread: lower our bid to just above second place
           tokenOffer = BigInt(Math.round(roundToValidPrecision(potentialNewBidEth) * Math.pow(10, decimal)));
-          if (DEBUG_SCHEDULED_BID) {
+          if (DEBUG) {
             console.log(`[ScheduledBid][OS-Token] ${slug}:${asset.tokenId} | OwnBid: Lowering to ${roundToValidPrecision(potentialNewBidEth)} (spread: ${roundToValidPrecision(spread)} > margin: ${outbidMargin})`);
           }
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
           // Large spread but potential bid below min: keep current offer (don't lower below min)
-          if (DEBUG_SCHEDULED_BID) {
+          if (DEBUG) {
             console.log(`[ScheduledBid][OS-Token] ${slug}:${asset.tokenId} | OwnBid: Cannot lower - potentialBid ${potentialNewBidEth} < minBid ${minBidPriceEth}`);
           }
           // tokenOffer stays at original offerPriceEth-based value
         }
         else if (ttl > MIN_BID_DURATION) {
           // Our bid is still valid with sufficient TTL
-          if (DEBUG_SCHEDULED_BID) {
+          if (DEBUG) {
             console.log(`[ScheduledBid][OS-Token] ${slug}:${asset.tokenId} | OwnBid: SKIP - bid still valid (TTL: ${ttl.toFixed(0)}s)`);
           }
           return;
         } else {
           // Renew at same price
           tokenOffer = BigInt(Math.round(roundToValidPrecision(highestBidAmount / Math.pow(10, decimal)) * Math.pow(10, decimal)));
-          if (DEBUG_SCHEDULED_BID) {
+          if (DEBUG) {
             console.log(`[ScheduledBid][OS-Token] ${slug}:${asset.tokenId} | OwnBid: Renewing at same price ${highestBidAmount / Math.pow(10, decimal)}`);
           }
         }
@@ -16995,7 +17077,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         // Not our bid: outbid the current top bidder
         const newBidEth = (highestBidAmount / Math.pow(10, decimal)) + outbidMargin;
         tokenOffer = BigInt(Math.round(roundToValidPrecision(newBidEth) * Math.pow(10, decimal)));
-        if (DEBUG_SCHEDULED_BID) {
+        if (DEBUG) {
           console.log(`[ScheduledBid][OS-Token] ${slug}:${asset.tokenId} | NotOwnBid: Outbidding at ${roundToValidPrecision(newBidEth)}`);
         }
       }
@@ -17022,6 +17104,9 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${slug} ${asset.tokenId} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR OPENSEA.Skipping ...`.toUpperCase()
       skipStats[_id].opensea++;
       logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea");
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Token] ${slug}:${asset.tokenId} | SKIP: Bid ${offerEth} exceeds max ${maxBidPriceEth} ${currencySymbol}`);
+      }
       return;
     } else if (offerEth < minBidPriceEth) {
       tokenOffer = BigInt(Math.round(roundToValidPrecision(minBidPriceEth) * Math.pow(10, decimal)));
@@ -17029,7 +17114,10 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
     // Cancel existing orders only when we're actually proceeding with the bid
     if (orders.length > 0) {
-      const cancelData = orders.map((order, index) => {
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Token] ${slug}:${asset.tokenId} | Cancelling ${orders.length} existing orders before new bid`);
+      }
+      const cancelData = orders.map((order) => {
         return {
           name: CANCEL_OPENSEA_BID,
           data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id }
@@ -17038,6 +17126,11 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
       // Log cancellation enqueue
       queue.addBulk(cancelData)
+    }
+
+    if (DEBUG) {
+      const finalOfferEth = Number(tokenOffer) / Math.pow(10, decimal);
+      console.log(`[BidFlow][OS-Token] ${slug}:${asset.tokenId} | PLACING BID: ${finalOfferEth} ${currencySymbol}`);
     }
 
     try {
