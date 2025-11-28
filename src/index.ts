@@ -6356,8 +6356,17 @@ async function updateTaskData(task: ITask) {
     existingTask.loopInterval.unit !== task.loopInterval.unit;
 
   const wallet = await walletCache.getWalletById(task.walletId)
-  currentTasks.splice(existingTaskIndex, 1, dbTask.toObject());
-  activeTasks.set(task._id, dbTask.toObject());
+
+  // Ensure _id and user are strings for consistency with fetchCurrentTasks()
+  // This fixes the bug where bid price changes don't take effect until task restart
+  const updatedTask = {
+    ...dbTask.toObject(),
+    _id: dbTask._id.toString(),
+    user: dbTask.user?.toString() || task.user
+  } as ITask;
+
+  currentTasks.splice(existingTaskIndex, 1, updatedTask);
+  activeTasks.set(task._id, updatedTask);
   updateTaskIndexes(currentTasks);
 
   if (process.env.NODE_ENV === 'development') {
@@ -11933,6 +11942,18 @@ async function handleCounterBidForTask(task: any, message: any) {
 async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: string) {
   // Structured log: start
   try {
+    // Extract bid data early for logging
+    const orderHash = data?.data?.id
+    const maker = data?.data?.maker?.toLowerCase()
+    const bidType = data?.data?.criteria?.kind
+    const tokenId = +data?.data?.criteria?.data?.token?.tokenId;  // Will be NaN if not present
+    const eth_price_raw = Number(data?.data?.price?.amount?.native)
+    const makerFormatted = maker ? `${maker.slice(0, 6)}...${maker.slice(-4)}` : 'unknown';
+    const bidTypeDisplay = bidType === 'token' ? `Token #${tokenId}` : bidType === 'collection' ? 'Collection' : bidType;
+
+    if (DEBUG) {
+      console.log(`[Counterbid][ME] ${task.contract.slug} | WS Event: bid.created | Type: ${bidTypeDisplay} | Price: ${eth_price_raw} ETH | Maker: ${makerFormatted}`);
+    }
 
     const currentTask = activeTasks.get(task._id)
     if (!currentTask) {
@@ -11957,7 +11978,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
     };
 
     const expiration = getExpiry(currentTask.bidDuration)
-    const orderHash = data?.data?.id
 
     // Include task ID in the hash to make it task-specific
     // Use atomic check-and-add to prevent race conditions in concurrent handlers
@@ -11973,9 +11993,14 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
       });
     }
     if (!dedupPassed) {
+      if (DEBUG) {
+        console.log(`[Counterbid][ME] ${task.contract.slug} | Dedup Check: orderHash=${orderHash} | Result: BLOCKED`);
+      }
       return;  // Already being processed by another handler
     }
-    const maker = data?.data?.maker?.toLowerCase()
+    if (DEBUG) {
+      console.log(`[Counterbid][ME] ${task.contract.slug} | Dedup Check: orderHash=${orderHash} | Result: PASS`);
+    }
 
     // Parallel fetch wallet data and all wallets
     const [taskWallet, allWallets] = await Promise.all([
@@ -11990,9 +12015,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
 
     const walletAddresses = allWallets.map((wallet) => wallet.address.toLowerCase())
 
-    // Extract bid data before wallet check
-    const bidType = data?.data?.criteria?.kind
-    const tokenId = +data?.data?.criteria?.data?.token?.tokenId;
+    // Extract remaining bid data (bidType, tokenId already extracted at top for logging)
     const usdPrice = Number(data?.data?.price?.amount?.usd)
     const eth_price = Number(data?.data?.price?.amount?.native)
 
@@ -12015,16 +12038,18 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
 
 
     if (walletAddresses.includes(maker)) {
+      if (DEBUG) {
+        console.log(`[Counterbid][ME] ${task.contract.slug} | Own Bid: SKIP (maker=${makerFormatted})`);
+      }
       if (traceId) bidTraceLogger.logEarlyReturn(traceId, 'Own bid detected', { marketplace: 'magiceden', taskId: task._id?.toString(), orderHash });
       incrementOwnBidCounter('magiceden', orderHash);
       return
     }
 
-    // Comprehensive logging for MagicEden counterbid
-    const makerFormatted = maker ? `${maker.slice(0, 6)}...${maker.slice(-4)}` : 'unknown';
-    const bidTypeDisplay = bidType === 'token' ? `Token #${tokenId}` : 'Collection';
-
     if (!currentTask.outbidOptions.counterbid) {
+      if (DEBUG) {
+        console.log(`[Counterbid][ME] ${task.contract.slug} | SKIP: Counterbid disabled for task`);
+      }
       if (traceId) bidTraceLogger.logEarlyReturn(traceId, 'Counterbid disabled for task', { marketplace: 'magiceden', taskId: task._id?.toString() });
       return;
     }
@@ -12097,8 +12122,14 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
         });
       }
       if (!pendingPassed) {
+        if (DEBUG) {
+          console.log(`[Counterbid][ME] ${task.contract.slug} [${tokenId}] | Pending Check: BLOCKED (counterbid already pending)`);
+        }
         // Another counterbid for this token is already pending - skip
         return;
+      }
+      if (DEBUG) {
+        console.log(`[Counterbid][ME] ${task.contract.slug} [${tokenId}] | Pending Check: PASS`);
       }
 
       // Check cache first
@@ -12122,12 +12153,23 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
 
       const { maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
       const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal)
+
+      if (DEBUG) {
+        console.log(`[Counterbid][ME] ${task.contract.slug} [${tokenId}] | Price Check: incoming=${incomingBidAmountEth} min=${minBidPriceEth} max=${maxBidPriceEth} ${currencySymbol}`);
+      }
+
       if (incomingBidAmountEth < minBidPriceEth) {
+        if (DEBUG) {
+          console.log(`[Counterbid][ME] ${task.contract.slug} [${tokenId}] | Price Check: BELOW_MIN - SKIP`);
+        }
         // Return silently when incoming bid is less than min bid price
         clearCounterbidPending(task._id, 'magiceden', tokenId.toString());
         return;
       }
       if (incomingBidAmountEth > maxBidPriceEth) {
+        if (DEBUG) {
+          console.log(`[Counterbid][ME] ${task.contract.slug} [${tokenId}] | Price Check: ABOVE_MAX - SKIP`);
+        }
         const message = `incoming bid ${incomingBidAmountEth} ${currencySymbol} for ${task.contract.slug}: ${tokenId} is greater than max bid price ${maxBidPriceEth} ${currencySymbol}. Skipping ...`.toUpperCase()
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "magiceden");
         clearCounterbidPending(task._id, 'magiceden', tokenId.toString());
@@ -12226,6 +12268,12 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
         traceContext: traceId ? { traceId, correlationId: orderHash || traceId, startTime: Date.now() } : undefined
       }
 
+
+      if (DEBUG) {
+        const ourTopBidEth = ourTopBidPrice / Math.pow(10, decimal);
+        console.log(`[Counterbid][ME] ${task.contract.slug} [${tokenId}] | Top Bid Check: incoming=${incomingBidAmountEth} ourTop=${ourTopBidEth} | Action: QUEUE`);
+        console.log(`[Counterbid][ME] ${task.contract.slug} [${tokenId}] | QUEUEING JOB: offerPrice=${offerPriceEth} ${currencySymbol}`);
+      }
 
       try {
         const job = await queue.add(
@@ -12695,6 +12743,26 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
 
 async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string) {
   try {
+    // Extract bid data early for logging
+    const eventType = data.event;  // item_received_bid, trait_offer, collection_offer
+    const maker = data?.payload?.payload?.maker?.address?.toLowerCase()
+    const makerFormatted = maker ? `${maker.slice(0, 6)}...${maker.slice(-4)}` : 'unknown';
+    const orderHash = data?.payload?.payload?.order_hash;
+    const base_price_raw = Number(data?.payload?.payload?.base_price);
+    const symbol = data?.payload?.payload?.payment_token?.symbol?.toLowerCase();
+    const paymentTokenDecimal = Number(data?.payload?.payload?.payment_token?.decimals);
+    const incomingPriceDisplay = base_price_raw / Math.pow(10, paymentTokenDecimal);
+
+    // Determine bid type for logging
+    const tokenIdForLog = eventType === "item_received_bid" ?
+      data?.payload?.payload?.protocol_data?.parameters?.consideration?.find((item: any) => item.token.toLowerCase() === task.contract.contractAddress.toLowerCase())?.identifierOrCriteria : null;
+    const traitForLog = eventType === "trait_offer" ?
+      `${data?.payload?.payload?.trait_criteria?.trait_type}:${data?.payload?.payload?.trait_criteria?.trait_name}` : null;
+    const bidTypeDisplay = tokenIdForLog ? `Token #${tokenIdForLog}` : traitForLog ? `Trait: ${traitForLog}` : 'Collection';
+
+    if (DEBUG) {
+      console.log(`[Counterbid][OS] ${task.contract.slug} | WS Event: ${eventType} | Type: ${bidTypeDisplay} | Price: ${incomingPriceDisplay} ${symbol?.toUpperCase()} | Maker: ${makerFormatted}`);
+    }
 
     const currentTask = activeTasks.get(task._id)
     if (!currentTask) {
@@ -12721,12 +12789,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
     const expiry = getExpiry(currentTask.bidDuration)
     const outbidOptions = currentTask.outbidOptions
 
-    const maker = data?.payload?.payload?.maker?.address.toLowerCase()
+    // maker, symbol, paymentTokenDecimal already extracted at top for logging
     const quantity = Number(data?.payload?.payload?.quantity) || 1
     const base_price: number = Number(data?.payload?.payload?.base_price) / quantity;
     const eth_price: number = Number(data?.payload?.payload?.payment_token?.eth_price)
-    const symbol = data?.payload?.payload?.payment_token?.symbol?.toLowerCase()
-    const paymentTokenDecimal = Number(data?.payload?.payload?.payment_token?.decimals)
     const usd_price = Number(data?.payload?.payload?.payment_token?.usd_price)
     const etherPrice = usd_price / eth_price
 
@@ -12776,8 +12842,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
       value: data.payload.payload.trait_criteria.trait_name
     } : null
 
-    const orderHash = data.payload.payload.order_hash
-
+    // orderHash already extracted at top for logging
     const detectedBidType = tokenId ? 'token' : (trait ? 'trait' : 'collection');
 
     // Initialize bestOffers and currentTokenIds BEFORE any early returns
@@ -12815,10 +12880,19 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
       });
     }
     if (!dedupPassed) {
+      if (DEBUG) {
+        console.log(`[Counterbid][OS] ${task.contract.slug} | Dedup Check: orderHash=${orderHash} | Result: BLOCKED`);
+      }
       return;  // Already being processed by another handler
+    }
+    if (DEBUG) {
+      console.log(`[Counterbid][OS] ${task.contract.slug} | Dedup Check: orderHash=${orderHash} | Result: PASS`);
     }
 
     if (walletAddresses.includes(maker)) {
+      if (DEBUG) {
+        console.log(`[Counterbid][OS] ${task.contract.slug} | Own Bid: SKIP (maker=${makerFormatted})`);
+      }
       if (traceId) bidTraceLogger.logEarlyReturn(traceId, 'Own bid detected', { marketplace: 'opensea', taskId: task._id?.toString(), orderHash });
       incrementOwnBidCounter('opensea', orderHash);
       return
@@ -12829,6 +12903,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
 
 
     if (!outbidOptions.counterbid) {
+      if (DEBUG) {
+        console.log(`[Counterbid][OS] ${task.contract.slug} | SKIP: Counterbid disabled for task`);
+      }
       if (traceId) bidTraceLogger.logEarlyReturn(traceId, 'Counterbid disabled for task', { marketplace: 'opensea', taskId: task._id?.toString() });
       return;
     }
@@ -12933,14 +13010,19 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
 
       const { maxBidPriceEth, minBidPriceEth, currency } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
 
-      // VALIDATION: Log floor price and calculated limits for debugging
-      if (process.env.NODE_ENV === 'development') {
-        console.log(`[Counterbid] OpenSea Token Bid - Slug: ${task.contract.slug}, Token: ${tokenId}, Floor: ${floor_price} ETH, Min: ${minBidPriceEth} ETH, Max: ${maxBidPriceEth} ETH`);
+      if (DEBUG) {
+        console.log(`[Counterbid][OS] ${task.contract.slug} [${tokenId}] | Price Check: incoming=${incomingBidAmountEth} min=${minBidPriceEth} max=${maxBidPriceEth} ${currencySymbol}`);
       }
 
       if (incomingBidAmountEth < minBidPriceEth) {
+        if (DEBUG) {
+          console.log(`[Counterbid][OS] ${task.contract.slug} [${tokenId}] | Price Check: BELOW_MIN - SKIP`);
+        }
         return
       } else if (incomingBidAmountEth > maxBidPriceEth) {
+        if (DEBUG) {
+          console.log(`[Counterbid][OS] ${task.contract.slug} [${tokenId}] | Price Check: ABOVE_MAX - SKIP`);
+        }
         const reason = `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
         const message = `incoming bid ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: ${tokenId} ${reason}. Skipping ...`.toUpperCase()
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
@@ -13077,8 +13159,14 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
         });
       }
       if (!pendingPassed) {
+        if (DEBUG) {
+          console.log(`[Counterbid][OS] ${task.contract.slug} [${tokenId}] | Pending Check: BLOCKED (counterbid already pending)`);
+        }
         // Another counterbid for this token is already pending - skip
         return;
+      }
+      if (DEBUG) {
+        console.log(`[Counterbid][OS] ${task.contract.slug} [${tokenId}] | Pending Check: PASS`);
       }
 
       const asset = {
@@ -13087,6 +13175,13 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
       }
 
       const tokenOfferPriceForQueue = Math.ceil(Number(tokenOffer))
+
+      if (DEBUG) {
+        const ourTopBidEth = Number(ourTopBidPrice) / Math.pow(10, decimal);
+        console.log(`[Counterbid][OS] ${task.contract.slug} [${tokenId}] | Top Bid Check: incoming=${incomingBidAmountEth} ourTop=${ourTopBidEth} | Action: QUEUE`);
+        console.log(`[Counterbid][OS] ${task.contract.slug} [${tokenId}] | QUEUEING JOB: offerPrice=${offerPriceEth} ${currencySymbol}`);
+      }
+
       const bidData: IProcessOpenseaTokenBidData = {
         _id: task._id,
         address: task.wallet,
@@ -13592,14 +13687,20 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
 
 async function
   handleBlurCounterbid(data: any, task: ITask, traceId?: string) {
-  const startTime = Date.now();
   const incomingBid = data
 
-  // Log function start
-
   try {
+    // Extract bid info early for logging
+    const bidInfo = incomingBid?.stats?.[0] || incomingBid?.updates?.[0] || incomingBid;
+    const incomingPrice = bidInfo?.bestPrice || bidInfo?.price || 0;
+    const criteriaType = bidInfo?.criteriaType || 'unknown';
+    const criteriaValue = bidInfo?.criteriaValue || {};
+    const bidTypeDisplay = criteriaType === 'trait' ? `Trait: ${JSON.stringify(criteriaValue)}` : criteriaType === 'token' ? `Token #${criteriaValue?.identifier || 'unknown'}` : 'Collection';
 
-    const bidHash = hashBid({ ...data, taskId: task._id });
+    if (DEBUG) {
+      console.log(`[Counterbid][Blur] ${task.contract.slug} | WS Event: bid | Type: ${bidTypeDisplay} | Price: ${incomingPrice} BETH`);
+    }
+
     const currentTask = activeTasks.get(task._id)
 
     if (!currentTask) {
@@ -13634,16 +13735,12 @@ async function
     const traitBid = currentTask?.bidType === "collection" && selectedTraits && Object.keys(selectedTraits)?.length > 0
     const blurOutbidMargin = currentTask?.outbidOptions?.blurOutbidMargin || 0.01
 
-    // Comprehensive logging for Blur counterbid
-    const bidInfo = incomingBid?.stats?.[0] || incomingBid?.updates?.[0] || incomingBid;
-    const price = bidInfo?.bestPrice || bidInfo?.price || 0;
-    const criteriaType = bidInfo?.criteriaType || 'unknown';
-    const criteriaValue = bidInfo?.criteriaValue || {};
-    const makerAddress = incomingBid?.maker || bidInfo?.maker || 'unknown';
-    const makerFormatted = makerAddress !== 'unknown' ? `${makerAddress.slice(0, 6)}...${makerAddress.slice(-4)}` : 'unknown';
-    const bidTypeDisplay = criteriaType === 'trait' ? `Trait: ${JSON.stringify(criteriaValue)}` : criteriaType === 'token' ? `Token #${criteriaValue?.identifier || 'unknown'}` : 'Collection';
+    // bidInfo, criteriaType, criteriaValue, bidTypeDisplay already extracted at top for logging
 
     if (!currentTask?.outbidOptions?.counterbid) {
+      if (DEBUG) {
+        console.log(`[Counterbid][Blur] ${task.contract.slug} | SKIP: Counterbid disabled for task`);
+      }
       if (traceId) bidTraceLogger.logEarlyReturn(traceId, 'Counterbid disabled for task', { marketplace: 'blur', taskId: task._id?.toString() });
       return;
     }
@@ -13667,7 +13764,14 @@ async function
       const hasMatchingTraits = checkBlurTraits(incomingTraitBids, traits);
 
       if (!hasMatchingTraits?.length) {
+        if (DEBUG) {
+          console.log(`[Counterbid][Blur] ${task.contract.slug} | Trait Match: No matching traits found | SKIP`);
+        }
         return;
+      }
+
+      if (DEBUG) {
+        console.log(`[Counterbid][Blur] ${task.contract.slug} | Trait Match: ${hasMatchingTraits.length} matching trait(s) found`);
       }
       const transformedTraits = selectedTraits && Object.keys(selectedTraits)?.length > 0 ? transformOpenseaTraits(selectedTraits) : []
 
@@ -13714,9 +13818,15 @@ async function
         })
 
         if (+totalOffer < minBidPriceEth) {
+          if (DEBUG) {
+            console.log(`[Counterbid][Blur] ${task.contract.slug} [${identifier}] | Price Check: incoming=${incomingPrice} + margin=${blurOutbidMargin} = ${totalOffer} < min=${minBidPriceEth} | SKIP: Below minimum`);
+          }
           // Return silently when incoming bid is less than min bid price
           return
         } else if (+totalOffer > maxBidPriceEth) {
+          if (DEBUG) {
+            console.log(`[Counterbid][Blur] ${task.contract.slug} [${identifier}] | Price Check: incoming=${incomingPrice} + margin=${blurOutbidMargin} = ${totalOffer} > max=${maxBidPriceEth} | SKIP: Above maximum`);
+          }
           const reason = `is greater than max bid price ${maxBidPriceEth} BETH`
           const message = `incoming bid ${incomingPrice} + Blur Outbid Margin(${blurOutbidMargin}) BETH for ${task.contract.slug}: ${identifier} ${reason}. Skipping ...`.toUpperCase()
 
@@ -13812,6 +13922,11 @@ async function
 
 
 
+        if (DEBUG) {
+          const offerPriceEth = Number(offerPrice) / 1e18;
+          console.log(`[Counterbid][Blur] ${task.contract.slug} [${identifier}] | QUEUE: Trait counterbid at ${offerPriceEth} BETH (outbidding ${incomingPrice} BETH)`);
+        }
+
         await blurQueue.add(
           BLUR_TRAIT_BID_COUNTERBID,
           bidData
@@ -13848,9 +13963,15 @@ async function
 
       // Check if incoming bid is within valid range
       if (+bestPrice < minBidPriceEth) {
+        if (DEBUG) {
+          console.log(`[Counterbid][Blur] ${task.contract.slug} [Collection] | Price Check: incoming=${bestPrice} < min=${minBidPriceEth} | SKIP: Below minimum`);
+        }
         // Return silently when incoming bid is less than min bid price
         return
       } else if (+bestPrice > maxBidPriceEth) {
+        if (DEBUG) {
+          console.log(`[Counterbid][Blur] ${task.contract.slug} [Collection] | Price Check: incoming=${bestPrice} > max=${maxBidPriceEth} | SKIP: Above maximum`);
+        }
         const reason = `is greater than max bid price ${maxBidPriceEth} BETH`;
         const message = `incoming bid ${bestPrice} BETH for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "blur");
@@ -13995,6 +14116,11 @@ async function
               expiry
             }
 
+            if (DEBUG) {
+              const offerPriceEth = Number(orderOfferPrice) / 1e18;
+              console.log(`[Counterbid][Blur] ${task.contract.slug} [${order.identifier}] | QUEUE: Trait counterbid at ${offerPriceEth} BETH`);
+            }
+
             await blurQueue.add(
               BLUR_TRAIT_BID_COUNTERBID,
               counterbidData
@@ -14015,7 +14141,10 @@ async function
               expiry
             }
 
-
+            if (DEBUG) {
+              const offerPriceEth = Number(orderOfferPrice) / 1e18;
+              console.log(`[Counterbid][Blur] ${task.contract.slug} [Collection] | QUEUE: Collection counterbid at ${offerPriceEth} BETH`);
+            }
 
             await blurQueue.add(
               BLUR_COLLECTION_BID_COUNTERBID,
@@ -14027,6 +14156,9 @@ async function
       }
 
       if (counterbidsQueued > 0) {
+        if (DEBUG) {
+          console.log(`[Counterbid][Blur] ${task.contract.slug} | Collection bid processing complete: ${counterbidsQueued} counterbid(s) queued`);
+        }
       }
     }
 
@@ -14651,10 +14783,16 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
       (async () => {
         // Start log
         if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) {
+          if (DEBUG) {
+            console.log(`[BidFlow][OS-Sched] ${task.contract?.slug || taskId} | SKIP: OpenSea not enabled globally`);
+          }
           return;
         }
         const currentTask = activeTasks.get(task._id);
         if (!currentTask || !currentTask.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
+          if (DEBUG) {
+            console.log(`[BidFlow][OS-Sched] ${task.contract?.slug || taskId} | SKIP: Task not running or OpenSea not selected`);
+          }
           return;
         }
 
@@ -14683,12 +14821,18 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
 
           // If preprocessing didn't enable OpenSea, it means something went wrong
           if (!preprocessing.opensea.enabled) {
+            if (DEBUG) {
+              console.log(`[BidFlow][OS-Sched] ${currentTask.contract.slug} | SKIP: Preprocessing failed to enable OpenSea`);
+            }
             logError('opensea', taskId, 'processOpenseaScheduledBid', 'Preprocessing failed to enable OpenSea');
             throw new Error(`Preprocessing failed to enable OpenSea for task ${taskId}`);
           }
         }
 
         if (preprocessing.opensea.skipReason) {
+          if (DEBUG) {
+            console.log(`[BidFlow][OS-Sched] ${currentTask.contract.slug} | SKIP: ${preprocessing.opensea.skipReason}`);
+          }
           if (!warningBids[taskId]) {
             warningBids[taskId] = { opensea: false, magiceden: false, blur: false };
           }
@@ -14732,6 +14876,9 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
 
           lockAcquired = timedLockManager.acquireLock(taskId, 'opensea');
           if (!lockAcquired) {
+            if (DEBUG) {
+              console.log(`[BidFlow][OS-Sched] ${currentTask.contract.slug} | SKIP: Failed to acquire lock`);
+            }
             return;
           }
         } catch (lockError) {
@@ -14828,6 +14975,9 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
         // Create jobs based on preprocessing results
         if (preprocessing.opensea.tokens.length > 0) {
           // Token bid
+          if (DEBUG) {
+            console.log(`[BidFlow][OS-Sched] ${currentTask.contract.slug} | QUEUEING: ${preprocessing.opensea.tokens.length} token bid jobs`);
+          }
 
           const jobs = preprocessing.opensea.tokens
             .map((token) => ({
@@ -14879,6 +15029,9 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
           }
         } else if (preprocessing.opensea.traits.length > 0) {
           // Trait bid
+          if (DEBUG) {
+            console.log(`[BidFlow][OS-Sched] ${currentTask.contract.slug} | QUEUEING: ${preprocessing.opensea.traits.length} trait bid jobs`);
+          }
 
           const traitJobs = preprocessing.opensea.traits.map((trait) => {
             const jobData = {
@@ -14933,6 +15086,9 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
           }
         } else if (preprocessing.opensea.jobCount === 1) {
           // Collection bid
+          if (DEBUG) {
+            console.log(`[BidFlow][OS-Sched] ${currentTask.contract.slug} | QUEUEING: 1 collection bid job`);
+          }
           const jobId = `bid-${taskId}-opensea-${currentTask.contract.slug}-collection`
 
           // Ensure parent job exists BEFORE adding job
@@ -14963,6 +15119,9 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
           await updateTaskRunningPercentage(taskId);
         } else {
           // No jobs to create - create empty parent job and complete the loop
+          if (DEBUG) {
+            console.log(`[BidFlow][OS-Sched] ${currentTask.contract.slug} | SKIP: No jobs to create`);
+          }
 
           await ensureParentJobExists(taskId, 'opensea');
           const parentJobId = getParentJobId(taskId, 'opensea');
@@ -15155,6 +15314,9 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
   });
 
   if (isTaskBlacklisted(taskId, 'opensea')) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Coll] ${data.collectionDetails?.slug || taskId} | SKIP: Task blacklisted`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'task_blacklisted', {
       correlationId, marketplace: 'opensea', taskId, collectionSlug: data.collectionDetails?.slug || 'unknown', bidType: 'collection'
     });
@@ -15168,6 +15330,9 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea") || !enabledMarketplaces
       .map((m) => m.toLowerCase())
       .includes("opensea")) {
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Coll] ${data.collectionDetails?.slug || taskId} | SKIP: Task not running or OpenSea not selected`);
+      }
       bidTraceLogger.logEarlyReturn(traceId, 'task_not_active_or_marketplace_disabled', {
         correlationId, marketplace: 'opensea', taskId, collectionSlug: data.collectionDetails?.slug || 'unknown', bidType: 'collection'
       });
@@ -15180,6 +15345,9 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     // Early wallet validation - fetch once and reuse later
     const wallet = await walletCache.getWalletById(currentTask.walletId);
     if (!wallet || !wallet.encryptedPrivateKey) {
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Coll] ${currentTask.contract.slug} | SKIP: Wallet not found`);
+      }
       bidTraceLogger.logEarlyReturn(traceId, 'wallet_not_found', {
         correlationId, marketplace: 'opensea', taskId, collectionSlug: currentTask.contract.slug, bidType: 'collection',
         metadata: { walletId: currentTask.walletId, hasWallet: !!wallet, hasPrivateKey: !!wallet?.encryptedPrivateKey }
@@ -15228,6 +15396,9 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false)
     if (stopBid) {
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Coll] ${currentTask.contract.slug} | SKIP: Floor outside configured range`);
+      }
       bidTraceLogger.logEarlyReturn(traceId, 'stop_option_triggered', {
         correlationId, marketplace: 'opensea', taskId, collectionSlug: currentTask.contract.slug, bidType: 'collection'
       });
@@ -15235,10 +15406,18 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     }
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Coll] ${currentTask.contract.slug} | Floor: ${floor_price} ETH | PriceCalc: offer=${offerPriceEth} min=${minBidPriceEth} max=${maxBidPriceEth} ${currencySymbol}`);
+    }
+
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
     const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency);
     if (balance < minBidPriceEth) {
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Coll] ${currentTask.contract.slug} | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} ${currencySymbol}`);
+      }
       const errorMsg = balance <= 0
         ? `Insufficient ${currencySymbol} balance: ${balance} (zero or negative) for task ${taskId}`
         : `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId}`;
@@ -15374,7 +15553,10 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     const bidCount = getIncrementedBidCount(OPENSEA, currentTask.contract.slug, currentTask._id)
 
     if (orders.length > 0) {
-      const cancelData = orders.map((order, index) => {
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Coll] ${currentTask.contract.slug} | Cancelling ${orders.length} existing orders before new bid`);
+      }
+      const cancelData = orders.map((order) => {
         return {
           name: CANCEL_OPENSEA_BID,
           data: { walletId: currentTask.walletId, orderId: order.orderHash, taskId: currentTask._id, orderKey: order._id },
@@ -15392,6 +15574,9 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 
     // Check if offer exceeds floor price (only for WETH)
     if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Coll] ${currentTask.contract.slug} | SKIP: Bid ${offerEth} exceeds floor ${floor_price} ${currencySymbol}`);
+      }
       skipStats[currentTask._id]['opensea']++;
       const message = `⚠️ Offer price ${offerEth} ${currencySymbol} for ${currentTask.contract.slug} collection bid exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA.`.toUpperCase();
 
@@ -15405,31 +15590,26 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     }
 
     if (currentTask.outbidOptions.outbid && offerEth >= maxBidPriceEth) {
-      // Enhanced logging with bid configuration details
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Coll] ${currentTask.contract.slug} | SKIP: Bid ${offerEth} exceeds max ${maxBidPriceEth} ${currencySymbol}`);
+      }
+      // Orders already cancelled above - no additional cancellation needed
       skipStats[currentTask._id]['opensea']++;
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${currentTask.contract.slug} collection bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR OPENSEA.Skipping ...`.toUpperCase()
 
-
       logBidError(currentTask._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea"); // Non-blocking
-
-      if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-        if (orders.length > 0) {
-          const cancelData = orders.map((order, index) => {
-            return {
-              name: CANCEL_OPENSEA_BID,
-              data: { walletId: currentTask.walletId, orderId: order.orderHash, taskId: currentTask._id, orderKey: order._id },
-            }
-          })
-          queue.addBulk(cancelData)
-        }
-      }
       bidTraceLogger.logEarlyReturn(traceId, 'max_bid_price_exceeded', {
         correlationId, marketplace: 'opensea', taskId, collectionSlug: currentTask.contract.slug, bidType: 'collection',
-        metadata: { offerEth, maxBidPriceEth, cancelMaxWhenOutbid: currentTask.outbidOptions.cancelMaxWhenOutbid }
+        metadata: { offerEth, maxBidPriceEth }
       });
       return;
     } else if (offerEth < minBidPriceEth) {
       colletionOffer = BigInt(Math.round(minBidPriceEth * Math.pow(10, decimal)));
+    }
+
+    if (DEBUG) {
+      const finalOfferEth = Number(colletionOffer) / Math.pow(10, decimal);
+      console.log(`[BidFlow][OS-Coll] ${currentTask.contract.slug} | PLACING BID: ${finalOfferEth} ${currencySymbol}`);
     }
 
     // Log bid API start
@@ -15527,7 +15707,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 async function processBlurScheduledBid(task: ITask) {
   const taskId = task._id.toString();
   const currentLoopCount = loopCounterStats[taskId]?.blur || 1;
-  const startTime = Date.now();
 
   // Log function start
 
@@ -15537,6 +15716,9 @@ async function processBlurScheduledBid(task: ITask) {
   try {
     const currentTask = activeTasks.get(task._id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur") || !enabledMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("blur")) {
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Sched] ${task.contract?.slug || taskId} | SKIP: Task not running or Blur not selected`);
+      }
       return;
     }
 
@@ -15566,6 +15748,9 @@ async function processBlurScheduledBid(task: ITask) {
 
       // If preprocessing didn't enable Blur, it means something went wrong
       if (!preprocessing.blur.enabled) {
+        if (DEBUG) {
+          console.log(`[BidFlow][Blur-Sched] ${currentTask.contract.slug} | SKIP: Preprocessing failed to enable Blur`);
+        }
         const error = new Error(`Preprocessing failed to enable Blur for task ${taskId}`);
 
 
@@ -15574,6 +15759,9 @@ async function processBlurScheduledBid(task: ITask) {
     }
 
     if (preprocessing.blur.skipReason) {
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Sched] ${currentTask.contract.slug} | SKIP: ${preprocessing.blur.skipReason}`);
+      }
 
       if (!warningBids[taskId]) {
         warningBids[taskId] = { opensea: false, magiceden: false, blur: false };
@@ -15614,7 +15802,9 @@ async function processBlurScheduledBid(task: ITask) {
     // Use timed lock manager for better timeout handling
     lockAcquired = timedLockManager.acquireLock(taskId, 'blur');
     if (!lockAcquired) {
-
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Sched] ${currentTask.contract.slug} | SKIP: Failed to acquire lock`);
+      }
       return;
     }
 
@@ -15623,6 +15813,9 @@ async function processBlurScheduledBid(task: ITask) {
     const { currencySymbol } = await calculateBidPrice(currentTask, 0, "blur")
 
     if (currencySymbol.toLowerCase() !== "weth") {
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Sched] ${currentTask.contract.slug} | SKIP: ${currencySymbol} not supported on Blur`);
+      }
 
       if (!warningMessage[taskId]) {
         warningMessage[taskId] = {
@@ -15673,6 +15866,9 @@ async function processBlurScheduledBid(task: ITask) {
 
     // Check if balance is insufficient or zero
     if (bethBalance <= 0 || bethBalance < minBidPriceEth) {
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Sched] ${currentTask.contract.slug} | SKIP: Insufficient balance ${bethBalance} < ${minBidPriceEth} BETH`);
+      }
       const errorMsg = bethBalance <= 0
         ? `Insufficient BETH balance: ${bethBalance} (zero or negative) for task ${taskId}`
         : `Insufficient BETH balance: ${bethBalance} < ${minBidPriceEth} for task ${taskId}`;
@@ -15789,6 +15985,9 @@ async function processBlurScheduledBid(task: ITask) {
 
     // Create jobs based on preprocessing results
     if (preprocessing.blur.traits.length > 0) {
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Sched] ${currentTask.contract.slug} | QUEUEING: ${preprocessing.blur.traits.length} trait bid jobs`);
+      }
       // Trait bid - process all traits respecting Blur's rate limit
       const totalTraits = preprocessing.blur.traits.length;
       const batchSize = BLUR_RATE_LIMIT.batchSize;
@@ -15862,7 +16061,9 @@ async function processBlurScheduledBid(task: ITask) {
 
     } else if (preprocessing.blur.jobCount === 1) {
       // Collection bid
-
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Sched] ${currentTask.contract.slug} | QUEUEING: 1 collection bid job`);
+      }
 
       const slug = removeChar(currentTask.contract.slug, "-")
       const jobId = `bid-${taskId}-blur-${slug}-collection-${WALLET_ADDRESS}`
@@ -15986,6 +16187,9 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
   // Early exit if marketplace already stopped due to insufficient balance
   if (isMarketplaceStoppedDueToBalance(taskId, 'blur')) {
+    if (DEBUG) {
+      console.log(`[BidFlow][Blur-Coll] ${collectionSlug} | SKIP: Marketplace stopped (insufficient balance)`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'marketplace_stopped_insufficient_balance', {
       correlationId, marketplace: 'blur', taskId, collectionSlug, bidType: 'collection'
     });
@@ -15994,6 +16198,9 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
   // Check if task is blacklisted before processing
   if (isTaskBlacklisted(taskId)) {
+    if (DEBUG) {
+      console.log(`[BidFlow][Blur-Coll] ${collectionSlug} | SKIP: Task blacklisted`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'task_blacklisted', {
       correlationId, marketplace: 'blur', taskId, collectionSlug, bidType: 'collection'
     });
@@ -16002,6 +16209,9 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
   // Fetch task from activeTasks outside try block so it's accessible in catch
   if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((market) => market.toLowerCase()).includes("blur")) {
+    if (DEBUG) {
+      console.log(`[BidFlow][Blur-Coll] ${collectionSlug} | SKIP: Task not running or Blur not selected`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'task_not_active_or_marketplace_disabled', {
       correlationId, marketplace: 'blur', taskId, collectionSlug, bidType: 'collection'
     });
@@ -16045,6 +16255,9 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
     const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), false)
     if (stopBid) {
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Coll] ${collectionSlug} | SKIP: Floor outside configured range`);
+      }
 
       if (orders.length > 0) {
 
@@ -16077,7 +16290,9 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "blur")
 
-
+    if (DEBUG) {
+      console.log(`[BidFlow][Blur-Coll] ${collectionSlug} | Floor: ${floor_price} ETH | PriceCalc: offer=${offerPriceEth} min=${minBidPriceEth} max=${maxBidPriceEth} BETH`);
+    }
 
     // Fetch fresh BETH balance and check if sufficient for minimum bid
 
@@ -16088,6 +16303,9 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
 
     if (balance < minBidPriceEth) {
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Coll] ${collectionSlug} | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} BETH`);
+      }
       skipStats[currentTask._id]['blur']++;
 
 
@@ -16198,6 +16416,10 @@ async function processBlurCollectionBid(data: { taskId: string }) {
     const PRICE_TOLERANCE = 0.000001;
 
     if (currentTask.outbidOptions.outbid && collectionOfferEth >= maxBidPriceEth) {
+      // Orders already cancelled above - no additional cancellation needed
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Coll] ${collectionSlug} | SKIP: Bid ${collectionOfferEth} exceeds max ${maxBidPriceEth} BETH`);
+      }
       if (!skipStats[currentTask._id]) {
         skipStats[currentTask._id] = {
           opensea: 0,
@@ -16208,20 +16430,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       skipStats[currentTask._id]['blur']++;
 
       await logBidError(currentTask._id, "MAXIMUM BID PRICE EXCEEDED", `Offer price ${collectionOfferEth} BETH for ${currentTask.contract.slug} collection bid exceeds max bid price ${maxBidPriceEth} BETH FOR BLUR BID.`, "skipped", "blur");
-
-      if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-        if (orders.length > 0) {
-          const cancelData = orders.map((order) => {
-            const payload = JSON.parse(order.orderHash)
-
-            return {
-              name: CANCEL_BLUR_BID,
-              data: { walletId: currentTask.walletId, payload, taskId: currentTask._id, orderKey: order._id }
-            }
-          })
-          await queue.addBulk(cancelData);
-        }
-      }
 
       bidTraceLogger.logEarlyReturn(traceId, 'max_bid_price_exceeded', {
         correlationId, marketplace: 'blur', taskId, collectionSlug, bidType: 'collection',
@@ -16249,6 +16457,10 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
     // Wrap bidOnBlur call to track completion
     try {
+      const finalBidEth = Number(colletionOffer) / 1e18;
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Coll] ${collectionSlug} | PLACING BID: ${finalBidEth} BETH`);
+      }
       // Log bid API start
       bidTraceLogger.log(traceId, 'bid_api_start', 'info', {
         correlationId,
@@ -16666,28 +16878,29 @@ async function processOpenseaTraitBid(data: {
     const offerEth = Number(traitOffer) / Math.pow(10, decimal);
 
     if (outbidOptions.outbid && offerEth >= maxBidPriceEth) {
-      // Log bid price configuration for debugging
+      // Always cancel existing orders when exceeding max bid price
+      // This prevents orphaned orders from accumulating when we can't compete
+      if (orders.length > 0) {
+        await cancelOpenseaOrdersDirectly({
+          taskId: _id,
+          walletId,
+          privateKey,
+          orders,
+          source: 'processOpenseaTraitBid',
+          identifier,
+          reason: 'max_exceeded'
+        });
+        if (DEBUG) {
+          console.log(`[BidFlow][OS-Trait] ${slug}:${identifier} | Cancelling ${orders.length} existing orders (max exceeded)`);
+        }
+      }
+
       skipStats[_id]['opensea']++;
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${slug} trait ${trait} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR OPENSEA.Skipping ...`.toUpperCase()
       logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea"); // Non-blocking
       if (DEBUG) {
         console.log(`[BidFlow][OS-Trait] ${slug}:${identifier} | SKIP: Bid ${offerEth} exceeds max ${maxBidPriceEth} ${currencySymbol}`);
       }
-
-      if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-        if (orders.length > 0) {
-          const cancelData = orders.map((order) => {
-            return {
-              name: CANCEL_OPENSEA_BID,
-              data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id },
-            }
-          })
-
-          // Log cancellation enqueue
-          queue.addBulk(cancelData)
-        }
-      }
-
       return;
     } else if (offerEth < minBidPriceEth) {
       traitOffer = BigInt(Math.round(roundToValidPrecision(minBidPriceEth) * Math.pow(10, decimal)));
@@ -17087,17 +17300,16 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     const offerEth = Number(tokenOffer) / Math.pow(10, decimal);
 
     if (outbidOptions.outbid && offerEth >= maxBidPriceEth) {
-      if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-        if (orders.length > 0) {
-          const cancelData = orders.map((order, index) => {
-            return {
-              name: CANCEL_OPENSEA_BID,
-              data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id }
-            }
-          })
-
-          // Log cancellation enqueue
-          queue.addBulk(cancelData)
+      // Always cancel existing orders when exceeding max bid price
+      // This prevents orphaned orders from accumulating when we can't compete
+      if (orders.length > 0) {
+        const cancelData = orders.map((order) => ({
+          name: CANCEL_OPENSEA_BID,
+          data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id }
+        }));
+        queue.addBulk(cancelData);
+        if (DEBUG) {
+          console.log(`[BidFlow][OS-Token] ${slug}:${asset.tokenId} | Cancelling ${orders.length} existing orders (max exceeded)`);
         }
       }
 
@@ -17298,35 +17510,53 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 }
 
 async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
-  const { taskId, bidCount, walletAddress, walletId, slug, offerPrice, creatorFees, enforceCreatorFee, expiry } = data;
+  const { taskId, bidCount, walletAddress, walletId, slug, offerPrice, creatorFees, expiry } = data;
 
   if (!enabledMarketplaces.length) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Coll-CB] ${slug} | SKIP: No marketplaces enabled`);
+    }
     return;
   }
 
   const currentTask = activeTasks.get(taskId);
 
   if (!currentTask) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Coll-CB] ${slug} | SKIP: Task not found`);
+    }
     return;
   }
 
   if (!currentTask.running) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Coll-CB] ${slug} | SKIP: Task not running`);
+    }
     return;
   }
 
   const selectedIncludesOpensea = currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea");
   if (!selectedIncludesOpensea) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Coll-CB] ${slug} | SKIP: OpenSea not selected`);
+    }
     return;
   }
 
   const openseaGloballyEnabled = enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea");
   if (!openseaGloballyEnabled) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Coll-CB] ${slug} | SKIP: OpenSea not enabled globally`);
+    }
     return;
   }
 
   const floor_price = await getOpenseaFloor(currentTask.contract.slug);
 
   if (!floor_price) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Coll-CB] ${slug} | SKIP: Failed to fetch floor price`);
+    }
     return;
   }
 
@@ -17334,7 +17564,14 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
 
   const offerEth = Number(offerPrice) / Math.pow(10, decimal);
 
+  if (DEBUG) {
+    console.log(`[BidFlow][OS-Coll-CB] ${slug} | Floor: ${floor_price} ETH | CounterBid: ${offerEth} ${currencySymbol}`);
+  }
+
   if (currencySymbol.toLowerCase() === "weth" && offerEth > floor_price) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Coll-CB] ${slug} | SKIP: Bid ${offerEth} exceeds floor ${floor_price} ${currencySymbol}`);
+    }
     const message = `⚠️ Counter bid offer price ${offerEth} ${currencySymbol} for ${slug} collection exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA.`.toUpperCase();
     await logBidError(taskId, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "opensea");
     return;
@@ -17353,6 +17590,9 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
 
     // Cancel existing orders synchronously BEFORE placing new bid
     if (existingOrders.length > 0) {
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Coll-CB] ${slug} | Cancelling ${existingOrders.length} existing orders before new bid`);
+      }
       await cancelOpenseaOrdersDirectly({
         taskId,
         walletId,
@@ -17362,6 +17602,10 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
         identifier: 'collection',
         reason: 'counterbid_replace_existing'
       });
+    }
+
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Coll-CB] ${slug} | PLACING BID: ${offerEth} ${currencySymbol}`);
     }
 
     await bidOnOpensea(
@@ -17399,13 +17643,28 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
 }
 
 async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) {
-  if (!enabledMarketplaces.length) return
+  if (!enabledMarketplaces.length) {
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Coll-CB] ${data.slug} | SKIP: No marketplaces enabled`);
+    }
+    return;
+  }
   const { _id, bidCount, address, contractAddress, quantity, offerPrice, expiration, walletId, slug } = data
   const currentTask = activeTasks.get(_id)
-  if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) return
+  if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) {
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Coll-CB] ${slug} | SKIP: Task not running or MagicEden not enabled`);
+    }
+    return;
+  }
 
   const floor_price = Number(await fetchMagicEdenCollectionStats(contractAddress));
-  if (!floor_price) return
+  if (!floor_price) {
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Coll-CB] ${slug} | SKIP: Floor fetch failed`);
+    }
+    return;
+  }
 
   try {
     // Query and cancel existing collection orders
@@ -17417,6 +17676,9 @@ async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) 
     });
 
     if (orders.length > 0) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Coll-CB] ${slug} | Cancelling ${orders.length} existing orders before counterbid`);
+      }
       const cancelData = orders.map((order) => ({
         name: CANCEL_MAGICEDEN_BID,
         data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id }
@@ -17427,8 +17689,15 @@ async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) 
     const { currencyType, currency, decimal, currencySymbol } = await calculateBidPrice(currentTask, floor_price, "magiceden")
     const offerEth = Number(offerPrice) / Math.pow(10, decimal);
 
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Coll-CB] ${slug} | Floor: ${floor_price} ETH | CounterbidOffer: ${offerEth} ${currencySymbol}`);
+    }
+
     // Check if offer exceeds floor price (only for WETH)
     if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Coll-CB] ${slug} | SKIP: Bid ${offerEth} exceeds floor ${floor_price} ${currencySymbol}`);
+      }
       const message = `⚠️ Counter bid offer price ${offerEth} ${currencySymbol} for ${slug} collection exceeds floor price ${floor_price} ${currencySymbol} FOR MAGICEDEN.Stopping bid...`.toUpperCase();
 
 
@@ -17439,6 +17708,10 @@ async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) 
     // Fetch wallet and decrypt private key just before use
     const wallet = await walletCache.getWalletById(walletId);
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
+
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Coll-CB] ${slug} | PLACING COUNTERBID: ${offerEth} ${currencySymbol}`);
+    }
 
     await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, offerPrice.toString(), privateKey, slug, expiration, currency);
 
@@ -17496,6 +17769,9 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
   });
 
   if (!enabledMarketplaces.length) {
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Trait-CB] ${slug} [${traitKey}] | SKIP: No marketplaces enabled`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'no_enabled_marketplaces', {
       correlationId, marketplace: 'magiceden', taskId, collectionSlug: slug, bidType: 'trait', traitKey
     });
@@ -17504,6 +17780,9 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
 
   const currentTask = activeTasks.get(taskId)
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) {
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Trait-CB] ${slug} [${traitKey}] | SKIP: Task not running or MagicEden not enabled`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'task_not_running_or_marketplace_disabled', {
       correlationId, marketplace: 'magiceden', taskId, collectionSlug: slug, bidType: 'trait', traitKey
     });
@@ -17528,6 +17807,9 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
 
     // Cancel existing orders synchronously BEFORE placing new bid
     if (orders.length > 0) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Trait-CB] ${slug} [${traitKey}] | Cancelling ${orders.length} existing orders before counterbid`);
+      }
       bidTraceLogger.log(traceId, 'cancel_start', 'debug', {
         correlationId, marketplace: 'magiceden', taskId, collectionSlug: slug, bidType: 'trait', traitKey,
         metadata: { orderCount: orders.length }
@@ -17553,6 +17835,11 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
       correlationId, marketplace: 'magiceden', taskId, collectionSlug: slug, bidType: 'trait', traitKey,
       ourBidAmount: offerPrice.toString()
     });
+
+    const offerEth = Number(offerPrice) / 1e18;
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Trait-CB] ${slug} [${traitKey}] | PLACING COUNTERBID: ${offerEth} WETH`);
+    }
 
     await bidOnMagiceden(taskId, bidCount, address, contractAddress, quantity, offerPrice.toString(), privateKey, slug, expiration, currency, bidTrait);
 
@@ -17612,6 +17899,9 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
   });
 
   if (!enabledMarketplaces.length) {
+    if (DEBUG) {
+      console.log(`[BidFlow][Blur-Coll-CB] ${slug} | SKIP: No marketplaces enabled`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'no_enabled_marketplaces', {
       correlationId, marketplace: 'blur', taskId, collectionSlug: slug, bidType: 'collection'
     });
@@ -17621,6 +17911,9 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
   const currentTask = activeTasks.get(taskId)
 
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur")) {
+    if (DEBUG) {
+      console.log(`[BidFlow][Blur-Coll-CB] ${slug} | SKIP: Task not running or Blur not selected/enabled`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'task_not_running_or_marketplace_disabled', {
       correlationId, marketplace: 'blur', taskId, collectionSlug: slug, bidType: 'collection'
     });
@@ -17630,6 +17923,9 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
 
   const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
   if (!floor_price) {
+    if (DEBUG) {
+      console.log(`[BidFlow][Blur-Coll-CB] ${slug} | SKIP: Failed to fetch floor price`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'no_floor_price', {
       correlationId, marketplace: 'blur', taskId, collectionSlug: slug, bidType: 'collection'
     });
@@ -17639,7 +17935,14 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
 
   const offerEth = Number(offerPrice) / 1e18;
 
+  if (DEBUG) {
+    console.log(`[BidFlow][Blur-Coll-CB] ${slug} | Floor: ${floor_price} ETH | Counterbid: ${offerEth} BETH`);
+  }
+
   if (offerEth > floor_price) {
+    if (DEBUG) {
+      console.log(`[BidFlow][Blur-Coll-CB] ${slug} | SKIP: Bid ${offerEth} exceeds floor ${floor_price} BETH`);
+    }
     const message = `⚠️ Counter bid offer price ${offerEth} WETH for ${slug} collection exceeds floor price ${floor_price} WETH FOR BLUR.Stopping bid...`.toUpperCase();
     bidTraceLogger.logEarlyReturn(traceId, `offer_exceeds_floor: ${offerEth} > ${floor_price}`, {
       correlationId, marketplace: 'blur', taskId, collectionSlug: slug, bidType: 'collection'
@@ -17666,6 +17969,9 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
 
     // Cancel existing orders synchronously BEFORE placing new bid
     if (existingOrders.length > 0) {
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Coll-CB] ${slug} | Cancelling ${existingOrders.length} existing orders before counterbid`);
+      }
       bidTraceLogger.log(traceId, 'cancel_start', 'debug', {
         correlationId, marketplace: 'blur', taskId, collectionSlug: slug, bidType: 'collection',
         metadata: { orderCount: existingOrders.length }
@@ -17684,6 +17990,10 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
       bidTraceLogger.log(traceId, 'cancel_complete', 'debug', {
         correlationId, marketplace: 'blur', taskId, collectionSlug: slug, bidType: 'collection'
       });
+    }
+
+    if (DEBUG) {
+      console.log(`[BidFlow][Blur-Coll-CB] ${slug} | PLACING COUNTERBID: ${offerEth} BETH`);
     }
 
     // Log API start
@@ -17782,6 +18092,9 @@ async function blurTraitCounterBid(data: IBlurBidData) {
   });
 
   if (!enabledMarketplaces.length) {
+    if (DEBUG) {
+      console.log(`[BidFlow][Blur-Trait-CB] ${slug} [${traitKey}] | SKIP: No marketplaces enabled`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'no_enabled_marketplaces', {
       correlationId, marketplace: 'blur', taskId, collectionSlug: slug, bidType: 'trait', traitKey
     });
@@ -17790,6 +18103,9 @@ async function blurTraitCounterBid(data: IBlurBidData) {
 
   const currentTask = activeTasks.get(taskId)
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur")) {
+    if (DEBUG) {
+      console.log(`[BidFlow][Blur-Trait-CB] ${slug} [${traitKey}] | SKIP: Task not running or Blur not selected/enabled`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'task_not_running_or_marketplace_disabled', {
       correlationId, marketplace: 'blur', taskId, collectionSlug: slug, bidType: 'trait', traitKey
     });
@@ -17798,6 +18114,9 @@ async function blurTraitCounterBid(data: IBlurBidData) {
 
   try {
     if (!traits) {
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Trait-CB] ${slug} [${traitKey}] | SKIP: No traits provided`);
+      }
       bidTraceLogger.logEarlyReturn(traceId, 'no_traits_provided', {
         correlationId, marketplace: 'blur', taskId, collectionSlug: slug, bidType: 'trait', traitKey
       });
@@ -17821,6 +18140,9 @@ async function blurTraitCounterBid(data: IBlurBidData) {
 
     // Cancel existing orders synchronously BEFORE placing new bid
     if (existingOrders.length > 0) {
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Trait-CB] ${slug} [${identifier}] | Cancelling ${existingOrders.length} existing orders before counterbid`);
+      }
       bidTraceLogger.log(traceId, 'cancel_start', 'debug', {
         correlationId, marketplace: 'blur', taskId, collectionSlug: slug, bidType: 'trait', traitKey,
         metadata: { orderCount: existingOrders.length }
@@ -17839,6 +18161,11 @@ async function blurTraitCounterBid(data: IBlurBidData) {
       bidTraceLogger.log(traceId, 'cancel_complete', 'debug', {
         correlationId, marketplace: 'blur', taskId, collectionSlug: slug, bidType: 'trait', traitKey
       });
+    }
+
+    const offerEth = Number(offerPrice) / 1e18;
+    if (DEBUG) {
+      console.log(`[BidFlow][Blur-Trait-CB] ${slug} [${identifier}] | PLACING COUNTERBID: ${offerEth} BETH`);
     }
 
     // Log API start
@@ -17928,7 +18255,6 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
     slug,
     offerPrice,
     creatorFees,
-    enforceCreatorFee,
     asset,
     traceContext
   } = data;
@@ -17948,6 +18274,9 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
   }
 
   if (!enabledMarketplaces.length) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Token-CB] ${slug}#${asset.tokenId} | SKIP: No marketplaces enabled`);
+    }
     if (traceId) bidTraceLogger.logEarlyReturn(traceId, 'No enabled marketplaces', { marketplace: 'opensea', taskId });
     return;
   }
@@ -17955,23 +18284,35 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
   const currentTask = activeTasks.get(taskId);
 
   if (!currentTask) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Token-CB] ${slug}#${asset.tokenId} | SKIP: Task not found`);
+    }
     if (traceId) bidTraceLogger.logEarlyReturn(traceId, 'Task not in activeTasks', { marketplace: 'opensea', taskId });
     return;
   }
 
   if (!currentTask.running) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Token-CB] ${slug}#${asset.tokenId} | SKIP: Task not running`);
+    }
     if (traceId) bidTraceLogger.logEarlyReturn(traceId, 'Task not running', { marketplace: 'opensea', taskId });
     return;
   }
 
   const selectsOpensea = currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea");
   if (!selectsOpensea) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Token-CB] ${slug}#${asset.tokenId} | SKIP: OpenSea not selected`);
+    }
     if (traceId) bidTraceLogger.logEarlyReturn(traceId, 'OpenSea not in task marketplaces', { marketplace: 'opensea', taskId });
     return;
   }
 
   const openseaEnabled = enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea");
   if (!openseaEnabled) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Token-CB] ${slug}#${asset.tokenId} | SKIP: OpenSea not enabled globally`);
+    }
     if (traceId) bidTraceLogger.logEarlyReturn(traceId, 'OpenSea not enabled globally', { marketplace: 'opensea', taskId });
     return;
   }
@@ -17996,6 +18337,9 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
       const incomingOfferWei = BigInt(offerPrice);
 
       if (currentOfferWei >= incomingOfferWei) {
+        if (DEBUG) {
+          console.log(`[BidFlow][OS-Token-CB] ${slug}#${asset.tokenId} | SKIP: Existing bid ${currentOfferWei} >= incoming ${incomingOfferWei}`);
+        }
         if (traceId) bidTraceLogger.logEarlyReturn(traceId, 'Existing active order has higher or equal price', {
           marketplace: 'opensea',
           taskId,
@@ -18007,13 +18351,16 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
       }
     }
 
-    const { currency } = await calculateBidPrice(currentTask, 0, "opensea");
+    const { currency, decimal, currencySymbol } = await calculateBidPrice(currentTask, 0, "opensea");
 
     const wallet = await walletCache.getWalletById(walletId);
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
     // Cancel existing orders synchronously BEFORE placing new bid
     if (orders.length > 0) {
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Token-CB] ${slug}#${asset.tokenId} | Cancelling ${orders.length} existing orders before new bid`);
+      }
       if (traceId) bidTraceLogger.log(traceId, 'cancel_start', 'debug', {
         marketplace: 'opensea',
         taskId,
@@ -18036,6 +18383,11 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
         tokenId: asset.tokenId.toString(),
         collectionSlug: slug,
       });
+    }
+
+    const offerEth = Number(offerPrice) / Math.pow(10, decimal);
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Token-CB] ${slug}#${asset.tokenId} | PLACING BID: ${offerEth} ${currencySymbol}`);
     }
 
     if (traceId) bidTraceLogger.log(traceId, 'bid_api_start', 'info', {
@@ -18122,38 +18474,57 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
 }
 
 async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
-  const { _id, bidCount, address, walletId, slug, offerPrice, creatorFees, enforceCreatorFee, expiry, trait } = data;
+  const { _id, bidCount, address, walletId, slug, offerPrice, creatorFees, expiry, trait } = data;
   const taskId = _id;
+
   if (!enabledMarketplaces.length) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Trait-CB] ${slug} | SKIP: No marketplaces enabled`);
+    }
     return;
   }
 
   const currentTask = activeTasks.get(taskId);
 
   if (!currentTask) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Trait-CB] ${slug} | SKIP: Task not found`);
+    }
     return;
   }
 
   if (!currentTask.running) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Trait-CB] ${slug} | SKIP: Task not running`);
+    }
     return;
   }
 
   const selectsOpensea = currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea");
   if (!selectsOpensea) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Trait-CB] ${slug} | SKIP: OpenSea not selected`);
+    }
     return;
   }
 
   const openseaEnabled = enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea");
   if (!openseaEnabled) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Trait-CB] ${slug} | SKIP: OpenSea not enabled globally`);
+    }
     return;
   }
 
   if (!trait) {
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Trait-CB] ${slug} | SKIP: No trait provided`);
+    }
     return;
   }
 
-  const parsedTrait: { type: string; value: string } = JSON.parse(trait);
-  const identifier = `${parsedTrait.type}:${parsedTrait.value}`;
+  const traitObj: { type: string; value: string } = JSON.parse(trait);
+  const identifier = `${traitObj.type}:${traitObj.value}`;
 
   try {
     const orders = await Order.find({
@@ -18167,6 +18538,9 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
     if (orders.length > 0) {
+      if (DEBUG) {
+        console.log(`[BidFlow][OS-Trait-CB] ${slug} [${identifier}] | Cancelling ${orders.length} existing orders before new bid`);
+      }
       await cancelOpenseaOrdersDirectly({
         taskId,
         walletId,
@@ -18178,7 +18552,12 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
       });
     }
 
-    const { currency } = await calculateBidPrice(currentTask, 0, "opensea");
+    const { currency, decimal, currencySymbol } = await calculateBidPrice(currentTask, 0, "opensea");
+    const offerEth = Number(offerPrice) / Math.pow(10, decimal);
+
+    if (DEBUG) {
+      console.log(`[BidFlow][OS-Trait-CB] ${slug} [${identifier}] | PLACING BID: ${offerEth} ${currencySymbol}`);
+    }
 
     await bidOnOpensea(
       taskId,
@@ -18237,6 +18616,9 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
 
   try {
     if (!enabledMarketplaces.length) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Token-CB] ${data.slug} [${data.tokenId}] | SKIP: No marketplaces enabled`);
+      }
       bidTraceLogger.logEarlyReturn(traceId, 'no_enabled_marketplaces', {
         correlationId, marketplace: 'magiceden', taskId: data._id, collectionSlug: data.slug, bidType: 'token', tokenId: data.tokenId.toString()
       });
@@ -18245,6 +18627,9 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
     const { _id, address, contractAddress, quantity, offerPrice, walletId, slug, tokenId, expiration } = data
     const currentTask = activeTasks.get(_id)
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Token-CB] ${slug} [${tokenId}] | SKIP: Task not running or MagicEden not enabled`);
+      }
       bidTraceLogger.logEarlyReturn(traceId, 'task_not_running_or_marketplace_disabled', {
         correlationId, marketplace: 'magiceden', taskId: _id, collectionSlug: slug, bidType: 'token', tokenId: tokenId.toString()
       });
@@ -18266,6 +18651,9 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
       const incomingOfferWei = BigInt(offerPrice);
 
       if (currentOfferWei >= incomingOfferWei) {
+        if (DEBUG) {
+          console.log(`[BidFlow][ME-Token-CB] ${slug} [${tokenId}] | SKIP: Existing bid ${currentOfferWei} >= incoming ${incomingOfferWei}`);
+        }
         bidTraceLogger.logEarlyReturn(traceId, `existing_bid_higher_or_equal: current=${currentOfferWei} incoming=${incomingOfferWei}`, {
           correlationId, marketplace: 'magiceden', taskId: _id, collectionSlug: slug, bidType: 'token', tokenId: tokenId.toString()
         });
@@ -18282,6 +18670,9 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
 
     // Cancel existing orders synchronously BEFORE placing new bid
     if (orders.length > 0) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Token-CB] ${slug} [${tokenId}] | Cancelling ${orders.length} existing orders before counterbid`);
+      }
       bidTraceLogger.log(traceId, 'cancel_start', 'debug', {
         correlationId,
         marketplace: 'magiceden',
@@ -18322,6 +18713,11 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
       tokenId: tokenId.toString(),
       ourBidAmount: offerPrice?.toString()
     });
+
+    const offerEth = Number(offerPrice) / 1e18;
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Token-CB] ${slug} [${tokenId}] | PLACING COUNTERBID: ${offerEth} WETH`);
+    }
 
     await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, (offerPrice as number).toString(), privateKey, slug, expiration, currency, undefined, tokenId)
 
@@ -18425,6 +18821,9 @@ async function processBlurTraitBid(data: {
 
   // Early exit if marketplace already stopped due to insufficient balance
   if (isMarketplaceStoppedDueToBalance(data._id, 'blur')) {
+    if (DEBUG) {
+      console.log(`[BidFlow][Blur-Trait] ${data.slug} [${traitKey}] | SKIP: Marketplace stopped (insufficient balance)`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'marketplace_stopped_insufficient_balance', {
       correlationId, marketplace: 'blur', taskId: data._id, collectionSlug: data.slug, bidType: 'trait', traitKey
     });
@@ -18433,6 +18832,9 @@ async function processBlurTraitBid(data: {
 
   try {
     if (!enabledMarketplaces.length) {
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Trait] ${data.slug} [${traitKey}] | SKIP: No marketplaces enabled`);
+      }
       bidTraceLogger.logEarlyReturn(traceId, 'no_enabled_marketplaces', {
         correlationId, marketplace: 'blur', taskId: data._id, collectionSlug: data.slug, bidType: 'trait', traitKey
       });
@@ -18447,11 +18849,14 @@ async function processBlurTraitBid(data: {
 
     // Skip trait validation - preprocessing already determined valid traits
     // The trait passed in the job data is already validated
-    const parsedTrait = JSON.parse(trait);
+    JSON.parse(trait); // Validate JSON
 
     const currentTask = activeTasks.get(_id)
 
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("blur") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("blur")) {
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Trait] ${slug} [${traitKey}] | SKIP: Task not running or Blur not selected`);
+      }
       bidTraceLogger.logEarlyReturn(traceId, 'task_not_active_or_marketplace_disabled', {
         correlationId, marketplace: 'blur', taskId: _id, collectionSlug: slug, bidType: 'trait', traitKey
       });
@@ -18482,6 +18887,9 @@ async function processBlurTraitBid(data: {
 
 
     if (stopBid) {
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Trait] ${slug} [${identifier}] | SKIP: Floor outside configured range`);
+      }
 
       if (orders.length > 0) {
 
@@ -18518,6 +18926,9 @@ async function processBlurTraitBid(data: {
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "blur")
 
+    if (DEBUG) {
+      console.log(`[BidFlow][Blur-Trait] ${slug} [${identifier}] | Floor: ${floor_price} ETH | PriceCalc: offer=${offerPriceEth} min=${minBidPriceEth} max=${maxBidPriceEth} BETH`);
+    }
 
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
     const { BETH } = await import('./utils/currencies');
@@ -18525,6 +18936,9 @@ async function processBlurTraitBid(data: {
 
 
     if (balance < minBidPriceEth) {
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Trait] ${slug} [${identifier}] | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} BETH`);
+      }
 
       skipStats[_id]['blur']++;
       await logBidError(
@@ -18612,6 +19026,9 @@ async function processBlurTraitBid(data: {
     const bidCount = getIncrementedBidCount(BLUR, slug, _id)
 
     if (orders.length > 0) {
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Trait] ${slug} [${identifier}] | Cancelling ${orders.length} existing orders before new bid`);
+      }
 
       const cancelData = orders.map((order) => {
         const payload = JSON.parse(order.orderHash)
@@ -18625,10 +19042,11 @@ async function processBlurTraitBid(data: {
       queue.addBulk(cancelData);
     }
 
-    // Add tolerance for floating-point comparison (0.000001 = 1e-6)
-    const PRICE_TOLERANCE = 0.000001;
-
     if (outbidOptions.outbid && offerEth >= maxBidPriceEth) {
+      // Orders already cancelled above - no additional cancellation needed
+      if (DEBUG) {
+        console.log(`[BidFlow][Blur-Trait] ${slug} [${identifier}] | SKIP: Bid ${offerEth} exceeds max ${maxBidPriceEth} BETH`);
+      }
       if (!skipStats[_id]) {
         skipStats[_id] = {
           opensea: 0,
@@ -18639,27 +19057,11 @@ async function processBlurTraitBid(data: {
       skipStats[_id]['blur']++;
       const message = `❌ Offer price ${offerEth} BETH for ${slug} trait ${trait} bid exceeds max bid price ${maxBidPriceEth} BETH FOR BLUR BID.Skipping ...`.toUpperCase()
 
-
       await logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "blur");
-      if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-
-        if (orders.length > 0) {
-          const cancelData = orders.map((order) => {
-            const payload = JSON.parse(order.orderHash)
-
-            return {
-              name: CANCEL_BLUR_BID,
-              data: { walletId, payload, taskId: _id, orderKey: order._id }
-            }
-          })
-          // Log cancellation enqueue
-          queue.addBulk(cancelData);
-        }
-      }
 
       bidTraceLogger.logEarlyReturn(traceId, 'max_bid_price_exceeded', {
         correlationId, marketplace: 'blur', taskId: _id, collectionSlug: slug, bidType: 'trait', traitKey,
-        metadata: { offerEth, maxBidPriceEth, cancelMaxWhenOutbid: currentTask.outbidOptions.cancelMaxWhenOutbid }
+        metadata: { offerEth, maxBidPriceEth }
       });
       return;
     } else if (offerEth < minBidPriceEth) {
@@ -18667,11 +19069,16 @@ async function processBlurTraitBid(data: {
     }
 
 
+    const finalOfferEth = Math.round(Number(traitOffer) / 1e18 * 1000000) / 1000000;
+    if (DEBUG) {
+      console.log(`[BidFlow][Blur-Trait] ${slug} [${identifier}] | PLACING BID: ${finalOfferEth} BETH`);
+    }
+
     // Log bid API start
     bidTraceLogger.log(traceId, 'bid_api_start', 'info', {
       correlationId, marketplace: 'blur', taskId: _id, collectionSlug: slug, bidType: 'trait', traitKey,
       ourBidAmount: traitOffer.toString(),
-      metadata: { bidCount, expiry, offerEth: Math.round(Number(traitOffer) / 1e18 * 1000000) / 1000000 }
+      metadata: { bidCount, expiry, offerEth: finalOfferEth }
     });
 
     await bidOnBlur(_id, bidCount, address, privateKey, contractAddress, traitOffer, slug, expiry, trait, data.batchInfo);
@@ -18731,7 +19138,7 @@ async function processBlurTraitBid(data: {
   }
 }
 
-async function processMagicedenScheduledBid(task: ITask, jobId?: string, scheduleJob?: Job) {
+async function processMagicedenScheduledBid(task: ITask, _jobId?: string, scheduleJob?: Job) {
   // Structured start
   const taskId = task._id.toString();
   const currentLoopCount = loopCounterStats[taskId]?.magiceden || 1;
@@ -18756,11 +19163,21 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
     await Promise.race([
       (async () => {
         // Early return consolidation
-        if (!enabledMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) { return; }
+        if (!enabledMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) {
+          if (DEBUG) {
+            console.log(`[BidFlow][ME-Sched] ${task.contract?.slug || taskId} | SKIP: MagicEden not enabled`);
+          }
+          return;
+        }
 
         const currentTask = activeTasks.get(task._id);
 
-        if (!currentTask?.running || !currentTask.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) { return; }
+        if (!currentTask?.running || !currentTask.selectedMarketplaces.map(m => m.toLowerCase()).includes("magiceden")) {
+          if (DEBUG) {
+            console.log(`[BidFlow][ME-Sched] ${task.contract?.slug || taskId} | SKIP: Task not running or MagicEden not selected`);
+          }
+          return;
+        }
 
         // Transition from SCHEDULED to STARTED for this marketplace - AFTER validation
         setTaskStatus(taskId, 'STARTED', `magiceden scheduled bid starting - Loop #${currentLoopCount}`, 'magiceden');
@@ -18784,10 +19201,18 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
           taskPreprocessing.set(taskId, preprocessing);
 
           // If preprocessing didn't enable MagicEden, it means something went wrong
-          if (!preprocessing.magiceden.enabled) { throw new Error(`Preprocessing failed to enable MagicEden for task ${taskId}`); }
+          if (!preprocessing.magiceden.enabled) {
+            if (DEBUG) {
+              console.log(`[BidFlow][ME-Sched] ${currentTask.contract.slug} | SKIP: Preprocessing failed`);
+            }
+            throw new Error(`Preprocessing failed to enable MagicEden for task ${taskId}`);
+          }
         }
 
         if (preprocessing.magiceden.skipReason) {
+          if (DEBUG) {
+            console.log(`[BidFlow][ME-Sched] ${currentTask.contract.slug} | SKIP: ${preprocessing.magiceden.skipReason}`);
+          }
           if (!warningBids[taskId]) {
             warningBids[taskId] = { opensea: false, magiceden: false, blur: false };
           }
@@ -18831,6 +19256,9 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
 
           lockAcquired = timedLockManager.acquireLock(taskId, 'magiceden');
           if (!lockAcquired) {
+            if (DEBUG) {
+              console.log(`[BidFlow][ME-Sched] ${currentTask.contract.slug} | SKIP: Lock not acquired`);
+            }
             return;
           }
         } catch (lockError) {
@@ -18892,6 +19320,9 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
         // Create jobs based on preprocessing results
         if (preprocessing.magiceden.tokens.length > 0) {
           // Token bid
+          if (DEBUG) {
+            console.log(`[BidFlow][ME-Sched] ${currentTask.contract.slug} | Queueing ${preprocessing.magiceden.tokens.length} token bid jobs`);
+          }
 
           // Ensure parent job exists BEFORE processing jobs
           await ensureParentJobExists(taskId, 'magiceden');
@@ -18968,6 +19399,9 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
         }
         else if (preprocessing.magiceden.traits.length > 0) {
           // Trait bid
+          if (DEBUG) {
+            console.log(`[BidFlow][ME-Sched] ${currentTask.contract.slug} | Queueing ${preprocessing.magiceden.traits.length} trait bid jobs`);
+          }
 
           // Ensure parent job exists BEFORE processing jobs
           await ensureParentJobExists(taskId, 'magiceden');
@@ -19040,7 +19474,10 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
         }
         else if (preprocessing.magiceden.jobCount === 1) {
           // Collection bid
-          const jobId = `bid-${taskId}-magiceden-${currentTask.contract.slug}-collection`
+          if (DEBUG) {
+            console.log(`[BidFlow][ME-Sched] ${currentTask.contract.slug} | Queueing 1 collection bid job`);
+          }
+          const collJobId = `bid-${taskId}-magiceden-${currentTask.contract.slug}-collection`
 
           // Ensure parent job exists BEFORE adding job
           await ensureParentJobExists(taskId, 'magiceden');
@@ -19057,7 +19494,7 @@ async function processMagicedenScheduledBid(task: ITask, jobId?: string, schedul
           await queue.add(
             MAGICEDEN_COLLECTION_BID,
             { taskId: taskId },
-            { jobId, attempts: 1 }
+            { jobId: collJobId, attempts: 1 }
           );
 
           // Update parent job count after successful job addition - mark as all queued for single job
@@ -19219,6 +19656,9 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
   // Check if task is blacklisted before processing
   if (isTaskBlacklisted(taskId)) {
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Coll] ${taskId} | SKIP: Task blacklisted`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'task_blacklisted', {
       correlationId, marketplace: 'magiceden', taskId, collectionSlug: 'unknown', bidType: 'collection'
     });
@@ -19227,6 +19667,9 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
   try {
     if (!enabledMarketplaces.length) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Coll] ${taskId} | SKIP: No marketplaces enabled`);
+      }
       bidTraceLogger.logEarlyReturn(traceId, 'no_enabled_marketplaces', {
         correlationId, marketplace: 'magiceden', taskId, collectionSlug: 'unknown', bidType: 'collection'
       });
@@ -19236,6 +19679,9 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
     // Fetch task from activeTasks
     const currentTask = activeTasks.get(taskId);
     if (!currentTask || !currentTask?.running) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Coll] ${taskId} | SKIP: Task not running`);
+      }
       bidTraceLogger.logEarlyReturn(traceId, 'task_not_active', {
         correlationId, marketplace: 'magiceden', taskId, collectionSlug: 'unknown', bidType: 'collection'
       });
@@ -19243,6 +19689,9 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
     }
 
     if (!currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden")) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Coll] ${currentTask.contract.slug} | SKIP: MagicEden not selected`);
+      }
       bidTraceLogger.logEarlyReturn(traceId, 'marketplace_not_selected', {
         correlationId, marketplace: 'magiceden', taskId, collectionSlug: currentTask.contract.slug, bidType: 'collection'
       });
@@ -19250,6 +19699,9 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
     }
 
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Coll] ${currentTask.contract.slug} | SKIP: MagicEden not enabled`);
+      }
       bidTraceLogger.logEarlyReturn(traceId, 'marketplace_disabled', {
         correlationId, marketplace: 'magiceden', taskId, collectionSlug: currentTask.contract.slug, bidType: 'collection'
       });
@@ -19292,6 +19744,9 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
     const stopBid = await stopOption(currentTask, 'magiceden', floor_price, false)
     if (stopBid) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Coll] ${currentTask.contract.slug} | SKIP: Floor outside configured range`);
+      }
       if (orders.length > 0) {
         const orderKeys = orders.map(order => order._id)
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
@@ -19306,6 +19761,10 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
 
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Coll] ${currentTask.contract.slug} | Floor: ${floor_price} ETH | PriceCalc: offer=${offerPriceEth} min=${minBidPriceEth} max=${maxBidPriceEth} ${currencySymbol}`);
+    }
+
 
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
@@ -19313,6 +19772,9 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
 
     if (balance < minBidPriceEth) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Coll] ${currentTask.contract.slug} | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} ${currencySymbol}`);
+      }
       const errorMsg = balance <= 0
         ? `Insufficient ${currencySymbol} balance: ${balance} (zero or negative) for task ${taskId}`
         : `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId}`;
@@ -19434,6 +19896,9 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
     const bidCount = getIncrementedBidCount(MAGICEDEN, currentTask.contract.slug, currentTask._id)
 
     if (orders.length > 0) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Coll] ${currentTask.contract.slug} | Cancelling ${orders.length} existing orders before new bid`);
+      }
       const orderKeys = orders.map(order => order._id)
       const extractedOrderIds = await extractMagicedenOrderHash(orders)
       queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: currentTask.walletId, orderKeys: orderKeys, taskId: currentTask._id }); // Non-blocking
@@ -19442,21 +19907,13 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
     const outbidOptions = currentTask.outbidOptions
 
     if (outbidOptions.outbid && offerEth >= maxBidPriceEth) {
-      if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-        if (orders.length > 0) {
-          const orderKeys = orders.map((order: any) => order._id)
-          const extractedOrderIds = await extractMagicedenOrderHash(orders)
-          // Log cancellation enqueue
-          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: currentTask.walletId, orderKeys, taskId: currentTask._id }); // Non-blocking
-        }
+      // Orders already cancelled above - no additional cancellation needed
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Coll] ${currentTask.contract.slug} | SKIP: Bid ${offerEth} exceeds max ${maxBidPriceEth} ${currencySymbol}`);
       }
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${currentTask.contract.slug} COLLECTION bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase()
 
-
       logBidError(currentTask._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "magiceden"); // Non-blocking
-
-      if (currentTask.outbidOptions.cancelMaxWhenOutbid && orders.length > 0) {
-      }
 
       if (!skipStats[currentTask._id]) {
         skipStats[currentTask._id] = {
@@ -19468,18 +19925,23 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
       skipStats[currentTask._id].magiceden++;
       bidTraceLogger.logEarlyReturn(traceId, 'max_bid_price_exceeded', {
         correlationId, marketplace: 'magiceden', taskId, collectionSlug: currentTask.contract.slug, bidType: 'collection',
-        metadata: { offerEth, maxBidPriceEth, cancelMaxWhenOutbid: currentTask.outbidOptions.cancelMaxWhenOutbid }
+        metadata: { offerEth, maxBidPriceEth }
       });
       return;
     } else if (offerEth < minBidPriceEth) {
       colletionOffer = minBidPriceEth * Math.pow(10, decimal);
     }
 
+    const finalOfferEth = Number(colletionOffer) / Math.pow(10, decimal);
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Coll] ${currentTask.contract.slug} | PLACING BID: ${finalOfferEth} ${currencySymbol}`);
+    }
+
     // Log bid API start
     bidTraceLogger.log(traceId, 'bid_api_start', 'info', {
       correlationId, marketplace: 'magiceden', taskId, collectionSlug: currentTask.contract.slug, bidType: 'collection',
       ourBidAmount: colletionOffer.toString(),
-      metadata: { bidCount, expiration, offerEth: Number(colletionOffer) / Math.pow(10, decimal) }
+      metadata: { bidCount, expiration, offerEth: finalOfferEth }
     });
 
     try {
@@ -19555,6 +20017,9 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
   // Early exit if marketplace already stopped due to insufficient balance
   if (isMarketplaceStoppedDueToBalance(data._id, 'magiceden')) {
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Token] ${data.slug}#${tokenIdStr} | SKIP: Marketplace stopped (insufficient balance)`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'marketplace_stopped_insufficient_balance', {
       correlationId, marketplace: 'magiceden', taskId, collectionSlug: data.slug, bidType: 'token', tokenId: tokenIdStr
     });
@@ -19564,6 +20029,9 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
   try {
     const { contractAddress, address, quantity, walletId, slug, tokenId, _id } = data
     if (!enabledMarketplaces.length) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Token] ${slug}#${tokenIdStr} | SKIP: No marketplaces enabled`);
+      }
       bidTraceLogger.logEarlyReturn(traceId, 'no_enabled_marketplaces', {
         correlationId, marketplace: 'magiceden', taskId, collectionSlug: slug, bidType: 'token', tokenId: tokenIdStr
       });
@@ -19572,6 +20040,9 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
     // Early return for token validation
     if (!currentTokenIds[_id]?.magiceden?.includes(+tokenId)) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Token] ${slug}#${tokenIdStr} | SKIP: Token not in active list`);
+      }
       bidTraceLogger.logEarlyReturn(traceId, 'token_not_in_current_list', {
         correlationId, marketplace: 'magiceden', taskId, collectionSlug: slug, bidType: 'token', tokenId: tokenIdStr
       });
@@ -19579,6 +20050,9 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     }
     const currentTask = activeTasks.get(_id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Token] ${slug}#${tokenIdStr} | SKIP: Task not running or MagicEden not selected/enabled`);
+      }
       bidTraceLogger.logEarlyReturn(traceId, 'task_not_active_or_marketplace_disabled', {
         correlationId, marketplace: 'magiceden', taskId, collectionSlug: slug, bidType: 'token', tokenId: tokenIdStr
       });
@@ -19621,6 +20095,9 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
     const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), false)
     if (stopBid) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Token] ${slug}#${tokenId} | SKIP: Floor outside configured range`);
+      }
       if (orders.length > 0) {
         const orderKeys = orders.map((order: any) => order._id)
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
@@ -19634,11 +20111,18 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
 
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Token] ${slug}#${tokenId} | Floor: ${floor_price} ETH | PriceCalc: offer=${offerPriceEth} min=${minBidPriceEth} max=${maxBidPriceEth} ${currencySymbol}`);
+    }
+
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
     const balance = await fetchERC20BalanceFresh(address, currency);
 
     if (balance < minBidPriceEth) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Token] ${slug}#${tokenId} | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} ${currencySymbol}`);
+      }
       skipStats[_id]['magiceden']++;
       await logBidError(
         _id,
@@ -19744,15 +20228,18 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     const bidCount = getIncrementedBidCount(MAGICEDEN, slug, _id)
 
     if (outbidOptions.outbid && offerEth >= maxBidPriceEth) {
-      if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-        if (orders.length > 0) {
-          const orderKeys = orders.map((order: any) => order._id)
-          const extractedOrderIds = await extractMagicedenOrderHash(orders)
-          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId, orderKeys, taskId: _id });
+      // Always cancel existing orders when exceeding max bid price
+      // This prevents orphaned orders from accumulating when we can't compete
+      if (orders.length > 0) {
+        if (DEBUG) {
+          console.log(`[BidFlow][ME-Token] ${slug}#${tokenId} | Cancelling ${orders.length} existing orders (max exceeded)`);
         }
+        const orderKeys = orders.map((order: any) => order._id)
+        const extractedOrderIds = await extractMagicedenOrderHash(orders)
+        queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId, orderKeys, taskId: _id });
       }
       const message = `❌ Offer price ${offerEth} ${currencySymbol} for ${slug} ${tokenId} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase()
-      logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", `Offer price ${offerEth} ${currencySymbol} for ${slug} ${tokenId} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase(), "skipped", "magiceden");
+      logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "magiceden");
 
       skipStats[_id].magiceden++;
       bidTraceLogger.logEarlyReturn(traceId, 'max_bid_price_exceeded', {
@@ -19766,6 +20253,9 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
     // Cancel existing orders only when we're actually proceeding with the bid
     if (orders.length > 0) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Token] ${slug}#${tokenId} | Cancelling ${orders.length} existing orders before new bid`);
+      }
       const orderKeys = orders.map((order: any) => order._id)
       const extractedOrderIds = await extractMagicedenOrderHash(orders)
       queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId, orderKeys, taskId: _id });
@@ -19774,6 +20264,11 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     // Fetch wallet and decrypt private key just before use
     const wallet = await walletCache.getWalletById(walletId);
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
+
+    const finalOfferEth = Number(tokenOffer) / Math.pow(10, decimal);
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Token] ${slug}#${tokenId} | PLACING BID: ${finalOfferEth} ${currencySymbol}`);
+    }
 
     // Log bid API start
     bidTraceLogger.log(traceId, 'bid_api_start', 'info', {
@@ -19886,6 +20381,9 @@ async function processMagicedenTraitBid(data: {
 
   // Early exit if marketplace already stopped due to insufficient balance
   if (isMarketplaceStoppedDueToBalance(data._id, 'magiceden')) {
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Trait] ${data.slug} [${traitKey}] | SKIP: Marketplace stopped (insufficient balance)`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'marketplace_stopped_insufficient_balance', {
       correlationId, marketplace: 'magiceden', taskId: data._id, collectionSlug: data.slug, bidType: 'trait', traitKey
     });
@@ -19894,6 +20392,9 @@ async function processMagicedenTraitBid(data: {
 
   // Early validation
   if (!enabledMarketplaces.length || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) {
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Trait] ${data.slug} [${traitKey}] | SKIP: MagicEden not enabled`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'marketplace_not_enabled', {
       correlationId, marketplace: 'magiceden', taskId: data._id, collectionSlug: data.slug, bidType: 'trait', traitKey
     });
@@ -19902,6 +20403,9 @@ async function processMagicedenTraitBid(data: {
 
   const activeTask = activeTasks.get(data._id);
   if (!activeTask?.running || taskStatus[data._id]?.marketplaces?.magiceden?.status === 'COMPLETED' || taskStatus[data._id]?.marketplaces?.magiceden?.status === 'STOPPED') {
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Trait] ${data.slug} [${traitKey}] | SKIP: Task not running or completed/stopped`);
+    }
     bidTraceLogger.logEarlyReturn(traceId, 'task_not_active', {
       correlationId, marketplace: 'magiceden', taskId: data._id, collectionSlug: data.slug, bidType: 'trait', traitKey
     });
@@ -19918,6 +20422,9 @@ async function processMagicedenTraitBid(data: {
 
     const currentTask = activeTasks.get(_id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden")) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Trait] ${slug} [${traitKey}] | SKIP: Task not running or MagicEden not selected`);
+      }
       bidTraceLogger.logEarlyReturn(traceId, 'task_not_active_or_marketplace_disabled', {
         correlationId, marketplace: 'magiceden', taskId: _id, collectionSlug: slug, bidType: 'trait', traitKey
       });
@@ -19945,6 +20452,9 @@ async function processMagicedenTraitBid(data: {
 
     const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), false, traitFloor, identifier)
     if (stopBid) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Trait] ${slug} [${identifier}] | SKIP: Floor outside configured range`);
+      }
       if (orders.length > 0) {
         const orderKeys = orders.map((order: any) => order._id)
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
@@ -19963,11 +20473,18 @@ async function processMagicedenTraitBid(data: {
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
 
+    if (DEBUG) {
+      console.log(`[BidFlow][ME-Trait] ${slug} [${identifier}] | Floor: ${floor_price} ETH | PriceCalc: offer=${offerPriceEth} min=${minBidPriceEth} max=${maxBidPriceEth} ${currencySymbol}`);
+    }
+
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
     const balance = await fetchERC20BalanceFresh(address, currency);
 
     if (balance < minBidPriceEth) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Trait] ${slug} [${identifier}] | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} ${currencySymbol}`);
+      }
       skipStats[_id]['magiceden']++;
       await logBidError(
         _id,
@@ -20074,6 +20591,9 @@ async function processMagicedenTraitBid(data: {
     const bidCount = getIncrementedBidCount(MAGICEDEN, slug, _id)
 
     if (orders.length > 0) {
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Trait] ${slug} [${identifier}] | Cancelling ${orders.length} existing orders before new bid`);
+      }
       const orderKeys = orders.map((order: any) => order._id)
       const extractedOrderIds = await extractMagicedenOrderHash(orders)
       queue.add(CANCEL_MAGICEDEN_BID, {
@@ -20084,12 +20604,9 @@ async function processMagicedenTraitBid(data: {
       }); // Non-blocking
     }
     if (outbidOptions.outbid && offerEth >= maxBidPriceEth) {
-      if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-        if (orders.length > 0) {
-          const orderKeys = orders.map((order: any) => order._id)
-          const extractedOrderIds = await extractMagicedenOrderHash(orders)
-          queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId, orderKeys, taskId: _id });
-        }
+      // Orders already cancelled above - no additional cancellation needed
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Trait] ${slug} [${identifier}] | SKIP: Bid ${offerEth} exceeds max ${maxBidPriceEth} ${currencySymbol}`);
       }
       logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", `Offer price ${offerEth} ${currencySymbol} for ${slug} ${JSON.stringify(trait)} bid exceeds max bid price ${maxBidPriceEth} ${currencySymbol} FOR MAGICEDEN.Skipping ...`.toUpperCase(), "skipped", "magiceden");
 
@@ -20125,6 +20642,11 @@ async function processMagicedenTraitBid(data: {
         traitKey,
         ourBidAmount: traitOffer.toString()
       });
+
+      const finalOfferEth = Number(traitOffer) / Math.pow(10, decimal);
+      if (DEBUG) {
+        console.log(`[BidFlow][ME-Trait] ${slug} [${identifier}] | PLACING BID: ${finalOfferEth} ${currencySymbol}`);
+      }
 
       await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, traitOffer.toString(), privateKey, slug, expiration, currency, trait)
 

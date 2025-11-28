@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Counterbid Handler Debug Logging**: Added comprehensive debug logging to all 3 counterbid WebSocket handlers for improved visibility into counterbid decision-making
+  - Enable via `DEBUG=true` in environment
+  - **Log Prefix Pattern**: `[Counterbid][{ME|OS|Blur}] {slug} | MESSAGE`
+  - **Handlers Updated**:
+    - `handleMagicEdenCounterbid`: WS event receipt, dedup checks, own bid detection, counterbid disabled, pending checks, price validation, job queue
+    - `handleOpenseaCounterbid`: WS event receipt, dedup checks, own bid detection, counterbid disabled, pending checks, price validation, job queue
+    - `handleBlurCounterbid`: WS event receipt, counterbid disabled, trait matching, price validation (min/max), job queue for trait and collection bids
+  - **Log Points per Handler**:
+    - WS Event: `[Counterbid][XX] {slug} | WS Event: {type} | Type: {bidType} | Price: {price} | Maker: {maker}`
+    - Dedup: `[Counterbid][XX] {slug} | Dedup Check: orderHash={hash} | Result: {PASS|BLOCKED}`
+    - Own Bid: `[Counterbid][XX] {slug} | SKIP: Own bid detected`
+    - Disabled: `[Counterbid][XX] {slug} | SKIP: Counterbid disabled for task`
+    - Pending: `[Counterbid][XX] {slug} | Pending Check: identifier={id} | Result: {PASS|BLOCKED}`
+    - Price: `[Counterbid][XX] {slug} [{identifier}] | Price Check: incoming={x} min={y} max={z} | Result: {VALID|BELOW_MIN|ABOVE_MAX}`
+    - Queue: `[Counterbid][XX] {slug} [{identifier}] | QUEUE: {Token|Trait|Collection} counterbid at {price}`
+  - Files modified: `src/index.ts`
+  - Documentation: Added "Counterbid Handler Debug Logging" and "Counterbid Job Processor Debug Logging" sections to `BIDDING-FUNCTIONS.md` with flow diagrams
+  - **Note**: Job processor debug logs (`[BidFlow][XX-XX-CB]`) were already implemented - this adds handler-level logs (`[Counterbid][XX]`) and comprehensive documentation for both
+  - Resolves: Missing visibility into counterbid handler decision points
+  - Impact: Complete visibility into why counterbids are queued, skipped, or blocked at each decision point (handlers) and why they succeed or fail during execution (job processors)
+
+### Fixed
+- **Bid Price Changes Not Taking Effect While Task Running**: Fixed bug where editing `bidPrice`, `openseaBidPrice`, `blurBidPrice`, or `magicEdenBidPrice` while a task is running did not take effect until task restart
+  - **Root Cause**: `updateTaskData()` stored `dbTask.toObject()` which has `_id` as ObjectId, but `fetchCurrentTasks()` converts `_id` to string. This type inconsistency caused tasks fetched from `activeTasks` to have ObjectId `_id` which broke subsequent lookups when comparing against string keys.
+  - **Solution**: Convert `_id` and `user` to strings in `updateTaskData()` after calling `toObject()`, matching the pattern established in `fetchCurrentTasks()`
+  - Files modified: `src/index.ts` (updateTaskData function ~line 6362)
+  - Resolves: Bid price changes (min, max, hardCap) not applying until task restart
+  - Impact: All task field changes now take effect immediately on the next bid loop without requiring task restart
+
+- **Always Cancel Previous Orders Before Bidding**: Fixed active bid count exceeding total bid count due to orphaned orders not being cancelled
+  - **Root Cause**: When bids were skipped (max exceeded, own bid still valid), existing orders were not cancelled. The `cancelMaxWhenOutbid` flag controlled cancellation, but when false, orders accumulated.
+  - **Solution**: Orders are now ALWAYS cancelled before any bid processing decision, regardless of `cancelMaxWhenOutbid` flag
+  - **Pattern Applied**: All 8 scheduled bid functions now cancel orders unconditionally at the start of bid processing
+  - **Functions Fixed**:
+    - `processOpenseaTokenBid`: Now always cancels orders when max exceeded
+    - `processOpenseaTraitBid`: Removed redundant `cancelMaxWhenOutbid` check (orders already cancelled earlier)
+    - `processOpenseaCollectionBid`: Removed redundant `cancelMaxWhenOutbid` block
+    - `processMagicedenTokenBid`: Now always cancels orders when max exceeded
+    - `processMagicedenTraitBid`: Removed redundant `cancelMaxWhenOutbid` block
+    - `processMagicedenCollectionBid`: Removed redundant `cancelMaxWhenOutbid` block
+    - `processBlurCollectionBid`: Removed redundant `cancelMaxWhenOutbid` block
+    - `processBlurTraitBid`: Removed redundant `cancelMaxWhenOutbid` block
+  - Files modified: `src/index.ts`
+  - Resolves: Active bid count showing higher than total bid count, orphaned orders accumulating when bot can't compete
+  - Impact: Clean order state maintained regardless of bid outcome, consistent behavior across all marketplaces
+
 ### Changed
 - **Unified Debug Logging System**: Consolidated 6 separate debug environment variables into a single `DEBUG=true` variable
   - **Previous State**: 6 different debug variables across 5 files:
@@ -28,36 +75,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Impact: Single `DEBUG=true` in .env now enables all debug logging across the codebase
 
 ### Added
-- **Comprehensive BidFlow Debug Logging**: Added new `[BidFlow]` prefixed logs to track complete bid execution lifecycle
-  - **processOpenseaTokenBid** (~10 new log points):
-    - `[BidFlow][OS-Token] {slug}:{tokenId} | SKIP: Token not in active list`
-    - `[BidFlow][OS-Token] {slug}:{tokenId} | SKIP: Trading disabled (cached)`
-    - `[BidFlow][OS-Token] {slug}:{tokenId} | SKIP: Task not running or marketplace disabled`
-    - `[BidFlow][OS-Token] {slug}:{tokenId} | Floor: {price} ETH`
-    - `[BidFlow][OS-Token] {slug}:{tokenId} | STOP: Floor outside configured range`
-    - `[BidFlow][OS-Token] {slug}:{tokenId} | PriceCalc: offer={x} min={y} max={z} {currency}`
-    - `[BidFlow][OS-Token] {slug}:{tokenId} | SKIP: Insufficient balance`
-    - `[BidFlow][OS-Token] {slug}:{tokenId} | SKIP: Bid exceeds max`
-    - `[BidFlow][OS-Token] {slug}:{tokenId} | Cancelling {n} existing orders`
-    - `[BidFlow][OS-Token] {slug}:{tokenId} | PLACING BID: {amount} {currency}`
-  - **processOpenseaTraitBid** (~12 new log points):
-    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: Marketplace stopped (insufficient balance)`
-    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: Task blacklisted`
-    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: No marketplaces enabled`
-    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: OpenSea not enabled`
-    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: Task not running`
-    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: Marketplace completed or stopped`
-    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: Wallet not found`
-    - `[BidFlow][OS-Trait] {slug}:{trait} | Floor: {price} ETH | TraitFloor: {price} ETH`
-    - `[BidFlow][OS-Trait] {slug}:{trait} | STOP: Floor outside configured range`
-    - `[BidFlow][OS-Trait] {slug}:{trait} | PriceCalc: offer={x} min={y} max={z} {currency}`
-    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: Insufficient balance`
-    - `[BidFlow][OS-Trait] {slug}:{trait} | SKIP: Bid exceeds max`
-    - `[BidFlow][OS-Trait] {slug}:{trait} | Cancelling {n} existing orders`
-    - `[BidFlow][OS-Trait] {slug}:{trait} | PLACING BID: {amount} {currency}`
+- **Comprehensive BidFlow Debug Logging**: Added `[BidFlow]` prefixed logs to ALL 19 bidding job processors for complete bid execution lifecycle visibility
+  - Enable via `DEBUG=true` in environment
+  - **Log Pattern**: `[BidFlow][PREFIX] {slug} [{identifier}] | MESSAGE`
+  - **Prefixes by Function**:
+    - Scheduled Bids: `[OS-Sched]`, `[OS-Coll]`, `[OS-Token]`, `[OS-Trait]`, `[Blur-Sched]`, `[Blur-Coll]`, `[Blur-Trait]`, `[ME-Sched]`, `[ME-Coll]`, `[ME-Token]`, `[ME-Trait]`
+    - Counterbids: `[OS-Coll-CB]`, `[OS-Token-CB]`, `[OS-Trait-CB]`, `[Blur-Coll-CB]`, `[Blur-Trait-CB]`, `[ME-Coll-CB]`, `[ME-Token-CB]`, `[ME-Trait-CB]`
+  - **Log Points per Processor**:
+    - Early exits: `SKIP: {reason}` (marketplace stopped, task blacklisted, not enabled, floor outside range, insufficient balance, bid exceeds max)
+    - Price decisions: `Floor: X ETH`, `PriceCalc: offer=X min=Y max=Z CURRENCY`
+    - Cancellation: `Cancelling N existing orders before bid/counterbid`
+    - Bid placement: `PLACING BID: X CURRENCY` or `PLACING COUNTERBID: X CURRENCY`
+  - **Functions Updated** (19 total):
+    - OpenSea: `processOpenseaScheduledBid`, `processOpenseaCollectionBid`, `processOpenseaTokenBid`, `processOpenseaTraitBid`, `openseaCollectionCounterBid`, `openseaTokenCounterBid`, `openseaTraitCounterBid`
+    - Blur: `processBlurScheduledBid`, `processBlurCollectionBid`, `processBlurTraitBid`, `blurCollectionCounterBid`, `blurTraitCounterBid`
+    - MagicEden: `processMagicedenScheduledBid`, `processMagicedenCollectionBid`, `processMagicedenTokenBid`, `processMagicedenTraitBid`, `magicedenCollectionCounterBid`, `magicedenTokenCounterBid`, `magicedenTraitCounterBid`
   - Files modified: `src/index.ts`
-  - Resolves: Missing visibility into early exit reasons and bid flow decisions
-  - Impact: Complete visibility into why bids are skipped, stopped, or placed
+  - Resolves: Missing visibility into early exit reasons and bid flow decisions across all marketplaces
+  - Impact: Complete end-to-end visibility into why bids are skipped, stopped, or placed for all marketplaces
 
 ### Fixed
 - **Active Bid Count Shows 0 After Server Restart**: Fixed "Active: 0 / 1" display bug where UI showed 0 active bids despite orders existing in database
