@@ -11438,6 +11438,9 @@ async function _doConnect(): Promise<void> {
 
     // Set up event handlers
     wsManager.on('connected', async (connectionId) => {
+      // ALWAYS-ON connection log (not behind DEBUG flag) for diagnosing WebSocket connectivity
+      console.log(`[WebSocket] CONNECTED to ${MARKETPLACE_WS_URL} | connectionId=${connectionId}`);
+
       await logger.logInfo(ErrorCategory.WEBSOCKET, 'WebSocket connected to marketplace', {
         connectionId,
         url: MARKETPLACE_WS_URL,
@@ -11509,6 +11512,12 @@ async function _doConnect(): Promise<void> {
 
     wsManager.on('message', async (message: any) => {
       try {
+        // DEBUG: Log message reception at the very start of the pipeline
+        if (DEBUG) {
+          const eventType = message.eventType || message.event || message.endpoint || 'unknown';
+          console.log(`[WebSocket][Message] Received: eventType=${eventType} | size=${JSON.stringify(message).length} bytes`);
+        }
+
         // Handle initial data request synchronously
         if (message.endpoint === "get-initial-data") {
           const initialDataMessage = {
@@ -11566,6 +11575,12 @@ async function _doConnect(): Promise<void> {
 async function handleMarketplaceMessage(message: any) {
   const processingStartTime = Date.now();
   const eventType = message.eventType || message.event || 'unknown';
+
+  // DEBUG: Log message routing decision
+  if (DEBUG) {
+    const marketplace = message.marketplace || 'unknown';
+    console.log(`[WebSocket][Route] Processing: eventType=${eventType} | marketplace=${marketplace}`);
+  }
 
   try {
     if (message.eventType === 'BID_CREATED') {
@@ -11795,6 +11810,12 @@ async function triggerAutoListingForPurchase(
 
 async function handleCounterBid(message: any) {
   try {
+    // DEBUG: Log counterbid handler entry
+    if (DEBUG) {
+      const marketplace = message.marketplace || 'unknown';
+      const slug = message.data?.collection?.slug || message.payload?.payload?.collection?.slug || 'unknown';
+      console.log(`[WebSocket][CounterBid] Received bid event | marketplace=${marketplace} | slug=${slug}`);
+    }
 
     const { contractAddress, slug } = getMarketplaceDetails(message);
 
@@ -24155,9 +24176,17 @@ const activeSubscriptions = new Set<string>(); // Set of "slug:marketplace" comb
 
 function subscribeToCollections(tasks: ITask[]) {
   try {
+    // DEBUG: Log subscription attempt
+    if (DEBUG) {
+      const slugs = tasks.map(t => t.contract?.slug).filter(Boolean);
+      console.log(`[WebSocket][Subscribe] Subscribing to ${tasks.length} collections: ${slugs.join(', ')}`);
+    }
 
     // Always subscribe all tasks to WebSocket
     if (!wsManager?.isConnected()) {
+      if (DEBUG) {
+        console.log(`[WebSocket][Subscribe] SKIP: WebSocket not connected`);
+      }
       return;
     }
 

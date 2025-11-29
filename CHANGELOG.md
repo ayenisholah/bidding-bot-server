@@ -8,6 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **WebSocket Pipeline Debug Logging**: Added comprehensive debug logging throughout the entire WebSocket message pipeline to diagnose counterbid connectivity issues
+  - Enable via `DEBUG=true` in environment (connection log is ALWAYS-ON)
+  - **Problem Diagnosed**: Log analysis showed 0 counterbid activity despite 1891 scheduled bid logs working - WebSocket pipeline completely silent
+  - **Log Prefixes Added**:
+    - `[WebSocket]` - Connection status (ALWAYS-ON, not behind DEBUG flag)
+    - `[WebSocket][Message]` - Raw message reception with eventType and size
+    - `[WebSocket][Route]` - Message routing decision in handleMarketplaceMessage()
+    - `[WebSocket][CounterBid]` - Counterbid handler entry with marketplace and slug
+    - `[WebSocket][Subscribe]` - Subscription attempts and skip reasons
+  - **Locations Instrumented**:
+    - `wsManager.on('connected')`: ALWAYS logs connection with URL and connectionId
+    - `wsManager.on('message')`: DEBUG logs eventType and message size at very start
+    - `handleMarketplaceMessage()`: DEBUG logs routing decision (BID_CREATED, LISTING_CREATED, ITEM_SOLD)
+    - `handleCounterBid()`: DEBUG logs marketplace and slug when bid event received
+    - `subscribeToCollections()`: DEBUG logs collection count and slugs, also logs if WebSocket not connected
+  - Files modified: `src/index.ts`
+  - **Expected Output** (with DEBUG=true):
+    ```
+    [WebSocket] CONNECTED to wss://nfttools-ws-proxy.nfttools.io | connectionId=abc123
+    [WebSocket][Subscribe] Subscribing to 7 collections: crypts-and-caverns, lil-mutants, ...
+    [WebSocket][Message] Received: eventType=BID_CREATED | size=1234 bytes
+    [WebSocket][Route] Processing: eventType=BID_CREATED | marketplace=opensea
+    [WebSocket][CounterBid] Received bid event | marketplace=opensea | slug=crypts-and-caverns
+    ```
+  - **Diagnosis Guide**:
+    - No `[WebSocket] CONNECTED` → WebSocket connection failing
+    - Connected but no `[WebSocket][Subscribe]` → subscribeToCollections not called
+    - Subscribe but no `[WebSocket][Message]` → Proxy not sending messages or subscription failed
+    - Message but no `[WebSocket][Route]` → pQueue not processing messages
+    - Route but no `[WebSocket][CounterBid]` → eventType not matching BID_CREATED
+  - Resolves: Missing visibility into WebSocket pipeline failures
+  - Impact: Complete diagnostic capability for counterbid connectivity issues
+
 - **Counterbid Handler Debug Logging**: Added comprehensive debug logging to all 3 counterbid WebSocket handlers for improved visibility into counterbid decision-making
   - Enable via `DEBUG=true` in environment
   - **Log Prefix Pattern**: `[Counterbid][{ME|OS|Blur}] {slug} | MESSAGE`
