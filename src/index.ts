@@ -15,6 +15,7 @@ import fs from 'fs';
 import path from 'path';
 
 config()
+console.log('[STARTUP] Environment configuration loaded');
 
 import bodyParser from "body-parser";
 import { clearTimeout } from 'timers';
@@ -43,6 +44,7 @@ import { safeGetJob, safeMarkJobAsProcessed, recoverStuckJobs } from "./utils/re
 import BidLogs from "./models/logs.model";
 import PQueue from "p-queue";
 import Order from "./models/order.model";
+import { orderCache, CachedOrder } from "./utils/order-cache";
 import Approval from "./models/approval.model";
 import { USDC, WETH } from "./utils/currencies";
 import axios from "axios";
@@ -1352,6 +1354,7 @@ app.use(cors({
 }));
 
 const server = http.createServer(app);
+if (DEBUG) console.log('[STARTUP] HTTP server created');
 const wss = new WebSocketServer({ server });
 export let wsManager: WebSocketManager;
 let retryCount: number = 0;
@@ -2463,6 +2466,8 @@ async function startServer() {
       }
     });
 
+    console.log('[STARTUP] BullMQ queues initialized');
+
     // Initialize queue event handlers
     initializeQueueEventHandlers();
 
@@ -2569,11 +2574,15 @@ async function startServer() {
 
           // Delete the order from database anyway to clean up
           if (job.data.orderKey) {
+            orderCache.deleteById(job.data.orderKey);
             Order.deleteOne({ _id: job.data.orderKey }).catch((err) => {
               const orderTaskId = getTaskIdForLog(job);
               logSystemError('OrderCleanup', `Failed to delete order for task ${orderTaskId} after cancellation failure`, err, { taskId: orderTaskId });
             });
           } else if (job.data.orderKeys) {
+            for (const orderKey of job.data.orderKeys) {
+              orderCache.deleteById(orderKey);
+            }
             Order.deleteMany({ _id: { $in: job.data.orderKeys } }).catch((err) => {
               const ordersTaskId = getTaskIdForLog(job);
               logSystemError('OrderCleanup', `Failed to delete orders for task ${ordersTaskId} after cancellation failure`, err, { taskId: ordersTaskId });
@@ -2701,11 +2710,15 @@ async function startServer() {
 
         // Delete the order from database anyway to clean up
         if (job.data.orderKey) {
+          orderCache.deleteById(job.data.orderKey);
           Order.deleteOne({ _id: job.data.orderKey }).catch((err) => {
             const blurOrderTaskId = getTaskIdForLog(job);
             logSystemError('OrderCleanup', `Failed to delete Blur order for task ${blurOrderTaskId} after cancellation failure`, err, { taskId: blurOrderTaskId });
           });
         } else if (job.data.orderKeys) {
+          for (const orderKey of job.data.orderKeys) {
+            orderCache.deleteById(orderKey);
+          }
           Order.deleteMany({ _id: { $in: job.data.orderKeys } }).catch((err) => {
             const blurOrdersTaskId = getTaskIdForLog(job);
             logSystemError('OrderCleanup', `Failed to delete Blur orders for task ${blurOrdersTaskId} after cancellation failure`, err, { taskId: blurOrdersTaskId });
@@ -2743,6 +2756,8 @@ async function startServer() {
 
     // Initialize worker health monitoring
     startWorkerHealthMonitoring();
+
+    if (DEBUG) console.log(`[STARTUP] Workers initialized | count=${workers.length} | concurrency=${concurrencyPerWorker}`);
 
 
     // Add process-level error handler for uncaught BullMQ errors
@@ -2975,10 +2990,12 @@ async function startServer() {
 
     try {
       await initialize(RATE_LIMIT);
+      if (DEBUG) console.log(`[STARTUP] Rate limiter initialized | RATE_LIMIT=${RATE_LIMIT}`);
       // Initialize wallet cache with pre-decryption
       const password = await getPassword();
       if (password) {
         await walletCache.initialize(password);
+        if (DEBUG) console.log('[STARTUP] Wallet cache pre-loaded');
       }
     } catch (redisError) {
       logSystemError('RedisOperation', 'Redis operation failed', redisError);
@@ -3061,6 +3078,7 @@ async function startServer() {
 
     // Start internet connectivity monitoring
     startConnectivityMonitoring();
+    if (DEBUG) console.log('[STARTUP] Internet connectivity monitoring started');
 
     // Redis cluster monitoring disabled - using single node
     // startRedisClusterMonitoring();
@@ -3096,7 +3114,9 @@ async function startServer() {
     }
 
     if (tasksToRestart > 0) {
+      if (DEBUG) console.log(`[STARTUP] Restarting ${tasksToRestart} previously running tasks`);
     } else {
+      if (DEBUG) console.log('[STARTUP] No previously running tasks to restart');
     }
 
     // Check for orphaned scheduled tasks (tasks stuck in SCHEDULED state without timers)
@@ -3116,6 +3136,7 @@ async function startServer() {
       });
 
     if (orphanedScheduledTasks.length > 0) {
+      if (DEBUG) console.log(`[STARTUP] Recovered ${orphanedScheduledTasks.length} orphaned scheduled tasks`);
 
       for (const [taskId, task] of orphanedScheduledTasks) {
         const timeSinceLastUpdate = taskStatus[taskId]?.lastUpdate ?
@@ -3176,6 +3197,7 @@ async function startServer() {
     const STUCK_TASK_CHECK_INTERVAL = 30000; // 30 seconds
     setInterval(checkStuckTasks, STUCK_TASK_CHECK_INTERVAL);
 
+    if (DEBUG) console.log('[STARTUP] ✅ SERVER FULLY INITIALIZED');
 
   } catch (error) {
     logSystemError('ServerStartup', 'Failed to start server', error);
@@ -6192,17 +6214,9 @@ async function processGlobalMarketplaces(incomingMarketplaces: string[]) {
 async function cancelRemovedTokenBids(removedTokens: { opensea: string[]; magiceden: string[] }, taskId: string, walletId: string, currencySymbol: string): Promise<number> {
   let totalJobsCreated = 0;
   try {
-    const openseaTokensToCancel = await Order.find({
-      taskId: taskId,
-      identifier: { $in: removedTokens.opensea },
-      marketplace: "opensea"
-    })
+    const openseaTokensToCancel = orderCache.getByTaskAndIdentifiers(taskId, removedTokens.opensea, "opensea");
 
-    const magicedenTokensToCancel = await Order.find({
-      taskId: taskId,
-      identifier: { $in: removedTokens.magiceden },
-      marketplace: "magiceden"
-    })
+    const magicedenTokensToCancel = orderCache.getByTaskAndIdentifiers(taskId, removedTokens.magiceden, "magiceden");
 
     if (openseaTokensToCancel.length > 0) {
       const cancelData = openseaTokensToCancel.map((order) => {
@@ -6232,10 +6246,7 @@ async function cancelRemovedTokenBids(removedTokens: { opensea: string[]; magice
 async function cancelRemovedTraitBids(traitsToRemove: string[], taskId: string, walletId: string, currencySymbol: string): Promise<number> {
   let totalJobsCreated = 0;
   try {
-    const ordersToCancel = await Order.find({
-      taskId: taskId,
-      identifier: { $in: traitsToRemove }
-    })
+    const ordersToCancel = orderCache.getByTaskAndIdentifiers(taskId, traitsToRemove);
 
 
     const blurOrders = ordersToCancel.filter(order => order.marketplace.toLowerCase() === BLUR.toLowerCase());
@@ -7716,27 +7727,18 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
   // This loads any existing active orders so counterbid handlers can compare properly
   await initializeTopBidsFromDatabase(taskId, task.selectedMarketplaces);
 
-  // Initialize bidStats for this task from database (fixes Active:0 bug when task starts)
+  // Initialize order cache from database for this task
+  // This loads active orders into memory for fast lookups during bid processing
+  await orderCache.initializeFromDatabase(task._id);
+
+  // Initialize bidStats for this task from cache (uses order cache instead of DB query)
   // This ensures the UI shows correct active bid count immediately
-  try {
-    const counts = await Order.aggregate([
-      { $match: { taskId: task._id, expiresAt: { $gt: new Date() } } },
-      { $group: { _id: '$marketplace', count: { $sum: 1 } } }
-    ]);
-    bidStats[task._id] = { opensea: 0, magiceden: 0, blur: 0 };
-    for (const c of counts) {
-      const mp = c._id?.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
-      if (mp === 'opensea' || mp === 'magiceden' || mp === 'blur') {
-        bidStats[task._id][mp] = c.count;
-      }
-    }
-  } catch (error) {
-    // Non-fatal: bidStats will be populated by periodic validateBidCount()
-    logSystemError('TaskStart', `Failed to initialize bidStats for task ${task.contract?.slug}`, error);
-    if (!bidStats[task._id]) {
-      bidStats[task._id] = { opensea: 0, magiceden: 0, blur: 0 };
-    }
-  }
+  const counts = orderCache.countGroupedByMarketplace(task._id);
+  bidStats[task._id] = {
+    opensea: counts['opensea'] || 0,
+    magiceden: counts['magiceden'] || 0,
+    blur: counts['blur'] || 0
+  };
 
   if (!marketplace) {
     skipStats[task._id] = {
@@ -8387,12 +8389,9 @@ async function cancelMarketplaceRateLimiterJobs(taskId: string, marketplace?: st
 async function attemptRemainingCancellations(taskId: string, marketplace: string): Promise<number> {
 
   try {
-    // Fetch the remaining active orders
-    const remainingOrders = await Order.find({
-      taskId: taskId,
-      marketplace: marketplace.toLowerCase(),
-      expiresAt: { $gt: new Date() }
-    }).limit(500); // Limit to prevent overwhelming the system
+    // Fetch the remaining active orders from cache (auto-filters expired)
+    const cachedOrders = orderCache.getByTaskAndMarketplace(taskId, marketplace.toLowerCase());
+    const remainingOrders = cachedOrders.slice(0, 500); // Limit to prevent overwhelming the system
 
     if (remainingOrders.length === 0) {
       return 0;
@@ -8413,7 +8412,7 @@ async function attemptRemainingCancellations(taskId: string, marketplace: string
 
     // Attempt to cancel based on marketplace
     const marketplaceLower = marketplace.toLowerCase();
-    const ordersArray = remainingOrders.map(o => o.toObject());
+    const ordersArray = remainingOrders;
 
     switch (marketplaceLower) {
       case 'opensea':
@@ -8714,20 +8713,10 @@ async function fetchOrdersForCancellation(taskId: string, marketplace?: string):
   blur: any[];
 }> {
   try {
-    const now = new Date();
-    const baseConditions = {
-      taskId: taskId,
-      expiresAt: { $gt: now } // Only fetch non-expired orders
-    };
-
     if (marketplace) {
       // Fetch orders only for the specified marketplace
       const marketplaceLower = marketplace.toLowerCase();
-      const orders = await Order.find({
-        ...baseConditions,
-        marketplace: marketplaceLower
-      }).lean().exec();
-
+      const orders = orderCache.getByTaskAndMarketplace(taskId, marketplaceLower);
 
       return {
         opensea: marketplaceLower === 'opensea' ? orders : [],
@@ -8735,22 +8724,10 @@ async function fetchOrdersForCancellation(taskId: string, marketplace?: string):
         blur: marketplaceLower === 'blur' ? orders : []
       };
     } else {
-      // Fetch orders for all marketplaces - ensure we get ALL orders without cursor limits
-      const [openseaOrders, magicedenOrders, blurOrders] = await Promise.all([
-        Order.find({
-          ...baseConditions,
-          marketplace: 'opensea'
-        }).lean().exec(),
-        Order.find({
-          ...baseConditions,
-          marketplace: 'magiceden'
-        }).lean().exec(),
-        Order.find({
-          ...baseConditions,
-          marketplace: 'blur'
-        }).lean().exec()
-      ]);
-
+      // Fetch orders for all marketplaces from cache (already filters expired)
+      const openseaOrders = orderCache.getByTaskAndMarketplace(taskId, 'opensea');
+      const magicedenOrders = orderCache.getByTaskAndMarketplace(taskId, 'magiceden');
+      const blurOrders = orderCache.getByTaskAndMarketplace(taskId, 'blur');
 
       return {
         opensea: openseaOrders,
@@ -8867,6 +8844,9 @@ async function
 
       // Clear top bids store for this task
       clearTaskTopBids(taskId);
+
+      // Clear order cache for this task
+      orderCache.deleteByTask(taskId);
     }
 
     if (!marketplace && !stoppedByWarning) {
@@ -10955,6 +10935,7 @@ async function cancelOpenseaOrdersDirectly({
   try {
     for (const order of orders) {
       await cancelOrderWithoutTracking(order.orderHash, OPENSEA_PROTOCOL_ADDRESS, privateKey, taskId);
+      orderCache.deleteById(order._id.toString());
       await Order.deleteOne({ _id: order._id });
       completed += 1;
     }
@@ -11000,7 +10981,10 @@ async function cancelMagicEdenOrdersDirectly({
     // Cancel all orders at once
     await cancelMagicEdenBid(orderIds, privateKey, taskId);
 
-    // Delete orders from database
+    // Delete orders from cache and database
+    for (const order of orders) {
+      orderCache.deleteById(order._id.toString());
+    }
     await Order.deleteMany({
       _id: { $in: orders.map(o => o._id) }
     });
@@ -11045,6 +11029,7 @@ async function cancelBlurOrdersDirectly({
     for (const order of orders) {
       const payload = JSON.parse(order.orderHash);
       await cancelBlurBid({ payload, privateKey, taskId });
+      orderCache.deleteById(order._id.toString());
       await Order.deleteOne({ _id: order._id });
       completed += 1;
     }
@@ -12197,17 +12182,14 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
         return;
       }
 
-      const orders = await Order.find({
-        taskId: task._id,
-        marketplace: MAGICEDEN.toLowerCase(),
-        identifier: tokenId.toString()
-      })
+      const cachedOrder = orderCache.get(task._id, MAGICEDEN.toLowerCase(), tokenId.toString());
+      const orders = cachedOrder ? [cachedOrder] : [];
 
       const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), true)
       if (stopBid) {
         if (orders.length > 0) {
-          const orderKeys = orders.map((order: any) => order._id)
-          const extractedOrderIds = await extractMagicedenOrderHash(orders)
+          const orderKeys = orders.map((order) => order._id)
+          const extractedOrderIds = orders.map((order) => order.orderHash);
           queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
         }
         clearCounterbidPending(task._id, 'magiceden', tokenId.toString());
@@ -12383,11 +12365,8 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
       }
 
       const traitFloor = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices ? await fetchMagicEdenTraitFloor(currentTask.contract.contractAddress, { attributeKey: trait.attributeKey, attributeValue: trait.attributeValue }) : undefined
-      const orders = await Order.find({
-        taskId: task._id,
-        marketplace: MAGICEDEN.toLowerCase(),
-        identifier
-      })
+      const cachedOrder = orderCache.get(task._id, MAGICEDEN.toLowerCase(), identifier);
+      const orders = cachedOrder ? [cachedOrder] : [];
 
       const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), true, traitFloor, identifier)
 
@@ -12453,14 +12432,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
 
         // Check if we have existing token offers on any of these tokens
         for (const tokenId of tokensWithTrait) {
-          const tokenOrders = await Order.find({
-            slug: task.contract.slug,
-            taskId: task._id,
-            marketplace: MAGICEDEN.toLowerCase(),
-            identifier: tokenId
-          });
+          const cachedTokenOrder = orderCache.get(task._id, MAGICEDEN.toLowerCase(), tokenId);
 
-          if (tokenOrders.length > 0) {
+          if (cachedTokenOrder) {
             // We have an existing offer on this token - queue instant counterbid
             // Calculate offer price with crossTypeMarginMultiplier
             const marginMultiplier = currentTask.outbidOptions.crossTypeMarginMultiplier || 1;
@@ -12568,12 +12542,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
 
         // Cancel all orders if configured and price exceeds max
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-          const allOrders = await Order.find({
-            taskId: task._id,
-            marketplace: MAGICEDEN.toLowerCase()
-          })
+          const allOrders = orderCache.getByTaskAndMarketplace(task._id, MAGICEDEN.toLowerCase());
           if (allOrders.length > 0) {
-            const orderKeys = allOrders.map((order: any) => order._id)
+            const orderKeys = allOrders.map((order) => order._id)
             const extractedOrderIds = await extractMagicedenOrderHash(allOrders)
             queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
           }
@@ -12583,23 +12554,17 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
 
       const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), true)
       if (stopBid) {
-        const allOrders = await Order.find({
-          taskId: task._id,
-          marketplace: MAGICEDEN.toLowerCase()
-        })
+        const allOrders = orderCache.getByTaskAndMarketplace(task._id, MAGICEDEN.toLowerCase());
         if (allOrders.length > 0) {
-          const orderKeys = allOrders.map((order: any) => order._id)
+          const orderKeys = allOrders.map((order) => order._id)
           const extractedOrderIds = await extractMagicedenOrderHash(allOrders)
           queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
         }
         return
       }
 
-      // Fetch ALL orders for this task
-      const allTaskOrders = await Order.find({
-        slug: currentTask.contract.slug,
-        marketplace: MAGICEDEN.toLowerCase()
-      });
+      // Fetch ALL orders for this task from cache
+      const allTaskOrders = orderCache.getByTaskAndMarketplace(task._id, MAGICEDEN.toLowerCase());
 
       // Calculate the new offer price based on incoming bid
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
@@ -12613,11 +12578,10 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, traceId?: strin
         await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "magiceden");
 
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-          // Filter orders to only include those belonging to the current task
-          const taskOrders = allTaskOrders.filter((order: any) => order.taskId === currentTask._id);
-          if (taskOrders.length > 0) {
-            const orderKeys = taskOrders.map((order: any) => order._id)
-            const extractedOrderIds = await extractMagicedenOrderHash(taskOrders)
+          // allTaskOrders is already filtered by task._id from cache
+          if (allTaskOrders.length > 0) {
+            const orderKeys = allTaskOrders.map((order) => order._id)
+            const extractedOrderIds = await extractMagicedenOrderHash(allTaskOrders)
             queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
           }
         }
@@ -12977,13 +12941,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
       let tokenOffer: bigint;
       let offerPrice: number;
 
-      const orders = await Order.find({
-        slug: task.contract.slug,
-        taskId: task._id,
-        marketplace: OPENSEA.toLowerCase(),
-        identifier: tokenId.toString(),
-        expiresAt: { $gt: new Date() }  // Only active (non-expired) orders
-      })
+      const cachedOrder = orderCache.get(task._id, OPENSEA.toLowerCase(), tokenId.toString());
+      const orders = cachedOrder ? [cachedOrder] : [];
 
       if (!orders) {
         return;
@@ -13299,12 +13258,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
       }
       const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal)
 
-      const orders = await Order.find({
-        slug: task.contract.slug,
-        taskId: task._id,
-        marketplace: OPENSEA.toLowerCase(),
-        identifier
-      })
+      const cachedOrder = orderCache.get(task._id, OPENSEA.toLowerCase(), identifier);
+      const orders = cachedOrder ? [cachedOrder] : [];
 
       if (incomingBidAmountEth < minBidPriceEth) {
         return
@@ -13417,14 +13372,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
 
         // Check if we have existing token offers on any of these tokens
         for (const tokenId of tokensWithTrait) {
-          const tokenOrders = await Order.find({
-            slug: task.contract.slug,
-            taskId: task._id,
-            marketplace: OPENSEA.toLowerCase(),
-            identifier: tokenId
-          });
+          const cachedTokenOrder = orderCache.get(task._id, OPENSEA.toLowerCase(), tokenId);
 
-          if (tokenOrders.length > 0) {
+          if (cachedTokenOrder) {
             // We have an existing offer on this token - queue instant counterbid
             const asset = {
               contractAddress: task.contract.contractAddress,
@@ -13525,10 +13475,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
 
         // Cancel all orders if configured
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-          const allOrders = await Order.find({
-            taskId: task._id,
-            marketplace: OPENSEA.toLowerCase()
-          })
+          const allOrders = orderCache.getByTaskAndMarketplace(task._id, OPENSEA.toLowerCase());
           if (allOrders.length > 0) {
             const cancelData = allOrders.map((order) => {
               return {
@@ -13544,10 +13491,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
 
       const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true)
       if (stopBid) {
-        const allOrders = await Order.find({
-          taskId: task._id,
-          marketplace: OPENSEA.toLowerCase()
-        })
+        const allOrders = orderCache.getByTaskAndMarketplace(task._id, OPENSEA.toLowerCase());
         if (allOrders.length > 0) {
           const cancelData = allOrders.map((order) => {
             return {
@@ -13560,10 +13504,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
         return
       }
 
-      const allTaskOrders = await Order.find({
-        slug: currentTask.contract.slug,
-        marketplace: OPENSEA.toLowerCase()
-      });
+      // Fetch ALL orders for this task from cache
+      const allTaskOrders = orderCache.getByTaskAndMarketplace(task._id, OPENSEA.toLowerCase());
 
       const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth, currency)
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
@@ -13575,9 +13517,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask, traceId?: string)
         await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea");
 
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-          const taskOrders = allTaskOrders.filter((order: any) => order.taskId === currentTask._id);
-          if (taskOrders.length > 0) {
-            const cancelData = taskOrders.map((order) => {
+          // allTaskOrders is already filtered by task._id from cache
+          if (allTaskOrders.length > 0) {
+            const cancelData = allTaskOrders.map((order) => {
               return {
                 name: CANCEL_OPENSEA_BID,
                 data: { walletId: task.walletId, orderId: order.orderHash, taskId: task._id, orderKey: order._id },
@@ -13831,12 +13773,8 @@ async function
 
         const totalOffer = incomingPrice + blurOutbidMargin
 
-        const orders = await Order.find({
-          slug: task.contract.slug,
-          taskId: task._id,
-          marketplace: BLUR.toLowerCase(),
-          identifier: identifier
-        })
+        const cachedOrder = orderCache.get(task._id, BLUR.toLowerCase(), identifier);
+        const orders = cachedOrder ? [cachedOrder] : [];
 
         if (+totalOffer < minBidPriceEth) {
           if (DEBUG) {
@@ -14000,10 +13938,7 @@ async function
 
         // Cancel all orders if configured
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-          const allOrders = await Order.find({
-            taskId: task._id,
-            marketplace: BLUR.toLowerCase()
-          })
+          const allOrders = orderCache.getByTaskAndMarketplace(task._id, BLUR.toLowerCase());
           const cancelData = allOrders.map((order) => {
             const payload = JSON.parse(order.orderHash)
             return {
@@ -14023,11 +13958,7 @@ async function
 
       const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), true)
       if (stopBid) {
-
-        const allOrders = await Order.find({
-          taskId: task._id,
-          marketplace: BLUR.toLowerCase()
-        })
+        const allOrders = orderCache.getByTaskAndMarketplace(task._id, BLUR.toLowerCase());
         if (allOrders.length > 0) {
           const cancelData = allOrders.map((order) => {
             const payload = JSON.parse(order.orderHash)
@@ -14046,11 +13977,8 @@ async function
         return
       }
 
-      // Fetch ALL orders for this task
-      const allTaskOrders = await Order.find({
-        slug: currentTask.contract.slug,
-        marketplace: BLUR.toLowerCase()
-      });
+      // Fetch ALL orders for this task from cache
+      const allTaskOrders = orderCache.getByTaskAndMarketplace(task._id, BLUR.toLowerCase());
 
       // Calculate incoming price in wei
       const incomingPriceWei = Number(bestPrice) * 1e18;
@@ -14069,9 +13997,9 @@ async function
 
 
         if (currentTask.outbidOptions.cancelMaxWhenOutbid) {
-          const taskOrders = allTaskOrders.filter((order: any) => order.taskId === currentTask._id);
-          if (taskOrders.length > 0) {
-            const cancelData = taskOrders.map((order) => {
+          // allTaskOrders is already filtered by task._id from cache
+          if (allTaskOrders.length > 0) {
+            const cancelData = allTaskOrders.map((order) => {
               const payload = JSON.parse(order.orderHash)
               return {
                 name: CANCEL_BLUR_BID,
@@ -14300,7 +14228,9 @@ async function performMarketplacePreprocessing(
   availableMarketplaces: string[]
 ): Promise<TaskPreprocessing> {
   const taskId = task._id;
+  const slug = task.contract?.slug || 'unknown';
 
+  if (DEBUG) console.log(`[Preprocessing] ${slug} | ENTRY | marketplace=${marketplace} | bidType=${task.bidType} | tokens=${task.tokenIds?.length || 0} | traits=${Object.keys(task.selectedTraits?.[marketplace as keyof typeof task.selectedTraits] || {}).length}`);
 
   // Initialize preprocessing result
   const preprocessing: TaskPreprocessing = {
@@ -14781,12 +14711,22 @@ async function performMarketplacePreprocessing(
     currentTraits[taskId].magiceden = magicedenTraitMap;
   }
 
+  if (DEBUG) {
+    const mpData = preprocessing[marketplace as keyof TaskPreprocessing];
+    const enabled = typeof mpData === 'object' && 'enabled' in mpData ? mpData.enabled : false;
+    const jobCount = typeof mpData === 'object' && 'jobCount' in mpData ? mpData.jobCount : 0;
+    const skipReason = typeof mpData === 'object' && 'skipReason' in mpData ? mpData.skipReason : undefined;
+    console.log(`[Preprocessing] ${slug} | EXIT | marketplace=${marketplace} | enabled=${enabled} | jobCount=${jobCount}${skipReason ? ` | skipReason=${skipReason}` : ''}`);
+  }
+
   return preprocessing;
 }
 
 async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
   const taskId = task._id.toString();
   const currentLoopCount = loopCounterStats[taskId]?.opensea || 1;
+
+  if (DEBUG) console.log(`[ScheduledBid][OS-Sched] ${task.contract?.slug || taskId} | ENTRY | bidType=${task.bidType} | loop=${currentLoopCount}`);
 
   let lockAcquired = false;
 
@@ -15320,6 +15260,8 @@ function transformSelectedTraitsToAttributes(selectedTraits: Record<string, stri
 async function processOpenseaCollectionBid(data: { taskId: string, collectionDetails: any }) {
   const taskId = data.taskId;
 
+  if (DEBUG) console.log(`[BidFlow][OS-Coll] ${data.collectionDetails?.slug || taskId} | ENTRY`);
+
   // Create trace for scheduled bid
   const traceId = `bt-os-scb-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
   const correlationId = traceId;
@@ -15395,17 +15337,10 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     }
 
 
-    // Parallel fetch: floor price and orders (wallet will be fetched when needed)
-    const [floor_price, orders] = await Promise.all([
-      getOpenseaFloor(currentTask.contract.slug),
-      Order.find({
-        slug: currentTask.contract.slug,
-        taskId: currentTask._id,
-        marketplace: OPENSEA.toLowerCase(),
-        identifier: 'collection',
-        expiresAt: { $gt: new Date() }  // Only active (non-expired) orders
-      }).sort({ createdAt: -1 })
-    ])
+    // Parallel fetch: floor price (orders now from cache)
+    const floor_price = await getOpenseaFloor(currentTask.contract.slug);
+    const cachedOrder = orderCache.get(currentTask._id, OPENSEA.toLowerCase(), 'collection');
+    const orders = cachedOrder ? [cachedOrder] : [];
 
 
     if (!floor_price) {
@@ -15481,10 +15416,13 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     // Extract first active order (if any) with proper null guards
     const [order] = orders
     const hasActiveOrder = order && order.expiresAt && order.createdAt;
-    const ttl = hasActiveOrder ? (order.expiresAt.getTime() - Date.now()) / 1000 : -1;
+    // CachedOrder has expiresAt/createdAt as number (timestamp in ms)
+    const orderExpiresAt = typeof order?.expiresAt === 'number' ? order.expiresAt : new Date(order?.expiresAt).getTime();
+    const orderCreatedAt = typeof order?.createdAt === 'number' ? order.createdAt : new Date(order?.createdAt).getTime();
+    const ttl = hasActiveOrder ? (orderExpiresAt - Date.now()) / 1000 : -1;
     const currentPrice = hasActiveOrder ? Number(order.offerPrice) : Number(colletionOffer);
     const orderExpiration = hasActiveOrder
-      ? Math.round((order.expiresAt.getTime() - order.createdAt.getTime()) / 1000)
+      ? Math.round((orderExpiresAt - orderCreatedAt) / 1000)
       : expiry;
 
     // Debug logging for order state
@@ -15730,8 +15668,7 @@ async function processBlurScheduledBid(task: ITask) {
   const taskId = task._id.toString();
   const currentLoopCount = loopCounterStats[taskId]?.blur || 1;
 
-  // Log function start
-
+  if (DEBUG) console.log(`[ScheduledBid][Blur-Sched] ${task.contract?.slug || taskId} | ENTRY | bidType=${task.bidType} | loop=${currentLoopCount}`);
 
   let lockAcquired = false;
 
@@ -16189,13 +16126,15 @@ async function processBlurCollectionBid(data: { taskId: string }) {
   const taskId = data.taskId;
   const startTime = Date.now();
 
-  // Create trace for scheduled bid
-  const traceId = `bt-blur-scb-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-  const correlationId = traceId;
-
   // Get task early to access collectionSlug
   const currentTask = activeTasks.get(taskId);
   const collectionSlug = currentTask?.contract?.slug || 'unknown';
+
+  if (DEBUG) console.log(`[BidFlow][Blur-Coll] ${collectionSlug} | ENTRY`);
+
+  // Create trace for scheduled bid
+  const traceId = `bt-blur-scb-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  const correlationId = traceId;
 
   // Log job started
   bidTraceLogger.log(traceId, 'job_started', 'info', {
@@ -16265,12 +16204,8 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
 
 
-    const orders = await Order.find({
-      slug: currentTask.contract.slug,
-      taskId: currentTask._id,
-      marketplace: BLUR.toLowerCase(),
-      identifier: "collection"
-    }).sort({ createdAt: -1 })
+    const cachedOrder = orderCache.get(currentTask._id, BLUR.toLowerCase(), "collection");
+    const orders = cachedOrder ? [cachedOrder] : [];
 
 
 
@@ -16362,12 +16297,13 @@ async function processBlurCollectionBid(data: { taskId: string }) {
     }
 
     const [order, ...remainingOrders] = orders
-    const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
+    const orderExpiresAt = typeof order?.expiresAt === 'number' ? order.expiresAt : new Date(order?.expiresAt).getTime();
+    const ttl = (orderExpiresAt - Date.now()) / 1000
     const currentPrice = Number(order ? order.offerPrice : colletionOffer)
     const expiry = getExpiry(currentTask.bidDuration)
 
-    const createdAt = new Date(order?.createdAt).getTime()
-    const expiredAt = new Date(order?.expiresAt).getTime()
+    const createdAt = typeof order?.createdAt === 'number' ? order.createdAt : new Date(order?.createdAt).getTime()
+    const expiredAt = orderExpiresAt
     const orderExpiration = order ? Math.round((expiredAt - createdAt) / 1000) : expiry
 
     if (!currentTask.outbidOptions.outbid) {
@@ -16592,16 +16528,18 @@ async function processOpenseaTraitBid(data: {
     counterbid: boolean;
   }
 }) {
-  // Create trace for scheduled trait bid
-  const traceId = `bt-os-strb-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-  const correlationId = traceId;
-
   // Parse trait early for logging
   let traitKey = 'unknown';
   try {
     const traitInfo = JSON.parse(data.trait);
     traitKey = `${traitInfo.type}:${traitInfo.value}`;
   } catch { /* ignore */ }
+
+  if (DEBUG) console.log(`[BidFlow][OS-Trait] ${data.slug} [${traitKey}] | ENTRY`);
+
+  // Create trace for scheduled trait bid
+  const traceId = `bt-os-strb-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  const correlationId = traceId;
 
   // Log job started
   bidTraceLogger.log(traceId, 'job_started', 'info', {
@@ -16735,20 +16673,15 @@ async function processOpenseaTraitBid(data: {
     const { type, value } = JSON.parse(trait);
     const identifier = `${type}:${value}`
 
-    // Parallel fetch: floor price, trait floor (if needed), and orders
-    const [floor_price, traitFloor, orders] = await Promise.all([
+    // Parallel fetch: floor price and trait floor (if needed). Orders from cache.
+    const [floor_price, traitFloor] = await Promise.all([
       getOpenseaFloor(slug),
       currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices
         ? openseaTraitFloor(slug, { traitType: type, values: [value] })
-        : Promise.resolve(undefined),
-      Order.find({
-        slug: slug,
-        taskId: _id,
-        marketplace: OPENSEA.toLowerCase(),
-        identifier,
-        expiresAt: { $gt: new Date() }  // Only active (non-expired) orders
-      }).sort({ createdAt: -1 })
+        : Promise.resolve(undefined)
     ]);
+    const cachedOrder = orderCache.get(_id, OPENSEA.toLowerCase(), identifier);
+    const orders = cachedOrder ? [cachedOrder] : [];
 
 
     if (!floor_price) { throw new Error(`Failed to fetch floor price for ${slug}`); }
@@ -16813,10 +16746,13 @@ async function processOpenseaTraitBid(data: {
     // Extract first active order (if any) with proper null guards
     const [order] = orders
     const hasActiveOrder = order && order.expiresAt && order.createdAt;
-    const ttl = hasActiveOrder ? (order.expiresAt.getTime() - Date.now()) / 1000 : -1;
+    // CachedOrder has expiresAt/createdAt as number (timestamp in ms)
+    const orderExpiresAt = typeof order?.expiresAt === 'number' ? order.expiresAt : new Date(order?.expiresAt).getTime();
+    const orderCreatedAt = typeof order?.createdAt === 'number' ? order.createdAt : new Date(order?.createdAt).getTime();
+    const ttl = hasActiveOrder ? (orderExpiresAt - Date.now()) / 1000 : -1;
     const currentPrice = hasActiveOrder ? Number(order.offerPrice) : Number(traitOffer);
     const orderExpiration = hasActiveOrder
-      ? Math.round((order.expiresAt.getTime() - order.createdAt.getTime()) / 1000)
+      ? Math.round((orderExpiresAt - orderCreatedAt) / 1000)
       : expiry;
 
     // Debug logging for order state
@@ -17031,6 +16967,8 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
   const taskId = data._id;
   const tokenId = data.asset?.tokenId?.toString() || 'unknown';
 
+  if (DEBUG) console.log(`[BidFlow][OS-Token] ${data.slug} [${tokenId}] | ENTRY`);
+
   // Create trace for scheduled bid
   const traceId = `bt-os-stb-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
   const correlationId = traceId;
@@ -17151,17 +17089,10 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       }
     }
 
-    // Parallel fetch: floor price and orders (only active, non-expired orders)
-    const [floor_price, orders] = await Promise.all([
-      getOpenseaFloor(slug),
-      Order.find({
-        slug: slug,
-        taskId: _id,
-        marketplace: OPENSEA.toLowerCase(),
-        identifier: asset.tokenId.toString(),
-        expiresAt: { $gt: new Date() }  // Only active orders
-      }).sort({ createdAt: -1 })
-    ]);
+    // Fetch floor price. Orders from cache.
+    const floor_price = await getOpenseaFloor(slug);
+    const cachedOrder = orderCache.get(_id, OPENSEA.toLowerCase(), asset.tokenId.toString());
+    const orders = cachedOrder ? [cachedOrder] : [];
 
     if (!floor_price) { throw new Error(`Failed to fetch floor price for ${slug}`); }
 
@@ -17227,10 +17158,13 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     // Extract first active order (if any) with proper null guards
     const [order] = orders
     const hasActiveOrder = order && order.expiresAt && order.createdAt;
-    const ttl = hasActiveOrder ? (order.expiresAt.getTime() - Date.now()) / 1000 : -1;
+    // CachedOrder has expiresAt/createdAt as number (timestamp in ms)
+    const orderExpiresAt = typeof order?.expiresAt === 'number' ? order.expiresAt : new Date(order?.expiresAt).getTime();
+    const orderCreatedAt = typeof order?.createdAt === 'number' ? order.createdAt : new Date(order?.createdAt).getTime();
+    const ttl = hasActiveOrder ? (orderExpiresAt - Date.now()) / 1000 : -1;
     const currentPrice = hasActiveOrder ? Number(order.offerPrice) : Number(tokenOffer);
     const orderExpiration = hasActiveOrder
-      ? Math.round((order.expiresAt.getTime() - order.createdAt.getTime()) / 1000)
+      ? Math.round((orderExpiresAt - orderCreatedAt) / 1000)
       : expiry;
 
     // Debug logging for order state
@@ -17605,12 +17539,8 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
   }
 
   try {
-    const existingOrders = await Order.find({
-      slug,
-      taskId,
-      marketplace: "opensea",
-      identifier: "collection",
-    });
+    const cachedOrder = orderCache.get(taskId, "opensea", "collection");
+    const existingOrders = cachedOrder ? [cachedOrder] : [];
 
     const wallet = await walletCache.getWalletById(walletId);
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
@@ -17695,12 +17625,8 @@ async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) 
 
   try {
     // Query and cancel existing collection orders
-    const orders = await Order.find({
-      slug: slug,
-      taskId: _id,
-      marketplace: MAGICEDEN.toLowerCase(),
-      identifier: "collection"
-    });
+    const cachedOrder = orderCache.get(_id, MAGICEDEN.toLowerCase(), "collection");
+    const orders = cachedOrder ? [cachedOrder] : [];
 
     if (orders.length > 0) {
       if (DEBUG) {
@@ -17819,12 +17745,8 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
   try {
     // Query existing trait orders
     const identifier = traitKey;
-    const orders = await Order.find({
-      slug: slug,
-      taskId: taskId,
-      marketplace: MAGICEDEN.toLowerCase(),
-      identifier: identifier
-    });
+    const cachedOrder = orderCache.get(taskId, MAGICEDEN.toLowerCase(), identifier);
+    const orders = cachedOrder ? [cachedOrder] : [];
 
     const { currencyType, currency } = await calculateBidPrice(currentTask, 0, "magiceden")
 
@@ -17983,12 +17905,8 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
     // Query existing collection orders
     const identifier = "collection";
 
-    const existingOrders = await Order.find({
-      slug: slug,
-      taskId: taskId,
-      marketplace: "blur",
-      identifier: identifier
-    });
+    const cachedOrder = orderCache.get(taskId, "blur", identifier);
+    const existingOrders = cachedOrder ? [cachedOrder] : [];
 
     // Fetch wallet and decrypt private key just before use
     const wallet = await walletCache.getWalletById(walletId);
@@ -18154,12 +18072,8 @@ async function blurTraitCounterBid(data: IBlurBidData) {
     const identifier = `${traitType}:${traitValue}`;
 
     // Query existing orders for this trait
-    const existingOrders = await Order.find({
-      slug: slug,
-      taskId: taskId,
-      marketplace: "blur",
-      identifier: identifier
-    });
+    const cachedOrder = orderCache.get(taskId, "blur", identifier);
+    const existingOrders = cachedOrder ? [cachedOrder] : [];
 
     // Fetch wallet and decrypt private key just before use
     const wallet = await walletCache.getWalletById(walletId);
@@ -18349,17 +18263,12 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
   const bidCount = getIncrementedBidCount(OPENSEA, slug, taskId);
 
   try {
-    const orders = await Order.find({
-      slug,
-      taskId,
-      marketplace: OPENSEA.toLowerCase(),
-      identifier: asset.tokenId.toString(),
-      expiresAt: { $gt: new Date() }  // Only active (non-expired) orders
-    });
+    const cachedOrder = orderCache.get(taskId, OPENSEA.toLowerCase(), asset.tokenId.toString());
+    const orders = cachedOrder ? [cachedOrder] : [];
 
     // Check if we need to cancel existing orders
     if (orders.length > 0) {
-      const mostRecentOrder = orders.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+      const mostRecentOrder = orders[0]; // Cache already stores the most recent order
       const currentOfferWei = BigInt(mostRecentOrder.offerPrice);
       const incomingOfferWei = BigInt(offerPrice);
 
@@ -18554,12 +18463,8 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
   const identifier = `${traitObj.type}:${traitObj.value}`;
 
   try {
-    const orders = await Order.find({
-      slug,
-      taskId,
-      marketplace: OPENSEA.toLowerCase(),
-      identifier
-    });
+    const cachedOrder = orderCache.get(taskId, OPENSEA.toLowerCase(), identifier);
+    const orders = cachedOrder ? [cachedOrder] : [];
 
     const wallet = await walletCache.getWalletById(walletId);
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
@@ -18664,16 +18569,12 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
     }
 
     // Check if current offer in database is greater than incoming offer price
-    const orders = await Order.find({
-      slug: slug,
-      taskId: _id,
-      marketplace: MAGICEDEN.toLowerCase(),
-      identifier: tokenId.toString()
-    });
+    const cachedOrder = orderCache.get(_id, MAGICEDEN.toLowerCase(), tokenId.toString());
+    const orders = cachedOrder ? [cachedOrder] : [];
 
     // Check if we need to cancel existing orders
     if (orders.length > 0 && offerPrice !== undefined) {
-      const mostRecentOrder = orders.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+      const mostRecentOrder = orders[0]; // Cache already stores the most recent order
       const currentOfferWei = BigInt(mostRecentOrder.offerPrice);
       const incomingOfferWei = BigInt(offerPrice);
 
@@ -18831,6 +18732,8 @@ async function processBlurTraitBid(data: {
     traitKey = `${type}:${value}`;
   } catch { /* ignore */ }
 
+  if (DEBUG) console.log(`[BidFlow][Blur-Trait] ${data.slug} [${traitKey}] | ENTRY`);
+
   // Create trace for scheduled bid
   const traceId = `bt-blur-stb-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
   const correlationId = traceId;
@@ -18905,12 +18808,8 @@ async function processBlurTraitBid(data: {
     const expiry = getExpiry(currentTask.bidDuration)
 
 
-    const orders = await Order.find({
-      slug: slug,
-      taskId: _id,
-      marketplace: BLUR.toLowerCase(),
-      identifier
-    }).sort({ createdAt: -1 })
+    const cachedOrder = orderCache.get(_id, BLUR.toLowerCase(), identifier);
+    const orders = cachedOrder ? [cachedOrder] : [];
 
 
     if (stopBid) {
@@ -18987,11 +18886,12 @@ async function processBlurTraitBid(data: {
 
 
     const [order, ...remainingOrders] = orders
-    const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
+    const orderExpiresAt = typeof order?.expiresAt === 'number' ? order.expiresAt : new Date(order?.expiresAt).getTime();
+    const ttl = (orderExpiresAt - Date.now()) / 1000
     const currentPrice = Number(order ? order.offerPrice : traitOffer)
 
-    const createdAt = new Date(order?.createdAt).getTime()
-    const expiredAt = new Date(order?.expiresAt).getTime()
+    const createdAt = typeof order?.createdAt === 'number' ? order.createdAt : new Date(order?.createdAt).getTime()
+    const expiredAt = orderExpiresAt
     const orderExpiration = order ? Math.round((expiredAt - createdAt) / 1000) : expiry
 
     if (!outbidOptions.outbid) {
@@ -19171,6 +19071,8 @@ async function processMagicedenScheduledBid(task: ITask, _jobId?: string, schedu
   // Structured start
   const taskId = task._id.toString();
   const currentLoopCount = loopCounterStats[taskId]?.magiceden || 1;
+
+  if (DEBUG) console.log(`[ScheduledBid][ME-Sched] ${task.contract?.slug || taskId} | ENTRY | bidType=${task.bidType} | loop=${currentLoopCount}`);
 
   // Log if this appears to be a retry (job has an ID and attempt number)
   if (scheduleJob && scheduleJob.attemptsMade > 0) {
@@ -19669,6 +19571,8 @@ async function processMagicedenScheduledBid(task: ITask, _jobId?: string, schedu
 async function processMagicedenCollectionBid(data: { taskId: string }) {
   const taskId = data.taskId;
 
+  if (DEBUG) console.log(`[BidFlow][ME-Coll] ${taskId} | ENTRY`);
+
   // Create trace for scheduled bid
   const traceId = `bt-me-scb-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
   const correlationId = traceId;
@@ -19743,16 +19647,10 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
     const expiration = getExpiry(currentTask.bidDuration)
 
 
-    // Parallel data fetching (wallet will be fetched when needed)
-    const [floor_price, orders] = await Promise.all([
-      fetchMagicEdenCollectionStats(currentTask.contract.contractAddress).then(Number),
-      Order.find({
-        slug: currentTask.contract.slug,
-        taskId: currentTask._id,
-        marketplace: MAGICEDEN.toLowerCase(),
-        identifier: 'collection'
-      }).sort({ createdAt: -1 })
-    ]);
+    // Fetch floor price. Orders from cache.
+    const floor_price = await fetchMagicEdenCollectionStats(currentTask.contract.contractAddress).then(Number);
+    const cachedOrder = orderCache.get(currentTask._id, MAGICEDEN.toLowerCase(), 'collection');
+    const orders = cachedOrder ? [cachedOrder] : [];
 
     // Early return for floor price
     if (!floor_price) {
@@ -19846,11 +19744,13 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
 
     const [order] = orders
-    const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
+    // CachedOrder has expiresAt/createdAt as number (timestamp in ms)
+    const orderExpiresAt = typeof order?.expiresAt === 'number' ? order.expiresAt : new Date(order?.expiresAt).getTime();
+    const ttl = (orderExpiresAt - Date.now()) / 1000
     const currentPrice = Number(order ? order.offerPrice : offerPrice)
 
-    const createdAt = new Date(order?.createdAt).getTime()
-    const expiredAt = new Date(order?.expiresAt).getTime()
+    const createdAt = typeof order?.createdAt === 'number' ? order.createdAt : new Date(order?.createdAt).getTime()
+    const expiredAt = orderExpiresAt
     const orderExpiration = order ? Math.round((expiredAt - createdAt) / 1000) : expiration
 
     if (!currentTask.outbidOptions.outbid) {
@@ -20032,6 +19932,8 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
   const taskId = data._id;
   const tokenIdStr = data.tokenId?.toString() || 'unknown';
 
+  if (DEBUG) console.log(`[BidFlow][ME-Token] ${data.slug} [${tokenIdStr}] | ENTRY`);
+
   // Create trace for scheduled bid
   const traceId = `bt-me-stb-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
   const correlationId = traceId;
@@ -20092,16 +19994,10 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     }
     const outbidOptions = currentTask.outbidOptions
 
-    // Parallel operations for floor price and orders
-    const [floor_price, orders] = await Promise.all([
-      fetchMagicEdenCollectionStats(currentTask.contract.contractAddress).then(Number),
-      Order.find({
-        slug,
-        taskId: _id,
-        identifier: tokenId.toString(),
-        marketplace: MAGICEDEN.toLowerCase()
-      }).sort({ createdAt: -1 })
-    ]);
+    // Fetch floor price. Orders from cache.
+    const floor_price = await fetchMagicEdenCollectionStats(currentTask.contract.contractAddress).then(Number);
+    const cachedOrder = orderCache.get(_id, MAGICEDEN.toLowerCase(), tokenId.toString());
+    const orders = cachedOrder ? [cachedOrder] : [];
 
     if (!floor_price) {
       throw new Error(`Failed to fetch floor price for ${slug}`);
@@ -20177,12 +20073,15 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     let tokenOffer = Number(offerPriceEth * Math.pow(10, decimal))
 
     const [order, ...remainingOrders] = orders
-    const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
+    const hasActiveOrder = !!order
+    const orderExpiresAt = typeof order?.expiresAt === 'number' ? order.expiresAt : new Date(order?.expiresAt).getTime()
+    const orderCreatedAt = typeof order?.createdAt === 'number' ? order.createdAt : new Date(order?.createdAt).getTime()
+    const ttl = hasActiveOrder ? (orderExpiresAt - Date.now()) / 1000 : -1
     const currentPrice = Number(order ? order.offerPrice : tokenOffer)
 
-    const createdAt = new Date(order?.createdAt).getTime()
-    const expiredAt = new Date(order?.expiresAt).getTime()
-    const orderExpiration = order ? Math.round((expiredAt - createdAt) / 1000) : expiration
+    const orderExpiration = hasActiveOrder
+      ? Math.round((orderExpiresAt - orderCreatedAt) / 1000)
+      : expiration
 
     if (!outbidOptions.outbid) {
       if (ttl >= MIN_BID_DURATION && currentPrice === tokenOffer && Math.abs(orderExpiration - expiration) < 30) {
@@ -20402,6 +20301,8 @@ async function processMagicedenTraitBid(data: {
 }) {
   const traitKey = `${data.trait?.attributeKey}:${data.trait?.attributeValue}`;
 
+  if (DEBUG) console.log(`[BidFlow][ME-Trait] ${data.slug} [${traitKey}] | ENTRY`);
+
   // Create trace for scheduled bid
   const traceId = `bt-me-stb-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
   const correlationId = traceId;
@@ -20472,19 +20373,15 @@ async function processMagicedenTraitBid(data: {
     const outbidOptions = currentTask.outbidOptions
     const identifier = `${trait.attributeKey}:${trait.attributeValue}`
 
-    // Parallel floor price fetching
-    const [floor_price, traitFloor, orders] = await Promise.all([
+    // Parallel floor price fetching. Orders from cache.
+    const [floor_price, traitFloor] = await Promise.all([
       fetchMagicEdenCollectionStats(currentTask.contract.contractAddress).then(Number),
       currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices
         ? fetchMagicEdenTraitFloor(contractAddress, { attributeKey: trait.attributeKey, attributeValue: trait.attributeValue })
-        : Promise.resolve(undefined),
-      Order.find({
-        slug,
-        taskId: _id,
-        identifier: identifier,
-        marketplace: MAGICEDEN.toLowerCase()
-      }).sort({ createdAt: -1 })
+        : Promise.resolve(undefined)
     ]);
+    const cachedOrder = orderCache.get(_id, MAGICEDEN.toLowerCase(), identifier);
+    const orders = cachedOrder ? [cachedOrder] : [];
 
     if (!floor_price) { throw new Error(`Failed to fetch floor price for ${slug}`); }
 
@@ -20551,11 +20448,13 @@ async function processMagicedenTraitBid(data: {
     let traitOffer = Number(offerPriceEth * Math.pow(10, decimal))
 
     const [order, ...remainingOrders] = orders
-    const ttl = (order?.expiresAt?.getTime() - Date.now()) / 1000
+    // CachedOrder has expiresAt/createdAt as number (timestamp in ms)
+    const orderExpiresAt = typeof order?.expiresAt === 'number' ? order.expiresAt : new Date(order?.expiresAt).getTime();
+    const ttl = (orderExpiresAt - Date.now()) / 1000
     const currrentPrice = Number(order ? order.offerPrice : traitOffer)
 
-    const createdAt = new Date(order?.createdAt).getTime()
-    const expiredAt = new Date(order?.expiresAt).getTime()
+    const createdAt = typeof order?.createdAt === 'number' ? order.createdAt : new Date(order?.createdAt).getTime()
+    const expiredAt = orderExpiresAt
     const orderExpiration = order ? Math.round((expiredAt - createdAt) / 1000) : expiration
 
     if (!outbidOptions.outbid) {
@@ -20945,85 +20844,52 @@ async function validateBidCount() {
 }
 
 async function validateBidCountInternal() {
-  const taskIds = currentTasks.map(task => task._id);
-  const now = new Date();
+  // Clean up expired entries from the cache first
+  orderCache.cleanupExpired();
 
-  // Batch process all tasks in a single query using Mongodb's aggregate
-  const [orderCounts, expiredOrders] = await Promise.all([
-    // Get counts for all tasks grouped by taskId and marketplace
-    Order.aggregate([
-      {
-        $match: {
-          taskId: { $in: taskIds },
-          expiresAt: { $gt: now }  // Only count non-expired orders
-        }
-      },
-      {
-        $group: {
-          _id: { taskId: '$taskId', marketplace: '$marketplace' },
-          _count: { $sum: 1 }
-        }
-      }
-    ]),
-
-    // Get all expired orders
-    Order.find({
-      taskId: { $in: taskIds },
-      expiresAt: { $lte: now }  // Already expired
-    }, '_id')  // Only need _id for deletion
-  ]);
-
-  // Process order counts
+  // Process order counts from cache
   const bidStatsMap: { [taskId: string]: { opensea: number; magiceden: number; blur: number } } = {};
 
-  // Initialize all tasks with zero counts
+  // Initialize all tasks with zero counts and populate from cache
   for (const task of currentTasks) {
+    const counts = orderCache.countGroupedByMarketplace(task._id);
     bidStatsMap[task._id] = {
-      opensea: 0,
-      magiceden: 0,
-      blur: 0
+      opensea: counts['opensea'] || 0,
+      magiceden: counts['magiceden'] || 0,
+      blur: counts['blur'] || 0
     };
-  }
-
-  // Populate counts from grouped results
-  for (const group of orderCounts) {
-    const marketplace = group._id.marketplace.toLowerCase();
-    const taskId = group._id.taskId;
-    if (bidStatsMap[taskId] && (marketplace === 'opensea' || marketplace === 'magiceden' || marketplace === 'blur')) {
-      bidStatsMap[taskId][marketplace as 'opensea' | 'magiceden' | 'blur'] = group._count;
-    }
   }
 
   // Update global bidStats
   Object.assign(bidStats, bidStatsMap);
 
-  // Delete expired orders and update ownBidCounts
-  if (expiredOrders.length > 0) {
-    // First, count expired orders by marketplace for ownBidCounts
-    const expiredByMarketplace = await Order.aggregate([
-      {
-        $match: {
-          _id: { $in: expiredOrders.map(o => o._id) },
-          marketplace: { $in: ['opensea', 'magiceden'] } // Only track these two
-        }
-      },
-      {
-        $group: {
-          _id: '$marketplace',
-          count: { $sum: 1 }
-        }
-      }
-    ]);
+  // Clean up expired orders from database (still needed for data consistency)
+  const taskIds = currentTasks.map(task => task._id);
+  const now = new Date();
 
-    // Decrement ownBidCounts for expired orders
-    for (const group of expiredByMarketplace) {
-      const marketplace = group._id.toLowerCase();
-      if (marketplace === 'opensea' || marketplace === 'magiceden') {
-        decrementOwnBidCounter(marketplace as 'opensea' | 'magiceden', group.count);
+  const expiredOrders = await Order.find({
+    taskId: { $in: taskIds },
+    expiresAt: { $lte: now }
+  }, '_id marketplace');
+
+  if (expiredOrders.length > 0) {
+    // Count expired orders by marketplace for ownBidCounts
+    const expiredByMarketplace: { [key: string]: number } = {};
+    for (const order of expiredOrders) {
+      const mp = order.marketplace?.toLowerCase();
+      if (mp === 'opensea' || mp === 'magiceden') {
+        expiredByMarketplace[mp] = (expiredByMarketplace[mp] || 0) + 1;
       }
     }
 
-    // Now delete the expired orders
+    // Decrement ownBidCounts for expired orders
+    for (const [marketplace, count] of Object.entries(expiredByMarketplace)) {
+      if (marketplace === 'opensea' || marketplace === 'magiceden') {
+        decrementOwnBidCounter(marketplace as 'opensea' | 'magiceden', count);
+      }
+    }
+
+    // Delete expired orders from database
     await Order.deleteMany({
       _id: { $in: expiredOrders.map(o => o._id) }
     });
@@ -24033,6 +23899,8 @@ async function calculateBidPrice(task: ITask, floorPrice: number, marketplaceNam
   const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
   const currencySymbol = currencyType === "usdc" ? "usdc" : "weth"
 
+  if (DEBUG) console.log(`[PriceCalc] ${task.contract?.slug || task._id} | floor=${floorPrice} | min=${minBidPriceEth} | max=${maxBidPriceEth} | offer=${offerPriceEth} | ${currencySymbol.toUpperCase()}`);
+
   return { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencyType, currency, decimal, currencySymbol: currencySymbol.toUpperCase() };
 }
 
@@ -24071,7 +23939,10 @@ async function stopOption(
 
   try {
     // Early return if stop options aren't enabled
-    if (!task?.stopOptions?.triggerStopOptions) return false;
+    if (!task?.stopOptions?.triggerStopOptions) {
+      if (DEBUG) console.log(`[StopOption] ${task.contract?.slug || task._id} | stopOptions not enabled | RESULT=false`);
+      return false;
+    }
 
     // Return false if minFloorPrice or maxFloorPrice is 0 or undefined
     const minFloorPrice = Number(task?.stopOptions?.minFloorPrice);
@@ -24096,6 +23967,7 @@ async function stopOption(
         if (!counterBid) {
           skipStats[task._id][marketplace]++
         }
+        if (DEBUG) console.log(`[StopOption] ${task.contract?.slug || task._id} [${trait}] | traitFloor=${traitFloor} range=[${traitFloorMin},${traitFloorMax}] | TRIGGERED=true`);
         return true
       }
     } else {
@@ -24105,6 +23977,7 @@ async function stopOption(
         if (!counterBid) {
           skipStats[task._id][marketplace]++;
         }
+        if (DEBUG) console.log(`[StopOption] ${task.contract?.slug || task._id} | floor=${floorPrice} range=[${minFloorPrice},${maxFloorPrice}] | TRIGGERED=true`);
         return true;
       }
     }
@@ -24125,6 +23998,7 @@ async function stopOption(
         `Current balance: ${currentBalance} items.`;
 
       // Log the warning
+      if (DEBUG) console.log(`[StopOption] ${task.contract?.slug || task._id} | maxPurchase=${maxPurchase} balance=${currentBalance} | TRIGGERED=true`);
       return true;
     }
 

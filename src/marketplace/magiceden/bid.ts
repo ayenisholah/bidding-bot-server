@@ -8,6 +8,7 @@ import { config } from "dotenv";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, trackBidRate, updateTaskCancellationPercentage } from "../..";
 import { DistributedLockManager } from '../../utils/lock';
 import Order from '../../models/order.model';
+import { orderCache } from '../../utils/order-cache';
 import { withRetry } from '../../utils/db-retry';
 import redisClient from '../../utils/redis';
 import axios from "axios";
@@ -891,9 +892,23 @@ async function sendSignedOrderData(
 
           if (batch.length > 0) {
             try {
-              await withRetry(async () => {
+              const savedOrders = await withRetry(async () => {
                 return await Order.insertMany(batch);
               });
+              // Update in-memory cache for all saved orders
+              for (const savedOrder of savedOrders) {
+                orderCache.set({
+                  _id: savedOrder._id.toString(),
+                  orderHash: savedOrder.orderHash,
+                  expiresAt: new Date(savedOrder.expiresAt).getTime(),
+                  offerPrice: savedOrder.offerPrice,
+                  createdAt: new Date(savedOrder.createdAt).getTime(),
+                  identifier: savedOrder.identifier,
+                  marketplace: savedOrder.marketplace,
+                  slug: savedOrder.slug,
+                  taskId: savedOrder.taskId
+                });
+              }
             } catch (error) {
               // Log error but don't fail the bid
               await logger.logDatabaseError('Failed to batch create orders', {

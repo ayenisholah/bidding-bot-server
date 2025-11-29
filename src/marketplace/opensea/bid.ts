@@ -8,6 +8,7 @@ import { getCollectionDetails, getCollectionTokenContractMap } from "../../funct
 import { config } from "dotenv";
 import axios from "axios";
 import Order from '../../models/order.model';
+import { orderCache } from '../../utils/order-cache';
 import { withRetry } from '../../utils/db-retry'
 import { USDC, WETH } from "../../utils/currencies";
 import { CollectionItemsListQuery } from "../../queries";
@@ -501,15 +502,29 @@ export async function bidOnOpensea(
 
         const sanitizedExpiry = expiry > 900 ? expiry : 900
         if (offerPrice && itemOrderHash && sanitizedExpiry && slug && taskId && asset.tokenId) {
+          const expiresAt = new Date(Date.now() + sanitizedExpiry * 1000);
+          const orderData = {
+            slug: slug,
+            orderHash: itemOrderHash,
+            expiresAt: expiresAt,
+            offerPrice: offerPrice.toString(),
+            identifier: asset.tokenId.toString(),
+            taskId: taskId,
+            marketplace: 'opensea'
+          };
           await withRetry(async () => {
-            await Order.create({
-              slug: slug,
-              orderHash: itemOrderHash,
-              expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
-              offerPrice: offerPrice.toString(),
-              identifier: asset.tokenId.toString(),
-              taskId: taskId,
-              marketplace: 'opensea'
+            const savedOrder = await Order.create(orderData);
+            // Update in-memory cache
+            orderCache.set({
+              _id: savedOrder._id.toString(),
+              orderHash: savedOrder.orderHash,
+              expiresAt: savedOrder.expiresAt.getTime(),
+              offerPrice: savedOrder.offerPrice,
+              createdAt: savedOrder.createdAt.getTime(),
+              identifier: savedOrder.identifier,
+              marketplace: savedOrder.marketplace,
+              slug: savedOrder.slug,
+              taskId: savedOrder.taskId
             });
           });
         }
@@ -836,15 +851,29 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
   const sanitizedExpiry = expiry > 900 ? expiry : 900
 
   if (offerPrice && order_hash && sanitizedExpiry && slug && taskId && identifier) {
+    const expiresAt = new Date(Date.now() + sanitizedExpiry * 1000);
+    const orderData = {
+      slug: slug,
+      orderHash: order_hash,
+      expiresAt: expiresAt,
+      offerPrice: offerPrice.toString(),
+      identifier: identifier,
+      taskId: taskId,
+      marketplace: 'opensea'
+    };
     await withRetry(async () => {
-      await Order.create({
-        slug: slug,
-        orderHash: order_hash,
-        expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
-        offerPrice: offerPrice.toString(),
-        identifier: identifier,
-        taskId: taskId,
-        marketplace: 'opensea'
+      const savedOrder = await Order.create(orderData);
+      // Update in-memory cache
+      orderCache.set({
+        _id: savedOrder._id.toString(),
+        orderHash: savedOrder.orderHash,
+        expiresAt: savedOrder.expiresAt.getTime(),
+        offerPrice: savedOrder.offerPrice,
+        createdAt: savedOrder.createdAt.getTime(),
+        identifier: savedOrder.identifier,
+        marketplace: savedOrder.marketplace,
+        slug: savedOrder.slug,
+        taskId: savedOrder.taskId
       });
     });
   }
