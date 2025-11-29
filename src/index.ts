@@ -15529,7 +15529,8 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 
       // 2. Handle own bid case
       if (isOwnBid) {
-        const spread = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
+        const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
+        const spread = roundToValidPrecision(spreadRaw);
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
@@ -16860,7 +16861,8 @@ async function processOpenseaTraitBid(data: {
       }
 
       if (isOwnBid) {
-        const spread = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
+        const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
+        const spread = roundToValidPrecision(spreadRaw);
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
@@ -17278,7 +17280,8 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       }
 
       if (isOwnBid) {
-        const spread = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
+        const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
+        const spread = roundToValidPrecision(spreadRaw);
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
@@ -19878,7 +19881,8 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
         .includes(owner);
 
       if (isOwnBid) {
-        const spread = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
+        const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
+        const spread = roundToValidPrecision(spreadRaw);
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
@@ -20204,7 +20208,8 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       const outbidMargin = currentTask.outbidOptions.magicedenOutbidMargin || usdcBid ? 0.01 : 0.0001
 
       if (isOwnBid) {
-        const spread = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
+        const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
+        const spread = roundToValidPrecision(spreadRaw);
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
@@ -20228,7 +20233,8 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       }
 
       else if (isTopBid) {
-        const spread = (Number(order.offerPrice) - Number(highestBidAmount)) / Math.pow(10, decimal);
+        const spreadRaw = (Number(order.offerPrice) - Number(highestBidAmount)) / Math.pow(10, decimal);
+        const spread = roundToValidPrecision(spreadRaw);
         const highestBidAmountEth = Number(highestBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = highestBidAmountEth + outbidMargin;
 
@@ -20573,7 +20579,8 @@ async function processMagicedenTraitBid(data: {
       const outbidMargin = currentTask.outbidOptions.magicedenOutbidMargin || usdcBid ? 0.01 : 0.0001
 
       if (isOwnBid) {
-        const spread = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
+        const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
+        const spread = roundToValidPrecision(spreadRaw);
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
@@ -20596,7 +20603,8 @@ async function processMagicedenTraitBid(data: {
         }
       }
       else if (isTopBid) {
-        const spread = (Number(order.offerPrice) - Number(highestBidAmount)) / Math.pow(10, decimal);
+        const spreadRaw = (Number(order.offerPrice) - Number(highestBidAmount)) / Math.pow(10, decimal);
+        const spread = roundToValidPrecision(spreadRaw);
         const highestBidAmountEth = Number(highestBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = highestBidAmountEth + outbidMargin;
 

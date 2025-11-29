@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Spread Comparison Floating-Point Precision**: Fixed false positives in `spread > outbidMargin` comparisons due to floating-point precision errors
+  - **Root Cause**: JavaScript floating-point division produced values like `0.00010000000000000002` instead of clean `0.0001`, causing incorrect "spread greater than margin" evaluations when values should be equal
+  - **Example**: `spread = 0.00010000000000000002` vs `outbidMargin = 0.0001` → comparison returns TRUE (should be FALSE)
+  - **Solution**: Applied `roundToValidPrecision()` to spread before comparison, matching OpenSea's tiered precision rules:
+    - 0.0001-0.0999 ETH: 4 decimals
+    - 0.100-0.999 ETH: 3 decimals
+    - 1.00+ ETH: 2 decimals
+  - **Locations Fixed (8 total)**:
+    - `processOpenseaCollectionBid`: spread calculation
+    - `processOpenseaTraitBid`: spread calculation
+    - `processOpenseaTokenBid`: spread calculation
+    - `processMagicedenCollectionBid`: spread calculation
+    - `processMagicedenTokenBid` (isOwnBid): spread calculation
+    - `processMagicedenTokenBid` (isTopBid): spread calculation
+    - `processMagicedenTraitBid` (isOwnBid): spread calculation
+    - `processMagicedenTraitBid` (isTopBid): spread calculation
+  - **Note**: Blur already uses `+spread.toFixed(2)` so no changes needed
+  - Files modified: `src/index.ts`
+  - Resolves: Unnecessary bid adjustments when spread equals margin, floating-point noise triggering incorrect bid optimization
+  - Impact: Spread comparisons now use clean rounded values matching marketplace precision requirements
+
 - **Spread Logic Bugs in Scheduled Bid Functions**: Fixed 7 bugs in spread-based bid optimization logic across MagicEden and Blur
   - **Bug 1 - MagicEden Empty else-if Fall-through (5 locations)**: When `spread > margin` but `potentialNewBid < minBid`, empty else-if blocks caused unintended fall-through to TTL check, potentially placing unwanted bids
     - `processMagicedenCollectionBid`: Now sets `collectionOffer = highestBidAmount` to maintain position
