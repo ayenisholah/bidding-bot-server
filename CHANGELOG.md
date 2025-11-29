@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Spread Logic Bugs in Scheduled Bid Functions**: Fixed 7 bugs in spread-based bid optimization logic across MagicEden and Blur
+  - **Bug 1 - MagicEden Empty else-if Fall-through (5 locations)**: When `spread > margin` but `potentialNewBid < minBid`, empty else-if blocks caused unintended fall-through to TTL check, potentially placing unwanted bids
+    - `processMagicedenCollectionBid`: Now sets `collectionOffer = highestBidAmount` to maintain position
+    - `processMagicedenTokenBid` (isOwnBid): Now sets `tokenOffer = highestBidAmount`
+    - `processMagicedenTokenBid` (isTopBid): Now sets `tokenOffer = +order.offerPrice`
+    - `processMagicedenTraitBid` (isOwnBid): Now sets `traitOffer = highestBidAmount`
+    - `processMagicedenTraitBid` (isTopBid): Now sets `traitOffer = +order.offerPrice`
+  - **Bug 2 - Blur Missing minBidPriceEth Check (2 locations)**: Blur could place bids below task's minimum bid price when lowering
+    - `processBlurCollectionBid`: Added `&& bidPrice >= minBidPriceEth` to spread condition
+    - `processBlurTraitBid`: Added `&& bidPrice >= minBidPriceEth` to spread condition
+  - **Root Cause**: Spread logic is used when you're already the top bidder to optimize bid price (lower your bid to save money while staying ahead). The bugs caused: (1) MagicEden to place redundant bids when it couldn't lower, (2) Blur to place bids below minimum
+  - Files modified: `src/index.ts`
+  - Resolves: Unwanted bid placements, bids below minimum price
+  - Impact: All marketplaces now correctly handle the "can't lower below min" case by maintaining current bid position
+
 ### Added
 - **WebSocket Pipeline Debug Logging**: Added comprehensive debug logging throughout the entire WebSocket message pipeline to diagnose counterbid connectivity issues
   - Enable via `DEBUG=true` in environment (connection log is ALWAYS-ON)

@@ -16393,9 +16393,12 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
       if (isTopBid) {
         const spread = (Number(topOfferAmount) - Number(secondOfferAmount));
-        if (+spread.toFixed(2) > blurOutbidMargin && Number(secondOfferAmount) > 0) {
-          const bidPrice = secondOfferAmount + blurOutbidMargin
+        const bidPrice = secondOfferAmount + blurOutbidMargin;
+        if (+spread.toFixed(2) > blurOutbidMargin && Number(secondOfferAmount) > 0 && bidPrice >= minBidPriceEth) {
           colletionOffer = BigInt(Math.round(bidPrice * 1e18));
+        } else if (+spread.toFixed(2) > blurOutbidMargin && Number(secondOfferAmount) > 0 && bidPrice < minBidPriceEth) {
+          // Large spread but can't lower below min - maintain current bid
+          colletionOffer = BigInt(Math.round(topOfferAmount * 1e18));
         } else if (ttl > MIN_BID_DURATION) {
           bidTraceLogger.logEarlyReturn(traceId, 'own_bid_still_valid_ttl', {
             correlationId, marketplace: 'blur', taskId, collectionSlug, bidType: 'collection',
@@ -19020,10 +19023,12 @@ async function processBlurTraitBid(data: {
 
       if (isTopBid) {
         const spread = (Number(topOfferAmount) - Number(secondOfferAmount));
-        if (+spread.toFixed(2) > blurOutbidMargin && Number(secondOfferAmount) > 0) {
-          const bidPrice = secondOfferAmount + blurOutbidMargin
-
+        const bidPrice = secondOfferAmount + blurOutbidMargin;
+        if (+spread.toFixed(2) > blurOutbidMargin && Number(secondOfferAmount) > 0 && bidPrice >= minBidPriceEth) {
           traitOffer = BigInt(Math.round((bidPrice * 1e18) / 1e16) * 1e16);
+        } else if (+spread.toFixed(2) > blurOutbidMargin && Number(secondOfferAmount) > 0 && bidPrice < minBidPriceEth) {
+          // Large spread but can't lower below min - maintain current bid
+          traitOffer = BigInt(Math.round(topOfferAmount * 1e18));
         } else if (ttl > MIN_BID_DURATION) {
           bidTraceLogger.logEarlyReturn(traceId, 'own_bid_still_valid_ttl', {
             correlationId, marketplace: 'blur', taskId: _id, collectionSlug: slug, bidType: 'trait', traitKey,
@@ -19882,6 +19887,8 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
           colletionOffer = Number(secondTopBidAmount) + (outbidMargin * Math.pow(10, decimal))
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
+          // Large spread but can't lower below min - maintain current bid
+          colletionOffer = highestBidAmount;
         }
         else if (ttl > MIN_BID_DURATION) {
           bidTraceLogger.logEarlyReturn(traceId, 'own_bid_still_valid_ttl', {
@@ -20206,6 +20213,8 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
           tokenOffer = Number(secondTopBidAmount) + (outbidMargin * Math.pow(10, decimal))
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
+          // Large spread but can't lower below min - maintain current bid
+          tokenOffer = highestBidAmount;
         }
         else if (ttl > MIN_BID_DURATION) {
           bidTraceLogger.logEarlyReturn(traceId, 'own_bid_still_valid_ttl', {
@@ -20228,6 +20237,8 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
           tokenOffer = Number(highestBidAmount) + (outbidMargin * Math.pow(10, decimal));
         }
         else if (spread > outbidMargin && Number(highestBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
+          // Large spread but can't lower below min - maintain current bid
+          tokenOffer = +order.offerPrice;
         }
         else if (ttl > MIN_BID_DURATION) {
           bidTraceLogger.logEarlyReturn(traceId, 'top_bid_still_valid_ttl', {
@@ -20571,6 +20582,8 @@ async function processMagicedenTraitBid(data: {
           traitOffer = Number(secondTopBidAmount) + (outbidMargin * Math.pow(10, decimal));
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
+          // Large spread but can't lower below min - maintain current bid
+          traitOffer = highestBidAmount;
         }
         else if (ttl > MIN_BID_DURATION) {
           bidTraceLogger.logEarlyReturn(traceId, 'own_bid_still_valid_ttl', {
@@ -20592,6 +20605,8 @@ async function processMagicedenTraitBid(data: {
           traitOffer = Number(highestBidAmount) + (outbidMargin * Math.pow(10, decimal));
         }
         else if (spread > outbidMargin && Number(highestBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
+          // Large spread but can't lower below min - maintain current bid
+          traitOffer = +order.offerPrice;
         }
         else if (ttl > MIN_BID_DURATION) {
           bidTraceLogger.logEarlyReturn(traceId, 'top_bid_still_valid_ttl', {
