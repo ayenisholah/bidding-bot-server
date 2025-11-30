@@ -1,4 +1,4 @@
-import { logger } from './logger';
+import { errorLog } from './debug-file-logger';
 
 interface TaskFailureRecord {
   taskId: string;
@@ -24,9 +24,9 @@ export class TaskCircuitBreaker {
   recordTimeout(taskId: string, collection: string, marketplace: string): boolean {
     const key = this.getKey(taskId, marketplace);
     const now = Date.now();
-    
+
     let record = this.failureRecords.get(key);
-    
+
     if (!record) {
       record = {
         taskId,
@@ -54,18 +54,11 @@ export class TaskCircuitBreaker {
     if (record.consecutiveFailures >= this.maxConsecutiveFailures) {
       record.suspended = true;
       record.suspendedUntil = now + this.suspensionDurationMs;
-      
+
       // console.log(`[Circuit Breaker] Suspending ${marketplace} for task ${taskId} (${collection}) due to ${record.consecutiveFailures} consecutive timeouts`);
-      
-      logger.logGeneralError('Task suspended due to repeated timeouts', {
-        taskId,
-        collection,
-        marketplace,
-        consecutiveFailures: record.consecutiveFailures,
-        totalTimeouts: record.totalTimeouts,
-        suspendedUntil: new Date(record.suspendedUntil).toISOString()
-      });
-      
+
+      errorLog('[Circuit Breaker]', `Task suspended due to repeated timeouts - taskId=${taskId} collection=${collection} marketplace=${marketplace} consecutiveFailures=${record.consecutiveFailures} totalTimeouts=${record.totalTimeouts} suspendedUntil=${new Date(record.suspendedUntil).toISOString()}`);
+
       return true; // Task should be suspended
     }
 
@@ -75,7 +68,7 @@ export class TaskCircuitBreaker {
   recordSuccess(taskId: string, marketplace: string): void {
     const key = this.getKey(taskId, marketplace);
     const record = this.failureRecords.get(key);
-    
+
     if (record) {
       record.consecutiveFailures = 0;
       // Don't reset totalTimeouts to maintain history
@@ -85,19 +78,19 @@ export class TaskCircuitBreaker {
   isSuspended(taskId: string, marketplace: string): boolean {
     const key = this.getKey(taskId, marketplace);
     const record = this.failureRecords.get(key);
-    
+
     if (!record || !record.suspended) {
       return false;
     }
 
     const now = Date.now();
-    
+
     // Check if suspension period has expired
     if (record.suspendedUntil && now >= record.suspendedUntil) {
       record.suspended = false;
       record.consecutiveFailures = 0;
       delete record.suspendedUntil;
-      
+
       // console.log(`[Circuit Breaker] Resuming ${marketplace} for task ${taskId} after suspension period`);
       return false;
     }
@@ -117,9 +110,9 @@ export class TaskCircuitBreaker {
     const status = [];
     const now = Date.now();
 
-    for (const [key, record] of this.failureRecords.entries()) {
+    for (const [_key, record] of this.failureRecords.entries()) {
       const isSuspended = record.suspended && record.suspendedUntil && now < record.suspendedUntil;
-      
+
       status.push({
         taskId: record.taskId,
         collection: record.collection,
@@ -142,7 +135,7 @@ export class TaskCircuitBreaker {
         keysToDelete.push(key);
       }
     }
-    
+
     keysToDelete.forEach(key => this.failureRecords.delete(key));
   }
 }

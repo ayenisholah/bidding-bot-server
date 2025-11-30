@@ -1,5 +1,6 @@
 import { DistributedLockManager } from './lock';
 import { ITask } from '../models/task.model';
+import { errorLog } from './debug-file-logger';
 
 export type TaskStatus = 'STARTED' | 'RUNNING' | 'COMPLETED' | 'SCHEDULED' | 'CANCELLING' | 'STOPPED' | 'PROCESSING';
 
@@ -89,9 +90,9 @@ export class TaskStateManager {
       
       const currentState = this.taskStatus.get(taskId);
       if (!currentState) {
-        console.error(`[StateManager] Task ${taskId} has no current state`);
-        console.error(`  Available tasks: ${Array.from(this.taskStatus.keys()).join(', ')}`);
-        console.error(`  Called from:\n    ${stackTrace}`);
+        errorLog('TaskState', `Task ${taskId} has no current state`);
+        errorLog('TaskState', `Available tasks: ${Array.from(this.taskStatus.keys()).join(', ')}`);
+        errorLog('TaskState', `Called from:\n    ${stackTrace}`);
         return false;
       }
 
@@ -111,22 +112,22 @@ export class TaskStateManager {
       );
 
       if (!validTransition) {
-        console.error(`[StateManager] Invalid state transition for task ${taskId}: ${currentState.status} -> ${newStatus}`);
-        console.error(`  Valid transitions from ${currentState.status}: ${
+        errorLog('TaskState', `Invalid state transition for task ${taskId}: ${currentState.status} -> ${newStatus}`);
+        errorLog('TaskState', `Valid transitions from ${currentState.status}: ${
           STATE_TRANSITIONS
             .filter(t => t.from.includes(currentState.status))
             .map(t => t.to)
             .join(', ')
         }`);
-        console.error(`  Called from:\n    ${stackTrace}`);
+        errorLog('TaskState', `Called from:\n    ${stackTrace}`);
         return false;
       }
 
       // Check transition condition if any
       if (validTransition.condition && !validTransition.condition(currentState)) {
-        console.error(`[StateManager] State transition condition not met for task ${taskId}`);
-        console.error(`  Transition: ${currentState.status} -> ${newStatus}`);
-        console.error(`  Current state details: ${JSON.stringify(currentState)}`);
+        errorLog('TaskState', `State transition condition not met for task ${taskId}`);
+        errorLog('TaskState', `Transition: ${currentState.status} -> ${newStatus}`);
+        errorLog('TaskState', `Current state details: ${JSON.stringify(currentState)}`);
         return false;
       }
 
@@ -247,7 +248,7 @@ console.log(`  Total tasks in manager: ${this.taskStatus.size}`);
           // waitingTime: updatedState.waitingTime
         // }, null, 2)}`);
       } else {
-        console.error(`  Task ${taskId} not found in state manager`);
+        errorLog('TaskState', `Task ${taskId} not found in state manager`);
       }
     }, 30);
   }
@@ -370,7 +371,7 @@ console.log(`  Total tasks in manager: ${this.taskStatus.size}`);
       try {
         listener(oldState, newState);
       } catch (error) {
-        console.error(`[StateManager] Error in state change listener for task ${taskId}:`, error);
+        errorLog('TaskState', `Error in state change listener for task ${taskId}`, error);
       }
     });
   }

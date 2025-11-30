@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
+import { warnLog } from './debug-file-logger';
 
 export interface WebSocketManagerConfig {
   url: string;
@@ -123,7 +124,7 @@ class WebSocketManager extends EventEmitter {
               try {
                 this.ws.close();
               } catch (error) {
-// console.log('Error closing WebSocket:', error);
+                warnLog('WebSocket', 'Error closing WebSocket connection during timeout');
               }
             } else if (this.ws.readyState === WebSocket.CONNECTING) {
               // Can't terminate a CONNECTING WebSocket - just clean up
@@ -140,8 +141,7 @@ class WebSocketManager extends EventEmitter {
                 try {
                   wsToCleanup.close();
                 } catch (e) {
-                  // Ignore errors during cleanup
-// console.log(e);
+                  warnLog('WebSocket', 'Error closing WebSocket during cleanup after connection timeout');
                 }
               });
               wsToCleanup.once('error', () => {
@@ -152,11 +152,11 @@ class WebSocketManager extends EventEmitter {
           }
           this.attemptReconnect();
         } catch (error) {
-// console.log(error);
+          warnLog('WebSocket', 'Error during connection timeout handling');
           try {
             this.attemptReconnect();
           } catch (reconnectError) {
-// console.log(reconnectError);
+            warnLog('WebSocket', 'Error attempting reconnect after connection timeout');
           }
         }
       }, this.config.connectionTimeout);
@@ -184,7 +184,7 @@ class WebSocketManager extends EventEmitter {
       }
 
     } catch (error) {
-// console.log(error);
+      warnLog('WebSocket', 'Error during WebSocket connection attempt');
       this.isReconnecting = false;
       this.attemptReconnect();
     }
@@ -219,7 +219,7 @@ class WebSocketManager extends EventEmitter {
 
     // Sync subscriptions (don't await to prevent blocking connection)
     this.syncSubscriptions().catch(error => {
-// console.log(error);
+      warnLog('WebSocket', 'Error syncing subscriptions on connection');
     });
 
     this.emit('connected', connectionId);
@@ -240,7 +240,7 @@ class WebSocketManager extends EventEmitter {
           try {
             this.ws?.close();
           } catch (error) {
-// console.log(error);
+            warnLog('WebSocket', 'Error closing WebSocket after missed pongs');
           }
           return;
         }
@@ -258,7 +258,7 @@ class WebSocketManager extends EventEmitter {
         try {
           this.ws?.close(1001, 'Stale connection detected');
         } catch (error) {
-// console.log('Error closing stale connection:', error);
+          warnLog('WebSocket', 'Error closing stale connection');
         }
         return;
       }
@@ -282,7 +282,7 @@ class WebSocketManager extends EventEmitter {
           try {
             this.ws?.close();
           } catch (error) {
-// console.log('Error closing WebSocket after missed pongs:', error);
+            warnLog('WebSocket', 'Error closing WebSocket after max missed pongs reached');
           }
         }
       }, 15000); // 15 second pong timeout (increased from 5s for better network tolerance)
@@ -349,7 +349,7 @@ class WebSocketManager extends EventEmitter {
         try {
           this.ws?.close();
         } catch (error) {
-// console.log('Error closing severely stale connection:', error);
+          warnLog('WebSocket', 'Error closing severely stale connection');
         }
       }
 
@@ -357,14 +357,14 @@ class WebSocketManager extends EventEmitter {
       if (this.activeSubscriptions.size > 0 && timeSinceLastMessage > 300000) { // 5 minutes
 // console.log('Performing periodic subscription verification');
         this.verifySubscriptions().catch(error => {
-// console.log('Periodic subscription verification failed:', error);
+          warnLog('WebSocket', 'Periodic subscription verification failed');
         });
       }
 
       // Add specific listing subscription health check every 2 minutes
       if (this.persistentListingSubscriptions.size > 0 && timeSinceLastMessage > 120000) { // 2 minutes
         this.verifyListingSubscriptions().catch(error => {
-// console.log('Listing subscription verification failed:', error);
+          warnLog('WebSocket', 'Listing subscription verification failed');
         });
       }
 
@@ -464,8 +464,7 @@ class WebSocketManager extends EventEmitter {
       }
 
     } catch (error) {
-// console.log('Failed to sync subscriptions:', error);
-// console.log('Continuing without subscription sync');
+      warnLog('WebSocket', 'Failed to sync subscriptions - continuing without sync');
     }
   }
 
@@ -509,7 +508,7 @@ class WebSocketManager extends EventEmitter {
 // console.log('Failed to find subscription info for retry:', slug);
         }
       } catch (error) {
-// console.log('Retry subscription failed:', { slug, error });
+        warnLog('WebSocket', `Retry subscription failed for slug: ${slug}`);
       }
     }
   }
@@ -554,15 +553,14 @@ class WebSocketManager extends EventEmitter {
       this.emit('message', message);
 
     } catch (error) {
-// console.log('Failed to parse WebSocket message:', error);
+      warnLog('WebSocket', 'Failed to parse WebSocket message');
 
       // Still emit the raw message even if parsing fails
       // This helps prevent message loss
       try {
         this.emit('message', { raw: data.toString(), parseError: true });
       } catch (emitError) {
-// console.log(emitError);
-// console.log('Failed to emit raw message after parse error');
+        warnLog('WebSocket', 'Failed to emit raw message after parse error');
       }
     }
   }
@@ -728,7 +726,7 @@ class WebSocketManager extends EventEmitter {
       try {
         this.ws.send(JSON.stringify(message));
       } catch (error) {
-// console.log('Failed to send message:', error);
+        warnLog('WebSocket', 'Failed to send message - queueing for retry');
         this.queueMessage(message);
       }
     } else {
@@ -879,7 +877,7 @@ class WebSocketManager extends EventEmitter {
       this.emit('subscribed', { slug, marketplace, subscriptionType });
 
     } catch (error) {
-// console.log('Failed to subscribe:', error);
+      warnLog('WebSocket', 'Failed to subscribe to collection');
       throw error;
     }
   }
@@ -946,7 +944,7 @@ class WebSocketManager extends EventEmitter {
       this.emit('unsubscribed', { slug, marketplace });
 
     } catch (error) {
-// console.log('Failed to unsubscribe:', error);
+      warnLog('WebSocket', 'Failed to unsubscribe from collection');
       throw error;
     }
   }
@@ -984,7 +982,7 @@ class WebSocketManager extends EventEmitter {
           // });
           // Force resubscription
           this.syncSubscriptions().catch(error => {
-// console.log('Forced resubscription failed:', error);
+            warnLog('WebSocket', 'Forced resubscription failed during verification');
           });
         }
       }
@@ -1104,8 +1102,7 @@ class WebSocketManager extends EventEmitter {
             try {
               wsToCleanup.close();
             } catch (e) {
-              // Ignore errors during cleanup
-// console.log(e);
+              warnLog('WebSocket', 'Error closing WebSocket during safe cleanup');
             }
           });
           wsToCleanup.once('error', () => {
@@ -1117,11 +1114,11 @@ class WebSocketManager extends EventEmitter {
           try {
             this.ws.close(1000, 'Normal closure');
           } catch (error) {
-// console.log('Error closing WebSocket:', error);
+            warnLog('WebSocket', 'Error closing WebSocket - attempting force terminate');
             try {
               this.ws.terminate(); // Force terminate if close fails
             } catch (terminateError) {
-// console.log('Error terminating WebSocket:', terminateError);
+              warnLog('WebSocket', 'Error force terminating WebSocket');
             }
           }
           break;
@@ -1130,13 +1127,13 @@ class WebSocketManager extends EventEmitter {
           try {
             this.ws.terminate();
           } catch (error) {
-// console.log('Error terminating WebSocket in CLOSING state:', error);
+            warnLog('WebSocket', 'Error terminating WebSocket in CLOSING state');
           }
           break;
         // CLOSED state doesn't need any action
       }
     } catch (error) {
-// console.log('Unexpected error in safeCloseWebSocket:', error);
+      warnLog('WebSocket', 'Unexpected error in safeCloseWebSocket');
     }
   }
 
@@ -1165,7 +1162,7 @@ class WebSocketManager extends EventEmitter {
 // console.log('Loaded persistent listing subscriptions:', this.persistentListingSubscriptions.size);
       }
     } catch (error) {
-// console.log('Failed to load persistent subscriptions:', error);
+      warnLog('WebSocket', 'Failed to load persistent subscriptions from file');
     }
   }
 
@@ -1175,7 +1172,7 @@ class WebSocketManager extends EventEmitter {
       const subscriptions = Array.from(this.persistentListingSubscriptions.entries());
       fs.writeFileSync(this.subscriptionStateFile, JSON.stringify(subscriptions, null, 2));
     } catch (error) {
-// console.log('Failed to save persistent subscriptions:', error);
+      warnLog('WebSocket', 'Failed to save persistent subscriptions to file');
     }
   }
 

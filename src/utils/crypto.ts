@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { config } from "dotenv"
 import { getRedisConnection } from '../utils/redis'
+import { errorLog, warnLog } from './debug-file-logger'
 
 config()
 
@@ -75,11 +76,7 @@ export async function recoverPasswordFromRedis(): Promise<boolean> {
       return false;
     }
   } catch (error) {
-    console.error('❌ Failed to recover password from Redis:', error);
-    if (error instanceof Error) {
-      console.error('Error details:', error.message);
-      console.error('Stack:', error.stack);
-    }
+    errorLog('Crypto', 'Failed to recover password from Redis', error);
     return false;
   }
 }
@@ -106,9 +103,7 @@ export async function setPassword(password: string): Promise<void> {
         // console.log('🔑 [DEVELOPMENT] Password stored in Redis (no expiration)');
       }
     } catch (error) {
-      console.error('[DEVELOPMENT] Failed to store password in Redis:', error);
-      // Still set in memory even if Redis fails
-      // console.log('🔑 Password set in memory (Redis storage failed)');
+      warnLog('Crypto', '[DEV] Failed to store password in Redis - using memory only');
     }
   } else {
     // console.log('🔑 [PRODUCTION] Password set in memory only (not stored in Redis)');
@@ -133,7 +128,7 @@ export async function renewPasswordTTL(): Promise<void> {
       // console.log(`🔑 [DEVELOPMENT] Password TTL renewed for ${days} days, ${hours} hours`);
     }
   } catch (error) {
-    console.error('[DEVELOPMENT] Failed to renew password TTL:', error);
+    warnLog('Crypto', '[DEV] Failed to renew password TTL');
   }
 }
 
@@ -149,8 +144,7 @@ export async function clearPassword(): Promise<void> {
       await redis.del(PASSWORD_REDIS_KEY);
       // console.log('🔑 [DEVELOPMENT] Password cleared from Redis and memory');
     } catch (error) {
-      console.error('[DEVELOPMENT] Failed to clear password from Redis:', error);
-      // console.log('🔑 Password cleared from memory only');
+      warnLog('Crypto', '[DEV] Failed to clear password from Redis - cleared from memory only');
     }
   } else {
     // console.log('🔑 [PRODUCTION] Password cleared from memory');
@@ -180,8 +174,7 @@ function getEncryptionKey(): Buffer {
   // Rate-limited logging to prevent spam
   const now = Date.now();
   if (now - lastNoPasswordLogTime > NO_PASSWORD_LOG_INTERVAL) {
-    console.error('🔑 [getEncryptionKey] No password available! Operations requiring wallet encryption are paused.');
-    console.error('💡 Provide password via API to resume operations.');
+    warnLog('Crypto', 'No password available - wallet encryption operations paused. Provide password via API to resume.');
     lastNoPasswordLogTime = now;
   }
 
@@ -223,17 +216,17 @@ export function decryptPrivateKey(encryptedData: string): string {
 
   // Validate input data
   if (encryptedData === null || encryptedData === undefined) {
-    console.error('❌ [decryptPrivateKey] encryptedData is null or undefined');
+    errorLog('Crypto', 'decryptPrivateKey: encryptedData is null or undefined');
     throw new Error('Encrypted data is null or undefined');
   }
 
   if (typeof encryptedData !== 'string') {
-    console.error(`❌ [decryptPrivateKey] encryptedData is not a string, received: ${typeof encryptedData}`);
+    errorLog('Crypto', `decryptPrivateKey: encryptedData is not a string | type=${typeof encryptedData}`);
     throw new Error(`Encrypted data must be a string, received: ${typeof encryptedData}`);
   }
 
   if (encryptedData.trim() === '') {
-    console.error('❌ [decryptPrivateKey] encryptedData is empty string');
+    errorLog('Crypto', 'decryptPrivateKey: encryptedData is empty string');
     throw new Error('Encrypted data is empty');
   }
 
@@ -268,7 +261,7 @@ export function decryptPrivateKey(encryptedData: string): string {
     key = getEncryptionKey();
     // console.log('🔐 [decryptPrivateKey] Encryption key obtained successfully');
   } catch (error) {
-    console.error('🔐 [decryptPrivateKey] Failed to get encryption key:', error);
+    errorLog('Crypto', 'decryptPrivateKey: Failed to get encryption key', error);
     throw error;
   }
 
@@ -276,7 +269,7 @@ export function decryptPrivateKey(encryptedData: string): string {
   // console.log(`🔐 [decryptPrivateKey] Encrypted data parts: ${parts.length}`);
 
   if (parts.length !== 3) {
-    console.error(`🔐 [decryptPrivateKey] Invalid format - expected 3 parts, got ${parts.length}`);
+    errorLog('Crypto', `decryptPrivateKey: Invalid format | expected=3 parts | got=${parts.length}`);
     throw new Error('Invalid encrypted data format');
   }
 
@@ -301,11 +294,7 @@ export function decryptPrivateKey(encryptedData: string): string {
 
     return decrypted;
   } catch (error) {
-    console.error('🔐 [decryptPrivateKey] Decryption failed:', error);
-    if (error instanceof Error) {
-      console.error('🔐 [decryptPrivateKey] Error message:', error.message);
-      console.error('🔐 [decryptPrivateKey] Error stack:', error.stack);
-    }
+    errorLog('Crypto', 'decryptPrivateKey: Decryption failed', error);
     throw error;
   }
 }
@@ -337,7 +326,7 @@ export async function reEncryptWallet(
 
     return newEncryptedKey;
   } catch (error) {
-    console.error('🔐 [reEncryptWallet] Re-encryption failed:', error);
+    errorLog('Crypto', 'reEncryptWallet: Re-encryption failed', error);
     // Restore the current password on error
     PASSWORD = getPassword();
     throw error;

@@ -1,9 +1,5 @@
-import { logger, ErrorCategory } from './logger';
+import { errorLog, warnLog } from './debug-file-logger';
 import { getRedisConnection } from './redis';
-
-// Color constants for console output
-const RED = '\x1b[31m';
-const RESET = '\x1b[0m';
 
 // Cache configuration
 const MEMORY_CACHE_SIZE = 1000; // Maximum tokens in memory
@@ -96,28 +92,13 @@ class TokenTraitCache {
         }
       } catch {
         // Redis not available, continue with memory cache only
-        console.warn('[TOKEN TRAIT CACHE] Redis not available for write, using memory cache only');
+        warnLog('Cache', 'Redis not available for token trait cache write, using memory cache only');
       }
 
       // console.log(GREEN + `[TOKEN TRAIT CACHE] Cached traits for ${key}` + RESET);
-      logger.logInfo(ErrorCategory.DATABASE, 'Token traits cached successfully', {
-        contractAddress: data.contractAddress,
-        tokenId: data.tokenId,
-        traitCount: data.traits.length,
-        component: 'token_trait_cache',
-        operation: 'set_token_traits'
-      });
 
     } catch (error) {
-      console.error(RED + `[TOKEN TRAIT CACHE] Failed to cache traits for ${key}` + RESET, error);
-      logger.logCacheError('write', 'token_trait', 'Failed to cache token traits', {
-        contractAddress: data.contractAddress,
-        tokenId: data.tokenId,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        component: 'token_trait_cache',
-        operation: 'set_token_traits'
-      });
+      errorLog('Cache', `Failed to cache token traits | contract=${data.contractAddress} | tokenId=${data.tokenId}`, error);
     }
   }
 
@@ -166,21 +147,13 @@ class TokenTraitCache {
         }
       } catch {
         // Redis not available, continue without it
-        console.warn('[TOKEN TRAIT CACHE] Redis not available for read');
+        warnLog('Cache', 'Redis not available for token trait cache read');
       }
 
       return null;
 
     } catch (error) {
-      console.error(RED + `[TOKEN TRAIT CACHE] Failed to get traits for ${key}` + RESET, error);
-      logger.logCacheError('read', 'token_trait', 'Failed to get token traits from cache', {
-        contractAddress,
-        tokenId,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        component: 'token_trait_cache',
-        operation: 'get_token_traits'
-      });
+      errorLog('Cache', `Failed to get token traits from cache | contract=${contractAddress} | tokenId=${tokenId}`, error);
       return null;
     }
   }
@@ -251,21 +224,13 @@ class TokenTraitCache {
         }
       } catch {
         // Redis not available, continue
-        console.warn('[TOKEN TRAIT CACHE] Redis not available for delete');
+        warnLog('Cache', 'Redis not available for token trait cache delete');
       }
 
       // console.log(YELLOW + `[TOKEN TRAIT CACHE] Cleared cache for ${key}` + RESET);
 
     } catch (error) {
-      console.error(RED + `[TOKEN TRAIT CACHE] Failed to clear cache for ${key}` + RESET, error);
-      logger.logCacheError('delete', 'token_trait', 'Failed to clear token from cache', {
-        contractAddress,
-        tokenId,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        component: 'token_trait_cache',
-        operation: 'clear_token'
-      });
+      errorLog('Cache', `Failed to clear token from cache | contract=${contractAddress} | tokenId=${tokenId}`, error);
     }
   }
 
@@ -301,21 +266,13 @@ class TokenTraitCache {
         }
       } catch {
         // Redis not available, continue
-        console.warn('[TOKEN TRAIT CACHE] Redis not available for bulk delete');
+        warnLog('Cache', 'Redis not available for token trait cache bulk delete');
       }
 
       // console.log(YELLOW + `[TOKEN TRAIT CACHE] Cleared ${keysToRemove.length} entries for contract ${contractAddress}` + RESET);
 
     } catch (error) {
-      console.error(RED + `[TOKEN TRAIT CACHE] Failed to clear contract cache` + RESET, error);
-      logger.logCacheError('delete', 'token_trait', 'Failed to clear contract from cache', {
-        contractAddress,
-        keysRemoved: keysToRemove.length,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        component: 'token_trait_cache',
-        operation: 'clear_contract'
-      });
+      errorLog('Cache', `Failed to clear contract from cache | contract=${contractAddress} | keysRemoved=${keysToRemove.length}`, error);
     }
   }
 
@@ -349,15 +306,9 @@ class TokenTraitCache {
       this.accessOrder = [];
       
       console.log('[TOKEN TRAIT CACHE] Memory cache cleared');
-      
+
     } catch (error) {
-      console.error(RED + '[TOKEN TRAIT CACHE] Error during shutdown' + RESET, error);
-      logger.logGeneralError('Error shutting down token trait cache', {
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        component: 'token_trait_cache',
-        operation: 'shutdown'
-      });
+      errorLog('Cache', 'Error shutting down token trait cache', error);
     }
   }
 }

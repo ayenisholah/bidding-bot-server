@@ -1,6 +1,6 @@
 import { BoundedCache } from './bounded-cache';
 import redisClient, { getRedisConnection, withRedisRetry } from './redis';
-import { logger, DatabaseOperation } from './logger';
+import { errorLog, warnLog } from './debug-file-logger';
 
 interface ListingPriceData {
   price: number;
@@ -85,10 +85,10 @@ class ListingPriceCache {
         const updated = await withRedisRetry(async () => {
           const redis = getRedisConnection();
           if (!redis || !redisClient.isReady()) {
-            console.warn('[ListingPriceCache] Redis not available, skipping cache update');
+            warnLog('ListingPriceCache', 'Redis not available, skipping cache update');
             return false;
           }
-          
+
           await redis.setex(redisKey, this.ttl, JSON.stringify(data));
           return true;
         }, 'updatePrice', 3);
@@ -110,16 +110,7 @@ class ListingPriceCache {
       // console.log(`[ListingPriceCache] Existing price ${current} ETH is lower than or equal to new price ${price} ETH, skipping update`);
       return false;
     } catch (error) {
-      await logger.logDatabaseError('Failed to update listing price cache', {
-        databaseOperation: DatabaseOperation.UPDATE,
-        collection_name: 'listing_price_cache',
-        key: redisKey,
-        contractAddress,
-        tokenId,
-        price,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+      errorLog('[Cache]', `Failed to update listing price cache - contract=${contractAddress} tokenId=${tokenId} price=${price}`, error as Error);
       return false;
     }
   }
@@ -146,18 +137,10 @@ class ListingPriceCache {
         
         await redis.del(redisKey);
       }, 'clearPrice', 3);
-      
+
       // console.log(`[ListingPriceCache] Cleared price for ${contractAddress}:${tokenId}`);
     } catch (error) {
-      await logger.logDatabaseError('Failed to clear listing price cache', {
-        databaseOperation: DatabaseOperation.DELETE,
-        collection_name: 'listing_price_cache',
-        key: redisKey,
-        contractAddress,
-        tokenId,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+      errorLog('[Cache]', `Failed to clear listing price cache - contract=${contractAddress} tokenId=${tokenId}`, error as Error);
     }
   }
 
@@ -210,12 +193,7 @@ class ListingPriceCache {
         }
       }, 'clearAll', 3);
     } catch (error) {
-      await logger.logDatabaseError('Failed to clear all listing price cache', {
-        databaseOperation: DatabaseOperation.DELETE,
-        collection_name: 'listing_price_cache',
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+      errorLog('[Cache]', 'Failed to clear all listing price cache', error as Error);
     }
   }
 

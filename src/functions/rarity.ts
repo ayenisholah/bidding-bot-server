@@ -5,6 +5,7 @@ import { CollectionItemsListQuery } from "../queries";
 import RarityCache from "../models/rarityCache.model";
 import { DistributedLockManager } from "../utils/lock";
 import redisClient from '../utils/redis';
+import { errorLog } from '../utils/debug-file-logger';
 
 const getRedis = () => redisClient.getClient();
 
@@ -121,7 +122,7 @@ async function fetchRarityTokensRecursive(
     // Return all accumulated token IDs
     return allTokenIds;
   } catch (error) {
-    console.error("[RARITY FETCH] Error:", error);
+    errorLog('Rarity', 'Error fetching rarity tokens recursively', error);
     throw error;
   }
 }
@@ -251,7 +252,7 @@ export async function fetchRarityTokens(
       cached: false,
     };
   } catch (error) {
-    console.error("[RARITY] Error fetching rarity tokens:", error);
+    errorLog('Rarity', 'Error fetching rarity tokens', error);
     throw error;
   }
 }

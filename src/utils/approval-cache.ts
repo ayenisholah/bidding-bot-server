@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { ERC20_MIN_ABI } from '../constants';
 import { getRedisConnection } from './redis';
+import { errorLog, warnLog } from './debug-file-logger';
 
 // Create provider instance
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
@@ -54,7 +55,7 @@ class ApprovalCache {
         return BigInt(entry.allowance) >= BigInt(requiredAmount);
       }
     } catch (error) {
-      console.error('[ApprovalCache] Redis error:', error);
+      warnLog('Cache', `ApprovalCache: Redis read error | key=${key}`);
     }
 
     // Cache miss - check on-chain
@@ -74,7 +75,7 @@ class ApprovalCache {
 
       return approved;
     } catch (error) {
-      console.error('[ApprovalCache] On-chain check error:', error);
+      errorLog('Cache', `ApprovalCache: On-chain allowance check failed | wallet=${walletAddress.slice(0, 10)}...`, error);
       return false;
     }
   }
@@ -99,7 +100,7 @@ class ApprovalCache {
       const redisKey = this.REDIS_PREFIX + key;
       await redis.setex(redisKey, this.REDIS_TTL, JSON.stringify(entry));
     } catch (error) {
-      console.error('[ApprovalCache] Failed to update Redis:', error);
+      warnLog('Cache', `ApprovalCache: Failed to update Redis | key=${key}`);
     }
   }
 
@@ -118,7 +119,7 @@ class ApprovalCache {
       const redisKey = this.REDIS_PREFIX + key;
       await redis.del(redisKey);
     } catch (error) {
-      console.error('[ApprovalCache] Failed to invalidate Redis cache:', error);
+      warnLog('Cache', `ApprovalCache: Failed to invalidate Redis | key=${key}`);
     }
   }
 
@@ -135,7 +136,7 @@ class ApprovalCache {
         await redis.del(...keys);
       }
     } catch (error) {
-      console.error('[ApprovalCache] Failed to clear Redis cache:', error);
+      warnLog('Cache', 'ApprovalCache: Failed to clear Redis cache');
     }
   }
 

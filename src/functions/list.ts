@@ -4,7 +4,7 @@ import { NETWORK, BASE_URL } from "../constants";
 import { decryptPrivateKey } from "../utils/crypto";
 import { AlchemyProvider, Wallet as Web3Wallet } from "ethers";
 import { getOpenseaFloor } from "./collection";
-import { logger, ErrorCategory } from "../utils/logger";
+import { errorLog, warnLog } from "../utils/debug-file-logger";
 import { updateListingExpiration } from "./relistExpired";
 import Listing from "../models/listing.model";
 import { listOnOpensea } from "../marketplace/opensea/list";
@@ -18,10 +18,6 @@ import { getOpenseaTraitFloor } from "../utils/opensea-trait-floor";
 import { getTraitFilteredListings } from "../functions/tokenMetadata";
 
 config()
-
-// Color constants for console output
-const RED = '\x1b[31m';
-const RESET = '\x1b[0m';
 
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY
 const provider = new AlchemyProvider(NETWORK, ALCHEMY_API_KEY)
@@ -37,25 +33,8 @@ export async function createListing(data: IListing) {
     // Only process if listing is running
     if (!data.running) {
       // console.log(YELLOW + '[LISTING - Create] Listing not running, returning early' + RESET);
-      logger.logWarning(ErrorCategory.BUSINESS_LOGIC, 'Listing creation skipped - not running', {
-        listingId: data._id?.toString(),
-        tokenId: data.tokenId,
-        contractAddress: data.contract.contractAddress,
-        component: 'listing',
-        operation: 'create_listing_check'
-      });
       return;
     }
-
-
-    logger.logInfo(ErrorCategory.DATABASE, 'Starting listing creation', {
-      listingId: data._id?.toString(),
-      tokenId: data.tokenId,
-      contractAddress: data.contract.contractAddress,
-      selectedMarketplaces: data.selectedMarketplaces,
-      component: 'listing',
-      operation: 'create_listing_start'
-    });
 
     // Fetch fresh data if we have an _id
     let freshData = data;
@@ -83,38 +62,11 @@ export async function createListing(data: IListing) {
             listingExpiration: freshListing.listingExpiration || data.listingExpiration,
           };
           // console.log(GREEN + '[LISTING - Create] Step 1.3: Fresh data retrieved and merged' + RESET);
-
-          logger.logInfo(ErrorCategory.DATABASE, 'Fresh listing data retrieved', {
-            listingId: data._id?.toString(),
-            tokenId: data.tokenId,
-            queryTimeMs: queryTime,
-            component: 'listing',
-            operation: 'fetch_fresh_data'
-          });
         } else {
           // console.log(YELLOW + '[LISTING - Create] Step 1.3: No fresh listing found in database' + RESET);
-
-          logger.logWarning(ErrorCategory.DATABASE, 'No fresh listing found in database', {
-            listingId: data._id?.toString(),
-            tokenId: data.tokenId,
-            component: 'listing',
-            operation: 'fetch_fresh_data'
-          });
         }
       } catch (dbError) {
-        console.error(RED + '[LISTING - Create] Step 1.3: Database query error' + RESET, dbError);
-
-        logger.logDatabaseError('Database query failed during listing creation', {
-          listingId: data._id?.toString(),
-          tokenId: data.tokenId,
-          contractAddress: data.contract.contractAddress,
-          queryTimeMs: Date.now() - queryStartTime,
-          error: dbError as Error,
-          errorMessage: dbError instanceof Error ? dbError.message : 'Unknown error',
-          component: 'listing',
-          operation: 'fetch_fresh_data'
-        });
-
+        errorLog('Database', `Database query failed during listing creation | listingId=${data._id} | tokenId=${data.tokenId}`, dbError);
         throw new Error(`Database query failed: ${dbError instanceof Error ? dbError.message : 'Unknown error'}`);
       }
     }
@@ -265,11 +217,7 @@ export async function createListing(data: IListing) {
 
       // Additional validation
       if (listingPrice <= 0) {
-        console.error(`ERROR: Invalid listing price ${listingPrice} for ${marketplace}!`);
-        // console.log('Data values used in calculation:');
-        // console.log('- basePrice:', freshData.basePrice, 'type:', typeof freshData.basePrice);
-        // Use proper property name for magic eden
-        // console.log('- marketplace specific price:', freshData[propName as keyof IListing]);
+        errorLog('Listing', `Invalid listing price | marketplace=${marketplace} | price=${listingPrice} | listingId=${freshData._id}`);
         return;
       }
 
@@ -297,16 +245,6 @@ export async function createListing(data: IListing) {
           if (timeUntilExpiration > 60000) { // More than 1 minute remaining
             const minutesRemaining = Math.floor(timeUntilExpiration / 60000);
             // console.log(GREEN + `[LISTING - SKIPPED] Already have optimal listing on ${marketplace} with ${minutesRemaining} minutes remaining` + RESET);
-
-            logger.logInfo(ErrorCategory.BUSINESS_LOGIC, 'Listing skipped - optimal position maintained', {
-              listingId: freshData._id?.toString(),
-              marketplace,
-              listingPrice,
-              undercutMargin: freshData.underCutMargin,
-              minutesRemaining,
-              component: 'listing',
-              operation: 'skip_optimal_listing'
-            });
             return;
           } else {
             // Less than 1 minute remaining, set price to floor
@@ -346,7 +284,7 @@ export async function createListing(data: IListing) {
             result = await listOnMagicEden(walletAddress, contractAddress, tokenId, listingPrice, freshData.listDuration, web3Wallet);
             break;
           default:
-            console.warn(`Unknown marketplace: ${marketplace}`);
+            warnLog('Listing', `Unknown marketplace | marketplace=${marketplace} | listingId=${freshData._id}`);
             return;
         }
 
@@ -375,42 +313,10 @@ export async function createListing(data: IListing) {
 
     // console.log(GREEN + '[LISTING - Create] Step 8: createListing function completed successfully' + RESET);
 
-    logger.logInfo(ErrorCategory.GENERAL, 'Listing creation completed successfully', {
-      listingId: data._id?.toString(),
-      tokenId: data.tokenId,
-      contractAddress: data.contract.contractAddress,
-      selectedMarketplaces: data.selectedMarketplaces,
-      component: 'listing',
-      operation: 'create_listing_complete'
-    });
-
   } catch (error) {
-    console.error(RED + `[LISTING - Create] ❌ Unexpected listing error for ${data.tokenId}` + RESET, error);
-
     // Only log unexpected errors that weren't handled by marketplace-specific functions
     if (!error || (error instanceof Error && !error.message.includes('Magic Eden') && !error.message.includes('Blur') && !error.message.includes('OpenSea'))) {
-      logger.logMarketplaceError('Error creating listing', {
-        listingId: data._id?.toString(),
-        contractAddress: data.contract.contractAddress,
-        tokenId: data.tokenId,
-        selectedMarketplaces: data.selectedMarketplaces,
-        operation: 'create_listing',
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        component: 'listing'
-      });
-    } else {
-      // Marketplace-specific error, log as debug only
-      logger.logDebug(ErrorCategory.MARKETPLACE, 'Marketplace-specific listing error', {
-        listingId: data._id?.toString(),
-        contractAddress: data.contract.contractAddress,
-        tokenId: data.tokenId,
-        selectedMarketplaces: data.selectedMarketplaces,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        component: 'listing',
-        operation: 'create_listing_marketplace_error'
-      });
+      errorLog('Listing', `Error creating listing | listingId=${data._id} | tokenId=${data.tokenId}`, error);
     }
   }
 }
@@ -674,20 +580,7 @@ export async function shouldSkipListingWithUndercutCheck(
     return false;
 
   } catch (error: any) {
-    console.error(RED + `[LISTING - Undercut Check] Error checking undercut position` + RESET, error);
-
-    logger.logApiError('Failed to check undercut listing position', {
-      collectionSlug,
-      walletAddress,
-      ourListingPrice,
-      undercutMargin,
-      marketplace,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      component: 'listing',
-      operation: 'undercut_check'
-    });
-
+    errorLog('Listing', `Failed to check undercut listing position | slug=${collectionSlug} | marketplace=${marketplace}`, error);
     // On error, don't skip - allow listing to proceed
     return false;
   }
@@ -733,33 +626,12 @@ export async function checkIfWalletHasBestListing(
   } catch (error: any) {
     // Handle 404 errors specifically
     if (error?.response?.status === 404) {
-      await logger.logOpenseaCollectionError('Collection not found on OpenSea', {
-        collection: collectionSlug,
-        collectionSlug: collectionSlug,
-        endpoint: `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`,
-        method: 'GET',
-        statusCode: 404,
-        operation: 'check_offerer',
-        errorCode: 'COLLECTION_NOT_FOUND',
-        errorMessage: error?.response?.data?.errors?.[0]?.message || 'Collection not found',
-        error: new Error(`OpenSea collection not found: ${collectionSlug}`)
-      });
+      warnLog('API', `[list.ts] Collection not found on OpenSea | slug=${collectionSlug}`);
       return false;
     }
 
     // For other errors, log as API error
-    await logger.logApiError('Failed to check offerer', {
-      collection: collectionSlug,
-      collectionSlug: collectionSlug,
-      endpoint: `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`,
-      method: 'GET',
-      statusCode: error?.response?.status,
-      operation: 'check_offerer',
-      errorCode: error?.code || 'API_ERROR',
-      errorMessage: error?.response?.data?.errors?.[0]?.message || error?.message || 'Unknown error',
-      error: error
-    });
-
+    errorLog('API', `[list.ts] Failed to check offerer | slug=${collectionSlug}`, error);
     return false;
   }
 }

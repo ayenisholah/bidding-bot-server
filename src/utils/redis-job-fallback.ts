@@ -1,6 +1,6 @@
 import { Job, Queue } from 'bullmq';
-import { logger, DatabaseOperation, ErrorCategory } from './logger';
 import { withRedisRetry } from './redis';
+import { errorLog } from './debug-file-logger';
 
 interface JobFallbackData {
   jobId: string;
@@ -28,16 +28,6 @@ class JobFallbackStore {
       marketplace,
       timestamp: Date.now(),
       data
-    });
-
-    // Log the save operation
-    logger.logInfo(ErrorCategory.DATABASE, 'Job saved to fallback store', {
-      databaseOperation: DatabaseOperation.CREATE,
-      collection_name: 'job_fallback_store',
-      jobId,
-      taskId,
-      marketplace,
-      storeSize: this.store.size
     });
   }
 
@@ -95,15 +85,6 @@ class JobFallbackStore {
 
     const deletedCount = entriesToDelete.length;
     entriesToDelete.forEach(jobId => this.store.delete(jobId));
-
-    if (deletedCount > 0) {
-      logger.logInfo(ErrorCategory.DATABASE, 'Cleaned old entries from fallback store', {
-        databaseOperation: DatabaseOperation.DELETE,
-        collection_name: 'job_fallback_store',
-        deletedCount,
-        remainingSize: this.store.size
-      });
-    }
   }
 
   public size(): number {
@@ -142,13 +123,6 @@ export async function safeGetJob(
     const fallback = jobFallbackStore.get(jobId);
     if (fallback) {
       // console.log(`[JobFallback] Retrieved job ${jobId} from fallback store`);
-      logger.logInfo(ErrorCategory.DATABASE, 'Job retrieved from fallback store', {
-        databaseOperation: DatabaseOperation.READ,
-        collection_name: 'job_fallback_store',
-        jobId,
-        taskId: fallback.taskId,
-        marketplace: fallback.marketplace
-      });
       // Create a minimal job object for processing
       return {
         id: jobId,
@@ -165,8 +139,8 @@ export async function safeGetJob(
 
     return null;
   } catch (error) {
-    console.error(`[JobFallback] Failed to get job ${jobId}:`, error);
-    
+    errorLog('Queue', `Failed to get job from Redis | jobId=${jobId}`, error);
+
     // Try fallback store on error
     const fallback = jobFallbackStore.get(jobId);
     if (fallback) {
@@ -204,10 +178,10 @@ export async function safeMarkJobAsProcessed(
     
     // Clean up fallback store
     jobFallbackStore.delete(jobId);
-    
+
     // console.log(`[JobFallback] Marked job ${jobId} as processed (${success ? 'success' : 'failed'})`);
   } catch (error) {
-    console.error(`[JobFallback] Error marking job ${jobId} as processed:`, error);
+    errorLog('Queue', `Error marking job as processed | jobId=${jobId} | success=${success}`, error);
   }
 }
 

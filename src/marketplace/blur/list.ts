@@ -1,8 +1,7 @@
 import { config } from "dotenv";
 
-const GOLD = '\x1b[33m';
-const RESET = '\x1b[0m';
 import { approveNFT } from "../../functions/approve";
+import { errorLog } from "../../utils/debug-file-logger";
 import { BASE_URL } from "../../constants";
 import { axiosInstance, limiter } from "../../init";
 import { Wallet } from "ethers";
@@ -72,7 +71,7 @@ export async function listOnBlur(
       authToken = token;
       // console.log(`${GOLD}[BLUR] Access token fetched successfully${RESET}`);
     } catch (tokenError) {
-      console.error(`${GOLD}[BLUR] Failed to fetch access token${RESET}`, tokenError);
+      errorLog('Blur', `Failed to fetch access token | contract=${nftAddress} | tokenId=${tokenId}`, tokenError);
       throw new Error(`Blur access token fetch failed: ${tokenError instanceof Error ? tokenError.message : 'Unknown error'}`);
     }
     
@@ -87,7 +86,7 @@ export async function listOnBlur(
       feeRate = totalCreatorFee / 10000; // Convert basis points to decimal
       // console.log(`${GOLD}[BLUR] Collection details fetched - Total creator fee: ${totalCreatorFee} (${feeRate * 100}%)${RESET}`);
     } catch (error) {
-      console.error(`${GOLD}[BLUR] Error fetching collection details, proceeding without creator fees${RESET}`);
+      errorLog('Blur', `Error fetching collection details, proceeding without creator fees | slug=${contractSlug}`, error);
     }
     
     await approveNFT(
@@ -159,7 +158,7 @@ export async function listOnBlur(
       .request(options))
       .then((res) => res.data)
       .catch((err) => {
-        console.error('Error formatting Blur order:', err?.response?.data || err.message);
+        errorLog('Blur', `Error formatting Blur order | contract=${nftAddress} | tokenId=${tokenId}`, err);
         return { errors: err?.response?.data ?? err };
       });
 
@@ -172,20 +171,13 @@ export async function listOnBlur(
         formattedError = "Blur: Invalid expiration time (too far in the future)";
         const nowCheck = Date.now();
         const expirationCheck = new Date(requestExpirationTime).getTime();
-        console.error(`❌ ${formattedError}`);
-        console.error(`   Contract: ${nftAddress}`);
-        console.error(`   Token ID: ${tokenId}`);
-        console.error(`   Time until expiration: ${Math.round((expirationCheck - nowCheck) / (1000 * 60))} minutes`);
+        const minutesUntilExpiration = Math.round((expirationCheck - nowCheck) / (1000 * 60));
+        errorLog('Blur', `${formattedError} | contract=${nftAddress} | tokenId=${tokenId} | minutesUntilExpiration=${minutesUntilExpiration}`);
       } else if (errorMsg.includes('You need to own this NFT')) {
         formattedError = "Blur: User no longer owns this NFT";
-        console.error(`❌ ${formattedError}`);
-        console.error(`   Contract: ${nftAddress}`);
-        console.error(`   Token ID: ${tokenId}`);
+        errorLog('Blur', `${formattedError} | contract=${nftAddress} | tokenId=${tokenId}`);
       } else {
-        console.error(`❌ ${formattedError}: ${errorMsg}`);
-        console.error(`   Contract: ${nftAddress}`);
-        console.error(`   Token ID: ${tokenId}`);
-        console.error(`   Price: ${price} ETH`);
+        errorLog('Blur', `${formattedError}: ${errorMsg} | contract=${nftAddress} | tokenId=${tokenId} | price=${price}`);
       }
 
       // Check if the error is because user no longer owns the NFT
@@ -200,7 +192,7 @@ export async function listOnBlur(
           });
           // console.log(`${GOLD}[BLUR] Deleted listing for ${nftAddress}/${tokenId} as user no longer owns it${RESET}`);
         } catch (deleteError) {
-          console.error(`${GOLD}[BLUR] Error deleting listing:${RESET}`, deleteError);
+          errorLog('Blur', `Error deleting listing after format ownership check | contract=${nftAddress} | tokenId=${tokenId}`, deleteError);
         }
       }
 
@@ -210,8 +202,7 @@ export async function listOnBlur(
     // Convert BigNumber objects to strings for ethers v6 compatibility
     const signData = data?.signatures?.[0]?.signData;
     if (!signData) {
-      console.error('No sign data received from Blur');
-      console.error('Full response:', JSON.stringify(data, null, 2));
+      errorLog('Blur', `No sign data received from Blur | contract=${nftAddress} | tokenId=${tokenId} | response=${JSON.stringify(data, null, 2)}`);
       return;
     }
 
@@ -274,16 +265,14 @@ export async function listOnBlur(
         .request(submitOptions))
         .then((res) => res.data)
         .catch((err) => {
-          console.error('Error submitting to Blur:', err?.response?.data || err.message);
+          errorLog('Blur', `Error submitting to Blur | contract=${nftAddress} | tokenId=${tokenId}`, err);
           return { errors: err?.response?.data ?? err };
         });
 
       if (listings.errors) {
         // Display graceful error for submit errors
         const submitErrorMsg = listings.errors?.message || JSON.stringify(listings.errors);
-        console.error(`❌ Blur submit failed: ${submitErrorMsg}`);
-        console.error(`   Contract: ${nftAddress}`);
-        console.error(`   Token ID: ${tokenId}`);
+        errorLog('Blur', `Blur submit failed: ${submitErrorMsg} | contract=${nftAddress} | tokenId=${tokenId}`);
 
         // Check if the error is because user no longer owns the NFT
         const errorMessage = listings.errors?.message || '';
@@ -297,7 +286,7 @@ export async function listOnBlur(
             });
             // console.log(`${GOLD}[BLUR] Deleted listing for ${nftAddress}/${tokenId} as user no longer owns it${RESET}`);
           } catch (deleteError) {
-            console.error(`${GOLD}[BLUR] Error deleting listing:${RESET}`, deleteError);
+            errorLog('Blur', `Error deleting listing after ownership check | contract=${nftAddress} | tokenId=${tokenId}`, deleteError);
           }
         }
       } else {
@@ -356,17 +345,15 @@ export async function listOnBlur(
             // console.log(`${GOLD}[BLUR - LISTING] ⚠️  No listing found in DB for ${nftAddress} #${tokenId}${RESET}`);
           }
         } catch (updateError) {
-          console.error(`${GOLD}[BLUR] Error updating listing in database:${RESET}`, updateError);
+          errorLog('Blur', `Error updating listing in database | contract=${nftAddress} | tokenId=${tokenId}`, updateError);
         }
       }
     } catch (signError) {
-      console.error('Error during signing:', signError);
+      errorLog('Blur', `Error during signing | contract=${nftAddress} | tokenId=${tokenId}`, signError);
       throw signError;
     }
   } catch (error) {
     // General error handling for unexpected errors
-    console.error(`❌ Blur listing error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    console.error(`   Contract: ${nftAddress}`);
-    console.error(`   Token ID: ${tokenId}`);
+    errorLog('Blur', `Blur listing error | contract=${nftAddress} | tokenId=${tokenId}`, error);
   }
 }

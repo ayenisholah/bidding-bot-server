@@ -1,9 +1,9 @@
 import { DistributedLockManager } from "./lock";
 import redisClient from "./redis";
 import { RED, RESET, API_KEY } from "..";
-import { logger, ErrorCategory } from "./logger";
 import { limiter, axiosInstance } from "../init";
 import { BASE_URL } from "../constants";
+import { warnLog, errorLog } from "./debug-file-logger";
 
 const getRedis = () => redisClient.getClient()
 
@@ -105,7 +105,7 @@ export async function invalidateBalanceCache(walletAddress: string, tokenAddress
       console.log(`[Balance] Invalidated cache for ${walletAddress.slice(0, 10)}.../${tokenAddress.slice(0, 10)}...`);
     }
   } catch (error) {
-    console.warn('[Balance] Failed to invalidate cache:', error);
+    warnLog('Balance', `Failed to invalidate cache | wallet=${walletAddress.slice(0, 10)}...`);
   }
 }
 
@@ -128,7 +128,7 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
       }
     }
   } catch (error) {
-    console.warn('Redis not available for cache lookup:', error);
+    warnLog('Balance', `Redis not available for cache lookup | wallet=${walletAddress.slice(0, 10)}...`);
   }
 
   const lockManager = new DistributedLockManager({
@@ -155,7 +155,7 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
             }
           }
         } catch (error) {
-          console.warn('Redis not available for cache lookup after lock:', error);
+          warnLog('Balance', `Redis not available for cache lookup after lock | wallet=${walletAddress.slice(0, 10)}...`);
         }
 
         try {
@@ -170,7 +170,7 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
               await redis.set(staleCacheKey, balance.toString(), 'EX', STALE_CACHE_EXPIRY_SECONDS);
             }
           } catch (error) {
-            console.warn('Failed to cache balance:', error);
+            warnLog('Balance', `Failed to cache balance | wallet=${walletAddress.slice(0, 10)}...`);
           }
 
           if (DEBUG) {
@@ -179,13 +179,7 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
 
           return balance;
         } catch (error) {
-          await logger.logBlockchainError(`Error fetching WETH balance via GraphQL`, {
-            walletAddress,
-            operation: 'fetch_weth_balance_graphql',
-            error: error as Error,
-            errorMessage: error instanceof Error ? error.message : String(error)
-          });
-          console.error(RED + `Error fetching WETH balance via GraphQL:` + RESET, error);
+          errorLog('Balance', `Error fetching WETH balance via GraphQL | wallet=${walletAddress.slice(0, 10)}...`, error);
           throw error;
         }
       }
@@ -194,7 +188,7 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
     return result || 0;
   } catch (error: any) {
     // If we get a network error or lock error, try to use stale cache
-    console.warn(`Failed to fetch fresh WETH balance for ${walletAddress}, checking stale cache...`, error.message || error);
+    warnLog('Balance', `Failed to fetch fresh WETH balance, checking stale cache | wallet=${walletAddress.slice(0, 10)}...`);
 
     let staleBalance = null;
     try {
@@ -203,7 +197,7 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
         staleBalance = await redis.get(staleCacheKey);
       }
     } catch (error) {
-      console.warn('Failed to get stale cache:', error);
+      warnLog('Balance', `Failed to get stale cache | wallet=${walletAddress.slice(0, 10)}...`);
     }
     if (staleBalance) {
       if (DEBUG) {
@@ -213,11 +207,7 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
     }
 
     // If no stale cache available, log error and return 0
-    await logger.logWarning(ErrorCategory.BLOCKCHAIN, `No cached WETH balance available for ${walletAddress}`, {
-      walletAddress,
-      operation: 'fetch_weth_balance_fallback'
-    });
-    console.error(RED + `No cached WETH balance available for ${walletAddress}` + RESET);
+    warnLog('Balance', `No cached WETH balance available | wallet=${walletAddress.slice(0, 10)}...`);
     return 0;
   }
 }
@@ -242,7 +232,7 @@ export async function fetchERC20BalanceFresh(walletAddress: string, _tokenAddres
       }
     }
   } catch (error) {
-    console.warn('[fetchERC20BalanceFresh] Redis error when checking cache:', error);
+    warnLog('Balance', `[fetchERC20BalanceFresh] Redis error when checking cache | wallet=${walletAddress.slice(0, 10)}...`);
   }
 
   // Create promise with timeout (10 seconds to account for network latency)
@@ -274,7 +264,7 @@ export async function fetchERC20BalanceFresh(walletAddress: string, _tokenAddres
                 await redis.set(staleCacheKey, balance.toString(), 'EX', STALE_CACHE_EXPIRY_SECONDS);
               }
             } catch (error) {
-              console.warn('Failed to cache balance:', error);
+              warnLog('Balance', `Failed to cache balance | wallet=${walletAddress.slice(0, 10)}...`);
             }
 
             if (DEBUG) {
@@ -284,7 +274,7 @@ export async function fetchERC20BalanceFresh(walletAddress: string, _tokenAddres
 
             return balance;
           } catch (error) {
-            console.error(RED + `Error fetching fresh WETH balance via GraphQL:` + RESET, error);
+            errorLog('Balance', `Error fetching fresh WETH balance via GraphQL | wallet=${walletAddress.slice(0, 10)}...`, error);
             throw error;
           }
         }
@@ -292,7 +282,7 @@ export async function fetchERC20BalanceFresh(walletAddress: string, _tokenAddres
 
       return result || 0;
     } catch (error: any) {
-      console.error(RED + `Lock/fetch error for ${walletAddress}: ${error.message}` + RESET);
+      errorLog('Balance', `Lock/fetch error | wallet=${walletAddress.slice(0, 10)}...`, error);
       throw error;
     }
   };
@@ -304,7 +294,7 @@ export async function fetchERC20BalanceFresh(walletAddress: string, _tokenAddres
   } catch (error) {
     const elapsed = Date.now() - startTime;
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    console.warn(`[fetchERC20BalanceFresh] Failed after ${elapsed}ms: ${errorMsg}, checking stale cache...`);
+    warnLog('Balance', `[fetchERC20BalanceFresh] Failed after ${elapsed}ms: ${errorMsg}, checking stale cache | wallet=${walletAddress.slice(0, 10)}...`);
 
     // Try stale cache
     try {
@@ -319,11 +309,11 @@ export async function fetchERC20BalanceFresh(walletAddress: string, _tokenAddres
         }
       }
     } catch (cacheError) {
-      console.warn('[fetchERC20BalanceFresh] Failed to get stale cache:', cacheError);
+      warnLog('Balance', `[fetchERC20BalanceFresh] Failed to get stale cache | wallet=${walletAddress.slice(0, 10)}...`);
     }
 
     // Return 0 as final fallback
-    console.warn(`[fetchERC20BalanceFresh] No cached balance available, returning 0.00`);
+    warnLog('Balance', `[fetchERC20BalanceFresh] No cached balance available, returning 0.00 | wallet=${walletAddress.slice(0, 10)}...`);
     return 0;
   }
 }

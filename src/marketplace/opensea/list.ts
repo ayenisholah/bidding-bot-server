@@ -9,7 +9,7 @@ const BLUE = '\x1b[34m';
 const RESET = '\x1b[0m';
 import { BASE_URL, domain, minABI, NETWORK } from "../../constants";
 import Listing from "../../models/listing.model";
-import { logger } from "../../utils/logger";
+import { errorLog, warnLog } from "../../utils/debug-file-logger";
 import { convertDurationForOpenSea } from "../../utils/duration";
 import { roundToNineDecimals } from "../../utils/decimal-precision";
 import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
@@ -161,14 +161,7 @@ export const listOnOpensea = async (
     enforceCreatorFee = collectionData?.enforceCreatorFee as boolean;
     // console.log(`${BLUE}[OPENSEA] Collection details fetched - Enforce creator fee: ${enforceCreatorFee}${RESET}`);
   } catch (error) {
-    console.error(`${BLUE}[OPENSEA] Error fetching collection details, proceeding without creator fees${RESET}`);
-    await logger.logOpenseaListingError('Error fetching collection details', {
-      contractAddress: nftAddress,
-      walletAddress: wallet.address,
-      operation: 'fetch_collection_details',
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
+    warnLog('Listing', `[OpenSea] Error fetching collection details | contract=${nftAddress} | wallet=${wallet.address.slice(0, 10)}...`);
   }
   
   try {
@@ -178,13 +171,7 @@ export const listOnOpensea = async (
       '0x1E0049783F008A0085193E00003D00cd54003c71'
     );
   } catch (error) {
-    await logger.logOpenseaListingError('Error approving NFT for OpenSea listing', {
-      contractAddress: nftAddress,
-      walletAddress: wallet.address,
-      operation: 'approve_nft',
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
+    errorLog('Listing', `[OpenSea] Error approving NFT | contract=${nftAddress} | wallet=${wallet.address.slice(0, 10)}...`, error);
   }
 
   const listingPayload: any = {
@@ -387,30 +374,13 @@ export const listOnOpensea = async (
       formattedError = "OpenSea: User no longer owns this NFT";
     }
     
-    // Log with appropriate error category
-    await logger.logOpenseaListingError(
-      isTimeout ? 'OpenSea listing timeout - API response too slow' : 'Failed to list NFT on OpenSea', 
-      {
-        contractAddress: nftAddress,
-        tokenId: tokenId,
-        price: roundedPrice,
-        walletAddress: wallet.address,
-        operation: 'submit_listing',
-        error: listings.errors,
-        errorMessage: errorString,
-        isTimeout: isTimeout,
-        retryCount: retryCount
-      }
-    );
-    
-    // Display graceful error message
-    console.error(`❌ ${formattedError}`);
-    console.error(`   Contract: ${nftAddress}`);
-    console.error(`   Token ID: ${tokenId}`);
-    console.error(`   Price: ${roundedPrice} ETH`);
+    // Build detailed error context
+    let errorContext = `${formattedError} | contract=${nftAddress} | token=${tokenId} | price=${roundedPrice} | retries=${retryCount}`;
     if (isTimeout) {
-      console.error(`   Note: OpenSea API is slow or under heavy load`);
+      errorContext += ' | note=API slow or under heavy load';
     }
+
+    errorLog('Listing', `[OpenSea] ${errorContext}`, listings.errors);
     
     // Check if the error is because user no longer owns the NFT
     const errorMessage = errorString.toLowerCase();
@@ -424,7 +394,7 @@ export const listOnOpensea = async (
         });
         // console.log(`${BLUE}[OPENSEA] Deleted listing for ${nftAddress}/${tokenId} as user no longer owns it${RESET}`);
       } catch (deleteError) {
-        console.error(`${BLUE}[OPENSEA] Error deleting listing:${RESET}`, deleteError);
+        errorLog('Database', `[OpenSea] Error deleting listing | contract=${nftAddress} | token=${tokenId}`, deleteError);
       }
     }
   } else {
@@ -479,15 +449,7 @@ export const listOnOpensea = async (
         // console.log(`${BLUE}[OPENSEA - LISTING] ⚠️  No listing found in DB for ${nftAddress} #${tokenId}${RESET}`);
       }
     } catch (updateError) {
-      await logger.logOpenseaListingError('Error updating listing in database', {
-        contractAddress: nftAddress,
-        tokenId: tokenId,
-        operation: 'update_listing_price',
-        price: roundedPrice,
-        error: updateError as Error,
-        errorMessage: updateError instanceof Error ? updateError.message : String(updateError)
-      });
-      console.error('Error updating listing in database:', updateError);
+      errorLog('Database', `[OpenSea] Error updating listing | contract=${nftAddress} | token=${tokenId} | price=${roundedPrice}`, updateError);
     }
 
   }

@@ -4,7 +4,7 @@ import { getAllFloorPrices, getOpenseaFloor } from "./collection";
 import { PROCESS_LISTING_UPDATE, queue } from "../index";
 import { listingPriceCache } from "../utils/listing-price-cache";
 import { roundToNineDecimals } from "../utils/decimal-precision";
-import { logger, ErrorCategory } from "../utils/logger";
+import { errorLog, warnLog } from "../utils/debug-file-logger";
 import { tokenHasTrait } from "../functions/tokenMetadata";
 import { getOpenseaTraitFloor } from "../utils/opensea-trait-floor";
 import { axiosInstance, limiter } from "../init";
@@ -14,24 +14,10 @@ import { BASE_URL } from "../constants";
 // Store processed message IDs to prevent duplicate processing
 const processedMessageIds = new Set<string>();
 
-// Color constants for console output
-const GREEN = '\x1b[32m';
-const YELLOW = '\x1b[33m';
-const RED = '\x1b[31m';
-const BLUE = '\x1b[34m';
-const RESET = '\x1b[0m';
-
 // Clean up old message IDs every 5 minutes to prevent memory leak
 setInterval(() => {
   const previousSize = processedMessageIds.size;
   processedMessageIds.clear();
-  if (previousSize > 0) {
-    logger.logInfo(ErrorCategory.GENERAL, 'Price monitor message ID cleanup', {
-      operation: 'cleanup_message_ids',
-      clearedCount: previousSize,
-      component: 'price_monitor'
-    });
-  }
 }, 5 * 60 * 1000);
 
 // Log statistics every minute for debugging
@@ -114,15 +100,7 @@ export async function handleListingPriceUpdate(message: any): Promise<void> {
 
       if (!contractAddress || !tokenId || !price || !marketplace) {
         // console.log(YELLOW + `[PRICE MONITOR - Warning] Incomplete message data - skipping` + RESET);
-        logger.logWarning(ErrorCategory.WEBSOCKET, 'Incomplete price monitor message data', {
-          contractAddress,
-          tokenId,
-          price,
-          marketplace,
-          seller,
-          messageId: id,
-          component: 'price_monitor'
-        });
+        warnLog('WebSocket', '[priceMonitor.ts] Incomplete price monitor message data - skipping');
         return;
       }
 
@@ -143,13 +121,7 @@ export async function handleListingPriceUpdate(message: any): Promise<void> {
     // Ignore legacy format - only process new format
     return;
   } catch (error) {
-    console.error(RED + '[PRICE MONITOR - Error] Failed to handle listing price update' + RESET, error);
-    logger.logWebSocketError('Failed to handle listing price update', {
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      component: 'price_monitor',
-      operation: 'handle_listing_price_update'
-    });
+    errorLog('WebSocket', 'Failed to handle listing price update', error);
   }
 }
 
@@ -179,19 +151,6 @@ async function processListingUpdate(
 
     // console.log(BLUE + `[PRICE MONITOR - Query] Found ${activeListings.length} active instant price matching listings` + RESET);
 
-    if (activeListings.length > 0) {
-      logger.logInfo(ErrorCategory.GENERAL, 'Processing instant price matching listings', {
-        contractAddress,
-        tokenId,
-        marketplace,
-        price,
-        seller,
-        activeListingsCount: activeListings.length,
-        component: 'price_monitor',
-        operation: 'process_listing_update'
-      });
-    }
-
     for (const listing of activeListings) {
       // ALWAYS skip listings from our own wallet (prevent self-competition)
       if (seller && seller.toLowerCase() === listing.wallet.toLowerCase()) {
@@ -212,15 +171,7 @@ async function processListingUpdate(
           // Our token doesn't have the configured trait - log warning and compete with all tokens
           // console.log(YELLOW + `[PRICE MONITOR - Warning] Listing token ${listing.tokenId} doesn't have configured trait ${listing.selectedTrait.trait_type}:${listing.selectedTrait.value}` + RESET);
           // console.log(YELLOW + `[PRICE MONITOR - Warning] Trait filtering disabled - will compete with all tokens` + RESET);
-          
-          logger.logWarning(ErrorCategory.BUSINESS_LOGIC, 'Listing configured for trait it does not possess', {
-            listingId: listing._id.toString(),
-            contractAddress,
-            tokenId: listing.tokenId,
-            configuredTrait: listing.selectedTrait,
-            component: 'price_monitor',
-            operation: 'trait_filtering_check'
-          });
+          warnLog('Listing', `[priceMonitor.ts] Listing configured for trait it does not possess | listingId=${listing._id} | tokenId=${listing.tokenId}`);
           // Continue without trait filtering
         } else {
           // Our token has the trait - now check if competitor has it too
@@ -276,49 +227,13 @@ async function processListingUpdate(
             }
           );
 
-          logger.logInfo(ErrorCategory.QUEUE, 'Instant price match job enqueued', {
-            listingId: listing._id.toString(),
-            contractAddress,
-            tokenId,
-            marketplace,
-            competitorPrice: price,
-            newPrice,
-            undercutMargin,
-            jobId,
-            component: 'price_monitor',
-            operation: 'enqueue_instant_price_match'
-          });
-
         } catch (error) {
-          console.error(RED + `[PRICE MONITOR - Error] Failed to enqueue instant price match job for ${tokenId}` + RESET, error);
-          logger.logQueueError('Failed to enqueue instant price match job', {
-            listingId: listing._id.toString(),
-            contractAddress,
-            tokenId,
-            marketplace,
-            competitorPrice: price,
-            newPrice,
-            jobId,
-            error: error as Error,
-            errorMessage: error instanceof Error ? error.message : String(error),
-            component: 'price_monitor'
-          });
+          errorLog('Queue', `Failed to enqueue instant price match job | listingId=${listing._id} | tokenId=${tokenId}`, error);
         }
       }
     }
   } catch (error) {
-    console.error(RED + `[PRICE MONITOR - Error] Failed to process listing update for ${contractAddress}:${tokenId}` + RESET, error);
-    logger.logDatabaseError('Failed to process listing update', {
-      contractAddress,
-      tokenId,
-      marketplace,
-      price,
-      seller,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      component: 'price_monitor',
-      operation: 'process_listing_update'
-    });
+    errorLog('Database', `Failed to process listing update | contractAddress=${contractAddress} | tokenId=${tokenId}`, error);
   }
 }
 
@@ -369,17 +284,7 @@ async function shouldAdjustPrice(
 
     if (newPrice < minPrice) {
       // console.log(YELLOW + `[PRICE CHECK] Token ${listing.tokenId} - New price ${newPrice} < min price ${minPrice}, skipping adjustment` + RESET);
-      logger.logWarning(ErrorCategory.BUSINESS_LOGIC, 'Price adjustment blocked by minimum price constraint', {
-        listingId: listing._id.toString(),
-        contractAddress: listing.contract.contractAddress,
-        tokenId: listing.tokenId,
-        competitorPrice,
-        calculatedPrice: newPrice,
-        minPrice,
-        undercutMargin,
-        component: 'price_monitor',
-        operation: 'price_adjustment_check'
-      });
+      warnLog('Listing', `[priceMonitor.ts] Price adjustment blocked by minimum price constraint | listingId=${listing._id} | tokenId=${listing.tokenId} | newPrice=${newPrice} | minPrice=${minPrice}`);
       return false;
     }
 
@@ -390,18 +295,7 @@ async function shouldAdjustPrice(
 
       if (profit < minimumProfit && minimumProfit > 0) {
         // console.log(YELLOW + `[PRICE CHECK] Token ${listing.tokenId} - Insufficient profit ${profit} < ${minimumProfit}, skipping adjustment` + RESET);
-        logger.logWarning(ErrorCategory.BUSINESS_LOGIC, 'Price adjustment blocked by profit constraint', {
-          listingId: listing._id.toString(),
-          contractAddress: listing.contract.contractAddress,
-          tokenId: listing.tokenId,
-          competitorPrice,
-          calculatedPrice: newPrice,
-          buyPrice: listing.buyPrice,
-          calculatedProfit: profit,
-          minimumProfit,
-          component: 'price_monitor',
-          operation: 'price_adjustment_check'
-        });
+        warnLog('Listing', `[priceMonitor.ts] Price adjustment blocked by profit constraint | listingId=${listing._id} | tokenId=${listing.tokenId} | profit=${profit} | minProfit=${minimumProfit}`);
         return false;
       }
     }
@@ -421,50 +315,16 @@ async function shouldAdjustPrice(
       
       if (newPrice < floorPrice) {
         // console.log(YELLOW + `[PRICE CHECK] Token ${listing.tokenId} - New price ${newPrice} would be below floor price ${floorPrice}, skipping adjustment` + RESET);
-        logger.logWarning(ErrorCategory.BUSINESS_LOGIC, 'Price adjustment blocked by floor price constraint', {
-          listingId: listing._id.toString(),
-          contractAddress: listing.contract.contractAddress,
-          tokenId: listing.tokenId,
-          collectionSlug: listing.contract.slug,
-          competitorPrice,
-          calculatedPrice: newPrice,
-          floorPrice,
-          isTraitFloor: listing.dynamicPricingBasis === 'HIGHEST_TRAIT_FLOOR' || listing.dynamicPricingBasis === 'SPECIFIC_TRAIT',
-          trait: listing.selectedTrait,
-          component: 'price_monitor',
-          operation: 'price_adjustment_check'
-        });
+        warnLog('Listing', `[priceMonitor.ts] Price adjustment blocked by floor price constraint | listingId=${listing._id} | tokenId=${listing.tokenId} | newPrice=${newPrice} | floorPrice=${floorPrice}`);
         return false;
       }
     }
 
     // console.log(GREEN + `[PRICE CHECK] Token ${listing.tokenId} - ✅ All checks passed, should adjust price from ${ourPrice} to ${newPrice}` + RESET);
-    
-    logger.logInfo(ErrorCategory.GENERAL, 'Price adjustment approved', {
-      listingId: listing._id.toString(),
-      contractAddress: listing.contract.contractAddress,
-      tokenId: listing.tokenId,
-      competitorPrice,
-      currentPrice: ourPrice,
-      newPrice,
-      undercutMargin,
-      component: 'price_monitor',
-      operation: 'price_adjustment_approved'
-    });
-    
+
     return true;
   } catch (error) {
-    console.error(RED + `[PRICE CHECK] Token ${listing.tokenId} - Error checking price adjustment` + RESET, error);
-    logger.logGeneralError('Error checking price adjustment', {
-      listingId: listing._id.toString(),
-      contractAddress: listing.contract.contractAddress,
-      tokenId: listing.tokenId,
-      competitorPrice,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      component: 'price_monitor',
-      operation: 'price_adjustment_check'
-    });
+    errorLog('Listing', `Error checking price adjustment | listingId=${listing._id} | tokenId=${listing.tokenId}`, error);
     return false;
   }
 }
@@ -480,28 +340,11 @@ export async function getFloorPrices(collectionSlug: string): Promise<{
   try {
     // console.log(BLUE + `[PRICE MONITOR - Floor] Fetching floor prices for ${collectionSlug}` + RESET);
     const floorPrices = await getAllFloorPrices(collectionSlug);
-    
     // console.log(GREEN + `[PRICE MONITOR - Floor] Retrieved floor prices: OpenSea=${floorPrices.opensea}, Blur=${floorPrices.blur}, MagicEden=${floorPrices.magiceden}` + RESET);
-    
-    logger.logInfo(ErrorCategory.API, 'Floor prices retrieved successfully', {
-      collectionSlug,
-      floorPrices,
-      component: 'price_monitor',
-      operation: 'get_floor_prices'
-    });
-    
+
     return floorPrices;
   } catch (error) {
-    console.error(RED + `[PRICE MONITOR - Error] Failed to fetch floor prices for ${collectionSlug}` + RESET, error);
-    
-    logger.logApiError('Failed to fetch floor prices', {
-      collectionSlug,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      component: 'price_monitor',
-      operation: 'get_floor_prices'
-    });
-    
+    errorLog('API', `Failed to fetch floor prices | slug=${collectionSlug}`, error);
     return { opensea: 0, blur: 0, magiceden: 0 };
   }
 }
@@ -520,34 +363,11 @@ export async function extendInstantPriceMatchingSession(listingId: string, durat
 
     if (result) {
       // console.log(GREEN + `[PRICE MONITOR - Extend] ✅ Extended instant price matching until ${newExpiration.toISOString()}` + RESET);
-      
-      logger.logInfo(ErrorCategory.DATABASE, 'Instant price matching session extended', {
-        listingId,
-        durationMinutes,
-        newExpiration: newExpiration.toISOString(),
-        component: 'price_monitor',
-        operation: 'extend_instant_price_matching'
-      });
     } else {
       // console.log(YELLOW + `[PRICE MONITOR - Extend] Warning: Listing ${listingId} not found` + RESET);
-      
-      logger.logWarning(ErrorCategory.DATABASE, 'Listing not found for instant price matching extension', {
-        listingId,
-        durationMinutes,
-        component: 'price_monitor',
-        operation: 'extend_instant_price_matching'
-      });
+      warnLog('Database', `Listing not found for instant price matching extension | listingId=${listingId}`);
     }
   } catch (error) {
-    console.error(RED + `[PRICE MONITOR - Error] Failed to extend instant price matching session for ${listingId}` + RESET, error);
-    
-    logger.logDatabaseError('Failed to extend instant price matching session', {
-      listingId,
-      durationMinutes,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      component: 'price_monitor',
-      operation: 'extend_instant_price_matching'
-    });
+    errorLog('Database', `Failed to extend instant price matching session | listingId=${listingId}`, error);
   }
 }

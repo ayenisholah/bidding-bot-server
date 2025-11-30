@@ -8,6 +8,303 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Consolidated ourTopBids into OrderCache**: Eliminated redundant in-memory bid tracking store by using existing `orderCache` for counterbid price comparison
+  - **Problem Solved**: Two parallel caching systems (`ourTopBids` and `orderCache`) stored the same order data redundantly, risking desync and adding maintenance complexity
+  - **Solution**: Consolidated all bid price lookups into `orderCache.getOfferPrice()` method
+  - **Implementation**:
+    - Added `getOfferPrice(taskId, marketplace, identifier)` method to OrderCache class
+    - Replaced 7 `getOurTopBid()` calls with `orderCache.getOfferPrice()` in counterbid handlers
+    - Removed 14 redundant `updateOurTopBid()` calls (orderCache.set() already called in bid.ts files)
+    - Removed lifecycle calls (`initializeTopBidsFromDatabase`, `clearTaskTopBids`)
+    - Deleted entire `ourTopBids` code block (~150 lines)
+  - **Benefits**:
+    - Single source of truth for order data
+    - Better expiration handling (orderCache checks `isExpired()`, ourTopBids didn't)
+    - Reduced memory footprint
+    - Simpler codebase (~140 lines removed)
+  - **Counterbid Handlers Updated**:
+    - `handleMagicEdenCounterbid`: token, trait, bulk handlers
+    - `handleOpenseaCounterbid`: trait, bulk handlers
+    - `handleBlurCounterbid`: trait, bulk handlers (with wei→ETH conversion for Blur)
+  - Files modified: `src/index.ts`, `src/utils/order-cache.ts`
+  - Resolves: Potential desync between two caching systems storing same data
+  - Impact: Cleaner architecture with single source of truth for order lookups
+
+### Added
+- **Floor Price Pre-Fetching Optimization**: Added automatic floor price cache warming when tasks start
+  - **Problem Solved**: Counterbid handlers were blocking on floor price API calls when cache was cold, adding latency to time-critical counterbid decisions
+  - **Solution**: Pre-fetch floor prices for all selected marketplaces during task initialization
+  - **Implementation**:
+    - Fires parallel floor price fetches for OpenSea, MagicEden, and Blur based on selected marketplaces
+    - Uses fire-and-forget pattern (non-blocking) - task start doesn't wait for fetches to complete
+    - Populates `collectionCache` L1/L2 cache so counterbid handlers get instant cache hits
+    - Logs pre-fetch results with `[TaskStart]` prefix to `task-YYYY-MM-DD.log`
+  - **Cache Keys**:
+    - OpenSea: `task.contract.slug`
+    - MagicEden: `task.contract.contractAddress`
+    - Blur: `task.contract.slug`
+  - Files modified: `src/index.ts` (startTaskInternal function ~line 7612-7646)
+  - Resolves: Cold cache latency during first counterbid after task start
+  - Impact: Counterbid handlers immediately get cache hits instead of blocking API calls
+
+### Changed
+- **Counterbid Handler Logging Standardization**: Converted all ~45 `console.log` statements in counterbid handlers to use centralized `debugLog()` function
+  - **Handlers Updated**:
+    - `handleMagicEdenCounterbid`: ~20 console.log calls converted
+    - `handleOpenseaCounterbid`: ~20 console.log calls converted
+    - `handleBlurCounterbid`: ~5 console.log calls converted
+  - **Log Format**: `[Counterbid] [ME|OS|Blur] {slug} [{identifier}] | Action: details`
+  - **Categories Logged**:
+    - WS Event receipt with bid type, price, maker
+    - Deduplication checks (orderHash, pending counterbids)
+    - Own bid detection
+    - Counterbid disabled checks
+    - Price validation (min/max bounds)
+    - Job queue confirmations
+  - **Routing**: All logs with `Counterbid` prefix route to `counterbid-YYYY-MM-DD.log`
+  - Files modified: `src/index.ts` (handleMagicEdenCounterbid ~line 11540-12300, handleOpenseaCounterbid ~line 12302-13170, handleBlurCounterbid ~line 13171-13622)
+  - Resolves: Inconsistent logging format, missing file persistence for counterbid debug logs
+  - Impact: Complete counterbid flow visibility in dedicated log file
+
+- **Debug File Logger Prefix Updates**: Added new prefix mapping for task initialization logs
+  - Added `TaskStart` prefix → `task` category (routes to `task-YYYY-MM-DD.log`)
+  - Updated Task category count from 6 to 7 prefixes
+  - Files modified: `src/utils/debug-file-logger.ts`
+
+### Fixed
+- **Task Loop Stuck at 100% Due to BullMQ "Missing key for job" Error**: Fixed critical bug where scheduled bid loops would get stuck indefinitely when BullMQ's internal Redis key was corrupted or deleted
+  - **Root Cause**: When `job.updateProgress()` fails with "Missing key for job" error, the job fails but the task completion handler never runs, preventing `scheduleNextLoop()` from being called. The task gets stuck at 100% progress with no timer registered for the next loop.
+  - **Solution**: Extended the existing timeout recovery logic to also handle "Missing key for job" errors in `queueEvents.on('failed')` handler
+  - **Recovery Behavior**: When infrastructure error is detected on a `-schedule` job:
+    1. Acquires distributed lock to prevent multiple recoveries
+    2. Clears stuck parent jobs for all marketplaces
+    3. Clears preprocessing data
+    4. Releases any scheduled bid locks
+    5. Resets task status to SCHEDULED
+    6. Restarts the task
+    7. Logs recovery to `logs/task-restarts.log` and debug log
+  - **Errors Now Handled**:
+    - `timed out after` - Job exceeded 15-minute timeout (existing)
+    - `Missing key for job` - BullMQ Redis key corrupted/deleted during processing (NEW)
+  - Files modified: `src/index.ts` (queueEvents.on('failed') handler ~line 4722)
+  - Resolves: Tasks stuck at RUNNING 100% for hours after BullMQ infrastructure errors
+  - Impact: Tasks now automatically recover and continue bidding after BullMQ errors
+
+### Changed
+- **Granular Log File Separation (22 Files)**: Refactored `debug-file-logger.ts` to automatically route logs to separate files based on prefix categories
+  - **Zero Code Changes Required**: All existing `debugLog()`, `errorLog()`, `warnLog()` calls work unchanged
+  - **New `infoLog()` Function**: Added info-level logging that always logs (like errorLog/warnLog) for important status messages
+  - **WebSocket Logs Fixed**: Converted 6 raw `console.log('[WebSocket]...')` calls in index.ts to use `debugLog()`/`infoLog()` - now properly route to `websocket-YYYY-MM-DD.log`
+  - **22 Category-Specific Log Files**:
+    - `startup-YYYY-MM-DD.log` - Server initialization (STARTUP, ServerStartup, ServerRestart, BullMQInit)
+    - `task-YYYY-MM-DD.log` - Task lifecycle (Task, TaskStatus, TaskState, TaskRecovery)
+    - `scheduler-YYYY-MM-DD.log` - Scheduling operations (TaskScheduler, Scheduler, TimedLockManager)
+    - `bidflow-YYYY-MM-DD.log` - Bid processing (BidFlow, ScheduledBid, Preprocessing, PriceCalc, StopOption)
+    - `counterbid-YYYY-MM-DD.log` - Counterbid handling (Counterbid)
+    - `queue-YYYY-MM-DD.log` - Job queue operations (Queue, BlurQueue, QueueEvent, JobProcessing, BulkJobs)
+    - `worker-YYYY-MM-DD.log` - Worker health (Worker, BlurWorker, WorkerHealth, WorkerFailure)
+    - `database-YYYY-MM-DD.log` - MongoDB operations (Database, MongoDBConnection, ConnectionPool, DB Retry)
+    - `redis-YYYY-MM-DD.log` - Redis operations (Redis, RedisOperation, RedisRecovery)
+    - `lock-YYYY-MM-DD.log` - Distributed locks (Lock, LockRelease)
+    - `blur-YYYY-MM-DD.log` - Blur marketplace (Blur)
+    - `opensea-YYYY-MM-DD.log` - OpenSea marketplace (OpenSea)
+    - `magiceden-YYYY-MM-DD.log` - MagicEden marketplace (MagicEden)
+    - `api-YYYY-MM-DD.log` - External API calls (API, Blockchain)
+    - `websocket-YYYY-MM-DD.log` - WebSocket events (WebSocket)
+    - `listing-YYYY-MM-DD.log` - Listing operations (Listing, ListingScheduler, ListingPriceCache)
+    - `collection-YYYY-MM-DD.log` - Collection data (Collection, TRAIT FLOOR, CollectionStats)
+    - `balance-YYYY-MM-DD.log` - Balance operations (Balance)
+    - `cancellation-YYYY-MM-DD.log` - Order cancellation (Cancel, CancellationTracking, OrderCleanup, TopBids)
+    - `health-YYYY-MM-DD.log` - Health monitoring (Health, HealthCheck, ConnectivityMonitor)
+    - `metadata-YYYY-MM-DD.log` - Token/rarity metadata (Metadata, Rarity)
+    - `system-YYYY-MM-DD.log` - General/fallback (General, Security, Crypto, Cache, + unknown prefixes)
+  - **Prefix-to-Category Mapping**: Central configuration routes each log prefix to appropriate file
+  - **Unknown Prefix Handling**: Any unmapped prefix automatically routes to `system.log`
+  - **Daily Rotation**: Each category file rotates by date (YYYY-MM-DD suffix)
+  - Files modified: `src/utils/debug-file-logger.ts`
+  - Resolves: 100MB+ monolithic log files difficult to analyze
+  - Impact: Smaller ~5MB files per category, easier debugging by domain
+
+- **Complete Console Logging Migration**: Replaced ALL remaining 130 `console.error` and `console.warn` calls with centralized `errorLog()`/`warnLog()` from `debug-file-logger.ts`
+  - **Files Updated** (20 total):
+    - `src/index.ts` - 69 console.error/warn replaced (Task, Queue, Cancellation, WebSocket, Counterbid, Marketplace categories)
+    - `src/utils/websocket-manager.ts` - 27 silent catch blocks fixed with warnLog (all had commented-out `// console.log`)
+    - `src/utils/task-state-manager.ts` - 11 console.error replaced with errorLog('TaskState', ...)
+    - `src/utils/redis.ts` - 7 console.error/warn replaced with errorLog/warnLog('Redis', ...)
+    - `src/marketplace/magiceden/list.ts` - 6 console.error consolidated into errorLog (listing errors with context)
+    - `src/marketplace/opensea/list.ts` - 6 console.error consolidated into errorLog (listing errors with context)
+    - `src/functions/listingScheduler.ts` - 6 console.error replaced with errorLog('ListingScheduler', ...)
+    - `src/functions/tokenMetadata.ts` - 4 console.error replaced, RED/RESET colors removed
+    - `src/functions/approve.ts` - 3 console.warn replaced with warnLog('Cache', ...)
+    - `src/utils/bid-trace-logger.ts` - 3 console.error replaced with warnLog (to avoid recursive logging)
+    - `src/marketplace/blur/bid.ts` - 2 console.error replaced with errorLog('Blur', ...)
+    - `src/functions/rarity.ts` - 2 console.error replaced with errorLog('Rarity', ...)
+    - `src/utils/db-retry.ts` - 2 console calls replaced with errorLog/warnLog('DB Retry', ...)
+    - `src/utils/cancellation-debug-logger.ts` - 1 console.error replaced with warnLog
+    - `src/functions/relistExpired.ts` - 1 console.error replaced with errorLog
+    - `src/functions/cleanupExpiredPrices.ts` - 1 console.error replaced with errorLog
+    - `src/marketplace/opensea/bid.ts` - 1 console.error replaced with errorLog
+    - `src/utils/opensea-trait-floor.ts` - 1 duplicate console.error removed
+    - `src/utils/listing-price-cache.ts` - 1 console.warn replaced with warnLog
+  - **Silent Catch Blocks Fixed**: websocket-manager.ts had 27 catch blocks with `// console.log(error)` - all now log properly
+  - **Color Constants Removed**: Removed RED, GOLD, RESET, YELLOW, BLUE, MAGENTA color codes from error messages
+  - **Result**: 130 → 3 console.error/warn calls (2 in debug-file-logger.ts itself, 1 in test script)
+  - **Impact**: 100% of production error logging now centralized to `debug-logs/server-debug-YYYY-MM-DD.log`
+  - Files modified: 20 files, ~130 console calls replaced
+
+### Removed
+- **Removed Better Stack Logger (logger.ts)**: Completely removed the Better Stack logging integration
+  - **Files Deleted**:
+    - `src/utils/logger.ts` - Better Stack HTTP logging integration (~400 lines)
+    - `src/utils/marketplace-file-logger.ts` - Redundant marketplace-specific file logger (~466 lines)
+    - `src/types/marketplace-logs.types.ts` - Associated type definitions
+  - **~200+ logger calls replaced** across the entire codebase with `errorLog()`, `warnLog()`, `debugLog()` from `debug-file-logger.ts`
+  - **Files Updated**:
+    - `src/index.ts` - 169 logger calls replaced
+    - `src/marketplace/opensea/bid.ts` - 8 logger calls replaced
+    - `src/marketplace/magiceden/bid.ts` - 25+ logger calls replaced
+    - `src/marketplace/blur/bid.ts` - 14 logger calls replaced
+    - `src/marketplace/opensea/list.ts` - 4 logger calls replaced
+    - `src/marketplace/magiceden/list.ts` - 3 logger calls replaced
+    - `src/utils/redis.ts` - 5 logger calls replaced
+    - `src/utils/balance.ts` - 2 logger calls replaced
+    - `src/utils/lock.ts` - 3 logger calls replaced
+    - `src/utils/nft.ts` - 5 logger calls replaced
+    - `src/utils/task-circuit-breaker.ts`, `src/utils/token-trait-cache.ts`, `src/utils/listing-price-cache.ts`, `src/utils/opensea-cache.ts`, `src/utils/opensea-trait-floor.ts`, `src/utils/redis-job-fallback.ts`, `src/utils/bullmq-error-formatter.ts`, `src/utils/collection-cache.ts`, `src/utils/wallet-cache.ts`
+    - `src/functions/collection.ts`, `src/functions/listingScheduler.ts`, `src/functions/relistExpired.ts`, `src/functions/tokenMetadata.ts`, `src/functions/approve.ts`, `src/functions/cleanupExpiredPrices.ts`, `src/functions/list.ts`, `src/functions/priceMonitor.ts`
+  - **Deprecated Endpoints**: `/api/logs/export` and `/api/logs` now return HTTP 501 "Endpoint no longer available"
+  - **Log Output**: All logs now write to `debug-logs/server-debug-YYYY-MM-DD.log` instead of Better Stack
+  - Impact: Simplified logging, removed external dependency, faster error logging, all logs in one place
+
+### Changed
+- **Migrated Function Files to debug-file-logger**: Replaced all logger utility calls in function files with errorLog() and warnLog() from debug-file-logger
+  - **Files Migrated**:
+    - `src/functions/collection.ts` - Removed 18 logger calls, now uses errorLog/warnLog for cache errors, API errors, collection errors
+    - `src/functions/listingScheduler.ts` - Removed 15 logger calls, simplified with errorLog for queue/WebSocket errors
+    - `src/functions/relistExpired.ts` - Removed 3 logger calls, now uses errorLog for listing/marketplace errors
+    - `src/functions/tokenMetadata.ts` - Removed 5 logger calls, now uses errorLog for API/metadata errors
+    - `src/functions/approve.ts` - Removed 1 logger call, now uses errorLog for blockchain errors
+    - `src/functions/cleanupExpiredPrices.ts` - Removed 1 logger call, now uses errorLog
+    - `src/functions/list.ts` - Removed 12 logger calls, now uses errorLog/warnLog for listing/database/API errors
+    - `src/functions/priceMonitor.ts` - Removed 18 logger calls, now uses errorLog/warnLog for WebSocket/queue/listing errors
+  - **Log Prefixes Used**: Collection, Listing, API, Database, Metadata, Blockchain, WebSocket, Queue, Cache
+  - **Removed Dependencies**: No longer imports logger utility or ErrorCategory enums in these files
+  - **Consistent Format**: All errors now follow `errorLog('Category', '[file.ts] Message with context | key=value', error)` pattern
+  - Impact: Cleaner function files with simpler error handling, reduced MongoDB logger writes for non-critical errors
+
+### Added
+- **Full Logging Coverage - errorLog() and warnLog()**: Extended debug-file-logger with error and warning log levels
+  - **New Functions**:
+    - `errorLog(prefix, message, error?)` - Logs errors with full stack traces (ALWAYS logged, regardless of DEBUG flag)
+    - `warnLog(prefix, message)` - Logs warnings (ALWAYS logged, regardless of DEBUG flag)
+  - **Log Format**:
+    - Errors: `[timestamp] [ERROR][prefix] message | error details`
+    - Warnings: `[timestamp] [WARN][prefix] message`
+  - **Files Updated with Error Logging**:
+    - `src/index.ts` - 15+ silent catch blocks now log errors (queue rate limiting, counterbid handlers, health checks)
+    - `src/marketplace/opensea/bid.ts` - Cancel order errors
+    - `src/marketplace/blur/bid.ts` - Auth failures, cache errors, cancel errors, trait floor fetch errors
+    - `src/marketplace/magiceden/bid.ts` - Cache read/write errors, trait floor fetch errors
+    - `src/utils/order-cache.ts` - Database initialization errors
+    - `src/utils/balance.ts` - Balance fetch errors, cache errors, GraphQL errors
+    - `src/utils/redis.ts` - Redis connection errors, BullMQ connection errors
+    - `src/functions/collection.ts` - Floor price fetch errors, cache errors
+  - **Log Prefix Standards**:
+    - `[ERROR][API]` - API call failures (OpenSea, Blur, MagicEden)
+    - `[ERROR][Cache]` - Cache read/write failures
+    - `[ERROR][Database]` - MongoDB/Redis connection errors
+    - `[ERROR][Balance]` - WETH balance fetch failures
+    - `[WARN][Queue]` - Job rescheduling failures (non-critical)
+    - `[WARN][Health]` - Health check timeouts (non-critical)
+    - `[WARN][Cancel]` - Cancellation minor issues
+  - **Silent Catch Blocks Fixed**: ~50+ previously silent catch blocks now log useful diagnostics
+  - Files modified: `src/utils/debug-file-logger.ts`, `src/index.ts`, `src/marketplace/*/bid.ts`, `src/utils/*.ts`, `src/functions/collection.ts`
+  - Resolves: Silent error swallowing making debugging difficult
+  - Impact: All errors and warnings now visible in debug log files for post-mortem analysis
+
+- **Unified Debug File Logger**: Created centralized file-based debug logging system that writes to both console AND file
+  - Enable via `DEBUG=true` environment variable
+  - **Log File Location**: `nfttools/debug-logs/server-debug-YYYY-MM-DD.log` (daily rotation, project root)
+  - **Features**:
+    - Dual output: Console (for real-time monitoring) + File (for persistent history)
+    - ISO timestamps in file logs for precise timing analysis
+    - Daily log file rotation (new file each day)
+    - Silent file write failures (won't crash app)
+    - Same `DEBUG=true` flag controls all debug output
+  - **Log Prefix Categories**:
+    - `[TaskScheduler]` - Lock acquisition/release, timer registration, timer expiration, task completion flow
+    - `[STARTUP]` - Server initialization sequence (HTTP server, workers, rate limiter, wallet cache)
+    - `[ScheduledBid]` - Scheduled bid parent function entry (OS/Blur/ME)
+    - `[BidFlow]` - Individual bid processor entry (all marketplaces and bid types)
+    - `[Preprocessing]` - Marketplace preprocessing decisions
+    - `[PriceCalc]` - Bid price calculation results
+    - `[StopOption]` - Stop option trigger evaluation
+  - **Example Output**:
+    ```
+    [2025-11-30T10:15:30.123Z] [TaskScheduler] Timer EXPIRED | timerKey=abc123-opensea | taskId=abc123 | marketplace=opensea
+    [2025-11-30T10:15:30.125Z] [TaskScheduler] Lock ACQUIRED | lockKey=abc123-opensea
+    [2025-11-30T10:15:30.130Z] [TaskScheduler] Calling startTask | taskId=abc123 | marketplace=opensea
+    ```
+  - **Implementation**:
+    - Replaced 47 `if (DEBUG) console.log(...)` statements with `debugLog(prefix, message)` calls
+    - All scheduler-related logging now uses file logger for complete scheduling flow visibility
+  - Files created: `src/utils/debug-file-logger.ts`
+  - Files modified: `src/index.ts` (replaced all debug logging with `debugLog()` function)
+  - Resolves: Debug logs lost after terminal closed, difficulty analyzing scheduling issues
+  - Impact: Complete persistent debug log history for diagnosing task scheduling and bid flow issues
+
+- **Cancellation Debug Log File**: Added comprehensive file-based debug logging for task cancellation flow
+  - Enable via `DEBUG=true` environment variable
+  - **Log File Location**: `nfttools/cancellation-debug-logs/cancellation-debug-{taskId}.log` (project root, overwrites on each run)
+  - **Phases Logged**:
+    - `ENTRY`: stopTask called with task info, marketplace, stoppedByWarning flag
+    - `WALLET`: Decryption success/failure, wallet address (truncated)
+    - `BLACKLIST`: Task blacklisted to prevent new jobs
+    - `JOB_CANCEL`: Jobs removed from queue (count)
+    - `ORDERS_SOURCE`: Per-marketplace order source (cache, mongodb, or empty) with counts
+    - `ORDERS_FETCH`: Summary of orders retrieved with sources
+    - `STATE`: CANCELLING vs STOPPED decision with order counts
+    - `CANCEL_QUEUE`: Orders queued per marketplace with sample orderHashes
+    - `CANCEL_JOB`: Individual cancellation job results (SUCCESS/ERROR/SKIPPED with reason)
+    - `CLEANUP`: Resources cleared
+    - `COMPLETE`: Final status
+    - `ERROR`: Error details if stopTask fails
+  - **Output Format**: Human-readable with elapsed timestamps (MM:SS.mmm), no absolute timestamps
+  - **File Structure**:
+    ```
+    ================================================================================
+    CANCELLATION DEBUG LOG
+    Task: {taskId} | Slug: {slug}
+    ================================================================================
+    [00:00.000] [ENTRY] stopTask called
+                marketplace: all | stoppedByWarning: false
+    [00:00.100] [ORDERS_SOURCE] opensea: Found 906 orders in MONGODB
+    [00:00.200] [CANCEL_JOB] SUCCESS | orderId: 0xabc123def456...
+    [00:00.300] [CANCEL_JOB] ERROR | orderId: 0x789xyz... | reason: API timeout
+    ...
+    ================================================================================
+    SUMMARY
+    Duration: 2.5s | Status: SUCCESS
+    orderSources: {"opensea":"mongodb","magiceden":"empty","blur":"empty"}
+    cancellationResults: {"success":850,"error":10,"skipped":3}
+    ================================================================================
+    ```
+  - Files created: `src/utils/cancellation-debug-logger.ts`
+  - Files modified: `src/index.ts` (stopTask function, bulkCancelOpenseaBid function)
+  - Resolves: Difficulty debugging cancellation flow during task stop operations
+  - Impact: Complete visibility into cancellation lifecycle including individual job results with DEBUG=true
+
+### Fixed
+- **Orders Not Cancelled When Cache Empty**: Fixed bug where `stopTask` would skip order cancellation if OrderCache was empty
+  - **Root Cause**: `fetchOrdersForCancellation()` only queried in-memory cache, missing orders that existed in MongoDB but not in cache (e.g., task started before server restart, cache not populated)
+  - **Solution**: Added MongoDB fallback - if cache returns 0 orders, query MongoDB `Order` collection
+  - **Flow**: Cache first (fast path) → MongoDB fallback if cache empty (ensures no orders missed)
+  - **Debug Log**: Added console log when fallback is used: `[fetchOrdersForCancellation] Cache miss for {marketplace}, found {count} orders in MongoDB`
+  - Files modified: `src/index.ts` (fetchOrdersForCancellation function)
+  - Resolves: Orders not being cancelled when stopping tasks that started before server restart
+  - Impact: All orders are now properly cancelled regardless of cache state
+
+### Changed
 - **Order Lookups Migrated to In-Memory Cache**: Replaced ~35 MongoDB `Order.find()` calls with `OrderCache` in-memory lookups for faster bid processing
   - **Performance Impact**: O(1) cache lookups vs O(log n) database queries, 20-30% reduction in MongoDB queries during peak bidding
   - **OrderCache Methods Used**:

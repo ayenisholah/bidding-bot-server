@@ -11,10 +11,10 @@ import { isCancel } from "axios";
 import { BASE_URL } from "../../constants";
 import { fetchERC20Balance } from "../../utils/balance";
 import { convertBigNumbers } from "../../utils/bigNumberConverter";
-import { logger, ErrorCategory, MarketplaceSubCategory, DatabaseOperation } from "../../utils/logger";
 import { InsufficientBalanceError, TransferRestrictedError, MinimumPriceError, InvalidRequestError } from "../errors";
 import { blurRateLimiter } from "../../utils/blur-rate-limiter";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
+import { errorLog, warnLog } from "../../utils/debug-file-logger";
 
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
 
@@ -94,11 +94,7 @@ function addActiveRequest(taskId: string, controller: AbortController) {
 export async function cancelBlurRequest(taskId: string): Promise<{ success: boolean; cancelledCount: number; error?: string }> {
   // Input validation
   if (!taskId || typeof taskId !== 'string') {
-    await logger.logWarning(ErrorCategory.MARKETPLACE, 'Invalid taskId provided to cancelBlurRequest', {
-      taskId,
-      marketplace: 'blur',
-      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION
-    });
+    warnLog('API', `[Blur] Invalid taskId provided to cancelBlurRequest | taskId=${taskId}`);
     return { success: false, cancelledCount: 0, error: 'Invalid taskId' };
   }
 
@@ -126,12 +122,7 @@ export async function cancelBlurRequest(taskId: string): Promise<{ success: bool
         await Promise.race([abortPromise, timeoutPromise]);
         cancelledCount++;
       } catch (error) {
-        await logger.logWarning(ErrorCategory.MARKETPLACE, 'Failed to abort Blur request controller', {
-          taskId,
-          marketplace: 'blur',
-          marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
-          errorMessage: error instanceof Error ? error.message : String(error)
-        });
+        warnLog('API', `[Blur] Failed to abort request controller | taskId=${taskId} | ${error instanceof Error ? error.message : String(error)}`);
       }
     }));
 
@@ -139,12 +130,7 @@ export async function cancelBlurRequest(taskId: string): Promise<{ success: bool
 
     return { success: true, cancelledCount };
   } catch (error) {
-    await logger.logMarketplaceError('Failed to cancel Blur requests', {
-      taskId,
-      marketplace: 'blur',
-      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
+    errorLog('API', `[Blur] Failed to cancel requests | taskId=${taskId} | ${error instanceof Error ? error.message : String(error)}`, error);
     return { success: false, cancelledCount: 0, error: error instanceof Error ? error.message : String(error) };
   }
 }
@@ -204,15 +190,7 @@ export async function bidOnBlur(
         wallet_address,
         slug
       );
-      await logger.logBlurBalanceError('Insufficient BETH balance for bid', {
-        taskId,
-        walletAddress: wallet_address,
-        collection: slug,
-        bidAmount: Number(offerPriceEth),
-        availableBalance: bethBalance,
-        requiredBalance: Number(offerPriceEth),
-        error
-      });
+      errorLog('Balance', `[Blur] Insufficient BETH balance | wallet=${wallet_address.slice(0, 10)}... | slug=${slug} | bid=${offerPriceEth} | available=${bethBalance}`, error);
       throw error;
     }
 
@@ -231,14 +209,7 @@ export async function bidOnBlur(
         0.01,
         slug
       );
-      await logger.logBlurBidError('Bid price below minimum', {
-        taskId,
-        walletAddress: wallet_address,
-        collection: slug,
-        bidAmount: Number(offerPriceEth),
-        minimumBid: 0.01,
-        error
-      });
+      errorLog('API', `[Blur] Bid price below minimum | wallet=${wallet_address.slice(0, 10)}... | slug=${slug} | bid=${offerPriceEth} | min=0.01`, error);
       throw error;
     }
 
@@ -265,12 +236,7 @@ export async function bidOnBlur(
 
     if (!accessToken) {
       const error = new Error('Access token is undefined');
-      await logger.logBlurBidError('Failed to get Blur access token', {
-        taskId,
-        walletAddress: wallet_address,
-        collection: slug,
-        error
-      });
+      errorLog('API', `[Blur] Failed to get access token | taskId=${taskId} | wallet=${wallet_address.slice(0, 10)}... | slug=${slug}`, error);
       throw error;
     }
     build = await formatBidOnBlur(taskId, BLUR_API_URL, accessToken, wallet_address, buildPayload, private_key);
@@ -342,13 +308,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
   // Check if limiter is initialized
   if (!limiter) {
     const error = new Error('Limiter not initialized');
-    console.error('Limiter not initialized - cannot get access token');
-    await logger.logBlurBidError('Limiter not initialized', {
-      operation: 'get_access_token',
-      walletAddress: wallet.address,
-      error: error,
-      errorMessage: 'Limiter not initialized - cannot get access token'
-    });
+    errorLog('API', `[Blur] Limiter not initialized | operation=get_access_token | wallet=${wallet.address}`, error);
     throw error;
   }
 
@@ -363,7 +323,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
       return cachedToken;
     }
   } catch (error) {
-    console.warn(`[Auth Cache] Failed to read cache for ${wallet.address}:`, error);
+    warnLog('Cache', `[Blur] Failed to read auth cache | wallet=${wallet.address}`);
   }
 
   // Check for authentication block in Redis first
@@ -400,7 +360,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
       // console.log(`[Auth State] Received auth result for ${wallet.address}:`, result ? 'SUCCESS' : 'FAILED');
       return result;
     } catch (error) {
-      console.warn(`[Auth State] Failed to wait for existing auth for ${wallet.address}:`, error);
+      warnLog('API', `[Blur] Failed to wait for existing auth | wallet=${wallet.address}`);
       // Continue with our own auth attempt if the existing one failed
     }
   }
@@ -424,7 +384,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
         return cachedToken;
       }
     } catch (error) {
-      console.warn(`[Auth Cache] Failed to double-check cache for ${wallet.address}:`, error);
+      warnLog('Cache', `[Blur] Failed to double-check cache | wallet=${wallet.address}`);
     }
 
     // console.log(`[Auth] Starting authentication for ${wallet.address}`);
@@ -477,11 +437,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
         authMetrics.failureReasons.set(reason, (authMetrics.failureReasons.get(reason) || 0) + 1);
 
         // Log the error details
-        console.error(`Blur auth attempt ${retries + 1}/${maxRetries} failed:`, {
-          wallet: wallet.address,
-          status: error.response?.status,
-          message: error.response?.data?.message || error.message
-        });
+        errorLog('Blur', `Auth attempt ${retries + 1}/${maxRetries} failed | wallet=${wallet.address} | status=${error.response?.status || 'N/A'} | message=${error.response?.data?.message || error.message}`, error);
 
         // Check for authentication block error
         const errorMessage = error.response?.data?.message || error.message || '';
@@ -554,7 +510,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
     }
 
     // If all retries failed, throw the last error
-    console.error(`Failed to get Blur access token after ${maxRetries} attempts`);
+    errorLog('Blur', `Failed to get access token after ${maxRetries} attempts | wallet=${wallet.address}`, lastError);
     throw lastError || new Error('Failed to authenticate with Blur');
 
   });
@@ -572,7 +528,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
 
     return result;
   } catch (error) {
-    console.error(`[Auth State] Authentication failed for ${wallet.address}:`, error);
+    errorLog('API', `[Blur] Authentication failed | wallet=${wallet.address}`, error);
 
     // Add to retry queue on failure
     const retryInfo = authRetryQueue.get(wallet.address) || { retryCount: 0, nextRetryTime: 0 };
@@ -617,14 +573,7 @@ async function formatBidOnBlur(
   // Check if limiter is initialized
   if (!limiter) {
     const error = new Error('Limiter not initialized');
-    console.error('Limiter not initialized - cannot format Blur bid');
-    await logger.logBlurBidError('Limiter not initialized', {
-      taskId,
-      operation: 'format_bid',
-      contractAddress: buildPayload.contractAddress,
-      error: error,
-      errorMessage: 'Limiter not initialized - cannot format Blur bid'
-    });
+    errorLog('API', `[Blur] Limiter not initialized | operation=format_bid | taskId=${taskId} | contract=${buildPayload.contractAddress}`, error);
     throw error;
   }
 
@@ -692,7 +641,7 @@ async function formatBidOnBlur(
             continue; // Retry with new token
           }
         } catch (authError) {
-          console.error('Failed to refresh Blur access token:', authError);
+          errorLog('API', `[Blur] Failed to refresh access token`, authError);
         }
       }
 
@@ -894,15 +843,7 @@ async function submitBidToBlur(
       }
 
       if (offers.errors) {
-        console.error('Error:', JSON.stringify(offers.errors));
-        await logger.logBlurBidError('Blur API returned errors in response', {
-          taskId,
-          walletAddress,
-          collection: slug,
-          operation: 'submit_bid',
-          errors: offers.errors,
-          errorMessage: JSON.stringify(offers.errors)
-        });
+        errorLog('API', `[Blur] API returned errors | taskId=${taskId} | slug=${slug} | errors=${JSON.stringify(offers.errors)}`);
       }
     } catch (error: any) {
       // Record error for adaptive rate limiting
@@ -982,19 +923,7 @@ async function submitBidToBlur(
 
       const formattedPrice = (Math.round(Number(formatUnits(offer_price.toString(), 18)) * 100) / 100).toFixed(2);
       const errorMessage = `Failed to submit Blur bid for collection ${slug} at price ${formattedPrice} BETH: ${Array.isArray(errorData) ? errorData[0] : errorData?.message || error.message || error}`;
-      console.error(errorMessage, error);
-      await logger.logBlurBidError(errorMessage, {
-        taskId,
-        walletAddress,
-        collection: slug,
-        bidAmount: formattedPrice,
-        currency: 'BETH',
-        operation: 'submit_bid',
-        error: error,
-        errorCode: error.response?.status,
-        errorData: errorData,
-        isRateLimitError
-      });
+      errorLog('API', `[Blur] ${errorMessage} | taskId=${taskId} | status=${error.response?.status} | rateLimit=${isRateLimitError}`, error);
       throw new InvalidRequestError('blur', errorMessage, error.response?.status);
     }
   } finally {
@@ -1042,17 +971,7 @@ export async function cancelBlurBid(data: BlurCancelPayload) {
     await updateTaskCancellationPercentage(taskId, undefined, 'blur');
   } catch (error: any) {
     if (error.response?.data?.message?.message !== 'No bids found') {
-      const errorDetails = error?.response?.data || error?.response || error?.code || error.message;
-      console.error(`Failed to cancel Blur bid for task ${data.taskId}: ${JSON.stringify(errorDetails)}`);
-      await logger.logBlurBidError('Failed to cancel Blur bid', {
-        taskId: data.taskId,
-        operation: 'cancel_bid',
-        walletAddress: walletAddress || 'unknown',
-        error: error,
-        errorCode: error?.response?.status,
-        errorMessage: error?.response?.data?.message?.message || error?.response?.data?.message || error?.message || String(error),
-        errorDetails
-      });
+      errorLog('API', `[Blur] Failed to cancel bid | taskId=${data.taskId} | wallet=${walletAddress || 'unknown'} | status=${error?.response?.status}`, error);
     }
   }
 }
@@ -1148,16 +1067,7 @@ export async function fetchBlurCollectionStats(slug: string) {
       }
     }
   } catch (error: any) {
-    console.error(`Error reading from Redis cache for Blur stats (${slug}): ${error.message || error}`);
-    await logger.logDatabaseError('Error reading Blur stats from Redis cache', {
-      databaseOperation: DatabaseOperation.READ,
-      collection_name: 'redis_cache',
-      operation: 'get_blur_stats',
-      slug,
-      cacheKey,
-      error: error,
-      errorMessage: error.message || String(error)
-    });
+    warnLog('Cache', `[Blur] Error reading stats from Redis | slug=${slug}`);
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -1189,16 +1099,7 @@ export async function fetchBlurCollectionStats(slug: string) {
       }
       return floor_price || 0;
     } catch (error: any) {
-      // console.warn(`Failed to fetch Blur collection stats for ${slug}: ${error.response?.data?.message || error.message}`);
-      await logger.logMarketplaceError('Failed to fetch Blur collection stats', {
-        marketplace: 'blur',
-        marketplaceSubCategory: MarketplaceSubCategory.COLLECTION,
-        slug,
-        operation: 'fetch_collection_stats',
-        error: error,
-        errorCode: error?.response?.status,
-        errorMessage: error.response?.data?.message || error.message || String(error)
-      });
+      errorLog('Collection', `[Blur] Failed to fetch collection stats | slug=${slug} | status=${error?.response?.status}`, error);
       return 0;
     }
 
@@ -1233,18 +1134,7 @@ export async function fetchBlurTraitFloor(slug: string, trait: { type: string; v
     const amount = data?.tokens[0]?.price?.amount;
     return amount !== undefined ? Number(amount) : undefined
   } catch (error: any) {
-    console.error(`Failed to fetch Blur trait floor for ${slug} with trait ${trait.type}:${trait.value}: ${error.message || error}`);
-    await logger.logMarketplaceError('Failed to fetch Blur trait floor', {
-      marketplace: 'blur',
-      marketplaceSubCategory: MarketplaceSubCategory.TRAIT,
-      slug,
-      traitType: trait.type,
-      traitValue: trait.value,
-      operation: 'fetch_trait_floor',
-      error: error,
-      errorCode: error?.response?.status,
-      errorMessage: error.message || String(error)
-    });
+    errorLog('API', `[Blur] Failed to fetch trait floor | slug=${slug} | trait=${trait.type}:${trait.value} | status=${error?.response?.status}`, error);
     throw error;
   }
 }

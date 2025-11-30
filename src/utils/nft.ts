@@ -1,7 +1,7 @@
 import { BASE_URL } from '../constants';
 import { axiosInstance, limiter } from '../init';
 import { ethers } from 'ethers';
-import { logger } from './logger';
+import { errorLog, warnLog } from './debug-file-logger';
 
 const API_KEY = process.env.API_KEY as string;
 
@@ -110,10 +110,7 @@ export interface WalletNFTsResponse {
  */
 export async function fetchWalletNFTs(wallets: { address: string, walletId: string }[]): Promise<WalletNFTsResponse[]> {
   if (!API_KEY) {
-    await logger.logApiError('API_KEY is not configured', {
-      operation: 'fetch_wallet_nfts',
-      errorCode: 'MISSING_API_KEY'
-    });
+    errorLog('API', '[NFT] API_KEY is not configured');
     throw new Error('API_KEY is not configured');
   }
 
@@ -122,11 +119,7 @@ export async function fetchWalletNFTs(wallets: { address: string, walletId: stri
   for (const wallet of wallets) {
     // Validate wallet address
     if (!ethers.isAddress(wallet.address)) {
-      await logger.logValidationError('walletAddress', wallet.address, 'Invalid Ethereum address format', {
-        walletId: wallet.walletId,
-        operation: 'fetch_wallet_nfts'
-      });
-      console.error(`Invalid wallet address: ${wallet.address}`);
+      warnLog('Validation', `[NFT] Invalid wallet address format | wallet=${wallet.address}`);
       results.push({
         wallet: wallet.address,
         walletId: wallet.walletId,
@@ -149,23 +142,10 @@ export async function fetchWalletNFTs(wallets: { address: string, walletId: stri
 
         results.push(response);
       } catch (error) {
-        await logger.logApiError(`Error fetching NFTs from OpenSea for wallet ${wallet.address}`, {
-          walletAddress: wallet.address,
-          walletId: wallet.walletId,
-          operation: 'fetch_nfts_opensea',
-          error: error as Error,
-          errorMessage: error instanceof Error ? error.message : String(error)
-        });
+        errorLog('API', `[NFT] Error fetching NFTs from OpenSea | wallet=${wallet.address.slice(0, 10)}...`, error);
       }
     } catch (error) {
-      await logger.logGeneralError(`Error fetching NFTs for wallet ${wallet.address}`, {
-        walletAddress: wallet.address,
-        walletId: wallet.walletId,
-        operation: 'fetch_wallet_nfts',
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
-      console.error(`Error fetching NFTs for wallet ${wallet}:`, error);
+      errorLog('API', `[NFT] Error fetching wallet NFTs | wallet=${wallet.address.slice(0, 10)}...`, error);
       results.push({
         wallet: wallet.address,
         walletId: wallet.walletId,
@@ -333,16 +313,7 @@ async function fetchNFTsFromOpenSea({ wallet, walletId }: { wallet: string; wall
         break;
       }
     } catch (error) {
-      await logger.logApiError('Error fetching NFTs from OpenSea GraphQL', {
-        walletAddress: wallet,
-        walletId,
-        operation: 'fetch_nfts_graphql',
-        endpoint: `${BASE_URL}/opensea/graphql`,
-        error: error as Error,
-        errorCode: (error as any)?.response?.status,
-        errorMessage: (error as any)?.response?.data || (error instanceof Error ? error.message : String(error))
-      });
-      console.error(RED + "Error fetching NFTs from OpenSea:", error + RESET);
+      errorLog('API', `[NFT] Error fetching NFTs from OpenSea GraphQL | wallet=${wallet.slice(0, 10)}... | status=${(error as any)?.response?.status}`, error);
       throw error;
     }
   } while (cursor);

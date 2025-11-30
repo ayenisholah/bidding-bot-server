@@ -1,4 +1,4 @@
-import { logger, QueueOperation } from './logger';
+import { errorLog } from './debug-file-logger';
 
 interface BullMQError {
   message: string;
@@ -72,11 +72,7 @@ export class BullMQErrorFormatter {
       }
     } else {
       // Handle other BullMQ errors
-      await logger.logQueueError(error.message, {
-        error: error as Error,
-        queueOperation: QueueOperation.PROCESS_JOB,
-        ...context
-      });
+      errorLog('[Queue]', error.message, error as Error);
     }
   }
 
@@ -141,14 +137,7 @@ export class BullMQErrorFormatter {
     // Log grouped errors
     for (const [type, typeErrors] of Object.entries(groupedErrors)) {
       const summary = this.createErrorSummary(type, typeErrors);
-
-      await logger.logQueueError(summary, {
-        errorType: type,
-        errorCount: typeErrors.length,
-        jobIds: typeErrors.map(e => e.jobId),
-        queueOperation: QueueOperation.PROCESS_JOB,
-        details: typeErrors
-      });
+      errorLog('[Queue]', `${summary} - count=${typeErrors.length} jobs=${typeErrors.map(e => e.jobId).join(',')}`);
     }
   }
 

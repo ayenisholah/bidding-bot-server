@@ -8,9 +8,10 @@ import { API_KEY } from "..";
 import redisClient from '../utils/redis';
 import { CollectionItemsListQuery } from "../queries";
 import { BASE_URL } from "../constants";
-import { logger, DatabaseOperation, ErrorCategory, MarketplaceSubCategory } from "../utils/logger";
+
 import { ICollectionDetails, ICollectionFee } from "../types/collection.types";
 import { setOpenseaMarketplaceFee } from "../utils/marketplace-fee-cache";
+import { errorLog, warnLog } from "../utils/debug-file-logger";
 
 const collectionCache: { [key: string]: ICollectionDetails } = {};
 const MAX_CACHE_ITEMS = 1000;
@@ -105,15 +106,8 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
         ensureOpenseaMarketplaceFee(collectionCache[slug]);
         return details;
       }
-    } catch (error) {
-      await logger.logDatabaseError('Error reading collection details from Redis cache', {
-        databaseOperation: DatabaseOperation.READ,
-        collection_name: 'opensea_collection_cache',
-        collection: slug,
-        cacheKey,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+    } catch {
+      warnLog('Cache', `[collection.ts] Error reading collection details from Redis cache | slug=${slug} | key=${cacheKey}`);
     }
   }
 
@@ -183,12 +177,8 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
         if (redis && redisClient.isReady()) {
           try {
             await redis.setex(cacheKey, 3600, JSON.stringify(result));
-          } catch (error) {
-            console.error('[collection.ts] Error caching collection details to Redis:', {
-              cacheKey,
-              slug,
-              error: error instanceof Error ? error.message : String(error)
-            });
+          } catch {
+            warnLog('Cache', `[collection.ts] Error caching collection details to Redis | slug=${slug}`);
           }
         }
         return result;
@@ -198,12 +188,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
     );
 
     if (!result) {
-      await logger.logOpenseaCollectionError('Failed to acquire lock for collection details', {
-        collection: slug,
-        contractAddress,
-        operation: 'get_collection_details',
-        errorCode: 'LOCK_ACQUISITION_FAILED'
-      });
+      errorLog('Collection', `[collection.ts] Failed to acquire lock for collection details | slug=${slug} | contractAddress=${contractAddress}`);
       throw new Error('Failed to acquire lock for collection details');
     }
     // {
@@ -223,13 +208,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
     return result;
   } catch (error) {
     // Log the error
-    await logger.logOpenseaCollectionError(`Failed to fetch collection details: ${error}`, {
-      collection: slug,
-      contractAddress,
-      operation: 'get_collection_details',
-      errorCode: 'FETCH_FAILED',
-      error: error as Error
-    });
+    errorLog('Collection', `[collection.ts] Failed to fetch collection details | slug=${slug} | contractAddress=${contractAddress}`, error);
 
     // Return a minimal collection object to prevent complete failure
     const fallbackResult: ICollectionDetails & { error: boolean; errorMessage: string } = {
@@ -290,15 +269,8 @@ export async function getOpenseaFloor(collectionSlug: string) {
     if (cachedFloor) {
       return JSON.parse(cachedFloor);
     }
-  } catch (error) {
-    await logger.logDatabaseError('Error reading OpenSea floor price from cache', {
-      databaseOperation: DatabaseOperation.READ,
-      collection_name: 'getRedis()_cache',
-      collection: collectionSlug,
-      cacheKey,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
+  } catch {
+    warnLog('Cache', `[collection.ts] Error reading OpenSea floor price from cache | slug=${collectionSlug} | key=${cacheKey}`);
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -329,17 +301,7 @@ export async function getOpenseaFloor(collectionSlug: string) {
     } catch (error: any) {
       // Handle 404 errors specifically - collection might be delisted or renamed
       if (error?.response?.status === 404) {
-        await logger.logOpenseaCollectionError('Collection not found on OpenSea', {
-          collection: collectionSlug,
-          collectionSlug: collectionSlug,
-          endpoint: `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`,
-          method: 'GET',
-          statusCode: 404,
-          operation: 'get_floor_price',
-          errorCode: 'COLLECTION_NOT_FOUND',
-          errorMessage: error?.response?.data?.errors?.[0]?.message || 'Collection not found',
-          error: new Error(`OpenSea collection not found: ${collectionSlug}`)
-        });
+        warnLog('API', `[collection.ts] Collection not found on OpenSea | slug=${collectionSlug} | status=404`);
 
         // Cache the zero floor price for a short time to avoid repeated 404s
         if (getRedis()) {
@@ -349,17 +311,7 @@ export async function getOpenseaFloor(collectionSlug: string) {
       }
 
       // For other errors, log as API error and re-throw
-      await logger.logApiError('Failed to fetch OpenSea floor price', {
-        collection: collectionSlug,
-        collectionSlug: collectionSlug,
-        endpoint: `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`,
-        method: 'GET',
-        statusCode: error?.response?.status,
-        operation: 'get_floor_price',
-        errorCode: error?.code || 'API_ERROR',
-        errorMessage: error?.response?.data?.errors?.[0]?.message || error?.message || 'Unknown error',
-        error: error
-      });
+      errorLog('API', `[collection.ts] Failed to fetch OpenSea floor price | slug=${collectionSlug} | status=${error?.response?.status}`, error);
 
       throw error; // Re-throw to let the lock manager handle it
     }
@@ -377,24 +329,13 @@ export async function getOpenseaFloor(collectionSlug: string) {
         if (cachedFloor) {
           return JSON.parse(cachedFloor);
         }
-      } catch (error) {
-        await logger.logDatabaseError('Error reading from cache after lock failure', {
-          databaseOperation: DatabaseOperation.READ,
-          collection_name: 'getRedis()_cache',
-          collection: collectionSlug,
-          cacheKey,
-          error: error as Error,
-          errorMessage: error instanceof Error ? error.message : String(error)
-        });
+      } catch {
+        warnLog('Cache', `[collection.ts] Error reading from cache after lock failure | slug=${collectionSlug}`);
       }
     }
 
     // After all retries, still no data - log and throw error
-    await logger.logOpenseaCollectionError('Failed to fetch OpenSea floor price after retries', {
-      collection: collectionSlug,
-      operation: 'get_floor_price',
-      errorCode: 'FLOOR_PRICE_FETCH_FAILED'
-    });
+    errorLog('Collection', `[collection.ts] Failed to fetch OpenSea floor price after retries | slug=${collectionSlug}`);
     throw new Error('Failed to fetch OpenSea floor price');
   }
 
@@ -412,12 +353,8 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
     if (cachedFloor) {
       return JSON.parse(cachedFloor);
     }
-  } catch (error) {
-    console.error('[collection.ts] Error reading Blur floor from cache:', {
-      cacheKey,
-      collectionSlug,
-      error: error instanceof Error ? error.message : String(error)
-    });
+  } catch {
+    warnLog('Cache', `[collection.ts] Error reading Blur floor from cache | slug=${collectionSlug}`);
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -442,11 +379,7 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
       }
       return floor_price;
     } catch (error) {
-      console.error('[collection.ts] Error fetching Blur floor price:', {
-        collectionSlug,
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined
-      });
+      errorLog('API', `[collection.ts] Error fetching Blur floor price | slug=${collectionSlug}`, error);
       return 0;
     }
   });
@@ -465,12 +398,8 @@ export async function getMagicEdenFloor(collectionSlug: string): Promise<number>
     if (cachedFloor) {
       return JSON.parse(cachedFloor);
     }
-  } catch (error) {
-    console.error('[collection.ts] Error reading Magic Eden floor from cache:', {
-      cacheKey,
-      collectionSlug,
-      error: error instanceof Error ? error.message : String(error)
-    });
+  } catch {
+    warnLog('Cache', `[collection.ts] Error reading Magic Eden floor from cache | slug=${collectionSlug}`);
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -494,11 +423,7 @@ export async function getMagicEdenFloor(collectionSlug: string): Promise<number>
       }
       return floor_price;
     } catch (error) {
-      console.error('[collection.ts] Error fetching Magic Eden floor price:', {
-        collectionSlug,
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined
-      });
+      errorLog('API', `[collection.ts] Error fetching Magic Eden floor price | slug=${collectionSlug}`, error);
       return 0;
     }
   });
@@ -532,11 +457,7 @@ export async function getOpenseaCollectionStats(collectionSlug: string) {
     }
   ));
   if (!data?.total) {
-    await logger.logOpenseaCollectionError(`No listings found for collection ${collectionSlug}`, {
-      collection: collectionSlug,
-      operation: 'get_floor_price',
-      errorCode: 'NO_LISTINGS_FOUND'
-    });
+    warnLog('Collection', `[collection.ts] No listings found for collection | slug=${collectionSlug}`);
     throw new Error(`No listings found for collection ${collectionSlug}`);
   }
   return data?.total?.floor_price;
@@ -572,13 +493,7 @@ export async function getCollectionEvents(
     }
     return data;
   } catch (error) {
-    await logger.logOpenseaCollectionError('Error fetching collection events', {
-      collectionSlug: collectionSlug,
-      operation: 'fetch_collection_events',
-      error: error as Error,
-      errorCode: (error as any)?.response?.status,
-      errorMessage: (error as any)?.response?.data || (error instanceof Error ? error.message : String(error))
-    });
+    errorLog('Collection', `[collection.ts] Error fetching collection events | slug=${collectionSlug}`, error);
     throw error;
   }
 }
@@ -607,12 +522,8 @@ export async function fetchOpenSeaCollectionItems(
       if (cachedData) {
         return JSON.parse(cachedData);
       }
-    } catch (error) {
-      console.error('[collection.ts] Error reading collection items from cache:', {
-        cacheKey,
-        collectionSlug: variables.collectionSlug,
-        error: error instanceof Error ? error.message : String(error)
-      });
+    } catch {
+      warnLog('Cache', `[collection.ts] Error reading collection items from cache | slug=${variables.collectionSlug}`);
     }
   }
 
@@ -651,13 +562,7 @@ export async function fetchOpenSeaCollectionItems(
       return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount);
     }
   } catch (error) {
-    await logger.logOpenseaCollectionError('Error fetching OpenSea collection items', {
-      collectionSlug: variables.collectionSlug,
-      operation: 'fetch_collection_items',
-      error: error as Error,
-      errorCode: (error as any)?.response?.status,
-      errorMessage: (error as any)?.response?.data || (error instanceof Error ? error.message : String(error))
-    });
+    errorLog('Collection', `[collection.ts] Error fetching OpenSea collection items | slug=${variables.collectionSlug}`, error);
     throw new Error(`Failed to fetch collection items for ${variables.collectionSlug}`);
   }
 }
@@ -809,15 +714,8 @@ export async function fetchOpenseaTraits(
       if (cachedTraits) {
         return JSON.parse(cachedTraits);
       }
-    } catch (error) {
-      await logger.logDatabaseError('Error reading traits from cache', {
-        databaseOperation: DatabaseOperation.READ,
-        collection_name: 'getRedis()_cache',
-        collection: slug,
-        cacheKey,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+    } catch {
+      warnLog('Cache', `[collection.ts] Error reading traits from cache | slug=${slug} | key=${cacheKey}`);
     }
   }
 
@@ -855,13 +753,7 @@ export async function fetchOpenseaTraits(
       return await fetchOpenseaTraitsRecursive(slug, limit, cursor);
     }
   } catch (error) {
-    await logger.logOpenseaCollectionError(`Error fetching OpenSea traits for ${slug}`, {
-      collection: slug,
-      operation: 'fetch_traits',
-      error: error as Error,
-      errorCode: (error as any)?.response?.status,
-      errorMessage: (error as any)?.response?.data || (error instanceof Error ? error.message : String(error))
-    });
+    errorLog('Collection', `[collection.ts] Error fetching OpenSea traits | slug=${slug}`, error);
     throw new Error(`Failed to fetch traits for collection ${slug}: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
@@ -891,11 +783,7 @@ async function fetchOpenseaTraitsRecursive(
   );
 
   if (!data?.data?.collectionBySlug?.attributes) {
-    await logger.logOpenseaCollectionError(`No attributes found for collection ${slug}`, {
-      collection: slug,
-      operation: 'fetch_traits',
-      errorCode: 'NO_ATTRIBUTES_FOUND'
-    });
+    warnLog('Collection', `[collection.ts] No attributes found for collection | slug=${slug}`);
     throw new Error(`No attributes found for collection ${slug}`);
   }
 
@@ -969,12 +857,8 @@ export async function fetchOpenseaTraitFloors(
     if (cachedData) {
       return JSON.parse(cachedData);
     }
-  } catch (error) {
-    console.error('[collection.ts] Error reading trait floors from cache:', {
-      cacheKey,
-      slug,
-      error: error instanceof Error ? error.message : String(error)
-    });
+  } catch {
+    warnLog('Cache', `[collection.ts] Error reading trait floors from cache | slug=${slug}`);
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -1092,14 +976,7 @@ export async function fetchOpenseaTraitFloors(
 
       return result;
     } catch (error) {
-      await logger.logOpenseaCollectionError(`Error fetching OpenSea trait floors for ${slug}`, {
-        collection: slug,
-        operation: 'fetch_trait_floors',
-        traits: traits.map(t => ({ traitType: t.traitType, valuesCount: t.values.length })),
-        error: error as Error,
-        errorCode: (error as any)?.response?.status,
-        errorMessage: (error as any)?.response?.data || (error instanceof Error ? error.message : String(error))
-      });
+      errorLog('Collection', `[collection.ts] Error fetching OpenSea trait floors | slug=${slug}`, error);
       throw error;
     }
   });
@@ -1112,12 +989,8 @@ export async function fetchOpenseaTraitFloors(
       if (cachedData) {
         return JSON.parse(cachedData);
       }
-    } catch (error) {
-      console.error('[collection.ts] Error reading trait floors from cache after lock failure:', {
-        cacheKey,
-        slug,
-        error: error instanceof Error ? error.message : String(error)
-      });
+    } catch {
+      warnLog('Cache', `[collection.ts] Error reading trait floors from cache after lock failure | slug=${slug}`);
     }
     throw new Error(`Failed to fetch trait floors for collection ${slug}: Could not acquire lock`);
   }
@@ -1392,13 +1265,7 @@ export async function getCollectionTokenContractMap(collectionSlug: string): Pro
     return map;
   } catch (error) {
     // Log error but return empty map to allow graceful degradation
-    await logger.logMarketplaceError('Error fetching collection token contract map', {
-      errorCategory: ErrorCategory.MARKETPLACE,
-      marketplaceSubCategory: MarketplaceSubCategory.OPENSEA,
-      collection: collectionSlug,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
+    errorLog('Collection', `[collection.ts] Error fetching collection token contract map | slug=${collectionSlug}`, error);
 
     return map; // Return whatever we've collected so far
   }

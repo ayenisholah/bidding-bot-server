@@ -1,6 +1,6 @@
 import { IWallet } from '../models/wallet.model';
 import { decryptPrivateKey, getPassword } from './crypto';
-import { logger, ErrorCategory } from './logger';
+import { errorLog } from './debug-file-logger';
 import Wallet from '../models/wallet.model';
 
 interface CachedWallet {
@@ -50,7 +50,7 @@ class WalletCache {
       }
 
     } catch (error) {
-      await logger.logError(ErrorCategory.DATABASE, 'Failed to initialize wallet cache', error as Error);
+      errorLog('[Database]', 'Failed to initialize wallet cache', error as Error);
     }
   }
 
@@ -80,7 +80,7 @@ class WalletCache {
         return wallet;
       }
     } catch (error) {
-      await logger.logError(ErrorCategory.DATABASE, `Failed to fetch wallet ${address} from database`, error as Error);
+      errorLog('[Database]', `Failed to fetch wallet from database - address=${address}`, error as Error);
     }
 
     return null;
@@ -108,10 +108,10 @@ class WalletCache {
         key: decryptedKey,
         timestamp: Date.now()
       });
-      
+
       return decryptedKey;
     } catch (error) {
-      await logger.logError(ErrorCategory.SECURITY, `Failed to decrypt private key for wallet ${address}`, error as Error);
+      errorLog('[Database]', `Failed to decrypt private key for wallet - address=${address}`, error as Error);
       return null;
     }
   }
@@ -141,7 +141,7 @@ class WalletCache {
       }
       return wallets;
     } catch (error) {
-      await logger.logError(ErrorCategory.DATABASE, `Failed to find wallets for task ${taskId}`, error as Error);
+      errorLog('[Database]', `Failed to find wallets for task - taskId=${taskId}`, error as Error);
       return [];
     }
   }
@@ -185,9 +185,9 @@ class WalletCache {
         return wallet;
       }
     } catch (error) {
-      await logger.logError(ErrorCategory.DATABASE, `Failed to fetch wallet by ID ${walletId} from database`, error as Error);
+      errorLog('[Database]', `Failed to fetch wallet by ID from database - walletId=${walletId}`, error as Error);
     }
-    
+
     return null;
   }
 

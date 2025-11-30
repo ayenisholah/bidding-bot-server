@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { warnLog } from './debug-file-logger';
 import {
   BidTraceEntry,
   BidTraceFilter,
@@ -209,10 +210,10 @@ class BidTraceLogger {
 
       switch (level) {
         case 'error':
-          console.error(msg, data.error?.message || '');
+          warnLog('BidTraceLogger', `${msg} ${data.error?.message || ''}`);
           break;
         case 'warn':
-          console.warn(msg);
+          warnLog('BidTraceLogger', msg);
           break;
         case 'debug':
         case 'trace':
@@ -419,7 +420,7 @@ class BidTraceLogger {
         }
       }
     } catch (err) {
-      console.error('[BidTraceLogger] Error in getTraces:', err);
+      warnLog('BidTraceLogger', `Error in getTraces: ${err}`);
     }
 
     return this.buildQueryResult(

@@ -1,6 +1,6 @@
 import { BoundedCache } from './bounded-cache';
 import redisClient, { getRedisConnection } from './redis';
-import { logger, DatabaseOperation } from './logger';
+import { errorLog } from './debug-file-logger';
 
 interface CollectionData {
   floor?: number;
@@ -58,15 +58,7 @@ class CollectionCache {
       }
     } catch (error) {
       // Log error but don't fail the operation
-      await logger.logDatabaseError('Failed to get floor price from Redis', {
-        databaseOperation: DatabaseOperation.READ,
-        collection_name: 'redis_floor_cache',
-        key: redisKey,
-        marketplace,
-        collection,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+      errorLog('Cache', `Failed to get floor price from Redis - marketplace=${marketplace} collection=${collection}`, error);
     }
     
     return null;
@@ -94,15 +86,7 @@ class CollectionCache {
       }
     } catch (error) {
       // Log error but don't fail the operation
-      await logger.logDatabaseError('Failed to set floor price in Redis', {
-        databaseOperation: DatabaseOperation.UPDATE,
-        collection_name: 'redis_floor_cache',
-        key: redisKey,
-        marketplace,
-        collection,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+      errorLog('Cache', `Failed to set floor price in Redis - marketplace=${marketplace} collection=${collection}`, error);
     }
   }
 
@@ -131,14 +115,7 @@ class CollectionCache {
       }
     } catch (error) {
       // Log error but don't fail the operation
-      await logger.logDatabaseError('Failed to get collection details from Redis', {
-        databaseOperation: DatabaseOperation.READ,
-        collection_name: 'redis_collection_cache',
-        key: redisKey,
-        collection,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+      errorLog('Cache', `Failed to get collection details from Redis - collection=${collection}`, error);
     }
     
     return null;
@@ -167,14 +144,7 @@ class CollectionCache {
       }
     } catch (error) {
       // Log error but don't fail the operation
-      await logger.logDatabaseError('Failed to set collection details in Redis', {
-        databaseOperation: DatabaseOperation.UPDATE,
-        collection_name: 'redis_collection_cache',
-        key: redisKey,
-        collection,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+      errorLog('Cache', `Failed to set collection details in Redis - collection=${collection}`, error);
     }
   }
 
@@ -203,14 +173,7 @@ class CollectionCache {
       }
     } catch (error) {
       // Log error but don't fail the operation
-      await logger.logDatabaseError('Failed to get collection stats from Redis', {
-        databaseOperation: DatabaseOperation.READ,
-        collection_name: 'redis_collection_cache',
-        key: redisKey,
-        collection,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+      errorLog('Cache', `Failed to get collection stats from Redis - collection=${collection}`, error);
     }
     
     return null;
@@ -239,14 +202,7 @@ class CollectionCache {
       }
     } catch (error) {
       // Log error but don't fail the operation
-      await logger.logDatabaseError('Failed to set collection stats in Redis', {
-        databaseOperation: DatabaseOperation.UPDATE,
-        collection_name: 'redis_collection_cache',
-        key: redisKey,
-        collection,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+      errorLog('Cache', `Failed to set collection stats in Redis - collection=${collection}`, error);
     }
   }
 
@@ -308,13 +264,7 @@ class CollectionCache {
       }
     } catch (error) {
       // Log error but don't fail the operation
-      await logger.logDatabaseError('Failed to invalidate collection in Redis', {
-        databaseOperation: DatabaseOperation.DELETE,
-        collection_name: 'redis_collection_cache',
-        collection: key,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+      errorLog('Cache', `Failed to invalidate collection in Redis - collection=${key}`, error);
     }
   }
 

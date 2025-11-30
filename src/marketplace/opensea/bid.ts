@@ -14,11 +14,11 @@ import { USDC, WETH } from "../../utils/currencies";
 import { CollectionItemsListQuery } from "../../queries";
 import { CollectionItemsQueryVariables, CollectionItemsResponse } from "../../functions";
 import { fetchERC20Balance } from "../../utils/balance";
-import { logger, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
 import { InsufficientBalanceError } from "../errors";
 import { getCachedOrFetch, CACHE_TTL, CACHE_KEYS } from "../../utils/opensea-cache";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
+import { errorLog, warnLog } from "../../utils/debug-file-logger";
 import fs from 'fs';
 import path from 'path';
 import { MAX_PAIN_OVERRIDE_ADDRESS, MAX_PAIN_SLUG, MAX_PAIN_TOKEN_OVERRIDES } from "../../maxPainOverrides";
@@ -423,16 +423,7 @@ export async function bidOnOpensea(
           wallet_address,
           slug
         );
-        await logger.logOpenseaBidError('Insufficient balance for bid', {
-          taskId,
-          walletAddress: wallet_address,
-          collection: slug,
-          bidAmount: offerPriceEthFinal,
-          currency: currencySymbol,
-          availableBalance: wethBalance,
-          requiredBalance: offerPriceEthFinal,
-          error
-        });
+        errorLog('API', `[OpenSea] Insufficient balance for bid | taskId=${taskId} | wallet=${wallet_address.slice(0, 10)}... | collection=${slug} | bidAmount=${offerPriceEthFinal} ${currencySymbol} | available=${wethBalance}`, error);
         throw error;
       }
 
@@ -827,17 +818,7 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
     offer = response.data;
 
   } catch (error) {
-
-    // Check for merkle root error in submit response
-    await logger.logOpenseaBidError('Failed to submit OpenSea offer', {
-      taskId,
-      collection: payload.criteria.collection.slug,
-      bidAmount: Number(offerPrice) / Math.pow(10, decimal),
-      currency: currencySymbol,
-      error: error as Error,
-      errorCode: (error as any)?.response?.status,
-      errorMessage: extractOpenseaErrorMessage(error)
-    });
+    errorLog('API', `[OpenSea] Failed to submit offer | taskId=${taskId} | collection=${payload.criteria.collection.slug} | bidAmount=${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} | status=${(error as any)?.response?.status} | ${extractOpenseaErrorMessage(error)}`, error);
     throw error;
   }
 
@@ -910,13 +891,7 @@ async function buildOffer(taskId: string, buildPayload: any) {
       return null;
     }
 
-    await logger.logOpenseaBidError('Failed to build OpenSea offer', {
-      taskId,
-      operation: 'build_offer',
-      error: error,
-      errorCode: error?.response?.status,
-      errorMessage: extractOpenseaErrorMessage(error)
-    });
+    errorLog('API', `[OpenSea] Failed to build offer | taskId=${taskId} | status=${error?.response?.status} | ${extractOpenseaErrorMessage(error)}`, error);
     throw error;
   } finally {
     const controllers = activeRequests.get(taskId) || [];
@@ -947,8 +922,9 @@ async function cancelOrderInternal(orderHash: string, protocolAddress: string, p
 
     // Check if limiter is initialized
     if (!limiter) {
-      console.error('Limiter not initialized - cannot process cancelOrder request');
-      throw new Error('Limiter not initialized');
+      const error = new Error('Limiter not initialized');
+      errorLog('OpenSea', `Limiter not initialized - cannot process cancelOrder request | taskId=${taskId} | orderHash=${orderHash}`, error);
+      throw error;
     }
 
     const response = await limiter.schedule(() => axiosInstance.post(url, body, { headers }))
@@ -966,15 +942,7 @@ async function cancelOrderInternal(orderHash: string, protocolAddress: string, p
     return response.data;
   } catch (error) {
     if (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to cancel OpenSea order: ${errorMessage}`);
-      await logger.logOpenseaBidError('Failed to cancel OpenSea order', {
-        taskId,
-        orderHash,
-        operation: 'cancel_order',
-        error: error as Error,
-        errorMessage: errorMessage
-      });
+      errorLog('API', `[OpenSea] Failed to cancel order | taskId=${taskId} | orderHash=${orderHash}`, error);
     }
     throw error;
   }
@@ -1075,13 +1043,7 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
       return null;
     }
 
-    await logger.logOpenseaBidError('Failed to post item offer to OpenSea', {
-      taskId,
-      operation: 'post_item_offer',
-      error: error,
-      errorCode: error?.response?.status,
-      errorMessage: extractOpenseaErrorMessage(error)
-    });
+    errorLog('API', `[OpenSea] Failed to post item offer | taskId=${taskId} | status=${error?.response?.status} | ${extractOpenseaErrorMessage(error)}`, error);
     throw error
   }
 }
@@ -2086,17 +2048,12 @@ interface ItemOfferSpecification {
 export async function cancelOpenseaRequest(taskId: string): Promise<{ success: boolean; cancelledCount: number; error?: string }> {
   // Input validation
   if (!taskId || typeof taskId !== 'string') {
-    await logger.logWarning(ErrorCategory.MARKETPLACE, 'Invalid taskId provided to cancelOpenseaRequest', {
-      taskId,
-      marketplace: 'opensea',
-      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION
-    });
+    warnLog('API', `[OpenSea] Invalid taskId provided to cancelOpenseaRequest | taskId=${taskId}`);
     return { success: false, cancelledCount: 0, error: 'Invalid taskId' };
   }
 
   const controllers = activeRequests.get(taskId);
   if (!controllers || controllers.length === 0) {
-
     return { success: false, cancelledCount: 0 };
   }
 
@@ -2118,12 +2075,7 @@ export async function cancelOpenseaRequest(taskId: string): Promise<{ success: b
         await Promise.race([abortPromise, timeoutPromise]);
         cancelledCount++;
       } catch (error) {
-        await logger.logWarning(ErrorCategory.MARKETPLACE, 'Failed to abort OpenSea request controller', {
-          taskId,
-          marketplace: 'opensea',
-          marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
-          errorMessage: error instanceof Error ? error.message : String(error)
-        });
+        warnLog('API', `[OpenSea] Failed to abort request controller | taskId=${taskId} | ${error instanceof Error ? error.message : String(error)}`);
       }
     }));
 
@@ -2131,12 +2083,7 @@ export async function cancelOpenseaRequest(taskId: string): Promise<{ success: b
 
     return { success: true, cancelledCount };
   } catch (error) {
-    await logger.logMarketplaceError('Failed to cancel OpenSea requests', {
-      taskId,
-      marketplace: 'opensea',
-      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
+    errorLog('API', `[OpenSea] Failed to cancel requests | taskId=${taskId}`, error);
     return { success: false, cancelledCount: 0, error: error instanceof Error ? error.message : String(error) };
   }
 }

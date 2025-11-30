@@ -1,4 +1,5 @@
 import Order from '../models/order.model';
+import { errorLog, debugLog } from './debug-file-logger';
 
 export interface CachedOrder {
   _id: string;
@@ -288,6 +289,18 @@ class OrderCache {
   }
 
   /**
+   * Get the offer price for a specific order (for counterbid comparison)
+   * Returns price as number (wei), or null if no active order exists
+   */
+  getOfferPrice(taskId: string, marketplace: string, identifier: string): number | null {
+    const order = this.get(taskId, marketplace, identifier);
+    if (!order || this.isExpired(order)) {
+      return null;
+    }
+    return Number(order.offerPrice);
+  }
+
+  /**
    * Clean up expired orders from cache
    */
   cleanupExpired(): void {
@@ -349,11 +362,9 @@ class OrderCache {
 
       this.initializedTasks.add(taskId);
 
-      if (DEBUG) {
-        console.log(`[OrderCache] INIT: taskId=${taskId} | loaded ${orders.length} orders from database`);
-      }
+      debugLog('Cache', `[OrderCache] INIT: taskId=${taskId} | loaded ${orders.length} orders from database`);
     } catch (error) {
-      console.error(`[OrderCache] INIT ERROR: taskId=${taskId}`, error);
+      errorLog('Cache', `[OrderCache] INIT ERROR | taskId=${taskId}`, error);
     }
   }
 

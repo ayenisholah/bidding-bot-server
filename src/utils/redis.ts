@@ -1,6 +1,6 @@
 import { config } from 'dotenv';
 import Redis from 'ioredis';
-import { logger, DatabaseOperation } from './logger';
+import { errorLog, warnLog } from './debug-file-logger';
 
 config()
 
@@ -14,7 +14,7 @@ export const getRedisConfig = () => {
 
   // In production Docker environment, ensure we use the service name
   if (process.env.NODE_ENV === 'production' && host === 'localhost') {
-    console.warn('[Redis] Production environment detected but REDIS_HOST not set, using "redis" service name');
+    warnLog('Redis', 'Production environment detected but REDIS_HOST not set, using "redis" service name');
     return { host: 'redis', port };
   }
 
@@ -105,21 +105,7 @@ class RedisClient {
         this.isConnected = false;
         this.client = null;
 
-        console.error('Failed to connect to Redis:', error);
-
-        // Always log Redis connection errors
-        try {
-          await logger.logDatabaseConnectionError('Failed to connect to Redis', {
-            operation: 'redis_connection',
-            connectionAttempts: this.connectionAttempts,
-            maxAttempts: this.maxConnectionAttempts,
-            error: error as Error,
-            errorMessage: error instanceof Error ? error.message : String(error)
-          });
-        } catch (logError) {
-          // Fallback if logger fails
-          console.error('Failed to log Redis error:', logError);
-        }
+        errorLog('Database', `[Redis] Failed to connect | attempts=${this.connectionAttempts}/${this.maxConnectionAttempts}`, error);
 
         if (this.connectionAttempts < this.maxConnectionAttempts) {
           this.connectionAttempts++;
@@ -147,23 +133,7 @@ class RedisClient {
     });
 
     this.client.on('error', async (err) => {
-      console.error('Redis error:', err);
-
-      // Only log to Better Stack if it's not a connection refused error to localhost:6379
-      // This prevents recursive logging attempts
-      if (!err.message.includes('ECONNREFUSED') || !err.message.includes('127.0.0.1:6379')) {
-        try {
-          await logger.logDatabaseError('Redis error', {
-            databaseOperation: DatabaseOperation.CONNECTION,
-            collection_name: 'redis',
-            error: err,
-            errorMessage: err.message,
-            connectionAttempts: this.connectionAttempts,
-          });
-        } catch (logError) {
-          console.error('Failed to log Redis error:', logError);
-        }
-      }
+      errorLog('Database', `[Redis] Connection error | attempts=${this.connectionAttempts}`, err);
       this.isConnected = false;
       if (!this.connecting && this.connectionAttempts < this.maxConnectionAttempts) {
         this.connectionAttempts++;
@@ -175,14 +145,7 @@ class RedisClient {
     setInterval(() => {
       if (this.isConnected && this.client) {
         this.client.ping().catch(async err => {
-          await logger.logDatabaseError('Redis health check failed', {
-            databaseOperation: DatabaseOperation.CONNECTION,
-            collection_name: 'redis',
-            operation: 'health_check_ping',
-            error: err,
-            errorMessage: err.message
-          });
-          console.warn('Redis ping failed:', err);
+          warnLog('Database', `[Redis] Health check ping failed | ${err.message}`);
           this.isConnected = false;
           this.connect();
         });
@@ -236,7 +199,7 @@ export const createBullMQConnection = async (identifier?: string): Promise<Redis
       // Retry strategy
       retryStrategy: (times: number) => {
         if (times > RETRY_MAX_ATTEMPTS) {
-          console.error(`[Redis] BullMQ connection ${connectionId} exceeded max retry attempts`);
+          errorLog('Redis', `BullMQ connection ${connectionId} exceeded max retry attempts`);
           return null;
         }
 
@@ -275,20 +238,9 @@ export const createBullMQConnection = async (identifier?: string): Promise<Redis
       const isTimeoutError = err.message.includes('Command timed out') || err.message.includes('ETIMEDOUT');
 
       if (isTimeoutError && needsBlockingConfig) {
-        console.warn(`[Redis] BullMQ connection ${connectionId} timeout (expected for ${isQueueEvents ? 'queue events' : 'worker'}):`, err.message);
+        warnLog('Database', `[Redis] BullMQ connection ${connectionId} timeout (expected for ${isQueueEvents ? 'queue events' : 'worker'}) | ${err.message}`);
       } else {
-        console.error(`[Redis] BullMQ connection ${connectionId} error:`, err.message);
-        logger.logDatabaseError(`BullMQ Redis connection error: ${connectionId}`, {
-          databaseOperation: DatabaseOperation.CONNECTION,
-          collection_name: 'bullmq_redis',
-          connectionId,
-          error: err,
-          errorMessage: err.message,
-          isTimeoutError,
-          isQueueEvents,
-          isWorker,
-          needsBlockingConfig,
-        });
+        errorLog('Database', `[Redis] BullMQ connection ${connectionId} error | timeout=${isTimeoutError}`, err);
       }
     });
 
@@ -364,7 +316,7 @@ export const createBullMQConnection = async (identifier?: string): Promise<Redis
       await redis.ping();
       // console.log(`[Redis] BullMQ connection ${connectionId} verified with ping`);
     } catch (pingError) {
-      console.error(`[Redis] BullMQ connection ${connectionId} ping failed:`, pingError);
+      errorLog('Database', `[Redis] BullMQ connection ${connectionId} ping failed`, pingError);
       throw pingError;
     }
 
@@ -379,13 +331,7 @@ export const createBullMQConnection = async (identifier?: string): Promise<Redis
     return redis;
 
   } catch (error) {
-    console.error(`[Redis] Failed to create BullMQ connection ${connectionId}:`, error);
-    await logger.logDatabaseConnectionError(`Failed to create BullMQ connection: ${connectionId}`, {
-      operation: 'bullmq_connection_creation',
-      connectionId,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
+    errorLog('Database', `[Redis] Failed to create BullMQ connection ${connectionId}`, error);
     throw error;
   }
 };
@@ -431,7 +377,7 @@ export const closeAllBullMQConnections = async () => {
     promises.push(
       info.redis.quit()
         .then(() => console.log(`[Redis] Closed BullMQ connection: ${id}`))
-        .catch(err => console.error(`[Redis] Error closing BullMQ connection ${id}:`, err))
+        .catch(err => errorLog('Redis', `Error closing BullMQ connection ${id}`, err))
     );
   }
 
@@ -460,7 +406,7 @@ export const isRedisError = (error: unknown): boolean => {
 export const handleRedisError = async (error: unknown, context: string): Promise<void> => {
   if (!isRedisError(error)) return;
 
-  console.error(`[Redis] Error in ${context}:`, error);
+  errorLog('Redis', `Error in ${context}`, error);
 };
 
 // Retry wrapper for Redis operations with exponential backoff
@@ -479,11 +425,11 @@ export const withRedisRetry = async <T>(
       
       // Check if it's a redis error
       if (isRedisError(error)) {
-        console.warn(`[Redis] Error in ${context} (attempt ${attempt}/${maxRetries}):`, error.message);
-        
+        warnLog('Redis', `Error in ${context} (attempt ${attempt}/${maxRetries}): ${error.message}`);
+
         // Don't retry if we've exhausted attempts
         if (attempt === maxRetries) {
-          console.error(`[Redis] Max retries reached for ${context}`);
+          errorLog('Redis', `Max retries reached for ${context}`);
           return null;
         }
         
@@ -497,8 +443,8 @@ export const withRedisRetry = async <T>(
       }
     }
   }
-  
+
   // If we get here, all retries failed
-  console.error(`[Redis] All retries exhausted for ${context}:`, lastError);
+  errorLog('Redis', `All retries exhausted for ${context}`, lastError);
   return null;
 };
