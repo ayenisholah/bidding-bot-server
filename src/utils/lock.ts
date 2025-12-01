@@ -14,20 +14,6 @@ export class DistributedLockManager {
     this.defaultTTLSeconds = options?.defaultTTLSeconds ?? 60;
   }
 
-  private formatError(error: any): string {
-    // Check if it's an axios error with response
-    if (error?.response) {
-      const status = error.response.status;
-      const statusText = error.response.statusText;
-      const url = error.config?.url || 'Unknown URL';
-      
-      return `[HTTP ${status}${statusText ? ` ${statusText}` : ''}] URL: ${url}`;
-    }
-    
-    // For non-axios errors, just return the message
-    return error instanceof Error ? error.message : String(error);
-  }
-
   private get redis(): Redis | null {
     try {
       return RedisClient.getClient();
@@ -102,7 +88,7 @@ export class DistributedLockManager {
       const lockKey = this.getLockKey(key);
       const existLockKey = this.redis ? await this.redis.exists(lockKey) : 0;
       return existLockKey === 1;
-    } catch (e) {
+    } catch {
       warnLog('Lock', `[Redis] Error checking lock exists | key=${this.getLockKey(key)}`);
       return false;
     }
@@ -136,7 +122,7 @@ export class DistributedLockManager {
         await this.releaseLock(key);
       } catch (releaseError) {
         // Log but don't throw if we can't release the lock
-        warnLog('Lock', `[Redis] Failed to release lock | key=${key}`);
+        errorLog('Lock', `[Redis] Failed to release lock | key=${key}`, releaseError);
       }
       throw error;
     }

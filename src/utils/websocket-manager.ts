@@ -1,6 +1,8 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
-import { warnLog } from './debug-file-logger';
+import { warnLog, errorLog, debugLog } from './debug-file-logger';
+
+const DEBUG = process.env.DEBUG === 'true';
 
 export interface WebSocketManagerConfig {
   url: string;
@@ -72,6 +74,15 @@ class WebSocketManager extends EventEmitter {
   private lastMessageReceived = 0;
   private connectionStaleThreshold = 3600000; // 60 minutes without any messages - increased from 10min for low-activity collections
 
+  // Application-level watchdog: tracks bid events independently of ping/pong
+  private lastBidEventReceived = 0;
+  private bidActivityWatchdogInterval = 5 * 60 * 1000; // Check every 5 minutes
+  private maxSilenceForActiveTasks = 10 * 60 * 1000; // 10 minutes without bid events = suspicious
+
+  // Server status health check tracking
+  private lastServerStatusReceived = 0;
+  private serverStatusTimeout = 90000; // 90 seconds (server sends every 30s, allow 3x grace)
+
   // State persistence for listings (per CLIENT_CONNECTION_GUIDE.md)
   private persistentListingSubscriptions: Map<string, SubscriptionInfo> = new Map();
   private subscriptionStateFile = '.listing-subscriptions.json';
@@ -123,7 +134,7 @@ class WebSocketManager extends EventEmitter {
               // Safe to close an open connection
               try {
                 this.ws.close();
-              } catch (error) {
+              } catch {
                 warnLog('WebSocket', 'Error closing WebSocket connection during timeout');
               }
             } else if (this.ws.readyState === WebSocket.CONNECTING) {
@@ -140,7 +151,7 @@ class WebSocketManager extends EventEmitter {
               wsToCleanup.once('open', () => {
                 try {
                   wsToCleanup.close();
-                } catch (e) {
+                } catch {
                   warnLog('WebSocket', 'Error closing WebSocket during cleanup after connection timeout');
                 }
               });
@@ -152,11 +163,11 @@ class WebSocketManager extends EventEmitter {
           }
           this.attemptReconnect();
         } catch (error) {
-          warnLog('WebSocket', 'Error during connection timeout handling');
+          errorLog('WebSocket', 'Error during connection timeout handling', error);
           try {
             this.attemptReconnect();
           } catch (reconnectError) {
-            warnLog('WebSocket', 'Error attempting reconnect after connection timeout');
+            errorLog('WebSocket', 'Error attempting reconnect after connection timeout', reconnectError);
           }
         }
       }, this.config.connectionTimeout);
@@ -175,8 +186,8 @@ class WebSocketManager extends EventEmitter {
         this.ws.on('error', this.handleError.bind(this));
 
         // Handle any errors during connection phase
-        this.ws.once('error', (error) => {
-// console.log('WebSocket connection error:', error);
+        this.ws.once('error', () => {
+// console.log('WebSocket connection error');
           clearTimeout(connectionTimeout);
           this.isReconnecting = false;
           // The error handler will trigger reconnection
@@ -184,7 +195,7 @@ class WebSocketManager extends EventEmitter {
       }
 
     } catch (error) {
-      warnLog('WebSocket', 'Error during WebSocket connection attempt');
+      errorLog('WebSocket', 'Error during WebSocket connection attempt', error);
       this.isReconnecting = false;
       this.attemptReconnect();
     }
@@ -214,11 +225,14 @@ class WebSocketManager extends EventEmitter {
     // Start health monitoring
     this.startHealthMonitoring();
 
+    // Start application-level bid activity watchdog
+    this.startBidActivityWatchdog();
+
     // Process queued messages
     this.processMessageQueue();
 
     // Sync subscriptions (don't await to prevent blocking connection)
-    this.syncSubscriptions().catch(error => {
+    this.syncSubscriptions().catch(() => {
       warnLog('WebSocket', 'Error syncing subscriptions on connection');
     });
 
@@ -239,7 +253,7 @@ class WebSocketManager extends EventEmitter {
 
           try {
             this.ws?.close();
-          } catch (error) {
+          } catch {
             warnLog('WebSocket', 'Error closing WebSocket after missed pongs');
           }
           return;
@@ -257,7 +271,7 @@ class WebSocketManager extends EventEmitter {
         // Force clean disconnection to ensure server cleans up state
         try {
           this.ws?.close(1001, 'Stale connection detected');
-        } catch (error) {
+        } catch {
           warnLog('WebSocket', 'Error closing stale connection');
         }
         return;
@@ -281,7 +295,7 @@ class WebSocketManager extends EventEmitter {
 // console.log('Max missed pongs reached, forcing reconnection');
           try {
             this.ws?.close();
-          } catch (error) {
+          } catch {
             warnLog('WebSocket', 'Error closing WebSocket after max missed pongs reached');
           }
         }
@@ -321,26 +335,21 @@ class WebSocketManager extends EventEmitter {
       const timeSinceLastMessage = this.lastMessageReceived ? now - this.lastMessageReceived : 0;
       const timeSinceLastPong = this.lastPongReceived ? now - this.lastPongReceived : 0;
 
-      // Log health status periodically
-      if (timeSinceLastMessage > 60000 || timeSinceLastPong > 60000) { // 1 minute
-// console.log('WebSocket health status:', {
-          // connectionQuality: this.metrics.connectionQuality,
-          // timeSinceLastMessage,
-          // timeSinceLastPong,
-          // missedPongs: this.missedPongs,
-          // activeSubscriptions: this.activeSubscriptions.size,
-          // persistentListingSubscriptions: this.persistentListingSubscriptions.size,
-          // messageRate: this.metrics.messageRate,
-          // averageLatency: this.metrics.averageLatency,
-          // lastMessageReceived: new Date(this.lastMessageReceived).toISOString()
-        // });
-
-        // Log subscription details for debugging
-        if (this.persistentListingSubscriptions.size > 0) {
-          const listingSubs = Array.from(this.persistentListingSubscriptions.entries())
-            .map(([, info]) => `${info.slug}:${info.marketplace}`);
-// console.log('Active listing subscriptions:', listingSubs);
-        }
+      // Log health status periodically (every minute to debug file)
+      if (DEBUG) {
+        const healthStatus = {
+          connected: true,
+          connectionId: this.metrics.currentConnectionId,
+          uptime: this.metrics.connectionStartTime ? now - this.metrics.connectionStartTime : 0,
+          lastMessageAge: timeSinceLastMessage,
+          lastPongAge: timeSinceLastPong,
+          lastBidEventAge: this.lastBidEventReceived ? now - this.lastBidEventReceived : null,
+          lastServerStatusAge: this.lastServerStatusReceived ? now - this.lastServerStatusReceived : null,
+          missedPongs: this.missedPongs,
+          activeSubscriptions: this.activeSubscriptions.size,
+          messageRate: this.metrics.messageRate
+        };
+        debugLog('WebSocket', `[HealthCheck] ${JSON.stringify(healthStatus)}`);
       }
 
       // Force reconnection if connection appears severely degraded
@@ -348,7 +357,7 @@ class WebSocketManager extends EventEmitter {
 // console.log('Forcing reconnection due to severely stale connection');
         try {
           this.ws?.close();
-        } catch (error) {
+        } catch {
           warnLog('WebSocket', 'Error closing severely stale connection');
         }
       }
@@ -356,19 +365,84 @@ class WebSocketManager extends EventEmitter {
       // Periodic subscription verification (every 5 minutes)
       if (this.activeSubscriptions.size > 0 && timeSinceLastMessage > 300000) { // 5 minutes
 // console.log('Performing periodic subscription verification');
-        this.verifySubscriptions().catch(error => {
+        this.verifySubscriptions().catch(() => {
           warnLog('WebSocket', 'Periodic subscription verification failed');
         });
       }
 
       // Add specific listing subscription health check every 2 minutes
       if (this.persistentListingSubscriptions.size > 0 && timeSinceLastMessage > 120000) { // 2 minutes
-        this.verifyListingSubscriptions().catch(error => {
+        this.verifyListingSubscriptions().catch(() => {
           warnLog('WebSocket', 'Listing subscription verification failed');
         });
       }
 
+      // Check if server status messages are being received
+      this.checkServerStatusHealth();
+
     }, 60000); // Check every minute
+  }
+
+  /**
+   * Application-level watchdog that monitors bid activity.
+   * Unlike ping/pong which tests raw connectivity, this verifies that actual
+   * business data (bid events) is flowing through the connection.
+   *
+   * If we have active subscriptions but no bid events for 10+ minutes,
+   * the connection may be silently dead even if ping/pong still works.
+   */
+  private startBidActivityWatchdog(): void {
+    this.clearInterval('bidWatchdog');
+
+    this.setInterval('bidWatchdog', () => {
+      if (!this.isConnected()) return;
+
+      const now = Date.now();
+      const timeSinceLastBidEvent = this.lastBidEventReceived > 0
+        ? now - this.lastBidEventReceived
+        : 0;
+
+      // Count active bidding subscriptions (not listing subscriptions)
+      const activeBiddingSubscriptions = Array.from(this.activeSubscriptions.values())
+        .filter(sub => sub.subscriptionType !== 'listing').length;
+
+      // Only trigger if we have active bidding subscriptions AND no bid activity
+      if (activeBiddingSubscriptions > 0 &&
+          this.lastBidEventReceived > 0 &&
+          timeSinceLastBidEvent > this.maxSilenceForActiveTasks) {
+
+        warnLog('WebSocket', `[Watchdog] No bid events for ${Math.floor(timeSinceLastBidEvent / 60000)}+ minutes with ${activeBiddingSubscriptions} active subscriptions`);
+        warnLog('WebSocket', '[Watchdog] Forcing reconnection to verify connection health');
+
+        // Force a clean reconnection
+        try {
+          this.ws?.close(1000, 'Watchdog: No bid activity detected');
+        } catch {
+          warnLog('WebSocket', 'Error closing WebSocket during watchdog recovery');
+        }
+      }
+    }, this.bidActivityWatchdogInterval);
+  }
+
+  /**
+   * Check if server status messages are being received.
+   * Server sends status every 30 seconds - if we haven't received one in 90s,
+   * the connection may be half-open.
+   */
+  private checkServerStatusHealth(): void {
+    if (!this.isConnected()) return;
+
+    const now = Date.now();
+
+    // Only check if we've received at least one server status
+    if (this.lastServerStatusReceived > 0 &&
+        (now - this.lastServerStatusReceived) > this.serverStatusTimeout) {
+
+      warnLog('WebSocket', `[ServerStatus] No server status received for ${Math.floor((now - this.lastServerStatusReceived) / 1000)}+ seconds`);
+
+      // Send a ping to verify connection is still alive
+      this.sendPing();
+    }
   }
 
   private async syncSubscriptions(): Promise<void> {
@@ -405,7 +479,7 @@ class WebSocketManager extends EventEmitter {
       const failedSubscriptions: string[] = [];
 
       // Use activeSubscriptions which now includes persistent listings
-      for (const [subscriptionId, subInfo] of this.activeSubscriptions) {
+      for (const [, subInfo] of this.activeSubscriptions) {
         const subscriptionType = subInfo.subscriptionType || 'bidding';
         const isListing = subscriptionType === 'listing';
         const trackingSet = isListing ? subscribedListings : subscribedSlugs;
@@ -436,11 +510,7 @@ class WebSocketManager extends EventEmitter {
             await new Promise(resolve => setTimeout(resolve, 100));
           } catch (error) {
             failedSubscriptions.push(subInfo.slug);
-// console.log('Failed to resubscribe to collection:', {
-              // slug: subInfo.slug,
-              // subscriptionType,
-              // error
-            // });
+            errorLog('WebSocket', `Failed to resubscribe to collection: ${subInfo.slug} | type=${subscriptionType}`, error);
           }
         }
       }
@@ -464,7 +534,7 @@ class WebSocketManager extends EventEmitter {
       }
 
     } catch (error) {
-      warnLog('WebSocket', 'Failed to sync subscriptions - continuing without sync');
+      errorLog('WebSocket', 'Failed to sync subscriptions - continuing without sync', error);
     }
   }
 
@@ -508,7 +578,7 @@ class WebSocketManager extends EventEmitter {
 // console.log('Failed to find subscription info for retry:', slug);
         }
       } catch (error) {
-        warnLog('WebSocket', `Retry subscription failed for slug: ${slug}`);
+        errorLog('WebSocket', `Retry subscription failed for slug: ${slug}`, error);
       }
     }
   }
@@ -553,14 +623,14 @@ class WebSocketManager extends EventEmitter {
       this.emit('message', message);
 
     } catch (error) {
-      warnLog('WebSocket', 'Failed to parse WebSocket message');
+      errorLog('WebSocket', 'Failed to parse WebSocket message', error);
 
       // Still emit the raw message even if parsing fails
       // This helps prevent message loss
       try {
         this.emit('message', { raw: data.toString(), parseError: true });
       } catch (emitError) {
-        warnLog('WebSocket', 'Failed to emit raw message after parse error');
+        errorLog('WebSocket', 'Failed to emit raw message after parse error', emitError);
       }
     }
   }
@@ -593,7 +663,8 @@ class WebSocketManager extends EventEmitter {
 
 
   private handleServerStatus(status: any): void {
-// console.log('Server status update:', status);
+    // Track server status for health monitoring
+    this.lastServerStatusReceived = Date.now();
 
     // Acknowledge receipt
     this.sendMessage({
@@ -610,28 +681,30 @@ class WebSocketManager extends EventEmitter {
     this.isReconnecting = false;
 
     // Calculate connection duration
+    const now = Date.now();
     if (this.metrics.connectionStartTime) {
-      this.metrics.connectionEndTime = Date.now();
+      this.metrics.connectionEndTime = now;
       this.metrics.connectionDuration = this.metrics.connectionEndTime - this.metrics.connectionStartTime;
       this.metrics.totalDisconnections++;
     }
 
     this.metrics.connectionQuality = 'disconnected';
 
-    // Enhanced logging for disconnection analysis
-    const now = Date.now();
-// console.log('WebSocket disconnected:', {
-      // code: event.code,
-      // reason: event.reason || 'unknown',
-      // connectionDuration: this.metrics.connectionDuration,
-      // connectionDurationMinutes: this.metrics.connectionDuration ? Math.floor(this.metrics.connectionDuration / 60000) : 0,
-      // lastMessageAge: this.lastMessageReceived ? now - this.lastMessageReceived : null,
-      // lastPongAge: this.lastPongReceived ? now - this.lastPongReceived : null,
-      // missedPongs: this.missedPongs,
-      // activeSubscriptions: this.activeSubscriptions.size,
-      // connectionQuality: this.metrics.connectionQuality,
-      // messagesReceived: this.metrics.totalMessages
-    // });
+    // CRITICAL: Always log disconnections to help diagnose issues
+    const disconnectInfo = {
+      code: event.code,
+      reason: event.reason || 'unknown',
+      connectionDurationMinutes: this.metrics.connectionDuration ? Math.floor(this.metrics.connectionDuration / 60000) : 0,
+      lastMessageAge: this.lastMessageReceived ? now - this.lastMessageReceived : 'never',
+      lastPongAge: this.lastPongReceived ? now - this.lastPongReceived : 'never',
+      lastBidEventAge: this.lastBidEventReceived ? now - this.lastBidEventReceived : 'never',
+      lastServerStatusAge: this.lastServerStatusReceived ? now - this.lastServerStatusReceived : 'never',
+      missedPongs: this.missedPongs,
+      activeSubscriptions: this.activeSubscriptions.size,
+      persistentListings: this.persistentListingSubscriptions.size,
+      messagesReceived: this.metrics.totalMessages
+    };
+    errorLog('WebSocket', `DISCONNECTED: ${JSON.stringify(disconnectInfo)}`);
 
     // Clear intervals and timeouts
     this.clearAllIntervals();
@@ -714,8 +787,8 @@ class WebSocketManager extends EventEmitter {
 
     this.setTimeout('reconnect', () => {
 // console.log('Executing scheduled reconnection');
-      this.connect().catch(error => {
-// console.log('Reconnection failed:', error);
+      this.connect().catch(() => {
+// console.log('Reconnection failed');
         // Connection will retry through its own error handling
       });
     }, delay);
@@ -725,7 +798,7 @@ class WebSocketManager extends EventEmitter {
     if (this.ws?.readyState === WebSocket.OPEN) {
       try {
         this.ws.send(JSON.stringify(message));
-      } catch (error) {
+      } catch {
         warnLog('WebSocket', 'Failed to send message - queueing for retry');
         this.queueMessage(message);
       }
@@ -780,7 +853,7 @@ class WebSocketManager extends EventEmitter {
         this.ws.send(JSON.stringify(message));
         await new Promise(resolve => setTimeout(resolve, 100)); // Rate limit
       } catch {
-        // Put back in queue
+        warnLog('WebSocket', 'Failed to send queued message - putting back in queue');
         this.messageQueue.unshift(message);
         break;
       }
@@ -877,7 +950,7 @@ class WebSocketManager extends EventEmitter {
       this.emit('subscribed', { slug, marketplace, subscriptionType });
 
     } catch (error) {
-      warnLog('WebSocket', 'Failed to subscribe to collection');
+      errorLog('WebSocket', 'Failed to subscribe to collection', error);
       throw error;
     }
   }
@@ -944,7 +1017,7 @@ class WebSocketManager extends EventEmitter {
       this.emit('unsubscribed', { slug, marketplace });
 
     } catch (error) {
-      warnLog('WebSocket', 'Failed to unsubscribe from collection');
+      errorLog('WebSocket', 'Failed to unsubscribe from collection', error);
       throw error;
     }
   }
@@ -981,7 +1054,7 @@ class WebSocketManager extends EventEmitter {
             // activeSubscriptions: this.activeSubscriptions.size
           // });
           // Force resubscription
-          this.syncSubscriptions().catch(error => {
+          this.syncSubscriptions().catch(() => {
             warnLog('WebSocket', 'Forced resubscription failed during verification');
           });
         }
@@ -1082,6 +1155,14 @@ class WebSocketManager extends EventEmitter {
     return this.ws?.readyState === WebSocket.OPEN;
   }
 
+  /**
+   * Mark that a bid event was received.
+   * Called by counterbid handlers to track bid activity for the watchdog.
+   */
+  markBidEventReceived(): void {
+    this.lastBidEventReceived = Date.now();
+  }
+
   private safeCloseWebSocket(): void {
     if (!this.ws) return;
 
@@ -1101,7 +1182,7 @@ class WebSocketManager extends EventEmitter {
           wsToCleanup.once('open', () => {
             try {
               wsToCleanup.close();
-            } catch (e) {
+            } catch {
               warnLog('WebSocket', 'Error closing WebSocket during safe cleanup');
             }
           });
@@ -1113,11 +1194,11 @@ class WebSocketManager extends EventEmitter {
           // Gracefully close if open
           try {
             this.ws.close(1000, 'Normal closure');
-          } catch (error) {
+          } catch {
             warnLog('WebSocket', 'Error closing WebSocket - attempting force terminate');
             try {
               this.ws.terminate(); // Force terminate if close fails
-            } catch (terminateError) {
+            } catch {
               warnLog('WebSocket', 'Error force terminating WebSocket');
             }
           }
@@ -1126,13 +1207,13 @@ class WebSocketManager extends EventEmitter {
           // Already closing, terminate to speed it up
           try {
             this.ws.terminate();
-          } catch (error) {
+          } catch {
             warnLog('WebSocket', 'Error terminating WebSocket in CLOSING state');
           }
           break;
         // CLOSED state doesn't need any action
       }
-    } catch (error) {
+    } catch {
       warnLog('WebSocket', 'Unexpected error in safeCloseWebSocket');
     }
   }
@@ -1161,7 +1242,7 @@ class WebSocketManager extends EventEmitter {
         this.persistentListingSubscriptions = new Map(subscriptions);
 // console.log('Loaded persistent listing subscriptions:', this.persistentListingSubscriptions.size);
       }
-    } catch (error) {
+    } catch {
       warnLog('WebSocket', 'Failed to load persistent subscriptions from file');
     }
   }
@@ -1171,7 +1252,7 @@ class WebSocketManager extends EventEmitter {
       const fs = require('fs');
       const subscriptions = Array.from(this.persistentListingSubscriptions.entries());
       fs.writeFileSync(this.subscriptionStateFile, JSON.stringify(subscriptions, null, 2));
-    } catch (error) {
+    } catch {
       warnLog('WebSocket', 'Failed to save persistent subscriptions to file');
     }
   }
@@ -1184,11 +1265,11 @@ class WebSocketManager extends EventEmitter {
     const listingSubs = Array.from(this.activeSubscriptions.entries())
       .filter(([, info]) => info.subscriptionType === 'listing');
 
-    const persistentListingSubs = Array.from(this.persistentListingSubscriptions.entries());
+    // const persistentListingSubs = Array.from(this.persistentListingSubscriptions.entries());
 
 // console.log('Listing subscription verification:', {
       // activeListingSubscriptions: listingSubs.length,
-      // persistentListingSubscriptions: persistentListingSubs.length,
+      // persistentListingSubscriptions: this.persistentListingSubscriptions.size,
       // subscriptions: listingSubs.map(([key, info]) => ({
         // key,
         // slug: info.slug,

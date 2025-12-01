@@ -48,19 +48,37 @@ class OrderCache {
     this.idIndex.set(order._id, key);
 
     if (DEBUG) {
-      console.log(`[OrderCache] SET: ${key} | price=${order.offerPrice} | expires=${new Date(order.expiresAt).toISOString()}`);
+      debugLog('Cache', `[OrderCache] SET | key=${key} | price=${order.offerPrice} | expires=${new Date(order.expiresAt).toISOString()}`, { taskId: order.taskId, marketplace: order.marketplace as 'blur' | 'opensea' | 'magiceden' });
     }
   }
 
   /**
-   * Get a single order from cache
+   * Get a single order from cache (filters out expired orders)
    */
   get(taskId: string, marketplace: string, identifier: string): CachedOrder | undefined {
     const key = this.getKey(taskId, marketplace, identifier);
     const order = this.cache.get(key);
 
+    // Filter out expired orders and clean them from cache
+    if (order && this.isExpired(order)) {
+      if (DEBUG) {
+        debugLog('Cache', `[OrderCache] GET | key=${key} | EXPIRED - cleaning from cache | expiresAt=${new Date(order.expiresAt).toISOString()}`, { taskId, marketplace: marketplace as 'blur' | 'opensea' | 'magiceden' });
+      }
+      // Clean up expired order from cache
+      this.idIndex.delete(order._id);
+      this.cache.delete(key);
+      const taskKeys = this.taskIndex.get(taskId);
+      if (taskKeys) {
+        taskKeys.delete(key);
+        if (taskKeys.size === 0) {
+          this.taskIndex.delete(taskId);
+        }
+      }
+      return undefined;
+    }
+
     if (DEBUG && order) {
-      console.log(`[OrderCache] GET: ${key} | found=${!!order} | expired=${order ? this.isExpired(order) : 'N/A'}`);
+      debugLog('Cache', `[OrderCache] GET | key=${key} | found=${!!order}`, { taskId, marketplace: marketplace as 'blur' | 'opensea' | 'magiceden' });
     }
 
     return order;
@@ -90,7 +108,7 @@ class OrderCache {
     const deleted = this.cache.delete(key);
 
     if (DEBUG && deleted) {
-      console.log(`[OrderCache] DELETE: ${key}`);
+      debugLog('Cache', `[OrderCache] DELETE | key=${key}`, { taskId, marketplace: marketplace as 'blur' | 'opensea' | 'magiceden' });
     }
 
     return deleted;
@@ -136,7 +154,7 @@ class OrderCache {
     this.initializedTasks.delete(taskId);
 
     if (DEBUG) {
-      console.log(`[OrderCache] DELETE_BY_TASK: taskId=${taskId} | deleted=${deletedCount}`);
+      debugLog('Cache', `[OrderCache] DELETE_BY_TASK | taskId=${taskId} | deleted=${deletedCount}`, { taskId });
     }
   }
 
@@ -172,7 +190,7 @@ class OrderCache {
     }
 
     if (DEBUG) {
-      console.log(`[OrderCache] DELETE_BY_TASK_MARKETPLACE: taskId=${taskId} marketplace=${marketplace} | deleted=${keysToDelete.length}`);
+      debugLog('Cache', `[OrderCache] DELETE_BY_TASK_MARKETPLACE | taskId=${taskId} | marketplace=${marketplace} | deleted=${keysToDelete.length}`, { taskId, marketplace: marketplace as 'blur' | 'opensea' | 'magiceden' });
     }
   }
 
@@ -325,7 +343,7 @@ class OrderCache {
     }
 
     if (DEBUG && cleanedCount > 0) {
-      console.log(`[OrderCache] CLEANUP: removed ${cleanedCount} expired orders`);
+      debugLog('Cache', `[OrderCache] CLEANUP | removed=${cleanedCount} expired orders`);
     }
   }
 
@@ -335,7 +353,7 @@ class OrderCache {
   async initializeFromDatabase(taskId: string): Promise<void> {
     if (this.initializedTasks.has(taskId)) {
       if (DEBUG) {
-        console.log(`[OrderCache] INIT: taskId=${taskId} already initialized, skipping`);
+        debugLog('Cache', `[OrderCache] INIT | taskId=${taskId} already initialized, skipping`, { taskId });
       }
       return;
     }
@@ -396,7 +414,7 @@ class OrderCache {
     this.initializedTasks.clear();
 
     if (DEBUG) {
-      console.log(`[OrderCache] CLEAR: cache cleared`);
+      debugLog('Cache', `[OrderCache] CLEAR | cache cleared`);
     }
   }
 }

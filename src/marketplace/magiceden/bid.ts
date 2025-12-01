@@ -1387,7 +1387,7 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
     }
   } catch (error) {
     // Log cache error but continue to fetch fresh data
-    warnLog('Cache', `[MagicEden] Error reading trait floor from cache | contract=${contractAddress}`);
+    errorLog('Cache', `[MagicEden] Error reading trait floor from cache | contract=${contractAddress}`, error);
   }
 
   try {
@@ -1421,7 +1421,7 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
         await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(floor));
       } catch (error) {
         // Log cache error but don't fail the request
-        warnLog('Cache', `[MagicEden] Error caching trait floor | contract=${contractAddress}`);
+        errorLog('Cache', `[MagicEden] Error caching trait floor | contract=${contractAddress}`, error);
       }
     }
 
@@ -1446,7 +1446,7 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string): Pr
       return JSON.parse(cachedStats);
     }
   } catch (error) {
-    warnLog('Cache', `[MagicEden] Error reading stats from cache | contract=${contractAddress}`);
+    errorLog('Cache', `[MagicEden] Error reading stats from cache | contract=${contractAddress}`, error);
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -1459,7 +1459,7 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string): Pr
         return JSON.parse(cachedStats);
       }
     } catch (error) {
-      warnLog('Cache', `[MagicEden] Error reading stats from cache after lock | contract=${contractAddress}`);
+      errorLog('Cache', `[MagicEden] Error reading stats from cache after lock | contract=${contractAddress}`, error);
     }
 
     const queryParams = {
@@ -1489,7 +1489,7 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string): Pr
         const redis = redisClient.getClient();
         await redis.set(cacheKey, JSON.stringify(stats), 'EX', CACHE_TTL);
       } catch (error) {
-        warnLog('Cache', `[MagicEden] Error writing stats to cache | contract=${contractAddress}`);
+        errorLog('Cache', `[MagicEden] Error writing stats to cache | contract=${contractAddress}`, error);
       }
     }
 
@@ -1506,7 +1506,7 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string): Pr
         return JSON.parse(cachedStats);
       }
     } catch (error) {
-      warnLog('Cache', `[MagicEden] Error reading from cache after lock failure | contract=${contractAddress}`);
+      errorLog('Cache', `[MagicEden] Error reading from cache after lock failure | contract=${contractAddress}`, error);
     }
     errorLog('Collection', `[MagicEden] Failed to fetch collection stats | contract=${contractAddress}`);
     throw new Error('Failed to fetch collection stats');
@@ -1528,7 +1528,7 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
     }
   } catch (error) {
     // Log cache error but continue to fetch fresh data
-    warnLog('Cache', `[MagicEden] Error reading tokens from cache | collectionId=${collectionId}`);
+    errorLog('Cache', `[MagicEden] Error reading tokens from cache | collectionId=${collectionId}`, error);
   }
 
   return await lockManager.withLock(
@@ -1543,7 +1543,7 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
         }
       } catch (error) {
         // Continue if cache check fails
-        debugLog('Cache', `[MagicEden] Cache check after lock failed | collectionId=${collectionId}`);
+        errorLog('Cache', `[MagicEden] Cache check after lock failed | collectionId=${collectionId}`, error);
       }
 
       const params: any = {
@@ -1588,7 +1588,7 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
         await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(result));
       } catch (error) {
         // Log cache error but don't fail the request
-        warnLog('Cache', `[MagicEden] Error caching tokens | collectionId=${collectionId}`);
+        errorLog('Cache', `[MagicEden] Error caching tokens | collectionId=${collectionId}`, error);
       }
 
       return result;

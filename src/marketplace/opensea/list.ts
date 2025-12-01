@@ -5,11 +5,11 @@ import { axiosInstance, limiter } from "../../init";
 import { config } from "dotenv";
 import { getCollectionDetails } from "../../functions/collection";
 
-const BLUE = '\x1b[34m';
-const RESET = '\x1b[0m';
+// const BLUE = '\x1b[34m';
+// const RESET = '\x1b[0m';
 import { BASE_URL, domain, minABI, NETWORK } from "../../constants";
 import Listing from "../../models/listing.model";
-import { errorLog, warnLog } from "../../utils/debug-file-logger";
+import { errorLog } from "../../utils/debug-file-logger";
 import { convertDurationForOpenSea } from "../../utils/duration";
 import { roundToNineDecimals } from "../../utils/decimal-precision";
 import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
@@ -161,7 +161,7 @@ export const listOnOpensea = async (
     enforceCreatorFee = collectionData?.enforceCreatorFee as boolean;
     // console.log(`${BLUE}[OPENSEA] Collection details fetched - Enforce creator fee: ${enforceCreatorFee}${RESET}`);
   } catch (error) {
-    warnLog('Listing', `[OpenSea] Error fetching collection details | contract=${nftAddress} | wallet=${wallet.address.slice(0, 10)}...`);
+    errorLog('Listing', `[OpenSea] Error fetching collection details | contract=${nftAddress} | wallet=${wallet.address.slice(0, 10)}...`, error);
   }
   
   try {
@@ -221,11 +221,11 @@ export const listOnOpensea = async (
   // console.log(`${BLUE}[OPENSEA] Duration: ${listDuration.value} ${listDuration.unit} = ${durationInSeconds} seconds${RESET}`);
   
   const currentTime = Math.floor(Date.now() / 1000);
-  const endTime = Math.floor(Date.now() / 1000 + durationInSeconds);
-  
-  // console.log(`${BLUE}[OPENSEA] Start time: ${currentTime} (${new Date(currentTime * 1000).toISOString()})${RESET}`);
-  // console.log(`${BLUE}[OPENSEA] End time: ${endTime} (${new Date(endTime * 1000).toISOString()})${RESET}`);
-  // console.log(`${BLUE}[OPENSEA] Difference: ${endTime - currentTime} seconds${RESET}`);
+  // const endTime = Math.floor(Date.now() / 1000 + durationInSeconds);
+
+  // console.log(`[OPENSEA] Start time: ${currentTime} (${new Date(currentTime * 1000).toISOString()})`);
+  // console.log(`[OPENSEA] End time: ${currentTime + durationInSeconds} (${new Date((currentTime + durationInSeconds) * 1000).toISOString()})`);
+  // console.log(`[OPENSEA] Difference: ${durationInSeconds} seconds`);
   
   listingPayload.parameters.startTime = BigInt(currentTime).toString();
   listingPayload.parameters.endTime = BigInt(

@@ -2,7 +2,6 @@ import { IListing } from "../types/listing.types";
 import Listing from "../models/listing.model";
 import { getAllFloorPrices, getOpenseaFloor } from "./collection";
 import { PROCESS_LISTING_UPDATE, queue } from "../index";
-import { listingPriceCache } from "../utils/listing-price-cache";
 import { roundToNineDecimals } from "../utils/decimal-precision";
 import { errorLog, warnLog } from "../utils/debug-file-logger";
 import { tokenHasTrait } from "../functions/tokenMetadata";
@@ -16,7 +15,7 @@ const processedMessageIds = new Set<string>();
 
 // Clean up old message IDs every 5 minutes to prevent memory leak
 setInterval(() => {
-  const previousSize = processedMessageIds.size;
+  // const previousSize = processedMessageIds.size;
   processedMessageIds.clear();
 }, 5 * 60 * 1000);
 
@@ -27,13 +26,13 @@ setInterval(() => {
   }
 }, 60 * 1000);
 
-const colors = {
-  opensea: '\x1b[34m',    // Cyan
-  blur: '\x1b[33m',       // Magenta
-  magiceden: '\x1b[35m',  // Yellow
-  unknown: '\x1b[31m',    // Red
-  reset: '\x1b[0m'        // Reset
-};
+// const colors = {
+//   opensea: '\x1b[34m',    // Cyan
+//   blur: '\x1b[33m',       // Magenta
+//   magiceden: '\x1b[35m',  // Yellow
+//   unknown: '\x1b[31m',    // Red
+//   reset: '\x1b[0m'        // Reset
+// };
 /**
  * Get real-time listing price for our specific token
  * @param listing - The listing object with contract and wallet info
@@ -69,7 +68,7 @@ async function getRealTimeListingPrice(listing: IListing): Promise<number | null
     
     return price;
   } catch (error) {
-    // console.log(YELLOW + `[PRICE MONITOR - Real-time] Failed to get price for token ${listing.tokenId}: ${error}` + RESET);
+    errorLog('Listing', `[priceMonitor.ts] Failed to get price for token ${listing.tokenId}`, error);
     return null;
   }
 }
@@ -89,7 +88,7 @@ export async function handleListingPriceUpdate(message: any): Promise<void> {
       const marketplace = message.marketplace?.toLowerCase();
       const price = parseFloat(message.price) || 0;
       const seller = message.fromAddress?.toLowerCase();
-      const marketplaceColor = colors[marketplace as keyof typeof colors] || colors.unknown;
+      // const marketplaceColor = colors[marketplace as keyof typeof colors] || colors.unknown;
 
       // Check if we've already processed this message
       if (id && processedMessageIds.has(id)) {

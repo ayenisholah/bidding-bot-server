@@ -54,8 +54,8 @@ export async function recoverPasswordFromRedis(): Promise<boolean> {
       // Get remaining TTL
       const ttl = await redis.ttl(PASSWORD_REDIS_KEY);
       if (ttl > 0) {
-        const days = Math.floor(ttl / 86400);
-        const hours = Math.floor((ttl % 86400) / 3600);
+        // const days = Math.floor(ttl / 86400);
+        // const hours = Math.floor((ttl % 86400) / 3600);
         // console.log(`🔑 Password recovered from Redis (expires in ${days} days, ${hours} hours)`);
       } else if (ttl === -1) {
         // console.log('🔑 Password recovered from Redis (no expiration set)');
@@ -66,8 +66,8 @@ export async function recoverPasswordFromRedis(): Promise<boolean> {
       // Refresh TTL to full duration on recovery
       if (PASSWORD_TTL > 0) {
         await redis.expire(PASSWORD_REDIS_KEY, PASSWORD_TTL);
-        const days = Math.floor(PASSWORD_TTL / 86400);
-        const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
+        // const days = Math.floor(PASSWORD_TTL / 86400);
+        // const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
         // console.log(`🔑 Password TTL refreshed to ${days} days, ${hours} hours`);
       }
       return true;
@@ -95,14 +95,14 @@ export async function setPassword(password: string): Promise<void> {
       const redis = getRedisConnection();
       if (PASSWORD_TTL > 0) {
         await redis.setex(PASSWORD_REDIS_KEY, PASSWORD_TTL, password);
-        const days = Math.floor(PASSWORD_TTL / 86400);
-        const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
+        // const days = Math.floor(PASSWORD_TTL / 86400);
+        // const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
         // console.log(`🔑 [DEVELOPMENT] Password stored in Redis with TTL of ${days} days, ${hours} hours`);
       } else {
         await redis.set(PASSWORD_REDIS_KEY, password);
         // console.log('🔑 [DEVELOPMENT] Password stored in Redis (no expiration)');
       }
-    } catch (error) {
+    } catch {
       warnLog('Crypto', '[DEV] Failed to store password in Redis - using memory only');
     }
   } else {
@@ -123,11 +123,11 @@ export async function renewPasswordTTL(): Promise<void> {
     const exists = await redis.exists(PASSWORD_REDIS_KEY);
     if (exists) {
       await redis.expire(PASSWORD_REDIS_KEY, PASSWORD_TTL);
-      const days = Math.floor(PASSWORD_TTL / 86400);
-      const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
+      // const days = Math.floor(PASSWORD_TTL / 86400);
+      // const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
       // console.log(`🔑 [DEVELOPMENT] Password TTL renewed for ${days} days, ${hours} hours`);
     }
-  } catch (error) {
+  } catch {
     warnLog('Crypto', '[DEV] Failed to renew password TTL');
   }
 }
@@ -143,7 +143,7 @@ export async function clearPassword(): Promise<void> {
       const redis = getRedisConnection();
       await redis.del(PASSWORD_REDIS_KEY);
       // console.log('🔑 [DEVELOPMENT] Password cleared from Redis and memory');
-    } catch (error) {
+    } catch {
       warnLog('Crypto', '[DEV] Failed to clear password from Redis - cleared from memory only');
     }
   } else {
@@ -233,7 +233,7 @@ export function decryptPrivateKey(encryptedData: string): string {
   // console.log(`🔐 [decryptPrivateKey] Input validation passed, data length: ${encryptedData.length}`);
 
   // Check if password is available
-  const hasPassword = !!getPassword();
+  // const hasPassword = !!getPassword();
   // console.log(`🔐 [decryptPrivateKey] Password available: ${hasPassword}`);
 
   // Check cache first
@@ -335,7 +335,7 @@ export async function reEncryptWallet(
 
 // Clear the decrypted key cache (useful when changing passwords)
 export function clearDecryptedKeyCache(): void {
-  const previousSize = decryptedKeyCache.size;
+  // const previousSize = decryptedKeyCache.size;
   decryptedKeyCache.clear();
   // console.log(`🔐 [clearDecryptedKeyCache] Cleared ${previousSize} cached keys`);
 }
@@ -403,7 +403,8 @@ export function decryptPassword(encryptedPassword: string): string {
     decrypted += decipher.final("utf8");
 
     return decrypted;
-  } catch {
+  } catch (error) {
+    errorLog('Crypto', 'Failed to decrypt password', error);
     throw new Error("Failed to decrypt password");
   }
 }

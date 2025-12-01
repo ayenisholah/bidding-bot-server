@@ -8,6 +8,352 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Duplicate Token Bids Race Condition**: Fixed race condition causing duplicate bids on the same token from scheduled bids and Token-vs-Collection defense
+  - **Problem**: Meta Legend #4260 received TWO identical 0.0177 WETH bids placed 2 seconds apart from the same wallet
+  - **Root Cause**: The scheduled token bid processor (`processOpenseaTokenBid`, `processMagicedenTokenBid`) and the Token-vs-Collection counterbid defense both queue bids for the same token simultaneously without coordination
+  - **Timeline from Debug Logs**:
+    - `23:10:46.994Z` - Scheduled Token Bid ENTRY for #4260
+    - `23:10:49.241Z` - Token-vs-Collection: QUEUED at 0.0177 ETH (SECOND BID)
+    - `23:10:49.570Z` - First bid confirmed
+    - `23:10:50.745Z` - Second bid confirmed (DUPLICATE!)
+  - **Solution**: Coordinate both bid paths through the `pendingCounterbids` cache:
+    1. Scheduled bid processors now CHECK if a counterbid is already pending for the token
+    2. Scheduled bid processors now MARK the token as pending before placing a bid
+    3. Existing Token-vs-Collection defense already checks `markCounterbidPending()` before queuing
+  - **Functions Updated**:
+    - `processOpenseaTokenBid`: Added pending check at start, mark pending before bid, clear in finally block
+    - `processMagicedenTokenBid`: Added pending check at start, mark pending before bid, clear in finally block
+  - Files modified: `src/index.ts`
+  - Resolves: Duplicate token bids within seconds, wasted gas fees from redundant bids
+  - Impact: Only ONE bid source can win the "race" for each token, preventing duplicate bids
+
+### Added
+- **Comprehensive Max Bid Check Debug Logging**: Added debug logs showing max bid price check decisions for all counterbid handlers
+  - **Purpose**: Provide complete visibility into whether counterbid prices are within max bid bounds
+  - **Log Format**: `[Counterbid] [OS/ME] slug [identifier] | Max Check: counter=X max=Y | OK - PROCEED` or `EXCEEDS - SKIP`
+  - **Locations Updated**:
+    - OpenSea token counterbid: Shows calculated counter price vs max before queueing
+    - OpenSea trait counterbid: Shows calculated counter price vs max before queueing
+    - OpenSea collection offer counterbid: Shows base offer price vs max for collection offers
+    - MagicEden token counterbid: Shows outbid calculation + max check
+    - MagicEden trait counterbid: Shows outbid calculation + max check
+  - **Additional Logging**: Added outbid calculation logs for MagicEden handlers showing incoming price, margin, and counter price
+  - Files modified: `src/index.ts`
+  - Resolves: Missing visibility into max bid price enforcement decisions
+  - Impact: Complete debug logging trail for counterbid max bid checks
+
+### Changed
+- **Standardized Max Bid Check Operators**: Changed OpenSea token counterbid from `>=` to `>` for consistent max bid enforcement
+  - **Previous**: `if (offerPriceEth >= maxBidPriceEth)` - Would skip bid AT exactly max price
+  - **Now**: `if (offerPriceEth > maxBidPriceEth)` - Allows bid AT exactly max price (consistent with other handlers)
+  - Files modified: `src/index.ts` (line ~12700)
+  - Resolves: Inconsistent max bid enforcement across handlers
+  - Impact: Bids can now be placed at exactly the max bid price value
+
+### Fixed
+- **Two-Tier Top Offer Caching (Phase 3)**: Implemented complete two-tier approach to ensure bids are placed ABOVE marketplace's actual top offer
+  - **Problem Persisted**: Despite Phase 2 fix, cache was still empty when first token bids were placed because it was only populated from WebSocket incoming bids, not from API responses
+  - **Evidence**: CLOAKS #12920 had TOP OFFER 0.0171 WETH but bot bid 0.0143 WETH. Cache was always MISS on first bid because scheduled processors weren't caching API results.
+  - **Solution**: Two-tier approach as specified by user:
+    1. **Scheduled Bid Processors**: ALWAYS fetch from API and cache the result after each highest offer check
+    2. **Counterbid Handlers**: Check cache FIRST, if cache MISS → fetch from API as fallback
+  - **Scheduled Bid Processors Updated (8 functions)** - Now cache API results after `outbid=true` fetch:
+    - `processOpenseaTokenBid`: Caches `fetchItemOffers()` result after isOwnBid calculation
+    - `processOpenseaTraitBid`: Caches `fetchOpenseaOffers('TRAIT')` result after isOwnBid calculation
+    - `processOpenseaCollectionBid`: Caches `fetchOpenseaOffers('COLLECTION')` result after isOwnBid calculation
+    - `processMagicedenTokenBid`: Caches `fetchMagicEdenOffer('TOKEN')` result after isOwnBid calculation
+    - `processMagicedenTraitBid`: Caches `fetchMagicEdenOffer('TRAIT')` result after isOwnBid calculation
+    - `processMagicedenCollectionBid`: Caches `fetchMagicEdenOffer('COLLECTION')` result after isOwnBid calculation
+    - `processBlurCollectionBid`: Caches `fetchBlurBid('COLLECTION')` result after isTopBid calculation
+    - `processBlurTraitBid`: Caches `fetchBlurBid('TRAIT')` result after isTopBid calculation
+  - **Counterbid Handlers Updated** - Now fetch from API on cache miss:
+    - `handleOpenseaCounterbid` Token-vs-Collection: Added API fallback with `fetchItemOffers()` when cache miss
+    - `handleOpenseaCounterbid` Trait-vs-Collection: Added API fallback with `fetchOpenseaOffers('TRAIT')` when cache miss
+    - `handleMagicEdenCounterbid` Trait/Token-vs-Collection: Added API fallback with `fetchMagicEdenOffer()` when cache miss
+  - **Debug Logging Added**:
+    - `[BidFlow][XX-Type] slug [identifier] | API→Cache: topOffer=X ETH | isOurs=Y` - When scheduled processor caches API result
+    - `[Counterbid][XX] slug [identifier] | Token-vs-Collection: Cache MISS - fetching from API` - When counterbid handler falls back to API
+    - `[Counterbid][XX] slug [identifier] | Token-vs-Collection: API→Cache: topOffer=X ETH | isOurs=Y` - When counterbid handler caches API result
+    - `[Counterbid][XX] slug [identifier] | Token-vs-Collection: Using top offer X ETH (> collection offer Y ETH)` - When using cached/fetched offer
+  - Files modified: `src/index.ts`
+  - Resolves: First token bids not becoming top offers due to empty cache
+  - Impact: Cache is now always warm from scheduled bids, and counterbid handlers get accurate data even on cache miss via API fallback
+
+- **Cross-Type Counterbid Bid Price Calculation Fix (Phase 2)**: Fixed critical bug where cross-type counterbids (Token-vs-Collection, Token-vs-Trait, Trait-vs-Collection) calculated bid prices based on incoming offer instead of actual marketplace top offer
+  - **Problem Persisted**: Despite implementing `marketplaceTopOfferCache`, bids were still NOT becoming top offers because the cache was checked AFTER the bid price was already calculated
+  - **Evidence**: CLOAKS #17855 had TOP OFFER 0.0178 WETH (845ed3), but bot bid 0.0171 WETH (4th place). Logs showed: `Cache Check: SKIP | reason=competitor_still_top | cached=0.017` - cache correctly detected issue but bid was already queued with wrong price
+  - **Root Cause**: Cross-type counterbid logic calculated `tokenOfferPrice = roundedEth + margin` where `roundedEth` was the incoming lower-tier offer (collection/trait), NOT the actual top token offer on the marketplace
+  - **Solution**: Check `marketplaceTopOfferCache` BEFORE calculating bid price, use `max(incomingOffer, cachedTopOffer) + margin` for bid calculation
+  - **Locations Fixed (6 total)**:
+    1. **Token-vs-Collection** (OpenSea, line ~13289): Now uses `max(collectionOffer, cachedTopTokenOffer) + margin`
+    2. **Token-vs-Trait** (OpenSea, line ~12969): Now uses `max(traitOffer, cachedTopTokenOffer) + margin`
+    3. **Existing Token-vs-Trait** (OpenSea, line ~12928): Now uses `max(traitOffer, cachedTopTokenOffer) + margin`
+    4. **Trait-vs-Collection** (OpenSea, line ~13192): Now uses `max(collectionOffer, cachedTopTraitOffer) + margin`
+    5. **Trait/Token-vs-Collection** (MagicEden, line ~12194): Now uses `max(collectionOffer, cachedTopOffer) + margin`
+    6. **Token-vs-Trait** (MagicEden, line ~11996): Now uses `max(traitOffer, cachedTopTokenOffer) + margin`
+  - **Expected Behavior**: When collection offer arrives at 0.0142 WETH but existing competitor token offer is at 0.017 WETH, bot now bids `0.017 + margin` instead of `0.0142 + margin`
+  - Files modified: `src/index.ts`
+  - Resolves: Cross-type counterbids placing lower bids than marketplace top offer, wasted bids that can never win
+  - Impact: All cross-type counterbids now correctly beat existing marketplace top offers
+
+### Added
+- **Marketplace Top Offer Cache (Token-vs-Collection Fix)**: Implemented cache-first approach to track marketplace's actual top offer, fixing bug where first token bids were NOT becoming top offers
+  - **Problem Solved**: When a collection offer came in via WebSocket, the bot's "Token-vs-Collection" defense placed token bids based on the collection offer price (e.g., 0.0142 WETH), ignoring existing higher competitor token offers (e.g., 0.017+ WETH). Result: Bot's bids were NOT the top offer.
+  - **Root Cause**: `handleOpenseaCounterbid` Token-vs-Collection logic at line ~12984 used `roundedEth` (the collection offer amount) instead of checking the existing top TOKEN offer on that specific token.
+  - **Solution**: Implemented `marketplaceTopOfferCache` - a separate cache from `orderCache` that tracks WHO is winning each bid slot (ours vs competitor), not just our orders.
+  - **Cache Architecture**:
+    - `orderCache` (existing): Tracks OUR placed orders with offer prices
+    - `marketplaceTopOfferCache` (new): Tracks the marketplace's actual top offer (including competitor bids)
+    - Key format: `{taskId}:{marketplace}:{identifier}` (e.g., "abc123:opensea:17855")
+  - **New Infrastructure** (`src/index.ts`):
+    - `MarketplaceTopOffer` interface with: topOfferAmount, topOfferWei, topBidderAddress, isOurBid, timestamp
+    - `marketplaceTopOfferCache` BoundedCache with 10k capacity and 5-minute TTL
+    - `topOfferTaskIndex` Map for efficient task-level cleanup
+    - Helper functions: `getTopOfferCacheKey()`, `getMarketplaceTopOffer()`, `setMarketplaceTopOffer()`, `updateTopOfferAfterOurBid()`, `updateTopOfferFromIncomingBid()`, `clearTopOffersByTask()`, `checkShouldCounterbid()`
+  - **Cache-First Counterbid Logic**:
+    - Cache HIT: Compare incoming bid vs cached top offer to decide if counterbid needed
+    - Cache MISS: Counterbid proceeds (conservative approach), cache updated with incoming bid
+    - Own bid detection: Skip counterbid if incoming bidder is our wallet
+    - Already top bidder: Skip counterbid if we're already winning with higher price
+  - **Scheduled Bid Processors Updated** (8 functions):
+    - After successful bid placement, call `updateTopOfferAfterOurBid()` to mark us as top bidder
+    - OpenSea: `processOpenseaTokenBid`, `processOpenseaTraitBid`, `processOpenseaCollectionBid`
+    - MagicEden: `processMagicedenTokenBid`, `processMagicedenTraitBid`, `processMagicedenCollectionBid`
+    - Blur: `processBlurCollectionBid`, `processBlurTraitBid`
+  - **Counterbid Handlers Updated** (3 handlers):
+    - Replaced `orderCache.getOfferPrice()` checks with `checkShouldCounterbid()` cache-first approach
+    - `handleOpenseaCounterbid`: Token, trait, and collection counterbid sections
+    - `handleMagicEdenCounterbid`: Token, trait, and collection counterbid sections
+    - `handleBlurCounterbid`: Trait and collection counterbid sections
+  - **Cache Cleanup**: `clearTopOffersByTask()` called in `stopTask()` to clean up when tasks stop
+  - Files modified: `src/index.ts`
+  - Resolves: First token bids not becoming top offers, wasted bids that can't win
+  - Impact: Counterbids now correctly consider existing competitor offers, not just collection offer prices
+
+### Fixed
+- **Floor Price API Retry with Exponential Backoff**: Fixed critical bug where 0 floor prices were cached, causing percentage-based bids to calculate as 0
+  - **Problem Solved**: When OpenSea/Blur/MagicEden API returned empty listings (no floor price), the code returned 0 and cached it for 60 seconds. During this time, all percentage-based bid calculations resulted in 0 prices (e.g., `floor=0 | min=0 | max=0 | offer=0`).
+  - **Root Cause**: Debug logs showed `[PriceCalc] nakamigos-cloaks | floor=0 | min=0 | max=0 | offer=0 | WETH` - floor price was 0 which caused all percentage-based calculations to fail.
+  - **Solution**: Added retry with exponential backoff for all floor price API functions:
+    - `getOpenseaFloor()`: 3 retries with 500ms/1s/2s backoff for API errors and 0 floor prices
+    - `getBlurFloor()`: 3 retries with 500ms/1s/2s backoff for API errors and 0 floor prices
+    - `getMagicEdenFloor()`: 3 retries with 500ms/1s/2s backoff for API errors and 0 floor prices
+  - **Key Changes**:
+    - Retries when floor price is 0 (likely temporary API issue)
+    - Retries on API errors (except 404)
+    - Only caches POSITIVE floor prices - 0 values are NOT cached
+    - 404 errors still cached for 5 minutes (collection doesn't exist)
+  - Files modified: `src/functions/collection.ts`
+  - Resolves: Scheduled bids placing lower bids than competitors due to 0 floor price calculations
+  - Impact: Floor price fetching now resilient to temporary API failures, prevents incorrect bid pricing
+
+### Added
+- **WebSocket Connection Reliability Improvements**: Comprehensive improvements to prevent silent WebSocket connection death and missed counterbids
+  - **Problem Solved**: WebSocket connection died silently at 20:10:19 UTC without triggering close event, causing all competitor bids during ~1 hour window to be missed. No reconnection attempt was made because the ping/pong mechanism didn't detect the half-open connection.
+  - **Application-Level Watchdog** (`websocket-manager.ts`):
+    - New `startBidActivityWatchdog()` monitors actual bid events, not just ping/pong
+    - If active bidding subscriptions exist but no bid events received for 10+ minutes, forces reconnection
+    - Tracks `lastBidEventReceived` timestamp, updated via `markBidEventReceived()` method
+    - Runs every 5 minutes independently of ping/pong mechanism
+  - **Enhanced Disconnection Logging** (`websocket-manager.ts`):
+    - `handleClose()` now logs comprehensive disconnect info using `errorLog()` (ALWAYS logged, not just DEBUG)
+    - Includes: code, reason, connectionDuration, lastMessageAge, lastPongAge, lastBidEventAge, lastServerStatusAge, missedPongs, activeSubscriptions, persistentListings, messagesReceived
+    - Enables post-mortem analysis when connections die
+  - **Server Status Health Check** (`websocket-manager.ts`):
+    - Tracks `lastServerStatusReceived` timestamp when server_status messages arrive
+    - `checkServerStatusHealth()` verifies server sends status every 30s (allows 90s grace)
+    - If no server status received in 90+ seconds, sends ping to verify connection
+    - Called every minute in health monitoring loop
+  - **Health Logging to Debug File** (`websocket-manager.ts`):
+    - Health status logged every minute to `websocket-YYYY-MM-DD.log` when DEBUG=true
+    - Includes: uptime, lastMessageAge, lastPongAge, lastBidEventAge, lastServerStatusAge, missedPongs, activeSubscriptions, messageRate
+  - Files modified: `src/utils/websocket-manager.ts`
+  - Resolves: Silent WebSocket connection death causing missed counterbids for hours
+  - Impact: Bot will detect dead connections within 10 minutes and automatically reconnect
+
+- **Smart Subscription Cleanup on Task Stop**: WebSocket unsubscription now uses reference counting to prevent premature unsubscription when multiple tasks share a collection
+  - **Problem Solved**: When `stopTask()` was called, it unconditionally unsubscribed from the collection, even if other tasks were still bidding on that same collection
+  - **Solution**: Reference counting tracks how many active tasks are subscribed to each collection
+  - **Implementation** (`src/index.ts`):
+    - Added `collectionSubscriptionRefCount: Map<string, Set<string>>` (slug -> Set<taskId>)
+    - `addTaskToCollectionSubscription(slug, taskId)`: Adds task to ref count, returns true if first subscriber
+    - `removeTaskFromCollectionSubscription(slug, taskId)`: Removes task from ref count, returns true if should unsubscribe
+    - `getCollectionSubscriptionCount(slug)`: Returns number of tasks subscribed to collection
+  - **`subscribeToCollections()` updated**:
+    - Only sends `join_the_party` WebSocket message if this is the first task for the collection
+    - Additional tasks for same collection just increment ref count without sending message
+  - **`unsubscribeFromCollection()` updated**:
+    - Checks ref count before unsubscribing
+    - Only sends `leave_the_party` WebSocket message when last task for collection is stopped
+    - Returns `{ success: true, unsubscribed: false }` when other tasks still need the subscription
+  - Files modified: `src/index.ts`
+  - Resolves: Premature unsubscription causing other tasks to miss bid events
+  - Impact: Multiple tasks can safely share collection subscriptions; stopping one task doesn't affect others
+
+### Fixed
+- **Multiple Bids on Same Token - Previous Bid Not Cancelled**: Fixed race condition causing duplicate bids on the same token
+  - **Symptoms**: 3+ "Item Offer" bids visible on same token at different prices (e.g., CLOAKS #9353 showing 0.0173, 0.0173, 0.0171 WETH from same wallet)
+  - **Root Cause 1**: `orderCache.get()` returned expired orders without filtering, causing code to think an old bid still existed
+  - **Root Cause 2**: Scheduled bid processors used fire-and-forget `queue.addBulk()` or `queue.add()` for cancellation, placing new bids before old ones were cancelled
+  - **Root Cause 3**: Counterbid processor `magicedenCollectionCounterBid` also used fire-and-forget `queue.addBulk()` for cancellation
+  - **Fix 1**: Added expiry check to `orderCache.get()` - now returns `undefined` for expired orders and automatically cleans them from cache
+  - **Fix 2**: Changed scheduled bid processors to use `await cancelOpenseaOrdersDirectly()` and `await cancelMagicEdenOrdersDirectly()` instead of fire-and-forget queue jobs
+  - **Fix 3**: Changed `magicedenCollectionCounterBid` to use `await cancelMagicEdenOrdersDirectly()` instead of fire-and-forget `queue.addBulk()`
+  - **Functions Fixed (Scheduled Bid Processors)**:
+    - `processOpenseaTokenBid` - now awaits cancellation before placing new bid
+    - `processMagicedenTokenBid` - now awaits cancellation before placing new bid
+    - `processMagicedenTraitBid` - now awaits cancellation before placing new bid
+    - `processMagicedenCollectionBid` - now awaits cancellation before placing new bid
+  - **Functions Fixed (Counterbid Job Processors)**:
+    - `magicedenCollectionCounterBid` - now awaits cancellation before placing new counterbid
+  - **Counterbid Processors Audited (Already Correct)**:
+    - `openseaCollectionCounterBid` - uses `await cancelOpenseaOrdersDirectly()` ✓
+    - `openseaTraitCounterBid` - uses `await cancelOpenseaOrdersDirectly()` ✓
+    - `openseaTokenCounterBid` - uses `await cancelOpenseaOrdersDirectly()` ✓
+    - `magicedenTraitCounterBid` - uses `await cancelMagicEdenOrdersDirectly()` ✓
+    - `magicedenTokenCounterBid` - uses `await cancelMagicEdenOrdersDirectly()` ✓
+    - `blurCollectionCounterBid` - uses `await cancelBlurOrdersDirectly()` ✓
+    - `blurTraitCounterBid` - uses `await cancelBlurOrdersDirectly()` ✓
+  - Files modified: `src/utils/order-cache.ts`, `src/index.ts`
+  - Resolves: Multiple active bids on same token, "Order already exists" errors, wasted gas fees
+  - Impact: Each token now has at most 1 active bid, proper cancellation before new bid placement
+
+### Added
+- **Token Counterbid for Collection/Trait Offers (OpenSea)**: Token bid tasks now defend against incoming collection and trait offers
+  - **Problem Solved**: When a user had a token offer (bidType = "token") on a specific NFT, and a competitor placed a collection or trait offer that covered that token, the system would NOT counterbid, causing the user to lose the token to a lower-tier offer
+  - **Solution**: Added logic to `handleOpenseaCounterbid` to detect and counterbid against collection/trait offers for token-type tasks
+  - **Trait Offer Defense**:
+    - For tasks with `bidType === "token"` or `bidType === "rarity"`, when a trait offer comes in, the system now checks if any tokens in `task.tokenIds` have that trait using `tokenHasTrait()`
+    - If a matching token is found and the incoming trait offer beats the current token offer, a token counterbid is queued
+    - Uses `crossTypeMarginMultiplier` for price calculation
+  - **Collection Offer Defense**:
+    - For tasks with `bidType === "token"` or `bidType === "rarity"`, when a collection offer comes in, the system now proactively checks ALL tokens in `task.tokenIds`
+    - If the incoming collection offer beats any token's current offer, a token counterbid is queued for that token
+    - Skips tokens that already have orders in cache (already processed by existing logic)
+  - **Safeguards**:
+    - Uses `pendingCounterbids` cache to prevent duplicate counterbids on the same token
+    - Respects `maxBidPrice` constraint - skips counterbid if calculated price exceeds max
+    - Comprehensive debug logging with `Token-vs-Trait` and `Token-vs-Collection` prefixes
+  - **Files Modified**:
+    - `src/functions/index.ts` - Added export for `tokenMetadata` module
+    - `src/index.ts` - Added import for `tokenHasTrait`, modified `handleOpenseaCounterbid` trait_offer and collection_offer handlers
+  - Resolves: Token offers losing to lower-tier collection/trait offers on OpenSea
+  - Impact: Better token position defense - token bids now automatically counterbid against any offer type that threatens their position
+
+### Fixed
+- **Missing Error Details in Catch Block Logging**: Fixed catch blocks that captured errors but didn't include them in log output
+  - **Root Cause**: `warnLog()` was being used in catch blocks but doesn't accept an `error` parameter like `errorLog()` does
+  - **Solution**: Changed `warnLog()` to `errorLog()` in catch blocks and added the captured `error` variable as the third parameter
+  - **Files Fixed**:
+    - `src/utils/balance.ts` - 8 catch blocks now include error details (cache read/write errors, Redis errors, balance fetch errors)
+    - `src/functions/priceMonitor.ts` - 1 catch block fixed (was using commented console.log with no actual logging)
+    - `src/marketplace/magiceden/bid.ts` - 9 catch blocks now include error details (trait floor cache, stats cache, tokens cache)
+    - `src/marketplace/opensea/list.ts` - 1 catch block fixed (collection details fetch error)
+    - `src/utils/lock.ts` - 1 catch block fixed (lock release error)
+    - `src/marketplace/blur/bid.ts` - 1 catch block fixed (abort request controller error)
+  - **Total**: 21 catch blocks fixed across 6 files
+  - **Before**: `errorLog('Balance', 'Failed to invalidate cache...')` - error variable ignored
+  - **After**: `errorLog('Balance', 'Failed to invalidate cache...', error)` - full stack trace captured
+  - Resolves: Error details (message + stack trace) being lost in catch block logging
+  - Impact: All catch block errors now include full error information for debugging
+
+### Added
+- **Log Filtering and Export System**: Comprehensive log filtering and export system for debug logs with metadata support
+  - **New Log Metadata Support**:
+    - Added `LogMetadata` interface with optional fields: `taskId`, `marketplace`, `slug`, `tokenId`, `traitKey`, `jobId`, `orderHash`, `wallet`, `identifier`
+    - All logging functions (`debugLog`, `errorLog`, `warnLog`, `infoLog`) now accept optional metadata parameter
+    - Metadata is JSON-serialized and appended to log lines for machine-parseable filtering
+    - Backward-compatible: existing log calls without metadata continue to work
+  - **Log Parsing Infrastructure**:
+    - Added `parseLogLine()` function to extract timestamp, level, prefix, category, message, and metadata from log lines
+    - Added `ParsedLogLine` interface for structured log data
+    - Added `getMarketplaceCategories()` to map marketplace names to their log categories (e.g., 'blur' → ['blur', 'counterbid', 'bidflow'])
+    - Added `getAllCategories()` helper function for retrieving all 22 log categories
+  - **New Export Handler** (`src/utils/log-export-handler.ts`):
+    - `exportLogs()` function with streaming file parser using `AsyncGenerator`
+    - Supports filters: `taskId`, `marketplace`, `category`, `level`, `timeRange`, `startTime`, `endTime`, `limit`, `offset`
+    - Time range presets: 5m, 10m, 1h, 24h, custom
+    - Marketplace filtering searches across related categories (e.g., 'opensea' searches opensea, counterbid, bidflow logs)
+    - `logsToCSV()` and `logsToJSON()` export formatters
+    - Efficient streaming: handles large log files without loading entire file into memory
+  - **New API Endpoint** (`GET /api/debug-logs/export`):
+    - Query parameters: `taskId`, `marketplace`, `category`, `level`, `timeRange`, `startTime`, `endTime`, `format`, `limit`, `offset`
+    - Marketplace options: 'blur', 'opensea', 'magiceden', 'system', 'health', 'all'
+    - Format options: 'json' (default), 'csv'
+    - Default limit: 10,000 logs, max: 50,000
+    - Legacy `/api/logs/export` returns 301 redirect message pointing to new endpoint
+  - Files created: `src/utils/log-export-handler.ts`
+  - Files modified: `src/utils/debug-file-logger.ts`, `src/index.ts`
+  - Resolves: Need to filter and export logs by marketplace, system, health, and taskId
+  - Impact: Enables frontend log download with advanced filtering capabilities
+
+### Changed
+- **Console Logging Migration**: Migrated remaining console.log calls to centralized debug-file-logger
+  - **Files Updated**:
+    - `src/utils/balance.ts` - 10 console.log calls migrated to debugLog('Balance', ...)
+    - `src/utils/order-cache.ts` - 8 console.log calls migrated to debugLog('Cache', ...) with metadata
+    - `src/utils/task-state-manager.ts` - 1 console.log call migrated to debugLog('TaskState', ...)
+  - All DEBUG-gated logs now use consistent prefix and metadata format
+  - Enables filtering by marketplace, taskId, and other metadata fields
+  - Files modified: `src/utils/balance.ts`, `src/utils/order-cache.ts`, `src/utils/task-state-manager.ts`
+  - Resolves: Inconsistent debug logging format and missing metadata
+  - Impact: All balance, order-cache, and task-state logs now visible in exported log files with filtering support
+
+### Removed
+- **Bid Trace Logger System**: Completely removed the `bidTraceLogger` system in favor of existing `debugLog` logging
+  - **Files Deleted**:
+    - `src/utils/bid-trace-logger.ts` - Bid trace logger class (~400 lines)
+    - `src/types/bid-trace.types.ts` - Type definitions for bid tracing
+  - **~226 bidTraceLogger calls removed** throughout job processors and counterbid handlers
+  - **API Endpoints Removed**:
+    - `GET /api/bid-traces` - Query bid traces (now returns HTTP 501)
+    - `GET /api/bid-traces/export` - Export traces to JSON/CSV (now returns HTTP 501)
+    - `GET /api/bid-traces/duplicates` - Find duplicate bids (now returns HTTP 501)
+  - **Rationale**: The existing `debugLog()` system already provides comprehensive logging to category-specific files (`bidflow-YYYY-MM-DD.log`, `counterbid-YYYY-MM-DD.log`). The bidTraceLogger added redundant complexity with its own file format and in-memory trace contexts.
+  - Files modified: `src/index.ts` (removed import, trace variable declarations, all logger calls)
+  - Resolves: Redundant logging systems, unnecessary complexity
+  - Impact: All debug logging now consolidated through `debugLog()` function
+
+### Fixed
+- **Counterbid Floating Point Precision**: Fixed counterbid price calculations showing ugly floating point values like `0.017499999999999998` instead of clean values like `0.0175`
+  - **Root Cause**: `roundToValidPrecision()` was only applied to the incoming bid amount, not to the final counter bid price after margin addition
+  - **Solution**: Applied `roundToValidPrecision()` to the final `offerPriceEth` in all 4 counterbid handlers
+  - **Locations Fixed**:
+    - OpenSea token counterbid (line ~12523)
+    - OpenSea trait counterbid (line ~12748)
+    - MagicEden token counterbid (line ~11699)
+    - MagicEden trait counterbid (line ~11854)
+  - Files modified: `src/index.ts`
+  - Resolves: Floating point noise in counterbid logs and API calls
+  - Impact: Clean, human-readable counterbid prices matching OpenSea precision requirements
+
+- **Blur WebSocket Counterbid Log Shows slug=unknown**: Fixed debug log showing `slug=unknown` for Blur counterbid events
+  - **Root Cause**: The debug log at line 11292 tried to extract slug from message structure before `getMarketplaceDetails()` was called. Blur messages don't include slug directly - it needs to be looked up from `contractToTasksMap`.
+  - **Solution**: Moved debug log after `getMarketplaceDetails()` call so slug lookup is already complete
+  - Files modified: `src/index.ts:11287-11295`
+  - Resolves: `[WebSocket] [CounterBid] Received bid event | marketplace=BLUR | slug=unknown` messages
+  - Impact: Blur counterbid logs now show proper collection slugs for easier debugging
+
+### Changed
+- **Lock Acquisition Error Downgraded to Warning**: Changed lock contention messages from ERROR to WARN level
+  - **Analysis**: Lock acquisition failures when task is already being processed are expected behavior, not errors
+  - **Previous**: `errorLog('BulkJobs', 'Failed to acquire scheduled bid lock', lockError)`
+  - **Now**: `warnLog('BulkJobs', 'Lock contention | Task ... is already being processed - will retry on next loop')`
+  - Files modified: `src/index.ts:6710-6711`
+  - Resolves: False positive ERROR logs flooding the queue log file
+  - Impact: Cleaner error logs, lock contention shown as expected WARN instead of ERROR
+
+- **Schedule Jobs Configured for Infinite Retry**: Updated all *_SCHEDULE jobs (OPENSEA_SCHEDULE, BLUR_SCHEDULE, MAGICEDEN_SCHEDULE) to retry infinitely
+  - **Previous**: `attempts: 100`, `removeOnFail: true`, `delay: 2000`
+  - **Now**: `attempts: Number.MAX_SAFE_INTEGER`, `removeOnFail: false`, `delay: 1000`
+  - **Changes**:
+    - Infinite retries: Schedule jobs now never give up, will retry until successful
+    - Failed jobs kept: `removeOnFail: false` keeps failed jobs for debugging
+    - Faster retry: Backoff delay reduced from 2s to 1s for quicker recovery
+  - Files modified: `src/index.ts:7850-7898`
+  - Resolves: Schedule jobs giving up after 100 failures
+  - Impact: More resilient scheduled bid processing that recovers automatically from transient failures
+
 - **Invalid Task Status Transitions in markJobAsProcessed**: Fixed race condition causing hundreds of `[ERROR][TaskStatusTransition] Invalid state transition` errors
   - **Root Cause**: `markJobAsProcessed()` unconditionally attempted to set status to RUNNING, even when the marketplace was already in COMPLETED or SCHEDULED state (late jobs from previous loops)
   - **Solution**: Added state validation before RUNNING transition - only transitions from STARTED, QUEUED, or QUEUEING states

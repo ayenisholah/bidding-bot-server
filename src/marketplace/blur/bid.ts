@@ -122,7 +122,7 @@ export async function cancelBlurRequest(taskId: string): Promise<{ success: bool
         await Promise.race([abortPromise, timeoutPromise]);
         cancelledCount++;
       } catch (error) {
-        warnLog('API', `[Blur] Failed to abort request controller | taskId=${taskId} | ${error instanceof Error ? error.message : String(error)}`);
+        errorLog('API', `[Blur] Failed to abort request controller | taskId=${taskId}`, error);
       }
     }));
 
@@ -322,7 +322,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
       console.log(`[Auth Cache] Using cached token for ${wallet.address}`);
       return cachedToken;
     }
-  } catch (error) {
+  } catch {
     warnLog('Cache', `[Blur] Failed to read auth cache | wallet=${wallet.address}`);
   }
 
@@ -359,7 +359,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
       const result = await existingAuthPromise;
       // console.log(`[Auth State] Received auth result for ${wallet.address}:`, result ? 'SUCCESS' : 'FAILED');
       return result;
-    } catch (error) {
+    } catch {
       warnLog('API', `[Blur] Failed to wait for existing auth | wallet=${wallet.address}`);
       // Continue with our own auth attempt if the existing one failed
     }
@@ -383,7 +383,7 @@ export async function getAccessToken(private_key: string): Promise<string | unde
         // console.log(`[Auth Cache] Found cached token after acquiring lock for ${wallet.address}`);
         return cachedToken;
       }
-    } catch (error) {
+    } catch {
       warnLog('Cache', `[Blur] Failed to double-check cache | wallet=${wallet.address}`);
     }
 
@@ -1066,7 +1066,7 @@ export async function fetchBlurCollectionStats(slug: string) {
         return JSON.parse(cachedStats);
       }
     }
-  } catch (error: any) {
+  } catch {
     warnLog('Cache', `[Blur] Error reading stats from Redis | slug=${slug}`);
   }
 

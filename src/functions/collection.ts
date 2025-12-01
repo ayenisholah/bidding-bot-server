@@ -280,41 +280,68 @@ export async function getOpenseaFloor(collectionSlug: string) {
     if (cachedFloor) {
       return JSON.parse(cachedFloor);
     }
-    try {
-      // Debug logging for API key and request
-      const apiUrl = `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`;
-      const { data } = await openseaCircuitBreaker.execute(() =>
-        limiter.schedule(() => axiosInstance.get<ListingsResponse>(
-          apiUrl,
-          {
-            headers: { 'x-api-key': API_KEY }
-          }
-        ))
-      );
-      // Check if listings exist and has item
-      const floor_price = Number(data?.listings[0]?.price?.current?.value) / 1e18 || 0;
-      // Cache the result
-      if (getRedis()) {
-        await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
-      }
-      return floor_price;
-    } catch (error: any) {
-      // Handle 404 errors specifically - collection might be delisted or renamed
-      if (error?.response?.status === 404) {
-        warnLog('API', `[collection.ts] Collection not found on OpenSea | slug=${collectionSlug} | status=404`);
 
-        // Cache the zero floor price for a short time to avoid repeated 404s
-        if (getRedis()) {
-          await getRedis().set(cacheKey, JSON.stringify(0), 'EX', 300); // Cache for 5 minutes
+    // Retry configuration for floor price fetching
+    const MAX_RETRIES = 3;
+    const BASE_DELAY = 500; // 500ms, 1000ms, 2000ms exponential backoff
+
+    const apiUrl = `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const { data } = await openseaCircuitBreaker.execute(() =>
+          limiter.schedule(() => axiosInstance.get<ListingsResponse>(
+            apiUrl,
+            {
+              headers: { 'x-api-key': API_KEY }
+            }
+          ))
+        );
+
+        // Check if listings exist and has item
+        const floor_price = Number(data?.listings[0]?.price?.current?.value) / 1e18 || 0;
+
+        // If floor is 0 and we have retries left, retry (likely temporary API issue)
+        if (floor_price === 0 && attempt < MAX_RETRIES) {
+          warnLog('API', `[collection.ts] OpenSea floor price is 0, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug}`);
+          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+          continue;
         }
-        return 0; // Return 0 floor price for non-existent collections
+
+        // Only cache positive floor prices - don't cache 0 values
+        if (floor_price > 0 && getRedis()) {
+          await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+        }
+
+        return floor_price;
+
+      } catch (error: any) {
+        // Handle 404 errors specifically - collection might be delisted or renamed (no retry)
+        if (error?.response?.status === 404) {
+          warnLog('API', `[collection.ts] Collection not found on OpenSea | slug=${collectionSlug} | status=404`);
+
+          // Cache the zero floor price for a short time to avoid repeated 404s
+          if (getRedis()) {
+            await getRedis().set(cacheKey, JSON.stringify(0), 'EX', 300); // Cache for 5 minutes
+          }
+          return 0; // Return 0 floor price for non-existent collections
+        }
+
+        // Retry on other errors if attempts remaining
+        if (attempt < MAX_RETRIES) {
+          warnLog('API', `[collection.ts] OpenSea floor price fetch failed, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug} | status=${error?.response?.status}`);
+          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+          continue;
+        }
+
+        // Final attempt failed - log and re-throw
+        errorLog('API', `[collection.ts] Failed to fetch OpenSea floor price after ${MAX_RETRIES} attempts | slug=${collectionSlug} | status=${error?.response?.status}`, error);
+        throw error;
       }
-
-      // For other errors, log as API error and re-throw
-      errorLog('API', `[collection.ts] Failed to fetch OpenSea floor price | slug=${collectionSlug} | status=${error?.response?.status}`, error);
-
-      throw error; // Re-throw to let the lock manager handle it
     }
+
+    // Should not reach here, but return 0 as fallback
+    return 0;
   });
 
   if (!result) {
@@ -365,23 +392,50 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
       return JSON.parse(cachedFloor);
     }
 
-    try {
-      // Import Blur functions dynamically to avoid circular dependency
-      const { fetchBlurCollectionStats } = await import('../marketplace/blur/bid');
-      const stats = await fetchBlurCollectionStats(collectionSlug);
+    // Retry configuration for floor price fetching
+    const MAX_RETRIES = 3;
+    const BASE_DELAY = 500; // 500ms, 1000ms, 2000ms exponential backoff
 
-      const floor_price = stats?.floorPrice?.amount ?
-        parseFloat(stats.floorPrice.amount) : 0;
+    // Import Blur functions dynamically to avoid circular dependency
+    const { fetchBlurCollectionStats } = await import('../marketplace/blur/bid');
 
-      // Cache the result
-      if (getRedis()) {
-        await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const stats = await fetchBlurCollectionStats(collectionSlug);
+
+        const floor_price = stats?.floorPrice?.amount ?
+          parseFloat(stats.floorPrice.amount) : 0;
+
+        // If floor is 0 and we have retries left, retry (likely temporary API issue)
+        if (floor_price === 0 && attempt < MAX_RETRIES) {
+          warnLog('API', `[collection.ts] Blur floor price is 0, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug}`);
+          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+          continue;
+        }
+
+        // Only cache positive floor prices - don't cache 0 values
+        if (floor_price > 0 && getRedis()) {
+          await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+        }
+
+        return floor_price;
+
+      } catch (error: any) {
+        // Retry on errors if attempts remaining
+        if (attempt < MAX_RETRIES) {
+          warnLog('API', `[collection.ts] Blur floor price fetch failed, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug}`);
+          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+          continue;
+        }
+
+        // Final attempt failed - log and return 0
+        errorLog('API', `[collection.ts] Error fetching Blur floor price after ${MAX_RETRIES} attempts | slug=${collectionSlug}`, error);
+        return 0;
       }
-      return floor_price;
-    } catch (error) {
-      errorLog('API', `[collection.ts] Error fetching Blur floor price | slug=${collectionSlug}`, error);
-      return 0;
     }
+
+    // Should not reach here, but return 0 as fallback
+    return 0;
   });
 
   return result || 0;
@@ -410,22 +464,49 @@ export async function getMagicEdenFloor(collectionSlug: string): Promise<number>
       return JSON.parse(cachedFloor);
     }
 
-    try {
-      // Import Magic Eden functions dynamically to avoid circular dependency
-      const { fetchMagicEdenCollectionStats } = await import('../marketplace/magiceden');
-      const stats = await fetchMagicEdenCollectionStats(collectionSlug);
+    // Retry configuration for floor price fetching
+    const MAX_RETRIES = 3;
+    const BASE_DELAY = 500; // 500ms, 1000ms, 2000ms exponential backoff
 
-      const floor_price = stats ? Number(stats) : 0;
+    // Import Magic Eden functions dynamically to avoid circular dependency
+    const { fetchMagicEdenCollectionStats } = await import('../marketplace/magiceden');
 
-      // Cache the result
-      if (getRedis()) {
-        await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const stats = await fetchMagicEdenCollectionStats(collectionSlug);
+
+        const floor_price = stats ? Number(stats) : 0;
+
+        // If floor is 0 and we have retries left, retry (likely temporary API issue)
+        if (floor_price === 0 && attempt < MAX_RETRIES) {
+          warnLog('API', `[collection.ts] MagicEden floor price is 0, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug}`);
+          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+          continue;
+        }
+
+        // Only cache positive floor prices - don't cache 0 values
+        if (floor_price > 0 && getRedis()) {
+          await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+        }
+
+        return floor_price;
+
+      } catch (error: any) {
+        // Retry on errors if attempts remaining
+        if (attempt < MAX_RETRIES) {
+          warnLog('API', `[collection.ts] MagicEden floor price fetch failed, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug}`);
+          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+          continue;
+        }
+
+        // Final attempt failed - log and return 0
+        errorLog('API', `[collection.ts] Error fetching Magic Eden floor price after ${MAX_RETRIES} attempts | slug=${collectionSlug}`, error);
+        return 0;
       }
-      return floor_price;
-    } catch (error) {
-      errorLog('API', `[collection.ts] Error fetching Magic Eden floor price | slug=${collectionSlug}`, error);
-      return 0;
     }
+
+    // Should not reach here, but return 0 as fallback
+    return 0;
   });
 
   return result || 0;
