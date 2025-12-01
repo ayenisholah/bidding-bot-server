@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Invalid Task Status Transitions in markJobAsProcessed**: Fixed race condition causing hundreds of `[ERROR][TaskStatusTransition] Invalid state transition` errors
+  - **Root Cause**: `markJobAsProcessed()` unconditionally attempted to set status to RUNNING, even when the marketplace was already in COMPLETED or SCHEDULED state (late jobs from previous loops)
+  - **Solution**: Added state validation before RUNNING transition - only transitions from STARTED, QUEUED, or QUEUEING states
+  - **Race Timeline Fixed**:
+    1. All jobs complete → status becomes COMPLETED
+    2. 500ms delay → status becomes SCHEDULED
+    3. Late job from previous loop completes
+    4. Now correctly skips RUNNING transition instead of causing error
+  - Files modified: `src/index.ts:4061-4069`
+  - Resolves: SCHEDULED→RUNNING and COMPLETED→RUNNING invalid state transition errors
+  - Impact: Eliminates hundreds of error log entries per task
+
+- **Parent Job Disappearance During Lock Acquisition**: Fixed error "Parent job disappeared during lock acquisition! Task {taskId}"
+  - **Root Cause**: Scheduled job IDs (e.g., `task-opensea-schedule`) don't contain loop numbers, so the regex extraction at line 4023 failed. When `getParentJobId()` was called, it used the current loop counter which may have already been incremented, causing a mismatch.
+  - **Solution**: Added fallback logic to search for parent jobs within the last 2 loops when the job ID doesn't contain a loop number
+  - **Search Algorithm**:
+    1. Try current loop (loopOffset = 0)
+    2. Try previous loop (loopOffset = 1)
+    3. Try loop before that (loopOffset = 2)
+    4. Use first matching parent job found
+  - Files modified: `src/index.ts:4038-4057`
+  - Resolves: Parent job lookup failures for scheduled bid jobs
+  - Impact: Eliminates "Parent job disappeared" errors for scheduled jobs
+
+- **Blur Counterbid Slug Always Showing 'unknown'**: Fixed Blur counterbid logs displaying `slug=unknown` instead of the collection name
+  - **Root Cause**: `handleBlurMessages()` only extracted `contractAddress` and returned it directly, while OpenSea/MagicEden handlers returned `{ contractAddress, slug }`
+  - **Solution**: Updated `handleBlurMessages()` to look up the slug from `contractToTasksMap` using the contract address, since Blur WebSocket messages don't include the slug directly
+  - **Implementation**:
+    - Changed return type to `{ contractAddress?: string, slug?: string }`
+    - Look up slug from first matching task in `contractToTasksMap`
+    - Updated `getMarketplaceDetails()` to use new return format
+  - Files modified: `src/index.ts:13544-13563, 11319-11321`
+  - Resolves: Blur counterbid logs now show proper collection slugs
+  - Impact: Improved debugging visibility for Blur counterbid operations
+
+- **False Positive Redis Connection Leak Warnings**: Fixed spurious "Possible Redis connection leaks" warnings when only 6 connections exist
+  - **Root Cause**: Warning triggered when any connections were older than 2 hours, but BullMQ legitimately maintains ~6-8 long-lived connections for queues, workers, scheduler, and events
+  - **Solution**: Only warn when old connection count exceeds 8 (the expected number for BullMQ)
+  - **Expected Connections**:
+    - 2 for main queue (queue + worker)
+    - 2 for blur queue (queue + worker)
+    - 1 for scheduler
+    - 1 for events
+    - 2 buffer for Redis client and other operations
+  - Files modified: `src/index.ts:2001-2014`
+  - Resolves: False positive connection leak warnings during normal operation
+  - Impact: Cleaner logs, warnings only appear for actual connection leaks
+
+- **OrderCache Desync During Bulk Cancel Operations**: Fixed 7 critical bugs where MongoDB Order operations didn't update the in-memory OrderCache
+  - **Root Cause**: Several code paths deleted orders from MongoDB but didn't update the in-memory cache, causing stale data issues in counterbid logic
+  - **Bugs Fixed**:
+    1. **Expired orders cleanup**: Added `orderCache.cleanupExpired()` after DB cleanup in `validateBidCount()`
+    2. **Bulk cancel OpenSea (wallet not found)**: Added `orderCache.deleteById()` before DB deletion
+    3. **Bulk cancel OpenSea (after API)**: Added `orderCache.deleteById()` before DB deletion
+    4. **Bulk cancel MagicEden (wallet not found)**: Added cache deletion for all orderKeys
+    5. **Bulk cancel MagicEden (after API)**: Added cache deletion for all orderKeys
+    6. **Bulk cancel Blur (after API)**: Added `orderCache.deleteById()` before DB deletion
+    7. **MagicEden batch cleanup**: Added cache sync after `Order.insertMany()` in unflushed queue cleanup
+  - Files modified: `src/index.ts`, `src/marketplace/magiceden/bid.ts`
+  - Resolves: Stale cache data causing incorrect counterbid decisions, duplicate bids, or missed counterbid opportunities
+  - Impact: OrderCache now stays in sync with MongoDB for all Order operations
+
+- **Counterbid Handler Bug Fixes and Improvements (16 Issues)**: Comprehensive audit and fixes for `handleMagicEdenCounterbid`, `handleOpenseaCounterbid`, and `handleBlurCounterbid`
+  - **Critical Fixes**:
+    1. **OrderCache Expiry Filtering**: Added `expiresAt > Date.now()` check after all `orderCache.get()` calls to prevent using expired cached orders (6 locations across all 3 handlers)
+    2. **Blur Silent Error Catch**: Fixed catch block at lines 13501-13506 that extracted error details but never logged them - now uses `errorLog()`
+    3. **OpenSea Unreachable Null Check**: Fixed `if (!orders)` check that could never execute (arrays are always truthy) - now checks `if (!cachedOrder)` before creating array
+    4. **MagicEden pendingCounterbids Leak**: Added cleanup in outer catch block to clear pending marks on exception, preventing 60-second token blocking
+    5. **TypeScript Error**: Added null guard for `contractAddress` possibly undefined at line 13555
+  - **High Priority Fixes**:
+    6. **Missing await on Cancellation Jobs**: Added `await` to 14 `queue.add()` and `queue.addBulk()` cancellation calls to ensure job completion before proceeding
+    7. **Blur JSON.parse Safety**: Wrapped 5 `JSON.parse(order.orderHash)` calls in try-catch with `errorLog()` to prevent crashes on corrupted data
+  - **Medium Priority Fixes**:
+    8. **Below-Min-Price Logging**: Added `debugLog()` for 4 silent early returns when incoming bid is below minimum price (MagicEden trait/collection, OpenSea trait/collection)
+    9. **Empty If-Block Fixes**: Added meaningful debug logs to 4 empty if-blocks that previously did nothing (MagicEden token counterbids, OpenSea normalized price, OpenSea token/collection counterbids)
+    10. **Redundant Cache Lookup**: Replaced `orderCache.getOfferPrice()` call inside loop with `Number(order.offerPrice)` since order is already available
+    11. **Typo Fix**: Renamed `colletionOffer` to `collectionOffer` (37 occurrences)
+  - **Code Quality Fixes**:
+    12. **Variable Collision**: Fixed duplicate `collectionOffer` declaration by renaming OpenSea handler variable to `collectionOfferEth`
+  - Files modified: `src/index.ts` (handleMagicEdenCounterbid ~11431-12180, handleOpenseaCounterbid ~12182-13065, handleBlurCounterbid ~13068-13507)
+  - Resolves: Expired order usage, silent errors, unreachable code, pending bid leaks, potential crashes, missing visibility into counterbid decisions
+  - Impact: More reliable counterbid handling with better error visibility and proper resource cleanup
+
 ### Changed
 - **Consolidated ourTopBids into OrderCache**: Eliminated redundant in-memory bid tracking store by using existing `orderCache` for counterbid price comparison
   - **Problem Solved**: Two parallel caching systems (`ourTopBids` and `orderCache`) stored the same order data redundantly, risking desync and adding maintenance complexity

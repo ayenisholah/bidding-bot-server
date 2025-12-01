@@ -172,9 +172,26 @@ export async function cleanupMagicEden() {
     orderBatchQueue.length = 0;
 
     try {
-      await withRetry(async () => {
+      const savedOrders = await withRetry(async () => {
         return await Order.insertMany(batch);
       });
+
+      // Sync cache: add saved orders to in-memory cache
+      if (savedOrders && Array.isArray(savedOrders)) {
+        for (const order of savedOrders) {
+          orderCache.set({
+            _id: order._id.toString(),
+            orderHash: order.orderHash,
+            expiresAt: new Date(order.expiresAt).getTime(),
+            offerPrice: order.offerPrice,
+            createdAt: new Date(order.createdAt).getTime(),
+            identifier: order.identifier,
+            marketplace: order.marketplace,
+            slug: order.slug,
+            taskId: order.taskId
+          });
+        }
+      }
     } catch (error) {
       errorLog('Database', `[MagicEden] Failed to create orders during cleanup | count=${batch.length}`, error);
     }
