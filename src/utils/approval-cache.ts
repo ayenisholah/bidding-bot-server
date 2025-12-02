@@ -1,11 +1,19 @@
 import { ethers } from 'ethers';
 import { ERC20_MIN_ABI } from '../constants';
 import { getRedisConnection } from './redis';
-import { errorLog, warnLog } from './debug-file-logger';
+import { errorLog, warnLog, debugLog } from './debug-file-logger';
 
-// Create provider instance
+// Create primary provider with increased timeout (30 seconds)
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
+
+// Create fallback provider (PublicNode) for when Alchemy times out
+const fallbackProvider = new ethers.JsonRpcProvider('https://ethereum.publicnode.com');
+
+// Configure RPC timeout and retry settings
+const RPC_TIMEOUT = 30000; // 30 seconds (increased from default ~10s)
+const MAX_RPC_RETRIES = 3;
+const RPC_RETRY_DELAY = 1000; // 1s, 2s, 4s exponential backoff
 
 interface ApprovalCacheEntry {
   approved: boolean;
@@ -58,26 +66,81 @@ class ApprovalCache {
       warnLog('Cache', `ApprovalCache: Redis read error | key=${key}`);
     }
 
-    // Cache miss - check on-chain
-    try {
-      const tokenContract = new ethers.Contract(tokenAddress, ERC20_MIN_ABI, provider);
-      const allowance = await tokenContract.allowance(walletAddress, marketplaceAddress);
-      const approved = BigInt(allowance) >= BigInt(requiredAmount);
+    // Cache miss - check on-chain with retry logic
+    for (let attempt = 1; attempt <= MAX_RPC_RETRIES; attempt++) {
+      try {
+        debugLog('Balance', `[RPC] Fetching allowance attempt ${attempt}/${MAX_RPC_RETRIES} | wallet=${walletAddress.slice(0, 10)}...`);
 
-      // Update both caches
-      const entry: ApprovalCacheEntry = {
-        approved,
-        timestamp: Date.now(),
-        allowance: allowance.toString()
-      };
+        // Create timeout promise
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('RPC_TIMEOUT')), RPC_TIMEOUT);
+        });
 
-      await this.setApproval(walletAddress, marketplaceAddress, tokenAddress, entry);
+        // Try primary provider first (Alchemy)
+        const tokenContract = new ethers.Contract(tokenAddress, ERC20_MIN_ABI, provider);
+        const allowancePromise = tokenContract.allowance(walletAddress, marketplaceAddress);
 
-      return approved;
-    } catch (error) {
-      errorLog('Cache', `ApprovalCache: On-chain allowance check failed | wallet=${walletAddress.slice(0, 10)}...`, error);
-      return false;
+        const allowance = await Promise.race([allowancePromise, timeoutPromise]);
+        const approved = BigInt(allowance) >= BigInt(requiredAmount);
+
+        // Update both caches
+        const entry: ApprovalCacheEntry = {
+          approved,
+          timestamp: Date.now(),
+          allowance: allowance.toString()
+        };
+
+        await this.setApproval(walletAddress, marketplaceAddress, tokenAddress, entry);
+
+        debugLog('Balance', `[RPC] Success: allowance=${allowance.toString()} | wallet=${walletAddress.slice(0, 10)}...`);
+        return approved;
+      } catch (error: any) {
+        const errorMsg = error?.message || String(error);
+        const isTimeout = errorMsg.includes('TIMEOUT') || errorMsg.includes('timeout');
+
+        // Only retry on timeout errors
+        if (isTimeout && attempt < MAX_RPC_RETRIES) {
+          warnLog('Balance', `[RPC] Timeout on attempt ${attempt}, retrying in ${RPC_RETRY_DELAY * attempt}ms | wallet=${walletAddress.slice(0, 10)}...`);
+          await new Promise(resolve => setTimeout(resolve, RPC_RETRY_DELAY * Math.pow(2, attempt - 1)));
+          continue;
+        }
+
+        // Try fallback provider on last attempt or non-timeout errors
+        if (attempt === MAX_RPC_RETRIES) {
+          try {
+            warnLog('Balance', `[RPC] Alchemy failed, trying PublicNode fallback | wallet=${walletAddress.slice(0, 10)}...`);
+            const fallbackContract = new ethers.Contract(tokenAddress, ERC20_MIN_ABI, fallbackProvider);
+            const fallbackTimeoutPromise = new Promise<never>((_, reject) => {
+              setTimeout(() => reject(new Error('RPC_TIMEOUT_FALLBACK')), RPC_TIMEOUT);
+            });
+            const fallbackAllowancePromise = fallbackContract.allowance(walletAddress, marketplaceAddress);
+            const allowance = await Promise.race([fallbackAllowancePromise, fallbackTimeoutPromise]);
+            const approved = BigInt(allowance) >= BigInt(requiredAmount);
+
+            // Update caches with fallback result
+            const entry: ApprovalCacheEntry = {
+              approved,
+              timestamp: Date.now(),
+              allowance: allowance.toString()
+            };
+            await this.setApproval(walletAddress, marketplaceAddress, tokenAddress, entry);
+
+            debugLog('Balance', `[RPC] Fallback success: allowance=${allowance.toString()} | wallet=${walletAddress.slice(0, 10)}...`);
+            return approved;
+          } catch (fallbackError: any) {
+            errorLog('Balance', `[RPC] Both providers failed | wallet=${walletAddress.slice(0, 10)}...`, fallbackError);
+          }
+        }
+
+        // Final failure after all retries and fallback
+        if (attempt === MAX_RPC_RETRIES) {
+          errorLog('Cache', `ApprovalCache: On-chain allowance check failed after retries | wallet=${walletAddress.slice(0, 10)}...`, error);
+          return false;
+        }
+      }
     }
+
+    return false;
   }
 
   /**

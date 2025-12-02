@@ -3,7 +3,7 @@
 import { ethers, Wallet } from "ethers";
 import { BASE_URL, SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
-import { activeTasks, API_KEY, decrementBidCount, pQueue, trackBidRate, updateTaskCancellationPercentage } from "../..";
+import { activeTasks, API_KEY, decrementBidCount, pQueue, trackBidRate, updateTaskCancellationPercentage, updateTopOfferAfterOurBid } from "../..";
 import { getCollectionDetails, getCollectionTokenContractMap } from "../../functions/collection";
 import { config } from "dotenv";
 import axios from "axios";
@@ -18,7 +18,7 @@ import { InsufficientBalanceError } from "../errors";
 import { getCachedOrFetch, CACHE_TTL, CACHE_KEYS } from "../../utils/opensea-cache";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
-import { errorLog, warnLog } from "../../utils/debug-file-logger";
+import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
 import fs from 'fs';
 import path from 'path';
 import { MAX_PAIN_OVERRIDE_ADDRESS, MAX_PAIN_SLUG, MAX_PAIN_TOKEN_OVERRIDES } from "../../maxPainOverrides";
@@ -794,28 +794,46 @@ export async function bidOnOpensea(
  */
 async function submitOfferToOpensea(decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900) {
   const [taskId] = bidCount.split(":")
+  const bidStartTime = Date.now();
+
+  // Early blacklist check before entering limiter queue
   if (isTaskBlacklisted(taskId, 'opensea')) {
+    debugLog('InFlightBid', `BLOCKED_EARLY | taskId=${taskId} | marketplace=opensea | reason=blacklisted`, { taskId, marketplace: 'opensea' });
     return;
   }
   const task = activeTasks.get(taskId)
   if (!task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) return
 
+  debugLog('InFlightBid', `ENTERING_LIMITER | taskId=${taskId} | marketplace=opensea | collection=${payload.criteria?.collection?.slug} | timestamp=${bidStartTime}`, { taskId, marketplace: 'opensea' });
+
   let offer: OpenseaOffer;
   try {
-    const response = await limiter.schedule(() => axiosInstance.request<OpenseaOffer>({
-      method: 'POST',
-      url: `${BASE_URL}/opensea/api/v2/offers`,
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': API_KEY,
-        "Cache-Control": "no-store", // ⛔ Prevents caching
-        "Pragma": "no-cache", // ⛔ Prevents old cache policies from affecting response
-        "Expires": "0", // ⛔ Forces fresh reques
-      },
-      data: JSON.stringify(payload),
-      "axios-retry": { retries: 0 }
-    }))
+    const response = await limiter.schedule(async () => {
+      // Re-check blacklist AFTER waiting in limiter queue - this is the critical fix
+      if (isTaskBlacklisted(taskId, 'opensea')) {
+        debugLog('InFlightBid', `BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=opensea | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'opensea' });
+        throw new Error('Task stopped while waiting in limiter queue');
+      }
+
+      debugLog('InFlightBid', `EXECUTING_REQUEST | taskId=${taskId} | marketplace=opensea | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'opensea' });
+
+      return axiosInstance.request<OpenseaOffer>({
+        method: 'POST',
+        url: `${BASE_URL}/opensea/api/v2/offers`,
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY,
+          "Cache-Control": "no-store", // ⛔ Prevents caching
+          "Pragma": "no-cache", // ⛔ Prevents old cache policies from affecting response
+          "Expires": "0", // ⛔ Forces fresh reques
+        },
+        data: JSON.stringify(payload),
+        "axios-retry": { retries: 0 }
+      });
+    });
     offer = response.data;
+
+    debugLog('InFlightBid', `BID_PLACED | taskId=${taskId} | marketplace=opensea | collection=${payload.criteria?.collection?.slug} | totalTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'opensea' });
 
   } catch (error) {
     errorLog('API', `[OpenSea] Failed to submit offer | taskId=${taskId} | collection=${payload.criteria.collection.slug} | bidAmount=${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} | status=${(error as any)?.response?.status} | ${extractOpenseaErrorMessage(error)}`, error);
@@ -870,10 +888,17 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
 async function buildOffer(taskId: string, buildPayload: any) {
   const controller = new AbortController();
   addActiveRequest(taskId, controller);
+  const buildStartTime = Date.now();
 
   try {
-    const { data } = await limiter.schedule(() =>
-      axiosInstance.request<PartialParameters>({
+    const { data } = await limiter.schedule(async () => {
+      // Re-check blacklist AFTER waiting in limiter queue
+      if (isTaskBlacklisted(taskId, 'opensea')) {
+        debugLog('InFlightBid', `BUILD_BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=opensea | waitTime=${Date.now() - buildStartTime}ms`, { taskId, marketplace: 'opensea' });
+        throw new Error('Task stopped while waiting in limiter queue');
+      }
+
+      return axiosInstance.request<PartialParameters>({
         method: 'POST',
         url: `${BASE_URL}/opensea/api/v2/offers/build`,
         headers: {
@@ -882,8 +907,8 @@ async function buildOffer(taskId: string, buildPayload: any) {
         },
         data: JSON.stringify(buildPayload),
         signal: controller.signal
-      })
-    );
+      });
+    });
 
     return data;
   } catch (error: any) {
@@ -997,9 +1022,114 @@ const getOffer = (priceWei: bigint, currency: string) => {
   ]
 }
 
+/**
+ * Fetches existing offers for a token from a specific maker (wallet)
+ * Used to sync local state when OpenSea returns "Order already exists"
+ */
+async function fetchMakerOfferForToken(
+  contractAddress: string,
+  tokenId: string,
+  makerAddress: string
+): Promise<{
+  orderHash: string;
+  expirationTime: number;
+  currentPrice: string;
+  slug: string;
+  tokenId: string;
+} | null> {
+  // ENTRY log
+  debugLog('API', `[OpenSea] fetchMakerOfferForToken ENTRY | contract=${contractAddress} | token=${tokenId} | maker=${makerAddress.slice(0, 10)}...`, {
+    marketplace: 'opensea',
+    tokenId,
+    wallet: makerAddress
+  });
+
+  const url = `${BASE_URL}/opensea/api/v2/orders/ethereum/seaport/offers`;
+  const params = {
+    asset_contract_address: contractAddress,
+    token_ids: tokenId,
+    maker: makerAddress
+  };
+
+  try {
+    const response = await limiter.schedule(() =>
+      axiosInstance.get(url, {
+        params,
+        headers: {
+          'accept': '*/*',
+          'x-api-key': API_KEY
+        }
+      })
+    );
+
+    // Find active order from this maker
+    const orders = response.data?.orders || [];
+    const now = Date.now();
+
+    // API RESPONSE log
+    debugLog('API', `[OpenSea] fetchMakerOfferForToken API response | ordersReturned=${orders.length} | token=${tokenId}`, {
+      marketplace: 'opensea',
+      tokenId
+    });
+
+    // Log filtering details for debugging
+    if (orders.length > 0) {
+      const orderDetails = orders.map((o: any) => ({
+        hash: o.order_hash?.slice(0, 16),
+        expired: o.expiration_time * 1000 <= now,
+        cancelled: o.cancelled,
+        finalized: o.finalized
+      }));
+      debugLog('API', `[OpenSea] fetchMakerOfferForToken order status | token=${tokenId} | details=${JSON.stringify(orderDetails)}`, {
+        marketplace: 'opensea',
+        tokenId
+      });
+    }
+
+    const activeOrder = orders.find((order: any) =>
+      order.expiration_time * 1000 > now && !order.cancelled && !order.finalized
+    );
+
+    if (!activeOrder) {
+      // NO ACTIVE ORDER log
+      debugLog('API', `[OpenSea] fetchMakerOfferForToken NO active order found | token=${tokenId} | totalOrders=${orders.length}`, {
+        marketplace: 'opensea',
+        tokenId
+      });
+      return null;
+    }
+
+    // Extract slug from taker_asset_bundle
+    const takerAsset = activeOrder.taker_asset_bundle?.assets?.[0];
+    const slug = takerAsset?.collection?.collection || '';
+    const priceEth = Number(activeOrder.current_price) / Math.pow(10, 18);
+    const expiresInMin = Math.round((activeOrder.expiration_time * 1000 - now) / 60000);
+
+    // ACTIVE ORDER FOUND log
+    debugLog('API', `[OpenSea] fetchMakerOfferForToken FOUND active order | token=${tokenId} | orderHash=${activeOrder.order_hash.slice(0, 16)}... | price=${priceEth.toFixed(6)} ETH | slug=${slug} | expiresIn=${expiresInMin}min`, {
+      marketplace: 'opensea',
+      tokenId,
+      orderHash: activeOrder.order_hash,
+      slug
+    });
+
+    return {
+      orderHash: activeOrder.order_hash,
+      expirationTime: activeOrder.expiration_time,  // Unix timestamp in seconds
+      currentPrice: activeOrder.current_price,       // Wei string
+      slug: slug,
+      tokenId: takerAsset?.token_id || tokenId
+    };
+  } catch (fetchError) {
+    errorLog('API', `[OpenSea] fetchMakerOfferForToken FAILED | token=${tokenId} | contract=${contractAddress}`, fetchError);
+    throw fetchError;
+  }
+}
+
 async function postItemOffer(taskId: string, offer: unknown, signature: string, slug?: string) {
   const task = activeTasks.get(taskId);
   const collectionSlug = slug || task?.contract?.slug?.toLowerCase();
+  const bidStartTime = Date.now();
 
   const parameters = offer as any;
 
@@ -1027,24 +1157,156 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
   }
 
   try {
-    const { data } = await limiter.schedule(() => axiosInstance.post(`${BASE_URL}/opensea/api/v2/orders/ethereum/seaport/offers`, payload, {
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': API_KEY,
-        "Cache-Control": "no-store",
-        "Pragma": "no-cache",
-        "Expires": "0",
-      },
-      "axios-retry": { retries: 0 },
-    }))
+    const { data } = await limiter.schedule(async () => {
+      // Re-check blacklist AFTER waiting in limiter queue - critical fix for in-flight token bids
+      if (isTaskBlacklisted(taskId, 'opensea')) {
+        debugLog('InFlightBid', `POST_ITEM_BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=opensea | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'opensea' });
+        throw new Error('Task stopped while waiting in limiter queue');
+      }
+
+      return axiosInstance.post(`${BASE_URL}/opensea/api/v2/orders/ethereum/seaport/offers`, payload, {
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY,
+          "Cache-Control": "no-store",
+          "Pragma": "no-cache",
+          "Expires": "0",
+        },
+        "axios-retry": { retries: 0 },
+      });
+    })
     return data
   } catch (error: any) {
     if (axios.isCancel(error)) {
       return null;
     }
 
-    errorLog('API', `[OpenSea] Failed to post item offer | taskId=${taskId} | status=${error?.response?.status} | ${extractOpenseaErrorMessage(error)}`, error);
-    throw error
+    // Handle "Order already exists" by syncing with OpenSea
+    const errorMessage = extractOpenseaErrorMessage(error);
+    if (error?.response?.status === 400 && errorMessage.includes('Order already exists')) {
+      // ERROR DETECTED log
+      debugLog('API', `[OpenSea] ORDER_ALREADY_EXISTS detected | taskId=${taskId} | slug=${collectionSlug} | errorMsg=${errorMessage}`, {
+        taskId,
+        marketplace: 'opensea',
+        slug: collectionSlug
+      });
+
+      try {
+        // Extract details from the offer payload
+        const consideration = parameters?.consideration?.[0];
+        const contractAddress = consideration?.token;
+        const tokenId = consideration?.identifierOrCriteria;
+        const makerAddress = parameters?.offerer;
+
+        // PAYLOAD EXTRACTION log
+        debugLog('API', `[OpenSea] ORDER_ALREADY_EXISTS payload extracted | taskId=${taskId} | contract=${contractAddress?.slice(0, 16)}... | token=${tokenId} | maker=${makerAddress?.slice(0, 10)}...`, {
+          taskId,
+          marketplace: 'opensea',
+          tokenId,
+          wallet: makerAddress
+        });
+
+        if (contractAddress && tokenId && makerAddress) {
+          // FETCH INITIATED log
+          debugLog('API', `[OpenSea] ORDER_ALREADY_EXISTS fetching existing offer | taskId=${taskId} | token=${tokenId}`, {
+            taskId,
+            marketplace: 'opensea',
+            tokenId
+          });
+
+          // Fetch existing order from OpenSea
+          const existingOffer = await fetchMakerOfferForToken(contractAddress, tokenId, makerAddress);
+
+          if (existingOffer) {
+            // Convert expiration_time (Unix seconds) to Date
+            const expiresAt = new Date(existingOffer.expirationTime * 1000);
+
+            // Convert current_price (Wei string) to ETH string
+            const decimal = 18; // WETH decimal
+            const offerPriceEth = Number(existingOffer.currentPrice) / Math.pow(10, decimal);
+            const offerPriceWei = existingOffer.currentPrice;
+
+            // MONGODB SAVE log
+            debugLog('API', `[OpenSea] ORDER_ALREADY_EXISTS saving to MongoDB | taskId=${taskId} | orderHash=${existingOffer.orderHash.slice(0, 16)}... | token=${existingOffer.tokenId} | price=${offerPriceEth} ETH`, {
+              taskId,
+              marketplace: 'opensea',
+              tokenId: existingOffer.tokenId,
+              orderHash: existingOffer.orderHash
+            });
+
+            // Store in MongoDB Order model
+            const orderData = {
+              slug: existingOffer.slug || collectionSlug || '',
+              orderHash: existingOffer.orderHash,
+              expiresAt: expiresAt,
+              offerPrice: offerPriceEth.toString(),
+              identifier: existingOffer.tokenId,
+              taskId: taskId,
+              marketplace: 'opensea'
+            };
+
+            const savedOrder = await Order.create(orderData);
+
+            // ORDERCACHE UPDATE log
+            debugLog('API', `[OpenSea] ORDER_ALREADY_EXISTS updating orderCache | taskId=${taskId} | orderId=${savedOrder._id}`, {
+              taskId,
+              marketplace: 'opensea',
+              tokenId: existingOffer.tokenId,
+              orderHash: existingOffer.orderHash
+            });
+
+            // Update in-memory orderCache
+            orderCache.set({
+              _id: savedOrder._id.toString(),
+              orderHash: savedOrder.orderHash,
+              expiresAt: savedOrder.expiresAt.getTime(),
+              offerPrice: savedOrder.offerPrice,
+              createdAt: savedOrder.createdAt.getTime(),
+              identifier: savedOrder.identifier,
+              marketplace: savedOrder.marketplace,
+              slug: savedOrder.slug,
+              taskId: savedOrder.taskId
+            });
+
+            // TOP OFFER CACHE UPDATE log
+            debugLog('API', `[OpenSea] ORDER_ALREADY_EXISTS updating topOfferCache | taskId=${taskId} | token=${existingOffer.tokenId} | price=${offerPriceEth} ETH`, {
+              taskId,
+              marketplace: 'opensea',
+              tokenId: existingOffer.tokenId
+            });
+
+            // Update marketplaceTopOfferCache - mark us as top bidder
+            // This ensures counterbid handlers know we have an active offer
+            updateTopOfferAfterOurBid(
+              taskId,
+              'opensea',
+              existingOffer.tokenId,
+              offerPriceEth,
+              offerPriceWei,
+              makerAddress
+            );
+
+            // SYNC SUCCESS log (warnLog for visibility - always logged)
+            warnLog('API', `[OpenSea] ORDER_ALREADY_EXISTS SYNC SUCCESS | taskId=${taskId} | orderHash=${existingOffer.orderHash} | token=${existingOffer.tokenId} | price=${offerPriceEth} ETH | slug=${existingOffer.slug} | expiresAt=${expiresAt.toISOString()}`);
+
+            // Return the synced order data (similar to successful bid response)
+            return { order: { order_hash: existingOffer.orderHash } };
+          } else {
+            // NO OFFER FOUND log
+            warnLog('API', `[OpenSea] ORDER_ALREADY_EXISTS sync SKIPPED - no active offer found on OpenSea | taskId=${taskId} | token=${tokenId}`);
+          }
+        } else {
+          // MISSING PAYLOAD DATA log
+          warnLog('API', `[OpenSea] ORDER_ALREADY_EXISTS sync SKIPPED - missing payload data | taskId=${taskId} | hasContract=${!!contractAddress} | hasToken=${!!tokenId} | hasMaker=${!!makerAddress}`);
+        }
+      } catch (syncError) {
+        // SYNC FAILURE log
+        errorLog('API', `[OpenSea] ORDER_ALREADY_EXISTS sync FAILED | taskId=${taskId} | slug=${collectionSlug}`, syncError);
+      }
+    }
+
+    errorLog('API', `[OpenSea] Failed to post item offer | taskId=${taskId} | status=${error?.response?.status} | ${errorMessage}`, error);
+    throw error;
   }
 }
 

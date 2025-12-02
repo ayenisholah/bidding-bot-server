@@ -4,8 +4,8 @@ import { warnLog } from './debug-file-logger';
 
 const DEBUG = process.env.DEBUG === 'true';
 
-// Log directory in project root (one level up from bidding-bot-server)
-const LOG_DIR = path.resolve(process.cwd(), '..', 'cancellation-debug-logs');
+// Log directory in bidding-bot-server/debug-logs (same as all other debug logs)
+const LOG_DIR = path.resolve(process.cwd(), 'debug-logs');
 
 interface CancellationLogEntry {
   elapsed: string;

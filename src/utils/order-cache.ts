@@ -278,6 +278,13 @@ class OrderCache {
   }
 
   /**
+   * Count total active (non-expired) orders for a task
+   */
+  countByTask(taskId: string): number {
+    return this.getActiveByTask(taskId).length;
+  }
+
+  /**
    * Count all active orders grouped by marketplace (for bidStats)
    */
   countGroupedByMarketplace(taskId: string): { [marketplace: string]: number } {

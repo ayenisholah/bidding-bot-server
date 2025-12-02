@@ -120,6 +120,23 @@ export function getLimiterCounts() {
   return limiter.counts();
 }
 
+// Get detailed limiter queue state for debugging stopTask flow
+export function getLimiterQueueDetails(rateLimit: number): {
+  counts: ReturnType<typeof getLimiterCounts>;
+  jobsInQueue: number;
+  estimatedDrainTimeMs: number;
+} {
+  const counts = getLimiterCounts();
+  const jobsInQueue = (counts.RECEIVED || 0) + (counts.QUEUED || 0) + (counts.RUNNING || 0);
+  const estimatedDrainTimeMs = jobsInQueue * (1000 / rateLimit);
+
+  return {
+    counts,
+    jobsInQueue,
+    estimatedDrainTimeMs
+  };
+}
+
 // Function to start logging limiter counts every second
 export function startCountsLogger(intervalMs = 1000) {
   if (countLoggerInterval) {

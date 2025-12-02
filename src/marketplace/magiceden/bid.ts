@@ -397,23 +397,32 @@ async function createBidData(
   try {
     const controller = new AbortController();
     addActiveRequest(taskId, controller);
+    const bidStartTime = Date.now();
 
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     try {
-      const { data: order } = await limiter.schedule(() => axiosInstance.post<CreateBidData>(
-        `${BASE_URL}/magiceden/v3/rtp/ethereum/execute/bid/v5`,
-        data,
-        {
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': API_KEY
-          },
-          signal: controller.signal,
-          timeout: 30000,
-          "axios-retry": { retries: 0 }
+      const { data: order } = await limiter.schedule(async () => {
+        // Re-check blacklist AFTER waiting in limiter queue
+        if (isTaskBlacklisted(taskId, 'magiceden')) {
+          debugLog('InFlightBid', `BUILD_BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=magiceden | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'magiceden' });
+          throw new Error('Task stopped while waiting in limiter queue');
         }
-      ));
+
+        return axiosInstance.post<CreateBidData>(
+          `${BASE_URL}/magiceden/v3/rtp/ethereum/execute/bid/v5`,
+          data,
+          {
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': API_KEY
+            },
+            signal: controller.signal,
+            timeout: 30000,
+            "axios-retry": { retries: 0 }
+          }
+        );
+      });
 
       clearTimeout(timeoutId);
 
@@ -824,6 +833,7 @@ async function sendSignedOrderData(
 
     // check if the tasks is still active before you make the offer
     if (isTaskBlacklisted(taskId, 'magiceden')) {
+      debugLog('InFlightBid', `BLOCKED_EARLY | taskId=${taskId} | marketplace=magiceden | reason=blacklisted`, { taskId, marketplace: 'magiceden' });
       return;
     }
     const currentTask = activeTasks.get(taskId)
@@ -831,6 +841,9 @@ async function sendSignedOrderData(
 
     const controller = new AbortController();
     addActiveRequest(taskId, controller);
+    const bidStartTime = Date.now();
+
+    debugLog('InFlightBid', `ENTERING_LIMITER | taskId=${taskId} | marketplace=magiceden | collection=${slug} | timestamp=${bidStartTime}`, { taskId, marketplace: 'magiceden' });
 
     try {
 
@@ -838,8 +851,16 @@ async function sendSignedOrderData(
       // For collection offers (v4), signature is in the payload, not in query params
       url = (!trait && !tokenId) ? endpoint : `${endpoint}?signature=${encodeURIComponent(signature)}`;
 
-      const { data: offerResponse } = await limiter.schedule(() =>
-        axiosInstance.post(
+      const { data: offerResponse } = await limiter.schedule(async () => {
+        // Re-check blacklist AFTER waiting in limiter queue - this is the critical fix
+        if (isTaskBlacklisted(taskId, 'magiceden')) {
+          debugLog('InFlightBid', `BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=magiceden | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'magiceden' });
+          throw new Error('Task stopped while waiting in limiter queue');
+        }
+
+        debugLog('InFlightBid', `EXECUTING_REQUEST | taskId=${taskId} | marketplace=magiceden | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'magiceden' });
+
+        return axiosInstance.post(
           url,
           data,
           {
@@ -850,8 +871,8 @@ async function sendSignedOrderData(
             signal: controller.signal,
             "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
           }
-        )
-      );
+        );
+      });
       const responseTime = Date.now() - startTime;
       const successMessage = tokenId ? `🎉 TOKEN OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: ${slug.toUpperCase()} TOKEN: ${tokenId} ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} 🎉` :
         trait ?

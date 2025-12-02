@@ -4,13 +4,6 @@ import { API_KEY } from '..';
 import { tokenTraitCache, TokenTrait, TokenTraitData } from '../utils/token-trait-cache';
 import { errorLog } from '../utils/debug-file-logger';
 
-// Color constants for console output
-const GREEN = '\x1b[32m';
-const YELLOW = '\x1b[33m';
-const RED = '\x1b[31m';
-const BLUE = '\x1b[34m';
-const RESET = '\x1b[0m';
-
 // GraphQL queries
 // Note: Using /opensea/graphql endpoint instead of /graphql for OpenSea API compatibility
 const ItemAttributesQuery = `

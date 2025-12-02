@@ -369,6 +369,48 @@ export async function getOpenseaFloor(collectionSlug: string) {
   return result;
 }
 
+// Circuit breaker for Blur API calls to prevent repeated failures
+interface BlurCircuitBreakerState {
+  failureCount: number;
+  lastFailure: number;
+}
+
+const blurCircuitBreaker = new Map<string, BlurCircuitBreakerState>();
+const BLUR_CIRCUIT_OPEN_THRESHOLD = 5;
+const BLUR_CIRCUIT_RESET_TIME = 300000; // 5 minutes
+
+function shouldSkipBlurAPI(collectionSlug: string): boolean {
+  const state = blurCircuitBreaker.get(collectionSlug);
+  if (!state) return false;
+
+  const now = Date.now();
+  if (now - state.lastFailure > BLUR_CIRCUIT_RESET_TIME) {
+    blurCircuitBreaker.delete(collectionSlug);
+    return false;
+  }
+
+  if (state.failureCount >= BLUR_CIRCUIT_OPEN_THRESHOLD) {
+    return true;
+  }
+  return false;
+}
+
+function recordBlurAPIFailure(collectionSlug: string, errorStatus: number) {
+  // Only track 403 and 408 errors for circuit breaker
+  if (errorStatus !== 403 && errorStatus !== 408) {
+    return;
+  }
+
+  const state = blurCircuitBreaker.get(collectionSlug);
+  if (!state) {
+    blurCircuitBreaker.set(collectionSlug, { failureCount: 1, lastFailure: Date.now() });
+    return;
+  }
+
+  state.failureCount++;
+  state.lastFailure = Date.now();
+}
+
 export async function getBlurFloor(collectionSlug: string): Promise<number> {
   const CACHE_TTL = 60; // 1 minute cache (updated from 30 seconds)
   const cacheKey = `blur:floor:{${collectionSlug}}`;
@@ -382,6 +424,13 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
     }
   } catch {
     warnLog('Cache', `[collection.ts] Error reading Blur floor from cache | slug=${collectionSlug}`);
+  }
+
+  // Check circuit breaker before making API call
+  if (shouldSkipBlurAPI(collectionSlug)) {
+    const state = blurCircuitBreaker.get(collectionSlug);
+    warnLog('Collection', `[BlurCircuitBreaker] ${collectionSlug} | OPEN - skipping API | failureCount=${state?.failureCount} | lastFailure=${new Date(state?.lastFailure || 0).toISOString()}`);
+    return 0;
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -401,14 +450,15 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const stats = await fetchBlurCollectionStats(collectionSlug);
+        // CRITICAL FIX: fetchBlurCollectionStats returns a NUMBER, not an object!
+        const blurFloor = await fetchBlurCollectionStats(collectionSlug);
 
-        const floor_price = stats?.floorPrice?.amount ?
-          parseFloat(stats.floorPrice.amount) : 0;
+        // blurFloor is already a number (e.g., 0.0497)
+        const floor_price = blurFloor ? Number(blurFloor) : 0;
 
         // If floor is 0 and we have retries left, retry (likely temporary API issue)
         if (floor_price === 0 && attempt < MAX_RETRIES) {
-          warnLog('API', `[collection.ts] Blur floor price is 0, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug}`);
+          warnLog('Collection', `[getBlurFloor] ${collectionSlug} | Floor is 0, retrying (${attempt}/${MAX_RETRIES})`);
           await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
           continue;
         }
@@ -418,18 +468,32 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
           await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
         }
 
+        // Reset circuit breaker on success
+        if (blurCircuitBreaker.has(collectionSlug)) {
+          blurCircuitBreaker.delete(collectionSlug);
+        }
+
         return floor_price;
 
       } catch (error: any) {
+        const errorStatus = error?.response?.status;
+
+        // Record failure for circuit breaker (403/408 only)
+        if (errorStatus === 403 || errorStatus === 408) {
+          recordBlurAPIFailure(collectionSlug, errorStatus);
+          const state = blurCircuitBreaker.get(collectionSlug);
+          warnLog('Collection', `[BlurCircuitBreaker] ${collectionSlug} | Failure recorded: ${state?.failureCount}/${BLUR_CIRCUIT_OPEN_THRESHOLD} | status=${errorStatus}`);
+        }
+
         // Retry on errors if attempts remaining
         if (attempt < MAX_RETRIES) {
-          warnLog('API', `[collection.ts] Blur floor price fetch failed, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug}`);
+          warnLog('Collection', `[getBlurFloor] ${collectionSlug} | Fetch failed, retrying (${attempt}/${MAX_RETRIES}) | status=${errorStatus}`);
           await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
           continue;
         }
 
         // Final attempt failed - log and return 0
-        errorLog('API', `[collection.ts] Error fetching Blur floor price after ${MAX_RETRIES} attempts | slug=${collectionSlug}`, error);
+        errorLog('Collection', `[getBlurFloor] ${collectionSlug} | Error fetching Blur floor price after ${MAX_RETRIES} attempts | status=${errorStatus}`, error);
         return 0;
       }
     }

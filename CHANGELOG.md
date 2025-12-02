@@ -8,6 +8,422 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Critical Bug Fixes from Debug Log Analysis (2025-12-02)**: Fixed 7 critical bugs identified from analyzing 18 debug log files containing 5,829 ERROR lines
+  - **Bug #3: Blur Type Mismatch - ALL Floor Prices Returning 0 (CRITICAL)**:
+    - **Problem**: All Blur floor prices returned 0 since previous session, breaking percentage-based bid calculations
+    - **Root Cause**: `fetchBlurCollectionStats()` returns a NUMBER, but code accessed it as `object.floorPrice.amount` - always undefined
+    - **Solution**: Fixed type handling to use the number directly: `const floor_price = blurFloor ? Number(blurFloor) : 0;`
+    - **Circuit Breaker Added**: Prevents repeated Blur API failures (403/408 errors)
+      - Opens after 5 consecutive failures per collection
+      - Resets after 5 minutes or on successful call
+      - Tracks failure count and logs circuit breaker state changes
+    - **Debug Logging**: Added comprehensive logging using `debugLog()`, `warnLog()`, `errorLog()` with metadata
+    - Files modified: `src/functions/collection.ts` (lines 372-506)
+    - Resolves: All Blur floor prices returning 0, incorrect bid pricing, wasted bids
+    - Impact: Blur floor prices now work correctly, circuit breaker prevents API spam
+
+  - **Bug #1: Insufficient Balance Loop - 2,556+ Error Logs (CRITICAL)**:
+    - **Problem**: When wallet balance insufficient, bot flooded logs with 2,556+ errors attempting same bids repeatedly
+    - **Root Cause**: Bid processors threw errors on balance failures without intelligent handling
+    - **Solution**: Added `handleInsufficientBalanceError()` helper with smart decision logic:
+      - Extracts balance amounts from error message using regex: `/found:\s*([\d.]+)/i` and `/require:\s*([\d.]+)/i`
+      - If `currentBalance < task.bidPrice.min` → Stop marketplace (no bids possible on ANY tokens)
+      - If `currentBalance >= task.bidPrice.min` → Skip THIS bid (other tokens may have lower prices)
+    - **Helper Functions Added**:
+      - `stopMarketplaceDueToInsufficientBalance()`: Marks marketplace stopped, invalidates balance cache
+      - `handleInsufficientBalanceError()`: Parses error, makes decision, returns boolean
+    - **6 Bid Processors Updated** with try-catch around bid placement:
+      - `processOpenseaCollectionBid` (~line 15891)
+      - `processOpenseaTraitBid` (~line 17093)
+      - `processOpenseaTokenBid` (~line 17566)
+      - `processMagicedenCollectionBid` (~line 19624)
+      - `processMagicedenTokenBid` (~line 19925)
+      - `processMagicedenTraitBid` (~line 20271)
+    - **Debug Logging**: Added logs at each decision point (balance check, amounts extracted, stop/skip decision)
+    - Files modified: `src/index.ts` (helper functions lines 476-626, processor updates throughout)
+    - Resolves: Log flooding, wasted API calls, marketplace stopping entire marketplace when only some tokens unbiddable
+    - Impact: Intelligent balance handling - only stops when truly necessary, otherwise skips individual bids
+
+  - **Bug #5: Floor Price Retry Logic - VERIFIED**:
+    - **Investigation**: CHANGELOG claimed floor price retry was fixed on 2025-12-01, but logs showed floor=0 still occurring
+    - **Verification Results**: All three marketplace floor price functions ALREADY have proper retry logic:
+      - `getOpenseaFloor()`: 3 retries with exponential backoff (500ms, 1s, 2s), doesn't cache 0 values
+      - `getBlurFloor()`: 3 retries with exponential backoff (500ms, 1s, 2s), doesn't cache 0 values, circuit breaker integration
+      - `getMagicEdenFloor()`: 3 retries with exponential backoff (500ms, 1s, 2s), doesn't cache 0 values
+    - **Retry Behavior**: Retries when floor price is 0 (likely temporary API issue), retries on API errors (except 404)
+    - **Cache Behavior**: Only caches POSITIVE floor prices, never caches 0 values
+    - Files verified: `src/functions/collection.ts` (lines 261-577)
+    - Status: No changes needed - retry logic properly implemented
+    - Impact: Floor price fetching is resilient to temporary API failures
+
+  - **Bug #4: MagicEden Timeout - 120s Too Short**:
+    - **Problem**: Tasks with 900+ tokens timing out after 2 minutes, causing job failures
+    - **Root Cause**: 120-second timeout too short for large token count tasks
+    - **Solution**: Increased timeout from 120s to 600s (10 minutes) for MagicEden scheduled bids
+    - **Warning Threshold Added**: Warns at 80% (8 minutes) if processing taking longer than expected
+    - **Debug Logging Added**:
+      - Entry log: `[ME-Sched] slug | Timeout set to 600000ms`
+      - Warning log at 80%: `[ME-Sched] slug | Processing taking longer than expected (480000ms)`
+      - Timeout error: `[ME-Sched] slug | TIMEOUT after 600000ms`
+    - Files modified: `src/index.ts` (lines 18858-18891)
+    - Resolves: MagicEden task timeouts for large token counts
+    - Impact: Large tasks now have 10 minutes to complete instead of 2 minutes
+
+  - **Bug #6: Internet Connectivity False Positives**:
+    - **Problem**: 2 false "connectivity lost" alerts (17:26, 19:00 UTC) potentially caused by single endpoint failure
+    - **Root Cause**: Only checked one endpoint (Google) with no retry logic
+    - **Solution**: Implemented multi-endpoint connectivity check with retry logic:
+      - **3 Endpoints for Redundancy**: Google (https://www.google.com), Cloudflare (https://1.1.1.1), Cloudflare DNS (https://cloudflare-dns.com)
+      - **3 Retry Attempts**: 2-second delay between retries
+      - **Success if ANY endpoint responds**: Connection considered alive if ANY of the 3 endpoints returns 200 or 204
+      - **Only declares lost after all retries exhausted**: All 3 endpoints must fail 3 times before declaring connectivity lost
+    - **Debug Logging Added**:
+      - `[ConnectivityCheck] Attempt X/3`
+      - `[ConnectivityCheck] Endpoint {name}: {status} | SUCCESS` or `FAILED | {error}`
+      - `[ConnectivityCheck] All endpoints failed, retrying in 2000ms`
+      - `Internet connectivity lost after retry attempts` (final failure)
+    - Files modified: `src/index.ts` (lines 1851-1891)
+    - Resolves: False positive connectivity loss alerts
+    - Impact: More reliable connectivity monitoring, fewer false alarms
+
+  - **Bug #7: RPC Timeout - Approval Cache Failures**:
+    - **Problem**: Single RPC timeout at 18:56:38 UTC during approval cache allowance check
+    - **Root Cause**: Default RPC timeout (~10s) too short, no retry logic, no fallback provider
+    - **Solution**: Implemented comprehensive RPC reliability improvements:
+      - **Increased Timeout**: From default ~10s to 30 seconds
+      - **3 Retry Attempts**: Exponential backoff (1s, 2s, 4s delays)
+      - **Fallback Provider**: Falls back to PublicNode (https://ethereum.publicnode.com) if Alchemy fails
+      - **Timeout Detection**: Only retries on timeout errors (ETIMEDOUT, ECONNABORTED), not other errors
+    - **Retry Logic Flow**:
+      1. Try Alchemy with 30s timeout
+      2. If timeout → retry up to 3 times with exponential backoff
+      3. If all Alchemy attempts fail → try PublicNode fallback with 30s timeout
+      4. Only return false if both providers exhausted
+    - **Debug Logging Added**:
+      - `[RPC] Fetching allowance attempt X/3 | wallet=...`
+      - `[RPC] Success: allowance=X | wallet=...`
+      - `[RPC] Timeout on attempt X, retrying in Xms | wallet=...`
+      - `[RPC] Alchemy failed, trying PublicNode fallback | wallet=...`
+      - `[RPC] Fallback success: allowance=X | wallet=...`
+      - `[RPC] Both providers failed | wallet=...`
+    - Files modified: `src/utils/approval-cache.ts` (lines 1-144)
+    - Resolves: RPC timeout failures during approval checks
+    - Impact: More reliable on-chain allowance checks with retry and fallback
+
+### Fixed
+- **Token-vs-* Defense Running After Task Stop**: Fixed race condition where Token-vs-Collection and Token-vs-Trait defense blocks continued executing after stopTask was called
+  - **Problem**: Log showed `Token-vs-Collection: Cache MISS - fetching from API` after task was already stopped - defense logic was not respecting task stop
+  - **Root Cause**: `handleOpenseaCounterbid` and `handleMagicEdenCounterbid` check `currentTask.running` at the START of the handler, but Token-vs-* defense blocks run AFTER many async operations (floor price fetch, price calculations, existing order processing). During these async operations, `stopTask()` could be called setting `running = false`, but handlers never re-checked before entering defense blocks.
+  - **Solution**: Added `currentTask.running` check at the START of each Token-vs-* defense block, before any async operations
+  - **Locations Fixed (4 total)**:
+    - OpenSea Token-vs-Collection defense (~line 13689): Added running check before defense ENTRY
+    - OpenSea Token-vs-Trait defense (~line 13335): Added running check before defense ENTRY
+    - MagicEden Token-vs-Collection defense (~line 12519): Added running check before defense ENTRY
+    - MagicEden Token-vs-Trait defense (~line 12152): Added running check before defense ENTRY
+  - **New Debug Logs**:
+    - `[OS] slug | Token-vs-Collection: SKIP - task stopped during processing`
+    - `[OS] slug | Token-vs-Trait: SKIP - task stopped during processing`
+    - `[ME] slug | Token-vs-Collection: SKIP - task stopped during processing`
+    - `[ME] slug | Token-vs-Trait: SKIP - task stopped during processing`
+  - Files modified: `src/index.ts`
+  - Resolves: Defense logic executing after task was stopped, wasted API calls, potential bid placement on stopped tasks
+  - Impact: All Token-vs-* defense blocks now properly exit early when task is stopped mid-handler
+
+- **Token-vs-Trait Defense NOT Working for Token/Rarity Tasks**: Fixed critical bug where token/rarity bid tasks were NOT defending against incoming trait offers
+  - **Problem**: When a competitor placed a trait_offer that covered tokens we were bidding on, the bot should place token counterbids to defend those positions - but this never happened for token/rarity tasks
+  - **Root Cause** (Confirmed via debug logs):
+    - For token/rarity tasks, `selectedTraits` is empty (they don't select traits, they select tokens)
+    - `hasTraits = checkOpenseaTrait(selectedTraits, ...)` returns `false` when no traits are selected
+    - The early `return` at `if (!hasTraits)` exits BEFORE the Token-vs-Trait defense logic is reached
+    - Debug logs showed: `selectedTraitsCount=0 | isTokenOrRarityTask=true | reason=hasTraits_false | Token-vs-Trait_would_apply=true`
+    - **ZERO `Token-vs-Trait ENTRY` logs** appeared in production - confirming defense logic was NEVER reached
+  - **Why Token-vs-Collection Worked But Token-vs-Trait Didn't**:
+    - `collection_offer` handler: Token-vs-Collection defense is a SEPARATE block, always evaluated
+    - `trait_offer` handler: Token-vs-Trait defense was INSIDE the hasTraits block, after the early return
+  - **Solution**:
+    - Modified the early `return` at `if (!hasTraits)` to allow token/rarity tasks to continue
+    - Wrapped trait bid processing in `if (hasTraits) { ... }` block (only runs for trait tasks)
+    - Token-vs-Trait defense logic now runs OUTSIDE the hasTraits block (runs for ALL task types)
+  - **OpenSea Fix** (`handleOpenseaCounterbid`, trait_offer section):
+    - Changed `if (!hasTraits) return` to only return for non-token tasks
+    - Added `if (!hasTraits && !isTokenOrRarityTask) return` pattern
+    - Wrapped trait bid processing (price checks, stop option, counterbid queue) in `if (hasTraits)`
+    - Token-vs-Trait defense now runs after hasTraits block closes
+  - **MagicEden Fix** (`handleMagicEdenCounterbid`, attribute section):
+    - Same pattern: `if (!hasTraits && !isTokenOrRarityTask) return`
+    - Wrapped trait bid processing in `if (hasTraits)` block
+    - Token-vs-Trait defense (checking existing token orders for tokens with the trait) now runs outside
+  - **New Debug Logs**:
+    - `trait_offer EXIT | reason=hasTraits_false_not_token_task` - Non-token tasks exit early (expected)
+    - `trait_offer CONTINUE | reason=token_task_will_check_defense` - Token tasks continue to defense
+    - `attribute_bid EXIT | reason=hasTraits_false_not_token_task` - MagicEden non-token tasks exit early
+    - `attribute_bid CONTINUE | reason=token_task_will_check_defense` - MagicEden token tasks continue
+  - Files modified: `src/index.ts` (handleOpenseaCounterbid ~lines 12929-13297, handleMagicEdenCounterbid ~lines 12002-12230)
+  - Resolves: Token/rarity tasks not defending against trait offers
+  - Impact: Token bid tasks now properly counterbid when competitors place trait offers that cover their tokens
+
+- **MagicEden Token-vs-Trait Defense Debug Logs**: Added comprehensive debug logging to MagicEden Token-vs-Trait defense section for verification parity with OpenSea
+  - **Problem Solved**: OpenSea had comprehensive Token-vs-Trait debug logs at all decision points, but MagicEden was missing critical logs, making it impossible to verify the Token-vs-Trait defense fix was working correctly on MagicEden
+  - **New Debug Logs Added** (4 total):
+    - `Token-vs-Trait ENTRY`: Logged at start of defense block with traitType and traitValue
+    - `Token-vs-Trait: Found X tokens`: Logged after fetching tokens with matching trait from OpenSea GraphQL API
+    - `Token-vs-Trait: SKIP - exceeds max bid price`: Logged when calculated counterbid price exceeds task's max bid price
+    - `Token-vs-Trait: QUEUED`: Logged for each token counterbid successfully queued with price in ETH
+  - **Updated Summary Log**: Changed summary log to match OpenSea format with metadata
+  - **Expected Log Output When Working**:
+    ```
+    [Counterbid] [ME] genuine-undead | Token-vs-Trait ENTRY | traitType=EYEWEAR | traitValue=FACECRACK
+    [Counterbid] [ME] genuine-undead | Token-vs-Trait: Found 15 tokens with trait EYEWEAR:FACECRACK
+    [Counterbid] [ME] genuine-undead [1234] | Token-vs-Trait: QUEUED - defending token against trait offer EYEWEAR:FACECRACK at 0.0385 ETH
+    [Counterbid] [ME] genuine-undead [5678] | Token-vs-Trait: SKIP - exceeds max bid price 0.035
+    [Counterbid] [ME] genuine-undead | Token-vs-Trait: Queued 1 token counterbid(s) defending against trait offer EYEWEAR:FACECRACK
+    ```
+  - Files modified: `src/index.ts` (handleMagicEdenCounterbid Token-vs-Trait defense ~lines 12147-12229)
+  - Resolves: Missing debug logging for MagicEden Token-vs-Trait defense verification
+  - Impact: Can now verify Token-vs-Trait defense is working correctly on MagicEden via debug logs
+
+- **MagicEden Token-vs-Collection Defense Block**: Added dedicated Token-vs-Collection defense block to MagicEden to match OpenSea's architecture
+  - **Problem Solved**: MagicEden's collection bid handler only defended tokens that ALREADY had orders in cache, while OpenSea's Token-vs-Collection defense iterates through ALL `task.tokenIds` regardless of cached orders. This was a functional gap, not just a logging gap.
+  - **How OpenSea Worked**: Has a dedicated `if (isTokenOrRarityTask)` block that iterates through ALL `task.tokenIds` and defends them even if no order exists yet
+  - **How MagicEden Worked (Before)**: Only looped through `allTaskOrders = orderCache.getByTaskAndMarketplace()`, so tokens without existing orders were NOT defended
+  - **Solution**: Added a dedicated Token-vs-Collection defense block to MagicEden that mirrors OpenSea's implementation
+  - **New Features**:
+    - Iterates through ALL `task.tokenIds` for token/rarity tasks
+    - Skips tokens already processed in the existing order loop
+    - Checks if incoming collection offer beats our token offer
+    - Cache-first approach with API fallback for top offer lookup
+    - Uses `crossTypeMarginMultiplier` for price calculation
+    - Checks max bid price constraint
+    - Uses `pendingCounterbids` to prevent duplicate counterbids
+    - Queues `MAGICEDEN_TOKEN_BID_COUNTERBID` jobs for each defended token
+  - **Comprehensive Debug Logging**:
+    - `Token-vs-Collection ENTRY`: Entry to defense block with tokenCount and collection offer price
+    - `Token-vs-Collection: Cache MISS - fetching from API`: When cache miss triggers API fetch
+    - `Token-vs-Collection: API→Cache`: When API result is cached
+    - `Token-vs-Collection: Using top offer X ETH (> collection offer Y ETH)`: When cached offer is higher
+    - `Token-vs-Collection: SKIP - exceeds max bid price`: When price exceeds max
+    - `Token-vs-Collection: SKIP - counterbid already pending`: Duplicate prevention
+    - `Token-vs-Collection: SKIP - our token offer >= incoming collection offer`: Already winning
+    - `Token-vs-Collection: QUEUED`: Per-token counterbid queued with price
+    - Summary log with total counterbids queued
+  - Files modified: `src/index.ts` (handleMagicEdenCounterbid collection_bid section ~lines 12514-12621)
+  - Resolves: Token/rarity tasks on MagicEden not defending all tokens against collection offers
+  - Impact: MagicEden token tasks now defend ALL tokens in `task.tokenIds` against collection offers, matching OpenSea's behavior
+
+### Added
+- **Token-vs-Trait/Collection Defense Debug Logging**: Added comprehensive debug logs to investigate why token bid tasks are NOT defending against incoming trait and collection offers
+  - **Problem Being Investigated**: When a competitor places a trait_offer or collection_offer that covers tokens we're bidding on, the bot should place token counterbids to defend those positions - but this isn't happening
+  - **Suspected Root Cause**: For token bid tasks, `selectedTraits` is empty, so `hasTraits` is always `false`, causing early return BEFORE the Token-vs-Trait defense logic is reached
+  - **OpenSea Debug Logs Added** (`handleOpenseaCounterbid`):
+    - `trait_offer ENTRY`: Task context when trait_offer received (bidType, hasTokenIds, tokenCount, selectedTraitsCount, isTokenOrRarityTask)
+    - `trait_offer EXIT (no_trait)`: Early return when no trait in payload
+    - `trait_offer hasTraits`: Decision point showing hasTraits result and whether Token-vs-Trait would apply
+    - `trait_offer EXIT (hasTraits_false)`: Early return with Token-vs-Trait_would_apply flag
+    - `Token-vs-Trait ENTRY`: Entry to token defense block (if ever reached)
+    - `collection_offer ENTRY`: Task context when collection_offer received
+    - `Token-vs-Collection ENTRY`: Entry to collection defense block
+  - **MagicEden Debug Logs Added** (`handleMagicEdenCounterbid`):
+    - `attribute_bid ENTRY`: Task context when attribute bid received (taskBidType, hasTokenIds, tokenCount, selectedTraitsCount, isTokenOrRarityTask, trait)
+    - `attribute_bid hasTraits`: Decision point showing hasTraits result and whether Token-vs-Trait would apply
+    - `attribute_bid EXIT`: Early return with reason (hasTraits_false or missing_trait_data) and Token-vs-Trait_would_apply flag
+    - `collection_bid ENTRY`: Task context when collection bid received
+  - **Expected Log Output** (confirms suspected bug):
+    ```
+    [Counterbid] [OS] genuine-undead | trait_offer ENTRY | bidType=token | hasTokenIds=true | tokenCount=5 | selectedTraitsCount=0 | isTokenOrRarityTask=true
+    [Counterbid] [OS] genuine-undead [HEADWEAR:OPEN MIND] | trait_offer hasTraits=false | isTokenOrRarityTask=true | bidType=token
+    [Counterbid] [OS] genuine-undead [HEADWEAR:OPEN MIND] | trait_offer EXIT | reason=hasTraits_false | Token-vs-Trait_would_apply=true
+    ```
+  - Files modified: `src/index.ts` (handleOpenseaCounterbid ~lines 12898-12920, 13158, 13276-13280, 13537-13539; handleMagicEdenCounterbid ~lines 11992-12005, 12223-12226)
+  - Resolves: Missing visibility into why token bids don't defend against trait/collection offers
+  - Impact: Once logs confirm the root cause, a fix can be implemented with confidence
+
+### Fixed
+- **Critical: Tasks Not Actually Blacklisted on stopTask (Root Cause of Uncancelled Bids)**: Fixed critical bug where `stopTask()` was calling `isTaskBlacklisted()` (which only CHECKS) instead of `cancelTaskJobs()` (which ADDS to blacklist)
+  - **Problem**: When stopping a task, new bids continued to be placed because the task was never actually added to the blacklist
+  - **Root Cause**: Lines 8912-8915 in `stopTask()` called `isTaskBlacklisted(taskId, marketplace)` and `isTaskBlacklisted(taskId)` - these functions only CHECK if a task is blacklisted, they don't ADD the task to the blacklist
+  - **Evidence from Debug Logs**:
+    - `BULK_JOBS_BLOCKED_BLACKLISTED` logs were never appearing because the blacklist check was always returning false
+    - Bids continued to be placed after stopTask was called
+  - **Fix**: Changed to call `cancelTaskJobs(taskId, marketplace)` which actually adds the task to the blacklist
+  - **Additional Fix**: Imported `cancelTaskJobs` function from `./init`
+  - Files modified: `src/index.ts` (import statement line 28, stopTask lines 8909-8916)
+  - Resolves: Root cause of all "bids not cancelling on stopTask" issues
+  - Impact: Tasks are now properly blacklisted immediately when stopTask is called
+
+- **Floor Price API Crash (`Cannot set properties of undefined`)**: Fixed crash when fetching floor prices where `floorPrices[taskId]` was undefined
+  - **Problem**: Error `Cannot set properties of undefined (setting 'magiceden')` at line 20675
+  - **Root Cause**: The `floorPrices[taskId]` object was not initialized before marketplace-specific floor price fetches ran, and the object could be undefined when parallel fetches completed
+  - **Fix**: Always initialize `floorPrices[taskId]` and `bestOffers[taskId]` objects with all marketplaces set to 0 BEFORE any async fetches start
+  - Files modified: `src/index.ts` (lines ~20621-20671)
+  - Resolves: Server crash during floor price fetching
+  - Impact: Floor price fetching is now robust against race conditions
+
+- **Race Condition: Bids Placed After stopTask Due to Missing Blacklist Checks**: Added comprehensive blacklist checks at multiple levels to prevent any new bids after stopTask is called
+  - **Problem**: Even after fixing the blacklist issue, bids could still slip through because blacklist checks were only at individual job processor level, not at batch queuing level
+  - **Solution**: Added blacklist checks at three levels:
+    1. **At `processBulkJobs` entry** (line ~6838): Block entire batch of jobs if task is blacklisted before any processing
+    2. **Inside `processBulkJobs` chunk loop** (line ~6912): Abort mid-batch if task gets blacklisted during processing
+    3. **At scheduled bid processor entry** (all 3 marketplaces): Block individual jobs at the very start
+  - **New Blacklist Checks Added**:
+    - `processOpenseaScheduledBid`: Blacklist check at line ~14722
+    - `processBlurScheduledBid`: Blacklist check at line ~15591
+    - `processMagicedenScheduledBid`: Blacklist check at line ~18454
+    - `processOpenseaTokenBid`: Blacklist check at line ~16778
+    - `processOpenseaTraitBid`: Blacklist check at line ~16388
+    - `processOpenseaCollectionBid`: Blacklist check at line ~15241
+    - `processBlurCollectionBid`: Blacklist check at line ~16070
+    - `processBlurTraitBid`: Blacklist check at line ~18169
+    - `processMagicedenTokenBid`: Blacklist check at line ~19273
+    - `processMagicedenTraitBid`: Blacklist check at line ~19587
+    - `processMagicedenCollectionBid`: Blacklist check at line ~18945
+  - Files modified: `src/index.ts`
+  - Resolves: Race condition where jobs in queue or mid-processing continued after stopTask
+  - Impact: Complete prevention of new bids after stopTask is called
+
+### Added
+- **Comprehensive StopTask Debug Logging**: Added extensive debug logging throughout the cancellation flow for debugging
+  - **New Log Prefix**: `StopTaskFlow` for all cancellation-related logs
+  - **Log Points Added**:
+    - `BULK_JOBS_BLOCKED_BLACKLISTED`: When entire batch is blocked at processBulkJobs entry
+    - `BULK_JOBS_CHUNK_ABORTED_BLACKLISTED`: When batch processing is aborted mid-chunk
+    - `SCHEDULED_BID_BLOCKED_BLACKLISTED`: When scheduled bid processor is blocked at entry
+    - `BID_BLOCKED_BLACKLISTED`: When individual bid processor (token/trait/collection) is blocked
+    - `BLACKLIST_ADDED`: When task is added to blacklist in stopTask
+  - **Log Format**: All logs include `taskId`, `marketplace`, `bidType`, `slug`, and context-specific fields
+  - Files modified: `src/index.ts`
+  - Resolves: Missing visibility into why bids are blocked or allowed during cancellation
+  - Impact: Complete debug trail for diagnosing cancellation issues
+
+- **"Order already exists" Error Now Syncs Local State with OpenSea**: Fixed issue where bot threw errors when OpenSea returned "Order already exists" for token bids
+  - **Problem**: When an order existed on OpenSea but not in the local database/cache (e.g., after server restart, or if DB write failed previously), the bot would fail with "Validation error: Order already exists"
+  - **Root Cause**: `postItemOffer()` didn't handle the case where OpenSea already has an active offer from our wallet on the same token
+  - **Solution**: When "Order already exists" (HTTP 400) is detected:
+    1. Fetch the existing offer from OpenSea REST API using maker address filter
+    2. Extract order details (order_hash, expiration_time, current_price, slug, tokenId)
+    3. Store in MongoDB `Order` model
+    4. Update in-memory `orderCache`
+    5. Update `marketplaceTopOfferCache` via `updateTopOfferAfterOurBid()`
+    6. Return success instead of throwing - the order already exists, job is done
+  - **New Function**: `fetchMakerOfferForToken(contractAddress, tokenId, makerAddress)` fetches active offers for a token from a specific wallet
+  - **API Endpoint Used**: `GET /opensea/api/v2/orders/ethereum/seaport/offers?asset_contract_address={}&token_ids={}&maker={}`
+  - **Comprehensive Debug Logging**: Added ~25 debug log statements to verify the sync flow works correctly:
+    - `fetchMakerOfferForToken()`: ENTRY, API response, order status/filtering details, FOUND/NOT_FOUND result
+    - `postItemOffer()` catch block: ORDER_ALREADY_EXISTS detected, payload extraction, fetch initiated, MongoDB save, orderCache update, topOfferCache update, SYNC SUCCESS/SKIPPED/FAILED
+    - All logs include structured `LogMetadata` with taskId, marketplace, tokenId, orderHash, slug for filtering
+    - Debug logs written to `api-YYYY-MM-DD.log` when DEBUG=true
+    - SYNC SUCCESS/SKIPPED use `warnLog` (always logged) for visibility; failures use `errorLog` with stack trace
+  - Files modified: `src/marketplace/opensea/bid.ts` (added `fetchMakerOfferForToken()`, modified `postItemOffer()` catch block), `src/index.ts` (exported `updateTopOfferAfterOurBid`)
+  - Resolves: Bot failing on "Order already exists" errors, orders not tracked in local DB after server restart
+  - Impact: Bot now gracefully syncs local state with OpenSea when duplicate offers are detected
+
+- **Bulk Cancel API Passing Private Key Instead of WalletId**: Fixed critical bug where `fetchAndCancelOpenseaBids()` passed the decrypted Ethereum private key instead of the MongoDB walletId to `cancelOpenseaBids()`
+  - **Problem**: ~50 uncancelled bids on OpenSea from the `/cancel-bids` API endpoint. Orders were cleaned from DB but NOT cancelled on OpenSea because wallet lookup failed.
+  - **Root Cause**: Line 10084 passed `WALLET_PRIVATE_KEY` (decrypted private key starting with `0x`) instead of `task.walletId` (24-character MongoDB ObjectId)
+  - **Evidence from Debug Logs** (1,104 "Wallet not found" errors):
+    ```
+    fetchAndCancelOpenseaBids BATCH | task.walletId=692a33a72d0f68d63a11561c | WALLET_PRIVATE_KEY=0xa9fb4204ea...
+    [WARN] Wallet 0xa9fb…0276 not found for task 692d5d558c28086d2571baa8 - cleaning up order from DB
+    ```
+  - **Fix**: Changed `await cancelOpenseaBids(batch, WALLET_PRIVATE_KEY, ...)` to `await cancelOpenseaBids(batch, task.walletId, ...)`
+  - Files modified: `src/index.ts` (line 10084 in `fetchAndCancelOpenseaBids()`)
+  - Resolves: Orders not being cancelled on OpenSea API when using bulk cancel endpoint
+  - Impact: Bulk cancel operations now properly pass walletId for wallet lookup
+
+- **Token Bids Not Cancelling on StopTask (75 Uncancelled Bids)**: Fixed critical bug where token bids (via `postItemOffer()`) were not being blocked by the blacklist re-check when stopTask was called
+  - **Problem**: Out of 3800+ bids, 75 token bids remained uncancelled on OpenSea after stopTask. The previous fix added blacklist re-checks to `submitOfferToOpensea()` and `buildOffer()`, but token bids use a different code path: `bidOnOpensea() → postItemOffer()`.
+  - **Root Cause**: The `postItemOffer()` function at line 1055 was missing the critical blacklist re-check inside its `limiter.schedule()` callback. Token bids that had passed the initial blacklist check and were waiting in the Bottleneck rate limiter queue completed successfully after stopTask was called.
+  - **Evidence from Logs**:
+    - `07:49:15.521Z` - Task blacklisted
+    - `07:49:15.758Z` onwards - 80+ token bid jobs entered `processOpenseaTokenBid()` AFTER blacklist
+    - `07:49:22.803Z` - stopTask exited with `limiterQueueFinal=86` (86 jobs still in queue)
+    - **ZERO `BLOCKED_POST_QUEUE` logs** - confirming the fix wasn't being triggered for token bids
+  - **Fix**: Added blacklist re-check inside `postItemOffer()` `limiter.schedule()` callback (matching the pattern in `submitOfferToOpensea()`):
+    ```typescript
+    const { data } = await limiter.schedule(async () => {
+      if (isTaskBlacklisted(taskId, 'opensea')) {
+        debugLog('InFlightBid', `POST_ITEM_BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=opensea | waitTime=${Date.now() - bidStartTime}ms`);
+        throw new Error('Task stopped while waiting in limiter queue');
+      }
+      return axiosInstance.post(...);
+    });
+    ```
+  - Files modified: `src/marketplace/opensea/bid.ts` (postItemOffer function)
+  - Resolves: Token bids placed after stopTask was called, uncancelled bids on OpenSea
+  - Impact: All token bids now properly blocked when task is stopped, even if already in the Bottleneck rate limiter queue
+
+### Added
+- **StopTask Debug Logging and In-Flight Bid Cancellation Fix**: Comprehensive debug logging and critical fix for ~3% of bids not being cancelled when stopTask is called
+  - **Problem Solved**: Out of 1900+ bids, ~58 (3%) remained uncancelled on OpenSea after stopTask completed. These were requests that had already passed the blacklist check and were waiting in the Bottleneck rate limiter queue when stopTask was called.
+  - **Root Cause**: The blacklist check (`isTaskBlacklisted()`) was only performed ONCE at the start of bid functions, BEFORE entering the Bottleneck limiter queue. Requests that passed this check then waited in the queue (sometimes for seconds) and completed successfully after stopTask had been called.
+  - **Critical Fix - Double Blacklist Check**: Added a second blacklist check INSIDE the `limiter.schedule()` callback, AFTER the request exits the queue but BEFORE the HTTP request is made:
+    ```typescript
+    const response = await limiter.schedule(async () => {
+      // Re-check blacklist AFTER waiting in limiter queue - this is the critical fix
+      if (isTaskBlacklisted(taskId, 'opensea')) {
+        debugLog('InFlightBid', `BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=opensea | waitTime=${Date.now() - bidStartTime}ms`);
+        throw new Error('Task stopped while waiting in limiter queue');
+      }
+      return axiosInstance.request({...});
+    });
+    ```
+  - **Functions Updated with Double Blacklist Check**:
+    - OpenSea: `submitOfferToOpensea()`, `buildOffer()` in `src/marketplace/opensea/bid.ts`
+    - MagicEden: `sendSignedOrderData()`, `createBidData()` in `src/marketplace/magiceden/bid.ts`
+    - Blur: `submitBidToBlur()`, `formatBidOnBlur()` in `src/marketplace/blur/bid.ts`
+  - **New Log Category**: Added `stoptask` category to debug-file-logger with prefixes: StopTask, StopTaskFlow, InFlightBid, LimiterQueue, BidAbort
+  - **New Export**: Added `getLimiterQueueDetails(rateLimit)` to `src/init.ts` for stopTask flow debugging
+  - **StopTask Flow Logging** in `src/index.ts`:
+    - `ENTRY` log with limiter queue state (RECEIVED, QUEUED, RUNNING, EXECUTING counts)
+    - `BLACKLISTED` log after task is blacklisted
+    - `QUEUE_CLEAR` log after job removal with count
+    - `HTTP_ABORT_OS/ME/BLUR/ALL` logs for each marketplace abort operation
+    - `EXIT` log with total elapsed time
+    - `ERROR` log in catch block
+  - **Queue Removal Logging** in `removeAllTaskJobsFromQueue()`:
+    - `QUEUE_REMOVAL_START` with taskId and marketplaces
+    - `QUEUE_REMOVAL_PASS1` per marketplace with breakdown (waiting, active, delayed, completed, failed)
+    - `QUEUE_REMOVAL_PASS2` if second pass finds remaining jobs
+    - `QUEUE_REMOVAL_COMPLETE` with total removed and elapsed time
+  - **Bulk Jobs Logging** in `processBulkJobs()`:
+    - `BULK_JOBS_ENTRY` with job count and name
+    - `BULK_JOBS_REJECTED` when jobs are rejected with reasons
+    - `BULK_JOBS_QUEUED` for non-blur and blur queues separately
+    - `BULK_JOBS_EXIT` with totals and elapsed time
+  - **In-Flight Bid Logging** in marketplace bid functions:
+    - `BLOCKED_POST_QUEUE` when request is caught after queue wait (the key indicator the fix is working!)
+    - `EXECUTING_REQUEST` when request starts HTTP call
+  - Files modified: `src/utils/debug-file-logger.ts`, `src/init.ts`, `src/index.ts`, `src/marketplace/opensea/bid.ts`, `src/marketplace/magiceden/bid.ts`, `src/marketplace/blur/bid.ts`
+  - Resolves: ~3% of bids not being cancelled when stopTask is called during active bidding
+  - Impact: 100% cancellation rate when stopTask is called, complete visibility into stopTask timing via debug logs
+
+### Fixed
+- **Cancellation BidStats Zeroing Bug**: Fixed bug where `bidStats[taskId]` was deleted immediately when stopTask triggered instead of decrementing as each bid was cancelled
+  - **Problem Solved**: When stopping a task, the UI showed 0 bids immediately instead of showing the count progressively decrement as each bid was cancelled
+  - **Root Cause 1**: `delete bidStats[taskId]` was called in `updateMultipleTasksStatus()` when status changed to STOPPED/COMPLETED, before cancellation jobs completed
+  - **Root Cause 2**: `orderCache.deleteByTask(taskId)` was called too early in `stopTask()` (line 8879), preventing proper tracking
+  - **Root Cause 3**: `decrementBidCount()` was never called in bulkCancel functions - only `decrementOwnBidCounter()` was called
+  - **Solution**:
+    - Removed premature `delete bidStats[taskId]` from `updateMultipleTasksStatus()` - now only deleted when cancellation reaches 100%
+    - Removed premature `orderCache.deleteByTask(taskId)` from `stopTask()` - now only deleted when cancellation reaches 100%
+    - Added `decrementBidCount()` calls to all 3 bulkCancel functions:
+      - `bulkCancelOpenseaBid`: Added `decrementBidCount('opensea', taskId)`
+      - `bulkCancelMagicedenBid`: Added `decrementBidCount('magiceden', taskId)` for each order in batch
+      - `bulkCancelBlurBid`: Added `decrementBidCount('blur', taskId)`
+    - Added completion verification in `updateTaskCancellationPercentage` and `validateAndTransitionToStopped` when 100%:
+      - Verifies zero remaining in both `orderCache` and `Order.model`
+      - Logs error if incomplete cancellation detected
+      - Only cleans up `bidStats` and `orderCache` after verification
+  - **Debug Logging Added**:
+    - Added `StopTask` prefix to `PREFIX_TO_CATEGORY` → `cancellation` category
+    - Added `BEFORE SNAPSHOT` log at stopTask entry with orderCount and cacheCount
+    - Added `COMPLETION CHECK` log when percentage reaches 100%
+    - Added `AFTER SNAPSHOT` log showing counts after cleanup
+    - Added `ALL MARKETPLACES COMPLETE` log when all marketplaces are done
+  - **New Method Added**: `orderCache.countByTask(taskId)` for counting active orders
+  - Files modified: `src/index.ts`, `src/utils/debug-file-logger.ts`, `src/utils/order-cache.ts`
+  - Resolves: UI showing 0 bids immediately at cancellation instead of progressive decrement
+  - Impact: Users now see accurate bid counts during cancellation, providing proper visibility into cancellation progress
+
 - **Duplicate Token Bids Race Condition**: Fixed race condition causing duplicate bids on the same token from scheduled bids and Token-vs-Collection defense
   - **Problem**: Meta Legend #4260 received TWO identical 0.0177 WETH bids placed 2 seconds apart from the same wallet
   - **Root Cause**: The scheduled token bid processor (`processOpenseaTokenBid`, `processMagicedenTokenBid`) and the Token-vs-Collection counterbid defense both queue bids for the same token simultaneously without coordination

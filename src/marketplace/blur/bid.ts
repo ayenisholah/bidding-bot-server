@@ -14,7 +14,7 @@ import { convertBigNumbers } from "../../utils/bigNumberConverter";
 import { InsufficientBalanceError, TransferRestrictedError, MinimumPriceError, InvalidRequestError } from "../errors";
 import { blurRateLimiter } from "../../utils/blur-rate-limiter";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
-import { errorLog, warnLog } from "../../utils/debug-file-logger";
+import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
 
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
 
@@ -579,11 +579,18 @@ async function formatBidOnBlur(
 
   let retries = 0;
   const maxRetries = 2;
+  const formatStartTime = Date.now();
 
   while (retries <= maxRetries) {
     try {
-      const { data } = await limiter.schedule(() =>
-        axiosInstance.request<BlurBidResponse>({
+      const { data } = await limiter.schedule(async () => {
+        // Re-check blacklist AFTER waiting in limiter queue
+        if (isTaskBlacklisted(taskId, 'blur')) {
+          debugLog('InFlightBid', `FORMAT_BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=blur | waitTime=${Date.now() - formatStartTime}ms`, { taskId, marketplace: 'blur' });
+          throw new Error('Task stopped while waiting in limiter queue');
+        }
+
+        return axiosInstance.request<BlurBidResponse>({
           method: 'POST',
           url: `${url}/v1/collection-bids/format`,
           headers: {
@@ -596,8 +603,8 @@ async function formatBidOnBlur(
           signal: controller.signal,
           timeout: 30000,
           "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
-        })
-      );
+        });
+      });
 
       // Record successful request for adaptive rate limiting
       blurRateLimiter.recordError(walletAddress, false);
@@ -700,15 +707,19 @@ async function submitBidToBlur(
     // Calculate formatted ETH price for logging
     const offerPriceEth = (Math.round(Number(formatUnits(offer_price.toString(), 18)) * 100) / 100).toFixed(2);
 
-    const [taskId] = bidCount.split(":")
-    if (isTaskBlacklisted(taskId, 'blur')) {
-      // console.log(`[Blur] Offer submission blocked for stopped task: ${taskId}`);
+    const [parsedTaskId] = bidCount.split(":")
+    const bidStartTime = Date.now();
+
+    if (isTaskBlacklisted(parsedTaskId, 'blur')) {
+      debugLog('InFlightBid', `BLOCKED_EARLY | taskId=${parsedTaskId} | marketplace=blur | reason=blacklisted`, { taskId: parsedTaskId, marketplace: 'blur' });
       return;
     }
-    const currentTask = activeTasks.get(taskId)
+    const currentTask = activeTasks.get(parsedTaskId)
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("BLUR".toLowerCase())) return
     let running = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase())
     if (!running) return
+
+    debugLog('InFlightBid', `ENTERING_LIMITER | taskId=${parsedTaskId} | marketplace=blur | collection=${slug} | timestamp=${bidStartTime}`, { taskId: parsedTaskId, marketplace: 'blur' });
 
     // Try to reserve a request slot atomically
     let reserved = false;
@@ -739,8 +750,16 @@ async function submitBidToBlur(
 
       while (submitRetries <= maxSubmitRetries) {
         try {
-          response = await limiter.schedule(() =>
-            axiosInstance.request({
+          response = await limiter.schedule(async () => {
+            // Re-check blacklist AFTER waiting in limiter queue - this is the critical fix
+            if (isTaskBlacklisted(parsedTaskId, 'blur')) {
+              debugLog('InFlightBid', `BLOCKED_POST_QUEUE | taskId=${parsedTaskId} | marketplace=blur | waitTime=${Date.now() - bidStartTime}ms`, { taskId: parsedTaskId, marketplace: 'blur' });
+              throw new Error('Task stopped while waiting in limiter queue');
+            }
+
+            debugLog('InFlightBid', `EXECUTING_REQUEST | taskId=${parsedTaskId} | marketplace=blur | waitTime=${Date.now() - bidStartTime}ms`, { taskId: parsedTaskId, marketplace: 'blur' });
+
+            return axiosInstance.request({
               method: 'POST',
               url: `${url}/v1/collection-bids/submit`,
               headers: {
@@ -753,8 +772,8 @@ async function submitBidToBlur(
               signal: controller.signal,
               timeout: 30000,
               "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
-            })
-          );
+            });
+          });
           break; // Success, exit retry loop
         } catch (submitError: any) {
           // Handle 403 errors

@@ -44,7 +44,7 @@ export interface ParsedLogLine {
 }
 
 // ============================================
-// LOG CATEGORY DEFINITIONS (22 categories)
+// LOG CATEGORY DEFINITIONS (23 categories)
 // ============================================
 
 export type LogCategory =
@@ -69,6 +69,7 @@ export type LogCategory =
   | 'cancellation'
   | 'health'
   | 'metadata'
+  | 'stoptask'
   | 'system';
 
 // Prefix → Category mapping (single point of configuration)
@@ -179,6 +180,13 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'BulkCancelMagiceden': 'cancellation',
   'ValidateBidCount': 'cancellation',
   'TopBids': 'cancellation',
+
+  // StopTask Flow (5) - Detailed stopTask debugging
+  'StopTask': 'stoptask',
+  'StopTaskFlow': 'stoptask',
+  'InFlightBid': 'stoptask',
+  'LimiterQueue': 'stoptask',
+  'BidAbort': 'stoptask',
 
   // Health (3)
   'Health': 'health',
@@ -370,7 +378,7 @@ export function getAllCategories(): LogCategory[] {
   return [
     'startup', 'task', 'scheduler', 'bidflow', 'counterbid', 'queue', 'worker',
     'database', 'redis', 'lock', 'blur', 'opensea', 'magiceden', 'api', 'websocket',
-    'listing', 'collection', 'balance', 'cancellation', 'health', 'metadata', 'system'
+    'listing', 'collection', 'balance', 'cancellation', 'health', 'metadata', 'stoptask', 'system'
   ];
 }
 
@@ -380,11 +388,12 @@ export function getAllCategories(): LogCategory[] {
  */
 export function getMarketplaceCategories(marketplace: string): LogCategory[] {
   const categoryMap: Record<string, LogCategory[]> = {
-    'opensea': ['opensea', 'bidflow', 'counterbid', 'queue', 'api', 'cancellation'],
-    'blur': ['blur', 'bidflow', 'counterbid', 'queue', 'api', 'cancellation'],
-    'magiceden': ['magiceden', 'bidflow', 'counterbid', 'queue', 'api', 'cancellation'],
-    'system': ['system', 'startup', 'database', 'redis', 'lock', 'task', 'scheduler'],
+    'opensea': ['opensea', 'bidflow', 'counterbid', 'queue', 'api', 'cancellation', 'stoptask'],
+    'blur': ['blur', 'bidflow', 'counterbid', 'queue', 'api', 'cancellation', 'stoptask'],
+    'magiceden': ['magiceden', 'bidflow', 'counterbid', 'queue', 'api', 'cancellation', 'stoptask'],
+    'system': ['system', 'startup', 'database', 'redis', 'lock', 'task', 'scheduler', 'stoptask'],
     'health': ['health', 'worker', 'scheduler', 'queue'],
+    'stoptask': ['stoptask', 'cancellation', 'queue', 'task'],
     'all': getAllCategories(),
   };
   return categoryMap[marketplace.toLowerCase()] || getAllCategories();
