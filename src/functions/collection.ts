@@ -73,10 +73,11 @@ const lockManager = new DistributedLockManager({
 });
 
 // Circuit breaker for OpenSea API calls to prevent retry storms
+// Updated settings to be less aggressive after 2025-12-02 outage analysis
 const openseaCircuitBreaker = new CircuitBreaker({
-  failureThreshold: 5,    // Open circuit after 5 consecutive failures
-  resetTimeout: 60000,    // Wait 60s before attempting recovery
-  halfOpenRequests: 3     // Test recovery with 3 requests
+  failureThreshold: 10,    // Open circuit after 10 consecutive failures (increased from 5)
+  resetTimeout: 120000,    // Wait 120s before attempting recovery (increased from 60s)
+  halfOpenRequests: 5      // Test recovery with 5 requests (increased from 3)
 });
 
 // Helper function to add timeout to promises

@@ -2987,6 +2987,23 @@ async function startServer() {
         errorLog('MongoDBConnection', 'MongoDB connection error', err);
       });
 
+      // Connection pool monitoring (added 2025-12-03 to diagnose pool exhaustion)
+      const mongoClient = mongoose.connection.getClient();
+
+      // Log pool metrics every minute when DEBUG=true
+      if (DEBUG) {
+        setInterval(() => {
+          try {
+            const poolStats = mongoClient?.topology?.s?.pool;
+            if (poolStats) {
+              debugLog('ConnectionPool', `Pool Stats | total=${poolStats.totalConnectionCount || 0} | available=${poolStats.availableConnectionCount || 0} | pending=${poolStats.pendingConnectionCount || 0}`);
+            }
+          } catch (error) {
+            // Silent fail - pool monitoring is non-critical
+          }
+        }, 60000); // Log every minute
+      }
+
       // Log connection pool stats in development
       if (process.env.NODE_ENV === 'development') {
         setInterval(() => {
