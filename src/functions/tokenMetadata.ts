@@ -2,7 +2,7 @@ import { axiosInstance, limiter } from '../init';
 import { BASE_URL } from '../constants';
 import { API_KEY } from '..';
 import { tokenTraitCache, TokenTrait, TokenTraitData } from '../utils/token-trait-cache';
-import { errorLog } from '../utils/debug-file-logger';
+import { errorLog, debugLog } from '../utils/debug-file-logger';
 
 // GraphQL queries
 // Note: Using /opensea/graphql endpoint instead of /graphql for OpenSea API compatibility
@@ -366,24 +366,38 @@ export async function tokenHasTrait(
   traitType: string,
   traitValue: any
 ): Promise<boolean> {
+  // DEBUG: Log entry with parameters
+  debugLog('Metadata', `tokenHasTrait ENTRY | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | trait=${traitType}:${traitValue}`);
+
   // Try cache first
   const hasTrait = await tokenTraitCache.tokenHasTrait(contractAddress, tokenId, traitType, traitValue);
-  
+
   if (hasTrait) {
+    debugLog('Metadata', `tokenHasTrait: Cache HIT | tokenId=${tokenId} | result=true`);
     return true;
   }
 
   // If not in cache, fetch metadata
+  debugLog('Metadata', `tokenHasTrait: Cache MISS | tokenId=${tokenId} | fetching metadata...`);
   const metadata = await fetchTokenMetadata(contractAddress, tokenId);
-  
+
   if (!metadata) {
+    debugLog('Metadata', `tokenHasTrait: Metadata fetch FAILED | tokenId=${tokenId} | returning false`);
     return false;
   }
 
-  return metadata.traits.some(trait => 
-    trait.trait_type === traitType && 
+  // DEBUG: Log traits found and comparison
+  const traitsList = metadata.traits.map(t => `${t.trait_type}:${t.value}`).slice(0, 5).join(', ');
+  const hasMoreTraits = metadata.traits.length > 5 ? ` (+${metadata.traits.length - 5} more)` : '';
+  debugLog('Metadata', `tokenHasTrait: Metadata fetched | tokenId=${tokenId} | traitsCount=${metadata.traits.length} | traits=[${traitsList}${hasMoreTraits}]`);
+
+  const result = metadata.traits.some(trait =>
+    trait.trait_type === traitType &&
     trait.value === traitValue
   );
+
+  debugLog('Metadata', `tokenHasTrait EXIT | tokenId=${tokenId} | looking for ${traitType}:${traitValue} | result=${result}`);
+  return result;
 }
 
 /**

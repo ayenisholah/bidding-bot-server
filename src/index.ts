@@ -487,7 +487,7 @@ async function stopMarketplaceDueToInsufficientBalance(
   // Initialize marketplace status if it doesn't exist
   if (!taskStatus[taskId]) {
     taskStatus[taskId] = {
-      status: 'STOPPED',
+      selectedMarketplaces: [],
       marketplaces: {}
     };
   }
@@ -495,6 +495,11 @@ async function stopMarketplaceDueToInsufficientBalance(
   if (!taskStatus[taskId].marketplaces[mpKey]) {
     taskStatus[taskId].marketplaces[mpKey] = {
       status: 'STOPPED',
+      runningPercentage: 0,
+      cancellationPercentage: 0,
+      processingPercentage: 0,
+      totalJobs: 0,
+      completedJobs: 0,
       lastUpdate: Date.now()
     };
   }
@@ -510,7 +515,7 @@ async function stopMarketplaceDueToInsufficientBalance(
 
   warnLog('BidFlow', `STOP MARKETPLACE | taskId=${taskId} | marketplace=${marketplace} | balance=${currentBalance} < minBid=${minBidPrice} | required=${requiredBalance}`, {
     taskId,
-    marketplace,
+    marketplace: marketplace.toLowerCase() as 'blur' | 'opensea' | 'magiceden',
     wallet: walletAddress
   });
 }
@@ -552,8 +557,9 @@ async function handleInsufficientBalanceError(
     currentBalance = parseFloat(foundMatch[1]);
     requiredBalance = parseFloat(requireMatch[1]);
   } else {
-    const availableMatch = errorMessage.match(/available:\s*([\d.]+)/i);
-    const requiredMatch2 = errorMessage.match(/required:\s*([\d.]+)/i);
+    // Match both "available: X" and "available X" formats (colon OR space)
+    const availableMatch = errorMessage.match(/available[:\s]\s*([\d.]+)/i);
+    const requiredMatch2 = errorMessage.match(/required[:\s]\s*([\d.]+)/i);
 
     if (availableMatch && requiredMatch2) {
       currentBalance = parseFloat(availableMatch[1]);
@@ -563,14 +569,14 @@ async function handleInsufficientBalanceError(
 
   debugLog('BidFlow', `Balance Check: Caught InsufficientBalanceError | taskId=${taskId} | marketplace=${marketplace} | identifier=${identifier}`, {
     taskId,
-    marketplace,
+    marketplace: marketplace.toLowerCase() as 'blur' | 'opensea' | 'magiceden',
     identifier
   });
 
   if (currentBalance !== null && requiredBalance !== null) {
     debugLog('BidFlow', `Balance Amounts | taskId=${taskId} | current=${currentBalance} | required=${requiredBalance} | min=${minBidPrice}`, {
       taskId,
-      marketplace,
+      marketplace: marketplace.toLowerCase() as 'blur' | 'opensea' | 'magiceden',
       identifier
     });
 
@@ -589,30 +595,32 @@ async function handleInsufficientBalanceError(
     } else {
       debugLog('BidFlow', `SKIP BID | taskId=${taskId} | marketplace=${marketplace} | identifier=${identifier} | Balance sufficient for min but not for this bid`, {
         taskId,
-        marketplace,
+        marketplace: marketplace.toLowerCase() as 'blur' | 'opensea' | 'magiceden',
         identifier
       });
       return true; // Skip this bid, continue processing other tokens
     }
   } else {
-    // Couldn't extract balance amounts, but we know it's a balance error
-    // Default to stopping the marketplace to be safe
-    warnLog('BidFlow', `Balance error detected but couldn't parse amounts | taskId=${taskId} | marketplace=${marketplace} | error=${errorMessage}`, {
+    // Couldn't parse balance amounts - set warning instead of stopping
+    // Only stop if we're SURE balance < minBid, which we can't confirm here
+    warnLog('BidFlow', `Balance error detected but couldn't parse amounts - setting warning | taskId=${taskId} | marketplace=${marketplace} | error=${errorMessage}`, {
       taskId,
-      marketplace,
+      marketplace: marketplace.toLowerCase() as 'blur' | 'opensea' | 'magiceden',
       identifier
     });
 
-    await stopMarketplaceDueToInsufficientBalance(
-      taskId,
-      marketplace,
-      walletAddress,
-      currency,
-      0,
-      0,
-      minBidPrice
-    );
-    return true;
+    // Set warning flags instead of stopping marketplace
+    if (!warningBids[taskId]) {
+      warningBids[taskId] = { opensea: false, magiceden: false, blur: false };
+    }
+    if (!warningMessage[taskId]) {
+      warningMessage[taskId] = { opensea: "", magiceden: "", blur: "" };
+    }
+    const mpLower = marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
+    warningBids[taskId][mpLower] = true;
+    warningMessage[taskId][mpLower] = `Insufficient balance for some bids (couldn't parse exact amounts from error)`;
+
+    return true; // Skip this bid but don't stop marketplace
   }
 }
 
@@ -2994,7 +3002,8 @@ async function startServer() {
       if (DEBUG) {
         setInterval(() => {
           try {
-            const poolStats = mongoClient?.topology?.s?.pool;
+            // Cast to any to access internal MongoDB driver topology properties
+            const poolStats = (mongoClient as any)?.topology?.s?.pool;
             if (poolStats) {
               debugLog('ConnectionPool', `Pool Stats | total=${poolStats.totalConnectionCount || 0} | available=${poolStats.availableConnectionCount || 0} | pending=${poolStats.pendingConnectionCount || 0}`);
             }
@@ -3205,6 +3214,14 @@ async function startServer() {
     // This ensures bidStats is populated before clients connect (fixes Active:0 bug on server restart)
     await validateBidCount();
     console.log('✅ Bid counts initialized from database');
+
+    // Initialize periodic intervals AFTER MongoDB connection is established
+    // These were previously top-level causing "Client must be connected" errors on startup
+    validateBidCountInterval = setInterval(validateBidCount, STANDARD_INTERVAL);
+    setInterval(logJobTrackingStatus, STANDARD_INTERVAL);
+    setInterval(checkStuckTasks, STANDARD_INTERVAL);
+    setInterval(recoverPartialQueueingTasks, STANDARD_INTERVAL);
+    debugLog('STARTUP', 'Periodic monitoring intervals initialized');
 
     // Start all tasks that have running: true in database
     // This handles server restarts where tasks were previously running
@@ -12422,6 +12439,9 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
             );
             tokenCounterbidsQueued++;
             debugLog('Counterbid', `[ME] ${task.contract.slug} [${tokenId}] | Token-vs-Trait: QUEUED - defending token against trait offer ${trait.attributeKey}:${trait.attributeValue} at ${tokenOfferPriceEth} ETH`, { taskId: task._id.toString(), marketplace: 'magiceden' });
+          } else {
+            // DEBUG: Log when token has trait but no cached order (token not being bid on)
+            debugLog('Counterbid', `[ME] ${task.contract.slug} [${tokenId}] | Token-vs-Trait: SKIP - no cached order for this token (token has trait but no active bid)`, { taskId: task._id.toString(), marketplace: 'magiceden' });
           }
         }
 
@@ -13556,6 +13576,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               trait.value
             );
 
+            // DEBUG: Log tokenHasTrait result for each token
+            debugLog('Counterbid', `[OS] ${task.contract.slug} [${targetTokenId}] | Token-vs-Trait: tokenHasTrait=${hasMatchingTrait} | checking trait=${trait.type}:${trait.value}`, { taskId: task._id.toString(), marketplace: 'opensea' });
+
             if (hasMatchingTrait) {
               // Token has this trait - check if we need to counterbid
               const ourTokenPrice = orderCache.getOfferPrice(task._id, 'opensea', targetTokenId.toString()) || 0;
@@ -13625,6 +13648,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             errorLog('OpenSea', `Error checking trait for token ${targetTokenId}`, traitCheckError);
           }
         }
+
+        // DEBUG: Log loop completion summary (always log to show why no counterbids were queued)
+        debugLog('Counterbid', `[OS] ${task.contract.slug} | Token-vs-Trait: Loop COMPLETE | tokensChecked=${task.tokenIds.length} | counterbidsQueued=${tokenTraitCounterbidsQueued}`, { taskId: task._id.toString(), marketplace: 'opensea' });
 
         if (tokenTraitCounterbidsQueued > 0) {
           debugLog('Counterbid', `[OS] ${task.contract.slug} | Token-vs-Trait: Queued ${tokenTraitCounterbidsQueued} token counterbid(s) defending against trait offer ${trait.type}:${trait.value}`, { taskId: task._id.toString(), marketplace: 'opensea' });
@@ -20670,7 +20696,8 @@ async function validateBidCountInternal() {
   }
 }
 
-validateBidCountInterval = setInterval(validateBidCount, STANDARD_INTERVAL);
+// NOTE: validateBidCountInterval is initialized in startServer() after MongoDB connection
+// validateBidCountInterval = setInterval(validateBidCount, STANDARD_INTERVAL);
 
 async function bulkCancelBlurBid(data: BlurCancelPayload) {
   const { orderKey, walletId, taskId, payload } = data
@@ -25359,8 +25386,16 @@ async function logJobTrackingStatus() {
               }
             }
 
-            // Trigger task completion check
-            await checkTaskCompletionAndScheduleNext(taskId);
+            // Trigger task completion check for each selected marketplace
+            const stuckTask = activeTasks.get(taskId);
+            if (stuckTask && stuckTask.selectedMarketplaces) {
+              for (const mp of stuckTask.selectedMarketplaces) {
+                const mpLower = mp.toLowerCase();
+                if (marketplaces.includes(mpLower as 'opensea' | 'magiceden' | 'blur')) {
+                  await checkTaskCompletionAndScheduleNext(taskId, mpLower);
+                }
+              }
+            }
           }
         }
       }
@@ -25661,8 +25696,15 @@ async function checkStuckTasks() {
                 }
               }
 
-              // Trigger completion
-              await checkTaskCompletionAndScheduleNext(taskId);
+              // Trigger completion for each selected marketplace
+              if (task && task.selectedMarketplaces) {
+                for (const mp of task.selectedMarketplaces) {
+                  const mpLower = mp.toLowerCase();
+                  if (marketplaces.includes(mpLower)) {
+                    await checkTaskCompletionAndScheduleNext(taskId, mpLower);
+                  }
+                }
+              }
 
               // Clean up tracking
               taskCompletionTracking.delete(`${taskId}-99`);
@@ -25708,8 +25750,15 @@ async function checkStuckTasks() {
               }
             }
 
-            // Trigger completion
-            await checkTaskCompletionAndScheduleNext(taskId);
+            // Trigger completion for each selected marketplace
+            if (task && task.selectedMarketplaces) {
+              for (const mp of task.selectedMarketplaces) {
+                const mpLower = mp.toLowerCase();
+                if (['opensea', 'magiceden', 'blur'].includes(mpLower)) {
+                  await checkTaskCompletionAndScheduleNext(taskId, mpLower);
+                }
+              }
+            }
 
             // Clean up tracking
             taskCompletionTracking.delete(taskId);
@@ -26496,17 +26545,11 @@ async function recoverOrphanedJobs() {
   }
 }
 
-// Schedule periodic job tracking status report
-setInterval(logJobTrackingStatus, STANDARD_INTERVAL);
-
-// Schedule stuck task checker
-setInterval(checkStuckTasks, STANDARD_INTERVAL);
-
-// Schedule partial queueing recovery check
-setInterval(recoverPartialQueueingTasks, STANDARD_INTERVAL);
-
-// Schedule orphaned job recovery - DISABLED to prevent state bleed
-// setInterval(recoverOrphanedJobs, STANDARD_INTERVAL);
+// NOTE: These intervals are initialized in startServer() after MongoDB connection
+// setInterval(logJobTrackingStatus, STANDARD_INTERVAL);
+// setInterval(checkStuckTasks, STANDARD_INTERVAL);
+// setInterval(recoverPartialQueueingTasks, STANDARD_INTERVAL);
+// setInterval(recoverOrphanedJobs, STANDARD_INTERVAL); - DISABLED to prevent state bleed
 
 // Export verification function for use in other modules
 export { verifyCancellationComplete };
