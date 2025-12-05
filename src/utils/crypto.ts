@@ -1,7 +1,9 @@
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { config } from "dotenv"
 import { getRedisConnection } from '../utils/redis'
-import { errorLog, warnLog } from './debug-file-logger'
+import { errorLog, warnLog, infoLog } from './debug-file-logger'
 
 config()
 
@@ -17,6 +19,9 @@ const MAX_CACHE_SIZE = 100; // Maximum number of cached keys
 const PASSWORD_REDIS_KEY = 'nft-bot:server:password'; // Single Redis node key
 const PASSWORD_TTL = 604800; // Default 7 days (7 * 24 * 60 * 60)
 
+// File-based password storage (production)
+const PASSWORD_FILE_PATH = process.env.PASSWORD_FILE_PATH || '/app/data/.encrypted-password';
+
 // In development mode, allow password from environment variable
 let PASSWORD: string | undefined = undefined
 // console.log('🔑 [crypto module] Initialized with PASSWORD =', PASSWORD ? 'SET' : 'UNDEFINED')
@@ -24,6 +29,105 @@ let PASSWORD: string | undefined = undefined
 // Rate limiter for no password error logging
 let lastNoPasswordLogTime = 0;
 const NO_PASSWORD_LOG_INTERVAL = 60000; // Log once per minute max
+
+// =============================================================================
+// FILE-BASED PASSWORD STORAGE (Production)
+// =============================================================================
+
+/**
+ * Save encrypted password to file on Docker volume
+ * Only used in production mode
+ */
+function savePasswordToFile(password: string): void {
+  try {
+    const encrypted = encryptPassword(password); // Uses existing deterministic encryption
+    const dir = path.dirname(PASSWORD_FILE_PATH);
+
+    // Ensure directory exists
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    // Write with restrictive permissions (owner read/write only)
+    fs.writeFileSync(PASSWORD_FILE_PATH, encrypted, { mode: 0o600 });
+    infoLog('Crypto', `[PRODUCTION] Password saved to encrypted file`);
+  } catch (err) {
+    warnLog('Crypto', '[PRODUCTION] Failed to save password to file');
+  }
+}
+
+/**
+ * Load encrypted password from file on Docker volume
+ * Only used in production mode
+ */
+function loadPasswordFromFile(): string | null {
+  try {
+    if (!fs.existsSync(PASSWORD_FILE_PATH)) {
+      return null;
+    }
+
+    const encrypted = fs.readFileSync(PASSWORD_FILE_PATH, 'utf8').trim();
+    if (!encrypted) return null;
+
+    return decryptPassword(encrypted); // Uses existing decryptPassword function
+  } catch (err) {
+    warnLog('Crypto', '[PRODUCTION] Failed to load password from file');
+    return null;
+  }
+}
+
+/**
+ * Delete password file from Docker volume
+ * Only used in production mode
+ */
+function deletePasswordFile(): void {
+  try {
+    if (fs.existsSync(PASSWORD_FILE_PATH)) {
+      fs.unlinkSync(PASSWORD_FILE_PATH);
+      infoLog('Crypto', '[PRODUCTION] Password file deleted');
+    }
+  } catch (err) {
+    warnLog('Crypto', '[PRODUCTION] Failed to delete password file');
+  }
+}
+
+/**
+ * Recover password from encrypted file (production only)
+ * Returns true if password was successfully recovered
+ */
+export function recoverPasswordFromFile(): boolean {
+  if (process.env.NODE_ENV !== 'production') {
+    return false; // Only for production
+  }
+
+  const password = loadPasswordFromFile();
+  if (password) {
+    PASSWORD = password;
+    infoLog('Crypto', '[PRODUCTION] Password recovered from encrypted file');
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Unified password recovery function
+ * Tries file-based recovery in production, Redis in development
+ */
+export async function recoverPassword(): Promise<boolean> {
+  // Try file first in production
+  if (process.env.NODE_ENV === 'production') {
+    if (recoverPasswordFromFile()) {
+      return true;
+    }
+  }
+
+  // Fall back to Redis (development)
+  return recoverPasswordFromRedis();
+}
+
+// =============================================================================
+// REDIS-BASED PASSWORD STORAGE (Development)
+// =============================================================================
 
 // Try to recover password from Redis on startup (development only)
 export async function recoverPasswordFromRedis(): Promise<boolean> {
@@ -82,31 +186,25 @@ export async function recoverPasswordFromRedis(): Promise<boolean> {
 }
 
 export async function setPassword(password: string): Promise<void> {
-  // console.log('🔑 [setPassword] Setting password in memory');
   PASSWORD = password;
-  // console.log(`🔑 [setPassword] Password is now ${PASSWORD ? 'SET' : 'NOT SET'}`);
   // Clear the cache when password changes
   decryptedKeyCache.clear();
-  // console.log(`🔑 [setPassword] Decryption cache cleared`);
 
-  // Only store in Redis during development
-  if (process.env.NODE_ENV !== 'production') {
+  // Production: store encrypted password in file on Docker volume
+  if (process.env.NODE_ENV === 'production') {
+    savePasswordToFile(password);
+  } else {
+    // Development: continue using Redis (existing behavior)
     try {
       const redis = getRedisConnection();
       if (PASSWORD_TTL > 0) {
         await redis.setex(PASSWORD_REDIS_KEY, PASSWORD_TTL, password);
-        // const days = Math.floor(PASSWORD_TTL / 86400);
-        // const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
-        // console.log(`🔑 [DEVELOPMENT] Password stored in Redis with TTL of ${days} days, ${hours} hours`);
       } else {
         await redis.set(PASSWORD_REDIS_KEY, password);
-        // console.log('🔑 [DEVELOPMENT] Password stored in Redis (no expiration)');
       }
     } catch {
       warnLog('Crypto', '[DEV] Failed to store password in Redis - using memory only');
     }
-  } else {
-    // console.log('🔑 [PRODUCTION] Password set in memory only (not stored in Redis)');
   }
 }
 
@@ -137,17 +235,17 @@ export async function clearPassword(): Promise<void> {
   PASSWORD = undefined;
   decryptedKeyCache.clear();
 
-  // Only attempt to clear from Redis in development
-  if (process.env.NODE_ENV !== 'production') {
+  // Production: delete password file
+  if (process.env.NODE_ENV === 'production') {
+    deletePasswordFile();
+  } else {
+    // Development: clear from Redis
     try {
       const redis = getRedisConnection();
       await redis.del(PASSWORD_REDIS_KEY);
-      // console.log('🔑 [DEVELOPMENT] Password cleared from Redis and memory');
     } catch {
       warnLog('Crypto', '[DEV] Failed to clear password from Redis - cleared from memory only');
     }
-  } else {
-    // console.log('🔑 [PRODUCTION] Password cleared from memory');
   }
 }
 
@@ -185,15 +283,31 @@ function getEncryptionKey(): Buffer {
 }
 
 // Deterministic password encryption/decryption functions
-// Uses a fixed key derived from JWT_SECRET for deterministic encryption
+// Uses ENCRYPTION_KEY (unique per installation) for better security
 function getPasswordEncryptionKey(): Buffer {
-  const secret = process.env.JWT_SECRET || "default-jwt-secret";
+  const encryptionKey = process.env.ENCRYPTION_KEY;
 
-  // Create a deterministic key from JWT_SECRET
+  if (!encryptionKey) {
+    // Fall back to JWT_SECRET for backwards compatibility during migration
+    const fallback = process.env.JWT_SECRET || "default-jwt-secret";
+    warnLog('Crypto', 'ENCRYPTION_KEY not set, using JWT_SECRET fallback (less secure)');
+    return crypto
+      .createHash("sha256")
+      .update("password-encryption-key")
+      .update(fallback)
+      .digest();
+  }
+
+  // Use ENCRYPTION_KEY with additional key derivation for security
+  const intermediate = crypto
+    .createHash("sha512")
+    .update(encryptionKey)
+    .update("nft-bidding-bot-password-key-v1")
+    .digest();
+
   return crypto
     .createHash("sha256")
-    .update("password-encryption-key")
-    .update(secret)
+    .update(intermediate)
     .digest();
 }
 

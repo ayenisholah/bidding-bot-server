@@ -8,6 +8,170 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Snapshot Download via HTTP (2025-12-05)**: Added `download` command to easily download all snapshots from VPS.
+  - Creates zip archive of all snapshots in `./debug-snapshots/`
+  - Starts temporary HTTP server for easy browser/curl download
+  - Auto-stops after timeout (default 5 minutes) and cleans up zip file
+  - **Usage**:
+    ```bash
+    # On VPS:
+    ./debug-container.sh download
+
+    # On local machine:
+    curl -O http://YOUR_VPS_IP:8888/snapshots_20251205_143022.zip
+    ```
+  - Files: `debug-container.sh`
+
+- **Automated Crash Diagnostics Capture (2025-12-05)**: Debug script now automatically captures diagnostic snapshots at hourly intervals and on crash detection.
+  - **Problem**: Manual execution of `./debug-container.sh all` was required after crashes, and volatile data (memory, queue state, connections) was lost after container restart
+  - **Solution**:
+    - Periodic snapshots: Takes full diagnostic snapshot every hour (configurable)
+    - Crash detection: Watches Docker events and captures snapshot immediately on container die/OOM
+    - Systemd services: Auto-starts on VPS boot, restarts on failure
+  - **New Commands**:
+    - `snapshot [trigger]` - Take immediate diagnostic snapshot
+    - `monitor [interval]` - Start periodic snapshot daemon (default: 3600s = 1hr)
+    - `crashes` - Watch for crashes and auto-capture snapshots
+    - `snapshots` - List saved snapshots with monitor status
+    - `stop-monitor` - Stop monitoring daemons
+  - **Snapshot Files**:
+    - Periodic: `./debug-snapshots/snapshot_YYYYMMDD_HHMMSS.txt`
+    - Crash: `./debug-snapshots/crash_YYYYMMDD_HHMMSS_exitN.txt` (includes exit code)
+  - **Auto-Start**: Systemd services enabled on installation:
+    - `debug-monitor` - Hourly snapshots
+    - `debug-crashwatch` - Crash detection and capture
+  - **Retention**: Automatically keeps last 168 snapshots (~1 week at hourly intervals, ~15MB storage)
+  - **Usage**:
+    ```bash
+    # Check service status
+    sudo systemctl status debug-monitor
+    sudo systemctl status debug-crashwatch
+
+    # View saved snapshots
+    ./debug-container.sh snapshots
+
+    # View specific crash snapshot
+    cat ./debug-snapshots/crash_20251205_143022_exit137.txt
+    ```
+  - Files: `debug-container.sh`, `install.sh`
+
+### Changed
+- **Secure Password Encryption with Unique Per-Installation Key (2025-12-05)**: Password file encryption now uses a unique `ENCRYPTION_KEY` instead of hardcoded `JWT_SECRET`.
+  - **Problem**: Password file was encrypted with `JWT_SECRET` which is hardcoded in `compose.yaml`, making it trivially decryptable by anyone with VPS access
+  - **Solution**:
+    - `install.sh` now generates a unique 256-bit `ENCRYPTION_KEY` per installation stored in `.env` with 600 permissions
+    - `crypto.ts` uses `ENCRYPTION_KEY` for password file encryption with additional key derivation
+    - Falls back to `JWT_SECRET` for backwards compatibility during migration
+  - **Security Improvement**: Password can no longer be decrypted via `docker inspect` or reading `compose.yaml`
+  - **Migration Note**: Existing users will need to re-enter password once after update (old encrypted file uses different key)
+  - Files: `install.sh`, `src/utils/crypto.ts`
+
+### Fixed
+- **Auto-Recovery Password Persistence Across Updates (2025-12-05)**: Fixed critical bug where encrypted password file was deleted on reinstall/update, breaking auto-recovery.
+  - **Problem**: `install.sh` removed `server_data` volume on each update, deleting the encrypted password file at `/app/data/.encrypted-password`
+  - **Solution**: Updated `install.sh` to preserve `server_data` volume alongside `mongodb_data`
+  - **Impact**: Auto-recovery now works correctly across server updates/reinstalls - tasks will automatically resume after crashes even after running `install.sh`
+  - Files: `install.sh`
+
+### Added
+- **Comprehensive Debug Container Script (2025-12-05)**: Enhanced `debug-container.sh` with 6 new diagnostic commands to fully diagnose all crash vectors.
+  - **New Commands**:
+    - `redis` - Redis connection health, memory stats, client connections, queue sizes, slowlog
+    - `mongodb` - MongoDB connection pool stats, long-running operations, database size
+    - `health` - Application health endpoints (/health, /api/health/redis, /metrics)
+    - `memory` - Node.js heap usage, container memory limits, memory trends from logs
+    - `network` - DNS resolution tests, external API connectivity, WebSocket status, network errors
+    - `queue` - BullMQ queue counts, stalled jobs detection, active job ages (stuck job detection), worker errors
+  - **Diagnostic Coverage**:
+    - Redis down/connection exhaustion
+    - MongoDB pool exhaustion/slow queries
+    - Memory leaks/OOM kills
+    - Health check timeouts
+    - DNS failures
+    - WebSocket disconnects
+    - Queue backlog/stalled workers
+  - **Usage**: `./debug-container.sh all` runs all diagnostics, or use individual commands
+  - Files: `debug-container.sh`
+
+- **Debug Script with Auto-Export (2025-12-05)**: The `debug-container.sh` script is now automatically downloaded and executed during installation.
+  - Script available at `./debug-container.sh` in the VPS project directory
+  - Auto-generates `debug-output.txt` with full container diagnostics after installation
+  - Manual run: `./debug-container.sh [command]` from VPS project root
+  - Re-export anytime: `./debug-container.sh all > debug-output.txt`
+  - Commands: status, logs, events, inspect, resources, lifecycle, crash, all, watch, export
+  - Files: `install.sh`
+
+- **Crash Detection and Automatic Task Recovery (2025-12-04)**: Server now detects crashes and automatically resumes previously running tasks after restart.
+  - **Problem**: When server crashed/restarted unexpectedly, all tasks were stopped and required manual restart via dashboard
+  - **Solution**:
+    - Added crash detection using Redis flags to distinguish graceful shutdown vs crash
+    - On graceful shutdown (SIGINT/SIGTERM), saves list of running tasks/listings to Redis
+    - On startup, detects if previous shutdown was a crash and auto-resumes previously running tasks
+    - Password is now persisted to encrypted file on Docker volume (production) for automatic recovery
+  - **Password Persistence**:
+    - Production: Encrypted password stored in `/app/data/.encrypted-password` (AES-256-ECB with JWT_SECRET)
+    - Development: Continues using Redis (7-day TTL)
+  - **Auto-Resume Flow**:
+    1. Server starts → detects previous shutdown type (graceful/crash/first-start)
+    2. Attempts to recover password from encrypted file (production) or Redis (development)
+    3. If crash detected AND password recovered → auto-resumes all previously running tasks
+    4. If graceful shutdown → normal startup, no auto-resume
+  - Files: `src/index.ts`, `src/utils/crypto.ts`
+
+- **Process Lifecycle Logger (2025-12-04)**: Added dedicated logging for process lifecycle events to diagnose unexpected restarts.
+  - **Purpose**: Track process start/stop/crash events that occur outside normal application logging
+  - **Features**:
+    - Logs process start with PID, Node version, memory info
+    - Logs all signals received (SIGINT, SIGTERM, SIGHUP, SIGUSR1/2)
+    - Logs uncaught exceptions and unhandled rejections with full stack traces
+    - Periodic memory usage logging (every 5 minutes)
+    - Logs process exit with exit code and reason
+  - **Log Location**: `/app/debug-logs/process-lifecycle-YYYY-MM-DD.log`
+  - **Docker Volume**: Logs now persisted via `server_logs:/app/debug-logs` volume mount
+  - Files: `src/utils/process-lifecycle-logger.ts`
+
+### Fixed
+- **Insufficient Balance Error Log Flooding (2025-12-04)**: Fixed critical issue where insufficient balance errors were flooding logs with 37,000+ identical errors.
+  - **Problem**: When multiple parallel bid jobs hit the same balance check, each one logged an error, causing massive log flooding (20+ errors within milliseconds for the same wallet/collection)
+  - **Solution**: Added `BoundedCache`-based deduplication to only log insufficient balance errors once per wallet/collection combo within a 5-second window
+  - **Impact**: Reduces API log volume by ~99% during insufficient balance conditions
+  - Files: `src/marketplace/opensea/bid.ts`, `src/marketplace/magiceden/bid.ts`
+
+- **StopOption Log Verbosity (2025-12-04)**: Removed excessive "stopOptions not enabled" debug logs that were flooding logs (54+ identical entries per loop).
+  - **Problem**: Every token check logged `[StopOption] {collection} | stopOptions not enabled | RESULT=false` even when the feature was disabled
+  - **Solution**: Removed the log statement for disabled stopOptions - only log when stopOptions is enabled or triggers
+  - **Impact**: Reduces bidflow log volume significantly for tasks without stopOptions enabled
+  - Files: `src/index.ts`
+
+- **Network Error Status Parsing (2025-12-04)**: Improved error logging for floor price fetch failures to show actual error codes.
+  - **Problem**: Network errors (DNS failures, timeouts) showed `status=undefined` which was unhelpful for debugging
+  - **Solution**: Parse `error.code` (e.g., `EAI_AGAIN`, `ENOTFOUND`, `ETIMEDOUT`) when `error.response.status` is unavailable
+  - **Expected Log Output**: Now shows `error=EAI_AGAIN` instead of `status=undefined` for DNS failures
+  - Files: `src/functions/collection.ts`
+
+### Added
+- **fetchTokenMetadata Debug Logging (2025-12-04)**: Added comprehensive debug logs to `fetchTokenMetadata()` to investigate 495+ metadata fetch failures.
+  - **Purpose**: Diagnose WHY metadata fetches fail - previously failures were silent with no visibility into root cause
+  - **Debug Logs Added** (`src/functions/tokenMetadata.ts`):
+    - ENTRY: Logs when cache miss occurs and API fetch begins
+    - NULL NFT: Logs when API returns success but no NFT data (with response structure keys)
+    - HTTP 400: Logs 400 errors with error message from API (previously completely silent)
+    - HTTP errors: Logs other HTTP status codes with error message
+    - Network errors: Logs network/timeout errors with error code
+  - **Expected Log Output** (HTTP 400):
+    ```
+    [Metadata] fetchTokenMetadata ENTRY | contract=0x1234abcd... | tokenId=3105
+    [Metadata] fetchTokenMetadata: HTTP 400 | contract=0x1234abcd... | tokenId=3105 | errorMsg="Token not found"
+    [Metadata] tokenHasTrait: Metadata fetch FAILED | tokenId=3105 | returning false
+    ```
+  - **Expected Log Output** (NULL response):
+    ```
+    [Metadata] fetchTokenMetadata ENTRY | contract=0x1234abcd... | tokenId=3105
+    [Metadata] fetchTokenMetadata: API returned NULL NFT | contract=0x1234abcd... | tokenId=3105 | responseKeys=[data] | dataKeys=[contract] | contractKeys=[address,name]
+    ```
+  - Files: `src/functions/tokenMetadata.ts`
+  - Resolves: Missing visibility into why `fetchTokenMetadata()` returns null (was causing 495 silent failures)
+
 - **tokenHasTrait Function Debug Logging (2025-12-04)**: Added comprehensive debug logs to `tokenHasTrait()` function to trace trait checking during Token-vs-Trait defense.
   - **Purpose**: Diagnose why Token-vs-Trait defense completes silently - now we can see exactly what `tokenHasTrait()` is doing
   - **Debug Logs Added** (`src/functions/tokenMetadata.ts`):
