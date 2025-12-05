@@ -19,7 +19,11 @@ import { convertBigNumbers } from "../../utils/bigNumberConverter";
 import { InsufficientBalanceError, MinimumPriceError, RateLimitError, InvalidRequestError } from "../errors";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
+import { BoundedCache } from "../../utils/bounded-cache";
 
+// Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
+// This prevents log flooding when multiple parallel jobs hit the same balance check
+const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000);
 
 const YELLOW = '\x1b[33m';
 const GREEN = '\x1b[32m';
@@ -279,7 +283,11 @@ export async function bidOnMagiceden(
         maker,
         slug
       );
-      errorLog('API', `[MagicEden] Insufficient balance for bid | taskId=${taskId} | wallet=${maker.slice(0, 10)}... | collection=${slug} | bidAmount=${offerPriceEth} ${currencySymbol} | available=${wethBalance}`, error);
+      // Only log once per wallet/collection combo within 5 seconds to prevent log flooding
+      const dedupeKey = `magiceden-${maker}-${slug}`;
+      if (insufficientBalanceLogCache.addIfNotExists(dedupeKey, Date.now())) {
+        errorLog('API', `[MagicEden] Insufficient balance for bid | taskId=${taskId} | wallet=${maker.slice(0, 10)}... | collection=${slug} | bidAmount=${offerPriceEth} ${currencySymbol} | available=${wethBalance}`, error);
+      }
       throw error;
     }
 

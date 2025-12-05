@@ -124,6 +124,8 @@ export async function fetchTokenMetadata(
     return cached;
   }
 
+  // DEBUG: Log entry for cache miss
+  debugLog('Metadata', `fetchTokenMetadata ENTRY | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId}`);
 
   try {
     const response = await limiter.schedule(() =>
@@ -146,7 +148,11 @@ export async function fetchTokenMetadata(
     );
 
     if (!response.data?.data?.contract?.nft) {
-      // console.log(YELLOW + `[TOKEN METADATA] No metadata found for ${contractAddress}:${tokenId}` + RESET);
+      // DEBUG: Log why the API returned no NFT data
+      const responseKeys = Object.keys(response.data || {}).join(',') || 'empty';
+      const dataKeys = Object.keys(response.data?.data || {}).join(',') || 'empty';
+      const contractKeys = Object.keys(response.data?.data?.contract || {}).join(',') || 'empty';
+      debugLog('Metadata', `fetchTokenMetadata: API returned NULL NFT | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | responseKeys=[${responseKeys}] | dataKeys=[${dataKeys}] | contractKeys=[${contractKeys}]`);
       return null;
     }
 
@@ -177,10 +183,16 @@ export async function fetchTokenMetadata(
   } catch (error: any) {
     // Handle specific error cases
     if (error.response?.status === 400) {
-      // console.log(YELLOW + `[TOKEN METADATA] Bad request for ${contractAddress}:${tokenId} - Token might not exist or be unsupported` + RESET);
-      // Don't log full error for 400s to reduce noise
+      // DEBUG: Log 400 errors with error message
+      const errorMsg = error.response?.data?.message || error.response?.data?.error || error.response?.data?.errors?.[0] || 'unknown';
+      debugLog('Metadata', `fetchTokenMetadata: HTTP 400 | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | errorMsg=${JSON.stringify(errorMsg).slice(0, 200)}`);
+    } else if (error.response?.status) {
+      // Log other HTTP errors
+      debugLog('Metadata', `fetchTokenMetadata: HTTP ${error.response.status} | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | errorMsg=${error.message}`);
+      errorLog('Metadata', `Failed to fetch token metadata | contractAddress=${contractAddress} | tokenId=${tokenId}`, error);
     } else {
-      // Log full error for other status codes
+      // Network/timeout errors
+      debugLog('Metadata', `fetchTokenMetadata: Network Error | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | errorCode=${error.code || 'unknown'} | errorMsg=${error.message}`);
       errorLog('Metadata', `Failed to fetch token metadata | contractAddress=${contractAddress} | tokenId=${tokenId}`, error);
     }
 

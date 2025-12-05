@@ -330,13 +330,16 @@ export async function getOpenseaFloor(collectionSlug: string) {
 
         // Retry on other errors if attempts remaining
         if (attempt < MAX_RETRIES) {
-          warnLog('API', `[collection.ts] OpenSea floor price fetch failed, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug} | status=${error?.response?.status}`);
+          // Better error parsing: show HTTP status or network error code
+          const errorCode = error?.response?.status || error?.code || 'UNKNOWN';
+          warnLog('API', `[collection.ts] OpenSea floor price fetch failed, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug} | error=${errorCode}`);
           await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
           continue;
         }
 
         // Final attempt failed - log and re-throw
-        errorLog('API', `[collection.ts] Failed to fetch OpenSea floor price after ${MAX_RETRIES} attempts | slug=${collectionSlug} | status=${error?.response?.status}`, error);
+        const errorCode = error?.response?.status || error?.code || 'UNKNOWN';
+        errorLog('API', `[collection.ts] Failed to fetch OpenSea floor price after ${MAX_RETRIES} attempts | slug=${collectionSlug} | error=${errorCode}`, error);
         throw error;
       }
     }
@@ -559,13 +562,16 @@ export async function getMagicEdenFloor(collectionSlug: string): Promise<number>
       } catch (error: any) {
         // Retry on errors if attempts remaining
         if (attempt < MAX_RETRIES) {
-          warnLog('API', `[collection.ts] MagicEden floor price fetch failed, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug}`);
+          // Better error parsing: show HTTP status or network error code
+          const errorCode = error?.response?.status || error?.code || 'UNKNOWN';
+          warnLog('API', `[collection.ts] MagicEden floor price fetch failed, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug} | error=${errorCode}`);
           await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
           continue;
         }
 
         // Final attempt failed - log and return 0
-        errorLog('API', `[collection.ts] Error fetching Magic Eden floor price after ${MAX_RETRIES} attempts | slug=${collectionSlug}`, error);
+        const errorCode = error?.response?.status || error?.code || 'UNKNOWN';
+        errorLog('API', `[collection.ts] Error fetching Magic Eden floor price after ${MAX_RETRIES} attempts | slug=${collectionSlug} | error=${errorCode}`, error);
         return 0;
       }
     }

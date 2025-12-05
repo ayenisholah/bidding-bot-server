@@ -22,6 +22,11 @@ import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
 import fs from 'fs';
 import path from 'path';
 import { MAX_PAIN_OVERRIDE_ADDRESS, MAX_PAIN_SLUG, MAX_PAIN_TOKEN_OVERRIDES } from "../../maxPainOverrides";
+import { BoundedCache } from "../../utils/bounded-cache";
+
+// Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
+// This prevents log flooding when multiple parallel jobs hit the same balance check
+const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000);
 
 // Performance timing utilitie
 // Ensure logs directory exists
@@ -423,7 +428,11 @@ export async function bidOnOpensea(
           wallet_address,
           slug
         );
-        errorLog('API', `[OpenSea] Insufficient balance for bid | taskId=${taskId} | wallet=${wallet_address.slice(0, 10)}... | collection=${slug} | bidAmount=${offerPriceEthFinal} ${currencySymbol} | available=${wethBalance}`, error);
+        // Only log once per wallet/collection combo within 5 seconds to prevent log flooding
+        const dedupeKey = `opensea-${wallet_address}-${slug}`;
+        if (insufficientBalanceLogCache.addIfNotExists(dedupeKey, Date.now())) {
+          errorLog('API', `[OpenSea] Insufficient balance for bid | taskId=${taskId} | wallet=${wallet_address.slice(0, 10)}... | collection=${slug} | bidAmount=${offerPriceEthFinal} ${currencySymbol} | available=${wethBalance}`, error);
+        }
         throw error;
       }
 
