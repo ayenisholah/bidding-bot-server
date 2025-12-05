@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Enhanced Export with HTTP Download (2025-12-05)**: The `export` command now includes crash analysis and optional HTTP serving.
+  - Added `analyze_crash` to `show_all()` - exports now include human-readable exit code analysis
+  - Added `serve` option to export command for HTTP download
+  - **Usage**:
+    ```bash
+    # Export to file (now includes crash analysis)
+    ./debug-container.sh export
+
+    # Export and serve via HTTP for download
+    ./debug-container.sh export serve
+
+    # Export and serve on custom port
+    ./debug-container.sh export serve 9000
+    ```
+  - Files: `debug-container.sh`
+
 - **Snapshot Download via HTTP (2025-12-05)**: Added `download` command to easily download all snapshots from VPS.
   - Creates zip archive of all snapshots in `./debug-snapshots/`
   - Starts temporary HTTP server for easy browser/curl download
