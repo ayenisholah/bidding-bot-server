@@ -12261,6 +12261,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       // Filter out expired orders to prevent stale data usage
       const orders = (cachedOrder && cachedOrder.expiresAt > Date.now()) ? [cachedOrder] : [];
 
+      debugLog('StopOption', `[ME] ${task.contract.slug} [${tokenId}] | PRE_CALL | context=token-counterbid | floor=${floor_price}`, { taskId: task._id.toString(), marketplace: 'magiceden', slug: task.contract.slug, tokenId: tokenId.toString() });
       const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), true)
       if (stopBid) {
         if (orders.length > 0) {
@@ -12443,11 +12444,14 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           return
         }
 
-        const traitFloor = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices ? await fetchMagicEdenTraitFloor(currentTask.contract.contractAddress, { attributeKey: trait.attributeKey, attributeValue: trait.attributeValue }) : undefined
+        const traitPriceKeyExists = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && `magiceden:${identifier}` in currentTask?.stopOptions?.traitPrices;
+        debugLog('StopOption', `[ME] ${task.contract.slug} [${identifier}] | TRAIT_FLOOR_DECISION | keyExists=${traitPriceKeyExists} | lookingFor=magiceden:${identifier}`, { taskId: task._id.toString(), marketplace: 'magiceden', slug: task.contract.slug, traitKey: identifier });
+        const traitFloor = traitPriceKeyExists ? await fetchMagicEdenTraitFloor(currentTask.contract.contractAddress, { attributeKey: trait.attributeKey, attributeValue: trait.attributeValue }) : undefined
         const cachedOrder = orderCache.get(task._id, MAGICEDEN.toLowerCase(), identifier);
         // Filter out expired orders to prevent stale data usage
         const orders = (cachedOrder && cachedOrder.expiresAt > Date.now()) ? [cachedOrder] : [];
 
+        debugLog('StopOption', `[ME] ${task.contract.slug} [${identifier}] | PRE_CALL | context=trait-counterbid | floor=${floor_price} | traitFloor=${traitFloor ?? 'not fetched'}`, { taskId: task._id.toString(), marketplace: 'magiceden', slug: task.contract.slug, traitKey: identifier });
         const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), true, traitFloor, identifier)
 
         if (stopBid) {
@@ -12682,6 +12686,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         return
       }
 
+      debugLog('StopOption', `[ME] ${task.contract.slug} | PRE_CALL | context=collection-counterbid | floor=${floor_price}`, { taskId: task._id.toString(), marketplace: 'magiceden', slug: task.contract.slug });
       const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), true)
       if (stopBid) {
         const allOrders = orderCache.getByTaskAndMarketplace(task._id, MAGICEDEN.toLowerCase());
@@ -13297,6 +13302,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         }
         return
       }
+
+      debugLog('StopOption', `[OS] ${task.contract.slug} [${tokenId}] | PRE_CALL | context=token-counterbid | floor=${floor_price}`, { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug, tokenId: tokenId.toString() });
       const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true)
       if (stopBid) {
         if (orders.length > 0) {
@@ -13496,7 +13503,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       // TRAIT BID PROCESSING - Only for tasks that match the incoming trait
       // =================================================================
       if (hasTraits) {
-        const traitFloor = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices ? await openseaTraitFloor(currentTask.contract.slug, { traitType: trait.type, values: [trait.value] }) : undefined
+        const traitPriceKeyExists = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && `opensea:${identifier}` in currentTask?.stopOptions?.traitPrices;
+        debugLog('StopOption', `[OS] ${task.contract.slug} [${identifier}] | TRAIT_FLOOR_DECISION | keyExists=${traitPriceKeyExists} | lookingFor=opensea:${identifier}`, { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug, traitKey: identifier });
+        const traitFloor = traitPriceKeyExists ? await openseaTraitFloor(currentTask.contract.slug, { traitType: trait.type, values: [trait.value] }) : undefined
 
         // VALIDATION: Ensure floor price is reasonable (not negative, not zero, not suspiciously low)
         if (floor_price <= 0 || floor_price < 0.001) {
@@ -13537,6 +13546,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           return
         }
 
+        debugLog('StopOption', `[OS] ${task.contract.slug} [${identifier}] | PRE_CALL | context=trait-counterbid | floor=${floor_price} | traitFloor=${traitFloor ?? 'not fetched'}`, { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug, traitKey: identifier });
         const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true, traitFloor, identifier)
 
         if (stopBid) {
@@ -13886,6 +13896,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         return
       }
 
+      debugLog('StopOption', `[OS] ${task.contract.slug} | PRE_CALL | context=collection-counterbid | floor=${floor_price}`, { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
       const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true)
       if (stopBid) {
         const allOrders = orderCache.getByTaskAndMarketplace(task._id, OPENSEA.toLowerCase());
@@ -14371,8 +14382,11 @@ async function handleBlurCounterbid(data: any, task: ITask) {
           return
         }
 
-        const traitFloor = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices ? await fetchBlurTraitFloor(currentTask?.contract?.slug, { type: traitType, value: traitValue as string }) : undefined
+        const traitPriceKeyExists = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && `blur:${identifier}` in currentTask?.stopOptions?.traitPrices;
+        debugLog('StopOption', `[Blur] ${task.contract.slug} [${identifier}] | TRAIT_FLOOR_DECISION | keyExists=${traitPriceKeyExists} | lookingFor=blur:${identifier}`, { taskId: task._id.toString(), marketplace: 'blur', slug: task.contract.slug, traitKey: identifier });
+        const traitFloor = traitPriceKeyExists ? await fetchBlurTraitFloor(currentTask?.contract?.slug, { type: traitType, value: traitValue as string }) : undefined
 
+        debugLog('StopOption', `[Blur] ${task.contract.slug} [${identifier}] | PRE_CALL | context=trait-counterbid | floor=${floor_price} | traitFloor=${traitFloor ?? 'not fetched'}`, { taskId: task._id.toString(), marketplace: 'blur', slug: task.contract.slug, traitKey: identifier });
         const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), true, traitFloor, identifier)
 
         if (stopBid) {
@@ -14514,6 +14528,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         return
       }
 
+      debugLog('StopOption', `[Blur] ${task.contract.slug} | PRE_CALL | context=collection-counterbid | floor=${floor_price}`, { taskId: task._id.toString(), marketplace: 'blur', slug: task.contract.slug });
       const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), true)
       if (stopBid) {
         const allOrders = orderCache.getByTaskAndMarketplace(task._id, BLUR.toLowerCase());
@@ -15887,6 +15902,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 
     floorPrices[currentTask._id].opensea = floor_price as number;
 
+    debugLog('StopOption', `[OS] ${currentTask.contract.slug} | PRE_CALL | context=scheduled-collection-bid | floor=${floor_price}`, { taskId: currentTask._id.toString(), marketplace: 'opensea', slug: currentTask.contract.slug });
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false)
     if (stopBid) {
       if (DEBUG) {
@@ -16709,9 +16725,7 @@ async function processBlurCollectionBid(data: { taskId: string }) {
     const cachedOrder = orderCache.get(currentTask._id, BLUR.toLowerCase(), "collection");
     const orders = cachedOrder ? [cachedOrder] : [];
 
-
-
-
+    debugLog('StopOption', `[Blur] ${collectionSlug} | PRE_CALL | context=scheduled-collection-bid | floor=${floor_price}`, { taskId: currentTask._id.toString(), marketplace: 'blur', slug: collectionSlug });
     const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), false)
     if (stopBid) {
       if (DEBUG) {
@@ -17093,9 +17107,12 @@ async function processOpenseaTraitBid(data: {
     const identifier = `${type}:${value}`
 
     // Parallel fetch: floor price and trait floor (if needed). Orders from cache.
+    const traitPriceKeyExists = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && `opensea:${identifier}` in currentTask?.stopOptions?.traitPrices;
+    debugLog('StopOption', `[OS] ${slug} [${identifier}] | TRAIT_FLOOR_DECISION | keyExists=${traitPriceKeyExists} | lookingFor=opensea:${identifier}`, { taskId: _id.toString(), marketplace: 'opensea', slug, traitKey: identifier });
+
     const [floor_price, traitFloor] = await Promise.all([
       getOpenseaFloor(slug),
-      currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices
+      traitPriceKeyExists
         ? openseaTraitFloor(slug, { traitType: type, values: [value] })
         : Promise.resolve(undefined)
     ]);
@@ -17111,6 +17128,7 @@ async function processOpenseaTraitBid(data: {
       console.log(`[BidFlow][OS-Trait] ${slug}:${identifier} | Floor: ${floor_price} ETH${traitFloor ? ` | TraitFloor: ${traitFloor} ETH` : ''}`);
     }
 
+    debugLog('StopOption', `[OS] ${slug} [${identifier}] | PRE_CALL | context=scheduled-trait-bid | floor=${floor_price} | traitFloor=${traitFloor ?? 'not fetched'}`, { taskId: _id.toString(), marketplace: 'opensea', slug, traitKey: identifier });
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false, traitFloor, identifier)
     if (stopBid) {
       if (DEBUG) {
@@ -17498,6 +17516,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       console.log(`[BidFlow][OS-Token] ${slug}:${asset.tokenId} | Floor: ${floor_price} ETH`);
     }
 
+    debugLog('StopOption', `[OS] ${slug} [${asset.tokenId}] | PRE_CALL | context=scheduled-token-bid | floor=${floor_price}`, { taskId: _id.toString(), marketplace: 'opensea', slug, tokenId: asset.tokenId.toString() });
     const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false)
     if (stopBid) {
       if (DEBUG) {
@@ -18848,11 +18867,11 @@ async function processBlurTraitBid(data: {
     const traitsObj = JSON.parse(trait);
     const [traitType, traitValue] = Object.entries(traitsObj)[0];
     const identifier = `${traitType}:${traitValue}`
-    const traitFloor = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices ? await fetchBlurTraitFloor(slug, { type: traitType, value: traitValue as string }) : undefined
+    const traitPriceKeyExists = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && `blur:${identifier}` in currentTask?.stopOptions?.traitPrices;
+    debugLog('StopOption', `[Blur] ${slug} [${identifier}] | TRAIT_FLOOR_DECISION | keyExists=${traitPriceKeyExists} | lookingFor=blur:${identifier}`, { taskId: _id.toString(), marketplace: 'blur', slug, traitKey: identifier });
+    const traitFloor = traitPriceKeyExists ? await fetchBlurTraitFloor(slug, { type: traitType, value: traitValue as string }) : undefined
 
-
-
-
+    debugLog('StopOption', `[Blur] ${slug} [${identifier}] | PRE_CALL | context=scheduled-trait-bid | floor=${floor_price} | traitFloor=${traitFloor ?? 'not fetched'}`, { taskId: _id.toString(), marketplace: 'blur', slug, traitKey: identifier });
     const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), false, traitFloor, identifier)
     const expiry = getExpiry(currentTask.bidDuration)
 
@@ -19681,6 +19700,7 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
     floorPrices[currentTask._id].magiceden = floor_price;
 
+    debugLog('StopOption', `[ME] ${currentTask.contract.slug} | PRE_CALL | context=scheduled-collection-bid | floor=${floor_price}`, { taskId: currentTask._id.toString(), marketplace: 'magiceden', slug: currentTask.contract.slug });
     const stopBid = await stopOption(currentTask, 'magiceden', floor_price, false)
     if (stopBid) {
       if (DEBUG) {
@@ -20021,6 +20041,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
     floorPrices[_id].magiceden = floor_price;
 
+    debugLog('StopOption', `[ME] ${slug} [${tokenId}] | PRE_CALL | context=scheduled-token-bid | floor=${floor_price}`, { taskId: _id.toString(), marketplace: 'magiceden', slug, tokenId: tokenId.toString() });
     const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), false)
     if (stopBid) {
       if (DEBUG) {
@@ -20343,9 +20364,12 @@ async function processMagicedenTraitBid(data: {
     const identifier = `${trait.attributeKey}:${trait.attributeValue}`
 
     // Parallel floor price fetching. Orders from cache.
+    const traitPriceKeyExists = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && `magiceden:${identifier}` in currentTask?.stopOptions?.traitPrices;
+    debugLog('StopOption', `[ME] ${slug} [${identifier}] | TRAIT_FLOOR_DECISION | keyExists=${traitPriceKeyExists} | lookingFor=magiceden:${identifier}`, { taskId: _id.toString(), marketplace: 'magiceden', slug, traitKey: identifier });
+
     const [floor_price, traitFloor] = await Promise.all([
       fetchMagicEdenCollectionStats(currentTask.contract.contractAddress).then(Number),
-      currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && identifier in currentTask?.stopOptions?.traitPrices
+      traitPriceKeyExists
         ? fetchMagicEdenTraitFloor(contractAddress, { attributeKey: trait.attributeKey, attributeValue: trait.attributeValue })
         : Promise.resolve(undefined)
     ]);
@@ -20354,6 +20378,7 @@ async function processMagicedenTraitBid(data: {
 
     if (!floor_price) { throw new Error(`Failed to fetch floor price for ${slug}`); }
 
+    debugLog('StopOption', `[ME] ${slug} [${identifier}] | PRE_CALL | context=scheduled-trait-bid | floor=${floor_price} | traitFloor=${traitFloor ?? 'not fetched'}`, { taskId: _id.toString(), marketplace: 'magiceden', slug, traitKey: identifier });
     const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), false, traitFloor, identifier)
     if (stopBid) {
       if (DEBUG) {
@@ -23635,9 +23660,17 @@ async function stopOption(
     };
   }
 
+  const slug = task.contract?.slug || task._id;
+  const taskId = task._id.toString();
+  const metadata = { taskId, marketplace, slug };
+
   try {
-    // Early return if stop options aren't enabled (no log - too verbose for disabled feature)
+    // ENTRY LOG - Log all input parameters for tracing
+    debugLog('StopOption', `${slug} | ENTRY | marketplace=${marketplace} | floor=${floorPrice} | counterBid=${counterBid} | traitFloor=${traitFloor ?? 'undefined'} | trait=${trait ?? 'none'}`, metadata);
+
+    // Early return if stop options aren't enabled
     if (!task?.stopOptions?.triggerStopOptions) {
+      debugLog('StopOption', `${slug} | DISABLED | triggerStopOptions=false | result=false`, metadata);
       return false;
     }
 
@@ -23654,9 +23687,18 @@ async function stopOption(
     const traitFloorMin = traitPriceKey && task?.stopOptions?.traitPrices ? Number(task?.stopOptions?.traitPrices[traitPriceKey].min) : 0;
     const traitFloorMax = traitPriceKey && task?.stopOptions?.traitPrices ? Number(task?.stopOptions?.traitPrices[traitPriceKey].max) : 0;
 
+    // CONFIG LOG - Log parsed configuration including key format resolution
+    const traitPriceKeys = task?.stopOptions?.traitPrices ? Object.keys(task.stopOptions.traitPrices).slice(0, 5).join(', ') : 'none';
+    debugLog('StopOption', `${slug} | CONFIG | minFloor=${minFloorPrice} | maxFloor=${maxFloorPrice} | traitKey=${traitPriceKey ?? 'none'} | hasMarketplaceKey=${hasMarketplaceKey} | hasOldKey=${hasOldKey} | traitPriceKeys=[${traitPriceKeys}]`, metadata);
 
     if (trait && traitFloor && traitFloor > 0 && (traitFloorMin > 0 || traitFloorMax > 0)) {
-      if ((traitFloorMin > 0 && traitFloor < traitFloorMin) || (traitFloorMax > 0 && traitFloor > traitFloorMax)) {
+      const belowMin = traitFloorMin > 0 && traitFloor < traitFloorMin;
+      const aboveMax = traitFloorMax > 0 && traitFloor > traitFloorMax;
+      const outOfRange = belowMin || aboveMax;
+
+      debugLog('StopOption', `${slug} [${trait}] | TRAIT_CHECK | traitFloor=${traitFloor} | min=${traitFloorMin} | max=${traitFloorMax} | belowMin=${belowMin} | aboveMax=${aboveMax} | outOfRange=${outOfRange}`, { ...metadata, traitKey: trait });
+
+      if (outOfRange) {
         const message = `❌ Trait Floor price ${traitFloor} ETH for ${task.contract.slug} [${trait}] is outside the allowed range (${traitFloorMin} ETH - ${traitFloorMax} ETH). Skipping...`.toUpperCase()
 
         await logBidError(task._id, "TRAIT FLOOR OUT OF RANGE", message, 'skipped', marketplace)
@@ -23664,17 +23706,22 @@ async function stopOption(
         if (!counterBid) {
           skipStats[task._id][marketplace]++
         }
-        debugLog('StopOption', `${task.contract?.slug || task._id} [${trait}] | traitFloor=${traitFloor} range=[${traitFloorMin},${traitFloorMax}] | TRIGGERED=true`);
+        debugLog('StopOption', `${slug} [${trait}] | TRAIT_TRIGGERED | traitFloor=${traitFloor} range=[${traitFloorMin},${traitFloorMax}] | result=true`, { ...metadata, traitKey: trait });
         return true
       }
     } else {
-      // Check if floor price is outside allowed range
-      if ((minFloorPrice > 0 && floorPrice < minFloorPrice) || (maxFloorPrice > 0 && floorPrice > maxFloorPrice)) {
+      // FLOOR CHECK LOG - Log collection floor evaluation
+      const belowMin = minFloorPrice > 0 && floorPrice < minFloorPrice;
+      const aboveMax = maxFloorPrice > 0 && floorPrice > maxFloorPrice;
+      const outOfRange = belowMin || aboveMax;
 
+      debugLog('StopOption', `${slug} | FLOOR_CHECK | floor=${floorPrice} | min=${minFloorPrice} | max=${maxFloorPrice} | belowMin=${belowMin} | aboveMax=${aboveMax} | outOfRange=${outOfRange}`, metadata);
+
+      if (outOfRange) {
         if (!counterBid) {
           skipStats[task._id][marketplace]++;
         }
-        debugLog('StopOption', `${task.contract?.slug || task._id} | floor=${floorPrice} range=[${minFloorPrice},${maxFloorPrice}] | TRIGGERED=true`);
+        debugLog('StopOption', `${slug} | FLOOR_TRIGGERED | floor=${floorPrice} range=[${minFloorPrice},${maxFloorPrice}] | result=true`, metadata);
         return true;
       }
     }
@@ -23687,15 +23734,18 @@ async function stopOption(
     const contractAddress = task.contract.contractAddress.toLowerCase();
     const currentBalance = getWalletContractBalance(walletAddress, contractAddress, marketplace);
 
-    if (maxPurchase && maxPurchase > 0 && currentBalance !== undefined && currentBalance >= maxPurchase) {
+    // MAX PURCHASE CHECK LOG
+    const maxPurchaseTriggered = maxPurchase && maxPurchase > 0 && currentBalance !== undefined && currentBalance >= maxPurchase;
+    debugLog('StopOption', `${slug} | MAX_PURCHASE_CHECK | maxPurchase=${maxPurchase ?? 'not set'} | balance=${currentBalance ?? 'undefined'} | triggered=${maxPurchaseTriggered}`, { ...metadata, wallet: walletAddress });
+
+    if (maxPurchaseTriggered) {
       // Set warning flags and message
       warningBids[task._id][marketplace] = true;
       warningMessage[task._id][marketplace] =
         `Maximum purchase amount (${maxPurchase}) for ${task.contract.slug} has been reached. ` +
         `Current balance: ${currentBalance} items.`;
 
-      // Log the warning
-      debugLog('StopOption', `${task.contract?.slug || task._id} | maxPurchase=${maxPurchase} balance=${currentBalance} | TRIGGERED=true`);
+      debugLog('StopOption', `${slug} | MAX_PURCHASE_TRIGGERED | maxPurchase=${maxPurchase} balance=${currentBalance} | result=true`, { ...metadata, wallet: walletAddress });
       return true;
     }
 
@@ -23704,9 +23754,10 @@ async function stopOption(
     if (taskStatus?.running) {
       warningBids[task._id][marketplace] = false;
       warningMessage[task._id][marketplace] = '';
-    } else {
-      // Task is stopped, preserve warnings
     }
+
+    // EXIT LOG - All checks passed
+    debugLog('StopOption', `${slug} | EXIT | all checks passed | result=false`, metadata);
     return false;
 
   } catch (error) {

@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **StopOption Debug Logging (2025-12-06)**: Added comprehensive debug logs to trace stopOption evaluation flow for debugging price limit issues.
+  - **Log Phases**:
+    - `ENTRY`: All input parameters (task, marketplace, floor, traitFloor, trait)
+    - `DISABLED`: When triggerStopOptions is false
+    - `CONFIG`: Parsed configuration (minFloor, maxFloor, traitKey, hasMarketplaceKey, hasOldKey, traitPriceKeys)
+    - `TRAIT_CHECK`: Trait floor evaluation with belowMin/aboveMax/outOfRange
+    - `FLOOR_CHECK`: Collection floor evaluation with belowMin/aboveMax/outOfRange
+    - `MAX_PURCHASE_CHECK`: Balance vs limit comparison
+    - `TRAIT_TRIGGERED` / `FLOOR_TRIGGERED` / `MAX_PURCHASE_TRIGGERED`: When checks stop bidding
+    - `EXIT`: Final result (all checks passed)
+  - **Call Site Logging**:
+    - `PRE_CALL`: Before each stopOption call with context (counterbid vs scheduled, collection vs trait vs token)
+    - `TRAIT_FLOOR_DECISION`: Before trait floor fetch, showing key format being checked
+  - **Metadata**: All logs include LogMetadata for filtering by taskId/marketplace/slug/traitKey
+  - Files: `src/index.ts`
+
+### Fixed
+- **stopOptions.traitPrices Not Working (2025-12-06)**: Fixed critical bug where trait-specific price limits in stopOptions were completely ignored.
+  - **Problem**: Client stored traitPrices with 3-part keys (`opensea:HEADWEAR:HAT`) but server checked for 2-part keys (`HEADWEAR:HAT`), causing the `in` check to always fail
+  - **Impact**: Trait floor prices were never fetched, so trait-specific stop conditions were bypassed entirely - falling back to collection floor price checks only
+  - **Solution**: Updated all 6 locations that check traitPrices to use the correct 3-part key format with marketplace prefix
+  - **Affected Functions**:
+    - `handleMagicEdenCounterbid` (line 12446)
+    - `handleOpenseaCounterbid` (line 13499)
+    - `handleBlurCounterbid` (line 14374)
+    - `processOpenseaTraitBid` (line 17098)
+    - `processBlurTraitBid` (line 18851)
+    - `processMagicedenTraitBid` (line 20348)
+  - Files: `src/index.ts`
+
+### Added
 - **Enhanced Export with HTTP Download (2025-12-05)**: The `export` command now includes crash analysis and optional HTTP serving.
   - Added `analyze_crash` to `show_all()` - exports now include human-readable exit code analysis
   - Added `serve` option to export command for HTTP download
