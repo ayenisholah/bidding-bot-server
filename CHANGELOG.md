@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Tasks Stuck in SCHEDULED with waitingTime=0 (2025-12-06)**: Fixed critical bug where tasks would get stuck in SCHEDULED status with waitingTime=0 after server restart and never execute their next loop.
+  - **Root Cause 1**: Orphaned task detection checked `taskTimeouts.has(taskId)` but timers are stored with keys like `${taskId}-${marketplace}`
+  - **Root Cause 2**: `checkStuckTasks()` only checked for RUNNING/QUEUED/QUEUEING statuses, ignoring SCHEDULED tasks
+  - **Root Cause 3**: No recovery mechanism when timer is lost (e.g., after server restart) and task stays in SCHEDULED with waitingTime=0
+  - **Fixes Implemented**:
+    - **Fix 1**: Updated orphaned task detection to check marketplace-specific timer keys
+    - **Fix 2**: Added SCHEDULED status checking to `checkStuckTasks()` with 30-second recovery window
+    - **Fix 3**: Added periodic timer health check function `verifyScheduledTaskTimers()` (runs every 60 seconds)
+    - **Fix 4**: Added Redis persistence for task state (taskStatus, loopCounterStats, nextLoopTime)
+    - **Fix 5**: Added state restoration on startup for running tasks from Redis
+  - **New Redis Keys** (24h TTL):
+    - `nft-bot:task-status:{taskId}` - Persisted task status
+    - `nft-bot:loop-count:{taskId}` - Loop counter per marketplace
+    - `nft-bot:next-loop:{taskId}:{marketplace}` - Next loop timestamp for timer recreation
+    - `nft-bot:task-started:{taskId}` - Task start timestamp
+    - `nft-bot:last-schedule:{taskId}` - Last schedule timestamp
+  - Files: `src/index.ts`
+
 ### Added
 - **StopOption Debug Logging (2025-12-06)**: Added comprehensive debug logs to trace stopOption evaluation flow for debugging price limit issues.
   - **Log Phases**:

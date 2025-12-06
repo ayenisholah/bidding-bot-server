@@ -140,6 +140,14 @@ const REDIS_KEY_PREVIOUS_RUNNING_LISTINGS = 'nft-bot:previous-running-listings';
 const REDIS_KEY_SHUTDOWN_TIMESTAMP = 'nft-bot:shutdown-timestamp';
 const REDIS_KEY_SHUTDOWN_REASON = 'nft-bot:shutdown-reason';
 
+// Redis keys for task state persistence (crash recovery)
+const REDIS_KEY_TASK_STATUS = 'nft-bot:task-status:';        // + taskId
+const REDIS_KEY_LOOP_COUNT = 'nft-bot:loop-count:';          // + taskId
+const REDIS_KEY_TASK_STARTED = 'nft-bot:task-started:';      // + taskId
+const REDIS_KEY_NEXT_LOOP = 'nft-bot:next-loop:';            // + taskId:marketplace
+const REDIS_KEY_LAST_SCHEDULE = 'nft-bot:last-schedule:';    // + taskId
+const REDIS_STATE_TTL = 86400; // 24 hours TTL for task state
+
 
 // Type definitions
 interface BidCounts {
@@ -2031,6 +2039,30 @@ async function fetchCurrentTasks() {
     currentTasks.push(...formattedTasks);
     updateTaskIndexes(currentTasks);
 
+    // Restore task state from Redis for running tasks
+    const runningTasks = formattedTasks.filter(task => task.running);
+    if (runningTasks.length > 0) {
+      debugLog('Recovery', `Found ${runningTasks.length} running tasks - attempting state restoration`);
+
+      for (const task of runningTasks) {
+        try {
+          // Restore persisted state from Redis
+          const hasPersistedState = await restoreTaskState(task._id);
+
+          if (hasPersistedState) {
+            // If we have persisted state, try to recreate timers
+            await recreateTimersFromRedis(task._id, task);
+            debugLog('Recovery', `Restored state for task ${task._id} (${task.contract?.slug})`);
+          } else {
+            // No persisted state - task will be restarted fresh by runScheduledLoop
+            debugLog('Recovery', `No persisted state for task ${task._id} (${task.contract?.slug}) - will restart fresh`);
+          }
+        } catch (err) {
+          errorLog('Recovery', `Failed to restore state for task ${task._id}: ${err instanceof Error ? err.message : err}`);
+        }
+      }
+    }
+
     // Task initialization complete
   } catch (error) {
     errorLog('Database', 'Failed to fetch current tasks', error as Error);
@@ -3420,16 +3452,23 @@ async function startServer() {
     const orphanedScheduledTasks = Array.from(activeTasks.entries())
       .filter(([taskId, task]) => {
         const status = taskStatus[taskId];
-        const hasTimer = taskTimeouts.has(taskId);
 
         // Check if any marketplace is in SCHEDULED state
-        const hasScheduledMarketplace = status?.marketplaces && Object.values(status.marketplaces).some(
-          mpStatus => mpStatus?.status === 'SCHEDULED'
-        );
+        const scheduledMarketplaces = status?.marketplaces ?
+          Object.entries(status.marketplaces)
+            .filter(([_, mpStatus]) => mpStatus?.status === 'SCHEDULED')
+            .map(([mp]) => mp) : [];
 
-        return task.running &&
-          hasScheduledMarketplace &&
-          !hasTimer;
+        if (scheduledMarketplaces.length === 0) return false;
+
+        // FIX: Check if ANY scheduled marketplace is missing its timer
+        // Timers are stored with keys like `${taskId}-${marketplace}`, not just `taskId`
+        const hasMissingTimer = scheduledMarketplaces.some(mp => {
+          const timerKey = `${taskId}-${mp}`;
+          return !taskTimeouts.has(timerKey);
+        });
+
+        return task.running && hasMissingTimer;
       });
 
     if (orphanedScheduledTasks.length > 0) {
@@ -3493,6 +3532,10 @@ async function startServer() {
     // Start stuck task detection
     const STUCK_TASK_CHECK_INTERVAL = 30000; // 30 seconds
     setInterval(checkStuckTasks, STUCK_TASK_CHECK_INTERVAL);
+
+    // Start periodic timer health check for SCHEDULED tasks
+    const TIMER_HEALTH_CHECK_INTERVAL = 60000; // 60 seconds
+    setInterval(verifyScheduledTaskTimers, TIMER_HEALTH_CHECK_INTERVAL);
 
     debugLog('STARTUP', '✅ SERVER FULLY INITIALIZED');
 
@@ -3870,6 +3913,14 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string, mark
     });
 
     const loopCount = loopCounterStats[taskId]?.[marketplace] || 0;
+
+    // Persist state to Redis for important status changes (for crash recovery)
+    // Only persist for statuses that matter for recovery: SCHEDULED, RUNNING, COMPLETED
+    if (['SCHEDULED', 'RUNNING', 'COMPLETED'].includes(newStatus)) {
+      persistTaskState(taskId).catch(err => {
+        // Non-blocking - don't fail the status update if persistence fails
+      });
+    }
 
     return true;
   }
@@ -5023,6 +5074,17 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
     }, loopInterval * 1000);
 
     taskTimeouts.set(timerKey, timeoutId);
+
+    // Persist nextLoopTime to Redis for crash recovery
+    if (marketplace) {
+      const redis = getRedisConnection();
+      redis.set(
+        `${REDIS_KEY_NEXT_LOOP}${taskId}:${marketplace}`,
+        nextLoopTime.getTime().toString(),
+        'EX', REDIS_STATE_TTL
+      ).catch(err => errorLog('Redis', `Failed to persist nextLoopTime for ${taskId}:${marketplace}: ${err instanceof Error ? err.message : err}`));
+    }
+
     debugLog('TaskScheduler', `scheduleNextLoop EXIT - timer set | timerKey=${timerKey}`);
   } catch (error) {
     // If scheduling fails, clean up resources
@@ -5030,6 +5092,261 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
     lastScheduleTimes.delete(taskId);
   }
 }
+
+// ============================================================
+// TASK STATE PERSISTENCE FUNCTIONS (for crash recovery)
+// ============================================================
+
+/**
+ * Persist task state to Redis for crash recovery.
+ * Called after setTaskStatus() to ensure state survives server restarts.
+ */
+async function persistTaskState(taskId: string): Promise<void> {
+  try {
+    const redis = getRedisConnection();
+    const status = taskStatus[taskId];
+    const loopCount = loopCounterStats[taskId];
+    const lastSchedule = lastScheduleTimes.get(taskId);
+
+    // Persist taskStatus
+    if (status) {
+      await redis.set(
+        `${REDIS_KEY_TASK_STATUS}${taskId}`,
+        JSON.stringify(status),
+        'EX', REDIS_STATE_TTL
+      );
+    }
+
+    // Persist loopCounterStats
+    if (loopCount) {
+      await redis.set(
+        `${REDIS_KEY_LOOP_COUNT}${taskId}`,
+        JSON.stringify(loopCount),
+        'EX', REDIS_STATE_TTL
+      );
+    }
+
+    // Persist lastScheduleTimes
+    if (lastSchedule) {
+      await redis.set(
+        `${REDIS_KEY_LAST_SCHEDULE}${taskId}`,
+        lastSchedule.toString(),
+        'EX', REDIS_STATE_TTL
+      );
+    }
+
+    // Persist nextLoopTime for each marketplace
+    if (status?.marketplaces) {
+      for (const [mp, mpStatus] of Object.entries(status.marketplaces)) {
+        if (mpStatus?.nextLoopTime) {
+          await redis.set(
+            `${REDIS_KEY_NEXT_LOOP}${taskId}:${mp}`,
+            mpStatus.nextLoopTime.getTime().toString(),
+            'EX', REDIS_STATE_TTL
+          );
+        }
+      }
+    }
+  } catch (err) {
+    errorLog('Redis', `Failed to persist task state for ${taskId}: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/**
+ * Persist task start timestamp to Redis.
+ * Called when a task first starts.
+ */
+async function persistTaskStartTime(taskId: string): Promise<void> {
+  try {
+    const redis = getRedisConnection();
+    await redis.set(
+      `${REDIS_KEY_TASK_STARTED}${taskId}`,
+      Date.now().toString(),
+      'EX', REDIS_STATE_TTL
+    );
+  } catch (err) {
+    errorLog('Redis', `Failed to persist task start time for ${taskId}: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/**
+ * Restore task state from Redis on startup.
+ * Called in fetchCurrentTasks() for tasks with running=true.
+ */
+async function restoreTaskState(taskId: string): Promise<boolean> {
+  try {
+    const redis = getRedisConnection();
+
+    // Restore taskStatus
+    const statusJson = await redis.get(`${REDIS_KEY_TASK_STATUS}${taskId}`);
+    if (statusJson) {
+      const status = JSON.parse(statusJson);
+      // Convert nextLoopTime strings back to Date objects
+      if (status.marketplaces) {
+        for (const mp of Object.keys(status.marketplaces)) {
+          if (status.marketplaces[mp]?.nextLoopTime) {
+            status.marketplaces[mp].nextLoopTime = new Date(status.marketplaces[mp].nextLoopTime);
+          }
+        }
+      }
+      taskStatus[taskId] = status;
+      debugLog('Recovery', `Restored taskStatus from Redis | taskId=${taskId}`);
+    }
+
+    // Restore loopCounterStats
+    const loopCountJson = await redis.get(`${REDIS_KEY_LOOP_COUNT}${taskId}`);
+    if (loopCountJson) {
+      loopCounterStats[taskId] = JSON.parse(loopCountJson);
+      debugLog('Recovery', `Restored loopCounterStats from Redis | taskId=${taskId} | counts=${JSON.stringify(loopCounterStats[taskId])}`);
+    }
+
+    // Restore lastScheduleTimes
+    const lastSchedule = await redis.get(`${REDIS_KEY_LAST_SCHEDULE}${taskId}`);
+    if (lastSchedule) {
+      lastScheduleTimes.set(taskId, parseInt(lastSchedule, 10));
+      debugLog('Recovery', `Restored lastScheduleTime from Redis | taskId=${taskId}`);
+    }
+
+    return !!statusJson; // Return true if we found persisted state
+  } catch (err) {
+    errorLog('Redis', `Failed to restore task state for ${taskId}: ${err instanceof Error ? err.message : err}`);
+    return false;
+  }
+}
+
+/**
+ * Recreate timers from Redis after server restart.
+ * Checks if timers should have fired during downtime and starts task immediately if so.
+ */
+async function recreateTimersFromRedis(taskId: string, task: ITask): Promise<void> {
+  try {
+    const redis = getRedisConnection();
+    const now = Date.now();
+
+    for (const mp of task.selectedMarketplaces) {
+      const mpLower = mp.toLowerCase();
+      const nextLoopTimeStr = await redis.get(`${REDIS_KEY_NEXT_LOOP}${taskId}:${mpLower}`);
+
+      if (nextLoopTimeStr) {
+        const nextLoopTime = parseInt(nextLoopTimeStr, 10);
+        const delay = Math.max(0, nextLoopTime - now);
+
+        if (delay > 0) {
+          // Timer hasn't fired yet - recreate it
+          debugLog('Recovery', `Recreating timer for ${taskId}:${mpLower} | delay=${Math.floor(delay / 1000)}s`);
+
+          // Set status to SCHEDULED with correct waitingTime
+          const mpKey = mpLower as 'opensea' | 'magiceden' | 'blur';
+          if (taskStatus[taskId]?.marketplaces?.[mpKey]) {
+            taskStatus[taskId].marketplaces[mpKey]!.status = 'SCHEDULED';
+            taskStatus[taskId].marketplaces[mpKey]!.waitingTime = Math.floor(delay / 1000);
+            taskStatus[taskId].marketplaces[mpKey]!.nextLoopTime = new Date(nextLoopTime);
+          }
+
+          // Create the timer with remaining delay
+          const timerKey = `${taskId}-${mpLower}`;
+          const timeoutId = setTimeout(async () => {
+            debugLog('Recovery', `Recovered timer EXPIRED | taskId=${taskId} | mp=${mpLower}`);
+            const currentTask = activeTasks.get(taskId);
+            if (currentTask?.running) {
+              await startTask(currentTask, true, mpLower);
+            }
+          }, delay);
+
+          taskTimeouts.set(timerKey, timeoutId);
+
+          // Also set up countdown timer
+          const countdownTimer = setInterval(() => {
+            const mpStatusRef = taskStatus[taskId]?.marketplaces?.[mpKey];
+            if (!mpStatusRef) {
+              clearInterval(countdownTimer);
+              taskCountdownTimers.delete(timerKey);
+              return;
+            }
+            if (mpStatusRef.nextLoopTime) {
+              const remainingSeconds = Math.max(0, Math.floor((mpStatusRef.nextLoopTime.getTime() - Date.now()) / 1000));
+              mpStatusRef.waitingTime = remainingSeconds;
+              if (remainingSeconds <= 0) {
+                clearInterval(countdownTimer);
+                taskCountdownTimers.delete(timerKey);
+              }
+            }
+          }, 1000);
+          taskCountdownTimers.set(timerKey, countdownTimer);
+
+        } else {
+          // Timer should have already fired during downtime - start task immediately
+          debugLog('Recovery', `Timer expired during downtime for ${taskId}:${mpLower} | starting immediately`);
+          await startTask(task, true, mpLower);
+        }
+
+        // Clean up the Redis key after processing
+        await redis.del(`${REDIS_KEY_NEXT_LOOP}${taskId}:${mpLower}`);
+      }
+    }
+  } catch (err) {
+    errorLog('Redis', `Failed to recreate timers for ${taskId}: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/**
+ * Clean up persisted task state from Redis when task is stopped.
+ */
+async function cleanupPersistedTaskState(taskId: string): Promise<void> {
+  try {
+    const redis = getRedisConnection();
+
+    // Delete all persisted state for this task
+    await redis.del(`${REDIS_KEY_TASK_STATUS}${taskId}`);
+    await redis.del(`${REDIS_KEY_LOOP_COUNT}${taskId}`);
+    await redis.del(`${REDIS_KEY_TASK_STARTED}${taskId}`);
+    await redis.del(`${REDIS_KEY_LAST_SCHEDULE}${taskId}`);
+
+    // Delete next loop times for all marketplaces
+    for (const mp of ['opensea', 'magiceden', 'blur']) {
+      await redis.del(`${REDIS_KEY_NEXT_LOOP}${taskId}:${mp}`);
+    }
+
+    debugLog('Recovery', `Cleaned up persisted state for ${taskId}`);
+  } catch (err) {
+    errorLog('Redis', `Failed to cleanup persisted task state for ${taskId}: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/**
+ * Periodic timer health check - verifies all SCHEDULED tasks have valid timers.
+ * Recovers stuck tasks by restarting them if timer is missing.
+ */
+async function verifyScheduledTaskTimers(): Promise<void> {
+  for (const [taskId, task] of activeTasks) {
+    if (!task.running) continue;
+
+    const status = taskStatus[taskId];
+    if (!status?.marketplaces) continue;
+
+    for (const [mp, mpStatus] of Object.entries(status.marketplaces)) {
+      if (mpStatus?.status !== 'SCHEDULED') continue;
+
+      const timerKey = `${taskId}-${mp}`;
+      const hasTimer = taskTimeouts.has(timerKey);
+
+      if (!hasTimer && mpStatus.waitingTime !== undefined && mpStatus.waitingTime <= 0) {
+        warnLog('TimerHealth', `Missing timer for SCHEDULED task | taskId=${taskId} | mp=${mp} | waitingTime=${mpStatus.waitingTime}`);
+
+        // Recover by restarting the task
+        try {
+          await startTask(task, true, mp);
+        } catch (err) {
+          errorLog('TimerHealth', `Failed to recover task ${taskId}:${mp}: ${err instanceof Error ? err.message : err}`);
+        }
+      }
+    }
+  }
+}
+
+// ============================================================
+// END TASK STATE PERSISTENCE FUNCTIONS
+// ============================================================
 
 
 // Initialize queue event handlers - called after queue is created
@@ -26002,6 +26319,54 @@ async function checkStuckTasks() {
         // Task is not complete, remove from tracking
         if (taskCompletionTracking.has(taskId)) {
           taskCompletionTracking.delete(taskId);
+        }
+      }
+    }
+
+    // ============================================================
+    // CHECK FOR STUCK SCHEDULED TASKS (waitingTime=0 with no timer)
+    // ============================================================
+    for (const [taskId, task] of activeTasks) {
+      if (!task.running) continue;
+
+      const status = taskStatus[taskId];
+      if (!status?.marketplaces) continue;
+
+      // Check for stuck SCHEDULED status (waitingTime=0 but no timer to fire)
+      const scheduledMarketplaces = Object.entries(status.marketplaces).filter(
+        ([_, mpStatus]) => mpStatus?.status === 'SCHEDULED' && mpStatus.waitingTime !== undefined && mpStatus.waitingTime <= 0
+      );
+
+      if (scheduledMarketplaces.length > 0) {
+        for (const [mp, mpStatus] of scheduledMarketplaces) {
+          const timerKey = `${taskId}-${mp}`;
+          const hasTimer = taskTimeouts.has(timerKey);
+
+          if (!hasTimer) {
+            // Task is stuck - SCHEDULED with waitingTime=0 but no timer to fire
+            const stuckKey = `${taskId}-${mp}-scheduled-stuck`;
+            const firstSeen = taskCompletionTracking.get(stuckKey);
+
+            if (!firstSeen) {
+              taskCompletionTracking.set(stuckKey, now);
+              warnLog('StuckTask', `Task ${taskId} marketplace ${mp} stuck in SCHEDULED with waitingTime=0 and no timer`);
+            } else {
+              const stuckDuration = now - firstSeen;
+
+              if (stuckDuration > 30000) { // 30 seconds stuck
+                warnLog('StuckTask', `Recovering task ${taskId} marketplace ${mp} stuck in SCHEDULED for ${stuckDuration}ms`);
+
+                // Immediately restart the task for this marketplace
+                try {
+                  await startTask(task, true, mp);
+                } catch (err) {
+                  errorLog('StuckTask', `Failed to recover stuck task ${taskId}:${mp}: ${err instanceof Error ? err.message : err}`);
+                }
+
+                taskCompletionTracking.delete(stuckKey);
+              }
+            }
+          }
         }
       }
     }
