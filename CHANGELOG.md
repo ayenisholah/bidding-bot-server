@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.0] - 2025-12-07
+
+### Added
+- **Update Server with Logging and Safeguards**: Enhanced update server (port 9999) with comprehensive logging and debugging capabilities.
+  - **Wrapper Script Approach**: Updates now execute via a self-contained bash wrapper script that survives server restarts
+  - **Full Logging**: All update output logged to `/var/log/nfttools-update.log`
+  - **Status Tracking**: Update status persisted to `/tmp/update-status.json`
+  - **Debug Endpoints**:
+    - `GET /logs` - Returns last 200 lines of update logs
+    - `GET /status` - Returns last update result (success/failed/running)
+    - `GET /health` - Health check with uptime
+  - **Lock File Protection**: `/tmp/update-in-progress.lock` prevents concurrent updates (10-minute timeout)
+  - **Installation Logging**: All install.sh output redirected to `/var/log/nfttools-install.log`
+  - Files: `install.sh`
+
 ## [3.1.0] - 2025-12-07
 
 ### Changed
