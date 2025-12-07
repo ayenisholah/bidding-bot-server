@@ -172,10 +172,8 @@ const CHAIN_CONFIGS: Partial<Record<ChainValue, ChainConfig>> = {
     value: "abstract",
     label: "Abstract",
     provider: {
-      // TODO: Confirm Abstract mainnet chainId. Using env-driven RPC for safety.
-      // Replace with the correct chainId when confirmed.
-      chainId: Number(process.env.ABSTRACT_CHAIN_ID || 0),
-      rpcUrlEnv: "ABSTRACT_RPC_URL",
+      chainId: 2741,
+      alchemyNetwork: "abstract-mainnet",
     },
     currencies: {
       weth: {
@@ -230,6 +228,12 @@ function resolveAlchemyRpcUrl(network: string, apiKey?: string): string | undefi
       return `https://base-mainnet.g.alchemy.com/v2/${apiKey}`;
     }
     return "https://mainnet.base.org";
+  }
+  if (network === "abstract-mainnet" || network === "abstract") {
+    if (apiKey) {
+      return `https://abstract-mainnet.g.alchemy.com/v2/${apiKey}`;
+    }
+    return "https://api.mainnet.abs.xyz";
   }
   if (apiKey) {
     return `https://${network}.g.alchemy.com/v2/${apiKey}`;

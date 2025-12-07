@@ -82,6 +82,11 @@ const CONDUIT_KEY = (
   "6a004d60a8d4e71d" +
   "599b8104250f0000"
 );
+const ABSTRACT_CONDUIT_KEY = "0x61159fefdfada89302ed55f8b9e89e2d67d8258712b3a3f89aa88525877f1d5e";
+
+function getConduitKey(chain: ChainValue): string {
+  return chain === "abstract" ? ABSTRACT_CONDUIT_KEY : CONDUIT_KEY;
+}
 const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1F0DF003000390027140000fAa719";
 
 
@@ -321,6 +326,7 @@ async function buildItemOffer(taskId: string, offerSpecification: ItemOfferSpeci
   const task = activeTasks.get(taskId)
 
   if (!task) return
+  const chain = (task.chain as ChainValue) ?? DEFAULT_CHAIN;
   const slug = task.contract?.slug?.toLowerCase()
   const resolvedContract = await resolveContractAddress(slug, tokenId, assetContractAddress)
   const consideration = getItemConsideration(
@@ -344,7 +350,7 @@ async function buildItemOffer(taskId: string, offerSpecification: ItemOfferSpeci
     zone: OPENSEA_ITEM_ZONE,
     zoneHash: ZONE_HASH,
     salt: getSalt(),
-    conduitKey: CONDUIT_KEY,
+    conduitKey: getConduitKey(chain),
     totalOriginalConsiderationItems: consideration.length.toString(),
     counter: 0,
   }
@@ -567,7 +573,7 @@ export async function bidOnOpensea(
               orderType: 2,
               zone: OPENSEA_COLLECTION_ZONE,
               zoneHash: ZONE_HASH,
-              conduitKey: CONDUIT_KEY,
+              conduitKey: getConduitKey(chain),
               totalOriginalConsiderationItems: 2,
               counter: '0'
             },
@@ -694,7 +700,7 @@ export async function bidOnOpensea(
               orderType: 2,
               zone: OPENSEA_COLLECTION_ZONE,
               zoneHash: ZONE_HASH,
-              conduitKey: CONDUIT_KEY,
+              conduitKey: getConduitKey(chain),
               totalOriginalConsiderationItems: 2,
               counter: '0'
             },
