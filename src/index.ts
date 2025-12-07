@@ -22593,20 +22593,28 @@ app.get('/api/blur-health', async (req, res) => {
 
 // Secure update endpoint with authentication and rate limiting
 app.post('/api/update-app', async (req, res) => {
+  debugLog('Update', '=== UPDATE REQUEST RECEIVED ===');
+  debugLog('Update', `Request IP: ${req.ip}`);
+  debugLog('Update', `Headers: x-api-key=${req.headers['x-api-key'] ? '[PRESENT]' : '[MISSING]'}`);
+
   try {
     // Authentication check - require API key
     const apiKey = req.headers['x-api-key']
 
     if (!apiKey || apiKey !== API_KEY) {
+      warnLog('Update', `AUTH FAILED - apiKey provided: ${!!apiKey}, matches: ${apiKey === API_KEY}`);
       warnLog('Security', 'UNAUTHORIZED_UPDATE_ATTEMPT - Unauthorized update attempt');
       return res.status(401).json({ error: 'Unauthorized' });
     }
+    debugLog('Update', 'AUTH SUCCESS - API key validated');
 
     // Additional security: Only allow updates from the server IP
     const SERVER_IP = process.env.SERVER_IP as string;
     if (!SERVER_IP) {
+      errorLog('Update', 'SERVER_IP not configured in environment');
       return res.status(500).json({ error: 'Server IP not configured' });
     }
+    debugLog('Update', `SERVER_IP configured: ${SERVER_IP}`);
 
     // Rate limiting check - prevent abuse
     const rateLimitKey = `update_app_${req.ip}`;
@@ -22616,14 +22624,18 @@ app.post('/api/update-app', async (req, res) => {
       if (attempts === 1) {
         await redis.expire(rateLimitKey, 3600); // 1 hour expiry
       }
+      debugLog('Update', `Rate limit check - attempts: ${attempts}/3`);
       if (attempts > 3) { // Max 3 update attempts per hour
+        warnLog('Update', 'RATE_LIMIT_EXCEEDED');
         warnLog('Security', 'RATE_LIMIT_EXCEEDED - Update rate limit exceeded');
         return res.status(429).json({ error: 'Too many requests' });
       }
     }
 
-
     // Check for updates
+    debugLog('Update', 'Checking updates.nfttools.io for available updates...');
+    debugLog('Update', `USERNAME env: ${process.env.USERNAME || '[NOT SET]'}`);
+
     const { data: update } = await axios.post(
       "https://updates.nfttools.io/api/v1/check", {},
       {
@@ -22635,32 +22647,50 @@ app.post('/api/update-app', async (req, res) => {
       }
     );
 
+    debugLog('Update', `Update check response: ${JSON.stringify(update)}`);
+
     if (!update?.releaseInfo?.downloadUrl) {
+      warnLog('Update', 'No downloadUrl in update response');
       return res.status(404).json({ error: 'No update available' });
     }
 
     // Validate the download URL is from trusted source
     const trustedDomains = ['updates.nfttools.io', 'github.com', 'githubusercontent.com'];
     const urlObj = new URL(update.releaseInfo.downloadUrl);
+    debugLog('Update', `Download URL hostname: ${urlObj.hostname}`);
+
     if (!trustedDomains.some(domain => urlObj.hostname.includes(domain))) {
+      warnLog('Update', `UNTRUSTED URL - hostname ${urlObj.hostname} not in trusted domains`);
       warnLog('Security', 'UNTRUSTED_UPDATE_URL - Update from untrusted source blocked');
       return res.status(400).json({ error: 'Invalid update source' });
     }
 
     const scriptUrl = update.releaseInfo.downloadUrl;
+    debugLog('Update', `Script URL validated: ${scriptUrl}`);
 
     // Trigger update with timeout
+    debugLog('Update', 'Triggering update server at http://host.docker.internal:9999/update');
 
     const { data } = await axios.post(`http://host.docker.internal:9999/update`,
       { scriptUrl },
       { timeout: 30000 } // 30 second timeout
     );
 
+    debugLog('Update', `Update server response: ${JSON.stringify(data)}`);
     warnLog('Security', 'UPDATE_TRIGGERED - Application update triggered successfully');
 
     res.status(200).json(data);
   } catch (error: any) {
-    errorLog('API', 'Failed to schedule update', error);
+    errorLog('Update', '=== UPDATE FAILED ===');
+    errorLog('Update', `Error type: ${error.name || 'Unknown'}`);
+    errorLog('Update', `Error message: ${error.message || 'No message'}`);
+    if (error.response) {
+      errorLog('Update', `Response status: ${error.response.status}`);
+      errorLog('Update', `Response data: ${JSON.stringify(error.response.data)}`);
+    }
+    if (error.code) {
+      errorLog('Update', `Error code: ${error.code}`);
+    }
     errorLog('API', 'Failed to schedule update', error instanceof Error ? error : new Error(String(error)));
     res.status(500).json({
       scheduled: false,
