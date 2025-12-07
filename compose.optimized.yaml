@@ -34,7 +34,6 @@ services:
       SERVER_IP: ${SERVER_IP}
       USERNAME: ${USERNAME}
       EMAIL: ${EMAIL}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       JWT_SECRET: "NFTTOOLS TO THE MOON"
       AXIOM_DATASET: "nft-bidding-bot"
       AXIOM_TOKEN: "xaat-30ecb9c3-ce16-42f6-b824-ba8ef5c50e7c"
@@ -50,8 +49,6 @@ services:
         condition: service_healthy
     networks:
       - my_network
-    volumes:
-      - server_data:/app/data
     ulimits:
       nofile:
         soft: 65536
@@ -215,8 +212,6 @@ volumes:
       type: none
       o: bind
       device: /var/lib/redis
-  server_data:
-    driver: local
 
 networks:
   my_network:

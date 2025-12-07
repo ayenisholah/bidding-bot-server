@@ -48,7 +48,7 @@ import { orderCache, CachedOrder } from "./utils/order-cache";
 import Approval from "./models/approval.model";
 import { USDC, WETH } from "./utils/currencies";
 import axios from "axios";
-import { decryptPrivateKey, setPassword, getPassword, decryptPassword, recoverPasswordFromRedis, recoverPassword, renewPasswordTTL, reEncryptWallet, clearDecryptedKeyCache } from "./utils/crypto";
+import { decryptPrivateKey, setPassword, getPassword, decryptPassword, recoverPasswordFromRedis, renewPasswordTTL, reEncryptWallet, clearDecryptedKeyCache } from "./utils/crypto";
 import { logProcessStart, logProcessExit, logSignal, logLifecycleEvent, stopMemoryMonitor } from "./utils/process-lifecycle-logger";
 import { fetchWalletNFTs } from "./utils/nft";
 import WebSocketManager from "./utils/websocket-manager";
@@ -1435,11 +1435,11 @@ function removeTaskFromIndexes(task: ITask): void {
 }
 
 export const OPENSEA_SCHEDULE = "OPENSEA_SCHEDULE"
+export const BLUR_SCHEDULE = "BLUR_SCHEDULE"
+export const MAGICEDEN_SCHEDULE = "MAGICEDEN_SCHEDULE"
 export const OPENSEA_COLLECTION_BID = "OPENSEA_COLLECTION_BID"
 export const OPENSEA_TOKEN_BID = "OPENSEA_TOKEN_BID"
 export const OPENSEA_TRAIT_BID = "OPENSEA_TRAIT_BID"
-export const BLUR_SCHEDULE = "BLUR_SCHEDULE"
-export const MAGICEDEN_SCHEDULE = "MAGICEDEN_SCHEDULE"
 export const MAGICEDEN_COLLECTION_BID = "MAGICEDEN_COLLECTION_BID"
 export const MAGICEDEN_TOKEN_BID = "MAGICEDEN_TOKEN_BID"
 export const MAGICEDEN_TRAIT_BID = "MAGICEDEN_TRAIT_BID"
@@ -3247,7 +3247,11 @@ async function startServer() {
         continue;
       }
 
-      passwordRecovered = await recoverPassword(); // Uses file in production, Redis in development
+      // Development only: try to recover password from Redis
+      if (process.env.NODE_ENV !== 'production') {
+        passwordRecovered = await recoverPasswordFromRedis();
+      }
+      // Production: no password persistence, always requires manual entry
 
       if (passwordRecovered) {
         break;
@@ -3264,10 +3268,9 @@ async function startServer() {
       console.log('💡 Server will remain in paused state until password is provided via API');
     } else {
       if (passwordRecovered) {
-        const source = process.env.NODE_ENV === 'production' ? 'encrypted file' : 'Redis';
-        console.log(`✅ Password recovered from ${source} - operations will resume`);
+        console.log('✅ Password recovered from Redis (development) - operations will resume');
 
-        // If crash recovery and password available, resume previously running tasks
+        // If crash recovery and password available, resume previously running tasks (dev only)
         if (shutdownType === 'crash') {
           console.log('🔄 Crash recovery: Auto-resuming previously running tasks...');
           await resumePreviouslyRunningTasks();
@@ -3536,6 +3539,10 @@ async function startServer() {
     // Start periodic timer health check for SCHEDULED tasks
     const TIMER_HEALTH_CHECK_INTERVAL = 60000; // 60 seconds
     setInterval(verifyScheduledTaskTimers, TIMER_HEALTH_CHECK_INTERVAL);
+
+    // Start periodic cleanup of stuck jobs (delayed and waiting)
+    const STUCK_JOB_CLEANUP_INTERVAL = 60000; // 60 seconds
+    setInterval(cleanupStuckJobs, STUCK_JOB_CLEANUP_INTERVAL);
 
     debugLog('STARTUP', '✅ SERVER FULLY INITIALIZED');
 
@@ -5341,6 +5348,116 @@ async function verifyScheduledTaskTimers(): Promise<void> {
         }
       }
     }
+  }
+}
+
+/**
+ * Cleanup stuck jobs (delayed AND waiting)
+ * - SCHEDULE jobs: fail immediately and retry infinitely (exponential backoff capped at 30s)
+ * - Other jobs: fail and retry up to 3 times, then restart task
+ */
+async function cleanupStuckJobs(): Promise<void> {
+  const SCHEDULE_JOBS = [OPENSEA_SCHEDULE, MAGICEDEN_SCHEDULE, BLUR_SCHEDULE];
+  const MAX_STUCK_TIME_MS = 60000; // 60 seconds max for any job to be stuck
+  const OTHER_MAX_ATTEMPTS = 3;
+
+  try {
+    // Get counts for summary logging
+    const mainDelayed = await queue.getDelayed();
+    const mainWaiting = await queue.getWaiting();
+    const blurDelayed = await blurQueue.getDelayed();
+    const blurWaiting = await blurQueue.getWaiting();
+
+    const totalStuckJobs = mainDelayed.length + mainWaiting.length + blurDelayed.length + blurWaiting.length;
+
+    // Log scan summary every run
+    debugLog('StuckJobCleanup', `SCAN | mainQueue: delayed=${mainDelayed.length} waiting=${mainWaiting.length} | blurQueue: delayed=${blurDelayed.length} waiting=${blurWaiting.length} | total=${totalStuckJobs}`);
+
+    // Track stats for this cleanup run
+    let processedCount = 0;
+    let failedToRetryCount = 0;
+    let restartedTaskCount = 0;
+    let skippedCount = 0;
+
+    // Helper function to process stuck jobs
+    const processStuckJob = async (job: Job, queueName: string, state: 'delayed' | 'waiting') => {
+      const stuckSince = Date.now() - (job.timestamp || 0);
+      const stuckSeconds = Math.round(stuckSince / 1000);
+      const isScheduleJob = SCHEDULE_JOBS.includes(job.name);
+      const taskId = job.data?._id || job.data?.taskId;
+
+      // Log every job found for debugging
+      debugLog('StuckJobCleanup', `FOUND ${state} job | queue=${queueName} | name=${job.name} | id=${job.id} | stuckFor=${stuckSeconds}s | attempts=${job.attemptsMade} | isSchedule=${isScheduleJob} | taskId=${taskId || 'unknown'}`);
+
+      // All stuck jobs (delayed or waiting) over 60 seconds should be processed
+      if (stuckSince > MAX_STUCK_TIME_MS) {
+        warnLog('StuckJobCleanup', `PROCESSING stuck ${state} job | queue=${queueName} | name=${job.name} | id=${job.id} | stuckFor=${stuckSeconds}s | attempts=${job.attemptsMade} | isSchedule=${isScheduleJob}`);
+
+        try {
+          // For non-SCHEDULE jobs that have exhausted retries, restart the task
+          if (!isScheduleJob && job.attemptsMade >= OTHER_MAX_ATTEMPTS) {
+            debugLog('StuckJobCleanup', `EXHAUSTED RETRIES | job=${job.name} | id=${job.id} | attempts=${job.attemptsMade} >= max=${OTHER_MAX_ATTEMPTS} | action=RESTART_TASK`);
+
+            if (taskId) {
+              const task = await Task.findById(taskId);
+              if (task && task.running) {
+                warnLog('StuckJobCleanup', `RESTARTING TASK | taskId=${taskId} | job=${job.name} | reason=exhausted_retries`);
+                await startTask(task, true);
+                restartedTaskCount++;
+                debugLog('StuckJobCleanup', `RESTART SUCCESS | taskId=${taskId}`);
+              } else {
+                debugLog('StuckJobCleanup', `SKIP RESTART | taskId=${taskId} | task=${task ? 'exists' : 'not_found'} | running=${task?.running}`);
+              }
+            } else {
+              debugLog('StuckJobCleanup', `NO TASK ID | job=${job.name} | id=${job.id} | cannot restart`);
+            }
+            // Remove the stuck job after triggering restart
+            await job.remove();
+            debugLog('StuckJobCleanup', `REMOVED job | id=${job.id} | after restart trigger`);
+            processedCount++;
+          } else {
+            // Fail the job to trigger retry
+            const action = isScheduleJob ? 'FAIL_FOR_INFINITE_RETRY' : `FAIL_FOR_RETRY (${job.attemptsMade + 1}/${OTHER_MAX_ATTEMPTS})`;
+            debugLog('StuckJobCleanup', `${action} | job=${job.name} | id=${job.id} | isSchedule=${isScheduleJob}`);
+
+            await job.moveToFailed(new Error(`Job stuck in ${state} state for ${stuckSeconds}s`), job.token || '');
+            failedToRetryCount++;
+            debugLog('StuckJobCleanup', `MOVED TO FAILED | job=${job.name} | id=${job.id} | will retry with backoff`);
+          }
+        } catch (err) {
+          errorLog('StuckJobCleanup', `PROCESS ERROR | job=${job.name} | id=${job.id} | error=${err instanceof Error ? err.message : err}`);
+        }
+      } else {
+        skippedCount++;
+        // Only log if job is getting close to threshold (>30s)
+        if (stuckSeconds > 30) {
+          debugLog('StuckJobCleanup', `MONITORING | job=${job.name} | id=${job.id} | stuckFor=${stuckSeconds}s | threshold=${MAX_STUCK_TIME_MS / 1000}s`);
+        }
+      }
+    };
+
+    // Process all queues
+    for (const job of mainDelayed) {
+      await processStuckJob(job, 'main', 'delayed');
+    }
+    for (const job of mainWaiting) {
+      await processStuckJob(job, 'main', 'waiting');
+    }
+    for (const job of blurDelayed) {
+      await processStuckJob(job, 'blur', 'delayed');
+    }
+    for (const job of blurWaiting) {
+      await processStuckJob(job, 'blur', 'waiting');
+    }
+
+    // Log summary only if something was processed
+    if (processedCount > 0 || failedToRetryCount > 0 || restartedTaskCount > 0) {
+      warnLog('StuckJobCleanup', `CLEANUP COMPLETE | processed=${processedCount} | failedToRetry=${failedToRetryCount} | restartedTasks=${restartedTaskCount} | skipped=${skippedCount}`);
+    } else if (totalStuckJobs > 0) {
+      debugLog('StuckJobCleanup', `NO ACTION NEEDED | allJobsUnderThreshold | skipped=${skippedCount}`);
+    }
+  } catch (err) {
+    errorLog('StuckJobCleanup', 'FATAL ERROR in cleanup', err);
   }
 }
 
@@ -8760,8 +8877,8 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
               opts: {
                 jobId: `${task._id}-opensea-schedule`,
                 removeOnComplete: true,
-                removeOnFail: true,
-                attempts: 100,
+                removeOnFail: false,  // Keep failed jobs for retry
+                attempts: Number.MAX_SAFE_INTEGER,  // Infinite retries for SCHEDULE jobs
                 timeout: 900000, // 15 minutes instead of default 5
                 backoff: {
                   type: 'exponential',
@@ -8776,8 +8893,8 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
               opts: {
                 jobId: `${task._id}-blur-schedule`,
                 removeOnComplete: true,
-                removeOnFail: true,
-                attempts: 100,
+                removeOnFail: false,  // Keep failed jobs for retry
+                attempts: Number.MAX_SAFE_INTEGER,  // Infinite retries for SCHEDULE jobs
                 timeout: 900000, // 15 minutes instead of default 5
                 backoff: {
                   type: 'exponential',
@@ -8792,8 +8909,8 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
               opts: {
                 jobId: `${task._id}-magiceden-schedule`,
                 removeOnComplete: true,
-                removeOnFail: true,
-                attempts: 100,
+                removeOnFail: false,  // Keep failed jobs for retry
+                attempts: Number.MAX_SAFE_INTEGER,  // Infinite retries for SCHEDULE jobs
                 timeout: 900000, // 15 minutes instead of default 5
                 priority: 1, // Higher priority than default jobs
                 backoff: {

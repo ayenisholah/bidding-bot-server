@@ -24,7 +24,6 @@ services:
       SERVER_IP: ${SERVER_IP}
       USERNAME: ${USERNAME}
       EMAIL: ${EMAIL}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       JWT_SECRET: "NFTTOOLS TO THE MOON"
       AXIOM_DATASET: "nft-bidding-bot"
       AXIOM_TOKEN: "xaat-30ecb9c3-ce16-42f6-b824-ba8ef5c50e7c"
@@ -34,7 +33,6 @@ services:
       - mongodb
       - redis
     volumes:
-      - server_data:/app/data
       - /dev/null:/app/.env:ro
 
   client:
@@ -109,4 +107,3 @@ services:
 volumes:
   mongodb_data:
   redis_data:
-  server_data:

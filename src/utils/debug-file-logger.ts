@@ -105,7 +105,7 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   // Counterbid (1)
   'Counterbid': 'counterbid',
 
-  // Queue (12)
+  // Queue (13)
   'Queue': 'queue',
   'BlurQueue': 'queue',
   'BlurQueueEvents': 'queue',
@@ -118,6 +118,7 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'JobRetry': 'queue',
   'Performance': 'queue',
   'BulkJobs': 'queue',
+  'StuckJobCleanup': 'queue',
 
   // Worker (6)
   'Worker': 'worker',

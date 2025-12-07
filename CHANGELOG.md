@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2025-12-07
+
+### Changed
+- **Removed File-Based Password Persistence (2025-12-07)**: Production now requires password entry on every server start.
+  - **Previous Behavior**: Password was encrypted and stored in `/app/data/.encrypted-password` for auto-recovery after crashes
+  - **New Behavior**:
+    - **Production**: Password only stored in memory, no persistence. Requires re-entry on every restart/crash
+    - **Development**: Password persists in Redis (7-day TTL) for convenience during development
+  - **Removed**:
+    - `savePasswordToFile()`, `loadPasswordFromFile()`, `deletePasswordFile()`, `recoverPasswordFromFile()`, `recoverPassword()` functions
+    - `PASSWORD_FILE_PATH` constant
+    - `ENCRYPTION_KEY` environment variable from compose files
+    - `server_data` Docker volume (no longer needed)
+  - **Kept for Development**:
+    - `recoverPasswordFromRedis()` - recovers password from Redis in dev mode
+    - `renewPasswordTTL()` - extends Redis password TTL
+  - **Security Note**: `encryptPassword()`/`decryptPassword()` functions retained for client-server password transmission (AES-256-ECB)
+  - Files: `src/utils/crypto.ts`, `src/index.ts`, `install.sh`, `compose.yaml`
+
+### Added
+- **Stuck Job Cleanup System (2025-12-07)**: Added automatic cleanup of jobs stuck in "delayed" or "waiting" BullMQ states.
+  - **Problem**: Jobs could get stuck indefinitely in delayed/waiting states (observed 19+ delayed jobs) with no recovery mechanism
+  - **Root Cause**: `job.moveToDelayed()` in Blur rate limiting could leave jobs stuck forever if rate limiter never cleared
+  - **Solution**: New `cleanupStuckJobs()` function runs every 60 seconds and processes stuck jobs:
+    - **SCHEDULE jobs** (`OPENSEA_SCHEDULE`, `MAGICEDEN_SCHEDULE`, `BLUR_SCHEDULE`): Retry infinitely with exponential backoff
+    - **Other jobs**: Retry up to 3 times, then trigger full task restart
+    - Jobs stuck for >60 seconds are considered stuck and processed
+  - **Debug Logging**: Comprehensive logging under `StuckJobCleanup` prefix:
+    - `SCAN`: Summary of delayed/waiting job counts per queue
+    - `FOUND`: Details of each stuck job discovered
+    - `PROCESSING`: Action taken on stuck jobs
+    - `RETRY`: When job is moved to failed for retry
+    - `TASK_RESTART`: When task restart is triggered after exhausted retries
+    - `CLEANUP COMPLETE`: Summary of cleanup run
+  - **Schedule Job Options Updated**: All schedule jobs now use `attempts: Number.MAX_SAFE_INTEGER` and `removeOnFail: false` for infinite retries
+  - Files: `src/index.ts`, `src/utils/debug-file-logger.ts`
+
+### Fixed
+- **debug-container.sh Queue Names (2025-12-07)**: Fixed incorrect queue names in debug script.
+  - **Problem**: Script checked for `main-queue`/`blur-queue` but actual queue names are `BIDDING_BOT`/`BLUR_BIDDING_QUEUE`
+  - **Solution**: Updated all Redis key references to use correct queue names
+  - **Affected Sections**: Queue sizes, stalled jobs, failed jobs, active jobs
+  - Files: `debug-container.sh`
+
 ### Fixed
 - **Tasks Stuck in SCHEDULED with waitingTime=0 (2025-12-06)**: Fixed critical bug where tasks would get stuck in SCHEDULED status with waitingTime=0 after server restart and never execute their next loop.
   - **Root Cause 1**: Orphaned task detection checked `taskTimeouts.has(taskId)` but timers are stored with keys like `${taskId}-${marketplace}`
