@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Update Server Not Executing Install Script (2025-12-07)**: Fixed critical bug where the update server's wrapper script downloaded the install script but never executed it.
+  - **Problem**: The wrapper script piped `curl` output through a `while` loop that only logged each line to the log file - the script content was never actually executed
+  - **Root Cause**: `curl -sL "$SCRIPT_URL" | while read line; do echo "$line" >> log; done` only reads and logs, doesn't execute
+  - **Solution**: Download script to temp file first, then execute with `bash "$TEMP_SCRIPT"` while capturing output
+  - **New Flow**:
+    1. Download script to `/tmp/nfttools-install-$$.sh`
+    2. Validate download succeeded (check curl exit code)
+    3. Execute with `bash` and pipe output through logging
+    4. Clean up temp file after execution
+  - **Impact**: Updates triggered from the dashboard will now actually apply
+  - Files: `bidding-bot-installation/install.sh`, `bidding-bot-deployer/src/update.sh`
+
 ## [3.3.0] - 2025-12-07
 
 ### Added
