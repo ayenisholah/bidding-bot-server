@@ -23922,7 +23922,7 @@ export async function fetchAddressBalances(walletAddress: string): Promise<Addre
       };
 
       try {
-        const { data } = await limiter.schedule(() => axiosInstance.post<AddressBalancesResponse>(
+        const { data } = await limiter.schedule({ priority: 0, id: `api-address-balances-${walletAddress}` }, () => axiosInstance.post<AddressBalancesResponse>(
           `${BASE_URL}/opensea/graphql`,
           query,
           {
@@ -23955,7 +23955,7 @@ export async function fetchBlurTraits(
 ): Promise<IBlurData> {
   const url = `${BASE_URL}/blur/v1/traits/${contractAddress}`;
   try {
-    const { data } = await limiter.schedule(() => axiosInstance.get(url, {
+    const { data } = await limiter.schedule({ priority: 0, id: `api-blur-traits-${contractAddress}` }, () => axiosInstance.get(url, {
       headers: { "x-api-key": API_KEY },
     }));
     const traits = terraformBlurTraits(data.traits);
@@ -23974,7 +23974,7 @@ export async function fetchMagicEdenAttributes(
 ): Promise<MagicEdenData> {
   const url = `${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${collectionId}/attributes/all/v4`;
   try {
-    const { data } = await limiter.schedule(() => axiosInstance.get<MagicEdenTraits>(url, {
+    const { data } = await limiter.schedule({ priority: 0, id: `api-magiceden-attrs-${collectionId}` }, () => axiosInstance.get<MagicEdenTraits>(url, {
       headers: {
         accept: "application/json",
         "x-api-key": API_KEY,
@@ -23996,12 +23996,12 @@ const fetchCollectionData = async (slug: string) => {
 
   const tasks = [
     () =>
-      limiter.schedule(() => axiosInstance.get<CollectionData>(apiUrl, {
+      limiter.schedule({ priority: 0, id: `api-collection-opensea-${slug}` }, () => axiosInstance.get<CollectionData>(apiUrl, {
         headers: { "x-api-key": API_KEY },
       })),
 
     () =>
-      limiter.schedule(() => axiosInstance.post(
+      limiter.schedule({ priority: 0, id: `api-collection-magiceden-${slug}` }, () => axiosInstance.post(
         `${BASE_URL}/magiceden/v4/collections`,
         {
           chain: "ethereum",

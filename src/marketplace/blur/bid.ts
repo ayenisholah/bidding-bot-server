@@ -1102,7 +1102,7 @@ export async function fetchBlurCollectionStats(slug: string) {
 
     try {
       const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens`;
-      const { data } = await limiter.schedule(() => axiosInstance.get<BlurTokensResponse>(url, {
+      const { data } = await limiter.schedule({ priority: 0, id: `api-blur-stats-${slug}` }, () => axiosInstance.get<BlurTokensResponse>(url, {
         headers: {
           'content-type': 'application/json',
           'x-api-key': API_KEY,

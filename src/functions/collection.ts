@@ -305,7 +305,7 @@ export async function getOpenseaFloor(collectionSlug: string) {
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
         const { data } = await openseaCircuitBreaker.execute(() =>
-          limiter.schedule(() => axiosInstance.get<ListingsResponse>(
+          limiter.schedule({ priority: 0, id: `api-opensea-floor-${collectionSlug}` }, () => axiosInstance.get<ListingsResponse>(
             apiUrl,
             {
               headers: { 'x-api-key': API_KEY }
@@ -940,7 +940,7 @@ async function fetchOpenseaTraitsRecursive(
     }
   };
 
-  const { data } = await limiter.schedule(() =>
+  const { data } = await limiter.schedule({ priority: 0, id: `api-opensea-traits-${slug}` }, () =>
     axiosInstance.post<TraitResponse>(`${BASE_URL}/opensea/graphql`, payload, {
       headers: {
         "x-api-key": API_KEY
