@@ -281,7 +281,7 @@ export const listOnOpensea = async (
     identifierOrCriteria: 0,
     startAmount: ((offerPrice * BigInt(openseaFee)) / BigInt(divider)).toString(),
     endAmount: ((offerPrice * BigInt(openseaFee)) / BigInt(divider)).toString(),
-    recipient: '0x0000a26b00c1F0DF003000390027140000fAa719'
+    recipient: '0x0000a26b00c1f0df003000390027140000faa719'
   };
 
   listingPayload.parameters.consideration = enforceCreatorFee

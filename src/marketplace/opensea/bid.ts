@@ -84,7 +84,7 @@ const OPENSEA_COLLECTION_ZONE = "0x004C00500000aD104D7DBd00e3ae0A5C00560C00"
 const ZONE_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000"
 const CONDUIT_KEY = "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000"
 const SEAPORT_1_6 = "0x0000000000000068f116a894984e2db1123eb395"
-const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1F0DF003000390027140000fAa719"
+const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1f0df003000390027140000faa719"
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 const SEAPORT_CONTRACT = new ethers.Contract(SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI, provider);
@@ -462,28 +462,41 @@ export async function bidOnOpensea(
         offer.consideration.push(opensea_consideration);
         offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
 
+        // DEBUG: Log creator_fees input for token bid
+        debugLog('FeeDebug', `[${slug}] Token bid - creator_fees input | tokenId=${asset.tokenId} | fees=${JSON.stringify(creator_fees)} | offerPrice=${offerPrice.toString()}`);
+
         for (const address in creator_fees) {
           let fee: bigint | number = creator_fees[address];
           fee = BigInt(Math.round(fee).toString());
 
+          // DEBUG: Log each fee being processed
+          debugLog('FeeDebug', `[${slug}] Token bid - processing fee | address=${address} | fee=${fee.toString()} | type=${typeof address}`);
+
           // Skip null address or zero fees
           if (address === 'null' || address.toLowerCase() === '0x0000000000000000000000000000000000000000' || fee === 0n) {
+            debugLog('FeeDebug', `[${slug}] Token bid - SKIP fee | address=${address} | fee=${fee.toString()} | reason=${address === 'null' ? 'null address' : fee === 0n ? 'zero fee' : 'zero address'}`);
             continue;
           }
 
           // Add all creator fees (OpenSea requires all fees marked as required=true)
+          const feeAmount = ((offerPrice * fee) / DIVIDER).toString();
+          debugLog('FeeDebug', `[${slug}] Token bid - ADDING consideration | recipient=${address} | fee=${fee.toString()} | amount=${feeAmount}`);
+
           const consideration_item = {
             itemType: 1,
             token: currency,
             identifierOrCriteria: "0",
-            startAmount: ((offerPrice * fee) / DIVIDER).toString(),
-            endAmount: ((offerPrice * fee) / DIVIDER).toString(),
+            startAmount: feeAmount,
+            endAmount: feeAmount,
             recipient: address
           };
           offer.consideration.push(consideration_item);
           offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
 
         }
+
+        // DEBUG: Log final consideration array
+        debugLog('FeeDebug', `[${slug}] Token bid - final consideration | count=${offer.consideration.length} | recipients=${offer.consideration.map((c: any) => c.recipient).join(', ')}`);
 
         const itemSignature = await signOffer(wallet, offer)
 

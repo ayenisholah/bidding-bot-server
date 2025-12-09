@@ -7357,6 +7357,8 @@ async function updateTaskData(task: ITask) {
     Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)])
   );
 
+  // DEBUG: Log fee conversion for scheduled bids
+  debugLog('FeeDebug', `[${task.contract.slug}] Scheduled bid - creatorFees conversion | input=${JSON.stringify(collectionDetails.creator_fees)} | output=${JSON.stringify(creatorFees)} | enforceCreatorFee=${collectionDetails.enforceCreatorFee}`);
 
   const bidDuration = currentTask && currentTask.bidDuration ? currentTask.bidDuration : task.bidDuration
   const expiration = getExpiry(bidDuration)
@@ -13642,6 +13644,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)])
     );
 
+    // DEBUG: Log fee conversion for counterbid
+    debugLog('FeeDebug', `[${task.contract.slug}] Counterbid - creatorFees conversion | input=${JSON.stringify(collectionDetails.creator_fees)} | output=${JSON.stringify(creatorFees)} | enforceCreatorFee=${collectionDetails.enforceCreatorFee}`);
+
     let offerPrice: number;
     let collectionOffer: bigint;
 
@@ -17873,6 +17878,9 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     }
     const { address, walletId, slug, creatorFees, enforceCreatorFee, asset, _id } = data
 
+    // DEBUG: Log creatorFees received in token bid processor
+    debugLog('FeeDebug', `[${slug}] processOpenseaTokenBid - received fees | tokenId=${asset.tokenId} | creatorFees=${JSON.stringify(creatorFees)} | enforceCreatorFee=${enforceCreatorFee}`);
+
     // Early wallet validation - fetch once and reuse later
     const wallet = await walletCache.getWalletById(walletId);
     if (!wallet || !wallet.encryptedPrivateKey) {
@@ -21965,70 +21973,71 @@ app.post('/api/collection/stats', async (req, res) => {
   try {
     const slug = req.body.slug as string;
     const contractAddress = req.body.address as string;
+    const startTime = Date.now();
 
+    // Check cache first (60 second TTL)
+    const STATS_CACHE_TTL = 60;
+    const cacheKey = `collection:stats:${slug}:${contractAddress}`;
 
-    // Wrap each task to handle failures gracefully
-    const tasks: (() => Promise<unknown>)[] = [
-      async () => {
-        try {
-          return await fetchBlurCollectionStats(slug);
-        } catch (error) {
-          errorLog('CollectionStats', 'Failed to fetch Blur collection stats', error);
-          return 0;
-        }
-      },
-      async () => {
-        try {
-          return await fetchMagicEdenCollectionStats(contractAddress);
-        } catch (error) {
-          errorLog('CollectionStats', 'Failed to fetch MagicEden collection stats', error);
-          return 0;
-        }
-      },
-      async () => {
-        try {
-          return await getOpenseaFloor(slug);
-        } catch (error) {
-          errorLog('CollectionStats', 'Failed to fetch OpenSea floor', error);
-          return 0;
-        }
-      },
-      async () => {
-        try {
-          return await fetchBlurTraits(contractAddress);
-        } catch (error) {
-          errorLog('CollectionStats', 'Failed to fetch Blur traits', error);
-          return { traits: { categories: {}, counts: {} }, blurRaw: null };
-        }
-      },
-      async () => {
-        try {
-          return await fetchMagicEdenAttributes(contractAddress);
-        } catch (error) {
-          errorLog('CollectionStats', 'Failed to fetch MagicEden attributes', error);
-          return { traits: { categories: {}, counts: {} }, magicedenRaw: null };
-        }
-      },
-      async () => {
-        try {
-          return await fetchOpenseaTraits(slug);
-        } catch (error) {
-          errorLog('CollectionStats', 'Failed to fetch MagicEden attributes', error);
-          return { traits: { categories: {}, counts: {} }, magicedenRaw: null };
-        }
-      },
-    ];
+    try {
+      const cached = redisClient.isReady() ? await redisClient.getClient().get(cacheKey) : null;
+      if (cached) {
+        debugLog('CollectionStats', `[${slug}] Cache HIT | returning cached stats`);
+        return res.status(200).json(JSON.parse(cached));
+      }
+    } catch (cacheError) {
+      warnLog('CollectionStats', `[${slug}] Cache read error: ${cacheError}`);
+    }
 
-    const results = await pQueue.addAll(tasks);
+    debugLog('CollectionStats', `[${slug}] Cache MISS | fetching from APIs in parallel`);
 
+    // Helper to time each fetch with timeout (prevents slow MagicEden APIs from blocking response)
+    const API_TIMEOUT_MS = 15000; // 15 second timeout per API call
+    const timedFetch = async <T>(name: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
+      const fnStart = Date.now();
+      try {
+        const result = await Promise.race([
+          fn(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`${name} timed out after ${API_TIMEOUT_MS}ms`)), API_TIMEOUT_MS)
+          )
+        ]);
+        debugLog('CollectionStats', `[${slug}] ${name} completed | time=${Date.now() - fnStart}ms`);
+        return result;
+      } catch (error) {
+        const elapsed = Date.now() - fnStart;
+        const isTimeout = error instanceof Error && error.message.includes('timed out');
+        if (isTimeout) {
+          warnLog('CollectionStats', `[${slug}] ${name} TIMEOUT | time=${elapsed}ms | using fallback`);
+        } else {
+          errorLog('CollectionStats', `[${slug}] ${name} failed | time=${elapsed}ms`, error);
+        }
+        return fallback;
+      }
+    };
+
+    // Run all fetches in parallel using Promise.all (bypass pQueue for faster response)
+    // NOTE: MagicEden + Blur traits API calls temporarily removed due to timeouts - using OpenSea data as fallback
     const [
-      blurFloorPrice,
-      magicedenFloorPrice,
-      openseaFloorPrice,
-      blurTraits,
-      magicEdenTraits,
-      openseaTraits
-    ] = results
+      blurFloorResult,
+      openseaFloorResult,
+      openseaTraitsResult
+    ] = await Promise.all([
+      timedFetch('fetchBlurCollectionStats', () => fetchBlurCollectionStats(slug), 0),
+      timedFetch('getOpenseaFloor', () => getOpenseaFloor(slug), 0),
+      timedFetch('fetchOpenseaTraits', () => fetchOpenseaTraits(slug), []),
+    ]);
+
+    const blurFloorPrice = blurFloorResult;
+    const openseaFloorPrice = openseaFloorResult;
+    const openseaTraits = openseaTraitsResult;
+
+    // Use fallback data for disabled APIs (MagicEden + Blur traits temporarily disabled due to timeouts)
+    const magicedenFloorPrice = String(openseaFloorPrice);
+    const magicEdenTraits = { traits: { categories: {}, counts: {} }, magicedenRaw: { attributes: [] } };
+    const blurTraits = { traits: { categories: {}, counts: {} }, blurRaw: { success: false, traits: {} } };
+
+    debugLog('CollectionStats', `[${slug}] All API fetches completed | totalTime=${Date.now() - startTime}ms`);
 
     const combinedTraits: {
       categories: Record<string, string>;
@@ -22189,6 +22198,17 @@ app.post('/api/collection/stats', async (req, res) => {
       slug
     };
 
+    // Cache the result for 60 seconds
+    try {
+      if (redisClient.isReady()) {
+        await redisClient.getClient().set(cacheKey, JSON.stringify(data), 'EX', STATS_CACHE_TTL);
+        debugLog('CollectionStats', `[${slug}] Cached stats | ttl=${STATS_CACHE_TTL}s`);
+      }
+    } catch (cacheWriteError) {
+      warnLog('CollectionStats', `[${slug}] Cache write error: ${cacheWriteError}`);
+    }
+
+    debugLog('CollectionStats', `[${slug}] Request complete | totalTime=${Date.now() - startTime}ms`);
     res.status(200).json(data);
   } catch (error: any) {
     errorLog('API', 'Unexpected error in collection stats endpoint', error);

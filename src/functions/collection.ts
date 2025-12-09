@@ -11,12 +11,12 @@ import { BASE_URL } from "../constants";
 
 import { ICollectionDetails, ICollectionFee } from "../types/collection.types";
 import { setOpenseaMarketplaceFee } from "../utils/marketplace-fee-cache";
-import { errorLog, warnLog } from "../utils/debug-file-logger";
+import { errorLog, warnLog, debugLog } from "../utils/debug-file-logger";
 
 const collectionCache: { [key: string]: ICollectionDetails } = {};
 const MAX_CACHE_ITEMS = 1000;
 
-const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1F0DF003000390027140000fAa719";
+const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1f0df003000390027140000faa719";
 const OPENSEA_FEE_ADDRESS_LOWER = OPENSEA_FEE_ADDRESS.toLowerCase();
 
 function computeOpenseaMarketplaceFeeBps(fees?: ICollectionFee[]): number | undefined {
@@ -136,30 +136,44 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
 
         let creator_fees: { [key: string]: number } = {};
         let enforceCreatorFee = false;
+
+        // DEBUG: Log raw fees from OpenSea API
+        debugLog('FeeDebug', `[${slug}] Raw API fees | fees=${JSON.stringify(collection?.fees)}`);
+
         if (collection?.fees && Array.isArray(collection.fees)) {
           // Process creator fees (exclude OpenSea platform fee and optional fees)
           for (const fee of collection.fees) {
             const isOpenSeaFee = fee.recipient.toLowerCase() === OPENSEA_FEE_ADDRESS_LOWER;
 
+            // DEBUG: Log each fee being processed
+            debugLog('FeeDebug', `[${slug}] Processing fee | recipient=${fee.recipient} | fee=${fee.fee} | required=${fee.required} | isOpenSea=${isOpenSeaFee}`);
+
             // Skip OpenSea platform fee
             if (isOpenSeaFee) {
+              debugLog('FeeDebug', `[${slug}] SKIP: OpenSea platform fee`);
               continue;
             }
 
             // Skip optional creator fees (fulfiller can opt-in at fill time)
             if (!fee.required) {
+              debugLog('FeeDebug', `[${slug}] SKIP: Optional fee (required=false)`);
               continue;
             }
 
             creator_fees[fee.recipient] = fee.fee * 100;
             enforceCreatorFee = true;
+            debugLog('FeeDebug', `[${slug}] ADDED: Creator fee | recipient=${fee.recipient} | bps=${fee.fee * 100}`);
           }
         }
 
         // If no creator fees found, use default
         if (Object.keys(creator_fees).length === 0) {
           creator_fees = { null: 0 };
+          debugLog('FeeDebug', `[${slug}] No creator fees found, using default { null: 0 }`);
         }
+
+        // DEBUG: Log final creator_fees
+        debugLog('FeeDebug', `[${slug}] Final creator_fees | result=${JSON.stringify(creator_fees)} | enforceCreatorFee=${enforceCreatorFee}`);
 
         if (Object.keys(collectionCache).length >= MAX_CACHE_ITEMS) {
           delete collectionCache[Object.keys(collectionCache)[0]];
