@@ -1,23 +1,23 @@
-import { config } from "dotenv";
 import stringify from 'json-stable-stringify';
 import crypto from 'crypto';
+import { AxiosResponse } from 'axios';
 import { axiosInstance, limiter } from "../init"; // Import Redis client
 import { DistributedLockManager } from "../utils/lock";
+import { CircuitBreaker } from "../utils/circuit-breaker";
 import { API_KEY } from "..";
 import redisClient from '../utils/redis';
 import { CollectionItemsListQuery } from "../queries";
 import { BASE_URL } from "../constants";
-import { logger, DatabaseOperation } from "../utils/logger";
+
 import { ICollectionDetails, ICollectionFee } from "../types/collection.types";
 import { setOpenseaMarketplaceFee } from "../utils/marketplace-fee-cache";
-
-config()
+import { errorLog, warnLog, debugLog } from "../utils/debug-file-logger";
+import { apiDedup } from "../utils/api-dedup";
 
 const collectionCache: { [key: string]: ICollectionDetails } = {};
-const collectionTokenContractCache: Record<string, Record<string, string>> = {};
 const MAX_CACHE_ITEMS = 1000;
 
-const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1F0DF003000390027140000fAa719";
+const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1f0df003000390027140000faa719";
 const OPENSEA_FEE_ADDRESS_LOWER = OPENSEA_FEE_ADDRESS.toLowerCase();
 
 function computeOpenseaMarketplaceFeeBps(fees?: ICollectionFee[]): number | undefined {
@@ -73,6 +73,14 @@ const lockManager = new DistributedLockManager({
   defaultTTLSeconds: 300 // Reduced from 10 hours to 5 minutes
 });
 
+// Circuit breaker for OpenSea API calls to prevent retry storms
+// Updated settings to be less aggressive after 2025-12-02 outage analysis
+const openseaCircuitBreaker = new CircuitBreaker({
+  failureThreshold: 10,    // Open circuit after 10 consecutive failures (increased from 5)
+  resetTimeout: 120000,    // Wait 120s before attempting recovery (increased from 60s)
+  halfOpenRequests: 5      // Test recovery with 5 requests (increased from 3)
+});
+
 // Helper function to add timeout to promises
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -100,15 +108,8 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
         ensureOpenseaMarketplaceFee(collectionCache[slug]);
         return details;
       }
-    } catch (error) {
-      await logger.logDatabaseError('Error reading collection details from Redis cache', {
-        databaseOperation: DatabaseOperation.READ,
-        collection_name: 'opensea_collection_cache',
-        collection: slug,
-        cacheKey,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+    } catch {
+      warnLog('Cache', `[collection.ts] Error reading collection details from Redis cache | slug=${slug} | key=${cacheKey}`);
     }
   }
 
@@ -122,46 +123,62 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
         }
 
         const { data: collection } = await withTimeout(
-          limiter.schedule(() => axiosInstance.get(
-            `${BASE_URL}/opensea/api/v2/collections/${slug}`,
-            {
-              headers: {
-                'x-api-key': API_KEY
+          apiDedup(
+            `opensea-collection-details-${slug.toLowerCase()}`,
+            () => limiter.schedule(() => axiosInstance.get(
+              `${BASE_URL}/opensea/api/v2/collections/${slug}`,
+              {
+                headers: {
+                  'x-api-key': API_KEY
+                }
               }
-            }
-          )),
+            )),
+            { category: 'Collection' }
+          ),
           20000, // 20 second timeout for API call
           `OpenSea API call for ${slug}`
         );
 
         let creator_fees: { [key: string]: number } = {};
         let enforceCreatorFee = false;
-        if (collection?.fees && Array.isArray(collection.fees)) {
-          // console.log(`[Fee Processing] ${slug} - Starting to process ${collection.fees.length} fees`);
 
+        // DEBUG: Log raw fees from OpenSea API
+        debugLog('FeeDebug', `[${slug}] Raw API fees | fees=${JSON.stringify(collection?.fees)}`);
+
+        if (collection?.fees && Array.isArray(collection.fees)) {
           // Process creator fees (exclude OpenSea platform fee and optional fees)
           for (const fee of collection.fees) {
             const isOpenSeaFee = fee.recipient.toLowerCase() === OPENSEA_FEE_ADDRESS_LOWER;
 
+            // DEBUG: Log each fee being processed
+            debugLog('FeeDebug', `[${slug}] Processing fee | recipient=${fee.recipient} | fee=${fee.fee} | required=${fee.required} | isOpenSea=${isOpenSeaFee}`);
+
             // Skip OpenSea platform fee
             if (isOpenSeaFee) {
+              debugLog('FeeDebug', `[${slug}] SKIP: OpenSea platform fee`);
               continue;
             }
 
             // Skip optional creator fees (fulfiller can opt-in at fill time)
             if (!fee.required) {
+              debugLog('FeeDebug', `[${slug}] SKIP: Optional fee (required=false)`);
               continue;
             }
 
             creator_fees[fee.recipient] = fee.fee * 100;
             enforceCreatorFee = true;
+            debugLog('FeeDebug', `[${slug}] ADDED: Creator fee | recipient=${fee.recipient} | bps=${fee.fee * 100}`);
           }
         }
 
         // If no creator fees found, use default
         if (Object.keys(creator_fees).length === 0) {
           creator_fees = { null: 0 };
+          debugLog('FeeDebug', `[${slug}] No creator fees found, using default { null: 0 }`);
         }
+
+        // DEBUG: Log final creator_fees
+        debugLog('FeeDebug', `[${slug}] Final creator_fees | result=${JSON.stringify(creator_fees)} | enforceCreatorFee=${enforceCreatorFee}`);
 
         if (Object.keys(collectionCache).length >= MAX_CACHE_ITEMS) {
           delete collectionCache[Object.keys(collectionCache)[0]];
@@ -180,8 +197,8 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
         if (redis && redisClient.isReady()) {
           try {
             await redis.setex(cacheKey, 3600, JSON.stringify(result));
-          } catch (error) {
-            console.log(error);
+          } catch {
+            warnLog('Cache', `[collection.ts] Error caching collection details to Redis | slug=${slug}`);
           }
         }
         return result;
@@ -191,12 +208,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
     );
 
     if (!result) {
-      await logger.logOpenseaCollectionError('Failed to acquire lock for collection details', {
-        collection: slug,
-        contractAddress,
-        operation: 'get_collection_details',
-        errorCode: 'LOCK_ACQUISITION_FAILED'
-      });
+      errorLog('Collection', `[collection.ts] Failed to acquire lock for collection details | slug=${slug} | contractAddress=${contractAddress}`);
       throw new Error('Failed to acquire lock for collection details');
     }
     // {
@@ -216,13 +228,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
     return result;
   } catch (error) {
     // Log the error
-    await logger.logOpenseaCollectionError(`Failed to fetch collection details: ${error}`, {
-      collection: slug,
-      contractAddress,
-      operation: 'get_collection_details',
-      errorCode: 'FETCH_FAILED',
-      error: error as Error
-    });
+    errorLog('Collection', `[collection.ts] Failed to fetch collection details | slug=${slug} | contractAddress=${contractAddress}`, error);
 
     // Return a minimal collection object to prevent complete failure
     const fallbackResult: ICollectionDetails & { error: boolean; errorMessage: string } = {
@@ -275,7 +281,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
 export async function getOpenseaFloor(collectionSlug: string) {
   const CACHE_TTL = 60; // 1 minute cache (updated from 30 seconds)
   const cacheKey = `opensea:floor:${collectionSlug}`;
-  const lockKey = `floor:opensea}:${collectionSlug}`;
+  const lockKey = `floor:{opensea}:${collectionSlug}`;
 
   // Try to get from cache first
   try {
@@ -283,16 +289,8 @@ export async function getOpenseaFloor(collectionSlug: string) {
     if (cachedFloor) {
       return JSON.parse(cachedFloor);
     }
-  } catch (error) {
-    await logger.logDatabaseError('Error reading OpenSea floor price from cache', {
-      databaseOperation: DatabaseOperation.READ,
-      collection_name: 'getRedis()_cache',
-      collection: collectionSlug,
-      cacheKey,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
-    console.error('Error reading from cache:', error);
+  } catch {
+    warnLog('Cache', `[collection.ts] Error reading OpenSea floor price from cache | slug=${collectionSlug} | key=${cacheKey}`);
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -302,93 +300,148 @@ export async function getOpenseaFloor(collectionSlug: string) {
     if (cachedFloor) {
       return JSON.parse(cachedFloor);
     }
-    try {
-      const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
-        `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
-        {
-          headers: { 'x-api-key': API_KEY }
+
+    // Retry configuration for floor price fetching
+    const MAX_RETRIES = 3;
+    const BASE_DELAY = 500; // 500ms, 1000ms, 2000ms exponential backoff
+
+    const apiUrl = `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const { data } = await apiDedup(
+          `opensea-floor-${collectionSlug}`,
+          () => openseaCircuitBreaker.execute(() =>
+            limiter.schedule({ priority: 0 }, () => axiosInstance.get<ListingsResponse>(
+              apiUrl,
+              {
+                headers: { 'x-api-key': API_KEY }
+              }
+            ))
+          ),
+          { category: 'Collection' }
+        );
+
+        // Check if listings exist and has item
+        const floor_price = Number(data?.listings[0]?.price?.current?.value) / 1e18 || 0;
+
+        // If floor is 0 and we have retries left, retry (likely temporary API issue)
+        if (floor_price === 0 && attempt < MAX_RETRIES) {
+          warnLog('API', `[collection.ts] OpenSea floor price is 0, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug}`);
+          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+          continue;
         }
-      ));
-      // Check if listings exist and has item
-      const floor_price = Number(data?.listings[0]?.price?.current?.value) / 1e18 || 0;
-      // Cache the result
-      if (getRedis()) {
-        await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
-      }
-      return floor_price;
-    } catch (error: any) {
-      // Handle 404 errors specifically - collection might be delisted or renamed
-      if (error?.response?.status === 404) {
-        await logger.logOpenseaCollectionError('Collection not found on OpenSea', {
-          collection: collectionSlug,
-          collectionSlug: collectionSlug,
-          endpoint: `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`,
-          method: 'GET',
-          statusCode: 404,
-          operation: 'get_floor_price',
-          errorCode: 'COLLECTION_NOT_FOUND',
-          errorMessage: error?.response?.data?.errors?.[0]?.message || 'Collection not found',
-          error: new Error(`OpenSea collection not found: ${collectionSlug}`)
-        });
 
-        // Cache the zero floor price for a short time to avoid repeated 404s
-        if (getRedis()) {
-          await getRedis().set(cacheKey, JSON.stringify(0), 'EX', 300); // Cache for 5 minutes
+        // Only cache positive floor prices - don't cache 0 values
+        if (floor_price > 0 && getRedis()) {
+          await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
         }
-        return 0; // Return 0 floor price for non-existent collections
+
+        return floor_price;
+
+      } catch (error: any) {
+        // Handle 404 errors specifically - collection might be delisted or renamed (no retry)
+        if (error?.response?.status === 404) {
+          warnLog('API', `[collection.ts] Collection not found on OpenSea | slug=${collectionSlug} | status=404`);
+
+          // Cache the zero floor price for a short time to avoid repeated 404s
+          if (getRedis()) {
+            await getRedis().set(cacheKey, JSON.stringify(0), 'EX', 300); // Cache for 5 minutes
+          }
+          return 0; // Return 0 floor price for non-existent collections
+        }
+
+        // Retry on other errors if attempts remaining
+        if (attempt < MAX_RETRIES) {
+          // Better error parsing: show HTTP status or network error code
+          const errorCode = error?.response?.status || error?.code || 'UNKNOWN';
+          warnLog('API', `[collection.ts] OpenSea floor price fetch failed, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug} | error=${errorCode}`);
+          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+          continue;
+        }
+
+        // Final attempt failed - log and re-throw
+        const errorCode = error?.response?.status || error?.code || 'UNKNOWN';
+        errorLog('API', `[collection.ts] Failed to fetch OpenSea floor price after ${MAX_RETRIES} attempts | slug=${collectionSlug} | error=${errorCode}`, error);
+        throw error;
       }
-
-      // For other errors, log as API error and re-throw
-      await logger.logApiError('Failed to fetch OpenSea floor price', {
-        collection: collectionSlug,
-        collectionSlug: collectionSlug,
-        endpoint: `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`,
-        method: 'GET',
-        statusCode: error?.response?.status,
-        operation: 'get_floor_price',
-        errorCode: error?.code || 'API_ERROR',
-        errorMessage: error?.response?.data?.errors?.[0]?.message || error?.message || 'Unknown error',
-        error: error
-      });
-
-      throw error; // Re-throw to let the lock manager handle it
     }
+
+    // Should not reach here, but return 0 as fallback
+    return 0;
   });
 
   if (!result) {
-    // If we couldn't acquire the lock, wait briefly and try cache again
-    await new Promise(resolve => setTimeout(resolve, 100));
-    try {
-      const cachedFloor = getRedis() ? await getRedis().get(cacheKey) : null;
-      if (cachedFloor) {
-        return JSON.parse(cachedFloor);
+    // If we couldn't acquire the lock, another request is fetching - wait with retries
+    const maxRetries = 5;
+    for (let i = 0; i < maxRetries; i++) {
+      const waitTime = Math.min(100 * Math.pow(2, i), 2000); // Exponential backoff, max 2s
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+
+      try {
+        const cachedFloor = getRedis() ? await getRedis().get(cacheKey) : null;
+        if (cachedFloor) {
+          return JSON.parse(cachedFloor);
+        }
+      } catch {
+        warnLog('Cache', `[collection.ts] Error reading from cache after lock failure | slug=${collectionSlug}`);
       }
-    } catch (error) {
-      await logger.logDatabaseError('Error reading from cache after lock failure', {
-        databaseOperation: DatabaseOperation.READ,
-        collection_name: 'getRedis()_cache',
-        collection: collectionSlug,
-        cacheKey,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
-      console.error('Error reading from cache after lock failure:', error);
     }
-    await logger.logOpenseaCollectionError('Failed to fetch OpenSea floor price', {
-      collection: collectionSlug,
-      operation: 'get_floor_price',
-      errorCode: 'FLOOR_PRICE_FETCH_FAILED'
-    });
+
+    // After all retries, still no data - log and throw error
+    errorLog('Collection', `[collection.ts] Failed to fetch OpenSea floor price after retries | slug=${collectionSlug}`);
     throw new Error('Failed to fetch OpenSea floor price');
   }
 
   return result;
 }
 
+// Circuit breaker for Blur API calls to prevent repeated failures
+interface BlurCircuitBreakerState {
+  failureCount: number;
+  lastFailure: number;
+}
+
+const blurCircuitBreaker = new Map<string, BlurCircuitBreakerState>();
+const BLUR_CIRCUIT_OPEN_THRESHOLD = 5;
+const BLUR_CIRCUIT_RESET_TIME = 300000; // 5 minutes
+
+function shouldSkipBlurAPI(collectionSlug: string): boolean {
+  const state = blurCircuitBreaker.get(collectionSlug);
+  if (!state) return false;
+
+  const now = Date.now();
+  if (now - state.lastFailure > BLUR_CIRCUIT_RESET_TIME) {
+    blurCircuitBreaker.delete(collectionSlug);
+    return false;
+  }
+
+  if (state.failureCount >= BLUR_CIRCUIT_OPEN_THRESHOLD) {
+    return true;
+  }
+  return false;
+}
+
+function recordBlurAPIFailure(collectionSlug: string, errorStatus: number) {
+  // Only track 403 and 408 errors for circuit breaker
+  if (errorStatus !== 403 && errorStatus !== 408) {
+    return;
+  }
+
+  const state = blurCircuitBreaker.get(collectionSlug);
+  if (!state) {
+    blurCircuitBreaker.set(collectionSlug, { failureCount: 1, lastFailure: Date.now() });
+    return;
+  }
+
+  state.failureCount++;
+  state.lastFailure = Date.now();
+}
+
 export async function getBlurFloor(collectionSlug: string): Promise<number> {
   const CACHE_TTL = 60; // 1 minute cache (updated from 30 seconds)
-  const cacheKey = `blur:floor}:${collectionSlug}`;
-  const lockKey = `floor:blur}:${collectionSlug}`;
+  const cacheKey = `blur:floor:{${collectionSlug}}`;
+  const lockKey = `floor:{blur}:${collectionSlug}`;
 
   // Try to get from cache first
   try {
@@ -396,8 +449,15 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
     if (cachedFloor) {
       return JSON.parse(cachedFloor);
     }
-  } catch (error) {
-    console.error('Error reading Blur floor from cache:', error);
+  } catch {
+    warnLog('Cache', `[collection.ts] Error reading Blur floor from cache | slug=${collectionSlug}`);
+  }
+
+  // Check circuit breaker before making API call
+  if (shouldSkipBlurAPI(collectionSlug)) {
+    const state = blurCircuitBreaker.get(collectionSlug);
+    warnLog('Collection', `[BlurCircuitBreaker] ${collectionSlug} | OPEN - skipping API | failureCount=${state?.failureCount} | lastFailure=${new Date(state?.lastFailure || 0).toISOString()}`);
+    return 0;
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -408,23 +468,65 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
       return JSON.parse(cachedFloor);
     }
 
-    try {
-      // Import Blur functions dynamically to avoid circular dependency
-      const { fetchBlurCollectionStats } = await import('../marketplace/blur/bid');
-      const stats = await fetchBlurCollectionStats(collectionSlug);
+    // Retry configuration for floor price fetching
+    const MAX_RETRIES = 3;
+    const BASE_DELAY = 500; // 500ms, 1000ms, 2000ms exponential backoff
 
-      const floor_price = stats?.floorPrice?.amount ?
-        parseFloat(stats.floorPrice.amount) : 0;
+    // Import Blur functions dynamically to avoid circular dependency
+    const { fetchBlurCollectionStats } = await import('../marketplace/blur/bid');
 
-      // Cache the result
-      if (getRedis()) {
-        await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        // CRITICAL FIX: fetchBlurCollectionStats returns a NUMBER, not an object!
+        const blurFloor = await fetchBlurCollectionStats(collectionSlug);
+
+        // blurFloor is already a number (e.g., 0.0497)
+        const floor_price = blurFloor ? Number(blurFloor) : 0;
+
+        // If floor is 0 and we have retries left, retry (likely temporary API issue)
+        if (floor_price === 0 && attempt < MAX_RETRIES) {
+          warnLog('Collection', `[getBlurFloor] ${collectionSlug} | Floor is 0, retrying (${attempt}/${MAX_RETRIES})`);
+          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+          continue;
+        }
+
+        // Only cache positive floor prices - don't cache 0 values
+        if (floor_price > 0 && getRedis()) {
+          await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+        }
+
+        // Reset circuit breaker on success
+        if (blurCircuitBreaker.has(collectionSlug)) {
+          blurCircuitBreaker.delete(collectionSlug);
+        }
+
+        return floor_price;
+
+      } catch (error: any) {
+        const errorStatus = error?.response?.status;
+
+        // Record failure for circuit breaker (403/408 only)
+        if (errorStatus === 403 || errorStatus === 408) {
+          recordBlurAPIFailure(collectionSlug, errorStatus);
+          const state = blurCircuitBreaker.get(collectionSlug);
+          warnLog('Collection', `[BlurCircuitBreaker] ${collectionSlug} | Failure recorded: ${state?.failureCount}/${BLUR_CIRCUIT_OPEN_THRESHOLD} | status=${errorStatus}`);
+        }
+
+        // Retry on errors if attempts remaining
+        if (attempt < MAX_RETRIES) {
+          warnLog('Collection', `[getBlurFloor] ${collectionSlug} | Fetch failed, retrying (${attempt}/${MAX_RETRIES}) | status=${errorStatus}`);
+          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+          continue;
+        }
+
+        // Final attempt failed - log and return 0
+        errorLog('Collection', `[getBlurFloor] ${collectionSlug} | Error fetching Blur floor price after ${MAX_RETRIES} attempts | status=${errorStatus}`, error);
+        return 0;
       }
-      return floor_price;
-    } catch (error) {
-      console.error('Error fetching Blur floor price:', error);
-      return 0;
     }
+
+    // Should not reach here, but return 0 as fallback
+    return 0;
   });
 
   return result || 0;
@@ -441,8 +543,8 @@ export async function getMagicEdenFloor(collectionSlug: string): Promise<number>
     if (cachedFloor) {
       return JSON.parse(cachedFloor);
     }
-  } catch (error) {
-    console.error('Error reading Magic Eden floor from cache:', error);
+  } catch {
+    warnLog('Cache', `[collection.ts] Error reading Magic Eden floor from cache | slug=${collectionSlug}`);
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -453,23 +555,52 @@ export async function getMagicEdenFloor(collectionSlug: string): Promise<number>
       return JSON.parse(cachedFloor);
     }
 
-    try {
-      // Import Magic Eden functions dynamically to avoid circular dependency
-      const { fetchMagicEdenCollectionStats } = await import('../marketplace/magiceden');
-      const stats = await fetchMagicEdenCollectionStats(collectionSlug);
+    // Retry configuration for floor price fetching
+    const MAX_RETRIES = 3;
+    const BASE_DELAY = 500; // 500ms, 1000ms, 2000ms exponential backoff
 
-      const floor_price = stats?.floorPrice?.amount ?
-        Number(stats.floorPrice.amount) / 1e18 : 0;
+    // Import Magic Eden functions dynamically to avoid circular dependency
+    const { fetchMagicEdenCollectionStats } = await import('../marketplace/magiceden');
 
-      // Cache the result
-      if (getRedis()) {
-        await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const stats = await fetchMagicEdenCollectionStats(collectionSlug);
+
+        const floor_price = stats ? Number(stats) : 0;
+
+        // If floor is 0 and we have retries left, retry (likely temporary API issue)
+        if (floor_price === 0 && attempt < MAX_RETRIES) {
+          warnLog('API', `[collection.ts] MagicEden floor price is 0, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug}`);
+          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+          continue;
+        }
+
+        // Only cache positive floor prices - don't cache 0 values
+        if (floor_price > 0 && getRedis()) {
+          await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+        }
+
+        return floor_price;
+
+      } catch (error: any) {
+        // Retry on errors if attempts remaining
+        if (attempt < MAX_RETRIES) {
+          // Better error parsing: show HTTP status or network error code
+          const errorCode = error?.response?.status || error?.code || 'UNKNOWN';
+          warnLog('API', `[collection.ts] MagicEden floor price fetch failed, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug} | error=${errorCode}`);
+          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+          continue;
+        }
+
+        // Final attempt failed - log and return 0
+        const errorCode = error?.response?.status || error?.code || 'UNKNOWN';
+        errorLog('API', `[collection.ts] Error fetching Magic Eden floor price after ${MAX_RETRIES} attempts | slug=${collectionSlug} | error=${errorCode}`, error);
+        return 0;
       }
-      return floor_price;
-    } catch (error) {
-      console.error('Error fetching Magic Eden floor price:', error);
-      return 0;
     }
+
+    // Should not reach here, but return 0 as fallback
+    return 0;
   });
 
   return result || 0;
@@ -494,18 +625,18 @@ export async function getAllFloorPrices(collectionSlug: string): Promise<{
 }
 
 export async function getOpenseaCollectionStats(collectionSlug: string) {
-  const { data } = await limiter.schedule(() => axiosInstance.get(
-    `${BASE_URL}/opensea/api/v2/collections/${collectionSlug}/stats`,
-    {
-      headers: { 'x-api-key': API_KEY }
-    }
-  ));
+  const { data } = await apiDedup(
+    `opensea-stats-${collectionSlug.toLowerCase()}`,
+    () => limiter.schedule(() => axiosInstance.get(
+      `${BASE_URL}/opensea/api/v2/collections/${collectionSlug}/stats`,
+      {
+        headers: { 'x-api-key': API_KEY }
+      }
+    )),
+    { category: 'Collection' }
+  );
   if (!data?.total) {
-    await logger.logOpenseaCollectionError(`No listings found for collection ${collectionSlug}`, {
-      collection: collectionSlug,
-      operation: 'get_floor_price',
-      errorCode: 'NO_LISTINGS_FOUND'
-    });
+    warnLog('Collection', `[collection.ts] No listings found for collection | slug=${collectionSlug}`);
     throw new Error(`No listings found for collection ${collectionSlug}`);
   }
   return data?.total?.floor_price;
@@ -527,13 +658,17 @@ export async function getCollectionEvents(
     eventTypes.forEach(type => params.append('event_type', type));
     params.append('limit', limit.toString());
 
-    const { data } = await limiter.schedule(() => axiosInstance.get<CollectionEventResponse>(
-      `${BASE_URL}/opensea/api/v2/events/collection/${collectionSlug}`,
-      {
-        params: params,
-        headers: { 'x-api-key': API_KEY }
-      }
-    ));
+    const { data } = await apiDedup(
+      `opensea-events-${collectionSlug}-${eventTypes.sort().join(',')}-${limit}`,
+      () => limiter.schedule(() => axiosInstance.get<CollectionEventResponse>(
+        `${BASE_URL}/opensea/api/v2/events/collection/${collectionSlug}`,
+        {
+          params: params,
+          headers: { 'x-api-key': API_KEY }
+        }
+      )),
+      { category: 'Collection' }
+    );
 
     // Cache for a short period (e.g., 30 seconds) since events data changes frequently
     if (getRedis()) {
@@ -541,14 +676,7 @@ export async function getCollectionEvents(
     }
     return data;
   } catch (error) {
-    await logger.logOpenseaCollectionError('Error fetching collection events', {
-      collectionSlug: collectionSlug,
-      operation: 'fetch_collection_events',
-      error: error as Error,
-      errorCode: (error as any)?.response?.status,
-      errorMessage: (error as any)?.response?.data || (error instanceof Error ? error.message : String(error))
-    });
-    console.error('Error fetching collection events:', error);
+    errorLog('Collection', `[collection.ts] Error fetching collection events | slug=${collectionSlug}`, error);
     throw error;
   }
 }
@@ -559,59 +687,16 @@ function hashData(data: any): string {
     .digest('hex');
 }
 
-export interface CollectionItemResult {
-  tokenId: string;
-  contractAddress: string;
-}
-
-export async function getCollectionTokenContractMap(slug: string): Promise<Record<string, string>> {
-  const normalizedSlug = slug.toLowerCase();
-  if (collectionTokenContractCache[normalizedSlug]) {
-    return collectionTokenContractCache[normalizedSlug];
-  }
-
-  try {
-    const items = await fetchOpenSeaCollectionItems({
-      collectionSlug: normalizedSlug,
-      limit: 200,
-      sort: { by: 'PRICE', direction: 'ASC' },
-    });
-
-    const tokenMap: Record<string, string> = {};
-    for (const item of items) {
-      if (item?.tokenId && item?.contractAddress) {
-        tokenMap[item.tokenId] = item.contractAddress;
-      }
-    }
-
-    collectionTokenContractCache[normalizedSlug] = tokenMap;
-    return tokenMap;
-  } catch (error) {
-    await logger.logOpenseaCollectionError('Error building token contract map', {
-      collection: slug,
-      operation: 'get_token_contract_map',
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
-    return {};
-  }
-}
-
 export async function fetchOpenSeaCollectionItems(
   variables: CollectionItemsQueryVariables,
-  allItems: CollectionItemResult[] = [],
+  allTokenIds: string[] = [],
   cursor?: string,
   taskId?: string,
   expectedCount?: number
-): Promise<CollectionItemResult[]> {
+): Promise<string[]> {
   const CACHE_TTL = 3600; // 1 hour cache
   const cacheKey = `opensea:collection-items:${hashData(variables)}`;
   const lockKey = `opensea:lock:collection-items:${variables.collectionSlug}:${hashData(variables)}`;
-
-  // Debug log the initial request
-  if (!cursor) {
-    // console.log(`[DEBUG] Fetching OpenSea collection items for ${variables.collectionSlug} with filter:`, JSON.stringify(variables.filter));
-  }
 
   // Try to get from cache first (only for initial request)
   if (!cursor) {
@@ -620,8 +705,8 @@ export async function fetchOpenSeaCollectionItems(
       if (cachedData) {
         return JSON.parse(cachedData);
       }
-    } catch (error) {
-      console.error('Error reading collection items from cache:', error);
+    } catch {
+      warnLog('Cache', `[collection.ts] Error reading collection items from cache | slug=${variables.collectionSlug}`);
     }
   }
 
@@ -637,7 +722,7 @@ export async function fetchOpenSeaCollectionItems(
         }
 
         // Fetch data
-        return await fetchCollectionItemsRecursive(variables, allItems, cursor, 1, taskId, expectedCount);
+        return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount);
       });
 
       if (result) {
@@ -657,23 +742,10 @@ export async function fetchOpenSeaCollectionItems(
       throw new Error('Failed to acquire lock for collection items fetch');
     } else {
       // For paginated requests, fetch directly without lock
-      return await fetchCollectionItemsRecursive(variables, allItems, cursor, 1, taskId, expectedCount);
+      return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount);
     }
   } catch (error) {
-    // Enhanced error logging
-    console.error(`[ERROR] OpenSea API error for ${variables.collectionSlug}:`);
-    console.error(`  Status: ${(error as any)?.response?.status}`);
-    console.error(`  Data: ${JSON.stringify((error as any)?.response?.data)}`);
-    console.error(`  Headers: ${JSON.stringify((error as any)?.response?.headers)}`);
-    console.error(`  Message: ${error instanceof Error ? error.message : String(error)}`);
-
-    await logger.logOpenseaCollectionError('Error fetching OpenSea collection items', {
-      collectionSlug: variables.collectionSlug,
-      operation: 'fetch_collection_items',
-      error: error as Error,
-      errorCode: (error as any)?.response?.status,
-      errorMessage: (error as any)?.response?.data || (error instanceof Error ? error.message : String(error))
-    });
+    errorLog('Collection', `[collection.ts] Error fetching OpenSea collection items | slug=${variables.collectionSlug}`, error);
     throw new Error(`Failed to fetch collection items for ${variables.collectionSlug}`);
   }
 }
@@ -681,12 +753,12 @@ export async function fetchOpenSeaCollectionItems(
 // Helper function for recursive fetching
 async function fetchCollectionItemsRecursive(
   variables: CollectionItemsQueryVariables,
-  allItems: CollectionItemResult[] = [],
+  allTokenIds: string[] = [],
   cursor?: string,
   pageNumber: number = 1,
   taskId?: string,
   expectedCount?: number
-): Promise<CollectionItemResult[]> {
+): Promise<string[]> {
   const queryVariables = {
     ...variables,
     cursor: cursor
@@ -698,30 +770,31 @@ async function fetchCollectionItemsRecursive(
   };
 
   try {
-    const { data } = await limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
-      headers: {
-        "x-api-key": API_KEY
-      },
-    }));
+    const { data } = await apiDedup(
+      `opensea-items-${variables.collectionSlug}-${cursor || 'initial'}`,
+      () => limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
+        headers: {
+          "x-api-key": API_KEY
+        },
+      })),
+      { category: 'Collection' }
+    );
 
     // Check if collectionItems is null
     if (!data?.data?.collectionItems) {
-      if (allItems.length > 0) {
-        return dedupeCollectionItems(allItems);
+      if (allTokenIds.length > 0) {
+        return [...new Set(allTokenIds)];
       }
       return [];
     }
-    const pageItems: CollectionItemResult[] = data.data.collectionItems.items.map((item) => ({
-      tokenId: item.tokenId,
-      contractAddress: item.contractAddress,
-    }));
+    const tokenIds = data.data.collectionItems.items.map((item) => item.tokenId);
 
-    if (pageItems.length === 0 && allItems.length > 0) {
-      return dedupeCollectionItems(allItems);
+    if (tokenIds.length === 0 && allTokenIds.length > 0) {
+      return [...new Set(allTokenIds)];
     }
 
     // Add current page's token IDs to our accumulated list
-    const updatedItems = [...allItems, ...pageItems];
+    const updatedTokenIds = [...allTokenIds, ...tokenIds];
 
     // Update processing percentage if taskId is provided
     if (taskId) {
@@ -731,7 +804,7 @@ async function fetchCollectionItemsRecursive(
         // Calculate percentage based on tokens fetched vs expected
         let percentage = 0;
         if (expectedCount && expectedCount > 0) {
-          percentage = Math.min(95, (updatedItems.length / expectedCount) * 100);
+          percentage = Math.min(95, (updatedTokenIds.length / expectedCount) * 100);
         } else {
           // If no expected count, use a more conservative progress estimate
           // Assuming average collection size and 100 items per page
@@ -744,8 +817,6 @@ async function fetchCollectionItemsRecursive(
         if (updateTaskProcessingPercentage) {
           updateTaskProcessingPercentage(taskId, percentage);
         }
-
-        // console.log(`[fetchCollectionItems] Task ${taskId}: Page ${pageNumber}, ${updatedTokenIds.length} tokens, ${percentage.toFixed(1)}% complete`);
       } catch {
         // Silently continue if update fails
       }
@@ -755,7 +826,7 @@ async function fetchCollectionItemsRecursive(
     const nextCursor = data.data.collectionItems.nextPageCursor;
 
     if (nextCursor) {
-      return fetchCollectionItemsRecursive(variables, updatedItems, nextCursor, pageNumber + 1, taskId, expectedCount);
+      return fetchCollectionItemsRecursive(variables, updatedTokenIds, nextCursor, pageNumber + 1, taskId, expectedCount);
     }
 
     // Reset processing percentage when done
@@ -770,28 +841,16 @@ async function fetchCollectionItemsRecursive(
       }
     }
 
-    return dedupeCollectionItems(updatedItems);
+    const uniqueTokenIds = [...new Set(updatedTokenIds)];
+
+    return uniqueTokenIds;
   } catch (error) {
     // Return what we have so far instead of failing completely
-    if (allItems.length > 0) {
-      return dedupeCollectionItems(allItems);
+    if (allTokenIds.length > 0) {
+      return [...new Set(allTokenIds)];
     }
     throw error;
   }
-}
-
-function dedupeCollectionItems(items: CollectionItemResult[]): CollectionItemResult[] {
-  const unique = new Map<string, CollectionItemResult>();
-  for (const item of items) {
-    if (!item?.tokenId) {
-      continue;
-    }
-    const key = `${item.contractAddress?.toLowerCase() ?? ''}:${item.tokenId}`;
-    if (!unique.has(key)) {
-      unique.set(key, item);
-    }
-  }
-  return Array.from(unique.values());
 }
 
 interface TraitValue {
@@ -842,16 +901,8 @@ export async function fetchOpenseaTraits(
       if (cachedTraits) {
         return JSON.parse(cachedTraits);
       }
-    } catch (error) {
-      await logger.logDatabaseError('Error reading traits from cache', {
-        databaseOperation: DatabaseOperation.READ,
-        collection_name: 'getRedis()_cache',
-        collection: slug,
-        cacheKey,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
-      console.error('Error reading traits from cache:', error);
+    } catch {
+      warnLog('Cache', `[collection.ts] Error reading traits from cache | slug=${slug} | key=${cacheKey}`);
     }
   }
 
@@ -889,14 +940,7 @@ export async function fetchOpenseaTraits(
       return await fetchOpenseaTraitsRecursive(slug, limit, cursor);
     }
   } catch (error) {
-    await logger.logOpenseaCollectionError(`Error fetching OpenSea traits for ${slug}`, {
-      collection: slug,
-      operation: 'fetch_traits',
-      error: error as Error,
-      errorCode: (error as any)?.response?.status,
-      errorMessage: (error as any)?.response?.data || (error instanceof Error ? error.message : String(error))
-    });
-    console.error(`Error fetching OpenSea traits for ${slug}:`, error);
+    errorLog('Collection', `[collection.ts] Error fetching OpenSea traits | slug=${slug}`, error);
     throw new Error(`Failed to fetch traits for collection ${slug}: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
@@ -917,21 +961,20 @@ async function fetchOpenseaTraitsRecursive(
     }
   };
 
-  const { data } = await limiter.schedule(() =>
-    axiosInstance.post<TraitResponse>(`${BASE_URL}/opensea/graphql`, payload, {
-      headers: {
-        "x-api-key": API_KEY
-      },
-    })
+  const { data } = await apiDedup(
+    `opensea-traits-${slug}-${cursor || 'initial'}`,
+    () => limiter.schedule({ priority: 0 }, () =>
+      axiosInstance.post<TraitResponse>(`${BASE_URL}/opensea/graphql`, payload, {
+        headers: {
+          "x-api-key": API_KEY
+        },
+      })
+    ),
+    { category: 'Collection' }
   );
 
-
   if (!data?.data?.collectionBySlug?.attributes) {
-    await logger.logOpenseaCollectionError(`No attributes found for collection ${slug}`, {
-      collection: slug,
-      operation: 'fetch_traits',
-      errorCode: 'NO_ATTRIBUTES_FOUND'
-    });
+    warnLog('Collection', `[collection.ts] No attributes found for collection | slug=${slug}`);
     throw new Error(`No attributes found for collection ${slug}`);
   }
 
@@ -1005,8 +1048,8 @@ export async function fetchOpenseaTraitFloors(
     if (cachedData) {
       return JSON.parse(cachedData);
     }
-  } catch (error) {
-    console.error('Error reading trait floors from cache:', error);
+  } catch {
+    warnLog('Cache', `[collection.ts] Error reading trait floors from cache | slug=${slug}`);
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -1086,12 +1129,16 @@ export async function fetchOpenseaTraitFloors(
         }
       };
 
-      const { data } = await limiter.schedule(() =>
-        axiosInstance.post(`${BASE_URL}/opensea/graphql`, payload, {
-          headers: {
-            "x-api-key": API_KEY
-          },
-        })
+      const { data } = await apiDedup(
+        `opensea-trait-floors-${slug}-${hashData(traits)}`,
+        () => limiter.schedule(() =>
+          axiosInstance.post(`${BASE_URL}/opensea/graphql`, payload, {
+            headers: {
+              "x-api-key": API_KEY
+            },
+          })
+        ),
+        { category: 'Collection' }
       );
 
       // Extract unique trait floor prices from the response
@@ -1124,15 +1171,7 @@ export async function fetchOpenseaTraitFloors(
 
       return result;
     } catch (error) {
-      await logger.logOpenseaCollectionError(`Error fetching OpenSea trait floors for ${slug}`, {
-        collection: slug,
-        operation: 'fetch_trait_floors',
-        traits: traits.map(t => ({ traitType: t.traitType, valuesCount: t.values.length })),
-        error: error as Error,
-        errorCode: (error as any)?.response?.status,
-        errorMessage: (error as any)?.response?.data || (error instanceof Error ? error.message : String(error))
-      });
-      console.error(`Error fetching OpenSea trait floors for ${slug}:`, error);
+      errorLog('Collection', `[collection.ts] Error fetching OpenSea trait floors | slug=${slug}`, error);
       throw error;
     }
   });
@@ -1145,8 +1184,8 @@ export async function fetchOpenseaTraitFloors(
       if (cachedData) {
         return JSON.parse(cachedData);
       }
-    } catch (error) {
-      console.error('Error reading from cache after lock failure:', error);
+    } catch {
+      warnLog('Cache', `[collection.ts] Error reading trait floors from cache after lock failure | slug=${slug}`);
     }
     throw new Error(`Failed to fetch trait floors for collection ${slug}: Could not acquire lock`);
   }
@@ -1201,7 +1240,6 @@ interface CollectionItem {
   name: string;
   imageUrl: string;
   tokenId: string;
-  contractAddress: string;
   bestListing: BestListing | null;
   lastSale: LastSale | null;
   rarity: Rarity;
@@ -1314,4 +1352,120 @@ interface Listing {
 interface ListingsResponse {
   listings: Listing[];
   next: string;
+}
+
+// GraphQL response types for collection token query
+interface CollectionTokenItem {
+  tokenId: string;
+  assetContract?: {
+    address: string;
+  };
+}
+
+interface CollectionTokensQueryResponse {
+  data: {
+    collectionItems: {
+      items: CollectionTokenItem[];
+      nextPageCursor: string | null;
+    };
+  };
+}
+
+/**
+ * Fetches token ID to contract address mapping for a collection.
+ * Used for multi-contract collections where different tokens may belong to different contracts.
+ *
+ * @param collectionSlug - The OpenSea collection slug
+ * @returns Record mapping token IDs to their contract addresses
+ */
+export async function getCollectionTokenContractMap(collectionSlug: string): Promise<Record<string, string>> {
+  const map: Record<string, string> = {};
+
+  try {
+    // GraphQL query to fetch token items with contract information
+    const query = `
+      query CollectionTokensQuery($collectionSlug: String!, $cursor: String, $limit: Int) {
+        collectionItems(
+          collectionSlug: $collectionSlug
+          cursor: $cursor
+          sort: { by: TOKEN_ID, direction: ASC }
+          limit: $limit
+        ) {
+          items {
+            tokenId
+            assetContract {
+              address
+            }
+          }
+          nextPageCursor
+        }
+      }
+    `;
+
+    let cursor: string | null = null;
+    let hasMore = true;
+    const BATCH_SIZE = 200; // Fetch in batches
+    const MAX_TOKENS = 10000; // Safety limit to prevent infinite loops
+    let totalFetched = 0;
+
+    // Paginate through all tokens in the collection
+    while (hasMore && totalFetched < MAX_TOKENS) {
+      const payload: {
+        query: string;
+        variables: {
+          collectionSlug: string;
+          cursor: string | null;
+          limit: number;
+        };
+      } = {
+        query,
+        variables: {
+          collectionSlug,
+          cursor,
+          limit: BATCH_SIZE
+        }
+      };
+
+      const response: AxiosResponse<CollectionTokensQueryResponse> = await apiDedup(
+        `opensea-token-contracts-${collectionSlug}-${cursor || 'initial'}`,
+        () => limiter.schedule(() =>
+          axiosInstance.post<CollectionTokensQueryResponse>(
+            `${BASE_URL}/opensea/graphql`,
+            payload,
+            {
+              headers: {
+                'x-api-key': API_KEY
+              }
+            }
+          )
+        ),
+        { category: 'Collection' }
+      );
+
+      const items: CollectionTokenItem[] = response?.data?.data?.collectionItems?.items || [];
+      const nextCursor: string | null = response?.data?.data?.collectionItems?.nextPageCursor ?? null;
+
+      // Build the mapping
+      for (const item of items) {
+        if (item?.tokenId && item?.assetContract?.address) {
+          map[item.tokenId] = item.assetContract.address.toLowerCase();
+          totalFetched++;
+        }
+      }
+
+      // Check if there are more items to fetch
+      if (!nextCursor || items.length === 0) {
+        hasMore = false;
+      } else {
+        cursor = nextCursor;
+      }
+    }
+
+    return map;
+  } catch (error) {
+    // Log error but return empty map to allow graceful degradation
+    errorLog('Collection', `[collection.ts] Error fetching collection token contract map | slug=${collectionSlug}`, error);
+
+    return map; // Return whatever we've collected so far
+  }
 }

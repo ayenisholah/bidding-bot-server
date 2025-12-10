@@ -2,14 +2,8 @@ import { axiosInstance, limiter } from '../init';
 import { BASE_URL } from '../constants';
 import { API_KEY } from '..';
 import { tokenTraitCache, TokenTrait, TokenTraitData } from '../utils/token-trait-cache';
-import { logger, ErrorCategory } from '../utils/logger';
-
-// Color constants for console output
-const GREEN = '\x1b[32m';
-const YELLOW = '\x1b[33m';
-const RED = '\x1b[31m';
-const BLUE = '\x1b[34m';
-const RESET = '\x1b[0m';
+import { errorLog, debugLog } from '../utils/debug-file-logger';
+import { apiDedup } from '../utils/api-dedup';
 
 // GraphQL queries
 // Note: Using /opensea/graphql endpoint instead of /graphql for OpenSea API compatibility
@@ -131,29 +125,39 @@ export async function fetchTokenMetadata(
     return cached;
   }
 
+  // DEBUG: Log entry for cache miss
+  debugLog('Metadata', `fetchTokenMetadata ENTRY | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId}`);
 
   try {
-    const response = await limiter.schedule(() =>
-      axiosInstance.post<GraphQLTokenResponse>(
-        `${BASE_URL}/opensea/graphql`,
-        {
-          query: ItemAttributesQuery,
-          variables: {
-            contractAddress,
-            tokenId
+    const response = await apiDedup(
+      `opensea-token-metadata-${contractAddress.toLowerCase()}-${tokenId}`,
+      () => limiter.schedule(() =>
+        axiosInstance.post<GraphQLTokenResponse>(
+          `${BASE_URL}/opensea/graphql`,
+          {
+            query: ItemAttributesQuery,
+            variables: {
+              contractAddress,
+              tokenId
+            }
+          },
+          {
+            headers: {
+              'x-api-key': API_KEY,
+              'Content-Type': 'application/json'
+            }
           }
-        },
-        {
-          headers: {
-            'x-api-key': API_KEY,
-            'Content-Type': 'application/json'
-          }
-        }
-      )
+        )
+      ),
+      { category: 'Metadata' }
     );
 
     if (!response.data?.data?.contract?.nft) {
-      // console.log(YELLOW + `[TOKEN METADATA] No metadata found for ${contractAddress}:${tokenId}` + RESET);
+      // DEBUG: Log why the API returned no NFT data
+      const responseKeys = Object.keys(response.data || {}).join(',') || 'empty';
+      const dataKeys = Object.keys(response.data?.data || {}).join(',') || 'empty';
+      const contractKeys = Object.keys(response.data?.data?.contract || {}).join(',') || 'empty';
+      debugLog('Metadata', `fetchTokenMetadata: API returned NULL NFT | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | responseKeys=[${responseKeys}] | dataKeys=[${dataKeys}] | contractKeys=[${contractKeys}]`);
       return null;
     }
 
@@ -179,45 +183,22 @@ export async function fetchTokenMetadata(
 
     // console.log(GREEN + `[TOKEN METADATA] Successfully fetched ${traits.length} traits for ${contractAddress}:${tokenId}` + RESET);
 
-    logger.logInfo(ErrorCategory.API, 'Token metadata fetched successfully', {
-      contractAddress,
-      tokenId,
-      traitCount: traits.length,
-      component: 'token_metadata',
-      operation: 'fetch_token_metadata'
-    });
-
     return tokenTraitData;
 
   } catch (error: any) {
     // Handle specific error cases
     if (error.response?.status === 400) {
-      // console.log(YELLOW + `[TOKEN METADATA] Bad request for ${contractAddress}:${tokenId} - Token might not exist or be unsupported` + RESET);
-      
-      // Don't log full error for 400s to reduce noise
-      logger.logApiError('Token metadata bad request', {
-        contractAddress,
-        tokenId,
-        endpoint: `${BASE_URL}/opensea/graphql`,
-        status: 400,
-        errorMessage: error.response?.data?.message || 'Bad Request',
-        component: 'token_metadata',
-        operation: 'fetch_token_metadata'
-      });
+      // DEBUG: Log 400 errors with error message
+      const errorMsg = error.response?.data?.message || error.response?.data?.error || error.response?.data?.errors?.[0] || 'unknown';
+      debugLog('Metadata', `fetchTokenMetadata: HTTP 400 | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | errorMsg=${JSON.stringify(errorMsg).slice(0, 200)}`);
+    } else if (error.response?.status) {
+      // Log other HTTP errors
+      debugLog('Metadata', `fetchTokenMetadata: HTTP ${error.response.status} | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | errorMsg=${error.message}`);
+      errorLog('Metadata', `Failed to fetch token metadata | contractAddress=${contractAddress} | tokenId=${tokenId}`, error);
     } else {
-      // Log full error for other status codes
-      console.error(RED + `[TOKEN METADATA] Error fetching metadata for ${contractAddress}:${tokenId}` + RESET, error);
-      
-      logger.logApiError('Failed to fetch token metadata', {
-        contractAddress,
-        tokenId,
-        endpoint: `${BASE_URL}/opensea/graphql`,
-        method: 'POST',
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        component: 'token_metadata',
-        operation: 'fetch_token_metadata'
-      });
+      // Network/timeout errors
+      debugLog('Metadata', `fetchTokenMetadata: Network Error | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | errorCode=${error.code || 'unknown'} | errorMsg=${error.message}`);
+      errorLog('Metadata', `Failed to fetch token metadata | contractAddress=${contractAddress} | tokenId=${tokenId}`, error);
     }
 
     return null;
@@ -235,32 +216,36 @@ export async function getTraitFloorPrice(
 
   try {
     // Use the collection items query with trait filter
-    const response = await limiter.schedule(() =>
-      axiosInstance.post(
-        `${BASE_URL}/opensea/graphql`,
-        {
-          query: CollectionItemsListQuery,
-          variables: {
-            collections: [collectionSlug],
-            count: 1,
-            where: {
-              traits: [
-                {
-                  name: traitType,
-                  value: traitValue
-                }
-              ],
-              isListedForSale: true
+    const response = await apiDedup(
+      `opensea-trait-floor-${collectionSlug}-${traitType}-${traitValue}`,
+      () => limiter.schedule(() =>
+        axiosInstance.post(
+          `${BASE_URL}/opensea/graphql`,
+          {
+            query: CollectionItemsListQuery,
+            variables: {
+              collections: [collectionSlug],
+              count: 1,
+              where: {
+                traits: [
+                  {
+                    name: traitType,
+                    value: traitValue
+                  }
+                ],
+                isListedForSale: true
+              }
+            }
+          },
+          {
+            headers: {
+              'x-api-key': API_KEY,
+              'Content-Type': 'application/json'
             }
           }
-        },
-        {
-          headers: {
-            'x-api-key': API_KEY,
-            'Content-Type': 'application/json'
-          }
-        }
-      )
+        )
+      ),
+      { category: 'Metadata' }
     );
 
     const edges = response.data?.data?.collections?.edges;
@@ -281,36 +266,14 @@ export async function getTraitFloorPrice(
       const price = parseFloat(floorItem.price.value) / Math.pow(10, floorItem.price.currency.decimals);
       
       // console.log(GREEN + `[TOKEN METADATA] Trait floor price: ${price} ETH` + RESET);
-      
-      logger.logInfo(ErrorCategory.API, 'Trait floor price fetched', {
-        collectionSlug,
-        traitType,
-        traitValue,
-        floorPrice: price,
-        component: 'token_metadata',
-        operation: 'get_trait_floor_price'
-      });
-      
+
       return price;
     }
 
     return null;
 
   } catch (error) {
-    console.error(RED + `[TOKEN METADATA] Error fetching trait floor price` + RESET, error);
-    
-    logger.logApiError('Failed to fetch trait floor price', {
-      collectionSlug,
-      traitType,
-      traitValue,
-      endpoint: `${BASE_URL}/opensea/graphql`,
-      method: 'POST',
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      component: 'token_metadata',
-      operation: 'get_trait_floor_price'
-    });
-
+    errorLog('Metadata', `Failed to fetch trait floor price | slug=${collectionSlug} | trait=${traitType}:${traitValue}`, error);
     return null;
   }
 }
@@ -331,32 +294,36 @@ export async function getTraitFilteredListings(
 }>> {
 
   try {
-    const response = await limiter.schedule(() =>
-      axiosInstance.post(
-        `${BASE_URL}/opensea/graphql`,
-        {
-          query: CollectionItemsListQuery,
-          variables: {
-            collections: [collectionSlug],
-            count: limit,
-            where: {
-              traits: [
-                {
-                  name: traitType,
-                  value: traitValue
-                }
-              ],
-              isListedForSale: true
+    const response = await apiDedup(
+      `opensea-trait-listings-${collectionSlug}-${traitType}-${traitValue}-${limit}`,
+      () => limiter.schedule(() =>
+        axiosInstance.post(
+          `${BASE_URL}/opensea/graphql`,
+          {
+            query: CollectionItemsListQuery,
+            variables: {
+              collections: [collectionSlug],
+              count: limit,
+              where: {
+                traits: [
+                  {
+                    name: traitType,
+                    value: traitValue
+                  }
+                ],
+                isListedForSale: true
+              }
+            }
+          },
+          {
+            headers: {
+              'x-api-key': API_KEY,
+              'Content-Type': 'application/json'
             }
           }
-        },
-        {
-          headers: {
-            'x-api-key': API_KEY,
-            'Content-Type': 'application/json'
-          }
-        }
-      )
+        )
+      ),
+      { category: 'Metadata' }
     );
 
     const edges = response.data?.data?.collections?.edges;
@@ -391,21 +358,7 @@ export async function getTraitFilteredListings(
     return listings;
 
   } catch (error) {
-    console.error(RED + `[TOKEN METADATA] Error fetching trait filtered listings` + RESET, error);
-    
-    logger.logApiError('Failed to fetch trait filtered listings', {
-      collectionSlug,
-      traitType,
-      traitValue,
-      limit,
-      endpoint: `${BASE_URL}/opensea/graphql`,
-      method: 'POST',
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      component: 'token_metadata',
-      operation: 'get_trait_filtered_listings'
-    });
-
+    errorLog('Metadata', `Failed to fetch trait filtered listings | slug=${collectionSlug} | trait=${traitType}:${traitValue}`, error);
     return [];
   }
 }
@@ -419,7 +372,7 @@ export async function prefetchTokenTraits(
 
   const fetchPromises = tokens.map(token =>
     fetchTokenMetadata(token.contractAddress, token.tokenId).catch(err => {
-      console.error(RED + `[TOKEN METADATA] Failed to prefetch ${token.contractAddress}:${token.tokenId}` + RESET, err);
+      errorLog('Metadata', `Failed to prefetch ${token.contractAddress}:${token.tokenId}`, err);
       return null;
     })
   );
@@ -438,24 +391,38 @@ export async function tokenHasTrait(
   traitType: string,
   traitValue: any
 ): Promise<boolean> {
+  // DEBUG: Log entry with parameters
+  debugLog('Metadata', `tokenHasTrait ENTRY | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | trait=${traitType}:${traitValue}`);
+
   // Try cache first
   const hasTrait = await tokenTraitCache.tokenHasTrait(contractAddress, tokenId, traitType, traitValue);
-  
+
   if (hasTrait) {
+    debugLog('Metadata', `tokenHasTrait: Cache HIT | tokenId=${tokenId} | result=true`);
     return true;
   }
 
   // If not in cache, fetch metadata
+  debugLog('Metadata', `tokenHasTrait: Cache MISS | tokenId=${tokenId} | fetching metadata...`);
   const metadata = await fetchTokenMetadata(contractAddress, tokenId);
-  
+
   if (!metadata) {
+    debugLog('Metadata', `tokenHasTrait: Metadata fetch FAILED | tokenId=${tokenId} | returning false`);
     return false;
   }
 
-  return metadata.traits.some(trait => 
-    trait.trait_type === traitType && 
+  // DEBUG: Log traits found and comparison
+  const traitsList = metadata.traits.map(t => `${t.trait_type}:${t.value}`).slice(0, 5).join(', ');
+  const hasMoreTraits = metadata.traits.length > 5 ? ` (+${metadata.traits.length - 5} more)` : '';
+  debugLog('Metadata', `tokenHasTrait: Metadata fetched | tokenId=${tokenId} | traitsCount=${metadata.traits.length} | traits=[${traitsList}${hasMoreTraits}]`);
+
+  const result = metadata.traits.some(trait =>
+    trait.trait_type === traitType &&
     trait.value === traitValue
   );
+
+  debugLog('Metadata', `tokenHasTrait EXIT | tokenId=${tokenId} | looking for ${traitType}:${traitValue} | result=${result}`);
+  return result;
 }
 
 /**

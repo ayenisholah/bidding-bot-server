@@ -1,3 +1,5 @@
+import { errorLog, warnLog } from './debug-file-logger';
+
 interface RetryOptions {
   maxRetries?: number;
   initialDelay?: number;
@@ -47,11 +49,11 @@ export async function withRetry<T>(
       }
 
       if (attempt === config.maxRetries) {
-        console.error(`[DB Retry] Failed after ${config.maxRetries} attempts:`, error);
+        errorLog('DB Retry', `Failed after ${config.maxRetries} attempts`, error);
         throw error;
       }
 
-      console.warn(`[DB Retry] Attempt ${attempt} failed, retrying in ${delay}ms...`);
+      warnLog('DB Retry', `Attempt ${attempt} failed, retrying in ${delay}ms`);
       await new Promise(resolve => setTimeout(resolve, delay));
       
       // Exponential backoff with jitter

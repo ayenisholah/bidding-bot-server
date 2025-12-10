@@ -151,3 +151,6 @@ dist
 # End of https://www.toptal.com/developers/gitignore/api/node
 SERVER_SECURITY_AUDIT_REPORT.md
 .listing-subscriptions.json
+
+# Additional log files
+message*.txt

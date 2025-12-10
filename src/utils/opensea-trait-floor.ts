@@ -1,5 +1,5 @@
 import { getTraitFloorPrice } from '../functions/tokenMetadata';
-import { logger, ErrorCategory } from './logger';
+import { errorLog } from './debug-file-logger';
 
 // Simple in-memory cache for trait floor prices
 interface TraitFloorCacheEntry {
@@ -53,18 +53,9 @@ export async function getOpenseaTraitFloor(
         price: floorPrice,
         timestamp: now
       });
-      
+
       // console.log(GREEN + `[TRAIT FLOOR] Fetched and cached floor price: ${floorPrice} ETH` + RESET);
-      
-      logger.logInfo(ErrorCategory.DATABASE, 'Trait floor price cached', {
-        collectionSlug,
-        traitType,
-        traitValue,
-        floorPrice,
-        component: 'trait_floor_cache',
-        operation: 'cache_trait_floor'
-      });
-      
+
       return floorPrice;
     }
 
@@ -73,18 +64,8 @@ export async function getOpenseaTraitFloor(
     return 0;
 
   } catch (error) {
-    console.error(`[TRAIT FLOOR] Error fetching floor price for ${cacheKey}:`, error);
-    
-    logger.logApiError('Failed to fetch trait floor price', {
-      collectionSlug,
-      traitType,
-      traitValue,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      component: 'trait_floor_cache',
-      operation: 'get_trait_floor'
-    });
-    
+    errorLog('TRAIT FLOOR', `Error fetching floor price for ${cacheKey} - collection=${collectionSlug} traitType=${traitType}`, error as Error);
+
     // Return 0 on error
     return 0;
   }

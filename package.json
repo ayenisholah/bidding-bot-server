@@ -17,7 +17,6 @@
 		"dc:push:beta-single": "docker push nfttools/bidding-bot-server-beta-single:beta-single",
 		"dc:build:beta-cluster": "DOCKER_BUILDKIT=1 docker buildx build --platform linux/arm64,linux/amd64 --cache-from type=registry,ref=nfttools/bidding-bot-server-beta-cluster:buildcache --cache-to type=registry,ref=nfttools/bidding-bot-server-beta-cluster:buildcache,mode=max -t nfttools/bidding-bot-server-beta-cluster:beta-cluster --push .",
 		"dc:push:beta-cluster": "docker push nfttools/bidding-bot-server-beta-cluster:beta-cluster",
-		"dc:build:multi-chain": "DOCKER_BUILDKIT=1 docker buildx build --platform linux/arm64,linux/amd64 --cache-from type=registry,ref=nfttools/bidding-bot-server-multi-chain:buildcache --cache-to type=registry,ref=nfttools/bidding-bot-server-multi-chain:buildcache,mode=max -t nfttools/bidding-bot-server-multi-chain:multi-chain --push .",
 		"lint": "eslint 'src/**/*.{ts,tsx}'",
 		"lint:fix": "eslint 'src/**/*.{ts,tsx}' --fix"
 	},
@@ -26,6 +25,7 @@
 	"license": "ISC",
 	"devDependencies": {
 		"@eslint/js": "9.29.0",
+		"@types/archiver": "^7.0.0",
 		"@types/body-parser": "1.19.6",
 		"@types/cors": "2.8.19",
 		"@types/express": "^4.17.21",
@@ -42,6 +42,7 @@
 	},
 	"dependencies": {
 		"@types/papaparse": "5.3.16",
+		"archiver": "^7.0.1",
 		"axios": "^1.9.0",
 		"axios-retry": "^4.5.0",
 		"body-parser": "2.2.0",

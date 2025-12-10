@@ -7,6 +7,9 @@ import { wrapAxiosInstance, jobContext } from "./utils/axios-wrapper";
 
 config()
 
+// Debug logging controlled by single environment variable
+const DEBUG = process.env.DEBUG === 'true';
+
 let limiter: Bottleneck;
 let axiosInstance: AxiosInstance;
 let countLoggerInterval: NodeJS.Timeout | null = null;
@@ -17,7 +20,7 @@ const rpsHistory: number[] = [];
 const RPS_HISTORY_SECONDS = 10; // Keep a 10-second history for averaging
 
 const retryConfig: IAxiosRetryConfig = {
-  retries: 3, // Reduced to 1 retry for 408 errors
+  retries: 3,
   retryDelay: (retryCount, error) => {
     limiter.schedule(() => Promise.resolve());
 
@@ -30,7 +33,7 @@ const retryConfig: IAxiosRetryConfig = {
         const baseDelay = 30000; // 30 seconds for Blur
         const progressiveDelay = baseDelay + (retryCount - 1) * 10000; // +10s each retry (30s, 40s, 50s)
         const jitter = 1000 + Math.random() * 2000; // 1-3s jitter
-// console.log(`[Blur 408] Retrying Blur endpoint after 408 (attempt ${retryCount}), waiting ${progressiveDelay + jitter}ms`);
+        // console.log(`[Blur 408] Retrying Blur endpoint after 408 (attempt ${retryCount}), waiting ${progressiveDelay + jitter}ms`);
         return progressiveDelay + jitter;
       }
 
@@ -40,14 +43,14 @@ const retryConfig: IAxiosRetryConfig = {
         const baseDelay = 5000; // 5 seconds
         const exponentialDelay = Math.min(baseDelay * Math.pow(2, retryCount - 1), 40000); // Max 40 seconds
         const jitter = 500 + Math.random() * 1500; // 500-2000ms jitter
-// console.log(`[Auth Backoff] Retrying auth endpoint after 408 (attempt ${retryCount}), waiting ${exponentialDelay + jitter}ms`);
+        // console.log(`[Auth Backoff] Retrying auth endpoint after 408 (attempt ${retryCount}), waiting ${exponentialDelay + jitter}ms`);
         return exponentialDelay + jitter;
       } else {
         // Progressive delay for other 408 errors
         const delays = [20000, 30000, 40000]; // 20s, 30s, 40s
         const delay = delays[Math.min(retryCount - 1, delays.length - 1)];
         const jitter = 200 + Math.random() * 800; // 200-1000ms jitter
-// console.log(`Retrying after 408 error (attempt ${retryCount}), waiting ${delay + jitter}ms`);
+        // console.log(`Retrying after 408 error (attempt ${retryCount}), waiting ${delay + jitter}ms`);
         return delay + jitter;
       }
     }
@@ -58,7 +61,7 @@ const retryConfig: IAxiosRetryConfig = {
       if (retryAfter) {
         return parseInt(retryAfter) * 1000;
       }
-      return Math.min(Math.pow(2, retryCount) * 500, 4000); // Faster backoff
+      return Math.min(Math.pow(2, retryCount) * 1000, 10000); // More aggressive backoff, max 10s
     }
 
     // Other 4xx/5xx errors - quick retry
@@ -77,18 +80,18 @@ const retryConfig: IAxiosRetryConfig = {
 
     // Retry on server errors (5xx) and specific client errors
     const status = error.response.status;
-    return status >= 500 || status === 429 || status === 408;
+    return status >= 500 || status === 429 || status === 430 || status === 408;
   },
-  onRetry: (retryCount, error, requestConfig) => {
+  onRetry: (_retryCount, _error, _requestConfig) => {
     // Only log retries in development mode or for specific debugging
-    if (process.env.DEBUG_AXIOS_RETRY === 'true') {
-// console.log(`[Axios Retry] Attempt ${retryCount} for ${requestConfig.url} - Status: ${error.response?.status || 'Network Error'}`);
+    if (DEBUG) {
+      // console.log(`[Axios Retry] Attempt ${_retryCount} for ${_requestConfig.url} - Status: ${_error.response?.status || 'Network Error'}`);
     }
   }
 };
 
 async function initialize(rateLimit: number) {
-  axiosInstance = axios.create({ timeout: 60000 });
+  axiosInstance = axios.create({ timeout: 30000 });
 
   limiter = new Bottleneck({
     minTime: 1000 / rateLimit, // Minimum time between job starts
@@ -117,6 +120,23 @@ export function getLimiterCounts() {
   return limiter.counts();
 }
 
+// Get detailed limiter queue state for debugging stopTask flow
+export function getLimiterQueueDetails(rateLimit: number): {
+  counts: ReturnType<typeof getLimiterCounts>;
+  jobsInQueue: number;
+  estimatedDrainTimeMs: number;
+} {
+  const counts = getLimiterCounts();
+  const jobsInQueue = (counts.RECEIVED || 0) + (counts.QUEUED || 0) + (counts.RUNNING || 0);
+  const estimatedDrainTimeMs = jobsInQueue * (1000 / rateLimit);
+
+  return {
+    counts,
+    jobsInQueue,
+    estimatedDrainTimeMs
+  };
+}
+
 // Function to start logging limiter counts every second
 export function startCountsLogger(intervalMs = 1000) {
   if (countLoggerInterval) {
@@ -124,11 +144,10 @@ export function startCountsLogger(intervalMs = 1000) {
   }
 
   countLoggerInterval = setInterval(() => {
-    const counts = getLimiterCounts();
-// console.log('Limiter Counts:', counts);
+    // console.log('Limiter Counts:', getLimiterCounts());
   }, intervalMs);
 
-// console.log(`Started logging limiter counts every ${intervalMs}ms`);
+  // console.log(`Started logging limiter counts every ${intervalMs}ms`);
   return countLoggerInterval;
 }
 
@@ -137,12 +156,11 @@ export function stopCountsLogger() {
   if (countLoggerInterval) {
     clearInterval(countLoggerInterval);
     countLoggerInterval = null;
-// console.log('Stopped logging limiter counts');
+    // console.log('Stopped logging limiter counts');
   }
 }
 setInterval(() => {
   const counts = getLimiterCounts();
-// console.log('Current Limiter Stats:', counts);
   // Calculate instantaneous RPS based on completed requests
   const completedInLastSecond = counts.DONE ? counts.DONE - previousDoneCount : 0;
   previousDoneCount = counts.DONE || 0;
@@ -165,8 +183,6 @@ setInterval(() => {
     : 0;
   trueRPS = Math.min(RATE_LIMIT, Math.max(executing, averageRPS));
 
-// console.log('Average RPS:', averageRPS.toFixed(2), 'Executing:', executing.toFixed(2), 'True RPS:', trueRPS.toFixed(2));
-
   rps.currentRPS = trueRPS
 
 }, 1000);
@@ -186,18 +202,18 @@ export function cancelTaskJobs(taskId: string, marketplace?: string) {
   if (marketplace) {
     // Marketplace-specific blacklist
     taskBlacklist.get(taskId)!.add(marketplace.toLowerCase());
-// console.log(`Task ${taskId} blacklisted for marketplace: ${marketplace}`);
+    // console.log(`Task ${taskId} blacklisted for marketplace: ${marketplace}`);
   } else {
     // Full task blacklist - add special marker
     taskBlacklist.get(taskId)!.add('*');
-// console.log(`Task ${taskId} fully blacklisted`);
+    // console.log(`Task ${taskId} fully blacklisted`);
   }
 
   // Get current limiter queue size for reporting
   const counts = limiter.counts();
   const queuedJobs = counts.RECEIVED + counts.QUEUED;
 
-// console.log(`Current limiter queue: ${queuedJobs} jobs`);
+  // console.log(`Current limiter queue: ${queuedJobs} jobs`);
 
   return { cancelled: 0, blacklisted: true, queuedJobs };
 }
@@ -212,7 +228,7 @@ export function removeTaskFromBlacklist(taskId: string, marketplace?: string) {
     // Remove specific marketplace from blacklist
     wasRemoved = taskEntry.delete(marketplace.toLowerCase());
     if (wasRemoved) {
-// console.log(`Task ${taskId} removed from blacklist for marketplace: ${marketplace}`);
+      // console.log(`Task ${taskId} removed from blacklist for marketplace: ${marketplace}`);
     }
     // Clean up empty entries
     if (taskEntry.size === 0) {
@@ -222,7 +238,7 @@ export function removeTaskFromBlacklist(taskId: string, marketplace?: string) {
     // Remove entire task from blacklist
     taskBlacklist.delete(taskId);
     wasRemoved = true;
-// console.log(`Task ${taskId} fully removed from blacklist - all marketplaces can execute again`);
+    // console.log(`Task ${taskId} fully removed from blacklist - all marketplaces can execute again`);
   }
 
   return wasRemoved;
@@ -247,7 +263,7 @@ export function isTaskBlacklisted(taskId: string, marketplace?: string): boolean
 // Enhanced limiter scheduling with task validation
 export function scheduleWithTaskValidation(fn: () => PromiseLike<any>, taskId: string) {
   if (isTaskBlacklisted(taskId)) {
-// console.log(`Blocked job execution for stopped task: ${taskId}`);
+    // console.log(`Blocked job execution for stopped task: ${taskId}`);
     return Promise.reject(new Error(`Task ${taskId} is stopped`));
   }
   return limiter.schedule(fn);

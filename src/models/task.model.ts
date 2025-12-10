@@ -1,5 +1,4 @@
 import mongoose, { Schema, Model } from "mongoose";
-import { CHAIN_OPTIONS, DEFAULT_CHAIN, ChainValue } from "../utils/chains";
 
 export interface SelectedTraits {
   [marketplace: string]: {
@@ -16,7 +15,6 @@ export interface ITask {
     slug: string;
     contractAddress: string;
   };
-  chain: ChainValue;
   wallet: string;
   selectedMarketplaces: string[];
   running: boolean;
@@ -91,7 +89,8 @@ export interface ITask {
   };
   walletId: string;
   tokenIds: (number | string)[];
-  bidType: "collection" | "token";
+  bidType: "collection" | "token" | "rarity";
+  rarityCategory?: "LEGENDARY" | "EPIC" | "RARE";
   bidPriceType: "GENERAL_BID_PRICE" | "MARKETPLACE_BID_PRICE";
   slugValid: boolean;
   magicEdenValid: boolean;
@@ -147,12 +146,6 @@ const TaskSchema: Schema = new Schema(
     tags: [{ name: String, color: String }],
     selectedTraits: {
       type: Schema.Types.Mixed,
-    },
-    chain: {
-      type: String,
-      enum: CHAIN_OPTIONS.map((option) => option.value),
-      default: DEFAULT_CHAIN,
-      required: true,
     },
     traits: {
       categories: { type: Schema.Types.Mixed },
@@ -222,8 +215,13 @@ const TaskSchema: Schema = new Schema(
     tokenIds: { type: [Schema.Types.Mixed], required: false },
     bidType: {
       type: String,
-      enum: ["collection", "token"],
+      enum: ["collection", "token", "rarity"],
       default: "collection"
+    },
+    rarityCategory: {
+      type: String,
+      enum: ["LEGENDARY", "EPIC", "RARE"],
+      required: false
     },
     bidPriceType: {
       type: String,

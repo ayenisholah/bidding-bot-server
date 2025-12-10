@@ -1,10 +1,11 @@
 import { Queue, Job } from 'bullmq';
 import Listing, { IListing } from '../models/listing.model';
 import { createListing } from './list';
-import { logger, ErrorCategory } from '../utils/logger';
+import { errorLog, warnLog } from '../utils/debug-file-logger';
 import WebSocketManager from '../utils/websocket-manager';
 import { PROCESS_LISTING, queue } from '..';
 import { prefetchTokenTraits } from '../functions/tokenMetadata';
+import { getPassword } from '../utils/crypto';
 
 // Color constants for console output
 const GREEN = '\x1b[32m';
@@ -23,10 +24,7 @@ export async function getMainQueue(): Promise<Queue> {
     mainQueue = queue;
   }
   if (!mainQueue) {
-    logger.logGeneralError('Main queue not initialized', {
-      component: 'listing_scheduler',
-      operation: 'get_main_queue'
-    });
+    errorLog('Queue', '[listingScheduler.ts] Main queue not initialized');
     throw new Error('Main queue not initialized');
   }
   return mainQueue;
@@ -47,28 +45,11 @@ export async function scheduleListing(listing: IListing): Promise<void> {
     const queue = await getMainQueue();
     const listingId = listing._id.toString();
 
-    logger.logInfo(ErrorCategory.QUEUE, 'Scheduling listing job', {
-      listingId,
-      tokenId: listing.tokenId,
-      contractAddress: listing.contract.contractAddress,
-      running: listing.running,
-      component: 'listing_scheduler',
-      operation: 'schedule_listing_start'
-    });
-
     // Cancel existing job if any
     await cancelListingJob(listingId);
 
     if (!listing.running) {
       // console.log(YELLOW + '[LISTING SCHEDULER] Schedule Step 3: Listing not running, returning early' + RESET);
-      
-      logger.logWarning(ErrorCategory.BUSINESS_LOGIC, 'Listing not running - skipping schedule', {
-        listingId,
-        tokenId: listing.tokenId,
-        contractAddress: listing.contract.contractAddress,
-        component: 'listing_scheduler',
-        operation: 'schedule_listing_skip'
-      });
       return;
     }
 
@@ -101,29 +82,8 @@ export async function scheduleListing(listing: IListing): Promise<void> {
     activeJobs.set(listingId, job.id!);
     // console.log(GREEN + '[LISTING SCHEDULER] Schedule Step 6: scheduleListing completed successfully' + RESET);
 
-    logger.logInfo(ErrorCategory.QUEUE, 'Listing job scheduled successfully', {
-      listingId,
-      tokenId: listing.tokenId,
-      contractAddress: listing.contract.contractAddress,
-      jobId: job.id,
-      delayMs,
-      loopInterval: listing.loopInterval,
-      component: 'listing_scheduler',
-      operation: 'schedule_listing_success'
-    });
-
   } catch (error) {
-    console.error(RED + `[LISTING SCHEDULER - Error] Failed to schedule listing ${listing._id}` + RESET, error);
-    
-    await logger.logQueueError('Failed to schedule listing', {
-      listingId: listing._id.toString(),
-      tokenId: listing.tokenId,
-      contractAddress: listing.contract.contractAddress,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      component: 'listing_scheduler',
-      operation: 'schedule_listing_error'
-    });
+    errorLog('Listing', `Failed to schedule listing | listingId=${listing._id} | tokenId=${listing.tokenId}`, error);
   }
 }
 
@@ -181,11 +141,7 @@ export async function cancelListingJob(listingId: string): Promise<void> {
       // console.log(`No active job found for listing ${listingId}`);
     }
   } catch (error) {
-    await logger.logQueueError('Failed to cancel listing job', {
-      listingId,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
+    errorLog('Listing', `[listingScheduler.ts] Failed to cancel listing job | listingId=${listingId}`, error);
   }
 }
 
@@ -205,12 +161,11 @@ export async function processListingJob(job: Job): Promise<boolean> {
   // console.log(BLUE + `[LISTING SCHEDULER] Listing ID: ${listingId}` + RESET);
 
   try {
-    logger.logInfo(ErrorCategory.QUEUE, 'Processing listing job started', {
-      jobId: job.id,
-      listingId,
-      component: 'listing_scheduler',
-      operation: 'process_listing_job_start'
-    });
+    // Check if password is available before processing
+    const password = getPassword();
+    if (!password) {
+      return true; // Return true to mark job as completed (not failed)
+    }
 
     // Update progress to prevent stalling
     // Progress reporting removed - await job.updateProgress(10);
@@ -285,34 +240,16 @@ export async function processListingJob(job: Job): Promise<boolean> {
     // Progress reporting removed - await job.updateProgress(100);
 
     // console.log(GREEN + '[LISTING SCHEDULER] ✅ Listing job completed successfully' + RESET);
-    
-    logger.logInfo(ErrorCategory.QUEUE, 'Listing job completed successfully', {
-      jobId: job.id,
-      listingId,
-      component: 'listing_scheduler',
-      operation: 'process_listing_job_success'
-    });
 
     return true
 
   } catch (error) {
-    console.error(RED + `[LISTING SCHEDULER - Error] Process listing job failed: ${listingId}` + RESET, error);
-    
-    // Log to database for tracking
-    await logger.logQueueJobFailed(job.name, {
-      jobId: job.id,
-      listingId,
-      queueName: 'BIDDING_BOT',
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      component: 'listing_scheduler',
-      operation: 'process_listing_job_error'
-    });
+    errorLog('Listing', `Process listing job failed | jobId=${job.id} | listingId=${listingId}`, error);
 
     // Only show brief error message - detailed errors are already logged by marketplace functions
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     if (!errorMsg.includes('Magic Eden') && !errorMsg.includes('Blur') && !errorMsg.includes('OpenSea')) {
-      console.error(RED + `[LISTING SCHEDULER - Error] ❌ Process listing job failed: ${errorMsg}` + RESET);
+      errorLog('Listing', `Process listing job failed: ${errorMsg}`);
     }
 
     throw error;
@@ -327,6 +264,13 @@ export async function processListingJob(job: Job): Promise<boolean> {
  */
 export async function initializeListingScheduler(wsManager?: WebSocketManager): Promise<void> {
   try {
+    // Check if password is available before initializing
+    const password = getPassword();
+    if (!password) {
+      console.log('⏸️  Listing scheduler initialization skipped - no password available');
+      return;
+    }
+
     // Initializing listing scheduler
 
     // Get the main queue
@@ -360,7 +304,7 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
       }));
       
       await prefetchTokenTraits(tokensToFetch).catch(err => {
-        console.error('Error pre-fetching token traits:', err);
+        errorLog('Metadata', 'Error pre-fetching token traits', err);
       });
     }
 
@@ -390,16 +334,12 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
               // console.log(`✅ Successfully subscribed to ${marketplace} for listing events`);
             } catch (error) {
               subscriptionResults.push(`${marketplace}: failed`);
-              console.error(`❌ Failed to subscribe to ${marketplace}:`, error);
+              errorLog('WebSocket', `Failed to subscribe to ${marketplace}`, error);
             }
           }
 
         } catch (error) {
-          await logger.logWebSocketError('Failed to subscribe listing to WebSocket', {
-            listingId,
-            error: error as Error,
-            errorMessage: error instanceof Error ? error.message : String(error)
-          });
+          errorLog('WebSocket', `[listingScheduler.ts] Failed to subscribe listing to WebSocket | listingId=${listingId}`, error);
         }
       }
 
@@ -418,20 +358,13 @@ export async function initializeListingScheduler(wsManager?: WebSocketManager): 
         await createListing(listingData);
 
       } catch (error) {
-        await logger.logGeneralError('Failed to process initial listing on startup', {
-          listingId,
-          error: error as Error,
-          errorMessage: error instanceof Error ? error.message : String(error)
-        });
+        errorLog('Listing', `[listingScheduler.ts] Failed to process initial listing on startup | listingId=${listingId}`, error);
       }
     }
 
     // Listing scheduler initialized successfully
   } catch (error) {
-    await logger.logGeneralError('Failed to initialize listing scheduler', {
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
+    errorLog('Listing', '[listingScheduler.ts] Failed to initialize listing scheduler', error);
   }
 }
 
@@ -457,7 +390,7 @@ export async function shutdownListingScheduler(): Promise<void> {
 
     // console.log('Listing scheduler shut down successfully');
   } catch (error) {
-    console.error('Error shutting down listing scheduler:', error);
+    errorLog('Scheduler', 'Error shutting down listing scheduler', error);
   }
 }
 
@@ -490,9 +423,7 @@ export async function getListingSubscriptionDiagnostics(wsManager?: WebSocketMan
       connectionStatus
     };
   } catch (error) {
-    await logger.logWebSocketError('Failed to get listing subscription diagnostics', {
-      error: error as Error
-    });
+    errorLog('WebSocket', '[listingScheduler.ts] Failed to get listing subscription diagnostics', error);
     throw error;
   }
 }

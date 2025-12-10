@@ -3,7 +3,7 @@ import { BASE_URL } from "../../constants";
 import { approveNFT } from "../../functions/approve";
 import { axiosInstance } from "../../init";
 import Listing from "../../models/listing.model";
-import { logger } from "../../utils/logger";
+import { errorLog, warnLog } from "../../utils/debug-file-logger";
 import Bottleneck from "bottleneck";
 import { roundToNineDecimals } from "../../utils/decimal-precision";
 
@@ -156,16 +156,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
     );
 
     if (!signStep) {
-      await logger.logMagicEdenListingError('No order-signature step found in response', {
-        walletAddress,
-        contractAddress: contract,
-        tokenId,
-        operation: 'create_listing',
-        availableSteps: listResponse.data.steps?.map((s: any) => s.id),
-        errorCode: 'MISSING_SIGNATURE_STEP'
-      });
-      console.error(`${MAGENTA}[MAGICEDEN] No order-signature step found in response${RESET}`);
-      console.error(`${MAGENTA}[MAGICEDEN] Available steps:${RESET}`, listResponse.data.steps);
+      errorLog('Listing', `[MagicEden] No order-signature step found | wallet=${walletAddress.slice(0, 10)}... | contract=${contract} | token=${tokenId}`);
       throw new Error('No order-signature step found');
     }
 
@@ -266,15 +257,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
         // console.log(`${MAGENTA}[MAGICEDEN - LISTING] ⚠️  No listing found in DB for ${contract} #${tokenId}${RESET}`);
       }
     } catch (updateError) {
-      await logger.logMagicEdenListingError('Error updating listing in database', {
-        contractAddress: contract,
-        tokenId,
-        operation: 'update_listing_price',
-        price: roundedPrice,
-        error: updateError as Error,
-        errorMessage: updateError instanceof Error ? updateError.message : String(updateError)
-      });
-      console.error(`${MAGENTA}[MAGICEDEN] Error updating listing in database:${RESET}`, updateError);
+      errorLog('Database', `[MagicEden] Error updating listing | contract=${contract} | token=${tokenId} | price=${roundedPrice}`, updateError);
     }
 
     return finalListingResponse.data;
@@ -296,29 +279,16 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
       formattedError = `Magic Eden: ${errorData.message}`;
     }
 
-    await logger.logMagicEdenListingError(formattedError, {
-      walletAddress,
-      contractAddress: contract,
-      tokenId,
-      price: roundedPrice,
-      operation: 'submit_listing',
-      error: error,
-      errorCode: errorStatus,
-      errorMessage: errorData ? extractMagicEdenErrorMessage({ response: { data: errorData } }) : extractMagicEdenErrorMessage(error),
-      responseData: errorData
-    });
-    
-    // Display graceful error message
-    console.error(`❌ ${formattedError}`);
-    if (errorData?.results?.[0]) {
-      const result = errorData.results[0];
-      console.error(`   Contract: ${contract}`);
-      console.error(`   Token ID: ${tokenId}`);
-      console.error(`   Price: ${roundedPrice} ETH`);
-      if (result.orderId) {
-        console.error(`   Order ID: ${result.orderId}`);
-      }
+    // Build detailed error context
+    let errorContext = `${formattedError} | contract=${contract} | token=${tokenId} | price=${roundedPrice}`;
+    if (errorStatus) {
+      errorContext += ` | status=${errorStatus}`;
     }
+    if (errorData?.results?.[0]?.orderId) {
+      errorContext += ` | orderId=${errorData.results[0].orderId}`;
+    }
+
+    errorLog('Listing', `[MagicEden] ${errorContext}`, error);
 
     // Check if the error is because user no longer owns the NFT
     const errorMessage = JSON.stringify(error?.response?.data || error?.message || '').toLowerCase();
@@ -332,7 +302,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
         });
         // console.log(`${MAGENTA}[MAGICEDEN] Deleted listing for ${contract}/${tokenId} as user no longer owns it${RESET}`);
       } catch (deleteError) {
-        console.error(`${MAGENTA}[MAGICEDEN] Error deleting listing:${RESET}`, deleteError);
+        errorLog('Database', `[MagicEden] Error deleting listing | contract=${contract} | token=${tokenId}`, deleteError);
       }
     }
 

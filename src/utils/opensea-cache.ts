@@ -1,16 +1,12 @@
 import redisClient from './redis';
-import { logger, DatabaseOperation } from './logger';
+import { errorLog, warnLog } from './debug-file-logger';
 
 // Get Redis connection
 const getRedis = () => {
   try {
     return redisClient.getClient();
   } catch (error) {
-    logger.logDatabaseConnectionError('Failed to get Redis client for OpenSea cache', {
-      operation: 'opensea_cache',
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
+    errorLog('Cache', 'Failed to get Redis client for OpenSea cache', error);
     return null;
   }
 };
@@ -42,13 +38,7 @@ export async function getCachedOrFetch<T>(
       }
     } catch (error) {
       // Log but continue without cache
-      await logger.logDatabaseError('Redis get error for OpenSea cache', {
-        databaseOperation: DatabaseOperation.READ,
-        collection_name: 'opensea_cache',
-        cacheKey,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+      errorLog('Cache', `Redis get error for OpenSea cache | key=${cacheKey}`, error);
     }
   }
 
@@ -61,7 +51,7 @@ export async function getCachedOrFetch<T>(
       const value = parseNumber ? String(result) : JSON.stringify(result);
       await redis.setex(cacheKey, ttl, value);
     } catch (error) {
-      // console.log(error);
+      warnLog('Cache', `Failed to cache OpenSea result | key=${cacheKey}`);
     }
   }
 

@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { config } from "dotenv"
 import { getRedisConnection } from '../utils/redis'
+import { errorLog, warnLog } from './debug-file-logger'
 
 config()
 
@@ -12,13 +13,20 @@ const decryptedKeyCache = new Map<string, { key: string; timestamp: number }>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache TTL
 const MAX_CACHE_SIZE = 100; // Maximum number of cached keys
 
-// Password persistence configuration
+// Password persistence configuration (development only)
 const PASSWORD_REDIS_KEY = 'nft-bot:server:password'; // Single Redis node key
 const PASSWORD_TTL = 604800; // Default 7 days (7 * 24 * 60 * 60)
 
-// In development mode, allow password from environment variable
+// In-memory password storage
 let PASSWORD: string | undefined = undefined
-// console.log('🔑 [crypto module] Initialized with PASSWORD =', PASSWORD ? 'SET' : 'UNDEFINED')
+
+// Rate limiter for no password error logging
+let lastNoPasswordLogTime = 0;
+const NO_PASSWORD_LOG_INTERVAL = 60000; // Log once per minute max
+
+// =============================================================================
+// REDIS-BASED PASSWORD STORAGE (Development)
+// =============================================================================
 
 // Try to recover password from Redis on startup (development only)
 export async function recoverPasswordFromRedis(): Promise<boolean> {
@@ -49,8 +57,8 @@ export async function recoverPasswordFromRedis(): Promise<boolean> {
       // Get remaining TTL
       const ttl = await redis.ttl(PASSWORD_REDIS_KEY);
       if (ttl > 0) {
-        const days = Math.floor(ttl / 86400);
-        const hours = Math.floor((ttl % 86400) / 3600);
+        // const days = Math.floor(ttl / 86400);
+        // const hours = Math.floor((ttl % 86400) / 3600);
         // console.log(`🔑 Password recovered from Redis (expires in ${days} days, ${hours} hours)`);
       } else if (ttl === -1) {
         // console.log('🔑 Password recovered from Redis (no expiration set)');
@@ -61,8 +69,8 @@ export async function recoverPasswordFromRedis(): Promise<boolean> {
       // Refresh TTL to full duration on recovery
       if (PASSWORD_TTL > 0) {
         await redis.expire(PASSWORD_REDIS_KEY, PASSWORD_TTL);
-        const days = Math.floor(PASSWORD_TTL / 86400);
-        const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
+        // const days = Math.floor(PASSWORD_TTL / 86400);
+        // const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
         // console.log(`🔑 Password TTL refreshed to ${days} days, ${hours} hours`);
       }
       return true;
@@ -71,44 +79,30 @@ export async function recoverPasswordFromRedis(): Promise<boolean> {
       return false;
     }
   } catch (error) {
-    console.error('❌ Failed to recover password from Redis:', error);
-    if (error instanceof Error) {
-      console.error('Error details:', error.message);
-      console.error('Stack:', error.stack);
-    }
+    errorLog('Crypto', 'Failed to recover password from Redis', error);
     return false;
   }
 }
 
 export async function setPassword(password: string): Promise<void> {
-  // console.log('🔑 [setPassword] Setting password in memory');
   PASSWORD = password;
-  // console.log(`🔑 [setPassword] Password is now ${PASSWORD ? 'SET' : 'NOT SET'}`);
   // Clear the cache when password changes
   decryptedKeyCache.clear();
-  // console.log(`🔑 [setPassword] Decryption cache cleared`);
 
-  // Only store in Redis during development
+  // Development only: persist to Redis for convenience
   if (process.env.NODE_ENV !== 'production') {
     try {
       const redis = getRedisConnection();
       if (PASSWORD_TTL > 0) {
         await redis.setex(PASSWORD_REDIS_KEY, PASSWORD_TTL, password);
-        const days = Math.floor(PASSWORD_TTL / 86400);
-        const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
-        // console.log(`🔑 [DEVELOPMENT] Password stored in Redis with TTL of ${days} days, ${hours} hours`);
       } else {
         await redis.set(PASSWORD_REDIS_KEY, password);
-        // console.log('🔑 [DEVELOPMENT] Password stored in Redis (no expiration)');
       }
-    } catch (error) {
-      console.error('[DEVELOPMENT] Failed to store password in Redis:', error);
-      // Still set in memory even if Redis fails
-      // console.log('🔑 Password set in memory (Redis storage failed)');
+    } catch {
+      warnLog('Crypto', '[DEV] Failed to store password in Redis - using memory only');
     }
-  } else {
-    // console.log('🔑 [PRODUCTION] Password set in memory only (not stored in Redis)');
   }
+  // Production: password only stored in memory (no persistence)
 }
 
 export function getPassword(): string | undefined {
@@ -124,12 +118,12 @@ export async function renewPasswordTTL(): Promise<void> {
     const exists = await redis.exists(PASSWORD_REDIS_KEY);
     if (exists) {
       await redis.expire(PASSWORD_REDIS_KEY, PASSWORD_TTL);
-      const days = Math.floor(PASSWORD_TTL / 86400);
-      const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
+      // const days = Math.floor(PASSWORD_TTL / 86400);
+      // const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
       // console.log(`🔑 [DEVELOPMENT] Password TTL renewed for ${days} days, ${hours} hours`);
     }
-  } catch (error) {
-    console.error('[DEVELOPMENT] Failed to renew password TTL:', error);
+  } catch {
+    warnLog('Crypto', '[DEV] Failed to renew password TTL');
   }
 }
 
@@ -138,19 +132,16 @@ export async function clearPassword(): Promise<void> {
   PASSWORD = undefined;
   decryptedKeyCache.clear();
 
-  // Only attempt to clear from Redis in development
+  // Development only: clear from Redis
   if (process.env.NODE_ENV !== 'production') {
     try {
       const redis = getRedisConnection();
       await redis.del(PASSWORD_REDIS_KEY);
-      // console.log('🔑 [DEVELOPMENT] Password cleared from Redis and memory');
-    } catch (error) {
-      console.error('[DEVELOPMENT] Failed to clear password from Redis:', error);
-      // console.log('🔑 Password cleared from memory only');
+    } catch {
+      warnLog('Crypto', '[DEV] Failed to clear password from Redis - cleared from memory only');
     }
-  } else {
-    // console.log('🔑 [PRODUCTION] Password cleared from memory');
   }
+  // Production: password only in memory, already cleared above
 }
 
 function getEncryptionKey(): Buffer {
@@ -173,7 +164,13 @@ function getEncryptionKey(): Buffer {
   }
 
   // No password available - throw error
-  console.error('🔑 [getEncryptionKey] No password available!');
+  // Rate-limited logging to prevent spam
+  const now = Date.now();
+  if (now - lastNoPasswordLogTime > NO_PASSWORD_LOG_INTERVAL) {
+    warnLog('Crypto', 'No password available - wallet encryption operations paused. Provide password via API to resume.');
+    lastNoPasswordLogTime = now;
+  }
+
   const error = new Error("No password available. Please provide a password for encryption.");
   (error as any).code = 'NO_PASSWORD';
   throw error;
@@ -181,15 +178,31 @@ function getEncryptionKey(): Buffer {
 }
 
 // Deterministic password encryption/decryption functions
-// Uses a fixed key derived from JWT_SECRET for deterministic encryption
+// Uses ENCRYPTION_KEY (unique per installation) for better security
 function getPasswordEncryptionKey(): Buffer {
-  const secret = process.env.JWT_SECRET || "default-jwt-secret";
+  const encryptionKey = process.env.ENCRYPTION_KEY;
 
-  // Create a deterministic key from JWT_SECRET
+  if (!encryptionKey) {
+    // Fall back to JWT_SECRET for backwards compatibility during migration
+    const fallback = process.env.JWT_SECRET || "default-jwt-secret";
+    warnLog('Crypto', 'ENCRYPTION_KEY not set, using JWT_SECRET fallback (less secure)');
+    return crypto
+      .createHash("sha256")
+      .update("password-encryption-key")
+      .update(fallback)
+      .digest();
+  }
+
+  // Use ENCRYPTION_KEY with additional key derivation for security
+  const intermediate = crypto
+    .createHash("sha512")
+    .update(encryptionKey)
+    .update("nft-bidding-bot-password-key-v1")
+    .digest();
+
   return crypto
     .createHash("sha256")
-    .update("password-encryption-key")
-    .update(secret)
+    .update(intermediate)
     .digest();
 }
 
@@ -212,24 +225,24 @@ export function decryptPrivateKey(encryptedData: string): string {
 
   // Validate input data
   if (encryptedData === null || encryptedData === undefined) {
-    console.error('❌ [decryptPrivateKey] encryptedData is null or undefined');
+    errorLog('Crypto', 'decryptPrivateKey: encryptedData is null or undefined');
     throw new Error('Encrypted data is null or undefined');
   }
 
   if (typeof encryptedData !== 'string') {
-    console.error(`❌ [decryptPrivateKey] encryptedData is not a string, received: ${typeof encryptedData}`);
+    errorLog('Crypto', `decryptPrivateKey: encryptedData is not a string | type=${typeof encryptedData}`);
     throw new Error(`Encrypted data must be a string, received: ${typeof encryptedData}`);
   }
 
   if (encryptedData.trim() === '') {
-    console.error('❌ [decryptPrivateKey] encryptedData is empty string');
+    errorLog('Crypto', 'decryptPrivateKey: encryptedData is empty string');
     throw new Error('Encrypted data is empty');
   }
 
   // console.log(`🔐 [decryptPrivateKey] Input validation passed, data length: ${encryptedData.length}`);
 
   // Check if password is available
-  const hasPassword = !!getPassword();
+  // const hasPassword = !!getPassword();
   // console.log(`🔐 [decryptPrivateKey] Password available: ${hasPassword}`);
 
   // Check cache first
@@ -257,7 +270,7 @@ export function decryptPrivateKey(encryptedData: string): string {
     key = getEncryptionKey();
     // console.log('🔐 [decryptPrivateKey] Encryption key obtained successfully');
   } catch (error) {
-    console.error('🔐 [decryptPrivateKey] Failed to get encryption key:', error);
+    errorLog('Crypto', 'decryptPrivateKey: Failed to get encryption key', error);
     throw error;
   }
 
@@ -265,7 +278,7 @@ export function decryptPrivateKey(encryptedData: string): string {
   // console.log(`🔐 [decryptPrivateKey] Encrypted data parts: ${parts.length}`);
 
   if (parts.length !== 3) {
-    console.error(`🔐 [decryptPrivateKey] Invalid format - expected 3 parts, got ${parts.length}`);
+    errorLog('Crypto', `decryptPrivateKey: Invalid format | expected=3 parts | got=${parts.length}`);
     throw new Error('Invalid encrypted data format');
   }
 
@@ -290,11 +303,7 @@ export function decryptPrivateKey(encryptedData: string): string {
 
     return decrypted;
   } catch (error) {
-    console.error('🔐 [decryptPrivateKey] Decryption failed:', error);
-    if (error instanceof Error) {
-      console.error('🔐 [decryptPrivateKey] Error message:', error.message);
-      console.error('🔐 [decryptPrivateKey] Error stack:', error.stack);
-    }
+    errorLog('Crypto', 'decryptPrivateKey: Decryption failed', error);
     throw error;
   }
 }
@@ -326,7 +335,7 @@ export async function reEncryptWallet(
 
     return newEncryptedKey;
   } catch (error) {
-    console.error('🔐 [reEncryptWallet] Re-encryption failed:', error);
+    errorLog('Crypto', 'reEncryptWallet: Re-encryption failed', error);
     // Restore the current password on error
     PASSWORD = getPassword();
     throw error;
@@ -335,7 +344,7 @@ export async function reEncryptWallet(
 
 // Clear the decrypted key cache (useful when changing passwords)
 export function clearDecryptedKeyCache(): void {
-  const previousSize = decryptedKeyCache.size;
+  // const previousSize = decryptedKeyCache.size;
   decryptedKeyCache.clear();
   // console.log(`🔐 [clearDecryptedKeyCache] Cleared ${previousSize} cached keys`);
 }
@@ -403,7 +412,8 @@ export function decryptPassword(encryptedPassword: string): string {
     decrypted += decipher.final("utf8");
 
     return decrypted;
-  } catch {
+  } catch (error) {
+    errorLog('Crypto', 'Failed to decrypt password', error);
     throw new Error("Failed to decrypt password");
   }
 }

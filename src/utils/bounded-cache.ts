@@ -49,6 +49,22 @@ export class BoundedCache<K, V> {
     return value !== undefined;
   }
 
+  /**
+   * Atomic check-and-add operation: adds the key-value pair only if the key doesn't already exist.
+   * Returns true if the entry was added, false if it already existed.
+   * This prevents race conditions in concurrent deduplication checks.
+   */
+  addIfNotExists(key: K, value: V): boolean {
+    // Check if already exists (including expiration check)
+    if (this.has(key)) {
+      return false;  // Already exists, don't add
+    }
+
+    // Add the entry
+    this.set(key, value);
+    return true;  // Successfully added
+  }
+
   delete(key: K): boolean {
     return this.cache.delete(key);
   }

@@ -8,7 +8,7 @@ services:
     memswap_limit: 4608m
     # CPU limits: 2.5 cores for server
     cpus: "2.5"
-    cpu_shares: 2048
+    cpu_shares: 4096
     ports:
       - "3003:3003"
     healthcheck:
@@ -34,7 +34,6 @@ services:
       SERVER_IP: ${SERVER_IP}
       USERNAME: ${USERNAME}
       EMAIL: ${EMAIL}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       JWT_SECRET: "NFTTOOLS TO THE MOON"
       AXIOM_DATASET: "nft-bidding-bot"
       AXIOM_TOKEN: "xaat-30ecb9c3-ce16-42f6-b824-ba8ef5c50e7c"
@@ -50,8 +49,6 @@ services:
         condition: service_healthy
     networks:
       - my_network
-    volumes:
-      - server_data:/app/data
     ulimits:
       nofile:
         soft: 65536
@@ -101,13 +98,14 @@ services:
     image: "mongo:7-jammy"
     container_name: "mongodb_container"
     # MongoDB gets 2GB memory
-    mem_limit: 2048m
+    mem_limit: 4096m
     memswap_limit: 2560m
     # CPU limits: 0.75 cores for MongoDB
     cpus: "0.75"
     cpu_shares: 768
     command: >
-      mongod 
+      mongod
+      --replSet rs0
       --wiredTigerCacheSizeGB 1.5
       --wiredTigerJournalCompressor snappy
       --wiredTigerCollectionBlockCompressor snappy
@@ -214,8 +212,6 @@ volumes:
       type: none
       o: bind
       device: /var/lib/redis
-  server_data:
-    driver: local
 
 networks:
   my_network:

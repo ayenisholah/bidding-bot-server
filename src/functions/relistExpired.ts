@@ -1,6 +1,6 @@
 import Listing, { IListing } from '../models/listing.model';
 import { createListing } from './list';
-import { logger, ErrorCategory, MarketplaceSubCategory } from '../utils/logger';
+import { errorLog } from '../utils/debug-file-logger';
 
 /**
  * Check if a listing has expired on a specific marketplace
@@ -43,7 +43,7 @@ async function relistOnExpiredMarketplaces(listing: IListing): Promise<void> {
     // Fetch fresh listing data from database
     const freshListing = await Listing.findById(listing._id);
     if (!freshListing) {
-      console.error(`Listing ${listing._id} not found when fetching fresh data for relisting`);
+      errorLog('Listing', `Listing not found when fetching fresh data for relisting | listingId=${listing._id}`);
       return;
     }
     
@@ -57,14 +57,7 @@ async function relistOnExpiredMarketplaces(listing: IListing): Promise<void> {
     await createListing(relistData);
     
   } catch (error) {
-    await logger.logMarketplaceError('Failed to relist expired listing', {
-      listingId: listing._id.toString(),
-      tokenId: listing.tokenId,
-      contractAddress: listing.contract.contractAddress,
-      marketplaceSubCategory: MarketplaceSubCategory.LISTING,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
+    errorLog('Listing', `[relistExpired.ts] Failed to relist expired listing | listingId=${listing._id} | tokenId=${listing.tokenId}`, error);
   }
 }
 
@@ -98,12 +91,7 @@ export async function checkAndRelistExpired(): Promise<void> {
     // console.log(`Processed ${expiredCount} expired listings`);
 
   } catch (error) {
-    await logger.logMarketplaceError('Failed to check expired listings', {
-      operation: 'check_expired',
-      marketplaceSubCategory: MarketplaceSubCategory.LISTING,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
+    errorLog('Listing', '[relistExpired.ts] Failed to check expired listings', error);
   }
 }
 
@@ -124,14 +112,7 @@ export async function updateListingExpiration(
     });
 
   } catch (error) {
-    await logger.logMarketplaceError('Failed to update listing expiration', {
-      listingId,
-      marketplace,
-      operation: 'update_expiration',
-      marketplaceSubCategory: MarketplaceSubCategory.LISTING,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
+    errorLog('Listing', `[relistExpired.ts] Failed to update listing expiration | listingId=${listingId} | marketplace=${marketplace}`, error);
     throw error;
   }
 }
@@ -142,15 +123,15 @@ export async function updateListingExpiration(
  */
 export function initializeExpirationMonitor(intervalMinutes: number = 5): NodeJS.Timeout {
   // console.log(`Starting expiration monitor (checking every ${intervalMinutes} minutes)`);
-  
+
   // Run immediately on startup
-  checkAndRelistExpired().catch(console.error);
-  
+  checkAndRelistExpired().catch(err => errorLog('Listing', 'Error in expiration monitor initial run', err));
+
   // Then run periodically
   const interval = setInterval(() => {
-    checkAndRelistExpired().catch(console.error);
+    checkAndRelistExpired().catch(err => errorLog('Listing', 'Error in expiration monitor periodic run', err));
   }, intervalMinutes * 60 * 1000);
-  
+
   return interval;
 }
 

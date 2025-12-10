@@ -1,16 +1,12 @@
-export const MAGICEDEN_CONTRACT_ADDRESS = "0x9A1D00bEd7CD04BCDA516d721A596eb22Aac6834";
-export const BASE_URL = "https://nfttools.pro/kong";
-export const NETWORK = "mainnet";
-
-export const SEAPORT_CONTRACT_ADDRESS = '0x0000000000000068f116a894984e2db1123eb395';
-export const OPENSEA_PROTOCOL_ADDRESS = SEAPORT_CONTRACT_ADDRESS;
-export const SEAPORT_SPENDER_ADDRESS = '0x1e0049783f008a0085193e00003d00cd54003c71';
+export const MAGICEDEN_CONTRACT_ADDRESS = "0x9A1D00bEd7CD04BCDA516d721A596eb22Aac6834"
+export const BASE_URL = "https://nfttools.pro/kong"
+export const NETWORK = "mainnet"
 
 export const domain = {
   name: 'Seaport',
   version: '1.6',
   chainId: '1',
-  verifyingContract: SEAPORT_CONTRACT_ADDRESS
+  verifyingContract: '0x0000000000000068f116a894984e2db1123eb395'
 };
 export const minABI = [
   {
@@ -132,6 +128,7 @@ export const SEAPORT_MIN_ABI = [
     "type": "function"
   }
 ]
+export const SEAPORT_CONTRACT_ADDRESS = '0x0000000000000068f116a894984e2db1123eb395';
 export const ERC20_MIN_ABI = [
   {
     "constant": false,

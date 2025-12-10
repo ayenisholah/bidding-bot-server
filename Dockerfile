@@ -1,8 +1,6 @@
 # Use an official Node.js runtime as the base image
 FROM node:20-alpine AS base
 
-ENV NODE_ENV=development
-
 # Check https://github.com/nodejs/docker-node/tree/b4117f9333da4138b03a546ec926ef50a31506c3#nodealpine
 
 # Install dependencies
@@ -18,8 +16,8 @@ WORKDIR /app
 COPY package*.json ./
 
 
-# Install dependencies including dev packages required for the build
-RUN npm ci --include=dev
+# Install dependencies
+RUN npm ci
 
 # Copy the rest of the application code
 COPY . .
@@ -34,8 +32,6 @@ RUN adduser -D -u 1001 app
 
 # Production image, copy all the files and run next
 FROM node:20-alpine AS runner
-
-ENV NODE_ENV=production
 
 WORKDIR /app
 

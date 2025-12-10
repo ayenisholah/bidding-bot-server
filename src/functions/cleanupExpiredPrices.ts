@@ -1,5 +1,5 @@
 import Listing from "../models/listing.model";
-import { logger, ErrorCategory } from "../utils/logger";
+import { errorLog } from "../utils/debug-file-logger";
 
 /**
  * Clean up expired final listing prices for all listings
@@ -39,7 +39,7 @@ export async function cleanupExpiredPrices(): Promise<void> {
           // This marketplace has expired
           updates[`finalListingPrice.${marketplace}`] = 1;
           hasExpired = true;
-          // console.log(`Removing expired ${marketplace} price for listing ${listing._id} (token ${listing.tokenId})`);
+          console.log(`Removing expired ${marketplace} price for listing ${listing._id} (token ${listing.tokenId})`);
         }
       }
       
@@ -52,14 +52,10 @@ export async function cleanupExpiredPrices(): Promise<void> {
       }
     }
     
-    // console.log(`Cleanup complete. Removed expired prices from ${cleanedCount} listings`);
+    console.log(`Cleanup complete. Removed expired prices from ${cleanedCount} listings`);
 
   } catch (error) {
-    console.error('Error cleaning up expired prices:', error);
-    await logger.logGeneralError('Failed to clean up expired prices', {
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
+    errorLog('Listing', 'Failed to clean up expired prices', error);
   }
 }
 
@@ -69,15 +65,15 @@ export async function cleanupExpiredPrices(): Promise<void> {
  */
 export function initializeExpiredPriceCleanup(intervalMinutes: number = 5): NodeJS.Timeout {
   // console.log(`Starting expired price cleanup monitor (checking every ${intervalMinutes} minutes)`);
-  
+
   // Run immediately on startup
-  cleanupExpiredPrices().catch(console.error);
-  
+  cleanupExpiredPrices().catch(err => errorLog('Listing', 'Error in expired price cleanup initial run', err));
+
   // Then run periodically
   const interval = setInterval(() => {
-    cleanupExpiredPrices().catch(console.error);
+    cleanupExpiredPrices().catch(err => errorLog('Listing', 'Error in expired price cleanup periodic run', err));
   }, intervalMinutes * 60 * 1000);
-  
+
   return interval;
 }
 

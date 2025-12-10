@@ -8,17 +8,23 @@ import { config } from "dotenv";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, trackBidRate, updateTaskCancellationPercentage } from "../..";
 import { DistributedLockManager } from '../../utils/lock';
 import Order from '../../models/order.model';
+import { orderCache } from '../../utils/order-cache';
 import { withRetry } from '../../utils/db-retry';
 import redisClient from '../../utils/redis';
 import axios from "axios";
 import { USDC, WETH } from "../../utils/currencies";
-import { BASE_URL, OPENSEA_PROTOCOL_ADDRESS } from "../../constants";
+import { BASE_URL } from "../../constants";
 import { fetchERC20Balance } from "../../utils/balance";
 import { convertBigNumbers } from "../../utils/bigNumberConverter";
-import { logger, DatabaseOperation, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
 import { InsufficientBalanceError, MinimumPriceError, RateLimitError, InvalidRequestError } from "../errors";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
+import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
+import { BoundedCache } from "../../utils/bounded-cache";
+import { apiDedup } from "../../utils/api-dedup";
 
+// Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
+// This prevents log flooding when multiple parallel jobs hit the same balance check
+const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000);
 
 const YELLOW = '\x1b[33m';
 const GREEN = '\x1b[32m';
@@ -104,7 +110,7 @@ const domainCache = {
   name: "Seaport",
   version: "1.6",
   chainId: 1,
-  verifyingContract: OPENSEA_PROTOCOL_ADDRESS
+  verifyingContract: "0x0000000000000068f116a894984e2db1123eb395"
 };
 
 const typesCache = {
@@ -171,16 +177,28 @@ export async function cleanupMagicEden() {
     orderBatchQueue.length = 0;
 
     try {
-      await withRetry(async () => {
+      const savedOrders = await withRetry(async () => {
         return await Order.insertMany(batch);
       });
+
+      // Sync cache: add saved orders to in-memory cache
+      if (savedOrders && Array.isArray(savedOrders)) {
+        for (const order of savedOrders) {
+          orderCache.set({
+            _id: order._id.toString(),
+            orderHash: order.orderHash,
+            expiresAt: new Date(order.expiresAt).getTime(),
+            offerPrice: order.offerPrice,
+            createdAt: new Date(order.createdAt).getTime(),
+            identifier: order.identifier,
+            marketplace: order.marketplace,
+            slug: order.slug,
+            taskId: order.taskId
+          });
+        }
+      }
     } catch (error) {
-      await logger.logDatabaseError('Failed to create orders during cleanup', {
-        databaseOperation: DatabaseOperation.CREATE,
-        collection_name: 'orders',
-        affectedRows: batch.length,
-        error: error as Error
-      });
+      errorLog('Database', `[MagicEden] Failed to create orders during cleanup | count=${batch.length}`, error);
     }
   }
 }
@@ -266,16 +284,11 @@ export async function bidOnMagiceden(
         maker,
         slug
       );
-      await logger.logMagicEdenBidError('Insufficient balance for bid', {
-        taskId,
-        walletAddress: maker,
-        collection: slug,
-        bidAmount: offerPriceEth,
-        currency: currencySymbol,
-        availableBalance: wethBalance,
-        requiredBalance: offerPriceEth,
-        error
-      });
+      // Only log once per wallet/collection combo within 5 seconds to prevent log flooding
+      const dedupeKey = `magiceden-${maker}-${slug}`;
+      if (insufficientBalanceLogCache.addIfNotExists(dedupeKey, Date.now())) {
+        errorLog('API', `[MagicEden] Insufficient balance for bid | taskId=${taskId} | wallet=${maker.slice(0, 10)}... | collection=${slug} | bidAmount=${offerPriceEth} ${currencySymbol} | available=${wethBalance}`, error);
+      }
       throw error;
     }
 
@@ -393,23 +406,32 @@ async function createBidData(
   try {
     const controller = new AbortController();
     addActiveRequest(taskId, controller);
+    const bidStartTime = Date.now();
 
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     try {
-      const { data: order } = await limiter.schedule(() => axiosInstance.post<CreateBidData>(
-        `${BASE_URL}/magiceden/v3/rtp/ethereum/execute/bid/v5`,
-        data,
-        {
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': API_KEY
-          },
-          signal: controller.signal,
-          timeout: 30000,
-          "axios-retry": { retries: 0 }
+      const { data: order } = await limiter.schedule(async () => {
+        // Re-check blacklist AFTER waiting in limiter queue
+        if (isTaskBlacklisted(taskId, 'magiceden')) {
+          debugLog('InFlightBid', `BUILD_BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=magiceden | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'magiceden' });
+          throw new Error('Task stopped while waiting in limiter queue');
         }
-      ));
+
+        return axiosInstance.post<CreateBidData>(
+          `${BASE_URL}/magiceden/v3/rtp/ethereum/execute/bid/v5`,
+          data,
+          {
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': API_KEY
+            },
+            signal: controller.signal,
+            timeout: 30000,
+            "axios-retry": { retries: 0 }
+          }
+        );
+      });
 
       clearTimeout(timeoutId);
 
@@ -431,17 +453,7 @@ async function createBidData(
     }
 
     const errorMessage = extractMagicEdenErrorMessage(error);
-    await logger.logMagicEdenBidError('Failed to create bid data on Magic Eden', {
-      taskId,
-      collection: slug,
-      tokenId: tokenId?.toString(),
-      traitType: trait?.attributeKey,
-      traitValue: trait?.attributeValue,
-      operation: 'create_bid_data',
-      error: error,
-      errorCode: error?.response?.status,
-      errorMessage: errorMessage
-    });
+    errorLog('API', `[MagicEden] Failed to create bid data | taskId=${taskId} | collection=${slug} | tokenId=${tokenId} | trait=${trait?.attributeKey}:${trait?.attributeValue} | status=${error?.response?.status} | ${errorMessage}`, error);
     throw error;
   }
 }
@@ -830,6 +842,7 @@ async function sendSignedOrderData(
 
     // check if the tasks is still active before you make the offer
     if (isTaskBlacklisted(taskId, 'magiceden')) {
+      debugLog('InFlightBid', `BLOCKED_EARLY | taskId=${taskId} | marketplace=magiceden | reason=blacklisted`, { taskId, marketplace: 'magiceden' });
       return;
     }
     const currentTask = activeTasks.get(taskId)
@@ -837,6 +850,9 @@ async function sendSignedOrderData(
 
     const controller = new AbortController();
     addActiveRequest(taskId, controller);
+    const bidStartTime = Date.now();
+
+    debugLog('InFlightBid', `ENTERING_LIMITER | taskId=${taskId} | marketplace=magiceden | collection=${slug} | timestamp=${bidStartTime}`, { taskId, marketplace: 'magiceden' });
 
     try {
 
@@ -844,8 +860,16 @@ async function sendSignedOrderData(
       // For collection offers (v4), signature is in the payload, not in query params
       url = (!trait && !tokenId) ? endpoint : `${endpoint}?signature=${encodeURIComponent(signature)}`;
 
-      const { data: offerResponse } = await limiter.schedule(() =>
-        axiosInstance.post(
+      const { data: offerResponse } = await limiter.schedule(async () => {
+        // Re-check blacklist AFTER waiting in limiter queue - this is the critical fix
+        if (isTaskBlacklisted(taskId, 'magiceden')) {
+          debugLog('InFlightBid', `BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=magiceden | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'magiceden' });
+          throw new Error('Task stopped while waiting in limiter queue');
+        }
+
+        debugLog('InFlightBid', `EXECUTING_REQUEST | taskId=${taskId} | marketplace=magiceden | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'magiceden' });
+
+        return axiosInstance.post(
           url,
           data,
           {
@@ -856,8 +880,8 @@ async function sendSignedOrderData(
             signal: controller.signal,
             "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
           }
-        )
-      );
+        );
+      });
       const responseTime = Date.now() - startTime;
       const successMessage = tokenId ? `🎉 TOKEN OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: ${slug.toUpperCase()} TOKEN: ${tokenId} ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} 🎉` :
         trait ?
@@ -891,17 +915,26 @@ async function sendSignedOrderData(
 
           if (batch.length > 0) {
             try {
-              await withRetry(async () => {
+              const savedOrders = await withRetry(async () => {
                 return await Order.insertMany(batch);
               });
+              // Update in-memory cache for all saved orders
+              for (const savedOrder of savedOrders) {
+                orderCache.set({
+                  _id: savedOrder._id.toString(),
+                  orderHash: savedOrder.orderHash,
+                  expiresAt: new Date(savedOrder.expiresAt).getTime(),
+                  offerPrice: savedOrder.offerPrice,
+                  createdAt: new Date(savedOrder.createdAt).getTime(),
+                  identifier: savedOrder.identifier,
+                  marketplace: savedOrder.marketplace,
+                  slug: savedOrder.slug,
+                  taskId: savedOrder.taskId
+                });
+              }
             } catch (error) {
               // Log error but don't fail the bid
-              await logger.logDatabaseError('Failed to batch create orders', {
-                databaseOperation: DatabaseOperation.CREATE,
-                collection_name: 'orders',
-                affectedRows: batch.length,
-                error: error as Error
-              });
+              errorLog('Database', `[MagicEden] Failed to batch create orders | count=${batch.length}`, error);
             }
           }
         }, 100); // Batch every 100ms
@@ -928,19 +961,7 @@ async function sendSignedOrderData(
     }
     // Enhanced error logging
     const errorMessage = extractMagicEdenErrorMessage(error);
-    await logger.logMagicEdenBidError('Failed to send signed order data to Magic Eden', {
-      taskId,
-      collection: slug,
-      tokenId: tokenId?.toString(),
-      traitType: trait?.attributeKey,
-      traitValue: trait?.attributeValue,
-      operation: 'send_signed_order',
-      bidAmount: offerPrice,
-      currency: currencySymbol,
-      error: error,
-      errorCode: error?.response?.status,
-      errorMessage: errorMessage
-    });
+    errorLog('API', `[MagicEden] Failed to send signed order | taskId=${taskId} | collection=${slug} | tokenId=${tokenId} | trait=${trait?.attributeKey}:${trait?.attributeValue} | bidAmount=${offerPrice} ${currencySymbol} | status=${error?.response?.status} | ${errorMessage}`, error);
     throw error
   }
 }
@@ -1091,15 +1112,7 @@ export async function submitSignedOrderData(
         };
       }
     } else {
-      await logger.logMagicEdenBidError('Sign data not found in order steps', {
-        taskId,
-        collection: slug,
-        operation: 'sign_order',
-        errorCode: 'MISSING_SIGN_DATA'
-      });
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('Sign data not found in order steps.');
-      }
+      errorLog('API', `[MagicEden] Sign data not found in order steps | taskId=${taskId} | collection=${slug}`);
     }
 
   }
@@ -1165,15 +1178,7 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
     }
     const signature = await signCancelOrder(taskId, cancelData, privateKey);
     if (!signature) {
-      await logger.logMagicEdenBidError('Failed to generate signature for cancel order', {
-        taskId,
-        operation: 'cancel_bid_signature',
-        orderIds: processedOrderIds,
-        errorCode: 'SIGNATURE_GENERATION_FAILED'
-      });
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('Failed to generate signature for cancel order');
-      }
+      errorLog('API', `[MagicEden] Failed to generate signature for cancel order | taskId=${taskId} | orderIds=${processedOrderIds.length}`);
       return;
     }
     const body = cancelStep?.items[0].data.post.body
@@ -1225,14 +1230,7 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
       return;
     }
 
-    await logger.logMagicEdenBidError('Failed to cancel MagicEden bid', {
-      taskId,
-      operation: 'cancel_bid',
-      orderIds: orderIds,
-      error: error,
-      errorCode: error?.response?.status,
-      errorMessage: errorMessage
-    });
+    errorLog('API', `[MagicEden] Failed to cancel bid | taskId=${taskId} | orderIds=${orderIds.length} | status=${error?.response?.status} | ${errorMessage}`, error);
     throw error;
   }
 }
@@ -1299,20 +1297,28 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
     return offers
   } else if (type === "TOKEN") {
     const tasks = [
-      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${identifier}&sortBy=price&status=active&excludeEOA=false&limit=2`, {
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY
-        }
-      })),
-
-      () => limiter.schedule(() =>
-        axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price&status=active&excludeEOA=false&limit=2`, {
+      () => apiDedup(
+        `magiceden-offers-token-${contractAddress}-${identifier}`,
+        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${identifier}&sortBy=price&status=active&excludeEOA=false&limit=2`, {
           headers: {
             'content-type': 'application/json',
             'x-api-key': API_KEY
           }
-        })
+        })),
+        { category: 'MagicEden' }
+      ),
+
+      () => apiDedup(
+        `magiceden-offers-collection-${contractAddress}`,
+        () => limiter.schedule(() =>
+          axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price&status=active&excludeEOA=false&limit=2`, {
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': API_KEY
+            }
+          })
+        ),
+        { category: 'MagicEden' }
       )
     ]
 
@@ -1352,22 +1358,30 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
 
   } else if (type === "TRAIT" && typeof identifier === "object" && identifier.attributeKey && identifier.attributeValue) {
     const tasks = [
-      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sources=magiceden.io&sources=magiceden.us&limit=2&sortBy=price`, {
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY
-        }
-      })),
+      () => apiDedup(
+        `magiceden-offers-collection-${contractAddress}`,
+        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sources=magiceden.io&sources=magiceden.us&limit=2&sortBy=price`, {
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': API_KEY
+          }
+        })),
+        { category: 'MagicEden' }
+      ),
       () => {
         const URL = `${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v5?collection=${contractAddress}&attribute%5B${identifier?.attributeKey}%5D=${identifier.attributeValue}&sortBy=price&status=active&limit=2`;
-        return limiter.schedule(() => axiosInstance.get<MagicEdenTraitOfferResponse>(
-          URL,
-          {
-            headers: {
-              'x-api-key': API_KEY,
+        return apiDedup(
+          `magiceden-offers-trait-${contractAddress}-${identifier.attributeKey}-${identifier.attributeValue}`,
+          () => limiter.schedule(() => axiosInstance.get<MagicEdenTraitOfferResponse>(
+            URL,
+            {
+              headers: {
+                'x-api-key': API_KEY,
+              }
             }
-          }
-        ));
+          )),
+          { category: 'MagicEden' }
+        );
       }
     ];
 
@@ -1419,18 +1433,7 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
     }
   } catch (error) {
     // Log cache error but continue to fetch fresh data
-    if (process.env.NODE_ENV !== 'production') {
-      console.error('Error reading MagicEden trait floor from cache:', error);
-    }
-    await logger.logDatabaseError('Error reading MagicEden trait floor from Redis cache', {
-      databaseOperation: DatabaseOperation.READ,
-      collection_name: 'redis_cache',
-      operation: 'get_magiceden_trait_floor',
-      contractAddress,
-      cacheKey,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
+    errorLog('Cache', `[MagicEden] Error reading trait floor from cache | contract=${contractAddress}`, error);
   }
 
   try {
@@ -1450,11 +1453,15 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
     queryParams.append("excludeSources[]", "nftx.io");
     queryParams.append("excludeSources[]", "sudoswap.xyz");
     const fullUrl = `${BASE_URL}/magiceden/v3/rtp/ethereum/tokens/v7?${queryParams.toString()}`;
-    const { data } = await limiter.schedule(() => axiosInstance.get<TokenDataList>(fullUrl, {
-      headers: {
-        'x-api-key': API_KEY,
-      },
-    }))
+    const { data } = await apiDedup(
+      `magiceden-trait-floor-${contractAddress}-${trait.attributeKey}-${trait.attributeValue}`,
+      () => limiter.schedule(() => axiosInstance.get<TokenDataList>(fullUrl, {
+        headers: {
+          'x-api-key': API_KEY,
+        },
+      })),
+      { category: 'MagicEden' }
+    )
     const floor = data?.tokens[0]?.market?.floorAsk?.price?.amount?.native
 
     // Cache the result
@@ -1464,40 +1471,19 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
         await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(floor));
       } catch (error) {
         // Log cache error but don't fail the request
-        if (process.env.NODE_ENV !== 'production') {
-          console.error('Error caching MagicEden trait floor:', error);
-        }
-        await logger.logDatabaseError('Error writing MagicEden trait floor to Redis cache', {
-          databaseOperation: DatabaseOperation.CREATE,
-          collection_name: 'redis_cache',
-          operation: 'set_magiceden_trait_floor',
-          contractAddress,
-          cacheKey,
-          error: error as Error,
-          errorMessage: error instanceof Error ? error.message : String(error)
-        });
+        errorLog('Cache', `[MagicEden] Error caching trait floor | contract=${contractAddress}`, error);
       }
     }
 
     return floor
   } catch (error) {
     if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('MagicEden trait floor error:', error instanceof Error ? error.message : String(error));
-      }
-      await logger.logMagicEdenCollectionError('Failed to fetch MagicEden trait floor', {
-        contractAddress,
-        traitKey: trait.attributeKey,
-        traitValue: trait.attributeValue,
-        operation: 'fetch_trait_floor',
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+      errorLog('API', `[MagicEden] Failed to fetch trait floor | contract=${contractAddress} | trait=${trait.attributeKey}:${trait.attributeValue}`, error);
     }
   }
 }
 
-export async function fetchMagicEdenCollectionStats(contractAddress: string) {
+export async function fetchMagicEdenCollectionStats(contractAddress: string): Promise<string> {
   const CACHE_TTL = 30; // 30 seconds cache
   const cacheKey = `magiceden:stats:${contractAddress}`;
   const lockKey = `stats:${contractAddress}`;
@@ -1510,18 +1496,7 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
       return JSON.parse(cachedStats);
     }
   } catch (error) {
-    await logger.logDatabaseError('Error reading MagicEden stats from Redis cache', {
-      databaseOperation: DatabaseOperation.READ,
-      collection_name: 'redis_cache',
-      operation: 'get_magiceden_stats',
-      contractAddress,
-      cacheKey,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
-    if (process.env.NODE_ENV !== 'production') {
-      console.error('Error reading from cache:', error);
-    }
+    errorLog('Cache', `[MagicEden] Error reading stats from cache | contract=${contractAddress}`, error);
   }
 
   // If not in cache, try to acquire lock and fetch
@@ -1534,59 +1509,41 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
         return JSON.parse(cachedStats);
       }
     } catch (error) {
-      await logger.logDatabaseError('Error reading MagicEden stats from Redis cache after lock', {
-        databaseOperation: DatabaseOperation.READ,
-        collection_name: 'redis_cache',
-        operation: 'get_magiceden_stats_after_lock',
-        contractAddress,
-        cacheKey,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('Error reading from cache after lock:', error);
-      }
+      errorLog('Cache', `[MagicEden] Error reading stats from cache after lock | contract=${contractAddress}`, error);
     }
 
     const queryParams = {
-      includeQuantity: true,
-      includeLastSale: true,
-      excludeSpam: true,
-      excludeBurnt: true,
-      collection: contractAddress,
-      sortBy: 'floorAskPrice',
-      sortDirection: 'asc',
+      includeCollectionStats: true,
+      includeMarket: true,
+      sortBy: 'price',
+      sortDir: 'asc',
       limit: 1,
-      includeAttributes: false,
+      chain: 'ethereum',
+      collectionId: contractAddress,
+      includeTopBid: false,
+      offset: 0
     };
 
-    const { data } = await limiter.schedule(() =>
-      axiosInstance.get(`${BASE_URL}/magiceden/v3/rtp/ethereum/tokens/v7`, {
-        params: queryParams,
-        headers: {
-          'x-api-key': API_KEY
-        }
-      })
+    const { data } = await apiDedup(
+      `magiceden-stats-${contractAddress.toLowerCase()}`,
+      () => limiter.schedule(() =>
+        axiosInstance.get(`${BASE_URL}/magiceden/v4/assets`, {
+          params: queryParams,
+          headers: {
+            'x-api-key': API_KEY
+          }
+        })
+      ),
+      { category: 'MagicEden' }
     );
-    const stats = data?.tokens[0]?.market?.floorAsk?.price?.amount?.decimal || 0;
+    const stats = data?.tokens[0]?.market?.floorAsk?.priceV2?.amount?.native || "0";
     // Cache the result
     if (stats !== undefined) {
       try {
         const redis = redisClient.getClient();
         await redis.set(cacheKey, JSON.stringify(stats), 'EX', CACHE_TTL);
       } catch (error) {
-        await logger.logDatabaseError('Error writing MagicEden stats to Redis cache', {
-          databaseOperation: DatabaseOperation.CREATE,
-          collection_name: 'redis_cache',
-          operation: 'set_magiceden_stats',
-          contractAddress,
-          cacheKey,
-          error: error as Error,
-          errorMessage: error instanceof Error ? error.message : String(error)
-        });
-        if (process.env.NODE_ENV !== 'production') {
-          console.error('Error writing to cache:', error);
-        }
+        errorLog('Cache', `[MagicEden] Error writing stats to cache | contract=${contractAddress}`, error);
       }
     }
 
@@ -1603,24 +1560,9 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string) {
         return JSON.parse(cachedStats);
       }
     } catch (error) {
-      await logger.logDatabaseError('Error reading from cache after lock failure', {
-        databaseOperation: DatabaseOperation.READ,
-        collection_name: 'redis_cache',
-        operation: 'get_magiceden_stats_retry',
-        contractAddress,
-        cacheKey,
-        error: error as Error,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('Error reading from cache after lock failure:', error);
-      }
+      errorLog('Cache', `[MagicEden] Error reading from cache after lock failure | contract=${contractAddress}`, error);
     }
-    await logger.logMagicEdenCollectionError('Failed to fetch collection stats', {
-      contractAddress,
-      operation: 'fetch_collection_stats',
-      errorCode: 'STATS_FETCH_FAILED'
-    });
+    errorLog('Collection', `[MagicEden] Failed to fetch collection stats | contract=${contractAddress}`);
     throw new Error('Failed to fetch collection stats');
   }
   return result;
@@ -1640,18 +1582,7 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
     }
   } catch (error) {
     // Log cache error but continue to fetch fresh data
-    if (process.env.NODE_ENV !== 'production') {
-      console.error('Error reading MagicEden tokens from cache:', error);
-    }
-    await logger.logDatabaseError('Error reading MagicEden tokens from Redis cache', {
-      databaseOperation: DatabaseOperation.READ,
-      collection_name: 'redis_cache',
-      operation: 'get_magiceden_tokens',
-      collectionId,
-      cacheKey,
-      error: error as Error,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
+    errorLog('Cache', `[MagicEden] Error reading tokens from cache | collectionId=${collectionId}`, error);
   }
 
   return await lockManager.withLock(
@@ -1666,6 +1597,7 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
         }
       } catch (error) {
         // Continue if cache check fails
+        errorLog('Cache', `[MagicEden] Cache check after lock failed | collectionId=${collectionId}`, error);
       }
 
       const params: any = {
@@ -1685,16 +1617,20 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
       let totalFetched = 0;
       if (!limit) return
       do {
-        const { data } = await limiter.schedule(() => axiosInstance.get<TokenResponseMagiceden>(
-          url,
-          {
-            headers: {
-              accept: "application/json",
-              "x-api-key": API_KEY,
-            },
-            params
-          }
-        ))
+        const { data } = await apiDedup(
+          `magiceden-tokens-${collectionId}-${params.continuation || 'initial'}`,
+          () => limiter.schedule(() => axiosInstance.get<TokenResponseMagiceden>(
+            url,
+            {
+              headers: {
+                accept: "application/json",
+                "x-api-key": API_KEY,
+              },
+              params
+            }
+          )),
+          { category: 'MagicEden' }
+        )
 
         const tokens = data?.tokens?.map((item: any) => +item?.token?.tokenId);
         allTokens.push(...tokens);
@@ -1710,18 +1646,7 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
         await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(result));
       } catch (error) {
         // Log cache error but don't fail the request
-        if (process.env.NODE_ENV !== 'production') {
-          console.error('Error caching MagicEden tokens:', error);
-        }
-        await logger.logDatabaseError('Error writing MagicEden tokens to Redis cache', {
-          databaseOperation: DatabaseOperation.CREATE,
-          collection_name: 'redis_cache',
-          operation: 'set_magiceden_tokens',
-          collectionId,
-          cacheKey,
-          error: error as Error,
-          errorMessage: error instanceof Error ? error.message : String(error)
-        });
+        errorLog('Cache', `[MagicEden] Error caching tokens | collectionId=${collectionId}`, error);
       }
 
       return result;
@@ -2242,11 +2167,7 @@ interface Media {
 export async function cancelMagicedenRequest(taskId: string): Promise<{ success: boolean; cancelledCount: number; error?: string }> {
   // Input validation
   if (!taskId || typeof taskId !== 'string') {
-    await logger.logWarning(ErrorCategory.MARKETPLACE, 'Invalid taskId provided to cancelMagicedenRequest', {
-      taskId,
-      marketplace: 'magiceden',
-      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION
-    });
+    warnLog('API', `[MagicEden] Invalid taskId provided to cancelMagicedenRequest | taskId=${taskId}`);
     return { success: false, cancelledCount: 0, error: 'Invalid taskId' };
   }
 
@@ -2274,12 +2195,7 @@ export async function cancelMagicedenRequest(taskId: string): Promise<{ success:
         await Promise.race([abortPromise, timeoutPromise]);
         cancelledCount++;
       } catch (error) {
-        await logger.logWarning(ErrorCategory.MARKETPLACE, 'Failed to abort MagicEden request controller', {
-          taskId,
-          marketplace: 'magiceden',
-          marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
-          errorMessage: error instanceof Error ? error.message : String(error)
-        });
+        warnLog('API', `[MagicEden] Failed to abort request controller | taskId=${taskId} | ${error instanceof Error ? error.message : String(error)}`);
       }
     }));
 
@@ -2287,12 +2203,7 @@ export async function cancelMagicedenRequest(taskId: string): Promise<{ success:
 
     return { success: true, cancelledCount };
   } catch (error) {
-    await logger.logMarketplaceError('Failed to cancel MagicEden requests', {
-      taskId,
-      marketplace: 'magiceden',
-      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
-      errorMessage: error instanceof Error ? error.message : String(error)
-    });
+    errorLog('API', `[MagicEden] Failed to cancel requests | taskId=${taskId} | ${error instanceof Error ? error.message : String(error)}`, error);
     return { success: false, cancelledCount: 0, error: error instanceof Error ? error.message : String(error) };
   }
 }

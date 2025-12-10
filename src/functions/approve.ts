@@ -1,5 +1,5 @@
 import { Contract, Wallet } from "ethers";
-import { logger } from "../utils/logger";
+import { errorLog, warnLog } from "../utils/debug-file-logger";
 import redisClient from "../utils/redis";
 
 const approveAbi = [
@@ -70,8 +70,8 @@ export async function approveNFT(
           // console.log(`NFT approval found in cache for ${nftAddress}`);
           return;
         }
-      } catch (cacheError) {
-        console.warn('Failed to check NFT approval cache:', cacheError);
+      } catch {
+        warnLog('Cache', 'Failed to check NFT approval cache');
         // Continue without cache if Redis fails
       }
     }
@@ -89,8 +89,8 @@ export async function approveNFT(
         try {
           await redis.set(cacheKey, 'true', 'EX', NFT_APPROVAL_CACHE_TTL);
           // console.log(`Cached NFT approval for ${nftAddress}`);
-        } catch (cacheError) {
-          console.warn('Failed to cache NFT approval:', cacheError);
+        } catch {
+          warnLog('Cache', 'Failed to cache NFT approval');
         }
       }
     } else {
@@ -107,22 +107,14 @@ export async function approveNFT(
         try {
           await redis.set(cacheKey, 'true', 'EX', NFT_APPROVAL_CACHE_TTL);
           // console.log(`Cached new NFT approval for ${nftAddress}`);
-        } catch (cacheError) {
-          console.warn('Failed to cache new NFT approval:', cacheError);
+        } catch {
+          warnLog('Cache', 'Failed to cache new NFT approval');
         }
       }
     }
   } catch (err: any) {
     // If approval fails, don't cache anything
-    await logger.logBlockchainError('Error approving NFT for marketplace', {
-      nftAddress,
-      walletAddress: wallet.address,
-      marketContractAddress,
-      operation: 'approve_nft',
-      error: err,
-      errorCode: err?.code,
-      errorMessage: err?.reason ?? err?.message
-    });
+    errorLog('Blockchain', `[approve.ts] Error approving NFT for marketplace | nftAddress=${nftAddress} | wallet=${wallet.address} | market=${marketContractAddress}`, err);
     // console.log(err?.reason ?? err?.message);
   }
 };
