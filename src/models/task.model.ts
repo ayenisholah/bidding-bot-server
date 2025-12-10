@@ -1,4 +1,5 @@
 import mongoose, { Schema, Model } from "mongoose";
+import { CHAIN_OPTIONS, DEFAULT_CHAIN, ChainValue } from "../utils/chains";
 
 export interface SelectedTraits {
   [marketplace: string]: {
@@ -15,6 +16,7 @@ export interface ITask {
     slug: string;
     contractAddress: string;
   };
+  chain: ChainValue;
   wallet: string;
   selectedMarketplaces: string[];
   running: boolean;
@@ -137,6 +139,12 @@ const TaskSchema: Schema = new Schema(
     contract: {
       slug: { type: String, required: true },
       contractAddress: { type: String, required: true },
+    },
+    chain: {
+      type: String,
+      enum: CHAIN_OPTIONS.map((option) => option.value),
+      default: DEFAULT_CHAIN,
+      required: true,
     },
     wallet: { type: String },
     // New field for wallet reference - will migrate to this

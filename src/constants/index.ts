@@ -129,6 +129,7 @@ export const SEAPORT_MIN_ABI = [
   }
 ]
 export const SEAPORT_CONTRACT_ADDRESS = '0x0000000000000068f116a894984e2db1123eb395';
+export const SEAPORT_SPENDER_ADDRESS = '0x1e0049783f008a0085193e00003d00cd54003c71';
 export const ERC20_MIN_ABI = [
   {
     "constant": false,
