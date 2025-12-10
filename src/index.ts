@@ -76,13 +76,13 @@ import { exportLogs, logsToCSV, logsToJSON, type LogFilters } from "./utils/log-
 import { listingPriceCache } from "./utils/listing-price-cache";
 import Listing from "./models/listing.model";
 
-// const MARKETPLACE_WS_URL = "wss://nfttools.-ws-proxy.nfttools.io";
+const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
 
 // Initialize process lifecycle logging immediately on startup
 logProcessStart();
 
 // Backward-compatible alias used across Blur codepaths
-const MARKETPLACE_WS_URL = "ws://localhost:8080";
+// const MARKETPLACE_WS_URL = "ws://localhost:8080";
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
@@ -4614,7 +4614,7 @@ async function handleTaskCleanup(taskId: string) {
   if (!task) return;
 
   const wallet = await walletCache.getWalletById(task.walletId);
-  const { currencySymbol } = await calculateBidPrice(task, 0, "opensea");
+  const { currencySymbol } = getCurrencyDetailsFromTask(task, "opensea");
 
   let totalCancellationJobs = 0;
 
@@ -7322,7 +7322,7 @@ async function updateTaskData(task: ITask) {
     )
   );
 
-  const { currencySymbol } = await calculateBidPrice(currentTask, 0, "magiceden")
+  const { currencySymbol } = getCurrencyDetailsFromTask(currentTask, "magiceden")
 
   traitsToRemove[task._id] = removedTraits.map((trait) => `${trait.type}:${trait.value}`)
   await cancelRemovedTraitBids(traitsToRemove[task._id], task._id, task.walletId, currencySymbol)
@@ -10001,13 +10001,7 @@ async function
 
 
     // Get currency symbol for OpenSea cancellations
-    let currencySymbol = 'WETH'; // Default to WETH
-    try {
-      const { currencySymbol: cs } = await calculateBidPrice(task, 0, "opensea");
-      currencySymbol = cs;
-    } catch (error) {
-      warnLog('Cancel', `Failed to get currency symbol for task=${taskId}, using default WETH`);
-    }
+    const { currencySymbol } = getCurrencyDetailsFromTask(task, "opensea");
 
     cancellationDebugLogger.log('STATE', 'Transitioning to CANCELLING', {
       totalOrderCount,
@@ -10897,13 +10891,8 @@ async function fetchAndCancelOpenseaBids(
 
     if (DEBUG) debugLog('OpenSea', `Starting bid cancellation for task ${taskId} (${contractSlug})`);
 
-    // Calculate bid price for currency symbol
-    const { currencySymbol } = await Promise.race([
-      calculateBidPrice(task, 0, "magiceden"),
-      new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Calculate bid price timeout')), 5000);
-      })
-    ]);
+    // Get currency symbol from task config
+    const { currencySymbol } = getCurrencyDetailsFromTask(task, "magiceden");
 
     // Implement pagination to handle large numbers of orders
     const BATCH_SIZE = 1000;
@@ -11528,7 +11517,7 @@ async function cancelMagicedenBids(orders: any[], walletId: string, taskId: stri
   }
 
   // Decrement the own bid counter by the number of cancelled orders
-  decrementOwnBidCounter('magiceden', ordersToCancel.length);
+  // decrementOwnBidCounter('magiceden', ordersToCancel.length);
 
 }
 
@@ -11589,7 +11578,7 @@ async function cancelOpenseaBids(orders: any[], walletId: string, taskId: string
   }
 
   // Decrement the own bid counter by the number of cancelled orders
-  decrementOwnBidCounter('opensea', orders.length);
+  // decrementOwnBidCounter('opensea', orders.length);
 }
 
 async function cancelOpenseaOrdersDirectly({
@@ -11638,7 +11627,7 @@ async function cancelOpenseaOrdersDirectly({
   if (completed > 0) {
     cancellationTracker.recordCompletion(taskId, completed, 'opensea');
     await updateTaskCancellationPercentage(taskId, undefined, 'opensea');
-    decrementOwnBidCounter('opensea', completed);
+    // decrementOwnBidCounter('opensea', completed);
   }
 
 }
@@ -11689,7 +11678,7 @@ async function cancelMagicEdenOrdersDirectly({
   if (completed > 0) {
     cancellationTracker.recordCompletion(taskId, completed, 'magiceden');
     await updateTaskCancellationPercentage(taskId, undefined, 'magiceden');
-    decrementOwnBidCounter('magiceden', completed);
+    // decrementOwnBidCounter('magiceden', completed);
   }
 }
 
@@ -11732,7 +11721,7 @@ async function cancelBlurOrdersDirectly({
   if (completed > 0) {
     cancellationTracker.recordCompletion(taskId, completed, 'blur');
     await updateTaskCancellationPercentage(taskId, undefined, 'blur');
-    decrementOwnBidCounter('blur', completed);
+    // decrementOwnBidCounter('blur', completed);
   }
 }
 
@@ -12627,7 +12616,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       return;
     }
 
-    const { currencyType, currency, decimal, currencySymbol } = await calculateBidPrice(currentTask, 0, "magiceden")
+    const { currencyType, currency, decimal, currencySymbol } = getCurrencyDetailsFromTask(currentTask, "magiceden")
     const usdcBid = currencySymbol.toLowerCase() === "usdc"
     const magicedenOutbidMargin = currentTask?.outbidOptions?.magicedenOutbidMargin || usdcBid ? 0.01 : 0.0001
 
@@ -13559,7 +13548,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
 
     let incomingBidAmount = 0
-    const { currencySymbol, decimal, currencyType } = await calculateBidPrice(currentTask, 0, "opensea")
+    const { currencySymbol, decimal, currencyType } = getCurrencyDetailsFromTask(currentTask, "opensea")
     let similarCurrency: boolean = false
 
     switch (currencyType.toLowerCase()) {
@@ -15966,12 +15955,9 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
         // Get collection details for creator fees
         let currency, collectionDetails;
         try {
-          const results = await Promise.all([
-            calculateBidPrice(currentTask, 0, "opensea"),
-            getCollectionDetails(currentTask.contract.slug, currentTask.contract.contractAddress)
-          ]);
-          currency = results[0].currency;
-          collectionDetails = results[1];
+          const currencyDetails = getCurrencyDetailsFromTask(currentTask, "opensea");
+          currency = currencyDetails.currency;
+          collectionDetails = await getCollectionDetails(currentTask.contract.slug, currentTask.contract.contractAddress);
 
           // Log full collection details object
         } catch (error) {
@@ -16780,7 +16766,7 @@ async function processBlurScheduledBid(task: ITask) {
 
 
 
-    const { currencySymbol } = await calculateBidPrice(currentTask, 0, "blur")
+    const { currencySymbol } = getCurrencyDetailsFromTask(currentTask, "blur");
 
     if (currencySymbol.toLowerCase() !== "weth") {
       if (DEBUG) {
@@ -16832,7 +16818,7 @@ async function processBlurScheduledBid(task: ITask) {
     }
 
     // Calculate minimum bid price to validate sufficient balance
-    const { minBidPriceEth } = await calculateBidPrice(currentTask, 0, "blur");
+    const minBidPriceEth = getMinBidPriceFromTask(currentTask, "blur");
 
     // Check if balance is insufficient or zero
     if (bethBalance <= 0 || bethBalance < minBidPriceEth) {
@@ -18623,7 +18609,7 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
     const cachedOrder = orderCache.get(taskId, MAGICEDEN.toLowerCase(), identifier);
     const orders = cachedOrder ? [cachedOrder] : [];
 
-    const { currencyType, currency } = await calculateBidPrice(currentTask, 0, "magiceden")
+    const { currencyType, currency } = getCurrencyDetailsFromTask(currentTask, "magiceden");
 
     // Fetch wallet and decrypt private key just before use
     const wallet = await walletCache.getWalletById(walletId);
@@ -18986,7 +18972,7 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
       }
     }
 
-    const { currency, decimal, currencySymbol } = await calculateBidPrice(currentTask, 0, "opensea");
+    const { currency, decimal, currencySymbol } = getCurrencyDetailsFromTask(currentTask, "opensea");
 
     const wallet = await walletCache.getWalletById(walletId);
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
@@ -19123,7 +19109,7 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
       });
     }
 
-    const { currency, decimal, currencySymbol } = await calculateBidPrice(currentTask, 0, "opensea");
+    const { currency, decimal, currencySymbol } = getCurrencyDetailsFromTask(currentTask, "opensea");
     const offerEth = Number(offerPrice) / Math.pow(10, decimal);
 
     if (DEBUG) {
@@ -19198,7 +19184,7 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
       }
     }
 
-    const { currency } = await calculateBidPrice(currentTask, 0, "magiceden")
+    const { currency } = getCurrencyDetailsFromTask(currentTask, "magiceden");
 
     const bidCount = getIncrementedBidCount(MAGICEDEN, slug, _id)
     // Fetch wallet and decrypt private key just before use
@@ -21125,7 +21111,7 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
       // Record completion since we've cleaned up our side
       cancellationTracker.recordCompletion(taskId, 1, 'opensea');
       await updateTaskCancellationPercentage(taskId, undefined, 'opensea');
-      decrementOwnBidCounter('opensea', 1);
+      // decrementOwnBidCounter('opensea', 1);
       // Log to cancellation debug file
       cancellationDebugLogger.logJobResult(orderId, 'skipped', 'wallet_not_found');
       return; // Don't throw - gracefully skip this order
@@ -21140,7 +21126,7 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
       await Order.deleteMany({ _id: orderKey });
       cancellationTracker.recordCompletion(taskId, 1, 'opensea');
       await updateTaskCancellationPercentage(taskId, undefined, 'opensea');
-      decrementOwnBidCounter('opensea', 1);
+      // decrementOwnBidCounter('opensea', 1);
       // Log to cancellation debug file
       cancellationDebugLogger.logJobResult(orderId, 'skipped', 'no_private_key');
       return; // Don't throw - gracefully skip this order
@@ -21165,7 +21151,7 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
     await updateTaskCancellationPercentage(taskId, undefined, 'opensea');
 
     // Decrement ownBidCounts for the cancelled order
-    decrementOwnBidCounter('opensea', 1);
+    // decrementOwnBidCounter('opensea', 1);
 
     // Decrement bidStats for UI display
     decrementBidCount('opensea', taskId);
@@ -21215,7 +21201,7 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
         const completedCount = batchSize || orderIds.length;
         cancellationTracker.recordCompletion(taskId, completedCount, 'magiceden');
         await updateTaskCancellationPercentage(taskId, undefined, 'magiceden');
-        decrementOwnBidCounter('magiceden', completedCount);
+        // decrementOwnBidCounter('magiceden', completedCount);
         orderKeys.forEach(orderKey => magicedenOrdersBeingCancelled.delete(orderKey));
         return; // Don't throw - gracefully skip these orders
       }
@@ -21230,7 +21216,7 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
         const completedCount = batchSize || orderIds.length;
         cancellationTracker.recordCompletion(taskId, completedCount, 'magiceden');
         await updateTaskCancellationPercentage(taskId, undefined, 'magiceden');
-        decrementOwnBidCounter('magiceden', completedCount);
+        // decrementOwnBidCounter('magiceden', completedCount);
         orderKeys.forEach(orderKey => magicedenOrdersBeingCancelled.delete(orderKey));
         return; // Don't throw - gracefully skip these orders
       }
@@ -21254,7 +21240,7 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
       await updateTaskCancellationPercentage(taskId, undefined, 'magiceden');
 
       // Decrement ownBidCounts for the cancelled orders
-      decrementOwnBidCounter('magiceden', completedCount);
+      // decrementOwnBidCounter('magiceden', completedCount);
 
       // Decrement bidStats for UI display (once per order in batch)
       for (let i = 0; i < completedCount; i++) {
@@ -21357,11 +21343,11 @@ async function validateBidCountInternal() {
     }
 
     // Decrement ownBidCounts for expired orders
-    for (const [marketplace, count] of Object.entries(expiredByMarketplace)) {
-      if (marketplace === 'opensea' || marketplace === 'magiceden') {
-        decrementOwnBidCounter(marketplace as 'opensea' | 'magiceden', count);
-      }
-    }
+    // for (const [marketplace, count] of Object.entries(expiredByMarketplace)) {
+    //   if (marketplace === 'opensea' || marketplace === 'magiceden') {
+    //     decrementOwnBidCounter(marketplace as 'opensea' | 'magiceden', count);
+    //   }
+    // }
 
     // Delete expired orders from database
     await Order.deleteMany({
@@ -24086,6 +24072,72 @@ export function getExpiry(bidDuration: { value: number; unit: string }) {
   return expiry
 }
 
+/**
+ * Extract currency details from task configuration without needing floor price.
+ * This avoids calling calculateBidPrice(task, 0) just to get currency info.
+ */
+function getCurrencyDetailsFromTask(
+  task: ITask,
+  marketplaceName: "opensea" | "magiceden" | "blur"
+): { currencyType: string; currency: string; decimal: number; currencySymbol: string } {
+  const isGeneralBidPrice = task.bidPriceType === "GENERAL_BID_PRICE";
+
+  const marketplaceBidPrice = marketplaceName.toLowerCase() === "blur"
+    ? task.blurBidPrice
+    : marketplaceName.toLowerCase() === "opensea"
+      ? task.openseaBidPrice
+      : marketplaceName.toLowerCase() === "magiceden"
+        ? task.magicEdenBidPrice
+        : task.bidPrice;
+
+  let bidPrice = isGeneralBidPrice ? task.bidPrice : marketplaceBidPrice;
+
+  if (task.bidPriceType === "MARKETPLACE_BID_PRICE" && !marketplaceBidPrice) {
+    bidPrice = task.bidPrice;
+  }
+
+  const currencyType = bidPrice.minType === "percentage" ? "eth" : bidPrice.minType;
+  const currency = currencyType === "usdc" ? USDC : WETH;
+  const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18;
+  const currencySymbol = currencyType === "usdc" ? "usdc" : "weth";
+
+  return { currencyType, currency, decimal, currencySymbol: currencySymbol.toUpperCase() };
+}
+
+/**
+ * Extract minimum bid price from task configuration for balance checking.
+ * For percentage-based pricing, returns 0 (any balance above 0 is sufficient for a 0% floor scenario).
+ * For absolute pricing (eth/usdc), returns the actual minimum from task config.
+ * This avoids calling calculateBidPrice(task, 0) just to get min bid price.
+ */
+function getMinBidPriceFromTask(
+  task: ITask,
+  marketplaceName: "opensea" | "magiceden" | "blur"
+): number {
+  const isGeneralBidPrice = task.bidPriceType === "GENERAL_BID_PRICE";
+
+  const marketplaceBidPrice = marketplaceName.toLowerCase() === "blur"
+    ? task.blurBidPrice
+    : marketplaceName.toLowerCase() === "opensea"
+      ? task.openseaBidPrice
+      : marketplaceName.toLowerCase() === "magiceden"
+        ? task.magicEdenBidPrice
+        : task.bidPrice;
+
+  let bidPrice = isGeneralBidPrice ? task.bidPrice : marketplaceBidPrice;
+
+  if (task.bidPriceType === "MARKETPLACE_BID_PRICE" && !marketplaceBidPrice) {
+    bidPrice = task.bidPrice;
+  }
+
+  // For percentage-based pricing, return 0 (floor price would be needed for actual calculation)
+  // For absolute pricing, return the actual minimum value
+  if (bidPrice.maxType === "percentage") {
+    return 0;
+  }
+  return bidPrice.min || task.bidPrice.min || 0;
+}
+
 async function calculateBidPrice(task: ITask, floorPrice: number, marketplaceName: "opensea" | "magiceden" | "blur"):
   Promise<{ offerPriceEth: number; maxBidPriceEth: number, minBidPriceEth: number, currencyType: string, currency: string, decimal: number, currencySymbol: string }> {
   const isGeneralBidPrice = task.bidPriceType === "GENERAL_BID_PRICE";
@@ -25199,24 +25251,24 @@ export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
 /**
  * Decrements memory-based counter for our own bids when we cancel a bid
  */
-export function decrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', count: number = 1, orderHash?: string) {
-  try {
-    // If order hash provided, remove it from processed set
-    if (orderHash) {
-      processedOwnBids.delete(orderHash);
-    }
-
-    // Update local ownBidCounts object for immediate broadcast
-    if (ownBidCounts[marketplace] && ownBidCounts[marketplace] > 0) {
-      ownBidCounts[marketplace] = Math.max(0, ownBidCounts[marketplace] - count);
-      return ownBidCounts[marketplace];
-    }
-    return 0;
-  } catch (error) {
-    errorLog('BidCounter', 'Failed to decrement own bid counter', error);
-  }
-  return 0;
-}
+// export function decrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', count: number = 1, orderHash?: string) {
+//   try {
+//     // If order hash provided, remove it from processed set
+//     if (orderHash) {
+//       processedOwnBids.delete(orderHash);
+//     }
+//
+//     // Update local ownBidCounts object for immediate broadcast
+//     if (ownBidCounts[marketplace] && ownBidCounts[marketplace] > 0) {
+//       ownBidCounts[marketplace] = Math.max(0, ownBidCounts[marketplace] - count);
+//       return ownBidCounts[marketplace];
+//     }
+//     return 0;
+//   } catch (error) {
+//     errorLog('BidCounter', 'Failed to decrement own bid counter', error);
+//   }
+//   return 0;
+// }
 
 
 /**
