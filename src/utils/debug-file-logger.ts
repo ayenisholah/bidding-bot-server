@@ -44,7 +44,7 @@ export interface ParsedLogLine {
 }
 
 // ============================================
-// LOG CATEGORY DEFINITIONS (23 categories)
+// LOG CATEGORY DEFINITIONS (24 categories)
 // ============================================
 
 export type LogCategory =
@@ -70,6 +70,7 @@ export type LogCategory =
   | 'health'
   | 'metadata'
   | 'stoptask'
+  | 'taskflow'  // Consolidated task lifecycle logging - ALL state transitions in one file
   | 'system';
 
 // Prefix → Category mapping (single point of configuration)
@@ -88,7 +89,7 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'TaskStatusTransition': 'task',
   'TaskStatus': 'task',
   'TaskStateUpdate': 'task',
-  'TaskRecovery': 'task',
+  'TaskRecovery': 'taskflow',  // Moved to taskflow for consolidated lifecycle logging
 
   // Scheduler (3)
   'TaskScheduler': 'scheduler',
@@ -112,9 +113,9 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'QueueClear': 'queue',
   'QueuePause': 'queue',
   'QueueResume': 'queue',
-  'QueueEvent': 'queue',
+  'QueueEvent': 'taskflow',      // Moved to taskflow for consolidated lifecycle logging
   'QueueDrainMonitor': 'queue',
-  'JobProcessing': 'queue',
+  'JobProcessing': 'taskflow',   // Moved to taskflow for consolidated lifecycle logging
   'JobRetry': 'queue',
   'Performance': 'queue',
   'BulkJobs': 'queue',
@@ -211,6 +212,19 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'UnhandledRejection': 'system',
   'UncaughtException': 'system',
   'TaskState': 'task',
+
+  // TaskFlow - Consolidated task lifecycle logging (all go to taskflow-YYYY-MM-DD.log)
+  // This category captures the ENTIRE task lifecycle for debugging stuck tasks
+  // NOTE: JobProcessing, QueueEvent, TaskRecovery moved above to 'taskflow' category
+  'TaskFlow': 'taskflow',           // General task flow events
+  'StateTransition': 'taskflow',    // Status changes: STARTED → RUNNING → COMPLETED → SCHEDULED
+  'ParentJob': 'taskflow',          // Parent job creation/tracking
+  'LoopScheduler': 'taskflow',      // scheduleNextLoop() - timer creation
+  'TaskCompletion': 'taskflow',     // checkTaskCompletionAndScheduleNext() - loop completion
+  'TaskProgress': 'taskflow',       // updateTaskRunningPercentage() - progress calculation
+  'RedisState': 'taskflow',         // persistTaskState() - Redis persistence
+  'LockOp': 'taskflow',             // Lock acquisition/release for counters
+  'TimerOp': 'taskflow',            // Timer creation/expiration/cleanup
 };
 
 // ============================================
@@ -379,7 +393,8 @@ export function getAllCategories(): LogCategory[] {
   return [
     'startup', 'task', 'scheduler', 'bidflow', 'counterbid', 'queue', 'worker',
     'database', 'redis', 'lock', 'blur', 'opensea', 'magiceden', 'api', 'websocket',
-    'listing', 'collection', 'balance', 'cancellation', 'health', 'metadata', 'stoptask', 'system'
+    'listing', 'collection', 'balance', 'cancellation', 'health', 'metadata', 'stoptask',
+    'taskflow', 'system'
   ];
 }
 
