@@ -2,11 +2,9 @@ import { BASE_URL } from '../constants';
 import { axiosInstance, limiter } from '../init';
 import { ethers } from 'ethers';
 import { errorLog, warnLog } from './debug-file-logger';
+import { apiDedup } from './api-dedup';
 
 const API_KEY = process.env.API_KEY as string;
-
-const RED = '\x1b[31m';
-const RESET = '\x1b[0m';
 
 interface NFTItem {
   contractAddress: string;
@@ -189,17 +187,21 @@ async function fetchNFTsFromOpenSea({ wallet, walletId }: { wallet: string; wall
     };
 
     try {
-      const { data } = await limiter.schedule(() =>
-        axiosInstance.post(
-          `${BASE_URL}/opensea/graphql`,
-          query,
-          {
-            headers: {
-              'content-type': 'application/json',
-              'x-api-key': API_KEY
+      const { data } = await apiDedup(
+        `opensea-nfts-${wallet.toLowerCase()}-${cursor || 'initial'}`,
+        () => limiter.schedule(() =>
+          axiosInstance.post(
+            `${BASE_URL}/opensea/graphql`,
+            query,
+            {
+              headers: {
+                'content-type': 'application/json',
+                'x-api-key': API_KEY
+              }
             }
-          }
-        )
+          )
+        ),
+        { category: 'OpenSea' }
       );
 
       if (data?.data?.profileItems?.items) {

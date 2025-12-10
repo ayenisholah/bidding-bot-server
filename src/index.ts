@@ -58,6 +58,7 @@ import { initializeExpiredPriceCleanup, stopExpiredPriceCleanup } from "./functi
 import { handleListingPriceUpdate } from "./functions/priceMonitor";
 import { createListing } from "./functions/list";
 import { BullMQErrorFormatter } from "./utils/bullmq-error-formatter";
+import { apiDedup } from "./utils/api-dedup";
 import { tradingDisabledCache } from "./utils/trading-disabled-cache";
 import { IListing } from "./types/listing.types";
 import { BoundedCache } from "./utils/bounded-cache";
@@ -75,13 +76,13 @@ import { exportLogs, logsToCSV, logsToJSON, type LogFilters } from "./utils/log-
 import { listingPriceCache } from "./utils/listing-price-cache";
 import Listing from "./models/listing.model";
 
-const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
+// const MARKETPLACE_WS_URL = "wss://nfttools.-ws-proxy.nfttools.io";
 
 // Initialize process lifecycle logging immediately on startup
 logProcessStart();
 
 // Backward-compatible alias used across Blur codepaths
-// const MARKETPLACE_WS_URL = "ws://localhost:8080";
+const MARKETPLACE_WS_URL = "ws://localhost:8080";
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
@@ -8803,7 +8804,7 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
       try {
         if (wsManager?.isConnected()) {
           const newTask = { ...task, running: true };
-          subscribeToCollections([newTask]);
+          await subscribeToCollections([newTask]);
         }
       } catch (error) {
         errorLog('CollectionSubscription', `Error subscribing to collection ${task.contract.slug}`, error);
@@ -9834,6 +9835,12 @@ async function
     if (!fetchResult) {
       cancellationDebugLogger.log('ORDERS_FETCH', 'Failed to acquire lock for order fetching', {});
       cancellationDebugLogger.finish({ status: 'FAILED', reason: 'lock_acquisition_failed' });
+
+      // Still unsubscribe from WebSocket on lock failure (full task stop only)
+      if (!marketplace) {
+        infoLog('StopTaskFlow', `LOCK_FAIL_UNSUBSCRIBE | taskId=${taskId} | slug=${task.contract.slug}`);
+        await unsubscribeFromCollection(task);
+      }
       return;
     }
 
@@ -9955,6 +9962,19 @@ async function
 
       // Broadcast the update
       broadcastBidRates();
+
+      // Unsubscribe from WebSocket before early return (when task is fully stopped with no orders)
+      if (!marketplace) {
+        infoLog('StopTaskFlow', `EARLY_EXIT_UNSUBSCRIBE | taskId=${taskId} | slug=${task.contract.slug} | reason=no_orders_to_cancel`);
+        const unsubscribeResult = await unsubscribeFromCollection(task);
+        if (!unsubscribeResult.success) {
+          errorLog('WebSocket', `Failed to unsubscribe from collection during early exit: taskId=${task._id}`, new Error(unsubscribeResult.error || 'Unknown error'));
+        } else if (unsubscribeResult.unsubscribed) {
+          infoLog('StopTaskFlow', `EARLY_EXIT_UNSUBSCRIBED | taskId=${taskId} | slug=${task.contract.slug}`);
+        } else {
+          infoLog('StopTaskFlow', `EARLY_EXIT_UNSUBSCRIBE_SKIPPED | taskId=${taskId} | slug=${task.contract.slug} | reason=other_tasks_active`);
+        }
+      }
 
       // Return early - task stays in STOPPED state
       return;
@@ -10215,12 +10235,21 @@ async function
     if (!statusResult.success) {
       warnLog('General', `Failed to update task status: taskId=${task._id}, marketplace=${marketplace || 'all'}`);
     }
-    if (task.outbidOptions.counterbid && !marketplace) {
+
+    // Debug log to verify this code path is reached
+    infoLog('StopTaskFlow', `UNSUBSCRIBE_SECTION_REACHED | taskId=${taskId} | slug=${task.contract.slug} | marketplace=${marketplace || 'none'} | willUnsubscribe=${!marketplace}`);
+
+    // Always unsubscribe from WebSocket when task is fully stopped (not marketplace-specific)
+    // This ensures the proxy knows to stop forwarding messages for this collection
+    if (!marketplace) {
+      infoLog('WebSocket', `[DEBUG-CLIENT] Task stop triggering unsubscribe | taskId=${taskId} | slug=${task.contract.slug}`);
       const unsubscribeResult = await unsubscribeFromCollection(task);
       if (!unsubscribeResult.success) {
         errorLog('WebSocket', `Failed to unsubscribe from collection during task stop: taskId=${task._id}`, new Error(unsubscribeResult.error || 'Unknown error'));
       } else if (unsubscribeResult.unsubscribed) {
-        debugLog('WebSocket', `Successfully unsubscribed from collection during task stop: ${task.contract.slug}`);
+        infoLog('WebSocket', `[DEBUG-CLIENT] Successfully unsubscribed during task stop | slug=${task.contract.slug}`);
+      } else {
+        infoLog('WebSocket', `[DEBUG-CLIENT] Unsubscribe skipped (other tasks still active) | slug=${task.contract.slug}`);
       }
     }
     const removalResult = await removePendingAndWaitingBids(task, marketplace);
@@ -12099,7 +12128,7 @@ async function _doConnect(): Promise<void> {
       // Subscribe only running tasks after connection
       const runningTasks = currentTasks.filter(task => task.running);
       if (runningTasks.length > 0) {
-        subscribeToCollections(runningTasks as unknown as ITask[]);
+        await subscribeToCollections(runningTasks as unknown as ITask[]);
 
         // Pre-warm caches for active tasks to improve counterbid performance
         runningTasks.forEach(async (task) => {
@@ -23922,16 +23951,20 @@ export async function fetchAddressBalances(walletAddress: string): Promise<Addre
       };
 
       try {
-        const { data } = await limiter.schedule({ priority: 0, id: `api-address-balances-${walletAddress}` }, () => axiosInstance.post<AddressBalancesResponse>(
-          `${BASE_URL}/opensea/graphql`,
-          query,
-          {
-            headers: {
-              'content-type': 'application/json',
-              'x-api-key': API_KEY
+        const { data } = await apiDedup(
+          `opensea-balances-${walletAddress.toLowerCase()}`,
+          () => limiter.schedule({ priority: 0 }, () => axiosInstance.post<AddressBalancesResponse>(
+            `${BASE_URL}/opensea/graphql`,
+            query,
+            {
+              headers: {
+                'content-type': 'application/json',
+                'x-api-key': API_KEY
+              }
             }
-          }
-        ));
+          )),
+          { category: 'AddressBalances' }
+        );
 
         // Cache the result
         if (redis) {
@@ -23955,9 +23988,13 @@ export async function fetchBlurTraits(
 ): Promise<IBlurData> {
   const url = `${BASE_URL}/blur/v1/traits/${contractAddress}`;
   try {
-    const { data } = await limiter.schedule({ priority: 0, id: `api-blur-traits-${contractAddress}` }, () => axiosInstance.get(url, {
-      headers: { "x-api-key": API_KEY },
-    }));
+    const { data } = await apiDedup(
+      `blur-traits-${contractAddress.toLowerCase()}`,
+      () => limiter.schedule({ priority: 0 }, () => axiosInstance.get(url, {
+        headers: { "x-api-key": API_KEY },
+      })),
+      { category: 'BlurTraits' }
+    );
     const traits = terraformBlurTraits(data.traits);
     return { traits, blurRaw: data };
   } catch (error) {
@@ -23974,12 +24011,16 @@ export async function fetchMagicEdenAttributes(
 ): Promise<MagicEdenData> {
   const url = `${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${collectionId}/attributes/all/v4`;
   try {
-    const { data } = await limiter.schedule({ priority: 0, id: `api-magiceden-attrs-${collectionId}` }, () => axiosInstance.get<MagicEdenTraits>(url, {
-      headers: {
-        accept: "application/json",
-        "x-api-key": API_KEY,
-      },
-    }));
+    const { data } = await apiDedup(
+      `magiceden-attrs-${collectionId.toLowerCase()}`,
+      () => limiter.schedule({ priority: 0 }, () => axiosInstance.get<MagicEdenTraits>(url, {
+        headers: {
+          accept: "application/json",
+          "x-api-key": API_KEY,
+        },
+      })),
+      { category: 'MagicEdenAttrs' }
+    );
 
     const traits = transformMagicEdenTraits(data);
     return { traits, magicedenRaw: data };
@@ -23996,21 +24037,29 @@ const fetchCollectionData = async (slug: string) => {
 
   const tasks = [
     () =>
-      limiter.schedule({ priority: 0, id: `api-collection-opensea-${slug}` }, () => axiosInstance.get<CollectionData>(apiUrl, {
-        headers: { "x-api-key": API_KEY },
-      })),
+      apiDedup(
+        `opensea-collection-${slug.toLowerCase()}`,
+        () => limiter.schedule({ priority: 0 }, () => axiosInstance.get<CollectionData>(apiUrl, {
+          headers: { "x-api-key": API_KEY },
+        })),
+        { category: 'Collection' }
+      ),
 
     () =>
-      limiter.schedule({ priority: 0, id: `api-collection-magiceden-${slug}` }, () => axiosInstance.post(
-        `${BASE_URL}/magiceden/v4/collections`,
-        {
-          chain: "ethereum",
-          collectionSlugs: [slug],
-        },
-        {
-          headers: { "x-api-key": API_KEY },
-        }
-      )),
+      apiDedup(
+        `magiceden-collection-${slug.toLowerCase()}`,
+        () => limiter.schedule({ priority: 0 }, () => axiosInstance.post(
+          `${BASE_URL}/magiceden/v4/collections`,
+          {
+            chain: "ethereum",
+            collectionSlugs: [slug],
+          },
+          {
+            headers: { "x-api-key": API_KEY },
+          }
+        )),
+        { category: 'Collection' }
+      ),
   ];
 
   const [collectionResult, magicEdenResult] = await pQueue.addAll(tasks, {
@@ -24345,11 +24394,12 @@ function getCollectionSubscriptionCount(slug: string): number {
   return collectionSubscriptionRefCount.get(slug)?.size || 0;
 }
 
-function subscribeToCollections(tasks: ITask[]) {
+async function subscribeToCollections(tasks: ITask[]) {
   try {
     // DEBUG: Log subscription attempt
+    const slugs = tasks.map(t => t.contract?.slug).filter(Boolean);
+    infoLog('WebSocket', `[DEBUG-CLIENT] subscribeToCollections called | taskCount=${tasks.length} | slugs=${slugs.join(',')}`);
     if (DEBUG) {
-      const slugs = tasks.map(t => t.contract?.slug).filter(Boolean);
       debugLog('WebSocket', `[Subscribe] Subscribing to ${tasks.length} collections: ${slugs.join(', ')}`);
     }
 
@@ -24371,7 +24421,7 @@ function subscribeToCollections(tasks: ITask[]) {
     const subscribedCollections = new Set<string>();
 
     // Handle subscriptions - subscribe all tasks by default
-    tasks.forEach((task) => {
+    for (const task of tasks) {
       try {
         const slug = task.contract.slug;
         const taskId = task._id.toString();
@@ -24380,7 +24430,7 @@ function subscribeToCollections(tasks: ITask[]) {
         if (subscribedCollections.has(slug)) {
           // Still track this task's subscription in ref count even if we've already sent WebSocket message
           addTaskToCollectionSubscription(slug, taskId);
-          return;
+          continue;
         }
 
         // Track this task's subscription and check if it's the first for this collection
@@ -24388,15 +24438,19 @@ function subscribeToCollections(tasks: ITask[]) {
 
         // Only send WebSocket subscription if this is the first task for this collection
         if (isFirstSubscriber) {
-          wsManager.sendMessage({
-            event: 'join_the_party',
-            clientId: clientId,
-            slug: slug,
-            contractAddress: task.contract.contractAddress
-          });
+          // Subscribe via wsManager.subscribe() to properly track in activeSubscriptions
+          // This ensures isSubscribedToSlug() returns true for received events
+          for (const marketplace of task.selectedMarketplaces) {
+            await wsManager.subscribe(
+              slug,
+              task.contract.contractAddress,
+              marketplace.toLowerCase(),
+              'bidding'
+            );
+          }
 
           if (DEBUG) {
-            debugLog('WebSocket', `[Subscribe] First task for ${slug}, sending WebSocket subscription`);
+            debugLog('WebSocket', `[Subscribe] First task for ${slug}, subscribed via wsManager`);
           }
         } else {
           if (DEBUG) {
@@ -24406,27 +24460,12 @@ function subscribeToCollections(tasks: ITask[]) {
 
         subscribedCollections.add(slug);
 
-
-        // Track subscriptions locally in activeSubscriptions for all marketplaces
-        const hasOpenseaMarketplace = task.selectedMarketplaces.map(marketplace => marketplace.toLowerCase()).includes("opensea");
-        const hasMagiceden = task.selectedMarketplaces.map(marketplace => marketplace.toLowerCase()).includes("magiceden");
-        const hasBlur = task.selectedMarketplaces.map(marketplace => marketplace.toLowerCase()).includes("blur");
-
-        if (hasOpenseaMarketplace) {
-          activeSubscriptions.add(`${task.contract.slug}:${OPENSEA}`);
-        }
-
-        if (hasMagiceden) {
-          activeSubscriptions.add(`${task.contract.slug}:${MAGICEDEN}`);
-        }
-
-        if (hasBlur) {
-          activeSubscriptions.add(`${task.contract.slug}:${BLUR}`);
-        }
+        // Note: activeSubscriptions tracking is now handled by wsManager.subscribe()
+        // No need for manual activeSubscriptions.add() calls here
       } catch (error) {
         errorLog('WebSocketSubscription', `Error subscribing to collection ${task.contract.slug}`, error);
       }
-    });
+    }
 
   } catch (error) {
     errorLog('WebSocketSubscription', 'Error subscribing to collections', error);
@@ -24588,16 +24627,20 @@ async function unsubscribeFromCollection(
 
     // Check if other tasks still need this subscription using reference counting
     const shouldUnsubscribe = removeTaskFromCollectionSubscription(contractSlug, taskId);
+    const remainingCount = getCollectionSubscriptionCount(contractSlug);
+
+    infoLog('WebSocket', `[DEBUG-CLIENT] unsubscribeFromCollection | slug=${contractSlug} | taskId=${taskId} | shouldUnsubscribe=${shouldUnsubscribe} | remainingTasks=${remainingCount}`);
 
     if (!shouldUnsubscribe) {
-      const remainingCount = getCollectionSubscriptionCount(contractSlug);
       if (DEBUG) {
         debugLog('WebSocket', `[Unsubscribe] Skipping unsubscribe for ${contractSlug} - ${remainingCount} other task(s) still active`);
       }
+      infoLog('WebSocket', `[DEBUG-CLIENT] Skipping upstream unsubscribe | slug=${contractSlug} | remainingTasks=${remainingCount}`);
       // Success but didn't actually unsubscribe - other tasks still need this collection
       return { success: true, unsubscribed: false };
     }
 
+    infoLog('WebSocket', `[DEBUG-CLIENT] Sending upstream unsubscribe | slug=${contractSlug} | contract=${contractAddress}`);
     if (DEBUG) {
       debugLog('WebSocket', `[Unsubscribe] Last task for ${contractSlug}, sending WebSocket unsubscribe`);
     }

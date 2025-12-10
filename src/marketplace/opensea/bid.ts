@@ -19,6 +19,7 @@ import { getCachedOrFetch, CACHE_TTL, CACHE_KEYS } from "../../utils/opensea-cac
 import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
 import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
+import { apiDedup } from "../../utils/api-dedup";
 import fs from 'fs';
 import path from 'path';
 import { MAX_PAIN_OVERRIDE_ADDRESS, MAX_PAIN_SLUG, MAX_PAIN_TOKEN_OVERRIDES } from "../../maxPainOverrides";
@@ -1074,14 +1075,18 @@ async function fetchMakerOfferForToken(
   };
 
   try {
-    const response = await limiter.schedule(() =>
-      axiosInstance.get(url, {
-        params,
-        headers: {
-          'accept': '*/*',
-          'x-api-key': API_KEY
-        }
-      })
+    const response = await apiDedup(
+      `opensea-maker-offer-${contractAddress.toLowerCase()}-${tokenId}-${makerAddress.toLowerCase()}`,
+      () => limiter.schedule(() =>
+        axiosInstance.get(url, {
+          params,
+          headers: {
+            'accept': '*/*',
+            'x-api-key': API_KEY
+          }
+        })
+      ),
+      { category: 'OpenSea' }
     );
 
     // Find active order from this maker
@@ -1485,16 +1490,20 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
       limit: 2
     }
   };
-  const itemOffers = await limiter.schedule(() => axiosInstance.post(
-    `${BASE_URL}/opensea/graphql`,
-    query,
-    {
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': API_KEY
+  const itemOffers = await apiDedup(
+    `opensea-item-offers-${contractAddress.toLowerCase()}-${tokenId}`,
+    () => limiter.schedule(() => axiosInstance.post(
+      `${BASE_URL}/opensea/graphql`,
+      query,
+      {
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY
+        }
       }
-    }
-  ));
+    )),
+    { category: 'OpenSea' }
+  );
 
   // Default offer structure
   const defaultOffer = {
@@ -1677,13 +1686,17 @@ export async function fetchOpenseaOffers(
       }
     };
 
-    const response = await limiter?.schedule(() =>
-      axiosInstance.post(`${BASE_URL}/opensea/graphql`, query, {
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY
-        }
-      })
+    const response = await apiDedup(
+      `opensea-collection-offers-${collectionSlug}`,
+      () => limiter?.schedule(() =>
+        axiosInstance.post(`${BASE_URL}/opensea/graphql`, query, {
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': API_KEY
+          }
+        })
+      ),
+      { category: 'OpenSea' }
     );
     // Parse the GraphQL response
     const offerAggregates = response.data?.data?.collectionOfferAggregates?.items || [];
@@ -1873,13 +1886,17 @@ export async function fetchOpenseaOffers(
           }
         };
 
-        return limiter?.schedule(() =>
-          axiosInstance.post(`${BASE_URL}/opensea/graphql`, collectionQuery, {
-            headers: {
-              'content-type': 'application/json',
-              'x-api-key': API_KEY
-            }
-          })
+        return apiDedup(
+          `opensea-trait-offers-collection-${collectionSlug}`,
+          () => limiter?.schedule(() =>
+            axiosInstance.post(`${BASE_URL}/opensea/graphql`, collectionQuery, {
+              headers: {
+                'content-type': 'application/json',
+                'x-api-key': API_KEY
+              }
+            })
+          ),
+          { category: 'OpenSea' }
         );
       },
 
@@ -2029,13 +2046,17 @@ export async function fetchOpenseaOffers(
           }
         };
 
-        return limiter?.schedule(() =>
-          axiosInstance.post(`${BASE_URL}/opensea/graphql`, traitQuery, {
-            headers: {
-              'content-type': 'application/json',
-              'x-api-key': API_KEY
-            }
-          })
+        return apiDedup(
+          `opensea-trait-offers-${collectionSlug}-${type}-${value}`,
+          () => limiter?.schedule(() =>
+            axiosInstance.post(`${BASE_URL}/opensea/graphql`, traitQuery, {
+              headers: {
+                'content-type': 'application/json',
+                'x-api-key': API_KEY
+              }
+            })
+          ),
+          { category: 'OpenSea' }
         );
       }
     ];

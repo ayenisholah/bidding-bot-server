@@ -6,6 +6,7 @@ import RarityCache from "../models/rarityCache.model";
 import { DistributedLockManager } from "../utils/lock";
 import redisClient from '../utils/redis';
 import { errorLog } from '../utils/debug-file-logger';
+import { apiDedup } from '../utils/api-dedup';
 
 const getRedis = () => redisClient.getClient();
 
@@ -61,14 +62,18 @@ async function fetchRarityTokensRecursive(
 
   try {
     // Use limiter to respect rate limits
-    const { data } = await limiter.schedule(() =>
-      axiosInstance.post<GraphQLResponse>(
-        `${BASE_URL}/opensea/graphql`,
-        payload,
-        {
-          headers: { "x-api-key": API_KEY },
-        }
-      )
+    const { data } = await apiDedup(
+      `opensea-rarity-${collectionSlug}-${rarityCategory}-${cursor || 'initial'}`,
+      () => limiter.schedule(() =>
+        axiosInstance.post<GraphQLResponse>(
+          `${BASE_URL}/opensea/graphql`,
+          payload,
+          {
+            headers: { "x-api-key": API_KEY },
+          }
+        )
+      ),
+      { category: 'Rarity' }
     );
 
     const items = data?.data?.collectionItems?.items || [];

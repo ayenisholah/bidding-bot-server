@@ -3,6 +3,7 @@ import { BASE_URL } from '../constants';
 import { API_KEY } from '..';
 import { tokenTraitCache, TokenTrait, TokenTraitData } from '../utils/token-trait-cache';
 import { errorLog, debugLog } from '../utils/debug-file-logger';
+import { apiDedup } from '../utils/api-dedup';
 
 // GraphQL queries
 // Note: Using /opensea/graphql endpoint instead of /graphql for OpenSea API compatibility
@@ -128,23 +129,27 @@ export async function fetchTokenMetadata(
   debugLog('Metadata', `fetchTokenMetadata ENTRY | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId}`);
 
   try {
-    const response = await limiter.schedule(() =>
-      axiosInstance.post<GraphQLTokenResponse>(
-        `${BASE_URL}/opensea/graphql`,
-        {
-          query: ItemAttributesQuery,
-          variables: {
-            contractAddress,
-            tokenId
+    const response = await apiDedup(
+      `opensea-token-metadata-${contractAddress.toLowerCase()}-${tokenId}`,
+      () => limiter.schedule(() =>
+        axiosInstance.post<GraphQLTokenResponse>(
+          `${BASE_URL}/opensea/graphql`,
+          {
+            query: ItemAttributesQuery,
+            variables: {
+              contractAddress,
+              tokenId
+            }
+          },
+          {
+            headers: {
+              'x-api-key': API_KEY,
+              'Content-Type': 'application/json'
+            }
           }
-        },
-        {
-          headers: {
-            'x-api-key': API_KEY,
-            'Content-Type': 'application/json'
-          }
-        }
-      )
+        )
+      ),
+      { category: 'Metadata' }
     );
 
     if (!response.data?.data?.contract?.nft) {
@@ -211,32 +216,36 @@ export async function getTraitFloorPrice(
 
   try {
     // Use the collection items query with trait filter
-    const response = await limiter.schedule(() =>
-      axiosInstance.post(
-        `${BASE_URL}/opensea/graphql`,
-        {
-          query: CollectionItemsListQuery,
-          variables: {
-            collections: [collectionSlug],
-            count: 1,
-            where: {
-              traits: [
-                {
-                  name: traitType,
-                  value: traitValue
-                }
-              ],
-              isListedForSale: true
+    const response = await apiDedup(
+      `opensea-trait-floor-${collectionSlug}-${traitType}-${traitValue}`,
+      () => limiter.schedule(() =>
+        axiosInstance.post(
+          `${BASE_URL}/opensea/graphql`,
+          {
+            query: CollectionItemsListQuery,
+            variables: {
+              collections: [collectionSlug],
+              count: 1,
+              where: {
+                traits: [
+                  {
+                    name: traitType,
+                    value: traitValue
+                  }
+                ],
+                isListedForSale: true
+              }
+            }
+          },
+          {
+            headers: {
+              'x-api-key': API_KEY,
+              'Content-Type': 'application/json'
             }
           }
-        },
-        {
-          headers: {
-            'x-api-key': API_KEY,
-            'Content-Type': 'application/json'
-          }
-        }
-      )
+        )
+      ),
+      { category: 'Metadata' }
     );
 
     const edges = response.data?.data?.collections?.edges;
@@ -285,32 +294,36 @@ export async function getTraitFilteredListings(
 }>> {
 
   try {
-    const response = await limiter.schedule(() =>
-      axiosInstance.post(
-        `${BASE_URL}/opensea/graphql`,
-        {
-          query: CollectionItemsListQuery,
-          variables: {
-            collections: [collectionSlug],
-            count: limit,
-            where: {
-              traits: [
-                {
-                  name: traitType,
-                  value: traitValue
-                }
-              ],
-              isListedForSale: true
+    const response = await apiDedup(
+      `opensea-trait-listings-${collectionSlug}-${traitType}-${traitValue}-${limit}`,
+      () => limiter.schedule(() =>
+        axiosInstance.post(
+          `${BASE_URL}/opensea/graphql`,
+          {
+            query: CollectionItemsListQuery,
+            variables: {
+              collections: [collectionSlug],
+              count: limit,
+              where: {
+                traits: [
+                  {
+                    name: traitType,
+                    value: traitValue
+                  }
+                ],
+                isListedForSale: true
+              }
+            }
+          },
+          {
+            headers: {
+              'x-api-key': API_KEY,
+              'Content-Type': 'application/json'
             }
           }
-        },
-        {
-          headers: {
-            'x-api-key': API_KEY,
-            'Content-Type': 'application/json'
-          }
-        }
-      )
+        )
+      ),
+      { category: 'Metadata' }
     );
 
     const edges = response.data?.data?.collections?.edges;

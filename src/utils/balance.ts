@@ -4,6 +4,7 @@ import { API_KEY } from "..";
 import { limiter, axiosInstance } from "../init";
 import { BASE_URL } from "../constants";
 import { warnLog, errorLog, debugLog } from "./debug-file-logger";
+import { apiDedup } from "./api-dedup";
 
 const getRedis = () => redisClient.getClient()
 
@@ -57,16 +58,20 @@ async function fetchWethBalanceGraphQL(walletAddress: string): Promise<number> {
     variables: { address: walletAddress }
   };
 
-  const { data } = await limiter.schedule({ priority: 0 }, () => axiosInstance.post<BalanceResponse>(
-    `${BASE_URL}/opensea/graphql`,
-    query,
-    {
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': API_KEY
+  const { data } = await apiDedup(
+    `opensea-weth-balance-${walletAddress.toLowerCase()}`,
+    () => limiter.schedule({ priority: 0 }, () => axiosInstance.post<BalanceResponse>(
+      `${BASE_URL}/opensea/graphql`,
+      query,
+      {
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY
+        }
       }
-    }
-  ));
+    )),
+    { category: 'Balance' }
+  );
 
   const wethBalance = data.data.addressBalances.find(
     (bal) =>

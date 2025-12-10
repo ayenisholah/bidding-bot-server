@@ -9,6 +9,7 @@ import { getOpenseaTraitFloor } from "../utils/opensea-trait-floor";
 import { axiosInstance, limiter } from "../init";
 import { API_KEY } from "../index";
 import { BASE_URL } from "../constants";
+import { apiDedup } from "../utils/api-dedup";
 
 // Store processed message IDs to prevent duplicate processing
 const processedMessageIds = new Set<string>();
@@ -44,9 +45,13 @@ async function getRealTimeListingPrice(listing: IListing): Promise<number | null
     // This is a simplified approach - ideally we'd have a token-specific endpoint
     const url = `${BASE_URL}/opensea/api/v2/listings/collection/${listing.contract.slug}/best?limit=50`;
     
-    const { data } = await limiter.schedule(() => axiosInstance.get(url, {
-      headers: { 'x-api-key': API_KEY }
-    }));
+    const { data } = await apiDedup(
+      `opensea-listings-${listing.contract.slug}`,
+      () => limiter.schedule(() => axiosInstance.get(url, {
+        headers: { 'x-api-key': API_KEY }
+      })),
+      { category: 'Listing' }
+    );
 
     if (!data?.listings || data.listings.length === 0) {
       return null;

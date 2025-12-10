@@ -15,6 +15,7 @@ import { InsufficientBalanceError, TransferRestrictedError, MinimumPriceError, I
 import { blurRateLimiter } from "../../utils/blur-rate-limiter";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
+import { apiDedup } from "../../utils/api-dedup";
 
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
 
@@ -1000,36 +1001,44 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
 
   if (criteriaType === 'TRAIT') {
     const tasks = [
-      () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
-        params: {
-          filters: JSON.stringify({
-            criteria: {
-              type: 'TRAIT',
-              value: criteriaValue
-            }
-          })
-        },
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY,
-        },
-        timeout: 60000
-      })),
-      () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
-        params: {
-          filters: JSON.stringify({
-            criteria: {
-              type: 'COLLECTION',
-              value: {}
-            }
-          })
-        },
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY,
-        },
-        timeout: 60000
-      }))
+      () => apiDedup(
+        `blur-bids-trait-${collection}-${JSON.stringify(criteriaValue)}`,
+        () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+          params: {
+            filters: JSON.stringify({
+              criteria: {
+                type: 'TRAIT',
+                value: criteriaValue
+              }
+            })
+          },
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': API_KEY,
+          },
+          timeout: 60000
+        })),
+        { category: 'Blur' }
+      ),
+      () => apiDedup(
+        `blur-bids-collection-${collection}`,
+        () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+          params: {
+            filters: JSON.stringify({
+              criteria: {
+                type: 'COLLECTION',
+                value: {}
+              }
+            })
+          },
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': API_KEY,
+          },
+          timeout: 60000
+        })),
+        { category: 'Blur' }
+      )
     ];
 
     const [traitResponse, collectionResponse] = await pQueue.addAll(tasks, {
@@ -1051,21 +1060,25 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
     return combinedData;
 
   } else {
-    const { data } = await limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
-      params: {
-        filters: JSON.stringify({
-          criteria: {
-            type: 'COLLECTION',
-            value: {}
-          }
-        })
-      },
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': API_KEY,
-      },
-      timeout: 60000
-    }));
+    const { data } = await apiDedup(
+      `blur-bids-collection-${collection}`,
+      () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+        params: {
+          filters: JSON.stringify({
+            criteria: {
+              type: 'COLLECTION',
+              value: {}
+            }
+          })
+        },
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY,
+        },
+        timeout: 60000
+      })),
+      { category: 'Blur' }
+    );
     return data;
   }
 
@@ -1102,13 +1115,17 @@ export async function fetchBlurCollectionStats(slug: string) {
 
     try {
       const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens`;
-      const { data } = await limiter.schedule({ priority: 0, id: `api-blur-stats-${slug}` }, () => axiosInstance.get<BlurTokensResponse>(url, {
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY,
-        },
-        timeout: 60000
-      }));
+      const { data } = await apiDedup(
+        `blur-stats-${slug}`,
+        () => limiter.schedule({ priority: 0 }, () => axiosInstance.get<BlurTokensResponse>(url, {
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': API_KEY,
+          },
+          timeout: 60000
+        })),
+        { category: 'Blur' }
+      );
 
       const listings = data?.tokens?.sort((a, b) => Number(a?.price?.amount) - Number(b?.price?.amount));
       const floor_price = Number(listings[0]?.price?.amount) || 0;
@@ -1142,13 +1159,17 @@ export async function fetchBlurTraitFloor(slug: string, trait: { type: string; v
     const encodedFilters = encodeURIComponent(JSON.stringify(filters));
 
     const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens?filters=${encodedFilters}`;
-    const { data } = await limiter.schedule(() =>
-      axiosInstance.get<BlurTokensResponse>(url, {
-        headers: {
-          'x-api-key': API_KEY,
-        },
-        timeout: 60000
-      })
+    const { data } = await apiDedup(
+      `blur-trait-floor-${slug}-${trait.type}-${trait.value}`,
+      () => limiter.schedule(() =>
+        axiosInstance.get<BlurTokensResponse>(url, {
+          headers: {
+            'x-api-key': API_KEY,
+          },
+          timeout: 60000
+        })
+      ),
+      { category: 'Blur' }
     );
     const amount = data?.tokens[0]?.price?.amount;
     return amount !== undefined ? Number(amount) : undefined

@@ -16,6 +16,7 @@ import { axiosInstance, limiter } from "../init";
 import { API_KEY } from "..";
 import { getOpenseaTraitFloor } from "../utils/opensea-trait-floor";
 import { getTraitFilteredListings } from "../functions/tokenMetadata";
+import { apiDedup } from "../utils/api-dedup";
 
 config()
 
@@ -40,7 +41,6 @@ export async function createListing(data: IListing) {
     let freshData = data;
     if (data._id && typeof data._id === 'object') {
       // console.log(BLUE + `[LISTING - Create] Step 1.1: Querying database for listing ${data._id}...` + RESET);
-      const queryStartTime = Date.now();
 
       try {
         const freshListing = await Promise.race([
@@ -50,8 +50,6 @@ export async function createListing(data: IListing) {
           )
         ]);
 
-        const queryTime = Date.now() - queryStartTime;
-        // console.log(GREEN + `[LISTING - Create] Step 1.2: Database query completed in ${queryTime}ms` + RESET);
 
         if (freshListing) {
           // Use the complete fresh listing data and merge with any passed data
@@ -61,9 +59,6 @@ export async function createListing(data: IListing) {
             finalListingPrice: freshListing.finalListingPrice || data.finalListingPrice,
             listingExpiration: freshListing.listingExpiration || data.listingExpiration,
           };
-          // console.log(GREEN + '[LISTING - Create] Step 1.3: Fresh data retrieved and merged' + RESET);
-        } else {
-          // console.log(YELLOW + '[LISTING - Create] Step 1.3: No fresh listing found in database' + RESET);
         }
       } catch (dbError) {
         errorLog('Database', `Database query failed during listing creation | listingId=${data._id} | tokenId=${data.tokenId}`, dbError);
@@ -243,8 +238,6 @@ export async function createListing(data: IListing) {
           const timeUntilExpiration = expirationTime - now;
 
           if (timeUntilExpiration > 60000) { // More than 1 minute remaining
-            const minutesRemaining = Math.floor(timeUntilExpiration / 60000);
-            // console.log(GREEN + `[LISTING - SKIPPED] Already have optimal listing on ${marketplace} with ${minutesRemaining} minutes remaining` + RESET);
             return;
           } else {
             // Less than 1 minute remaining, set price to floor
@@ -517,12 +510,16 @@ export async function shouldSkipListingWithUndercutCheck(
       }
     } else {
       // Get the best (floor) listings to analyze the market
-      const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
-        `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=3`, // Get top 3 to analyze
-        {
-          headers: { 'x-api-key': API_KEY }
-        }
-      ));
+      const { data } = await apiDedup(
+        `opensea-best-listings-${collectionSlug}`,
+        () => limiter.schedule(() => axiosInstance.get<ListingsResponse>(
+          `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=3`, // Get top 3 to analyze
+          {
+            headers: { 'x-api-key': API_KEY }
+          }
+        )),
+        { category: 'Listing' }
+      );
 
       if (!data?.listings || data.listings.length === 0) {
         // console.log(YELLOW + `[LISTING - Undercut Check] No listings found, should list` + RESET);
@@ -607,12 +604,16 @@ export async function checkIfWalletHasBestListing(
       return false;
     }
 
-    const { data } = await limiter.schedule(() => axiosInstance.get<ListingsResponse>(
-      `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
-      {
-        headers: { 'x-api-key': API_KEY }
-      }
-    ));
+    const { data } = await apiDedup(
+      `opensea-best-listing-${collectionSlug}`,
+      () => limiter.schedule(() => axiosInstance.get<ListingsResponse>(
+        `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`,
+        {
+          headers: { 'x-api-key': API_KEY }
+        }
+      )),
+      { category: 'Listing' }
+    );
 
     // Check if listings exist and extract offerer
     const offerer = data?.listings?.[0]?.protocol_data?.parameters?.offerer;

@@ -12,6 +12,7 @@ import { BASE_URL } from "../constants";
 import { ICollectionDetails, ICollectionFee } from "../types/collection.types";
 import { setOpenseaMarketplaceFee } from "../utils/marketplace-fee-cache";
 import { errorLog, warnLog, debugLog } from "../utils/debug-file-logger";
+import { apiDedup } from "../utils/api-dedup";
 
 const collectionCache: { [key: string]: ICollectionDetails } = {};
 const MAX_CACHE_ITEMS = 1000;
@@ -122,14 +123,18 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
         }
 
         const { data: collection } = await withTimeout(
-          limiter.schedule(() => axiosInstance.get(
-            `${BASE_URL}/opensea/api/v2/collections/${slug}`,
-            {
-              headers: {
-                'x-api-key': API_KEY
+          apiDedup(
+            `opensea-collection-details-${slug.toLowerCase()}`,
+            () => limiter.schedule(() => axiosInstance.get(
+              `${BASE_URL}/opensea/api/v2/collections/${slug}`,
+              {
+                headers: {
+                  'x-api-key': API_KEY
+                }
               }
-            }
-          )),
+            )),
+            { category: 'Collection' }
+          ),
           20000, // 20 second timeout for API call
           `OpenSea API call for ${slug}`
         );
@@ -304,13 +309,17 @@ export async function getOpenseaFloor(collectionSlug: string) {
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const { data } = await openseaCircuitBreaker.execute(() =>
-          limiter.schedule({ priority: 0, id: `api-opensea-floor-${collectionSlug}` }, () => axiosInstance.get<ListingsResponse>(
-            apiUrl,
-            {
-              headers: { 'x-api-key': API_KEY }
-            }
-          ))
+        const { data } = await apiDedup(
+          `opensea-floor-${collectionSlug}`,
+          () => openseaCircuitBreaker.execute(() =>
+            limiter.schedule({ priority: 0 }, () => axiosInstance.get<ListingsResponse>(
+              apiUrl,
+              {
+                headers: { 'x-api-key': API_KEY }
+              }
+            ))
+          ),
+          { category: 'Collection' }
         );
 
         // Check if listings exist and has item
@@ -616,12 +625,16 @@ export async function getAllFloorPrices(collectionSlug: string): Promise<{
 }
 
 export async function getOpenseaCollectionStats(collectionSlug: string) {
-  const { data } = await limiter.schedule(() => axiosInstance.get(
-    `${BASE_URL}/opensea/api/v2/collections/${collectionSlug}/stats`,
-    {
-      headers: { 'x-api-key': API_KEY }
-    }
-  ));
+  const { data } = await apiDedup(
+    `opensea-stats-${collectionSlug.toLowerCase()}`,
+    () => limiter.schedule(() => axiosInstance.get(
+      `${BASE_URL}/opensea/api/v2/collections/${collectionSlug}/stats`,
+      {
+        headers: { 'x-api-key': API_KEY }
+      }
+    )),
+    { category: 'Collection' }
+  );
   if (!data?.total) {
     warnLog('Collection', `[collection.ts] No listings found for collection | slug=${collectionSlug}`);
     throw new Error(`No listings found for collection ${collectionSlug}`);
@@ -645,13 +658,17 @@ export async function getCollectionEvents(
     eventTypes.forEach(type => params.append('event_type', type));
     params.append('limit', limit.toString());
 
-    const { data } = await limiter.schedule(() => axiosInstance.get<CollectionEventResponse>(
-      `${BASE_URL}/opensea/api/v2/events/collection/${collectionSlug}`,
-      {
-        params: params,
-        headers: { 'x-api-key': API_KEY }
-      }
-    ));
+    const { data } = await apiDedup(
+      `opensea-events-${collectionSlug}-${eventTypes.sort().join(',')}-${limit}`,
+      () => limiter.schedule(() => axiosInstance.get<CollectionEventResponse>(
+        `${BASE_URL}/opensea/api/v2/events/collection/${collectionSlug}`,
+        {
+          params: params,
+          headers: { 'x-api-key': API_KEY }
+        }
+      )),
+      { category: 'Collection' }
+    );
 
     // Cache for a short period (e.g., 30 seconds) since events data changes frequently
     if (getRedis()) {
@@ -753,11 +770,15 @@ async function fetchCollectionItemsRecursive(
   };
 
   try {
-    const { data } = await limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
-      headers: {
-        "x-api-key": API_KEY
-      },
-    }));
+    const { data } = await apiDedup(
+      `opensea-items-${variables.collectionSlug}-${cursor || 'initial'}`,
+      () => limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
+        headers: {
+          "x-api-key": API_KEY
+        },
+      })),
+      { category: 'Collection' }
+    );
 
     // Check if collectionItems is null
     if (!data?.data?.collectionItems) {
@@ -940,12 +961,16 @@ async function fetchOpenseaTraitsRecursive(
     }
   };
 
-  const { data } = await limiter.schedule({ priority: 0, id: `api-opensea-traits-${slug}` }, () =>
-    axiosInstance.post<TraitResponse>(`${BASE_URL}/opensea/graphql`, payload, {
-      headers: {
-        "x-api-key": API_KEY
-      },
-    })
+  const { data } = await apiDedup(
+    `opensea-traits-${slug}-${cursor || 'initial'}`,
+    () => limiter.schedule({ priority: 0 }, () =>
+      axiosInstance.post<TraitResponse>(`${BASE_URL}/opensea/graphql`, payload, {
+        headers: {
+          "x-api-key": API_KEY
+        },
+      })
+    ),
+    { category: 'Collection' }
   );
 
   if (!data?.data?.collectionBySlug?.attributes) {
@@ -1104,12 +1129,16 @@ export async function fetchOpenseaTraitFloors(
         }
       };
 
-      const { data } = await limiter.schedule(() =>
-        axiosInstance.post(`${BASE_URL}/opensea/graphql`, payload, {
-          headers: {
-            "x-api-key": API_KEY
-          },
-        })
+      const { data } = await apiDedup(
+        `opensea-trait-floors-${slug}-${hashData(traits)}`,
+        () => limiter.schedule(() =>
+          axiosInstance.post(`${BASE_URL}/opensea/graphql`, payload, {
+            headers: {
+              "x-api-key": API_KEY
+            },
+          })
+        ),
+        { category: 'Collection' }
       );
 
       // Extract unique trait floor prices from the response
@@ -1397,20 +1426,24 @@ export async function getCollectionTokenContractMap(collectionSlug: string): Pro
         }
       };
 
-      const { data } = await limiter.schedule((): Promise<AxiosResponse<CollectionTokensQueryResponse>> =>
-        axiosInstance.post<CollectionTokensQueryResponse>(
-          `${BASE_URL}/opensea/graphql`,
-          payload,
-          {
-            headers: {
-              'x-api-key': API_KEY
+      const response: AxiosResponse<CollectionTokensQueryResponse> = await apiDedup(
+        `opensea-token-contracts-${collectionSlug}-${cursor || 'initial'}`,
+        () => limiter.schedule(() =>
+          axiosInstance.post<CollectionTokensQueryResponse>(
+            `${BASE_URL}/opensea/graphql`,
+            payload,
+            {
+              headers: {
+                'x-api-key': API_KEY
+              }
             }
-          }
-        )
+          )
+        ),
+        { category: 'Collection' }
       );
 
-      const items: CollectionTokenItem[] = data?.data?.collectionItems?.items || [];
-      const nextCursor: string | null = data?.data?.collectionItems?.nextPageCursor ?? null;
+      const items: CollectionTokenItem[] = response?.data?.data?.collectionItems?.items || [];
+      const nextCursor: string | null = response?.data?.data?.collectionItems?.nextPageCursor ?? null;
 
       // Build the mapping
       for (const item of items) {

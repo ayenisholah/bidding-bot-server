@@ -20,6 +20,7 @@ import { InsufficientBalanceError, MinimumPriceError, RateLimitError, InvalidReq
 import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
 import { BoundedCache } from "../../utils/bounded-cache";
+import { apiDedup } from "../../utils/api-dedup";
 
 // Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
 // This prevents log flooding when multiple parallel jobs hit the same balance check
@@ -1296,20 +1297,28 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
     return offers
   } else if (type === "TOKEN") {
     const tasks = [
-      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${identifier}&sortBy=price&status=active&excludeEOA=false&limit=2`, {
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY
-        }
-      })),
-
-      () => limiter.schedule(() =>
-        axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price&status=active&excludeEOA=false&limit=2`, {
+      () => apiDedup(
+        `magiceden-offers-token-${contractAddress}-${identifier}`,
+        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${identifier}&sortBy=price&status=active&excludeEOA=false&limit=2`, {
           headers: {
             'content-type': 'application/json',
             'x-api-key': API_KEY
           }
-        })
+        })),
+        { category: 'MagicEden' }
+      ),
+
+      () => apiDedup(
+        `magiceden-offers-collection-${contractAddress}`,
+        () => limiter.schedule(() =>
+          axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price&status=active&excludeEOA=false&limit=2`, {
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': API_KEY
+            }
+          })
+        ),
+        { category: 'MagicEden' }
       )
     ]
 
@@ -1349,22 +1358,30 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
 
   } else if (type === "TRAIT" && typeof identifier === "object" && identifier.attributeKey && identifier.attributeValue) {
     const tasks = [
-      () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sources=magiceden.io&sources=magiceden.us&limit=2&sortBy=price`, {
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY
-        }
-      })),
+      () => apiDedup(
+        `magiceden-offers-collection-${contractAddress}`,
+        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sources=magiceden.io&sources=magiceden.us&limit=2&sortBy=price`, {
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': API_KEY
+          }
+        })),
+        { category: 'MagicEden' }
+      ),
       () => {
         const URL = `${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v5?collection=${contractAddress}&attribute%5B${identifier?.attributeKey}%5D=${identifier.attributeValue}&sortBy=price&status=active&limit=2`;
-        return limiter.schedule(() => axiosInstance.get<MagicEdenTraitOfferResponse>(
-          URL,
-          {
-            headers: {
-              'x-api-key': API_KEY,
+        return apiDedup(
+          `magiceden-offers-trait-${contractAddress}-${identifier.attributeKey}-${identifier.attributeValue}`,
+          () => limiter.schedule(() => axiosInstance.get<MagicEdenTraitOfferResponse>(
+            URL,
+            {
+              headers: {
+                'x-api-key': API_KEY,
+              }
             }
-          }
-        ));
+          )),
+          { category: 'MagicEden' }
+        );
       }
     ];
 
@@ -1436,11 +1453,15 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
     queryParams.append("excludeSources[]", "nftx.io");
     queryParams.append("excludeSources[]", "sudoswap.xyz");
     const fullUrl = `${BASE_URL}/magiceden/v3/rtp/ethereum/tokens/v7?${queryParams.toString()}`;
-    const { data } = await limiter.schedule(() => axiosInstance.get<TokenDataList>(fullUrl, {
-      headers: {
-        'x-api-key': API_KEY,
-      },
-    }))
+    const { data } = await apiDedup(
+      `magiceden-trait-floor-${contractAddress}-${trait.attributeKey}-${trait.attributeValue}`,
+      () => limiter.schedule(() => axiosInstance.get<TokenDataList>(fullUrl, {
+        headers: {
+          'x-api-key': API_KEY,
+        },
+      })),
+      { category: 'MagicEden' }
+    )
     const floor = data?.tokens[0]?.market?.floorAsk?.price?.amount?.native
 
     // Cache the result
@@ -1503,13 +1524,17 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string): Pr
       offset: 0
     };
 
-    const { data } = await limiter.schedule(() =>
-      axiosInstance.get(`${BASE_URL}/magiceden/v4/assets`, {
-        params: queryParams,
-        headers: {
-          'x-api-key': API_KEY
-        }
-      })
+    const { data } = await apiDedup(
+      `magiceden-stats-${contractAddress.toLowerCase()}`,
+      () => limiter.schedule(() =>
+        axiosInstance.get(`${BASE_URL}/magiceden/v4/assets`, {
+          params: queryParams,
+          headers: {
+            'x-api-key': API_KEY
+          }
+        })
+      ),
+      { category: 'MagicEden' }
     );
     const stats = data?.tokens[0]?.market?.floorAsk?.priceV2?.amount?.native || "0";
     // Cache the result
@@ -1592,16 +1617,20 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
       let totalFetched = 0;
       if (!limit) return
       do {
-        const { data } = await limiter.schedule(() => axiosInstance.get<TokenResponseMagiceden>(
-          url,
-          {
-            headers: {
-              accept: "application/json",
-              "x-api-key": API_KEY,
-            },
-            params
-          }
-        ))
+        const { data } = await apiDedup(
+          `magiceden-tokens-${collectionId}-${params.continuation || 'initial'}`,
+          () => limiter.schedule(() => axiosInstance.get<TokenResponseMagiceden>(
+            url,
+            {
+              headers: {
+                accept: "application/json",
+                "x-api-key": API_KEY,
+              },
+              params
+            }
+          )),
+          { category: 'MagicEden' }
+        )
 
         const tokens = data?.tokens?.map((item: any) => +item?.token?.tokenId);
         allTokens.push(...tokens);
