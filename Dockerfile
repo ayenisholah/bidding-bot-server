@@ -50,10 +50,10 @@ COPY --from=base /app/dist ./dist
 COPY --from=base /app/src ./src
 
 
-# Create data directory and set proper permissions
-RUN mkdir -p /app/data && \
-    chown -R app:app /app /app/data && \
-    chmod 755 /app/data
+# Create data and debug-logs directories and set proper permissions
+RUN mkdir -p /app/data /app/debug-logs && \
+    chown -R app:app /app /app/data /app/debug-logs && \
+    chmod 755 /app/data /app/debug-logs
 
 USER app
 

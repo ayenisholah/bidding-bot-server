@@ -24144,7 +24144,8 @@ app.get('/api/debug-logs/export', async (req, res) => {
 // Download all debug logs as ZIP
 app.get('/api/debug-logs/download', async (_req, res) => {
   try {
-    const logDir = path.join(__dirname, '..', 'debug-logs');
+    // Use same path resolution as debug-file-logger.ts for consistency
+    const logDir = path.resolve(process.cwd(), 'debug-logs');
 
     // Check if directory exists
     if (!fs.existsSync(logDir)) {
