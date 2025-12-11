@@ -3,31 +3,24 @@
 import { ethers, Wallet } from "ethers";
 import { BASE_URL, SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
-import { activeTasks, API_KEY, decrementBidCount, pQueue, trackBidRate, updateTaskCancellationPercentage, updateTopOfferAfterOurBid } from "../..";
-import { getCollectionDetails, getCollectionTokenContractMap } from "../../functions/collection";
+import { activeTasks, API_KEY, decrementBidCount, pQueue, trackBidRate, updateTaskCancellationPercentage } from "../..";
 import { config } from "dotenv";
 import axios from "axios";
 import Order from '../../models/order.model';
-import { orderCache } from '../../utils/order-cache';
 import { withRetry } from '../../utils/db-retry'
 import { USDC, WETH } from "../../utils/currencies";
 import { CollectionItemsListQuery } from "../../queries";
-import { CollectionItemsQueryVariables, CollectionItemsResponse } from "../../functions";
+import { CollectionItemsQueryVariables, CollectionItemsResponse, getCollectionDetails, getCollectionTokenContractMap } from "../../functions";
 import { fetchERC20Balance } from "../../utils/balance";
+import { logger, ErrorCategory, MarketplaceSubCategory } from "../../utils/logger";
 import { InsufficientBalanceError } from "../errors";
 import { getCachedOrFetch, CACHE_TTL, CACHE_KEYS } from "../../utils/opensea-cache";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
-import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
-import { apiDedup } from "../../utils/api-dedup";
 import fs from 'fs';
 import path from 'path';
 import { MAX_PAIN_OVERRIDE_ADDRESS, MAX_PAIN_SLUG, MAX_PAIN_TOKEN_OVERRIDES } from "../../maxPainOverrides";
-import { BoundedCache } from "../../utils/bounded-cache";
-
-// Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
-// This prevents log flooding when multiple parallel jobs hit the same balance check
-const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000);
+import { ChainValue, DEFAULT_CHAIN, getChainConfig, getCurrencyAddress, getMarketplaceAddress, getMarketplaceChainIdentifier, getProviderForChain } from "../../utils/chains";
 
 // Performance timing utilitie
 // Ensure logs directory exists
@@ -80,41 +73,148 @@ function extractOpenseaErrorMessage(error: any): string {
 config()
 
 // Pre-calculated constants for better performance
-const OPENSEA_ITEM_ZONE = "0x000056f7000000ece9003ca63978907a00ffd100"
-const OPENSEA_COLLECTION_ZONE = "0x004C00500000aD104D7DBd00e3ae0A5C00560C00"
-const ZONE_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000"
-const CONDUIT_KEY = "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000"
-const SEAPORT_1_6 = "0x0000000000000068f116a894984e2db1123eb395"
-const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1f0df003000390027140000faa719"
-const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
-const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
-const SEAPORT_CONTRACT = new ethers.Contract(SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI, provider);
+const OPENSEA_ITEM_ZONE = "0x000056f7000000ece9003ca63978907a00ffd100";
+const OPENSEA_COLLECTION_ZONE = "0x004C00500000aD104D7DBd00e3ae0A5C00560C00";
+const ZONE_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000";
+const CONDUIT_KEY = (
+  "0x0000007b02230091" +
+  "a7ed01230072f700" +
+  "6a004d60a8d4e71d" +
+  "599b8104250f0000"
+);
+const ABSTRACT_CONDUIT_KEY = "0x61159fefdfada89302ed55f8b9e89e2d67d8258712b3a3f89aa88525877f1d5e";
+
+function getConduitKey(chain: ChainValue): string {
+  return chain === "abstract" ? ABSTRACT_CONDUIT_KEY : CONDUIT_KEY;
+}
+const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1F0DF003000390027140000fAa719";
+
+
+const contractMapCache = new Map<string, Record<string, string>>();
+const multiContractSlugCache = new Map<string, boolean>();
+const contractMapPromises = new Map<string, Promise<Record<string, string>>>();
+
+export async function resolveContractAddress(collectionSlug: string | undefined, tokenId: string | number, fallbackAddress: string) {
+  if (!collectionSlug) {
+    return fallbackAddress;
+  }
+
+  const normalizedSlug = collectionSlug.toLowerCase();
+  const tokenKey = tokenId.toString();
+
+  if (normalizedSlug === MAX_PAIN_SLUG && MAX_PAIN_TOKEN_OVERRIDES.has(tokenKey)) {
+    return MAX_PAIN_OVERRIDE_ADDRESS;
+  }
+
+  try {
+    if (!multiContractSlugCache.has(normalizedSlug)) {
+      const details = await getCollectionDetails(normalizedSlug);
+      const contractAddresses = Array.isArray(details?.contracts)
+        ? details.contracts
+            .map((contract: { address?: string | null }) => contract?.address?.toLowerCase())
+            .filter((address: string | null | undefined): address is string => Boolean(address))
+        : [];
+
+      multiContractSlugCache.set(normalizedSlug, new Set(contractAddresses).size > 1);
+    }
+
+    if (!multiContractSlugCache.get(normalizedSlug)) {
+      return fallbackAddress;
+    }
+
+    if (!contractMapCache.has(normalizedSlug)) {
+      let pendingPromise = contractMapPromises.get(normalizedSlug);
+      if (!pendingPromise) {
+        pendingPromise = getCollectionTokenContractMap(normalizedSlug)
+          .then((map) => {
+            contractMapCache.set(normalizedSlug, map);
+            contractMapPromises.delete(normalizedSlug);
+            return map;
+          })
+          .catch((error) => {
+            contractMapPromises.delete(normalizedSlug);
+            throw error;
+          });
+        contractMapPromises.set(normalizedSlug, pendingPromise);
+      }
+      await pendingPromise;
+    }
+
+    const contractMap = contractMapCache.get(normalizedSlug) || {};
+    return contractMap[tokenKey] ?? fallbackAddress;
+  } catch {
+    return fallbackAddress;
+  }
+}
 
 // Pre-calculated values for optimization
 const DIVIDER = 10000n;
 const BASIS_MAP: { [key: number]: number } = { 2: 1e16, 3: 1e15, 4: 1e14 };
 
-// Wallet cache to avoid recreating wallet instances
-const walletCache = new Map<string, Wallet>();
-function getWallet(privateKey: string): Wallet {
-  if (!walletCache.has(privateKey)) {
-    walletCache.set(privateKey, new Wallet(privateKey, provider));
-  }
-  return walletCache.get(privateKey)!;
+const providerCache = new Map<ChainValue, ethers.JsonRpcProvider>();
+const seaportContractCache = new Map<ChainValue, ethers.Contract>();
+const walletSignerCache = new Map<string, Wallet>();
+const domainCache = new Map<ChainValue, { name: string; version: string; chainId: string; verifyingContract: string }>();
+
+function resolveChainValue(chain?: ChainValue | null): ChainValue {
+  const config = getChainConfig(chain ?? DEFAULT_CHAIN);
+  return config.value;
 }
 
-// Caching infrastructure for multi-contract collection resolution
-const multiContractSlugCache = new Map<string, boolean>();
-const contractMapCache = new Map<string, Record<string, string>>();
-const contractMapPromises = new Map<string, Promise<Record<string, string>>>();
+function getSeaportAddress(chain: ChainValue): string {
+  return getMarketplaceAddress(chain, 'opensea') ?? SEAPORT_CONTRACT_ADDRESS;
+}
 
-const domain = {
-  name: 'Seaport',
-  version: '1.6',
-  chainId: '1',
-  verifyingContract: SEAPORT_1_6
-};
+function getOpenseaProvider(chain?: ChainValue | null): ethers.JsonRpcProvider {
+  const resolved = resolveChainValue(chain);
+  if (!providerCache.has(resolved)) {
+    providerCache.set(resolved, getProviderForChain(resolved));
+  }
+  return providerCache.get(resolved)!;
+}
 
+function getSeaportContract(chain?: ChainValue | null): ethers.Contract {
+  const resolved = resolveChainValue(chain);
+  if (!seaportContractCache.has(resolved)) {
+    const provider = getOpenseaProvider(resolved);
+    const seaportAddress = getSeaportAddress(resolved);
+    seaportContractCache.set(resolved, new ethers.Contract(seaportAddress, SEAPORT_MIN_ABI, provider));
+  }
+  return seaportContractCache.get(resolved)!;
+}
+
+function getSeaportDomain(chain?: ChainValue | null, verifyingContract?: string) {
+  const resolved = resolveChainValue(chain);
+  if (!domainCache.has(resolved)) {
+    const config = getChainConfig(resolved);
+    const contractAddress = verifyingContract ?? getSeaportAddress(resolved);
+    domainCache.set(resolved, {
+      name: 'Seaport',
+      version: '1.6',
+      chainId: config.provider.chainId.toString(),
+      verifyingContract: contractAddress
+    });
+  }
+
+  const domain = domainCache.get(resolved)!;
+  if (verifyingContract && domain.verifyingContract.toLowerCase() !== verifyingContract.toLowerCase()) {
+    return {
+      ...domain,
+      verifyingContract
+    };
+  }
+
+  return domain;
+}
+
+function getWallet(privateKey: string, chain?: ChainValue | null): Wallet {
+  const resolved = resolveChainValue(chain);
+  const cacheKey = `${resolved}:${privateKey}`;
+  if (!walletSignerCache.has(cacheKey)) {
+    walletSignerCache.set(cacheKey, new Wallet(privateKey, getOpenseaProvider(resolved)));
+  }
+  return walletSignerCache.get(cacheKey)!;
+}
 const types = {
   OrderComponents: [
     {
@@ -214,89 +314,7 @@ const types = {
 
 const activeRequests = new Map<string, AbortController[]>();
 
-/**
- * Resolves the correct contract address for a given token ID in a collection.
- *
- * Priority:
- * 1. Max Pain override (if applicable)
- * 2. Multi-contract collection mapping (cached)
- * 3. Fallback to provided address
- *
- * @param collectionSlug - The OpenSea collection slug
- * @param tokenId - The token ID to resolve
- * @param fallbackAddress - Default contract address to use
- * @returns The resolved contract address
- */
-export async function resolveContractAddress(
-  collectionSlug: string | undefined,
-  tokenId: string | number,
-  fallbackAddress: string
-): Promise<string> {
-  // Early return if no slug provided
-  if (!collectionSlug) {
-    return fallbackAddress;
-  }
-
-  const normalizedSlug = collectionSlug.toLowerCase();
-  const tokenKey = tokenId.toString();
-
-  // STEP 1: Check Max Pain Override (Priority: Highest)
-  // This check happens FIRST for optimal performance
-  if (normalizedSlug === MAX_PAIN_SLUG && MAX_PAIN_TOKEN_OVERRIDES.has(tokenKey)) {
-    return MAX_PAIN_OVERRIDE_ADDRESS;
-  }
-
-  try {
-    // STEP 2: Check if collection has multiple contracts
-    if (!multiContractSlugCache.has(normalizedSlug)) {
-      const details = await getCollectionDetails(normalizedSlug);
-      const contractAddresses = Array.isArray(details?.contracts)
-        ? details.contracts
-            .map((contract: { address?: string | null }) => contract?.address?.toLowerCase())
-            .filter((address: string | null | undefined): address is string => Boolean(address))
-        : [];
-
-      multiContractSlugCache.set(normalizedSlug, new Set(contractAddresses).size > 1);
-    }
-
-    // STEP 3: If not a multi-contract collection, use fallback
-    if (!multiContractSlugCache.get(normalizedSlug)) {
-      return fallbackAddress;
-    }
-
-    // STEP 4: Fetch token-to-contract mapping for multi-contract collections
-    if (!contractMapCache.has(normalizedSlug)) {
-      let pendingPromise = contractMapPromises.get(normalizedSlug);
-
-      if (!pendingPromise) {
-        pendingPromise = getCollectionTokenContractMap(normalizedSlug)
-          .then((map) => {
-            contractMapCache.set(normalizedSlug, map);
-            contractMapPromises.delete(normalizedSlug);
-            return map;
-          })
-          .catch((error) => {
-            contractMapPromises.delete(normalizedSlug);
-            throw error;
-          });
-
-        contractMapPromises.set(normalizedSlug, pendingPromise);
-      }
-
-      await pendingPromise;
-    }
-
-    // STEP 5: Return mapped contract or fallback
-    const contractMap = contractMapCache.get(normalizedSlug) || {};
-    return contractMap[tokenKey] ?? fallbackAddress;
-
-  } catch {
-    // Silent failure - always return a valid address
-    return fallbackAddress;
-  }
-}
-
-async function buildItemOffer(taskId: string, offerSpecification: ItemOfferSpecification, currency: string, slug?: string) {
+async function buildItemOffer(taskId: string, offerSpecification: ItemOfferSpecification, currency: string) {
   const {
     assetContractAddress,
     tokenId,
@@ -308,16 +326,11 @@ async function buildItemOffer(taskId: string, offerSpecification: ItemOfferSpeci
   const task = activeTasks.get(taskId)
 
   if (!task) return
-
-  // Apply contract resolution with override logic
-  const resolvedContract = await resolveContractAddress(
-    slug,
-    tokenId,
-    assetContractAddress
-  );
-
+  const chain = (task.chain as ChainValue) ?? DEFAULT_CHAIN;
+  const slug = task.contract?.slug?.toLowerCase()
+  const resolvedContract = await resolveContractAddress(slug, tokenId, assetContractAddress)
   const consideration = getItemConsideration(
-    resolvedContract,  // Use resolved contract instead of original
+    resolvedContract,
     tokenId,
     quantity,
     walletAddress
@@ -337,7 +350,7 @@ async function buildItemOffer(taskId: string, offerSpecification: ItemOfferSpeci
     zone: OPENSEA_ITEM_ZONE,
     zoneHash: ZONE_HASH,
     salt: getSalt(),
-    conduitKey: CONDUIT_KEY,
+    conduitKey: getConduitKey(chain),
     totalOriginalConsiderationItems: consideration.length.toString(),
     counter: 0,
   }
@@ -389,12 +402,20 @@ export async function bidOnOpensea(
         return
       }
 
+      const chain = (task.chain as ChainValue) ?? DEFAULT_CHAIN;
+      const seaportAddress = getSeaportAddress(chain);
+      const seaportContract = getSeaportContract(chain);
+      const currencyAddress = currency ?? getCurrencyAddress(chain, "weth") ?? WETH;
+      const usdcAddress = getCurrencyAddress(chain, "usdc") ?? USDC;
+      const currencyLower = currencyAddress.toLowerCase();
+      const isUsdc = currencyLower === usdcAddress.toLowerCase();
+      currency = currencyAddress;
       const openseaMarketplaceFeeBps = getOpenseaMarketplaceFee();
 
 
       // Pre-calculate values
-      const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
-      currencySymbol = currency.toLowerCase() === USDC.toLowerCase() ? "USDC" : "WETH"
+      const decimal = isUsdc ? 6 : 18
+      currencySymbol = isUsdc ? "USDC" : "WETH"
       const offerPriceEth = Number(offer_price) / Math.pow(10, decimal);
 
       let decimals;
@@ -406,18 +427,18 @@ export async function bidOnOpensea(
         decimals = 4;
       }
 
-      const roundedEth = currency.toLowerCase() === USDC.toLowerCase() ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
+      const roundedEth = isUsdc ? Number(offerPriceEth.toFixed(2)) : Number(offerPriceEth);
       const basis = BASIS_MAP[decimals] || 1e14;
       const roundedWei = decimal === 18 ? Math.round(roundedEth * Math.pow(10, decimal) / basis) * basis : Math.round(roundedEth * Math.pow(10, decimal))
       const offerPrice = BigInt(roundedWei.toString());
       offerPriceEthFinal = Number(roundedWei) / Math.pow(10, decimal);
 
       // Get wallet from cache
-      const wallet = getWallet(private_key);
+      const wallet = getWallet(private_key, chain);
 
 
       // Fetch balance first
-      const wethBalance = await fetchERC20Balance(wallet_address, currency);
+      const wethBalance = await fetchERC20Balance(wallet_address, currency, chain);
 
       // Balance validation after parallel fetch
       if (offerPriceEthFinal > wethBalance) {
@@ -429,11 +450,16 @@ export async function bidOnOpensea(
           wallet_address,
           slug
         );
-        // Only log once per wallet/collection combo within 5 seconds to prevent log flooding
-        const dedupeKey = `opensea-${wallet_address}-${slug}`;
-        if (insufficientBalanceLogCache.addIfNotExists(dedupeKey, Date.now())) {
-          errorLog('API', `[OpenSea] Insufficient balance for bid | taskId=${taskId} | wallet=${wallet_address.slice(0, 10)}... | collection=${slug} | bidAmount=${offerPriceEthFinal} ${currencySymbol} | available=${wethBalance}`, error);
-        }
+        await logger.logOpenseaBidError('Insufficient balance for bid', {
+          taskId,
+          walletAddress: wallet_address,
+          collection: slug,
+          bidAmount: offerPriceEthFinal,
+          currency: currencySymbol,
+          availableBalance: wethBalance,
+          requiredBalance: offerPriceEthFinal,
+          error
+        });
         throw error;
       }
 
@@ -445,7 +471,7 @@ export async function bidOnOpensea(
           quantity: 1,
           expirationSeconds: BigInt(expiry),
           priceWei: BigInt(roundedWei)
-        }, currency, slug)
+        }, currency)
 
         if (!offer) {
           return
@@ -463,32 +489,22 @@ export async function bidOnOpensea(
         offer.consideration.push(opensea_consideration);
         offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
 
-        // DEBUG: Log creator_fees input for token bid
-        debugLog('FeeDebug', `[${slug}] Token bid - creator_fees input | tokenId=${asset.tokenId} | fees=${JSON.stringify(creator_fees)} | offerPrice=${offerPrice.toString()}`);
-
         for (const address in creator_fees) {
           let fee: bigint | number = creator_fees[address];
           fee = BigInt(Math.round(fee).toString());
 
-          // DEBUG: Log each fee being processed
-          debugLog('FeeDebug', `[${slug}] Token bid - processing fee | address=${address} | fee=${fee.toString()} | type=${typeof address}`);
-
           // Skip null address or zero fees
           if (address === 'null' || address.toLowerCase() === '0x0000000000000000000000000000000000000000' || fee === 0n) {
-            debugLog('FeeDebug', `[${slug}] Token bid - SKIP fee | address=${address} | fee=${fee.toString()} | reason=${address === 'null' ? 'null address' : fee === 0n ? 'zero fee' : 'zero address'}`);
             continue;
           }
 
           // Add all creator fees (OpenSea requires all fees marked as required=true)
-          const feeAmount = ((offerPrice * fee) / DIVIDER).toString();
-          debugLog('FeeDebug', `[${slug}] Token bid - ADDING consideration | recipient=${address} | fee=${fee.toString()} | amount=${feeAmount}`);
-
           const consideration_item = {
             itemType: 1,
             token: currency,
             identifierOrCriteria: "0",
-            startAmount: feeAmount,
-            endAmount: feeAmount,
+            startAmount: ((offerPrice * fee) / DIVIDER).toString(),
+            endAmount: ((offerPrice * fee) / DIVIDER).toString(),
             recipient: address
           };
           offer.consideration.push(consideration_item);
@@ -496,10 +512,7 @@ export async function bidOnOpensea(
 
         }
 
-        // DEBUG: Log final consideration array
-        debugLog('FeeDebug', `[${slug}] Token bid - final consideration | count=${offer.consideration.length} | recipients=${offer.consideration.map((c: any) => c.recipient).join(', ')}`);
-
-        const itemSignature = await signOffer(wallet, offer)
+        const itemSignature = await signOffer(chain, wallet, offer)
 
         if (!itemSignature) {
           return
@@ -511,34 +524,20 @@ export async function bidOnOpensea(
           return
         }
 
-        const itemResponse = await postItemOffer(taskId, offer, itemSignature, slug)
+        const itemResponse = await postItemOffer(taskId, offer, itemSignature, chain)
         const itemOrderHash = itemResponse?.order?.order_hash
 
         const sanitizedExpiry = expiry > 900 ? expiry : 900
         if (offerPrice && itemOrderHash && sanitizedExpiry && slug && taskId && asset.tokenId) {
-          const expiresAt = new Date(Date.now() + sanitizedExpiry * 1000);
-          const orderData = {
-            slug: slug,
-            orderHash: itemOrderHash,
-            expiresAt: expiresAt,
-            offerPrice: offerPrice.toString(),
-            identifier: asset.tokenId.toString(),
-            taskId: taskId,
-            marketplace: 'opensea'
-          };
           await withRetry(async () => {
-            const savedOrder = await Order.create(orderData);
-            // Update in-memory cache
-            orderCache.set({
-              _id: savedOrder._id.toString(),
-              orderHash: savedOrder.orderHash,
-              expiresAt: savedOrder.expiresAt.getTime(),
-              offerPrice: savedOrder.offerPrice,
-              createdAt: savedOrder.createdAt.getTime(),
-              identifier: savedOrder.identifier,
-              marketplace: savedOrder.marketplace,
-              slug: savedOrder.slug,
-              taskId: savedOrder.taskId
+            await Order.create({
+              slug: slug,
+              orderHash: itemOrderHash,
+              expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
+              offerPrice: offerPrice.toString(),
+              identifier: asset.tokenId.toString(),
+              taskId: taskId,
+              marketplace: 'opensea'
             });
           });
         }
@@ -574,13 +573,13 @@ export async function bidOnOpensea(
               orderType: 2,
               zone: OPENSEA_COLLECTION_ZONE,
               zoneHash: ZONE_HASH,
-              conduitKey: CONDUIT_KEY,
+              conduitKey: getConduitKey(chain),
               totalOriginalConsiderationItems: 2,
               counter: '0'
             },
             signature: '0x0'
           },
-          protocol_address: SEAPORT_1_6
+          protocol_address: seaportAddress
         }
         // reset consideration list and count
         payload.protocol_data.parameters.consideration = [];
@@ -600,13 +599,13 @@ export async function bidOnOpensea(
           quantity: 1,
           criteria: payload.criteria,
           offerer: wallet_address,
-          protocol_address: SEAPORT_1_6
+          protocol_address: seaportAddress
         };
 
         // Parallel operations for collection offers
         const [data, counter] = await Promise.all([
-          buildOffer(taskId, buildPayload),
-          SEAPORT_CONTRACT.getCounter(wallet_address)
+          buildOffer(taskId, buildPayload, chain),
+          seaportContract.getCounter(wallet_address)
         ]);
 
         if (!data || !data.partialParameters) {
@@ -661,18 +660,18 @@ export async function bidOnOpensea(
         payload.protocol_data.parameters.counter = counter.toString();
 
         const signObj = await wallet.signTypedData(
-          domain,
+          getSeaportDomain(chain, seaportAddress),
           types,
           payload.protocol_data.parameters
         );
         payload.protocol_data.signature = signObj;
-        payload.protocol_address = SEAPORT_1_6;
+        payload.protocol_address = seaportAddress;
 
         if (isTaskBlacklisted(taskId, 'opensea') || !task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
           return
         }
 
-        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
+        await submitOfferToOpensea(chain, decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
       }
 
       else {
@@ -701,13 +700,13 @@ export async function bidOnOpensea(
               orderType: 2,
               zone: OPENSEA_COLLECTION_ZONE,
               zoneHash: ZONE_HASH,
-              conduitKey: CONDUIT_KEY,
+              conduitKey: getConduitKey(chain),
               totalOriginalConsiderationItems: 2,
               counter: '0'
             },
             signature: '0x0'
           },
-          protocol_address: SEAPORT_1_6
+          protocol_address: seaportAddress
         }
         // reset consideration list and count
         payload.protocol_data.parameters.consideration = [];
@@ -719,7 +718,7 @@ export async function bidOnOpensea(
         delete payload.criteria.trait
 
 
-        const counter = await SEAPORT_CONTRACT.getCounter(wallet_address)
+        const counter = await seaportContract.getCounter(wallet_address)
 
         // Note: For collection bids without traits, we're using hardcoded data instead of calling buildOffer
         const data = {
@@ -790,17 +789,17 @@ export async function bidOnOpensea(
         payload.protocol_data.parameters.counter = counter.toString();
 
         const signObj = await wallet.signTypedData(
-          domain,
+          getSeaportDomain(chain, seaportAddress),
           types,
           payload.protocol_data.parameters
         );
         payload.protocol_data.signature = signObj;
-        payload.protocol_address = SEAPORT_1_6;
+        payload.protocol_address = seaportAddress;
 
         if (isTaskBlacklisted(taskId, 'opensea') || !task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
           return
         }
-        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
+        await submitOfferToOpensea(chain, decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
       }
 
     } catch (error) {
@@ -815,51 +814,43 @@ export async function bidOnOpensea(
  * Posts an offer to OpenSea.
  * @param payload - The payload of the offer.
  */
-async function submitOfferToOpensea(decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900) {
+async function submitOfferToOpensea(_chain: ChainValue, decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900) {
   const [taskId] = bidCount.split(":")
-  const bidStartTime = Date.now();
-
-  // Early blacklist check before entering limiter queue
   if (isTaskBlacklisted(taskId, 'opensea')) {
-    debugLog('InFlightBid', `BLOCKED_EARLY | taskId=${taskId} | marketplace=opensea | reason=blacklisted`, { taskId, marketplace: 'opensea' });
     return;
   }
   const task = activeTasks.get(taskId)
   if (!task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) return
 
-  debugLog('InFlightBid', `ENTERING_LIMITER | taskId=${taskId} | marketplace=opensea | collection=${payload.criteria?.collection?.slug} | timestamp=${bidStartTime}`, { taskId, marketplace: 'opensea' });
-
   let offer: OpenseaOffer;
   try {
-    const response = await limiter.schedule(async () => {
-      // Re-check blacklist AFTER waiting in limiter queue - this is the critical fix
-      if (isTaskBlacklisted(taskId, 'opensea')) {
-        debugLog('InFlightBid', `BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=opensea | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'opensea' });
-        throw new Error('Task stopped while waiting in limiter queue');
-      }
-
-      debugLog('InFlightBid', `EXECUTING_REQUEST | taskId=${taskId} | marketplace=opensea | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'opensea' });
-
-      return axiosInstance.request<OpenseaOffer>({
-        method: 'POST',
-        url: `${BASE_URL}/opensea/api/v2/offers`,
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY,
-          "Cache-Control": "no-store", // ⛔ Prevents caching
-          "Pragma": "no-cache", // ⛔ Prevents old cache policies from affecting response
-          "Expires": "0", // ⛔ Forces fresh reques
-        },
-        data: JSON.stringify(payload),
-        "axios-retry": { retries: 0 }
-      });
-    });
+    const response = await limiter.schedule(() => axiosInstance.request<OpenseaOffer>({
+      method: 'POST',
+      url: `${BASE_URL}/opensea/api/v2/offers`,
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': API_KEY,
+        "Cache-Control": "no-store", // ⛔ Prevents caching
+        "Pragma": "no-cache", // ⛔ Prevents old cache policies from affecting response
+        "Expires": "0", // ⛔ Forces fresh reques
+      },
+      data: JSON.stringify(payload),
+      "axios-retry": { retries: 0 }
+    }))
     offer = response.data;
 
-    debugLog('InFlightBid', `BID_PLACED | taskId=${taskId} | marketplace=opensea | collection=${payload.criteria?.collection?.slug} | totalTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'opensea' });
-
   } catch (error) {
-    errorLog('API', `[OpenSea] Failed to submit offer | taskId=${taskId} | collection=${payload.criteria.collection.slug} | bidAmount=${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} | status=${(error as any)?.response?.status} | ${extractOpenseaErrorMessage(error)}`, error);
+
+    // Check for merkle root error in submit response
+    await logger.logOpenseaBidError('Failed to submit OpenSea offer', {
+      taskId,
+      collection: payload.criteria.collection.slug,
+      bidAmount: Number(offerPrice) / Math.pow(10, decimal),
+      currency: currencySymbol,
+      error: error as Error,
+      errorCode: (error as any)?.response?.status,
+      errorMessage: extractOpenseaErrorMessage(error)
+    });
     throw error;
   }
 
@@ -873,29 +864,15 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
   const sanitizedExpiry = expiry > 900 ? expiry : 900
 
   if (offerPrice && order_hash && sanitizedExpiry && slug && taskId && identifier) {
-    const expiresAt = new Date(Date.now() + sanitizedExpiry * 1000);
-    const orderData = {
-      slug: slug,
-      orderHash: order_hash,
-      expiresAt: expiresAt,
-      offerPrice: offerPrice.toString(),
-      identifier: identifier,
-      taskId: taskId,
-      marketplace: 'opensea'
-    };
     await withRetry(async () => {
-      const savedOrder = await Order.create(orderData);
-      // Update in-memory cache
-      orderCache.set({
-        _id: savedOrder._id.toString(),
-        orderHash: savedOrder.orderHash,
-        expiresAt: savedOrder.expiresAt.getTime(),
-        offerPrice: savedOrder.offerPrice,
-        createdAt: savedOrder.createdAt.getTime(),
-        identifier: savedOrder.identifier,
-        marketplace: savedOrder.marketplace,
-        slug: savedOrder.slug,
-        taskId: savedOrder.taskId
+      await Order.create({
+        slug: slug,
+        orderHash: order_hash,
+        expiresAt: new Date(Date.now() + sanitizedExpiry * 1000),
+        offerPrice: offerPrice.toString(),
+        identifier: identifier,
+        taskId: taskId,
+        marketplace: 'opensea'
       });
     });
   }
@@ -908,20 +885,13 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
  * Builds an offer on OpenSea with request deduplication.
  * @param buildPayload - The payload to build the offer.
  */
-async function buildOffer(taskId: string, buildPayload: any) {
+async function buildOffer(taskId: string, buildPayload: any, _chain?: ChainValue) {
   const controller = new AbortController();
   addActiveRequest(taskId, controller);
-  const buildStartTime = Date.now();
 
   try {
-    const { data } = await limiter.schedule(async () => {
-      // Re-check blacklist AFTER waiting in limiter queue
-      if (isTaskBlacklisted(taskId, 'opensea')) {
-        debugLog('InFlightBid', `BUILD_BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=opensea | waitTime=${Date.now() - buildStartTime}ms`, { taskId, marketplace: 'opensea' });
-        throw new Error('Task stopped while waiting in limiter queue');
-      }
-
-      return axiosInstance.request<PartialParameters>({
+    const { data } = await limiter.schedule(() =>
+      axiosInstance.request<PartialParameters>({
         method: 'POST',
         url: `${BASE_URL}/opensea/api/v2/offers/build`,
         headers: {
@@ -930,8 +900,8 @@ async function buildOffer(taskId: string, buildPayload: any) {
         },
         data: JSON.stringify(buildPayload),
         signal: controller.signal
-      });
-    });
+      })
+    );
 
     return data;
   } catch (error: any) {
@@ -939,7 +909,13 @@ async function buildOffer(taskId: string, buildPayload: any) {
       return null;
     }
 
-    errorLog('API', `[OpenSea] Failed to build offer | taskId=${taskId} | status=${error?.response?.status} | ${extractOpenseaErrorMessage(error)}`, error);
+    await logger.logOpenseaBidError('Failed to build OpenSea offer', {
+      taskId,
+      operation: 'build_offer',
+      error: error,
+      errorCode: error?.response?.status,
+      errorMessage: extractOpenseaErrorMessage(error)
+    });
     throw error;
   } finally {
     const controllers = activeRequests.get(taskId) || [];
@@ -960,7 +936,10 @@ async function cancelOrderInternal(orderHash: string, protocolAddress: string, p
 
     const offererSignature = await signCancelOrder(taskId, orderHash, protocolAddress, privateKey);
     if (!offererSignature) return;
-    const url = `${BASE_URL}/opensea/api/v2/orders/chain/ethereum/protocol/${protocolAddress}/${orderHash}/cancel`;
+    const task = activeTasks.get(taskId);
+    const chain = (task?.chain as ChainValue) ?? DEFAULT_CHAIN;
+    const chainIdentifier = getMarketplaceChainIdentifier(chain, 'opensea');
+    const url = `${BASE_URL}/opensea/api/v2/orders/chain/${chainIdentifier}/protocol/${protocolAddress}/${orderHash}/cancel`;
     const headers = {
       'content-type': 'application/json',
       'x-api-key': API_KEY
@@ -970,9 +949,8 @@ async function cancelOrderInternal(orderHash: string, protocolAddress: string, p
 
     // Check if limiter is initialized
     if (!limiter) {
-      const error = new Error('Limiter not initialized');
-      errorLog('OpenSea', `Limiter not initialized - cannot process cancelOrder request | taskId=${taskId} | orderHash=${orderHash}`, error);
-      throw error;
+      console.error('Limiter not initialized - cannot process cancelOrder request');
+      throw new Error('Limiter not initialized');
     }
 
     const response = await limiter.schedule(() => axiosInstance.post(url, body, { headers }))
@@ -990,7 +968,15 @@ async function cancelOrderInternal(orderHash: string, protocolAddress: string, p
     return response.data;
   } catch (error) {
     if (error) {
-      errorLog('API', `[OpenSea] Failed to cancel order | taskId=${taskId} | orderHash=${orderHash}`, error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to cancel OpenSea order: ${errorMessage}`);
+      await logger.logOpenseaBidError('Failed to cancel OpenSea order', {
+        taskId,
+        orderHash,
+        operation: 'cancel_order',
+        error: error as Error,
+        errorMessage: errorMessage
+      });
     }
     throw error;
   }
@@ -1009,14 +995,12 @@ export async function cancelOrderWithoutTracking(orderHash: string, protocolAddr
 async function signCancelOrder(taskId: string, orderHash: string, protocolAddress: string, privateKey: string) {
   if (!orderHash) return
 
-  const wallet = getWallet(privateKey);
-  const domain = {
-    name: 'Seaport',
-    version: '1.6',
-    chainId: '1',
-    verifyingContract: protocolAddress
-  };
-  const types = {
+  const task = activeTasks.get(taskId);
+  const chain = (task?.chain as ChainValue) ?? DEFAULT_CHAIN;
+
+  const wallet = getWallet(privateKey, chain);
+  const domain = getSeaportDomain(chain, protocolAddress);
+  const cancelTypes = {
     OrderHash: [
       { name: 'orderHash', type: 'bytes32' }
     ]
@@ -1025,11 +1009,12 @@ async function signCancelOrder(taskId: string, orderHash: string, protocolAddres
   const value = {
     orderHash: orderHash
   };
-  const signature = await wallet.signTypedData(domain, types, value);
+  const signature = await wallet.signTypedData(domain, cancelTypes, value);
   return signature;
 }
 
-async function signOffer(wallet: ethers.Wallet, offer: Record<string, unknown>) {
+async function signOffer(chain: ChainValue, wallet: ethers.Wallet, offer: Record<string, unknown>) {
+  const domain = getSeaportDomain(chain);
   return await wallet.signTypedData(domain, types, offer)
 }
 
@@ -1045,134 +1030,19 @@ const getOffer = (priceWei: bigint, currency: string) => {
   ]
 }
 
-/**
- * Fetches existing offers for a token from a specific maker (wallet)
- * Used to sync local state when OpenSea returns "Order already exists"
- */
-async function fetchMakerOfferForToken(
-  contractAddress: string,
-  tokenId: string,
-  makerAddress: string
-): Promise<{
-  orderHash: string;
-  expirationTime: number;
-  currentPrice: string;
-  slug: string;
-  tokenId: string;
-} | null> {
-  // ENTRY log
-  debugLog('API', `[OpenSea] fetchMakerOfferForToken ENTRY | contract=${contractAddress} | token=${tokenId} | maker=${makerAddress.slice(0, 10)}...`, {
-    marketplace: 'opensea',
-    tokenId,
-    wallet: makerAddress
-  });
+async function postItemOffer(taskId: string, offer: unknown, signature: string, chain: ChainValue) {
+  const task = activeTasks.get(taskId)
+  const slug = task?.contract?.slug?.toLowerCase()
+  const seaportAddress = getSeaportAddress(chain);
+  const chainIdentifier = getMarketplaceChainIdentifier(chain, 'opensea');
 
-  const url = `${BASE_URL}/opensea/api/v2/orders/ethereum/seaport/offers`;
-  const params = {
-    asset_contract_address: contractAddress,
-    token_ids: tokenId,
-    maker: makerAddress
-  };
+  const parameters = offer as any
 
-  try {
-    const response = await apiDedup(
-      `opensea-maker-offer-${contractAddress.toLowerCase()}-${tokenId}-${makerAddress.toLowerCase()}`,
-      () => limiter.schedule(() =>
-        axiosInstance.get(url, {
-          params,
-          headers: {
-            'accept': '*/*',
-            'x-api-key': API_KEY
-          }
-        })
-      ),
-      { category: 'OpenSea' }
-    );
-
-    // Find active order from this maker
-    const orders = response.data?.orders || [];
-    const now = Date.now();
-
-    // API RESPONSE log
-    debugLog('API', `[OpenSea] fetchMakerOfferForToken API response | ordersReturned=${orders.length} | token=${tokenId}`, {
-      marketplace: 'opensea',
-      tokenId
-    });
-
-    // Log filtering details for debugging
-    if (orders.length > 0) {
-      const orderDetails = orders.map((o: any) => ({
-        hash: o.order_hash?.slice(0, 16),
-        expired: o.expiration_time * 1000 <= now,
-        cancelled: o.cancelled,
-        finalized: o.finalized
-      }));
-      debugLog('API', `[OpenSea] fetchMakerOfferForToken order status | token=${tokenId} | details=${JSON.stringify(orderDetails)}`, {
-        marketplace: 'opensea',
-        tokenId
-      });
-    }
-
-    const activeOrder = orders.find((order: any) =>
-      order.expiration_time * 1000 > now && !order.cancelled && !order.finalized
-    );
-
-    if (!activeOrder) {
-      // NO ACTIVE ORDER log
-      debugLog('API', `[OpenSea] fetchMakerOfferForToken NO active order found | token=${tokenId} | totalOrders=${orders.length}`, {
-        marketplace: 'opensea',
-        tokenId
-      });
-      return null;
-    }
-
-    // Extract slug from taker_asset_bundle
-    const takerAsset = activeOrder.taker_asset_bundle?.assets?.[0];
-    const slug = takerAsset?.collection?.collection || '';
-    const priceEth = Number(activeOrder.current_price) / Math.pow(10, 18);
-    const expiresInMin = Math.round((activeOrder.expiration_time * 1000 - now) / 60000);
-
-    // ACTIVE ORDER FOUND log
-    debugLog('API', `[OpenSea] fetchMakerOfferForToken FOUND active order | token=${tokenId} | orderHash=${activeOrder.order_hash.slice(0, 16)}... | price=${priceEth.toFixed(6)} ETH | slug=${slug} | expiresIn=${expiresInMin}min`, {
-      marketplace: 'opensea',
-      tokenId,
-      orderHash: activeOrder.order_hash,
-      slug
-    });
-
-    return {
-      orderHash: activeOrder.order_hash,
-      expirationTime: activeOrder.expiration_time,  // Unix timestamp in seconds
-      currentPrice: activeOrder.current_price,       // Wei string
-      slug: slug,
-      tokenId: takerAsset?.token_id || tokenId
-    };
-  } catch (fetchError) {
-    errorLog('API', `[OpenSea] fetchMakerOfferForToken FAILED | token=${tokenId} | contract=${contractAddress}`, fetchError);
-    throw fetchError;
-  }
-}
-
-async function postItemOffer(taskId: string, offer: unknown, signature: string, slug?: string) {
-  const task = activeTasks.get(taskId);
-  const collectionSlug = slug || task?.contract?.slug?.toLowerCase();
-  const bidStartTime = Date.now();
-
-  const parameters = offer as any;
-
-  // Fix contract addresses in consideration items
-  if (collectionSlug && parameters?.consideration) {
+  if (slug && parameters?.consideration) {
     for (const item of parameters.consideration) {
-      // itemType 2 = ERC721 token
       if (Number(item.itemType) === 2 && item?.token) {
         const targetTokenId = item.identifierOrCriteria;
-
-        // Apply override logic
-        item.token = await resolveContractAddress(
-          collectionSlug,
-          targetTokenId,
-          item.token
-        );
+        item.token = await resolveContractAddress(slug, targetTokenId, item.token);
       }
     }
   }
@@ -1180,160 +1050,34 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
   const payload = {
     parameters,
     signature,
-    protocol_address: SEAPORT_CONTRACT_ADDRESS,
+    protocol_address: seaportAddress,
   }
 
   try {
-    const { data } = await limiter.schedule(async () => {
-      // Re-check blacklist AFTER waiting in limiter queue - critical fix for in-flight token bids
-      if (isTaskBlacklisted(taskId, 'opensea')) {
-        debugLog('InFlightBid', `POST_ITEM_BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=opensea | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'opensea' });
-        throw new Error('Task stopped while waiting in limiter queue');
-      }
-
-      return axiosInstance.post(`${BASE_URL}/opensea/api/v2/orders/ethereum/seaport/offers`, payload, {
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY,
-          "Cache-Control": "no-store",
-          "Pragma": "no-cache",
-          "Expires": "0",
-        },
-        "axios-retry": { retries: 0 },
-      });
-    })
+    const { data } = await limiter.schedule(() => axiosInstance.post(`${BASE_URL}/opensea/api/v2/orders/${chainIdentifier}/seaport/offers`, payload, {
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': API_KEY,
+        "Cache-Control": "no-store",
+        "Pragma": "no-cache",
+        "Expires": "0",
+      },
+      "axios-retry": { retries: 0 },
+    }))
     return data
   } catch (error: any) {
     if (axios.isCancel(error)) {
       return null;
     }
 
-    // Handle "Order already exists" by syncing with OpenSea
-    const errorMessage = extractOpenseaErrorMessage(error);
-    if (error?.response?.status === 400 && errorMessage.includes('Order already exists')) {
-      // ERROR DETECTED log
-      debugLog('API', `[OpenSea] ORDER_ALREADY_EXISTS detected | taskId=${taskId} | slug=${collectionSlug} | errorMsg=${errorMessage}`, {
-        taskId,
-        marketplace: 'opensea',
-        slug: collectionSlug
-      });
-
-      try {
-        // Extract details from the offer payload
-        const consideration = parameters?.consideration?.[0];
-        const contractAddress = consideration?.token;
-        const tokenId = consideration?.identifierOrCriteria;
-        const makerAddress = parameters?.offerer;
-
-        // PAYLOAD EXTRACTION log
-        debugLog('API', `[OpenSea] ORDER_ALREADY_EXISTS payload extracted | taskId=${taskId} | contract=${contractAddress?.slice(0, 16)}... | token=${tokenId} | maker=${makerAddress?.slice(0, 10)}...`, {
-          taskId,
-          marketplace: 'opensea',
-          tokenId,
-          wallet: makerAddress
-        });
-
-        if (contractAddress && tokenId && makerAddress) {
-          // FETCH INITIATED log
-          debugLog('API', `[OpenSea] ORDER_ALREADY_EXISTS fetching existing offer | taskId=${taskId} | token=${tokenId}`, {
-            taskId,
-            marketplace: 'opensea',
-            tokenId
-          });
-
-          // Fetch existing order from OpenSea
-          const existingOffer = await fetchMakerOfferForToken(contractAddress, tokenId, makerAddress);
-
-          if (existingOffer) {
-            // Convert expiration_time (Unix seconds) to Date
-            const expiresAt = new Date(existingOffer.expirationTime * 1000);
-
-            // Convert current_price (Wei string) to ETH string
-            const decimal = 18; // WETH decimal
-            const offerPriceEth = Number(existingOffer.currentPrice) / Math.pow(10, decimal);
-            const offerPriceWei = existingOffer.currentPrice;
-
-            // MONGODB SAVE log
-            debugLog('API', `[OpenSea] ORDER_ALREADY_EXISTS saving to MongoDB | taskId=${taskId} | orderHash=${existingOffer.orderHash.slice(0, 16)}... | token=${existingOffer.tokenId} | price=${offerPriceEth} ETH`, {
-              taskId,
-              marketplace: 'opensea',
-              tokenId: existingOffer.tokenId,
-              orderHash: existingOffer.orderHash
-            });
-
-            // Store in MongoDB Order model
-            const orderData = {
-              slug: existingOffer.slug || collectionSlug || '',
-              orderHash: existingOffer.orderHash,
-              expiresAt: expiresAt,
-              offerPrice: offerPriceEth.toString(),
-              identifier: existingOffer.tokenId,
-              taskId: taskId,
-              marketplace: 'opensea'
-            };
-
-            const savedOrder = await Order.create(orderData);
-
-            // ORDERCACHE UPDATE log
-            debugLog('API', `[OpenSea] ORDER_ALREADY_EXISTS updating orderCache | taskId=${taskId} | orderId=${savedOrder._id}`, {
-              taskId,
-              marketplace: 'opensea',
-              tokenId: existingOffer.tokenId,
-              orderHash: existingOffer.orderHash
-            });
-
-            // Update in-memory orderCache
-            orderCache.set({
-              _id: savedOrder._id.toString(),
-              orderHash: savedOrder.orderHash,
-              expiresAt: savedOrder.expiresAt.getTime(),
-              offerPrice: savedOrder.offerPrice,
-              createdAt: savedOrder.createdAt.getTime(),
-              identifier: savedOrder.identifier,
-              marketplace: savedOrder.marketplace,
-              slug: savedOrder.slug,
-              taskId: savedOrder.taskId
-            });
-
-            // TOP OFFER CACHE UPDATE log
-            debugLog('API', `[OpenSea] ORDER_ALREADY_EXISTS updating topOfferCache | taskId=${taskId} | token=${existingOffer.tokenId} | price=${offerPriceEth} ETH`, {
-              taskId,
-              marketplace: 'opensea',
-              tokenId: existingOffer.tokenId
-            });
-
-            // Update marketplaceTopOfferCache - mark us as top bidder
-            // This ensures counterbid handlers know we have an active offer
-            updateTopOfferAfterOurBid(
-              taskId,
-              'opensea',
-              existingOffer.tokenId,
-              offerPriceEth,
-              offerPriceWei,
-              makerAddress
-            );
-
-            // SYNC SUCCESS log (warnLog for visibility - always logged)
-            warnLog('API', `[OpenSea] ORDER_ALREADY_EXISTS SYNC SUCCESS | taskId=${taskId} | orderHash=${existingOffer.orderHash} | token=${existingOffer.tokenId} | price=${offerPriceEth} ETH | slug=${existingOffer.slug} | expiresAt=${expiresAt.toISOString()}`);
-
-            // Return the synced order data (similar to successful bid response)
-            return { order: { order_hash: existingOffer.orderHash } };
-          } else {
-            // NO OFFER FOUND log
-            warnLog('API', `[OpenSea] ORDER_ALREADY_EXISTS sync SKIPPED - no active offer found on OpenSea | taskId=${taskId} | token=${tokenId}`);
-          }
-        } else {
-          // MISSING PAYLOAD DATA log
-          warnLog('API', `[OpenSea] ORDER_ALREADY_EXISTS sync SKIPPED - missing payload data | taskId=${taskId} | hasContract=${!!contractAddress} | hasToken=${!!tokenId} | hasMaker=${!!makerAddress}`);
-        }
-      } catch (syncError) {
-        // SYNC FAILURE log
-        errorLog('API', `[OpenSea] ORDER_ALREADY_EXISTS sync FAILED | taskId=${taskId} | slug=${collectionSlug}`, syncError);
-      }
-    }
-
-    errorLog('API', `[OpenSea] Failed to post item offer | taskId=${taskId} | status=${error?.response?.status} | ${errorMessage}`, error);
-    throw error;
+    await logger.logOpenseaBidError('Failed to post item offer to OpenSea', {
+      taskId,
+      operation: 'post_item_offer',
+      error: error,
+      errorCode: error?.response?.status,
+      errorMessage: extractOpenseaErrorMessage(error)
+    });
+    throw error
   }
 }
 
@@ -1370,7 +1114,8 @@ const getItemTokenConsideration = (
   }
 }
 
-export async function fetchItemOffers(contractAddress: string, tokenId: string) {
+export async function fetchItemOffers(contractAddress: string, tokenId: string, chain: ChainValue | null = DEFAULT_CHAIN) {
+  const chainIdentifier = getMarketplaceChainIdentifier(chain, 'opensea');
   const query = {
     operationName: "UseItemOffersQuery",
     query: `query UseItemOffersQuery($filter: ItemOffersFilter, $cursor: String, $limit: Int!, $address: Address, $identifier: ItemIdentifierInput!) {
@@ -1392,7 +1137,7 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
           __typename
         }
       }
-    
+
       fragment ItemOrdersTableRow on Order {
         id
         type
@@ -1414,7 +1159,7 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
         ...useCancelOrders
         __typename
       }
-    
+
       fragment TokenPrice on Price {
         usd
         token {
@@ -1429,7 +1174,7 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
         }
         __typename
       }
-    
+
       fragment AccountLockup on ProfileIdentifier {
         address
         displayName
@@ -1437,12 +1182,12 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
         ...profileUrl
         __typename
       }
-    
+
       fragment profileUrl on ProfileIdentifier {
         address
         __typename
       }
-    
+
       fragment useCancelOrders on BaseOrder {
         id
         marketplace {
@@ -1455,18 +1200,18 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
         }
         __typename
       }
-    
+
       fragment ProfilePreviewTooltip on ProfileIdentifier {
         address
         ...ProfilePreviewTooltipContent
         __typename
       }
-    
+
       fragment ProfilePreviewTooltipContent on ProfileIdentifier {
         address
         __typename
       }
-    
+
       fragment ItemOwnedQuantity on Item {
         ownership(address: $address) {
           id
@@ -1478,32 +1223,28 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
     variables: {
       address: "0x1b8afd0de8a9368ce635be8b9572c65d8f590b21",
       filter: {
-        chain: "ethereum",
+        chain: chainIdentifier,
         contractAddress: contractAddress,
         tokenId: tokenId
       },
       identifier: {
-        chain: "ethereum",
+        chain: chainIdentifier,
         contractAddress: contractAddress,
         tokenId: tokenId
       },
       limit: 2
     }
   };
-  const itemOffers = await apiDedup(
-    `opensea-item-offers-${contractAddress.toLowerCase()}-${tokenId}`,
-    () => limiter.schedule(() => axiosInstance.post(
-      `${BASE_URL}/opensea/graphql`,
-      query,
-      {
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY
-        }
+  const itemOffers = await limiter.schedule(() => axiosInstance.post(
+    `${BASE_URL}/opensea/graphql`,
+    query,
+    {
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': API_KEY
       }
-    )),
-    { category: 'OpenSea' }
-  );
+    }
+  ));
 
   // Default offer structure
   const defaultOffer = {
@@ -1686,17 +1427,13 @@ export async function fetchOpenseaOffers(
       }
     };
 
-    const response = await apiDedup(
-      `opensea-collection-offers-${collectionSlug}`,
-      () => limiter?.schedule(() =>
-        axiosInstance.post(`${BASE_URL}/opensea/graphql`, query, {
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': API_KEY
-          }
-        })
-      ),
-      { category: 'OpenSea' }
+    const response = await limiter?.schedule(() =>
+      axiosInstance.post(`${BASE_URL}/opensea/graphql`, query, {
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY
+        }
+      })
     );
     // Parse the GraphQL response
     const offerAggregates = response.data?.data?.collectionOfferAggregates?.items || [];
@@ -1886,17 +1623,13 @@ export async function fetchOpenseaOffers(
           }
         };
 
-        return apiDedup(
-          `opensea-trait-offers-collection-${collectionSlug}`,
-          () => limiter?.schedule(() =>
-            axiosInstance.post(`${BASE_URL}/opensea/graphql`, collectionQuery, {
-              headers: {
-                'content-type': 'application/json',
-                'x-api-key': API_KEY
-              }
-            })
-          ),
-          { category: 'OpenSea' }
+        return limiter?.schedule(() =>
+          axiosInstance.post(`${BASE_URL}/opensea/graphql`, collectionQuery, {
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': API_KEY
+            }
+          })
         );
       },
 
@@ -2046,17 +1779,13 @@ export async function fetchOpenseaOffers(
           }
         };
 
-        return apiDedup(
-          `opensea-trait-offers-${collectionSlug}-${type}-${value}`,
-          () => limiter?.schedule(() =>
-            axiosInstance.post(`${BASE_URL}/opensea/graphql`, traitQuery, {
-              headers: {
-                'content-type': 'application/json',
-                'x-api-key': API_KEY
-              }
-            })
-          ),
-          { category: 'OpenSea' }
+        return limiter?.schedule(() =>
+          axiosInstance.post(`${BASE_URL}/opensea/graphql`, traitQuery, {
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': API_KEY
+            }
+          })
         );
       }
     ];
@@ -2353,12 +2082,17 @@ interface ItemOfferSpecification {
 export async function cancelOpenseaRequest(taskId: string): Promise<{ success: boolean; cancelledCount: number; error?: string }> {
   // Input validation
   if (!taskId || typeof taskId !== 'string') {
-    warnLog('API', `[OpenSea] Invalid taskId provided to cancelOpenseaRequest | taskId=${taskId}`);
+    await logger.logWarning(ErrorCategory.MARKETPLACE, 'Invalid taskId provided to cancelOpenseaRequest', {
+      taskId,
+      marketplace: 'opensea',
+      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION
+    });
     return { success: false, cancelledCount: 0, error: 'Invalid taskId' };
   }
 
   const controllers = activeRequests.get(taskId);
   if (!controllers || controllers.length === 0) {
+
     return { success: false, cancelledCount: 0 };
   }
 
@@ -2380,7 +2114,12 @@ export async function cancelOpenseaRequest(taskId: string): Promise<{ success: b
         await Promise.race([abortPromise, timeoutPromise]);
         cancelledCount++;
       } catch (error) {
-        warnLog('API', `[OpenSea] Failed to abort request controller | taskId=${taskId} | ${error instanceof Error ? error.message : String(error)}`);
+        await logger.logWarning(ErrorCategory.MARKETPLACE, 'Failed to abort OpenSea request controller', {
+          taskId,
+          marketplace: 'opensea',
+          marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
       }
     }));
 
@@ -2388,7 +2127,12 @@ export async function cancelOpenseaRequest(taskId: string): Promise<{ success: b
 
     return { success: true, cancelledCount };
   } catch (error) {
-    errorLog('API', `[OpenSea] Failed to cancel requests | taskId=${taskId}`, error);
+    await logger.logMarketplaceError('Failed to cancel OpenSea requests', {
+      taskId,
+      marketplace: 'opensea',
+      marketplaceSubCategory: MarketplaceSubCategory.CANCELLATION,
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
     return { success: false, cancelledCount: 0, error: error instanceof Error ? error.message : String(error) };
   }
 }

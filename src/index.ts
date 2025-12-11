@@ -48,6 +48,7 @@ import Order from "./models/order.model";
 import { orderCache, CachedOrder } from "./utils/order-cache";
 import Approval from "./models/approval.model";
 import { USDC, WETH } from "./utils/currencies";
+import { getCurrencyAddress, DEFAULT_CHAIN } from "./utils/chains";
 import axios from "axios";
 import { decryptPrivateKey, setPassword, getPassword, decryptPassword, recoverPasswordFromRedis, renewPasswordTTL, reEncryptWallet, clearDecryptedKeyCache } from "./utils/crypto";
 import { logProcessStart, logProcessExit, logSignal, logLifecycleEvent, stopMemoryMonitor } from "./utils/process-lifecycle-logger";
@@ -16368,12 +16369,12 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
           timedLockManager.extendLock(taskId, 'opensea');
         }
 
-        // Fetch fresh WETH balance with timeout protection
+        // Fetch fresh WETH balance with timeout protection (chain-aware)
         let wethBalance = 0;
         try {
           const { fetchERC20BalanceFresh } = await import('./utils/balance');
-          const { WETH } = await import('./utils/currencies');
-          wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, WETH);
+          const wethAddress = getCurrencyAddress(currentTask.chain, 'weth') || WETH;
+          wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, wethAddress, currentTask.chain);
         } catch (error) {
           errorLog('OpenSea', 'Failed to fetch WETH balance', error);
         }
@@ -16780,6 +16781,11 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       throw new Error(`Failed to fetch floor price for ${currentTask.contract.slug}`);
     }
 
+    // Check if task was cleaned up during async floor fetch
+    if (!floorPrices[currentTask._id]) {
+      console.log(`[BidFlow][OS-Coll] ${currentTask.contract.slug} | SKIP: Task cleaned up during floor fetch`);
+      return;
+    }
     floorPrices[currentTask._id].opensea = floor_price as number;
 
     debugLog('StopOption', `[OS] ${currentTask.contract.slug} | PRE_CALL | context=scheduled-collection-bid | floor=${floor_price}`, { taskId: currentTask._id.toString(), marketplace: 'opensea', slug: currentTask.contract.slug });
@@ -16799,7 +16805,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency);
+    const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency, currentTask.chain);
     if (balance < minBidPriceEth) {
       if (DEBUG) {
         console.log(`[BidFlow][OS-Coll] ${currentTask.contract.slug} | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} ${currencySymbol}`);
@@ -18002,6 +18008,11 @@ async function processOpenseaTraitBid(data: {
 
     if (!floor_price) { throw new Error(`Failed to fetch floor price for ${slug}`); }
 
+    // Check if task was cleaned up during async floor fetch
+    if (!floorPrices[_id]) {
+      console.log(`[BidFlow][OS-Trait] ${slug}:${identifier} | SKIP: Task cleaned up during floor fetch`);
+      return;
+    }
     floorPrices[_id].opensea = floor_price as number;
 
     if (DEBUG) {
@@ -18037,7 +18048,7 @@ async function processOpenseaTraitBid(data: {
 
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const balance = await fetchERC20BalanceFresh(address, currency);
+    const balance = await fetchERC20BalanceFresh(address, currency, currentTask.chain);
 
     if (balance < minBidPriceEth) {
       skipStats[_id]['opensea']++;
@@ -18393,6 +18404,11 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
     if (!floor_price) { throw new Error(`Failed to fetch floor price for ${slug}`); }
 
+    // Check if task was cleaned up during async floor fetch
+    if (!floorPrices[_id]) {
+      console.log(`[BidFlow][OS-Token] ${slug}:${asset.tokenId} | SKIP: Task cleaned up during floor fetch`);
+      return;
+    }
     floorPrices[_id].opensea = floor_price as number;
 
     if (DEBUG) {
@@ -18434,7 +18450,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const balance = await fetchERC20BalanceFresh(address, currency);
+    const balance = await fetchERC20BalanceFresh(address, currency, currentTask.chain);
 
     if (balance < minBidPriceEth) {
       skipStats[_id]['opensea']++;
@@ -20185,12 +20201,12 @@ async function processMagicedenScheduledBid(task: ITask, _jobId?: string, schedu
           timedLockManager.extendLock(taskId, 'magiceden');
         }
 
-        // Fetch fresh WETH balance with timeout protection
+        // Fetch fresh WETH balance with timeout protection (chain-aware)
         let wethBalance = 0;
         try {
           const { fetchERC20BalanceFresh } = await import('./utils/balance');
-          const { WETH } = await import('./utils/currencies');
-          wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, WETH);
+          const wethAddress = getCurrencyAddress(currentTask.chain, 'weth') || WETH;
+          wethBalance = await fetchERC20BalanceFresh(WALLET_ADDRESS, wethAddress, currentTask.chain);
         } catch (error) {
           errorLog('MagicEden', 'Failed to fetch WETH balance', error);
         }
@@ -20607,7 +20623,7 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency);
+    const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency, currentTask.chain);
 
 
     if (balance < minBidPriceEth) {
@@ -20946,7 +20962,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const balance = await fetchERC20BalanceFresh(address, currency);
+    const balance = await fetchERC20BalanceFresh(address, currency, currentTask.chain);
 
     if (balance < minBidPriceEth) {
       if (DEBUG) {
@@ -21288,7 +21304,7 @@ async function processMagicedenTraitBid(data: {
 
     // Fetch fresh balance and check if sufficient for minimum bid
     const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const balance = await fetchERC20BalanceFresh(address, currency);
+    const balance = await fetchERC20BalanceFresh(address, currency, currentTask.chain);
 
     if (balance < minBidPriceEth) {
       if (DEBUG) {
@@ -24669,10 +24685,12 @@ async function calculateBidPrice(task: ITask, floorPrice: number, marketplaceNam
     minBidPriceEth = Math.round(Math.round(minBidPriceEth * 1000000) / 1000000 * 100) / 100;
   }
   const currencyType = bidPrice.minType === "percentage" ? "eth" : bidPrice.minType
-  const currency = currencyType === "usdc" ? USDC : WETH
+  const currencySymbol = currencyType === "usdc" ? "usdc" : "weth"
+  // Get chain-specific currency address, fall back to Ethereum addresses if not defined for chain
+  const chainCurrency = getCurrencyAddress(task.chain, currencySymbol);
+  const currency = chainCurrency || (currencyType === "usdc" ? USDC : WETH);
 
   const decimal = currency.toLowerCase() === USDC.toLowerCase() ? 6 : 18
-  const currencySymbol = currencyType === "usdc" ? "usdc" : "weth"
 
   debugLog('PriceCalc', `${task.contract?.slug || task._id} | floor=${floorPrice} | min=${minBidPriceEth} | max=${maxBidPriceEth} | offer=${offerPriceEth} | ${currencySymbol.toUpperCase()}`);
 

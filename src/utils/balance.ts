@@ -206,7 +206,6 @@ export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress
                   console.warn('Failed to cache balance:', error);
                 }
 
-                const elapsed = Date.now() - startTime;
                 // console.log(`[fetchERC20BalanceFresh] Fresh balance for ${walletAddress}/${tokenAddress}: ${formattedBalance} (took ${elapsed}ms)`);
                 return formattedBalance;
               } catch (error: any) {
