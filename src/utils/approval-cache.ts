@@ -1,19 +1,8 @@
 import { ethers } from 'ethers';
 import { ERC20_MIN_ABI } from '../constants';
 import { getRedisConnection } from './redis';
-import { errorLog, warnLog, debugLog } from './debug-file-logger';
-
-// Create primary provider with increased timeout (30 seconds)
-const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
-const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
-
-// Create fallback provider (PublicNode) for when Alchemy times out
-const fallbackProvider = new ethers.JsonRpcProvider('https://ethereum.publicnode.com');
-
-// Configure RPC timeout and retry settings
-const RPC_TIMEOUT = 30000; // 30 seconds (increased from default ~10s)
-const MAX_RPC_RETRIES = 3;
-const RPC_RETRY_DELAY = 1000; // 1s, 2s, 4s exponential backoff
+import { ChainValue, DEFAULT_CHAIN, getProviderForChain, normalizeChainValue } from './chains';
+import { logger, ErrorCategory } from './logger';
 
 interface ApprovalCacheEntry {
   approved: boolean;
@@ -30,8 +19,8 @@ class ApprovalCache {
   /**
    * Get cache key for wallet/marketplace/token combination
    */
-  private getCacheKey(walletAddress: string, marketplaceAddress: string, tokenAddress: string): string {
-    return `${walletAddress}:${marketplaceAddress}:${tokenAddress}`.toLowerCase();
+  private getCacheKey(walletAddress: string, spenderAddress: string, tokenAddress: string, chain: ChainValue): string {
+    return `${walletAddress}:${spenderAddress}:${tokenAddress}:${chain}`.toLowerCase();
   }
 
   /**
@@ -39,11 +28,13 @@ class ApprovalCache {
    */
   async isApproved(
     walletAddress: string,
-    marketplaceAddress: string,
+    spenderAddress: string,
     tokenAddress: string,
-    requiredAmount: string = ethers.MaxUint256.toString()
+    requiredAmount: string = ethers.MaxUint256.toString(),
+    chain: ChainValue = DEFAULT_CHAIN
   ): Promise<boolean> {
-    const key = this.getCacheKey(walletAddress, marketplaceAddress, tokenAddress);
+    const resolvedChain = normalizeChainValue(chain);
+    const key = this.getCacheKey(walletAddress, spenderAddress, tokenAddress, resolvedChain);
 
     // Check memory cache first
     const memoryCache = this.cache.get(key);
@@ -63,84 +54,46 @@ class ApprovalCache {
         return BigInt(entry.allowance) >= BigInt(requiredAmount);
       }
     } catch (error) {
-      warnLog('Cache', `ApprovalCache: Redis read error | key=${key}`);
+      console.error('[ApprovalCache] Redis error:', error);
     }
 
-    // Cache miss - check on-chain with retry logic
-    for (let attempt = 1; attempt <= MAX_RPC_RETRIES; attempt++) {
+    // Cache miss - check on-chain
+    try {
+      const provider = getProviderForChain(resolvedChain);
+      const tokenContract = new ethers.Contract(tokenAddress, ERC20_MIN_ABI, provider);
+      let allowance: bigint;
       try {
-        debugLog('Balance', `[RPC] Fetching allowance attempt ${attempt}/${MAX_RPC_RETRIES} | wallet=${walletAddress.slice(0, 10)}...`);
-
-        // Create timeout promise
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error('RPC_TIMEOUT')), RPC_TIMEOUT);
-        });
-
-        // Try primary provider first (Alchemy)
-        const tokenContract = new ethers.Contract(tokenAddress, ERC20_MIN_ABI, provider);
-        const allowancePromise = tokenContract.allowance(walletAddress, marketplaceAddress);
-
-        const allowance = await Promise.race([allowancePromise, timeoutPromise]);
-        const approved = BigInt(allowance) >= BigInt(requiredAmount);
-
-        // Update both caches
-        const entry: ApprovalCacheEntry = {
-          approved,
-          timestamp: Date.now(),
-          allowance: allowance.toString()
-        };
-
-        await this.setApproval(walletAddress, marketplaceAddress, tokenAddress, entry);
-
-        debugLog('Balance', `[RPC] Success: allowance=${allowance.toString()} | wallet=${walletAddress.slice(0, 10)}...`);
-        return approved;
+        allowance = await tokenContract.allowance(walletAddress, spenderAddress);
       } catch (error: any) {
-        const errorMsg = error?.message || String(error);
-        const isTimeout = errorMsg.includes('TIMEOUT') || errorMsg.includes('timeout');
-
-        // Only retry on timeout errors
-        if (isTimeout && attempt < MAX_RPC_RETRIES) {
-          warnLog('Balance', `[RPC] Timeout on attempt ${attempt}, retrying in ${RPC_RETRY_DELAY * attempt}ms | wallet=${walletAddress.slice(0, 10)}...`);
-          await new Promise(resolve => setTimeout(resolve, RPC_RETRY_DELAY * Math.pow(2, attempt - 1)));
-          continue;
-        }
-
-        // Try fallback provider on last attempt or non-timeout errors
-        if (attempt === MAX_RPC_RETRIES) {
-          try {
-            warnLog('Balance', `[RPC] Alchemy failed, trying PublicNode fallback | wallet=${walletAddress.slice(0, 10)}...`);
-            const fallbackContract = new ethers.Contract(tokenAddress, ERC20_MIN_ABI, fallbackProvider);
-            const fallbackTimeoutPromise = new Promise<never>((_, reject) => {
-              setTimeout(() => reject(new Error('RPC_TIMEOUT_FALLBACK')), RPC_TIMEOUT);
-            });
-            const fallbackAllowancePromise = fallbackContract.allowance(walletAddress, marketplaceAddress);
-            const allowance = await Promise.race([fallbackAllowancePromise, fallbackTimeoutPromise]);
-            const approved = BigInt(allowance) >= BigInt(requiredAmount);
-
-            // Update caches with fallback result
-            const entry: ApprovalCacheEntry = {
-              approved,
-              timestamp: Date.now(),
-              allowance: allowance.toString()
-            };
-            await this.setApproval(walletAddress, marketplaceAddress, tokenAddress, entry);
-
-            debugLog('Balance', `[RPC] Fallback success: allowance=${allowance.toString()} | wallet=${walletAddress.slice(0, 10)}...`);
-            return approved;
-          } catch (fallbackError: any) {
-            errorLog('Balance', `[RPC] Both providers failed | wallet=${walletAddress.slice(0, 10)}...`, fallbackError);
-          }
-        }
-
-        // Final failure after all retries and fallback
-        if (attempt === MAX_RPC_RETRIES) {
-          errorLog('Cache', `ApprovalCache: On-chain allowance check failed after retries | wallet=${walletAddress.slice(0, 10)}...`, error);
-          return false;
+        if (error?.code === 'BAD_DATA') {
+          await logger.logWarning(ErrorCategory.BLOCKCHAIN, 'Allowance decode failed, treating as zero', {
+            walletAddress,
+            spenderAddress,
+            tokenAddress,
+            chain: resolvedChain,
+            errorMessage: error?.message
+          });
+          allowance = 0n;
+        } else {
+          throw error;
         }
       }
-    }
+      const approved = BigInt(allowance) >= BigInt(requiredAmount);
 
-    return false;
+      // Update both caches
+      const entry: ApprovalCacheEntry = {
+        approved,
+        timestamp: Date.now(),
+        allowance: allowance.toString()
+      };
+
+      await this.setApproval(walletAddress, spenderAddress, tokenAddress, entry, resolvedChain);
+
+      return approved;
+    } catch (error) {
+      console.error('[ApprovalCache] On-chain check error:', error);
+      return false;
+    }
   }
 
   /**
@@ -148,11 +101,13 @@ class ApprovalCache {
    */
   async setApproval(
     walletAddress: string,
-    marketplaceAddress: string,
+    spenderAddress: string,
     tokenAddress: string,
-    entry: ApprovalCacheEntry
+    entry: ApprovalCacheEntry,
+    chain: ChainValue = DEFAULT_CHAIN
   ): Promise<void> {
-    const key = this.getCacheKey(walletAddress, marketplaceAddress, tokenAddress);
+    const resolvedChain = normalizeChainValue(chain);
+    const key = this.getCacheKey(walletAddress, spenderAddress, tokenAddress, resolvedChain);
 
     // Update memory cache
     this.cache.set(key, entry);
@@ -163,15 +118,16 @@ class ApprovalCache {
       const redisKey = this.REDIS_PREFIX + key;
       await redis.setex(redisKey, this.REDIS_TTL, JSON.stringify(entry));
     } catch (error) {
-      warnLog('Cache', `ApprovalCache: Failed to update Redis | key=${key}`);
+      console.error('[ApprovalCache] Failed to update Redis:', error);
     }
   }
 
   /**
    * Invalidate cache for a specific approval
    */
-  async invalidate(walletAddress: string, marketplaceAddress: string, tokenAddress: string): Promise<void> {
-    const key = this.getCacheKey(walletAddress, marketplaceAddress, tokenAddress);
+  async invalidate(walletAddress: string, spenderAddress: string, tokenAddress: string, chain: ChainValue = DEFAULT_CHAIN): Promise<void> {
+    const resolvedChain = normalizeChainValue(chain);
+    const key = this.getCacheKey(walletAddress, spenderAddress, tokenAddress, resolvedChain);
 
     // Remove from memory cache
     this.cache.delete(key);
@@ -182,7 +138,7 @@ class ApprovalCache {
       const redisKey = this.REDIS_PREFIX + key;
       await redis.del(redisKey);
     } catch (error) {
-      warnLog('Cache', `ApprovalCache: Failed to invalidate Redis | key=${key}`);
+      console.error('[ApprovalCache] Failed to invalidate Redis cache:', error);
     }
   }
 
@@ -199,7 +155,7 @@ class ApprovalCache {
         await redis.del(...keys);
       }
     } catch (error) {
-      warnLog('Cache', 'ApprovalCache: Failed to clear Redis cache');
+      console.error('[ApprovalCache] Failed to clear Redis cache:', error);
     }
   }
 

@@ -21,6 +21,7 @@ import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
 import { BoundedCache } from "../../utils/bounded-cache";
 import { apiDedup } from "../../utils/api-dedup";
+import { ChainValue, DEFAULT_CHAIN, getChainConfig, getCurrencyAddress, getProviderForChain, normalizeChainValue } from "../../utils/chains";
 
 // Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
 // This prevents log flooding when multiple parallel jobs hit the same balance check
@@ -79,8 +80,19 @@ const MAGICEDEN_CONFIG = {
 }
 
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
-// Singleton provider with connection pooling
-const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
+
+// Chain-aware provider cache
+const providerCache = new Map<ChainValue, ethers.JsonRpcProvider>();
+function getMagicEdenProvider(chain?: ChainValue | null): ethers.JsonRpcProvider {
+  const resolved = normalizeChainValue(chain ?? DEFAULT_CHAIN);
+  if (!providerCache.has(resolved)) {
+    providerCache.set(resolved, getProviderForChain(resolved));
+  }
+  return providerCache.get(resolved)!;
+}
+
+// Legacy provider for backwards compatibility
+const provider = getMagicEdenProvider(DEFAULT_CHAIN);
 
 const lockManager = new DistributedLockManager({
   lockPrefix: 'magiceden:fetch:',
@@ -96,22 +108,35 @@ const BASIS_CONSTANTS: Record<number, number> = {
   4: 1e14
 };
 
-// Wallet cache to avoid recreating wallet instances
+// Chain-aware wallet cache to avoid recreating wallet instances
 const walletCache = new Map<string, Wallet>();
-function getWallet(privateKey: string): Wallet {
-  if (!walletCache.has(privateKey)) {
-    walletCache.set(privateKey, new Wallet(privateKey, provider));
+function getWallet(privateKey: string, chain?: ChainValue | null): Wallet {
+  const resolved = normalizeChainValue(chain ?? DEFAULT_CHAIN);
+  const cacheKey = `${resolved}:${privateKey}`;
+  if (!walletCache.has(cacheKey)) {
+    walletCache.set(cacheKey, new Wallet(privateKey, getMagicEdenProvider(resolved)));
   }
-  return walletCache.get(privateKey)!;
+  return walletCache.get(cacheKey)!;
 }
 
-// Cached domain and types for signing
-const domainCache = {
-  name: "Seaport",
-  version: "1.6",
-  chainId: 1,
-  verifyingContract: "0x0000000000000068f116a894984e2db1123eb395"
-};
+// Chain-aware domain cache for signing
+const domainCacheMap = new Map<ChainValue, { name: string; version: string; chainId: number; verifyingContract: string }>();
+function getSeaportDomain(chain?: ChainValue | null): { name: string; version: string; chainId: number; verifyingContract: string } {
+  const resolved = normalizeChainValue(chain ?? DEFAULT_CHAIN);
+  if (!domainCacheMap.has(resolved)) {
+    const config = getChainConfig(resolved);
+    domainCacheMap.set(resolved, {
+      name: "Seaport",
+      version: "1.6",
+      chainId: config.provider.chainId,
+      verifyingContract: "0x0000000000000068f116a894984e2db1123eb395"
+    });
+  }
+  return domainCacheMap.get(resolved)!;
+}
+
+// Legacy domain cache for backwards compatibility
+const domainCache = getSeaportDomain(DEFAULT_CHAIN);
 
 const typesCache = {
   OrderComponents: [
@@ -249,6 +274,9 @@ export async function bidOnMagiceden(
       return;
     }
 
+    // Get chain from task
+    const chain = (task.chain as ChainValue) ?? DEFAULT_CHAIN;
+
     // Pre-calculate all constants upfront
     const duration = bidExpiry / 60 || 15; // minutes
     const currentTime = Date.now();
@@ -259,10 +287,10 @@ export async function bidOnMagiceden(
     const decimalPower = Math.pow(10, decimal);
     const currencySymbol = isUSDC ? "USDC" : "WETH";
 
-    // Get wallet from cache
-    const wallet = getWallet(privateKey);
+    // Get wallet from cache (chain-aware)
+    const wallet = getWallet(privateKey, chain);
 
-    const wethBalance = await fetchERC20Balance(maker, currency);
+    const wethBalance = await fetchERC20Balance(maker, currency, chain);
     const offerPriceEth = Math.round(Number(weiPrice)) / decimalPower;
 
     // Optimize decimal calculation
