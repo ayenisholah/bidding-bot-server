@@ -15028,7 +15028,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             if (!cachedTopOffer) {
               debugLog('Counterbid', `[OS] ${task.contract.slug} [${targetTokenId}] | Token-vs-Collection: Cache MISS - fetching from API`, { taskId: task._id.toString(), marketplace: 'opensea' });
               try {
-                const [topOffer] = await fetchItemOffers(task.contract.contractAddress, targetTokenId.toString());
+                const [topOffer] = await fetchItemOffers(task.contract.contractAddress, targetTokenId.toString(), task.chain);
                 const topOfferEth = topOffer?.eth || 0;
                 const walletsArr = await walletCache.getAllWallets();
                 const topBidderOwner = topOffer?.owner?.toLowerCase() || '';
@@ -18505,7 +18505,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       // Parallel fetch: wallets and item offers
       const [walletsArr, highestBid] = await Promise.all([
         walletCache.getAllWallets(),
-        fetchItemOffers(resolvedContractAddress, asset.tokenId.toString())
+        fetchItemOffers(resolvedContractAddress, asset.tokenId.toString(), currentTask.chain)
       ]);
       const [topOffer, secondOffer] = highestBid
 

@@ -17,6 +17,7 @@ import { InsufficientBalanceError } from "../errors";
 import { getCachedOrFetch, CACHE_TTL, CACHE_KEYS } from "../../utils/opensea-cache";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
+import { debugLog } from "../../utils/debug-file-logger";
 import fs from 'fs';
 import path from 'path';
 import { MAX_PAIN_OVERRIDE_ADDRESS, MAX_PAIN_SLUG, MAX_PAIN_TOKEN_OVERRIDES } from "../../maxPainOverrides";
@@ -464,6 +465,13 @@ export async function bidOnOpensea(
       }
 
       if (asset) {
+        debugLog('BidFlow', `[OS-TokenBid] ${slug} #${asset.tokenId} | ENTRY | price=${offerPriceEthFinal} ${currencySymbol} | contract=${asset.contractAddress} | expiry=${expiry}s`, {
+          taskId,
+          marketplace: 'opensea',
+          slug,
+          tokenId: asset.tokenId.toString()
+        });
+
         const offer = await buildItemOffer(task._id, {
           assetContractAddress: asset.contractAddress,
           tokenId: asset.tokenId.toString(),
@@ -476,6 +484,13 @@ export async function bidOnOpensea(
         if (!offer) {
           return
         }
+
+        debugLog('BidFlow', `[OS-TokenBid] ${slug} #${asset.tokenId} | OFFER_BUILT | considerations=${offer.consideration.length} | salt=${offer.salt}`, {
+          taskId,
+          marketplace: 'opensea',
+          slug,
+          tokenId: asset.tokenId.toString()
+        });
 
         const opensea_consideration = {
           itemType: 1,
@@ -512,17 +527,39 @@ export async function bidOnOpensea(
 
         }
 
+        const totalCreatorFees = Object.keys(creator_fees).filter(addr => addr !== 'null' && addr.toLowerCase() !== '0x0000000000000000000000000000000000000000' && creator_fees[addr] > 0).length;
+        debugLog('BidFlow', `[OS-TokenBid] ${slug} #${asset.tokenId} | FEES_ADDED | openseaFeeBps=${openseaMarketplaceFeeBps.toString()} | creatorFees=${totalCreatorFees} | totalConsiderations=${offer.totalOriginalConsiderationItems}`, {
+          taskId,
+          marketplace: 'opensea',
+          slug,
+          tokenId: asset.tokenId.toString()
+        });
+
         const itemSignature = await signOffer(chain, wallet, offer)
 
         if (!itemSignature) {
           return
         }
 
+        debugLog('BidFlow', `[OS-TokenBid] ${slug} #${asset.tokenId} | SIGNED | signatureLen=${itemSignature.length}`, {
+          taskId,
+          marketplace: 'opensea',
+          slug,
+          tokenId: asset.tokenId.toString()
+        });
+
         // check if the tasks is still active before you make the offer
         const [taskIdFromBidCount] = bidCount.split(":")
         if (isTaskBlacklisted(taskIdFromBidCount, 'opensea') || !task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) {
           return
         }
+
+        debugLog('BidFlow', `[OS-TokenBid] ${slug} #${asset.tokenId} | POSTING | wallet=${wallet_address.slice(0, 10)}...`, {
+          taskId,
+          marketplace: 'opensea',
+          slug,
+          tokenId: asset.tokenId.toString()
+        });
 
         const itemResponse = await postItemOffer(taskId, offer, itemSignature, chain)
         const itemOrderHash = itemResponse?.order?.order_hash
@@ -543,7 +580,13 @@ export async function bidOnOpensea(
         }
         trackBidRate('opensea', taskId);
 
-        // Log successful token bid
+        debugLog('BidFlow', `[OS-TokenBid] ${slug} #${asset.tokenId} | SUCCESS | orderHash=${itemOrderHash || 'none'} | savedToDB=${!!itemOrderHash}`, {
+          taskId,
+          marketplace: 'opensea',
+          slug,
+          tokenId: asset.tokenId.toString(),
+          orderHash: itemOrderHash
+        });
       }
 
       else if (opensea_traits && typeof opensea_traits !== "undefined") {
