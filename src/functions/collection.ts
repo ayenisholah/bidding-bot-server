@@ -89,7 +89,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation:
   return Promise.race([promise, timeoutPromise]);
 }
 
-export async function getCollectionDetails(slug: string, contractAddress?: string) {
+export async function getCollectionDetails(slug: string, contractAddress?: string, priority?: number) {
   if (collectionCache[slug]) {
     ensureOpenseaMarketplaceFee(collectionCache[slug]);
     return collectionCache[slug];
@@ -125,7 +125,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
         const { data: collection } = await withTimeout(
           apiDedup(
             `opensea-collection-details-${slug.toLowerCase()}`,
-            () => limiter.schedule(() => axiosInstance.get(
+            () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get(
               `${BASE_URL}/opensea/api/v2/collections/${slug}`,
               {
                 headers: {
@@ -624,10 +624,10 @@ export async function getAllFloorPrices(collectionSlug: string): Promise<{
   };
 }
 
-export async function getOpenseaCollectionStats(collectionSlug: string) {
+export async function getOpenseaCollectionStats(collectionSlug: string, priority?: number) {
   const { data } = await apiDedup(
     `opensea-stats-${collectionSlug.toLowerCase()}`,
-    () => limiter.schedule(() => axiosInstance.get(
+    () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get(
       `${BASE_URL}/opensea/api/v2/collections/${collectionSlug}/stats`,
       {
         headers: { 'x-api-key': API_KEY }
@@ -645,7 +645,8 @@ export async function getOpenseaCollectionStats(collectionSlug: string) {
 export async function getCollectionEvents(
   collectionSlug: string,
   eventTypes: string[] = ['all', 'cancel', 'listing', 'offer', 'order', 'sale', 'transfer'],
-  limit: number = 50
+  limit: number = 50,
+  priority?: number
 ) {
   const cacheKey = `collectionEvents:${collectionSlug}:${eventTypes.join(',')}}:${limit}`;
   const cachedData = getRedis() ? await getRedis().get(cacheKey) : null;
@@ -660,7 +661,7 @@ export async function getCollectionEvents(
 
     const { data } = await apiDedup(
       `opensea-events-${collectionSlug}-${eventTypes.sort().join(',')}-${limit}`,
-      () => limiter.schedule(() => axiosInstance.get<CollectionEventResponse>(
+      () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<CollectionEventResponse>(
         `${BASE_URL}/opensea/api/v2/events/collection/${collectionSlug}`,
         {
           params: params,
@@ -692,7 +693,8 @@ export async function fetchOpenSeaCollectionItems(
   allTokenIds: string[] = [],
   cursor?: string,
   taskId?: string,
-  expectedCount?: number
+  expectedCount?: number,
+  priority?: number
 ): Promise<string[]> {
   const CACHE_TTL = 3600; // 1 hour cache
   const cacheKey = `opensea:collection-items:${hashData(variables)}`;
@@ -722,7 +724,7 @@ export async function fetchOpenSeaCollectionItems(
         }
 
         // Fetch data
-        return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount);
+        return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount, priority);
       });
 
       if (result) {
@@ -742,7 +744,7 @@ export async function fetchOpenSeaCollectionItems(
       throw new Error('Failed to acquire lock for collection items fetch');
     } else {
       // For paginated requests, fetch directly without lock
-      return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount);
+      return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount, priority);
     }
   } catch (error) {
     errorLog('Collection', `[collection.ts] Error fetching OpenSea collection items | slug=${variables.collectionSlug}`, error);
@@ -757,7 +759,8 @@ async function fetchCollectionItemsRecursive(
   cursor?: string,
   pageNumber: number = 1,
   taskId?: string,
-  expectedCount?: number
+  expectedCount?: number,
+  priority?: number
 ): Promise<string[]> {
   const queryVariables = {
     ...variables,
@@ -772,7 +775,7 @@ async function fetchCollectionItemsRecursive(
   try {
     const { data } = await apiDedup(
       `opensea-items-${variables.collectionSlug}-${cursor || 'initial'}`,
-      () => limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
+      () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
         headers: {
           "x-api-key": API_KEY
         },
@@ -826,7 +829,7 @@ async function fetchCollectionItemsRecursive(
     const nextCursor = data.data.collectionItems.nextPageCursor;
 
     if (nextCursor) {
-      return fetchCollectionItemsRecursive(variables, updatedTokenIds, nextCursor, pageNumber + 1, taskId, expectedCount);
+      return fetchCollectionItemsRecursive(variables, updatedTokenIds, nextCursor, pageNumber + 1, taskId, expectedCount, priority);
     }
 
     // Reset processing percentage when done
@@ -1035,7 +1038,8 @@ interface TraitWithFloorPrice {
 
 export async function fetchOpenseaTraitFloors(
   slug: string,
-  traits: Array<{ traitType: string; values: string[] }>
+  traits: Array<{ traitType: string; values: string[] }>,
+  priority?: number
 ): Promise<TraitWithFloorPrice[]> {
   const CACHE_TTL = 60; // 1 minute cache
   const traitHash = hashData(traits);
@@ -1131,7 +1135,7 @@ export async function fetchOpenseaTraitFloors(
 
       const { data } = await apiDedup(
         `opensea-trait-floors-${slug}-${hashData(traits)}`,
-        () => limiter.schedule(() =>
+        () => limiter.schedule(priority !== undefined ? { priority } : {}, () =>
           axiosInstance.post(`${BASE_URL}/opensea/graphql`, payload, {
             headers: {
               "x-api-key": API_KEY
@@ -1378,7 +1382,7 @@ interface CollectionTokensQueryResponse {
  * @param collectionSlug - The OpenSea collection slug
  * @returns Record mapping token IDs to their contract addresses
  */
-export async function getCollectionTokenContractMap(collectionSlug: string): Promise<Record<string, string>> {
+export async function getCollectionTokenContractMap(collectionSlug: string, priority?: number): Promise<Record<string, string>> {
   const map: Record<string, string> = {};
 
   try {
@@ -1428,7 +1432,7 @@ export async function getCollectionTokenContractMap(collectionSlug: string): Pro
 
       const response: AxiosResponse<CollectionTokensQueryResponse> = await apiDedup(
         `opensea-token-contracts-${collectionSlug}-${cursor || 'initial'}`,
-        () => limiter.schedule(() =>
+        () => limiter.schedule(priority !== undefined ? { priority } : {}, () =>
           axiosInstance.post<CollectionTokensQueryResponse>(
             `${BASE_URL}/opensea/graphql`,
             payload,

@@ -9352,7 +9352,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
                 removeOnFail: false,  // Keep failed jobs for retry
                 attempts: Number.MAX_SAFE_INTEGER,  // Infinite retries for SCHEDULE jobs
                 timeout: 900000, // 15 minutes instead of default 5
-                priority: 1, // Higher priority than default jobs
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -15696,7 +15695,8 @@ function getTraitCount(traitsJson: any, attribute: any) {
 async function performMarketplacePreprocessing(
   task: ITask,
   marketplace: string,
-  availableMarketplaces: string[]
+  availableMarketplaces: string[],
+  priority?: number
 ): Promise<TaskPreprocessing> {
   const taskId = task._id;
   const slug = task.contract?.slug || 'unknown';
@@ -15740,7 +15740,7 @@ async function performMarketplacePreprocessing(
     if (amount) {
       const [openseaListings, magicedenListings] = await Promise.all([
         marketplace === "opensea" && availableMarketplaces.includes("opensea") ?
-          fetchOpenseaListings(taskId, task.contract.slug, amount)
+          fetchOpenseaListings(taskId, task.contract.slug, amount, priority)
             .then(result => {
               openseaApiCalled = true;
               openseaApiReturnedEmpty = result ? result.length === 0 : true;
@@ -15749,7 +15749,7 @@ async function performMarketplacePreprocessing(
             .catch(() => []) :
           Promise.resolve([]),
         marketplace === "magiceden" && availableMarketplaces.includes("magiceden") ?
-          fetchMagicEdenTokens(taskId, task.contract.slug, amount)
+          fetchMagicEdenTokens(taskId, task.contract.slug, amount, priority)
             .then(result => {
               magicedenApiCalled = true;
               magicedenApiReturnedEmpty = result ? result.length === 0 : true;
@@ -15799,7 +15799,7 @@ async function performMarketplacePreprocessing(
                 const traitCount = getTraitCount(task.traits, attribute);
                 const expectedCount = typeof traitCount === 'number' ? traitCount : 0;
 
-                const items = await fetchOpenSeaCollectionItems(variable, [], undefined, taskId, expectedCount);
+                const items = await fetchOpenSeaCollectionItems(variable, [], undefined, taskId, expectedCount, priority);
                 if (items.length === 0) {
                 } else if (items.length >= 2000) {
                 }
@@ -15830,7 +15830,7 @@ async function performMarketplacePreprocessing(
             }
             expectedCount = expectedCount === Infinity ? 0 : expectedCount;
 
-            const items = await fetchOpenSeaCollectionItems(variable, [], undefined, taskId, expectedCount);
+            const items = await fetchOpenSeaCollectionItems(variable, [], undefined, taskId, expectedCount, priority);
             if (items.length === 0) {
             } else if (items.length >= 2000) {
             }
@@ -16253,8 +16253,8 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
             .filter(m => enabledMarketplaces.map(em => em.toLowerCase()).includes(m))
             .filter(m => validMarketplaces.includes(m));
 
-          // Perform preprocessing for OpenSea
-          preprocessing = await performMarketplacePreprocessing(currentTask, "opensea", availableMarketplaces);
+          // Perform preprocessing for OpenSea (with priority 0 for scheduled jobs)
+          preprocessing = await performMarketplacePreprocessing(currentTask, "opensea", availableMarketplaces, 0);
 
           // Store in Map for other marketplaces to use
           taskPreprocessing.set(taskId, preprocessing);
@@ -16381,7 +16381,7 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
         try {
           const currencyDetails = getCurrencyDetailsFromTask(currentTask, "opensea");
           currency = currencyDetails.currency;
-          collectionDetails = await getCollectionDetails(currentTask.contract.slug, currentTask.contract.contractAddress);
+          collectionDetails = await getCollectionDetails(currentTask.contract.slug, currentTask.contract.contractAddress, 0);
 
           // Log full collection details object
         } catch (error) {
@@ -16871,10 +16871,10 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       }
     }
     else {
-      // Parallel fetch: wallets and offers
+      // Parallel fetch: wallets and offers (priority 0 for scheduled jobs)
       const [walletsArr, offers] = await Promise.all([
         walletCache.getAllWallets(),
-        fetchOpenseaOffers('COLLECTION', currentTask.contract.slug, {})
+        fetchOpenseaOffers('COLLECTION', currentTask.contract.slug, {}, 0)
       ]);
       const [topOffer, secondOffer] = (offers as unknown) as OpenseaOfferData[]
       const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
@@ -17126,8 +17126,8 @@ async function processBlurScheduledBid(task: ITask) {
         .filter(m => enabledMarketplaces.map(em => em.toLowerCase()).includes(m))
         .filter(m => validMarketplaces.includes(m));
 
-      // Perform preprocessing for Blur
-      preprocessing = await performMarketplacePreprocessing(currentTask, "blur", availableMarketplaces);
+      // Perform preprocessing for Blur (with priority 0 for scheduled jobs)
+      preprocessing = await performMarketplacePreprocessing(currentTask, "blur", availableMarketplaces, 0);
 
       // Store in Map for other marketplaces to use
       taskPreprocessing.set(taskId, preprocessing);
@@ -17603,7 +17603,7 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
 
 
-    const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
+    const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug, 0));
     if (!floor_price) {
       throw new Error(`Failed to fetch floor price for ${currentTask.contract.slug}`);
     }
@@ -17707,7 +17707,7 @@ async function processBlurCollectionBid(data: { taskId: string }) {
     }
     else {
 
-      const highestBid = await fetchBlurBid(currentTask.contract.slug, "COLLECTION", {});
+      const highestBid = await fetchBlurBid(currentTask.contract.slug, "COLLECTION", {}, 0);
       const [topOffer, secondOffer] = highestBid?.priceLevels?.sort((a, b) => +b.price - +a.price) || [{ price: "0" }, { price: "0" }];
       const topOfferAmount = typeof topOffer === 'object' && topOffer ? Number(topOffer.price) : 0
       const secondOfferAmount = typeof secondOffer === 'object' && secondOffer ? Number(secondOffer.price) : 0
@@ -20092,8 +20092,8 @@ async function processMagicedenScheduledBid(task: ITask, _jobId?: string, schedu
             .filter(m => enabledMarketplaces.map(em => em.toLowerCase()).includes(m))
             .filter(m => validMarketplaces.includes(m));
 
-          // Perform preprocessing for MagicEden
-          preprocessing = await performMarketplacePreprocessing(currentTask, "magiceden", availableMarketplaces);
+          // Perform preprocessing for MagicEden (with priority 0 for scheduled jobs)
+          preprocessing = await performMarketplacePreprocessing(currentTask, "magiceden", availableMarketplaces, 0);
 
           // Store in Map for other marketplaces to use
           taskPreprocessing.set(taskId, preprocessing);
@@ -20577,8 +20577,8 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
     const expiration = getExpiry(currentTask.bidDuration)
 
 
-    // Fetch floor price. Orders from cache.
-    const floor_price = await fetchMagicEdenCollectionStats(currentTask.contract.contractAddress).then(Number);
+    // Fetch floor price. Orders from cache. (priority 0 for scheduled jobs)
+    const floor_price = await fetchMagicEdenCollectionStats(currentTask.contract.contractAddress, 0).then(Number);
     const cachedOrder = orderCache.get(currentTask._id, MAGICEDEN.toLowerCase(), 'collection');
     const orders = cachedOrder ? [cachedOrder] : [];
 
@@ -20684,9 +20684,9 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
     }
 
     else {
-      // Parallel offer fetching when outbidding
+      // Parallel offer fetching when outbidding (priority 0 for scheduled jobs)
       const [[topOffer, secondOffer], walletsArr] = await Promise.all([
-        fetchMagicEdenOffer("COLLECTION", currentTask.contract.contractAddress, "{}") as unknown as Promise<OpenseaOfferData[]>,
+        fetchMagicEdenOffer("COLLECTION", currentTask.contract.contractAddress, "{}", 0) as unknown as Promise<OpenseaOfferData[]>,
         walletCache.getAllWallets()
       ]);
 

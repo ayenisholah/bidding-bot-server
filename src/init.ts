@@ -269,4 +269,12 @@ export function scheduleWithTaskValidation(fn: () => PromiseLike<any>, taskId: s
   return limiter.schedule(fn);
 }
 
+// Schedule with priority support - lower number = higher priority (0 = highest)
+export function scheduleWithPriority<T>(fn: () => PromiseLike<T>, priority?: number): Promise<T> {
+  if (priority !== undefined) {
+    return limiter.schedule({ priority }, fn);
+  }
+  return limiter.schedule(fn);
+}
+
 export { limiter, initialize, axiosInstance };

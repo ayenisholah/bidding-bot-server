@@ -1538,7 +1538,8 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
 export async function fetchOpenseaOffers(
   offerType: 'COLLECTION' | 'TRAIT' | 'TOKEN',
   collectionSlug: string,
-  identifiers: Record<string, string> | string
+  identifiers: Record<string, string> | string,
+  priority?: number
 ) {
   if (offerType === 'COLLECTION') {
     // Use OpenSea GraphQL API for collection offers
@@ -1688,7 +1689,7 @@ export async function fetchOpenseaOffers(
 
     const response = await apiDedup(
       `opensea-collection-offers-${collectionSlug}`,
-      () => limiter?.schedule(() =>
+      () => limiter?.schedule(priority !== undefined ? { priority } : {}, () =>
         axiosInstance.post(`${BASE_URL}/opensea/graphql`, query, {
           headers: {
             'content-type': 'application/json',
@@ -1888,7 +1889,7 @@ export async function fetchOpenseaOffers(
 
         return apiDedup(
           `opensea-trait-offers-collection-${collectionSlug}`,
-          () => limiter?.schedule(() =>
+          () => limiter?.schedule(priority !== undefined ? { priority } : {}, () =>
             axiosInstance.post(`${BASE_URL}/opensea/graphql`, collectionQuery, {
               headers: {
                 'content-type': 'application/json',
@@ -2048,7 +2049,7 @@ export async function fetchOpenseaOffers(
 
         return apiDedup(
           `opensea-trait-offers-${collectionSlug}-${type}-${value}`,
-          () => limiter?.schedule(() =>
+          () => limiter?.schedule(priority !== undefined ? { priority } : {}, () =>
             axiosInstance.post(`${BASE_URL}/opensea/graphql`, traitQuery, {
               headers: {
                 'content-type': 'application/json',
@@ -2154,7 +2155,7 @@ export async function openseaTraitFloor(slug: string, trait: {
   );
 }
 
-export async function fetchOpenseaListings(taskId: string, collectionSlug: string, limit?: number) {
+export async function fetchOpenseaListings(taskId: string, collectionSlug: string, limit?: number, priority?: number) {
   if (!limit) return;
 
   const cacheKey = CACHE_KEYS.listings(collectionSlug, limit);
@@ -2173,7 +2174,7 @@ export async function fetchOpenseaListings(taskId: string, collectionSlug: strin
           next: nextCursor,
           limit: Math.min(100, limit * 2 - uniqueTokenIds.length) // Fetch more to account for duplicates
         }
-        const { data } = await limiter.schedule(() => axiosInstance.get<OpenseaListingData>(baseUrl, {
+        const { data } = await limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<OpenseaListingData>(baseUrl, {
           headers: {
             'accept': 'application/json',
             'x-api-key': API_KEY

@@ -996,14 +996,14 @@ export async function cancelBlurBid(data: BlurCancelPayload) {
   }
 }
 
-export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | 'COLLECTION', criteriaValue: Record<string, string>) {
+export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | 'COLLECTION', criteriaValue: Record<string, string>, priority?: number) {
   const url = `${BASE_URL}/blur/v1/collections/${collection}/executable-bids`;
 
   if (criteriaType === 'TRAIT') {
     const tasks = [
       () => apiDedup(
         `blur-bids-trait-${collection}-${JSON.stringify(criteriaValue)}`,
-        () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+        () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<BlurBidResponse>(url, {
           params: {
             filters: JSON.stringify({
               criteria: {
@@ -1022,7 +1022,7 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
       ),
       () => apiDedup(
         `blur-bids-collection-${collection}`,
-        () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+        () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<BlurBidResponse>(url, {
           params: {
             filters: JSON.stringify({
               criteria: {
@@ -1062,7 +1062,7 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
   } else {
     const { data } = await apiDedup(
       `blur-bids-collection-${collection}`,
-      () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+      () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<BlurBidResponse>(url, {
         params: {
           filters: JSON.stringify({
             criteria: {
@@ -1084,7 +1084,7 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
 
 }
 
-export async function fetchBlurCollectionStats(slug: string) {
+export async function fetchBlurCollectionStats(slug: string, priority?: number) {
   const CACHE_TTL = 30; // 30 seconds cache
   const cacheKey = `blur:stats:${slug}`;
   const lockKey = `stats:${slug}`;
@@ -1117,7 +1117,7 @@ export async function fetchBlurCollectionStats(slug: string) {
       const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens`;
       const { data } = await apiDedup(
         `blur-stats-${slug}`,
-        () => limiter.schedule({ priority: 0 }, () => axiosInstance.get<BlurTokensResponse>(url, {
+        () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<BlurTokensResponse>(url, {
           headers: {
             'content-type': 'application/json',
             'x-api-key': API_KEY,
@@ -1147,7 +1147,7 @@ export async function fetchBlurCollectionStats(slug: string) {
   return result;
 }
 
-export async function fetchBlurTraitFloor(slug: string, trait: { type: string; value: string; }) {
+export async function fetchBlurTraitFloor(slug: string, trait: { type: string; value: string; }, priority?: number) {
   try {
     const filters = {
       traits: [{
@@ -1161,7 +1161,7 @@ export async function fetchBlurTraitFloor(slug: string, trait: { type: string; v
     const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens?filters=${encodedFilters}`;
     const { data } = await apiDedup(
       `blur-trait-floor-${slug}-${trait.type}-${trait.value}`,
-      () => limiter.schedule(() =>
+      () => limiter.schedule(priority !== undefined ? { priority } : {}, () =>
         axiosInstance.get<BlurTokensResponse>(url, {
           headers: {
             'x-api-key': API_KEY,
