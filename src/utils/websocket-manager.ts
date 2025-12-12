@@ -119,12 +119,10 @@ class WebSocketManager extends EventEmitter {
         this.ws = null;
       }
 
-// console.log(`Attempting WebSocket connection to: ${this.config.url}`);
       this.ws = new WebSocket(this.config.url);
 
       // Connection timeout
       const connectionTimeout = setTimeout(() => {
-// console.log(`WebSocket connection timeout after ${this.config.connectionTimeout}ms`);
         try {
           this.isReconnecting = false;
           if (this.ws) {
@@ -214,7 +212,17 @@ class WebSocketManager extends EventEmitter {
     this.missedPongs = 0;
 
     // Log connection established with current state
-    infoLog('WebSocket', `[CONNECTED] WebSocket connection established | connectionId=${connectionId} | totalConnections=${this.metrics.totalConnections} | activeSubscriptions=${this.activeSubscriptions.size} | persistentListings=${this.persistentListingSubscriptions.size} | activeSlugs=${this.getActiveSlugsList()}`);
+    infoLog('WebSocket', `[CONNECTED] WebSocket connection established | connectionId=${connectionId} | totalConnections=${this.metrics.totalConnections} | activeSubscriptions=${this.activeSubscriptions.size} | persistentListings=${this.persistentListingSubscriptions.size}`);
+
+    // Enable TCP keepalive for faster dead connection detection
+    try {
+      const socket = (this.ws as any)?._socket;
+      if (socket && typeof socket.setKeepAlive === 'function') {
+        socket.setKeepAlive(true, 10000); // 10 second keepalive
+      }
+    } catch {
+      // TCP keepalive not available
+    }
 
     // Send initial ping immediately after connection (per CLIENT_PROTOCOL.md)
     this.sendPing();
@@ -252,7 +260,7 @@ class WebSocketManager extends EventEmitter {
       // Check for missed pongs
       if (this.lastPingSent && this.lastPingSent > this.lastPongReceived) {
         this.missedPongs++;
-        if (this.missedPongs >= 6) { // Increased from 3 to 6 for better network tolerance
+        if (this.missedPongs >= 3) { // Reduced from 6 to 3 for faster dead connection detection
 
           try {
             this.ws?.close();
@@ -292,17 +300,16 @@ class WebSocketManager extends EventEmitter {
       this.clearTimeout('pongTimeout');
       this.setTimeout('pongTimeout', () => {
         this.missedPongs++;
-// console.log(`Pong timeout - missed ${this.missedPongs}/3 pongs`);
 
-        if (this.missedPongs >= 6) { // Increased from 3 to 6 for better network tolerance
-// console.log('Max missed pongs reached, forcing reconnection');
+        if (this.missedPongs >= 3) { // Reduced from 6 to 3 for faster dead connection detection
+          warnLog('WebSocket', 'Max missed pongs reached, forcing reconnection');
           try {
             this.ws?.close();
           } catch {
             warnLog('WebSocket', 'Error closing WebSocket after max missed pongs reached');
           }
         }
-      }, 15000); // 15 second pong timeout (increased from 5s for better network tolerance)
+      }, 10000); // 10 second pong timeout (reduced from 15s for faster detection)
 
     }, this.config.heartbeatInterval);
   }
@@ -610,10 +617,16 @@ class WebSocketManager extends EventEmitter {
         return;
       }
 
-      // Handle server shutdown notification
+      // Handle server shutdown notification - trigger immediate reconnection
       if (message.type === 'server_shutdown') {
-        infoLog('WebSocket', '[SHUTDOWN] Server shutdown notification received');
+        infoLog('WebSocket', '[SHUTDOWN] Server shutdown notification received - triggering reconnection');
         this.emit('server_shutdown', message);
+        // Close connection to trigger reconnection (use 1001 to indicate going away, not 1000 which prevents reconnect)
+        try {
+          this.ws?.close(1001, 'Server shutdown');
+        } catch {
+          warnLog('WebSocket', 'Error closing WebSocket on server shutdown');
+        }
         return;
       }
 
@@ -762,16 +775,10 @@ class WebSocketManager extends EventEmitter {
     this.metrics.totalErrors++;
     this.metrics.lastError = error;
 
-// console.log('WebSocket error:', error);
     this.emit('error', error);
 
     // If we get ECONNREFUSED or similar errors, the connection is dead
-    if (error.message?.includes('ECONNREFUSED') ||
-      error.message?.includes('ETIMEDOUT') ||
-      error.message?.includes('ENETUNREACH')) {
-// console.log('Connection error detected, will reconnect on close event');
-      // The close event will handle reconnection
-    }
+    // The close event will handle reconnection
   }
 
   private attemptReconnect(): void {
@@ -780,7 +787,7 @@ class WebSocketManager extends EventEmitter {
 
     // Check if we should stop retrying (0 means infinite retries)
     if (this.config.maxRetries > 0 && this.retryCount >= this.config.maxRetries) {
-// console.log('Max reconnection attempts exceeded');
+      warnLog('WebSocket', 'Max reconnection attempts exceeded');
       this.emit('max_retries_exceeded');
       return;
     }
@@ -800,20 +807,10 @@ class WebSocketManager extends EventEmitter {
     const jitter = exponentialDelay * jitterRange * (Math.random() - 0.5);
     const delay = Math.round(exponentialDelay + jitter);
 
-// console.log('Scheduling reconnection:', {
-      // attempt: this.retryCount + 1,
-      // maxRetries: this.config.maxRetries || 'unlimited',
-      // delayMs: delay,
-      // baseDelay: exponentialDelay,
-      // jitter: Math.round(jitter)
-    // });
-
     this.retryCount++;
 
     this.setTimeout('reconnect', () => {
-// console.log('Executing scheduled reconnection');
       this.connect().catch(() => {
-// console.log('Reconnection failed');
         // Connection will retry through its own error handling
       });
     }, delay);

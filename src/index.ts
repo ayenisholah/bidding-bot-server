@@ -77,13 +77,13 @@ import { exportLogs, logsToCSV, logsToJSON, type LogFilters } from "./utils/log-
 import { listingPriceCache } from "./utils/listing-price-cache";
 import Listing from "./models/listing.model";
 
-const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
+// const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
 
 // Initialize process lifecycle logging immediately on startup
 logProcessStart();
 
 // Backward-compatible alias used across Blur codepaths
-// const MARKETPLACE_WS_URL = "ws://localhost:8080";
+const MARKETPLACE_WS_URL = "ws://localhost:8080";
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
