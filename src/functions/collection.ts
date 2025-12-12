@@ -203,7 +203,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
         }
         return result;
       }),
-      30000, // 30 second timeout for entire operation
+      60000, // 60 second timeout for entire operation
       `Collection details fetch for ${slug}`
     );
 

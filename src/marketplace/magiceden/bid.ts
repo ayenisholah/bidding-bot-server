@@ -408,7 +408,7 @@ async function createBidData(
     addActiveRequest(taskId, controller);
     const bidStartTime = Date.now();
 
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
 
     try {
       const { data: order } = await limiter.schedule(async () => {
@@ -427,7 +427,7 @@ async function createBidData(
               'x-api-key': API_KEY
             },
             signal: controller.signal,
-            timeout: 30000,
+            timeout: 60000,
             "axios-retry": { retries: 0 }
           }
         );

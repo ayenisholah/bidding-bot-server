@@ -11,7 +11,7 @@ const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 const fallbackProvider = new ethers.JsonRpcProvider('https://ethereum.publicnode.com');
 
 // Configure RPC timeout and retry settings
-const RPC_TIMEOUT = 30000; // 30 seconds (increased from default ~10s)
+const RPC_TIMEOUT = 60000; // 60 seconds (increased from default ~10s)
 const MAX_RPC_RETRIES = 3;
 const RPC_RETRY_DELAY = 1000; // 1s, 2s, 4s exponential backoff
 
@@ -63,7 +63,8 @@ class ApprovalCache {
         return BigInt(entry.allowance) >= BigInt(requiredAmount);
       }
     } catch (error) {
-      warnLog('Cache', `ApprovalCache: Redis read error | key=${key}`);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      warnLog('Cache', `ApprovalCache: Redis read error | key=${key} | error=${errMsg}`);
     }
 
     // Cache miss - check on-chain with retry logic
@@ -163,7 +164,8 @@ class ApprovalCache {
       const redisKey = this.REDIS_PREFIX + key;
       await redis.setex(redisKey, this.REDIS_TTL, JSON.stringify(entry));
     } catch (error) {
-      warnLog('Cache', `ApprovalCache: Failed to update Redis | key=${key}`);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      warnLog('Cache', `ApprovalCache: Failed to update Redis | key=${key} | error=${errMsg}`);
     }
   }
 
@@ -182,7 +184,8 @@ class ApprovalCache {
       const redisKey = this.REDIS_PREFIX + key;
       await redis.del(redisKey);
     } catch (error) {
-      warnLog('Cache', `ApprovalCache: Failed to invalidate Redis | key=${key}`);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      warnLog('Cache', `ApprovalCache: Failed to invalidate Redis | key=${key} | error=${errMsg}`);
     }
   }
 
@@ -199,7 +202,8 @@ class ApprovalCache {
         await redis.del(...keys);
       }
     } catch (error) {
-      warnLog('Cache', 'ApprovalCache: Failed to clear Redis cache');
+      const errMsg = error instanceof Error ? error.message : String(error);
+      warnLog('Cache', `ApprovalCache: Failed to clear Redis cache | error=${errMsg}`);
     }
   }
 

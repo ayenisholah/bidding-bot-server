@@ -37,7 +37,7 @@ const authInProgress = new Map<string, Promise<string | undefined>>();
 
 // Authentication retry queue for failed attempts
 const authRetryQueue = new Map<string, { retryCount: number; nextRetryTime: number }>();
-const AUTH_RETRY_DELAY = 30000; // 30 seconds between retry attempts
+const AUTH_RETRY_DELAY = 60000; // 60 seconds between retry attempts
 const MAX_AUTH_RETRIES = 3;
 
 // Cache for transfer-restricted collections (TTL: 24 hours)
@@ -602,7 +602,7 @@ async function formatBidOnBlur(
           },
           data: JSON.stringify(buildPayload),
           signal: controller.signal,
-          timeout: 30000,
+          timeout: 60000,
           "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
         });
       });
@@ -771,7 +771,7 @@ async function submitBidToBlur(
               },
               data: JSON.stringify(submitPayload),
               signal: controller.signal,
-              timeout: 30000,
+              timeout: 60000,
               "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
             });
           });

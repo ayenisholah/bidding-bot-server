@@ -122,9 +122,6 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
     if (redis) {
       const cachedBalance = await redis.get(cacheKey);
       if (cachedBalance) {
-        if (DEBUG) {
-          debugLog('Balance', `Cache hit (fresh) | wallet=${truncateAddress(walletAddress)} | balance=${cachedBalance} ETH`);
-        }
         return Number(cachedBalance);
       }
     }
@@ -149,9 +146,6 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
           if (redis) {
             const cachedBalanceAfterLock = await redis.get(cacheKey);
             if (cachedBalanceAfterLock) {
-              if (DEBUG) {
-                debugLog('Balance', `Cache hit (after lock) | wallet=${truncateAddress(walletAddress)} | balance=${cachedBalanceAfterLock} ETH`);
-              }
               return Number(cachedBalanceAfterLock);
             }
           }
@@ -226,9 +220,6 @@ export async function fetchERC20BalanceFresh(walletAddress: string, _tokenAddres
     if (redis) {
       const cachedBalance = await redis.get(cacheKey);
       if (cachedBalance) {
-        if (DEBUG) {
-          debugLog('Balance', `[Fresh] Cache hit | wallet=${truncateAddress(walletAddress)} | balance=${cachedBalance} ETH`);
-        }
         return Number(cachedBalance);
       }
     }

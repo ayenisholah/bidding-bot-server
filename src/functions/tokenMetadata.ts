@@ -2,7 +2,7 @@ import { axiosInstance, limiter } from '../init';
 import { BASE_URL } from '../constants';
 import { API_KEY } from '..';
 import { tokenTraitCache, TokenTrait, TokenTraitData } from '../utils/token-trait-cache';
-import { errorLog, debugLog } from '../utils/debug-file-logger';
+import { errorLog, debugLog, warnLog } from '../utils/debug-file-logger';
 import { apiDedup } from '../utils/api-dedup';
 
 // GraphQL queries
@@ -124,9 +124,6 @@ export async function fetchTokenMetadata(
     // console.log(BLUE + `[TOKEN METADATA] Using cached traits for ${contractAddress}:${tokenId}` + RESET);
     return cached;
   }
-
-  // DEBUG: Log entry for cache miss
-  debugLog('Metadata', `fetchTokenMetadata ENTRY | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId}`);
 
   try {
     const response = await apiDedup(
@@ -391,37 +388,26 @@ export async function tokenHasTrait(
   traitType: string,
   traitValue: any
 ): Promise<boolean> {
-  // DEBUG: Log entry with parameters
-  debugLog('Metadata', `tokenHasTrait ENTRY | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | trait=${traitType}:${traitValue}`);
-
   // Try cache first
   const hasTrait = await tokenTraitCache.tokenHasTrait(contractAddress, tokenId, traitType, traitValue);
 
   if (hasTrait) {
-    debugLog('Metadata', `tokenHasTrait: Cache HIT | tokenId=${tokenId} | result=true`);
     return true;
   }
 
   // If not in cache, fetch metadata
-  debugLog('Metadata', `tokenHasTrait: Cache MISS | tokenId=${tokenId} | fetching metadata...`);
   const metadata = await fetchTokenMetadata(contractAddress, tokenId);
 
   if (!metadata) {
-    debugLog('Metadata', `tokenHasTrait: Metadata fetch FAILED | tokenId=${tokenId} | returning false`);
+    warnLog('Metadata', `tokenHasTrait: Metadata fetch FAILED | tokenId=${tokenId} | returning false`);
     return false;
   }
-
-  // DEBUG: Log traits found and comparison
-  const traitsList = metadata.traits.map(t => `${t.trait_type}:${t.value}`).slice(0, 5).join(', ');
-  const hasMoreTraits = metadata.traits.length > 5 ? ` (+${metadata.traits.length - 5} more)` : '';
-  debugLog('Metadata', `tokenHasTrait: Metadata fetched | tokenId=${tokenId} | traitsCount=${metadata.traits.length} | traits=[${traitsList}${hasMoreTraits}]`);
 
   const result = metadata.traits.some(trait =>
     trait.trait_type === traitType &&
     trait.value === traitValue
   );
 
-  debugLog('Metadata', `tokenHasTrait EXIT | tokenId=${tokenId} | looking for ${traitType}:${traitValue} | result=${result}`);
   return result;
 }
 

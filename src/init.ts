@@ -30,8 +30,8 @@ const retryConfig: IAxiosRetryConfig = {
 
       // Blur endpoints need extra time due to rate limiting
       if (url.includes('/blur/')) {
-        const baseDelay = 30000; // 30 seconds for Blur
-        const progressiveDelay = baseDelay + (retryCount - 1) * 10000; // +10s each retry (30s, 40s, 50s)
+        const baseDelay = 60000; // 60 seconds for Blur
+        const progressiveDelay = baseDelay + (retryCount - 1) * 10000; // +10s each retry (60s, 70s, 80s)
         const jitter = 1000 + Math.random() * 2000; // 1-3s jitter
         // console.log(`[Blur 408] Retrying Blur endpoint after 408 (attempt ${retryCount}), waiting ${progressiveDelay + jitter}ms`);
         return progressiveDelay + jitter;
@@ -47,7 +47,7 @@ const retryConfig: IAxiosRetryConfig = {
         return exponentialDelay + jitter;
       } else {
         // Progressive delay for other 408 errors
-        const delays = [20000, 30000, 40000]; // 20s, 30s, 40s
+        const delays = [40000, 60000, 80000]; // 40s, 60s, 80s
         const delay = delays[Math.min(retryCount - 1, delays.length - 1)];
         const jitter = 200 + Math.random() * 800; // 200-1000ms jitter
         // console.log(`Retrying after 408 error (attempt ${retryCount}), waiting ${delay + jitter}ms`);
@@ -91,7 +91,7 @@ const retryConfig: IAxiosRetryConfig = {
 };
 
 async function initialize(rateLimit: number) {
-  axiosInstance = axios.create({ timeout: 30000 });
+  axiosInstance = axios.create({ timeout: 60000 });
 
   limiter = new Bottleneck({
     minTime: 1000 / rateLimit, // Minimum time between job starts

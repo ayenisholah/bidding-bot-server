@@ -620,23 +620,19 @@ class WebSocketManager extends EventEmitter {
       // Log incoming bid/listing events with subscription validation
       if (message.eventType === 'BID_CREATED' || message.eventType === 'TRAIT_BID_CREATED' || message.eventType === 'LISTING_CREATED') {
         const msgSlug = message.payload?.payload?.collection?.slug || message.slug;
-        const msgContract = message.payload?.payload?.asset_contract_criteria?.address || message.contractAddress || 'unknown';
         const msgMarketplace = message.marketplace || 'unknown';
-
-        // Debug log for all incoming messages
-        infoLog('WebSocket', `[DEBUG-CLIENT] Message received | eventType=${message.eventType} | contract=${msgContract} | marketplace=${msgMarketplace}`);
 
         // Check if we're actually subscribed to this collection
         const isSubscribed = this.isSubscribedToSlug(msgSlug);
 
         if (!isSubscribed) {
-          // CRITICAL: We're receiving events for a collection we're NOT subscribed to!
-          warnLog('WebSocket', `[UNEXPECTED_EVENT] Received event for UNSUBSCRIBED collection | eventType=${message.eventType} | slug=${msgSlug} | marketplace=${msgMarketplace} | ourSubscriptions=${this.getActiveSlugsList()}`);
-          infoLog('WebSocket', `[DEBUG-CLIENT] Message for UNSUBSCRIBED collection | slug=${msgSlug} | ignoring=true`);
+          // Only log UNEXPECTED_EVENT for valid slugs (skip undefined/malformed - server-side noise)
+          if (msgSlug && msgSlug !== 'undefined') {
+            warnLog('WebSocket', `[UNEXPECTED_EVENT] Unsubscribed collection event | ${message.eventType} | slug=${msgSlug} | marketplace=${msgMarketplace}`);
+          }
         } else {
-          // Normal case - we are subscribed
-          debugLog('WebSocket', `[EVENT] Received ${message.eventType} for subscribed collection | slug=${msgSlug} | marketplace=${msgMarketplace}`);
-          infoLog('WebSocket', `[DEBUG-CLIENT] Message for subscribed collection | slug=${msgSlug} | processing=true`);
+          // Normal case - we are subscribed (debug level only)
+          debugLog('WebSocket', `[EVENT] ${message.eventType} | ${msgSlug} | ${msgMarketplace}`);
         }
       }
 

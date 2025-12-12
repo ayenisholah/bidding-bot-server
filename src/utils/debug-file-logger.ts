@@ -421,7 +421,8 @@ export function getMarketplaceCategories(marketplace: string): LogCategory[] {
 
 /**
  * Log a debug message to both console and file.
- * Only logs when DEBUG=true environment variable is set.
+ * Only logs when DEBUG=true.
+ * EXCEPTION: 'taskflow' category always logs (critical for debugging stuck tasks).
  * Routes to category-specific log file based on prefix.
  *
  * @param prefix - Log prefix category (e.g., 'TaskScheduler', 'BidFlow', 'STARTUP')
@@ -429,7 +430,12 @@ export function getMarketplaceCategories(marketplace: string): LogCategory[] {
  * @param metadata - Optional structured metadata for filtering (taskId, marketplace, slug, etc.)
  */
 export function debugLog(prefix: string, message: string, metadata?: LogMetadata): void {
-  if (!DEBUG) return;
+  // Always log taskflow category (critical for debugging stuck tasks)
+  const category = getCategoryForPrefix(prefix);
+  const isTaskflow = category === 'taskflow';
+
+  // Skip non-taskflow logs if DEBUG is off
+  if (!isTaskflow && !DEBUG) return;
 
   const timestamp = new Date().toISOString();
   const metaStr = formatMetadata(metadata);
