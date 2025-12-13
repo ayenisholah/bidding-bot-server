@@ -1,10 +1,10 @@
-import { errorLog, warnLog } from './debug-file-logger';
-import { getRedisConnection } from './redis';
+import { errorLog, warnLog, debugLog } from './debug-file-logger';
+import TokenTraitCacheModel from '../models/tokenTraitCache.model';
 
 // Cache configuration
 const MEMORY_CACHE_SIZE = 1000; // Maximum tokens in memory
-const REDIS_TTL = 7 * 24 * 60 * 60; // 7 days in seconds
 const MEMORY_TTL = 60 * 60 * 1000; // 1 hour in milliseconds
+const MONGODB_CACHE_MAX_SIZE = 100000; // Maximum documents in MongoDB collection
 
 interface TokenTrait {
   trait_type: string;
@@ -70,7 +70,7 @@ class TokenTraitCache {
    */
   async setTokenTraits(data: TokenTraitData): Promise<void> {
     const key = this.getCacheKey(data.contractAddress, data.tokenId);
-    
+
     try {
       // Store in memory cache with expiration
       this.evictLRU();
@@ -80,25 +80,58 @@ class TokenTraitCache {
       });
       this.updateAccessOrder(key);
 
-      // Store in Redis if available
+      // Store in MongoDB (bounded cache with LRU eviction)
       try {
-        const redis = getRedisConnection();
-        if (redis && redis.status === 'ready') {
-          await redis.setex(
-            key,
-            REDIS_TTL,
-            JSON.stringify(data)
-          );
-        }
-      } catch {
-        // Redis not available, continue with memory cache only
-        warnLog('Cache', 'Redis not available for token trait cache write, using memory cache only');
-      }
+        await TokenTraitCacheModel.findOneAndUpdate(
+          {
+            contractAddress: data.contractAddress.toLowerCase(),
+            tokenId: data.tokenId
+          },
+          {
+            $set: {
+              traits: data.traits,
+              lastUpdated: data.lastUpdated || new Date(),
+              accessedAt: new Date()
+            }
+          },
+          { upsert: true, new: true }
+        );
 
-      // console.log(GREEN + `[TOKEN TRAIT CACHE] Cached traits for ${key}` + RESET);
+        // Check if we need to evict old entries (bounded cache)
+        await this.evictMongoDBIfNeeded();
+      } catch (mongoErr) {
+        // MongoDB not available or error, continue with memory cache only
+        warnLog('Cache', `MongoDB write failed for token trait cache | error=${(mongoErr as Error).message}`);
+      }
 
     } catch (error) {
       errorLog('Cache', `Failed to cache token traits | contract=${data.contractAddress} | tokenId=${data.tokenId}`, error);
+    }
+  }
+
+  /**
+   * Evict oldest entries from MongoDB if cache exceeds max size
+   */
+  private async evictMongoDBIfNeeded(): Promise<void> {
+    try {
+      const count = await TokenTraitCacheModel.countDocuments();
+      if (count > MONGODB_CACHE_MAX_SIZE) {
+        // Delete oldest 10% of entries based on accessedAt
+        const deleteCount = Math.floor(MONGODB_CACHE_MAX_SIZE * 0.1);
+        const oldestDocs = await TokenTraitCacheModel
+          .find({})
+          .sort({ accessedAt: 1 })
+          .limit(deleteCount)
+          .select('_id');
+
+        const idsToDelete = oldestDocs.map(doc => doc._id);
+        await TokenTraitCacheModel.deleteMany({ _id: { $in: idsToDelete } });
+
+        debugLog('Cache', `MongoDB trait cache eviction: removed ${deleteCount} oldest entries | total was ${count}`);
+      }
+    } catch (error) {
+      // Non-critical, just log
+      warnLog('Cache', `MongoDB eviction check failed | error=${(error as Error).message}`);
     }
   }
 
@@ -113,7 +146,6 @@ class TokenTraitCache {
       const memoryCacheEntry = this.memoryCache.get(key);
       if (memoryCacheEntry && memoryCacheEntry.expires > Date.now()) {
         this.updateAccessOrder(key);
-        // console.log(BLUE + `[TOKEN TRAIT CACHE] Memory hit for ${key}` + RESET);
         return memoryCacheEntry.data;
       }
 
@@ -126,28 +158,43 @@ class TokenTraitCache {
         }
       }
 
-      // Check Redis if available
+      // Check MongoDB
       try {
-        const redis = getRedisConnection();
-        if (redis && redis.status === 'ready') {
-          const redisData = await redis.get(key);
-          if (redisData) {
-            const data = JSON.parse(redisData) as TokenTraitData;
-            
-            // Store back in memory cache
-            this.evictLRU();
-            this.memoryCache.set(key, {
-              data,
-              expires: Date.now() + MEMORY_TTL
-            });
-            this.updateAccessOrder(key);
-            
-            return data;
-          }
+        const mongoDoc = await TokenTraitCacheModel.findOneAndUpdate(
+          {
+            contractAddress: contractAddress.toLowerCase(),
+            tokenId: tokenId
+          },
+          { $set: { accessedAt: new Date() } }, // Update access time for LRU
+          { new: true }
+        );
+
+        if (mongoDoc) {
+          const data: TokenTraitData = {
+            contractAddress: mongoDoc.contractAddress,
+            tokenId: mongoDoc.tokenId,
+            traits: mongoDoc.traits.map((t: { trait_type: string; value: any; display_type?: string; rarity?: number }) => ({
+              trait_type: t.trait_type,
+              value: t.value,
+              display_type: t.display_type,
+              rarity: t.rarity
+            })),
+            lastUpdated: mongoDoc.lastUpdated
+          };
+
+          // Store back in memory cache
+          this.evictLRU();
+          this.memoryCache.set(key, {
+            data,
+            expires: Date.now() + MEMORY_TTL
+          });
+          this.updateAccessOrder(key);
+
+          return data;
         }
-      } catch {
-        // Redis not available, continue without it
-        warnLog('Cache', 'Redis not available for token trait cache read');
+      } catch (mongoErr) {
+        // MongoDB not available, continue without it
+        warnLog('Cache', `MongoDB read failed for token trait cache | error=${(mongoErr as Error).message}`);
       }
 
       return null;
@@ -216,18 +263,15 @@ class TokenTraitCache {
         this.accessOrder.splice(index, 1);
       }
 
-      // Remove from Redis if available
+      // Remove from MongoDB
       try {
-        const redis = getRedisConnection();
-        if (redis && redis.status === 'ready') {
-          await redis.del(key);
-        }
-      } catch {
-        // Redis not available, continue
-        warnLog('Cache', 'Redis not available for token trait cache delete');
+        await TokenTraitCacheModel.deleteOne({
+          contractAddress: contractAddress.toLowerCase(),
+          tokenId: tokenId
+        });
+      } catch (mongoErr) {
+        warnLog('Cache', `MongoDB delete failed for token trait cache | error=${(mongoErr as Error).message}`);
       }
-
-      // console.log(YELLOW + `[TOKEN TRAIT CACHE] Cleared cache for ${key}` + RESET);
 
     } catch (error) {
       errorLog('Cache', `Failed to clear token from cache | contract=${contractAddress} | tokenId=${tokenId}`, error);
@@ -258,18 +302,15 @@ class TokenTraitCache {
         }
       }
 
-      // Remove from Redis if available
+      // Remove from MongoDB
       try {
-        const redis = getRedisConnection();
-        if (redis && redis.status === 'ready' && keysToRemove.length > 0) {
-          await redis.del(...keysToRemove);
-        }
-      } catch {
-        // Redis not available, continue
-        warnLog('Cache', 'Redis not available for token trait cache bulk delete');
+        const result = await TokenTraitCacheModel.deleteMany({
+          contractAddress: contractLower
+        });
+        debugLog('Cache', `MongoDB cleared ${result.deletedCount} trait cache entries for contract ${contractAddress.slice(0, 10)}...`);
+      } catch (mongoErr) {
+        warnLog('Cache', `MongoDB bulk delete failed for token trait cache | error=${(mongoErr as Error).message}`);
       }
-
-      // console.log(YELLOW + `[TOKEN TRAIT CACHE] Cleared ${keysToRemove.length} entries for contract ${contractAddress}` + RESET);
 
     } catch (error) {
       errorLog('Cache', `Failed to clear contract from cache | contract=${contractAddress} | keysRemoved=${keysToRemove.length}`, error);
@@ -279,17 +320,24 @@ class TokenTraitCache {
   /**
    * Get cache statistics
    */
-  getCacheStats(): {
+  async getCacheStats(): Promise<{
     memorySize: number;
     memoryHits: number;
-    totalKeys: number;
+    mongoDBSize: number;
     oldestAccess: string | null;
     newestAccess: string | null;
-  } {
+  }> {
+    let mongoDBSize = 0;
+    try {
+      mongoDBSize = await TokenTraitCacheModel.countDocuments();
+    } catch {
+      // MongoDB not available
+    }
+
     return {
       memorySize: this.memoryCache.size,
       memoryHits: this.accessOrder.length,
-      totalKeys: this.memoryCache.size,
+      mongoDBSize,
       oldestAccess: this.accessOrder[0] || null,
       newestAccess: this.accessOrder[this.accessOrder.length - 1] || null
     };
@@ -300,11 +348,10 @@ class TokenTraitCache {
    */
   async shutdown(): Promise<void> {
     try {
-      // No need to close Redis connection as it's shared
-      // Just clear memory cache
+      // Just clear memory cache - MongoDB connection is shared
       this.memoryCache.clear();
       this.accessOrder = [];
-      
+
       console.log('[TOKEN TRAIT CACHE] Memory cache cleared');
 
     } catch (error) {

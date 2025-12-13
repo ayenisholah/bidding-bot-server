@@ -6,23 +6,19 @@ import { errorLog, debugLog, warnLog } from '../utils/debug-file-logger';
 import { apiDedup } from '../utils/api-dedup';
 
 // GraphQL queries
-// Note: Using /opensea/graphql endpoint instead of /graphql for OpenSea API compatibility
+// Note: Using /opensea/graphql endpoint with itemByIdentifier query
 const ItemAttributesQuery = `
-  query ItemAttributesQuery($contractAddress: String!, $tokenId: String!) {
-    contract(address: $contractAddress) {
-      address
-      name
-      nft(tokenId: $tokenId) {
+  query ItemAttributesQuery($identifier: ItemIdentifierInput!) {
+    itemByIdentifier(identifier: $identifier) {
+      __typename
+      ... on Item {
+        id
         tokenId
-        tokenUrl
-        tokenMetadata {
-          name
-          description
-          attributes {
-            traitType
-            value
-            displayType
-          }
+        contractAddress
+        attributes {
+          traitType
+          value
+          __typename
         }
       }
     }
@@ -78,24 +74,18 @@ const CollectionItemsListQuery = `
 interface GraphQLAttribute {
   traitType: string;
   value: any;
-  displayType?: string;
+  __typename?: string;
 }
 
-interface GraphQLTokenResponse {
+interface GraphQLItemByIdentifierResponse {
   data: {
-    contract: {
-      address: string;
-      name: string;
-      nft: {
-        tokenId: string;
-        tokenUrl: string;
-        tokenMetadata: {
-          name: string;
-          description: string;
-          attributes: GraphQLAttribute[];
-        };
-      };
-    };
+    itemByIdentifier: {
+      __typename: string;
+      id: string;
+      tokenId: string;
+      contractAddress: string;
+      attributes: GraphQLAttribute[];
+    } | null;
   };
 }
 
@@ -129,13 +119,17 @@ export async function fetchTokenMetadata(
     const response = await apiDedup(
       `opensea-token-metadata-${contractAddress.toLowerCase()}-${tokenId}`,
       () => limiter.schedule(() =>
-        axiosInstance.post<GraphQLTokenResponse>(
+        axiosInstance.post<GraphQLItemByIdentifierResponse>(
           `${BASE_URL}/opensea/graphql`,
           {
+            operationName: 'ItemAttributesQuery',
             query: ItemAttributesQuery,
             variables: {
-              contractAddress,
-              tokenId
+              identifier: {
+                chain: 'ethereum',
+                contractAddress,
+                tokenId
+              }
             }
           },
           {
@@ -149,23 +143,21 @@ export async function fetchTokenMetadata(
       { category: 'Metadata' }
     );
 
-    if (!response.data?.data?.contract?.nft) {
-      // DEBUG: Log why the API returned no NFT data
+    if (!response.data?.data?.itemByIdentifier) {
+      // DEBUG: Log why the API returned no item data
       const responseKeys = Object.keys(response.data || {}).join(',') || 'empty';
       const dataKeys = Object.keys(response.data?.data || {}).join(',') || 'empty';
-      const contractKeys = Object.keys(response.data?.data?.contract || {}).join(',') || 'empty';
-      debugLog('Metadata', `fetchTokenMetadata: API returned NULL NFT | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | responseKeys=[${responseKeys}] | dataKeys=[${dataKeys}] | contractKeys=[${contractKeys}]`);
+      debugLog('Metadata', `fetchTokenMetadata: API returned NULL item | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | responseKeys=[${responseKeys}] | dataKeys=[${dataKeys}]`);
       return null;
     }
 
-    const nftData = response.data.data.contract.nft;
-    const attributes = nftData.tokenMetadata?.attributes || [];
+    const item = response.data.data.itemByIdentifier;
+    const attributes = item.attributes || [];
 
     // Convert GraphQL attributes to our TokenTrait format
     const traits: TokenTrait[] = attributes.map(attr => ({
       trait_type: attr.traitType,
-      value: attr.value,
-      display_type: attr.displayType
+      value: attr.value
     }));
 
     const tokenTraitData: TokenTraitData = {
@@ -388,25 +380,53 @@ export async function tokenHasTrait(
   traitType: string,
   traitValue: any
 ): Promise<boolean> {
-  // Try cache first
-  const hasTrait = await tokenTraitCache.tokenHasTrait(contractAddress, tokenId, traitType, traitValue);
+  const startTime = Date.now();
+  const contractShort = contractAddress.slice(0, 10);
 
-  if (hasTrait) {
+  debugLog('Metadata', `tokenHasTrait: START | contract=${contractShort}... | tokenId=${tokenId} | traitType="${traitType}" | traitValue="${traitValue}"`);
+
+  // Try cache first
+  const cacheStartTime = Date.now();
+  const cachedHasTrait = await tokenTraitCache.tokenHasTrait(contractAddress, tokenId, traitType, traitValue);
+  const cacheElapsed = Date.now() - cacheStartTime;
+
+  if (cachedHasTrait) {
+    debugLog('Metadata', `tokenHasTrait: CACHE HIT | contract=${contractShort}... | tokenId=${tokenId} | traitType="${traitType}" | traitValue="${traitValue}" | result=true | cacheMs=${cacheElapsed} | totalMs=${Date.now() - startTime}`);
     return true;
   }
 
+  debugLog('Metadata', `tokenHasTrait: CACHE MISS | contract=${contractShort}... | tokenId=${tokenId} | cacheMs=${cacheElapsed} | fetching metadata...`);
+
   // If not in cache, fetch metadata
+  const fetchStartTime = Date.now();
   const metadata = await fetchTokenMetadata(contractAddress, tokenId);
+  const fetchElapsed = Date.now() - fetchStartTime;
 
   if (!metadata) {
-    warnLog('Metadata', `tokenHasTrait: Metadata fetch FAILED | tokenId=${tokenId} | returning false`);
+    warnLog('Metadata', `tokenHasTrait: FETCH FAILED | contract=${contractShort}... | tokenId=${tokenId} | traitType="${traitType}" | traitValue="${traitValue}" | fetchMs=${fetchElapsed} | totalMs=${Date.now() - startTime} | returning false`);
     return false;
   }
 
-  const result = metadata.traits.some(trait =>
+  debugLog('Metadata', `tokenHasTrait: FETCH SUCCESS | contract=${contractShort}... | tokenId=${tokenId} | traitsCount=${metadata.traits.length} | fetchMs=${fetchElapsed}`);
+
+  // Check if trait exists
+  const matchingTrait = metadata.traits.find(trait =>
     trait.trait_type === traitType &&
     trait.value === traitValue
   );
+
+  const result = !!matchingTrait;
+
+  if (result) {
+    debugLog('Metadata', `tokenHasTrait: MATCH FOUND | contract=${contractShort}... | tokenId=${tokenId} | traitType="${traitType}" | traitValue="${traitValue}" | result=true | totalMs=${Date.now() - startTime}`);
+  } else {
+    // Log available values for this trait type to help debug mismatches
+    const sameTypeTrait = metadata.traits.find(t => t.trait_type === traitType);
+    const availableValue = sameTypeTrait ? sameTypeTrait.value : 'TRAIT_TYPE_NOT_FOUND';
+    const allTraitTypes = metadata.traits.map(t => t.trait_type).join(', ');
+
+    debugLog('Metadata', `tokenHasTrait: NO MATCH | contract=${contractShort}... | tokenId=${tokenId} | traitType="${traitType}" | traitValue="${traitValue}" | actualValue="${availableValue}" | allTraitTypes=[${allTraitTypes}] | result=false | totalMs=${Date.now() - startTime}`);
+  }
 
   return result;
 }

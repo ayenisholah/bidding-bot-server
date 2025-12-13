@@ -3420,7 +3420,8 @@ async function startServer() {
     // These were previously top-level causing "Client must be connected" errors on startup
     validateBidCountInterval = setInterval(validateBidCount, STANDARD_INTERVAL);
     setInterval(logJobTrackingStatus, STANDARD_INTERVAL);
-    setInterval(checkStuckTasks, STANDARD_INTERVAL);
+    // NOTE: checkStuckTasks is registered at line ~3539 with 30s interval (STUCK_TASK_CHECK_INTERVAL)
+    // Removed duplicate 60s interval here to avoid interference
     setInterval(recoverPartialQueueingTasks, STANDARD_INTERVAL);
     debugLog('STARTUP', 'Periodic monitoring intervals initialized');
 
@@ -4469,7 +4470,7 @@ async function updateTaskRunningPercentage(taskId: string) {
       // Additional safety check for individual marketplace overflow
       if (mpCompleted > mpTotal && mpTotal > 0) {
       }
-      
+
 
       // Check if this specific marketplace is complete
       if (mpTotal > 0 && mpCompleted >= mpTotal) {
@@ -4683,6 +4684,24 @@ async function checkTaskCompletionAndScheduleNext(taskId: string, marketplace?: 
       `SCHEDULE_RETURNED | taskId=${taskId} | mp=${marketplace}`,
       { taskId, marketplace: mpKeyForLog }
     );
+
+    // Timer validation: Verify timer was created after scheduleNextLoop
+    if (marketplace) {
+      const timerKey = `${taskId}-${marketplace}`;
+      const hasTimer = taskTimeouts.has(timerKey);
+      const hasCountdown = taskCountdownTimers.has(timerKey);
+      if (!hasTimer) {
+        errorLog('TaskCompletion',
+          `TIMER_MISSING_AFTER_SCHEDULE | taskId=${taskId} | mp=${marketplace} | timerKey=${timerKey} | hasCountdown=${hasCountdown}`,
+          undefined, { taskId, marketplace: mpKeyForLog, timerKey, hasCountdown }
+        );
+      } else {
+        debugLog('TaskCompletion',
+          `TIMER_VERIFIED | taskId=${taskId} | mp=${marketplace} | timerKey=${timerKey}`,
+          { taskId, marketplace: mpKeyForLog, timerKey }
+        );
+      }
+    }
 
     // BUG FIX: Removed redundant setTaskStatus call - scheduleNextLoop() already sets status to SCHEDULED
     // The duplicate call was causing confusing log traces
@@ -5675,8 +5694,12 @@ async function cleanupPersistedTaskState(taskId: string): Promise<void> {
 /**
  * Periodic timer health check - verifies all SCHEDULED tasks have valid timers.
  * Recovers stuck tasks by restarting them if timer is missing.
+ * Also logs diagnostic information about timer map state.
  */
 async function verifyScheduledTaskTimers(): Promise<void> {
+  // Collect diagnostic info about all SCHEDULED tasks
+  const scheduledTasks: Array<{taskId: string, mp: string, waitingTime: number, hasTimer: boolean, hasCountdown: boolean}> = [];
+
   for (const [taskId, task] of activeTasks) {
     if (!task.running) continue;
 
@@ -5688,6 +5711,15 @@ async function verifyScheduledTaskTimers(): Promise<void> {
 
       const timerKey = `${taskId}-${mp}`;
       const hasTimer = taskTimeouts.has(timerKey);
+      const hasCountdown = taskCountdownTimers.has(timerKey);
+
+      scheduledTasks.push({
+        taskId,
+        mp,
+        waitingTime: mpStatus.waitingTime ?? -1,
+        hasTimer,
+        hasCountdown
+      });
 
       if (!hasTimer && mpStatus.waitingTime !== undefined && mpStatus.waitingTime <= 0) {
         warnLog('TimerHealth', `Missing timer for SCHEDULED task | taskId=${taskId} | mp=${mp} | waitingTime=${mpStatus.waitingTime}`);
@@ -5701,6 +5733,20 @@ async function verifyScheduledTaskTimers(): Promise<void> {
       }
     }
   }
+
+  // Log timer diagnostic summary
+  const stuckTasks = scheduledTasks.filter(t => t.waitingTime <= 0 && !t.hasTimer);
+  if (stuckTasks.length > 0) {
+    warnLog('TimerDiagnostic',
+      `STUCK_TASKS_FOUND | count=${stuckTasks.length} | tasks=${JSON.stringify(stuckTasks.map(t => ({ taskId: t.taskId, mp: t.mp, waitingTime: t.waitingTime })))}`,
+      { stuckCount: stuckTasks.length }
+    );
+  }
+
+  debugLog('TimerDiagnostic',
+    `TIMER_MAP_STATE | scheduledCount=${scheduledTasks.length} | timeoutMapSize=${taskTimeouts.size} | countdownMapSize=${taskCountdownTimers.size}`,
+    { scheduledCount: scheduledTasks.length, timeoutMapSize: taskTimeouts.size, countdownMapSize: taskCountdownTimers.size }
+  );
 }
 
 /**
@@ -5822,6 +5868,9 @@ async function cleanupStuckJobs(): Promise<void> {
 function initializeQueueEventHandlers() {
   queueEvents.on('completed', async ({ jobId }) => {
     try {
+      // Decrement counterbid counter if this was a tracked counterbid job
+      decrementCounterbidCount(jobId);
+
       // TaskFlow logging: Job completed event
       debugLog('QueueEvent',
         `JOB_COMPLETED | jobId=${jobId.substring(0, 80)}`,
@@ -5923,6 +5972,9 @@ function initializeQueueEventHandlers() {
   });
 
   queueEvents.on('failed', async ({ jobId, failedReason }) => {
+    // Decrement counterbid counter if this was a tracked counterbid job
+    decrementCounterbidCount(jobId);
+
     // TaskFlow logging: Job failed event
     debugLog('QueueEvent',
       `JOB_FAILED | jobId=${jobId.substring(0, 80)} | reason=${failedReason?.substring(0, 100) || 'unknown'}`,
@@ -6378,6 +6430,9 @@ function initializeQueueEventHandlers() {
 
   blurQueueEvents.on('completed', async ({ jobId }) => {
     try {
+      // Decrement counterbid counter if this was a tracked counterbid job
+      decrementCounterbidCount(jobId);
+
       // Handle Blur schedule job completions for sequential execution
       if (jobId.includes('-schedule')) {
         if (jobId.includes('-blur-schedule')) {
@@ -6441,6 +6496,9 @@ function initializeQueueEventHandlers() {
   });
 
   blurQueueEvents.on('failed', async ({ jobId, failedReason }) => {
+    // Decrement counterbid counter if this was a tracked counterbid job
+    decrementCounterbidCount(jobId);
+
     try {
       // Skip schedule jobs - they are orchestration jobs, not actual bid jobs
       if (jobId.includes('-schedule')) {
@@ -7924,6 +7982,21 @@ const BLUR_JOBS = [
   'BLUR_TRAIT_BID'
 ];
 
+// Counterbid job types for rate limiting
+const MAIN_QUEUE_COUNTERBID_TYPES = [
+  OPENSEA_TOKEN_BID_COUNTERBID,
+  OPENSEA_TRAIT_BID_COUNTERBID,
+  OPENSEA_COLLECTION_BID_COUNTERBID,
+  MAGICEDEN_COLLECTION_BID_COUNTERBID,
+  MAGICEDEN_TOKEN_BID_COUNTERBID,
+  MAGICEDEN_TRAIT_BID_COUNTERBID,
+];
+
+const BLUR_QUEUE_COUNTERBID_TYPES = [
+  BLUR_COLLECTION_BID_COUNTERBID,
+  BLUR_TRAIT_BID_COUNTERBID,
+];
+
 // Helper function to extract marketplace from job name
 function getMarketplaceFromJobName(jobName: string): string | null {
   const name = jobName.toUpperCase();
@@ -7959,6 +8032,74 @@ async function getTotalJobsInQueues(): Promise<number> {
     (blurCounts.waiting || 0) + (blurCounts.active || 0) + (blurCounts.prioritized || 0);
 }
 
+// In-memory tracking for counterbid jobs (fast O(1) lookups instead of expensive Redis queries)
+const counterbidJobTracker = {
+  mainCount: 0,
+  blurCount: 0,
+  mainJobIds: new Set<string>(),
+  blurJobIds: new Set<string>(),
+};
+
+function incrementCounterbidCount(isBlurQueue: boolean, jobId: string): void {
+  if (isBlurQueue) {
+    counterbidJobTracker.blurCount++;
+    counterbidJobTracker.blurJobIds.add(jobId);
+  } else {
+    counterbidJobTracker.mainCount++;
+    counterbidJobTracker.mainJobIds.add(jobId);
+  }
+}
+
+function decrementCounterbidCount(jobId: string): void {
+  if (counterbidJobTracker.mainJobIds.has(jobId)) {
+    counterbidJobTracker.mainCount = Math.max(0, counterbidJobTracker.mainCount - 1);
+    counterbidJobTracker.mainJobIds.delete(jobId);
+  } else if (counterbidJobTracker.blurJobIds.has(jobId)) {
+    counterbidJobTracker.blurCount = Math.max(0, counterbidJobTracker.blurCount - 1);
+    counterbidJobTracker.blurJobIds.delete(jobId);
+  }
+}
+
+function getCounterbidCount(isBlurQueue: boolean): number {
+  return isBlurQueue ? counterbidJobTracker.blurCount : counterbidJobTracker.mainCount;
+}
+
+/**
+ * Add a counterbid job to a queue with rate limiting.
+ * If counterbid jobs exceed RATE_LIMIT, wait 1 second before adding.
+ * Uses O(1) in-memory counter instead of expensive Redis queries.
+ */
+async function addCounterbidJobWithRateLimit<T>(
+  targetQueue: Queue,
+  jobName: string,
+  jobData: T,
+  options?: JobsOptions,
+  isBlurQueue: boolean = false
+): Promise<Job<T> | void> {
+  const queueName = isBlurQueue ? 'blur' : 'main';
+
+  try {
+    // O(1) counter check - no Redis calls
+    const currentCount = getCounterbidCount(isBlurQueue);
+
+    if (currentCount >= RATE_LIMIT) {
+      debugLog('RateLimit', `[${queueName}] Counterbid rate limit hit: ${currentCount}/${RATE_LIMIT}. Delaying 1s before ${jobName}`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    const job = await targetQueue.add(jobName, jobData, options);
+
+    // Track the job ID for decrement on completion
+    if (job?.id) {
+      incrementCounterbidCount(isBlurQueue, job.id);
+    }
+
+    return job;
+  } catch (error) {
+    errorLog('RateLimit', `Failed to add counterbid job ${jobName}`, error);
+    throw error; // Re-throw to preserve existing error handling
+  }
+}
 
 async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job): Promise<void> {
   if (!jobs?.length) {
@@ -13000,7 +13141,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     const taskSpecificHash = `${orderHash}-${task._id}`;
     const dedupPassed = markSeenIfNew(seenOrderHashes, taskSpecificHash);
     if (!dedupPassed) {
-      debugLog('Counterbid', `[ME] ${task.contract.slug} | Dedup: BLOCKED | hash=${orderHash?.slice(0,10)}...`, { taskId: task._id.toString(), marketplace: 'magiceden', slug: task.contract.slug });
+      debugLog('Counterbid', `[ME] ${task.contract.slug} | Dedup: BLOCKED | hash=${orderHash?.slice(0, 10)}...`, { taskId: task._id.toString(), marketplace: 'magiceden', slug: task.contract.slug });
       return;  // Already being processed by another handler
     }
 
@@ -13902,7 +14043,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
             };
 
             try {
-              await queue.add(MAGICEDEN_TOKEN_BID_COUNTERBID, tokenBidData);
+              await addCounterbidJobWithRateLimit(queue, MAGICEDEN_TOKEN_BID_COUNTERBID, tokenBidData, undefined, false);
               tokenCollectionCounterbidsQueued++;
               debugLog('Counterbid', `[ME] ${task.contract.slug} [${targetTokenId}] | Token-vs-Collection: QUEUED - defending token against collection offer at ${tokenOfferPriceEth} ETH`, { taskId: task._id.toString(), marketplace: 'magiceden' });
             } catch (queueError) {
@@ -14053,7 +14194,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const taskSpecificHash = `${orderHash}-${task._id}`
     const dedupPassed = markSeenIfNew(seenOrderHashes, taskSpecificHash);
     if (!dedupPassed) {
-      debugLog('Counterbid', `[OS] ${task.contract.slug} | Dedup: BLOCKED | hash=${orderHash?.slice(0,10)}...`, { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+      debugLog('Counterbid', `[OS] ${task.contract.slug} | Dedup: BLOCKED | hash=${orderHash?.slice(0, 10)}...`, { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
       return;  // Already being processed by another handler
     }
 
@@ -14065,7 +14206,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
     // Comprehensive logging for OpenSea counterbid
     const bidType = tokenId ? `Token #${tokenId}` : trait ? `Trait: ${trait.type}:${trait.value}` : 'Collection';
-
 
     if (!outbidOptions.counterbid) {
       return;
@@ -14101,6 +14241,27 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
     const selectedTraits = transformNewTask(currentTask?.selectedTraits?.opensea)
     const bestOffer = (bestOffers[task._id]?.opensea || 0);
+
+    // =====================================================================
+    // CROSS-TYPE COUNTERBID ANALYSIS LOG
+    // This log helps detect when cross-type counterbidding will occur
+    // =====================================================================
+    const incomingBidTypeAnalysis = tokenId ? 'TOKEN' : (trait ? 'TRAIT' : 'COLLECTION');
+    const taskBidTypeAnalysis = task.bidType.toUpperCase();
+    const hasTokenIdsAnalysis = !!(task.tokenIds?.length);
+    const hasSelectedTraitsAnalysis = !!(selectedTraits?.length);
+
+    // Determine potential cross-type scenarios
+    let crossTypeScenario = 'SAME_TYPE';
+    if (incomingBidTypeAnalysis === 'TRAIT' && (taskBidTypeAnalysis === 'TOKEN' || taskBidTypeAnalysis === 'RARITY') && hasTokenIdsAnalysis) {
+      crossTypeScenario = 'TOKEN-vs-TRAIT';
+    } else if (incomingBidTypeAnalysis === 'COLLECTION' && (taskBidTypeAnalysis === 'TOKEN' || taskBidTypeAnalysis === 'RARITY') && hasTokenIdsAnalysis) {
+      crossTypeScenario = 'TOKEN-vs-COLLECTION';
+    } else if (incomingBidTypeAnalysis === 'COLLECTION' && hasSelectedTraitsAnalysis) {
+      crossTypeScenario = 'TRAIT-vs-COLLECTION';
+    }
+
+    debugLog('Counterbid', `[OS] ${task.contract.slug} | COUNTERBID ANALYSIS | incomingBidType=${incomingBidTypeAnalysis} | taskBidType=${taskBidTypeAnalysis} | hasTokenIds=${hasTokenIdsAnalysis} | hasSelectedTraits=${hasSelectedTraitsAnalysis} | crossTypeScenario=${crossTypeScenario} | incomingPrice=${incomingPriceDisplay} ${symbol?.toUpperCase()}`, { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
 
     const collectionOfferEth = data.event === "collection_offer" ? incomingBidAmount / Math.pow(10, decimal) : 0
 
@@ -14640,8 +14801,12 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           debugLog('Counterbid', `[OS] ${task.contract.slug} | Token-vs-Trait: SKIP - task stopped during processing`, { taskId: task._id.toString(), marketplace: 'opensea' });
           return;
         }
-        // DEBUG: Log Token-vs-Trait defense entry
-        debugLog('Counterbid', `[OS] ${task.contract.slug} | Token-vs-Trait ENTRY | tokenCount=${task.tokenIds.length} | traitType=${trait.type} | traitValue=${trait.value}`, { taskId: task._id.toString(), marketplace: 'opensea' });
+        // =====================================================================
+        // CROSS-TYPE COUNTERBID DETECTION: TOKEN-vs-TRAIT
+        // Scenario: Incoming TRAIT offer threatens our TOKEN position
+        // Defense: Place higher TOKEN bids on our tokens that have the incoming trait
+        // =====================================================================
+        debugLog('Counterbid', `[OS] ${task.contract.slug} | *** CROSS-TYPE DETECTED: TOKEN-vs-TRAIT *** | incomingType=TRAIT_OFFER | defendingType=TOKEN_BID | traitType=${trait.type} | traitValue=${trait.value} | incomingPrice=${incomingBidAmountEth} ETH | ourTokenCount=${task.tokenIds.length}`, { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
         let tokenTraitCounterbidsQueued = 0;
 
         for (const targetTokenId of task.tokenIds) {
@@ -14708,7 +14873,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                 };
 
                 try {
-                  await queue.add(OPENSEA_TOKEN_BID_COUNTERBID, tokenBidData);
+                  await addCounterbidJobWithRateLimit(queue, OPENSEA_TOKEN_BID_COUNTERBID, tokenBidData, undefined, false);
                   tokenTraitCounterbidsQueued++;
                   debugLog('Counterbid', `[OS] ${task.contract.slug} [${targetTokenId}] | Token-vs-Trait: QUEUED - defending token against trait offer ${trait.type}:${trait.value} at ${tokenOfferPriceEth} ETH`, { taskId: task._id.toString(), marketplace: 'opensea' });
                 } catch (queueError) {
@@ -14877,6 +15042,13 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             let basePriceEth = roundedEth; // incoming collection offer
             let cachedOfferForTrait = counterbidCheck.cachedOffer;
 
+            // =====================================================================
+            // CROSS-TYPE COUNTERBID DETECTION: TRAIT-vs-COLLECTION
+            // Scenario: Incoming COLLECTION offer threatens our TRAIT position
+            // Defense: Place higher TRAIT bids on our trait offers
+            // =====================================================================
+            debugLog('Counterbid', `[OS] ${task.contract.slug} | *** CROSS-TYPE DETECTED: TRAIT-vs-COLLECTION *** | incomingType=COLLECTION_OFFER | defendingType=TRAIT_BID | traitIdentifier=${order.identifier} | incomingPrice=${incomingBidAmountEth} ETH | ourTraitPrice=${(Number(order.offerPrice) / Math.pow(10, decimal)).toFixed(4)} ETH`, { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug, traitKey: order.identifier });
+
             // API FALLBACK: If cache miss for trait, fetch from API
             if (!cachedOfferForTrait && order.identifier.includes(':')) {
               debugLog('Counterbid', `[OS] ${task.contract.slug} [${order.identifier}] | Trait-vs-Collection: Cache MISS - fetching from API`, { taskId: task._id.toString(), marketplace: 'opensea' });
@@ -15003,8 +15175,12 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           debugLog('Counterbid', `[OS] ${task.contract.slug} | Token-vs-Collection: SKIP - task stopped during processing`, { taskId: task._id.toString(), marketplace: 'opensea' });
           return;
         }
-        // DEBUG: Log Token-vs-Collection defense entry
-        debugLog('Counterbid', `[OS] ${task.contract.slug} | Token-vs-Collection ENTRY | tokenCount=${task.tokenIds.length} | collectionOfferPrice=${incomingBidAmountEth} ETH`, { taskId: task._id.toString(), marketplace: 'opensea' });
+        // =====================================================================
+        // CROSS-TYPE COUNTERBID DETECTION: TOKEN-vs-COLLECTION
+        // Scenario: Incoming COLLECTION offer threatens our TOKEN position
+        // Defense: Place higher TOKEN bids on our specific tokens
+        // =====================================================================
+        debugLog('Counterbid', `[OS] ${task.contract.slug} | *** CROSS-TYPE DETECTED: TOKEN-vs-COLLECTION *** | incomingType=COLLECTION_OFFER | defendingType=TOKEN_BID | incomingPrice=${incomingBidAmountEth} ETH | ourTokenCount=${task.tokenIds.length} | alreadyProcessed=${allTaskOrders.length}`, { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
         let tokenCollectionCounterbidsQueued = 0;
 
         for (const targetTokenId of task.tokenIds) {
@@ -15090,7 +15266,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             };
 
             try {
-              await queue.add(OPENSEA_TOKEN_BID_COUNTERBID, tokenBidData);
+              await addCounterbidJobWithRateLimit(queue, OPENSEA_TOKEN_BID_COUNTERBID, tokenBidData, undefined, false);
               tokenCollectionCounterbidsQueued++;
               debugLog('Counterbid', `[OS] ${task.contract.slug} [${targetTokenId}] | Token-vs-Collection: QUEUED - defending token against collection offer at ${tokenOfferPriceEth} ETH`, { taskId: task._id.toString(), marketplace: 'opensea' });
             } catch (queueError) {
@@ -15333,10 +15509,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         const offerPriceEth = Number(offerPrice) / 1e18;
         debugLog('Counterbid', `[Blur] ${task.contract.slug} [${identifier}] | QUEUE: Trait counterbid at ${offerPriceEth} BETH (outbidding ${incomingPrice} BETH)`);
 
-        await blurQueue.add(
-          BLUR_TRAIT_BID_COUNTERBID,
-          bidData
-        );
+        await addCounterbidJobWithRateLimit(blurQueue, BLUR_TRAIT_BID_COUNTERBID, bidData, undefined, true);
       }
 
     } else {
@@ -15540,10 +15713,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
             const offerPriceEth = Number(orderOfferPrice) / 1e18;
             debugLog('Counterbid', `[Blur] ${task.contract.slug} [${order.identifier}] | QUEUE: Trait counterbid at ${offerPriceEth} BETH`);
 
-            await blurQueue.add(
-              BLUR_TRAIT_BID_COUNTERBID,
-              counterbidData
-            );
+            await addCounterbidJobWithRateLimit(blurQueue, BLUR_TRAIT_BID_COUNTERBID, counterbidData, undefined, true);
 
             counterbidsQueued++;
 
@@ -15563,10 +15733,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
             const offerPriceEthColl = Number(orderOfferPrice) / 1e18;
             debugLog('Counterbid', `[Blur] ${task.contract.slug} [Collection] | QUEUE: Collection counterbid at ${offerPriceEthColl} BETH`);
 
-            await blurQueue.add(
-              BLUR_COLLECTION_BID_COUNTERBID,
-              bidData
-            );
+            await addCounterbidJobWithRateLimit(blurQueue, BLUR_COLLECTION_BID_COUNTERBID, bidData, undefined, true);
             counterbidsQueued++;
           }
         }
@@ -26857,6 +27024,12 @@ async function checkStuckTasks() {
   try {
     const now = Date.now();
 
+    // StuckTaskCheck: Entry logging for diagnostics
+    debugLog('StuckTaskCheck',
+      `SCAN_START | activeTasks=${activeTasks.size} | taskTimeouts=${taskTimeouts.size} | taskCountdowns=${taskCountdownTimers.size}`,
+      { activeTaskCount: activeTasks.size, timerCount: taskTimeouts.size, countdownCount: taskCountdownTimers.size }
+    );
+
     for (const [taskId, task] of activeTasks) {
       if (!task.running) continue;
 
@@ -27105,6 +27278,14 @@ async function checkStuckTasks() {
         for (const [mp, mpStatus] of scheduledMarketplaces) {
           const timerKey = `${taskId}-${mp}`;
           const hasTimer = taskTimeouts.has(timerKey);
+          const hasCountdown = taskCountdownTimers.has(timerKey);
+
+          // StuckTaskCheck: Log every SCHEDULED task with waitingTime<=0 for diagnostics
+          const mpLower = mp.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
+          debugLog('StuckTaskCheck',
+            `SCHEDULED_FOUND | taskId=${taskId} | mp=${mp} | waitingTime=${mpStatus?.waitingTime} | hasTimer=${hasTimer} | hasCountdown=${hasCountdown} | timerKey=${timerKey}`,
+            { taskId, marketplace: mpLower, waitingTime: mpStatus?.waitingTime, hasTimer, hasCountdown, timerKey }
+          );
 
           if (!hasTimer) {
             // Task is stuck - SCHEDULED with waitingTime=0 but no timer to fire
@@ -27113,18 +27294,29 @@ async function checkStuckTasks() {
 
             if (!firstSeen) {
               taskCompletionTracking.set(stuckKey, now);
-              warnLog('StuckTask', `Task ${taskId} marketplace ${mp} stuck in SCHEDULED with waitingTime=0 and no timer`);
+              warnLog('StuckTaskCheck', `STUCK_DETECTED | taskId=${taskId} | mp=${mp} | waitingTime=${mpStatus?.waitingTime} | hasTimer=false | timerKey=${timerKey}`,
+                { taskId, marketplace: mpLower, waitingTime: mpStatus?.waitingTime, hasTimer: false, timerKey }
+              );
             } else {
               const stuckDuration = now - firstSeen;
 
               if (stuckDuration > 30000) { // 30 seconds stuck
-                warnLog('StuckTask', `Recovering task ${taskId} marketplace ${mp} stuck in SCHEDULED for ${stuckDuration}ms`);
+                debugLog('StuckTaskCheck',
+                  `RECOVERY_STARTING | taskId=${taskId} | mp=${mp} | stuckDuration=${stuckDuration}ms`,
+                  { taskId, marketplace: mpLower, stuckDuration }
+                );
 
                 // Immediately restart the task for this marketplace
                 try {
                   await startTask(task, true, mp);
+                  debugLog('StuckTaskCheck',
+                    `RECOVERY_SUCCESS | taskId=${taskId} | mp=${mp} | stuckDuration=${stuckDuration}ms`,
+                    { taskId, marketplace: mpLower, stuckDuration }
+                  );
                 } catch (err) {
-                  errorLog('StuckTask', `Failed to recover stuck task ${taskId}:${mp}: ${err instanceof Error ? err.message : err}`);
+                  errorLog('StuckTaskCheck', `RECOVERY_FAILED | taskId=${taskId} | mp=${mp} | error=${err instanceof Error ? err.message : err}`,
+                    err, { taskId, marketplace: mpLower }
+                  );
                 }
 
                 taskCompletionTracking.delete(stuckKey);
