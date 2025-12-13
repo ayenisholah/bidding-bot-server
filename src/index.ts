@@ -5573,11 +5573,49 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
           );
         }
       } catch (error) {
+        // Log detailed error information for debugging
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorStack = error instanceof Error ? error.stack : undefined;
+
         errorLog('TimerOp',
-          `TIMER_ERROR | taskId=${taskId} | mp=${marketplace || 'all'}`,
+          `TIMER_ERROR | taskId=${taskId} | mp=${marketplace || 'all'} | error=${errorMessage}`,
           error,
-          { taskId, marketplace: mpKeyForLog }
+          { taskId, marketplace: mpKeyForLog, errorMessage, errorStack }
         );
+
+        // CRITICAL: Reschedule to ensure loop continues even on error
+        // The watchdog will pick this up if the in-memory timer fails
+        const currentTask = activeTasks.get(taskId);
+        if (currentTask?.running) {
+          const RETRY_DELAY_MS = 10000; // 10 seconds retry delay on error
+          const retryTime = new Date(Date.now() + RETRY_DELAY_MS);
+
+          // Create a new PENDING schedule for watchdog to pick up
+          TaskSchedule.findOneAndUpdate(
+            { taskId, marketplace: marketplace || 'all' },
+            {
+              $set: {
+                scheduledAt: new Date(),
+                nextFireTime: retryTime,
+                loopInterval: RETRY_DELAY_MS / 1000,
+                status: 'PENDING',
+                executionId: `${timerKey}-retry-${Date.now()}`,
+                attempts: 0
+              }
+            },
+            { upsert: true }
+          ).then(() => {
+            warnLog('TimerOp',
+              `TIMER_ERROR_RESCHEDULED | taskId=${taskId} | mp=${marketplace || 'all'} | retryIn=${RETRY_DELAY_MS}ms`,
+              { taskId, marketplace: mpKeyForLog, retryTime: retryTime.toISOString() }
+            );
+          }).catch(scheduleErr => {
+            errorLog('TimerOp',
+              `TIMER_ERROR_RESCHEDULE_FAILED | taskId=${taskId} | mp=${marketplace || 'all'}`,
+              scheduleErr
+            );
+          });
+        }
       } finally {
         // Always release the lock after execution
         releaseLoopSchedulingLock(lockKey);
@@ -9210,11 +9248,25 @@ async function startTask(task: ITask, start: boolean, marketplace?: string, isRe
         continue; // Retry
       }
 
-      // If not a timeout or no retries left, re-throw the error
+      // If not a timeout or no retries left, log detailed error and re-throw
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      const errorName = error instanceof Error ? error.name : 'Unknown';
+
       errorLog('TaskFlow',
-        `START_TASK_ERROR | taskId=${taskId} | mp=${marketplace || 'all'}`,
+        `START_TASK_ERROR | taskId=${taskId} | mp=${marketplace || 'all'} | errorType=${errorName} | error=${errorMessage}`,
         error,
-        { taskId, marketplace: mpKeyForLog, attempt: attempt + 1 }
+        {
+          taskId,
+          marketplace: mpKeyForLog,
+          attempt: attempt + 1,
+          errorType: errorName,
+          errorMessage,
+          errorStack,
+          taskRunning: task.running,
+          taskWalletId: task.walletId ? '***' : 'missing',
+          taskSlug: task.contract?.slug
+        }
       );
       throw error;
     }
@@ -27252,10 +27304,13 @@ const taskCompletionTracking = new Map<string, number>();
  * MongoDB TaskSchedule Watchdog
  * Recovers tasks whose in-memory timers failed to fire (due to memory pressure, GC, etc.)
  * Runs every 5 seconds with a 3-second grace period to allow in-memory timers to fire first
+ *
+ * IMPORTANT: Retries infinitely with exponential backoff - loop MUST NOT break
  */
 async function taskScheduleWatchdog(): Promise<void> {
   const GRACE_PERIOD_MS = 3000; // Allow in-memory timer to fire first
-  const MAX_ATTEMPTS = 3;
+  const BASE_BACKOFF_MS = 5000; // 5 seconds base
+  const MAX_BACKOFF_MS = 300000; // 5 minutes max backoff
 
   try {
     const overdueSchedules = await TaskSchedule.find({
@@ -27309,9 +27364,12 @@ async function taskScheduleWatchdog(): Promise<void> {
         continue;
       }
 
+      // Calculate exponential backoff based on attempts (capped at MAX_BACKOFF_MS)
+      const backoffMs = Math.min(BASE_BACKOFF_MS * Math.pow(2, claimed.attempts - 1), MAX_BACKOFF_MS);
+
       warnLog('Watchdog',
-        `RECOVERY_TRIGGER | taskId=${schedule.taskId} | mp=${schedule.marketplace} | overdueMs=${overdueMs} | attempts=${claimed.attempts}`,
-        { taskId: schedule.taskId, marketplace: mpForLog, overdueMs, attempts: claimed.attempts }
+        `RECOVERY_TRIGGER | taskId=${schedule.taskId} | mp=${schedule.marketplace} | overdueMs=${overdueMs} | attempts=${claimed.attempts} | nextBackoff=${backoffMs}ms`,
+        { taskId: schedule.taskId, marketplace: mpForLog, overdueMs, attempts: claimed.attempts, backoffMs }
       );
 
       try {
@@ -27320,22 +27378,45 @@ async function taskScheduleWatchdog(): Promise<void> {
 
         await TaskSchedule.updateOne({ _id: schedule._id }, { $set: { status: 'COMPLETED' } });
         debugLog('Watchdog',
-          `RECOVERY_SUCCESS | taskId=${schedule.taskId} | mp=${schedule.marketplace}`,
-          { taskId: schedule.taskId, marketplace: mpForLog }
+          `RECOVERY_SUCCESS | taskId=${schedule.taskId} | mp=${schedule.marketplace} | attempts=${claimed.attempts}`,
+          { taskId: schedule.taskId, marketplace: mpForLog, attempts: claimed.attempts }
         );
       } catch (err) {
-        errorLog('Watchdog', `RECOVERY_FAILED | taskId=${schedule.taskId} | mp=${schedule.marketplace}`, err);
+        // INFINITE RETRY: Never give up - always reset to PENDING with exponential backoff
+        // Log detailed error information for debugging
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        const errorStack = err instanceof Error ? err.stack : undefined;
 
-        if (claimed.attempts >= MAX_ATTEMPTS) {
-          await TaskSchedule.updateOne({ _id: schedule._id }, { $set: { status: 'CANCELLED' } });
-          warnLog('Watchdog',
-            `RECOVERY_EXHAUSTED | taskId=${schedule.taskId} | mp=${schedule.marketplace} | attempts=${claimed.attempts}`,
-            { taskId: schedule.taskId, marketplace: mpForLog, attempts: claimed.attempts }
-          );
-        } else {
-          // Reset to PENDING to retry later
-          await TaskSchedule.updateOne({ _id: schedule._id }, { $set: { status: 'PENDING' } });
-        }
+        errorLog('Watchdog',
+          `RECOVERY_FAILED | taskId=${schedule.taskId} | mp=${schedule.marketplace} | attempts=${claimed.attempts} | error=${errorMessage}`,
+          err,
+          {
+            taskId: schedule.taskId,
+            marketplace: mpForLog,
+            attempts: claimed.attempts,
+            errorMessage,
+            errorStack,
+            nextRetryIn: `${backoffMs}ms`
+          }
+        );
+
+        // Update nextFireTime to implement exponential backoff
+        // This prevents hammering the system if there's a persistent error
+        const nextRetryTime = new Date(Date.now() + backoffMs);
+        await TaskSchedule.updateOne(
+          { _id: schedule._id },
+          {
+            $set: {
+              status: 'PENDING',
+              nextFireTime: nextRetryTime
+            }
+          }
+        );
+
+        warnLog('Watchdog',
+          `RECOVERY_RETRY_SCHEDULED | taskId=${schedule.taskId} | mp=${schedule.marketplace} | attempts=${claimed.attempts} | nextRetry=${nextRetryTime.toISOString()}`,
+          { taskId: schedule.taskId, marketplace: mpForLog, attempts: claimed.attempts, nextRetryTime: nextRetryTime.toISOString() }
+        );
       }
     }
   } catch (err) {
