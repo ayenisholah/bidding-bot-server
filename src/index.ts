@@ -119,6 +119,72 @@ export const skipStats: BidCounts = {};
 const counterbidCounts: BidCounts = {};
 
 // ============================================
+// RESILIENT HELPER FUNCTIONS
+// ============================================
+// Helper functions with built-in retry logic for transient failures
+
+/**
+ * Initialize order cache with background retry
+ * Non-blocking: task starts immediately, cache populates in background
+ */
+async function initializeOrderCacheWithRetry(taskId: string, maxRetries = 3): Promise<void> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await orderCache.initializeFromDatabase(taskId);
+      debugLog('Cache', `Order cache initialized for task ${taskId} on attempt ${attempt}`);
+      return;
+    } catch (err) {
+      const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000); // 1s, 2s, 4s... max 10s
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      warnLog('Cache', `Order cache init failed for ${taskId}, attempt ${attempt}/${maxRetries}, retrying in ${delay}ms: ${errorMsg}`);
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+  errorLog('Cache', `Order cache init exhausted retries for ${taskId} - continuing with empty cache`);
+}
+
+/**
+ * Add jobs to BullMQ queue with retry logic for transient Redis failures
+ */
+async function addBulkWithRetry(
+  targetQueue: Queue,
+  jobs: any[],
+  queueName: string,
+  taskId: string,
+  maxRetries = 3
+): Promise<void> {
+  if (jobs.length === 0) return;
+
+  const RETRYABLE_ERRORS = ['ECONNREFUSED', 'ECONNRESET', 'Connection lost', 'Connection is closed', 'Command timed out', 'READONLY'];
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await targetQueue.addBulk(jobs);
+      if (attempt > 1) {
+        debugLog('Queue', `${queueName} addBulk succeeded on attempt ${attempt} for task ${taskId}`);
+      }
+      return;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const isRetryable = RETRYABLE_ERRORS.some(e => errorMsg.includes(e));
+
+      if (isRetryable && attempt < maxRetries) {
+        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000); // 1s, 2s, 4s max 5s
+        warnLog('Queue', `${queueName} addBulk failed for task ${taskId} (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms: ${errorMsg}`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+
+      // Non-retryable error or exhausted retries - re-throw
+      errorLog('Queue', `${queueName} addBulk failed for task ${taskId} after ${attempt} attempts: ${errorMsg}`, err);
+      throw err;
+    }
+  }
+}
+
+// ============================================
 // TASK STATE MONGODB PERSISTENCE
 // ============================================
 // Sync in-memory state to MongoDB for crash recovery
@@ -9355,9 +9421,12 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
 
   clearTaskTimers(taskId, marketplace)
 
-  // Initialize order cache from database for this task
+  // Initialize order cache from database for this task (non-blocking with background retry)
   // This loads active orders into memory for fast lookups during bid processing
-  await orderCache.initializeFromDatabase(task._id);
+  // Fire-and-forget: task starts immediately, cache populates in background
+  initializeOrderCacheWithRetry(task._id.toString()).catch(() => {
+    // Silently ignore - retries and errors handled internally
+  });
 
   // Initialize bidStats for this task from cache (uses order cache instead of DB query)
   // This ensures the UI shows correct active bid count immediately
@@ -9814,23 +9883,23 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
       if (start === true) {
         // Schedule all jobs immediately (MagicEden with delay if applicable)
         if (openseaJobs.length > 0) {
-          await queue.addBulk(openseaJobs);
+          await addBulkWithRetry(queue, openseaJobs, 'opensea', taskId);
         }
         if (blurJobs.length > 0) {
-          await blurQueue.addBulk(blurJobs);
+          await addBulkWithRetry(blurQueue, blurJobs, 'blur', taskId);
         }
         if (magicedenJobs.length > 0) {
           if (magicedenDelay > 0) {
             // Schedule MagicEden job with delay
             setTimeout(async () => {
               try {
-                await queue.addBulk(magicedenJobs);
+                await addBulkWithRetry(queue, magicedenJobs, 'magiceden', taskId);
               } catch (error) {
                 errorLog('JobScheduling', `Failed to schedule MagicEden jobs for task ${taskId}`, error);
               }
             }, magicedenDelay);
           } else {
-            await queue.addBulk(magicedenJobs);
+            await addBulkWithRetry(queue, magicedenJobs, 'magiceden', taskId);
           }
         }
       } else {
@@ -9867,23 +9936,23 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
         if (newJobs.length > 0) {
           // Schedule all new jobs (MagicEden with delay if applicable)
           if (newOpenseaJobs.length > 0) {
-            await queue.addBulk(newOpenseaJobs);
+            await addBulkWithRetry(queue, newOpenseaJobs, 'opensea', taskId);
           }
           if (newBlurJobs.length > 0) {
-            await blurQueue.addBulk(newBlurJobs);
+            await addBulkWithRetry(blurQueue, newBlurJobs, 'blur', taskId);
           }
           if (newMagicedenJobs.length > 0) {
             if (magicedenDelay > 0) {
               // Schedule MagicEden job with delay
               setTimeout(async () => {
                 try {
-                  await queue.addBulk(newMagicedenJobs);
+                  await addBulkWithRetry(queue, newMagicedenJobs, 'magiceden', taskId);
                 } catch (error) {
                   errorLog('Scheduling', `Failed to schedule new MagicEden jobs for task ${taskId}`, error);
                 }
               }, magicedenDelay);
             } else {
-              await queue.addBulk(newMagicedenJobs);
+              await addBulkWithRetry(queue, newMagicedenJobs, 'magiceden', taskId);
             }
           }
         }
