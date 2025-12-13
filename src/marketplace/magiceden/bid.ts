@@ -339,6 +339,7 @@ export async function bidOnMagiceden(
     );
     return order;
   } catch (error) {
+    errorLog('MagicEden', `generateMagicEdenOrder failed | taskId=${taskId}`, error);
     throw error;
   }
 }
@@ -795,6 +796,7 @@ async function signOrderData(taskId: string, wallet: ethers.Wallet, signData: an
 
     return signature;
   } catch (error) {
+    errorLog('MagicEden', `signMagicEdenOrder failed | wallet=${wallet.address.slice(0, 10)}...`, error);
     throw error;
   }
 }

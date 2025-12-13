@@ -46,10 +46,6 @@ class OrderCache {
 
     // Update id index
     this.idIndex.set(order._id, key);
-
-    if (DEBUG) {
-      debugLog('Cache', `[OrderCache] SET | key=${key} | price=${order.offerPrice} | expires=${new Date(order.expiresAt).toISOString()}`, { taskId: order.taskId, marketplace: order.marketplace as 'blur' | 'opensea' | 'magiceden' });
-    }
   }
 
   /**
@@ -77,10 +73,6 @@ class OrderCache {
       return undefined;
     }
 
-    if (DEBUG && order) {
-      debugLog('Cache', `[OrderCache] GET | key=${key} | found=${!!order}`, { taskId, marketplace: marketplace as 'blur' | 'opensea' | 'magiceden' });
-    }
-
     return order;
   }
 
@@ -106,10 +98,6 @@ class OrderCache {
     }
 
     const deleted = this.cache.delete(key);
-
-    if (DEBUG && deleted) {
-      debugLog('Cache', `[OrderCache] DELETE | key=${key}`, { taskId, marketplace: marketplace as 'blur' | 'opensea' | 'magiceden' });
-    }
 
     return deleted;
   }
@@ -359,9 +347,6 @@ class OrderCache {
    */
   async initializeFromDatabase(taskId: string): Promise<void> {
     if (this.initializedTasks.has(taskId)) {
-      if (DEBUG) {
-        debugLog('Cache', `[OrderCache] INIT | taskId=${taskId} already initialized, skipping`, { taskId });
-      }
       return;
     }
 

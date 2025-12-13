@@ -695,8 +695,7 @@ class WebSocketManager extends EventEmitter {
             warnLog('WebSocket', `[UNEXPECTED_EVENT] Unsubscribed collection event | ${message.eventType} | slug=${msgSlug} | marketplace=${msgMarketplace}`);
           }
         } else {
-          // Normal case - we are subscribed (debug level only)
-          debugLog('WebSocket', `[EVENT] ${message.eventType} | ${msgSlug} | ${msgMarketplace}`);
+          // Normal case - we are subscribed (no log needed - too noisy)
         }
       }
 

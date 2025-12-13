@@ -142,43 +142,32 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
         let creator_fees: { [key: string]: number } = {};
         let enforceCreatorFee = false;
 
-        // DEBUG: Log raw fees from OpenSea API
-        debugLog('FeeDebug', `[${slug}] Raw API fees | fees=${JSON.stringify(collection?.fees)}`);
+        // FeeDebug logs removed - too noisy in production
 
         if (collection?.fees && Array.isArray(collection.fees)) {
           // Process creator fees (exclude OpenSea platform fee and optional fees)
           for (const fee of collection.fees) {
             const isOpenSeaFee = fee.recipient.toLowerCase() === OPENSEA_FEE_ADDRESS_LOWER;
 
-            // DEBUG: Log each fee being processed
-            debugLog('FeeDebug', `[${slug}] Processing fee | recipient=${fee.recipient} | fee=${fee.fee} | required=${fee.required} | isOpenSea=${isOpenSeaFee}`);
-
             // Skip OpenSea platform fee
             if (isOpenSeaFee) {
-              debugLog('FeeDebug', `[${slug}] SKIP: OpenSea platform fee`);
               continue;
             }
 
             // Skip optional creator fees (fulfiller can opt-in at fill time)
             if (!fee.required) {
-              debugLog('FeeDebug', `[${slug}] SKIP: Optional fee (required=false)`);
               continue;
             }
 
             creator_fees[fee.recipient] = fee.fee * 100;
             enforceCreatorFee = true;
-            debugLog('FeeDebug', `[${slug}] ADDED: Creator fee | recipient=${fee.recipient} | bps=${fee.fee * 100}`);
           }
         }
 
         // If no creator fees found, use default
         if (Object.keys(creator_fees).length === 0) {
           creator_fees = { null: 0 };
-          debugLog('FeeDebug', `[${slug}] No creator fees found, using default { null: 0 }`);
         }
-
-        // DEBUG: Log final creator_fees
-        debugLog('FeeDebug', `[${slug}] Final creator_fees | result=${JSON.stringify(creator_fees)} | enforceCreatorFee=${enforceCreatorFee}`);
 
         if (Object.keys(collectionCache).length >= MAX_CACHE_ITEMS) {
           delete collectionCache[Object.keys(collectionCache)[0]];
@@ -849,6 +838,7 @@ async function fetchCollectionItemsRecursive(
     return uniqueTokenIds;
   } catch (error) {
     // Return what we have so far instead of failing completely
+    errorLog('Collection', `[collection.ts] Error fetching OpenSea collection tokens, returning partial results | count=${allTokenIds.length}`, error);
     if (allTokenIds.length > 0) {
       return [...new Set(allTokenIds)];
     }

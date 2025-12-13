@@ -61,26 +61,29 @@ const retryConfig: IAxiosRetryConfig = {
       if (retryAfter) {
         return parseInt(retryAfter) * 1000;
       }
-      return Math.min(Math.pow(2, retryCount) * 1000, 10000); // More aggressive backoff, max 10s
+      // Exponential backoff: 2s, 4s, 8s (max 10s) + jitter
+      const baseDelay = Math.min(Math.pow(2, retryCount) * 1000, 10000);
+      const jitter = 100 + Math.random() * 400; // 100-500ms jitter
+      return baseDelay + jitter;
     }
 
-    // Other 4xx/5xx errors - quick retry
-    if (error.response && (error.response.status >= 400 && error.response.status < 600)) {
-      return Math.min(retryCount * 500, 2000); // Max 2s
+    // Cloudflare origin errors - need longer delays
+    if (error.response?.status === 520) {
+      // Exponential backoff: 5s, 15s, 30s + jitter
+      const baseDelay = Math.min(5000 * Math.pow(2, retryCount - 1), 30000);
+      const jitter = 500 + Math.random() * 1000; // 500-1500ms jitter
+      return baseDelay + jitter;
     }
 
     return axiosRetry.exponentialDelay(retryCount);
   },
   retryCondition: async (error: any) => {
-    // Retry on network errors and 5xx status codes
     if (!error.response) {
-      // Network error (no response)
-      return true;
+      return true; // Network errors
     }
-
-    // Retry on server errors (5xx) and specific client errors
     const status = error.response.status;
-    return status >= 500 || status === 429 || status === 430 || status === 408;
+    // Only retry: rate limits (429/430), timeout (408), and Cloudflare origin error (520)
+    return status === 429 || status === 430 || status === 408 || status === 520;
   },
   onRetry: (_retryCount, _error, _requestConfig) => {
     // Only log retries in development mode or for specific debugging

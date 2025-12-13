@@ -463,25 +463,19 @@ export async function bidOnOpensea(
         offer.consideration.push(opensea_consideration);
         offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
 
-        // DEBUG: Log creator_fees input for token bid
-        debugLog('FeeDebug', `[${slug}] Token bid - creator_fees input | tokenId=${asset.tokenId} | fees=${JSON.stringify(creator_fees)} | offerPrice=${offerPrice.toString()}`);
+        // FeeDebug logs removed - too noisy in production
 
         for (const address in creator_fees) {
           let fee: bigint | number = creator_fees[address];
           fee = BigInt(Math.round(fee).toString());
 
-          // DEBUG: Log each fee being processed
-          debugLog('FeeDebug', `[${slug}] Token bid - processing fee | address=${address} | fee=${fee.toString()} | type=${typeof address}`);
-
           // Skip null address or zero fees
           if (address === 'null' || address.toLowerCase() === '0x0000000000000000000000000000000000000000' || fee === 0n) {
-            debugLog('FeeDebug', `[${slug}] Token bid - SKIP fee | address=${address} | fee=${fee.toString()} | reason=${address === 'null' ? 'null address' : fee === 0n ? 'zero fee' : 'zero address'}`);
             continue;
           }
 
           // Add all creator fees (OpenSea requires all fees marked as required=true)
           const feeAmount = ((offerPrice * fee) / DIVIDER).toString();
-          debugLog('FeeDebug', `[${slug}] Token bid - ADDING consideration | recipient=${address} | fee=${fee.toString()} | amount=${feeAmount}`);
 
           const consideration_item = {
             itemType: 1,
@@ -495,9 +489,6 @@ export async function bidOnOpensea(
           offer.totalOriginalConsiderationItems = (Number(offer.totalOriginalConsiderationItems) + 1).toString();
 
         }
-
-        // DEBUG: Log final consideration array
-        debugLog('FeeDebug', `[${slug}] Token bid - final consideration | count=${offer.consideration.length} | recipients=${offer.consideration.map((c: any) => c.recipient).join(', ')}`);
 
         const itemSignature = await signOffer(wallet, offer)
 
@@ -804,9 +795,11 @@ export async function bidOnOpensea(
       }
 
     } catch (error) {
+      errorLog('OpenSea', `bidOnOpensea inner error | taskId=${taskId} | slug=${slug}`, error);
       throw error;
     }
   } catch (error) {
+    errorLog('OpenSea', `bidOnOpensea failed | taskId=${taskId} | slug=${slug}`, error);
     throw error;
   }
 }

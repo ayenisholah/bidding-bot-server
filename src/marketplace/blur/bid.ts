@@ -276,6 +276,7 @@ export async function bidOnBlur(
     }
     await submitBidToBlur(taskId, bidCount, offer_price, BLUR_API_URL, accessToken, wallet_address, submitPayload, slug, cancelPayload, expiry, traits);
   } catch (error) {
+    errorLog('Blur', `placeBlurBid failed | taskId=${taskId} | slug=${slug}`, error);
     throw error;
   }
 };
