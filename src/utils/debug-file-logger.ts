@@ -225,6 +225,8 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'RedisState': 'taskflow',         // persistTaskState() - Redis persistence
   'LockOp': 'taskflow',             // Lock acquisition/release for counters
   'TimerOp': 'taskflow',            // Timer creation/expiration/cleanup
+  'StuckTaskCheck': 'taskflow',     // checkStuckTasks() - stuck task detection and recovery
+  'TimerDiagnostic': 'taskflow',    // Periodic timer map diagnostics
 };
 
 // ============================================
