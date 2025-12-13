@@ -4,6 +4,56 @@ import { warnLog, errorLog, debugLog, infoLog } from './debug-file-logger';
 
 const DEBUG = process.env.DEBUG === 'true';
 
+/**
+ * Circular buffer for timestamp tracking
+ * Avoids array.filter() on every message which creates GC pressure
+ */
+class TimestampCircularBuffer {
+  private buffer: number[];
+  private head = 0;
+  private size = 0;
+  private readonly capacity: number;
+  private readonly windowMs: number;
+
+  constructor(capacity: number, windowMs: number) {
+    this.capacity = capacity;
+    this.windowMs = windowMs;
+    this.buffer = new Array(capacity).fill(0);
+  }
+
+  push(timestamp: number): void {
+    this.buffer[this.head] = timestamp;
+    this.head = (this.head + 1) % this.capacity;
+    if (this.size < this.capacity) {
+      this.size++;
+    }
+  }
+
+  /**
+   * Count timestamps within the time window
+   * O(size) but avoids creating new arrays
+   */
+  countWithinWindow(now: number = Date.now()): number {
+    const threshold = now - this.windowMs;
+    let count = 0;
+    for (let i = 0; i < this.size; i++) {
+      const idx = (this.head - 1 - i + this.capacity) % this.capacity;
+      if (this.buffer[idx] > threshold) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * Get message rate per minute within window
+   */
+  getMessageRate(): number {
+    const windowMinutes = this.windowMs / 60000;
+    return this.countWithinWindow() / windowMinutes;
+  }
+}
+
 export interface WebSocketManagerConfig {
   url: string;
   clientId: string;
@@ -70,7 +120,8 @@ class WebSocketManager extends EventEmitter {
   private lastPongReceived = 0;
   private missedPongs = 0;
   private latencies: number[] = [];
-  private messageTimestamps: number[] = [];
+  // Circular buffer for message timestamps (5 minute window, max 10000 messages)
+  private messageTimestamps = new TimestampCircularBuffer(10000, 300000);
   private lastMessageReceived = 0;
   private connectionStaleThreshold = 3600000; // 60 minutes without any messages - increased from 10min for low-activity collections
 
@@ -883,11 +934,8 @@ class WebSocketManager extends EventEmitter {
   }
 
   private getAdaptiveStaleThreshold(): number {
-    // Calculate message rate over the last 5 minutes
-    const now = Date.now();
-    const fiveMinutesAgo = now - 300000;
-    const recentMessages = this.messageTimestamps.filter(ts => ts > fiveMinutesAgo).length;
-    const messagesPerMinute = recentMessages / 5;
+    // Calculate message rate over the last 5 minutes using circular buffer
+    const messagesPerMinute = this.messageTimestamps.getMessageRate();
 
     // Define thresholds based on activity level
     if (messagesPerMinute > 10) {
@@ -1162,14 +1210,11 @@ class WebSocketManager extends EventEmitter {
   }
 
   private recordMessage(): void {
+    // Push to circular buffer - no array.filter() needed!
     this.messageTimestamps.push(Date.now());
 
-    // Keep only last 5 minutes
-    const fiveMinutesAgo = Date.now() - 300000;
-    this.messageTimestamps = this.messageTimestamps.filter(t => t > fiveMinutesAgo);
-
-    // Calculate message rate (per minute)
-    this.metrics.messageRate = this.messageTimestamps.length / 5;
+    // Calculate message rate (per minute) using circular buffer
+    this.metrics.messageRate = this.messageTimestamps.getMessageRate();
   }
 
   private updateConnectionQuality(): void {

@@ -10,6 +10,86 @@ if (!fs.existsSync(LOG_DIR)) {
 }
 
 // ============================================
+// ASYNC BATCHED LOG WRITER
+// ============================================
+
+/**
+ * Buffer for async batched log writes
+ * Groups log lines by file path to minimize I/O operations
+ */
+const logBuffer = new Map<string, string[]>();
+const FLUSH_INTERVAL_MS = 1000; // Flush every 1 second
+let flushIntervalId: NodeJS.Timeout | null = null;
+let isShuttingDown = false;
+
+/**
+ * Flush all buffered log lines to their respective files
+ * Uses async fs.appendFile to avoid blocking the event loop
+ */
+function flushLogBuffers(): void {
+  if (logBuffer.size === 0) return;
+
+  for (const [filePath, lines] of logBuffer) {
+    if (lines.length === 0) continue;
+
+    const content = lines.join('\n') + '\n';
+
+    // Use async append - fire and forget for performance
+    fs.appendFile(filePath, content, (err) => {
+      if (err && !isShuttingDown) {
+        // Only log to console to avoid recursion
+        console.error(`[LogWriter] Failed to write to ${filePath}: ${err.message}`);
+      }
+    });
+  }
+
+  // Clear all buffers
+  logBuffer.clear();
+}
+
+/**
+ * Synchronous flush for shutdown scenarios
+ * Blocks to ensure all logs are written before process exit
+ */
+function flushLogBuffersSync(): void {
+  if (logBuffer.size === 0) return;
+
+  for (const [filePath, lines] of logBuffer) {
+    if (lines.length === 0) continue;
+
+    try {
+      fs.appendFileSync(filePath, lines.join('\n') + '\n');
+    } catch {
+      // Silently fail on shutdown
+    }
+  }
+  logBuffer.clear();
+}
+
+// Start the flush interval
+flushIntervalId = setInterval(flushLogBuffers, FLUSH_INTERVAL_MS);
+
+// Ensure logs are flushed on process exit
+process.on('beforeExit', () => {
+  isShuttingDown = true;
+  if (flushIntervalId) {
+    clearInterval(flushIntervalId);
+    flushIntervalId = null;
+  }
+  flushLogBuffersSync();
+});
+
+process.on('SIGINT', () => {
+  isShuttingDown = true;
+  flushLogBuffersSync();
+});
+
+process.on('SIGTERM', () => {
+  isShuttingDown = true;
+  flushLogBuffersSync();
+});
+
+// ============================================
 // LOG METADATA INTERFACE
 // ============================================
 
@@ -258,11 +338,13 @@ function formatMetadata(metadata?: LogMetadata): string {
 }
 
 function writeToFile(logLine: string, prefix: string): void {
-  try {
-    fs.appendFileSync(getLogFilePath(prefix), logLine + '\n');
-  } catch {
-    // Silently fail file write to not break app
+  const filePath = getLogFilePath(prefix);
+
+  // Add to buffer instead of synchronous write
+  if (!logBuffer.has(filePath)) {
+    logBuffer.set(filePath, []);
   }
+  logBuffer.get(filePath)!.push(logLine);
 }
 
 // Format error for logging

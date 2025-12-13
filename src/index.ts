@@ -45,6 +45,8 @@ import { safeGetJob, safeMarkJobAsProcessed, recoverStuckJobs } from "./utils/re
 import BidLogs from "./models/logs.model";
 import PQueue from "p-queue";
 import Order from "./models/order.model";
+import TaskSchedule from "./models/taskSchedule.model";
+import TaskRuntimeState from "./models/taskRuntimeState.model";
 import { orderCache, CachedOrder } from "./utils/order-cache";
 import Approval from "./models/approval.model";
 import { USDC, WETH } from "./utils/currencies";
@@ -115,6 +117,108 @@ export const warningMessage: WarningMessage = {};
 export const errorStats: BidCounts = {};
 export const skipStats: BidCounts = {};
 const counterbidCounts: BidCounts = {};
+
+// ============================================
+// TASK STATE MONGODB PERSISTENCE
+// ============================================
+// Sync in-memory state to MongoDB for crash recovery
+// State is loaded on task start and synced periodically
+
+/**
+ * Sync in-memory state to MongoDB for a specific task
+ */
+async function syncTaskStateToMongoDB(taskId: string): Promise<void> {
+  try {
+    await TaskRuntimeState.updateOne(
+      { taskId },
+      {
+        $set: {
+          bidStats: bidStats[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
+          skipStats: skipStats[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
+          errorStats: errorStats[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
+          floorPrices: floorPrices[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
+          bestOffers: bestOffers[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
+          warningBids: warningBids[taskId] || { opensea: false, magiceden: false, blur: false },
+          accessedAt: new Date()
+        }
+      },
+      { upsert: true }
+    );
+  } catch (err) {
+    debugLog('RuntimeState', `Failed to sync task ${taskId} to MongoDB: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/**
+ * Load state from MongoDB into in-memory objects for a task
+ */
+async function loadTaskStateFromMongoDB(taskId: string): Promise<void> {
+  try {
+    const doc = await TaskRuntimeState.findOneAndUpdate(
+      { taskId },
+      { $set: { accessedAt: new Date() } },
+      { new: true }
+    );
+
+    if (doc) {
+      // Restore in-memory state from MongoDB
+      if (doc.bidStats) bidStats[taskId] = { ...doc.bidStats };
+      if (doc.skipStats) skipStats[taskId] = { ...doc.skipStats };
+      if (doc.errorStats) errorStats[taskId] = { ...doc.errorStats };
+      if (doc.floorPrices) floorPrices[taskId] = { ...doc.floorPrices };
+      if (doc.bestOffers) bestOffers[taskId] = { ...doc.bestOffers };
+      if (doc.warningBids) warningBids[taskId] = { ...doc.warningBids };
+
+      debugLog('RuntimeState', `Loaded state from MongoDB for task ${taskId}`);
+    }
+  } catch (err) {
+    debugLog('RuntimeState', `Failed to load task ${taskId} from MongoDB: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/**
+ * Delete task state from MongoDB
+ */
+async function deleteTaskStateFromMongoDB(taskId: string): Promise<void> {
+  try {
+    await TaskRuntimeState.deleteOne({ taskId });
+  } catch (err) {
+    debugLog('RuntimeState', `Failed to delete task ${taskId} from MongoDB: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/**
+ * Sync all active task states to MongoDB (called periodically)
+ */
+async function syncAllActiveTaskStates(): Promise<void> {
+  const taskIds = Array.from(activeTasks.keys());
+  if (taskIds.length === 0) return;
+
+  const bulkOps = taskIds.map(taskId => ({
+    updateOne: {
+      filter: { taskId },
+      update: {
+        $set: {
+          bidStats: bidStats[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
+          skipStats: skipStats[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
+          errorStats: errorStats[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
+          floorPrices: floorPrices[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
+          bestOffers: bestOffers[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
+          warningBids: warningBids[taskId] || { opensea: false, magiceden: false, blur: false },
+          accessedAt: new Date()
+        }
+      },
+      upsert: true
+    }
+  }));
+
+  try {
+    await TaskRuntimeState.bulkWrite(bulkOps, { ordered: false });
+    debugLog('RuntimeState', `Synced ${taskIds.length} task states to MongoDB`);
+  } catch (err) {
+    warnLog('RuntimeState', `Failed to bulk sync task states: ${err instanceof Error ? err.message : err}`);
+  }
+}
 
 // Task status history tracking
 interface TaskStatusChange {
@@ -923,6 +1027,8 @@ let bullMQConnections: any[] = [];
 
 const taskTimeouts = new Map<string, NodeJS.Timeout>();
 const taskCountdownTimers = new Map<string, NodeJS.Timeout>();
+// Track timer execution IDs to detect cancelled timers (cancellation token pattern)
+const timerExecutionIds = new Map<string, string>();
 // Track consecutive no-progress calls for infinite loop prevention
 // Removed cancellationNoProgressCount - now using cancellationTracker
 const MAX_NO_PROGRESS_CALLS = 10;
@@ -3547,6 +3653,18 @@ async function startServer() {
     const STUCK_JOB_CLEANUP_INTERVAL = 60000; // 60 seconds
     setInterval(cleanupStuckJobs, STUCK_JOB_CLEANUP_INTERVAL);
 
+    // Start MongoDB TaskSchedule watchdog (recovers missed timers)
+    const WATCHDOG_INTERVAL = 5000; // 5 seconds
+    setInterval(taskScheduleWatchdog, WATCHDOG_INTERVAL);
+
+    // Start periodic cleanup of old TaskSchedule documents
+    const SCHEDULE_CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour
+    setInterval(cleanupOldSchedules, SCHEDULE_CLEANUP_INTERVAL);
+
+    // Start periodic sync of task runtime state to MongoDB
+    const TASK_STATE_SYNC_INTERVAL = 30000; // 30 seconds
+    setInterval(syncAllActiveTaskStates, TASK_STATE_SYNC_INTERVAL);
+
     debugLog('STARTUP', '✅ SERVER FULLY INITIALIZED');
 
   } catch (error) {
@@ -4123,7 +4241,25 @@ function cleanupTaskResources(taskId: string, preserveWarnings = false): void {
       taskCountdownTimers.delete(timerKey);
       clearedCountdowns++;
     }
+
+    // Clear marketplace-specific execution ID (cancellation token)
+    timerExecutionIds.delete(timerKey);
   }
+
+  // Clear legacy execution ID (taskId without marketplace suffix)
+  timerExecutionIds.delete(taskId);
+
+  // Cancel all pending MongoDB schedules for this task (fire-and-forget for performance)
+  TaskSchedule.updateMany(
+    { taskId, status: 'PENDING' },
+    { $set: { status: 'CANCELLED' } }
+  ).then(result => {
+    if (result.modifiedCount > 0) {
+      debugLog('Watchdog', `Cancelled ${result.modifiedCount} pending schedule(s) for task ${taskId}`);
+    }
+  }).catch(err => {
+    debugLog('Watchdog', `Failed to cancel schedules for task ${taskId}: ${err instanceof Error ? err.message : err}`);
+  });
 
   // TaskFlow logging: Timers cleared
   debugLog('TaskFlow',
@@ -4140,6 +4276,17 @@ function cleanupTaskResources(taskId: string, preserveWarnings = false): void {
   }
 
   // Clear marketplace adding jobs flag
+
+  // Sync task state to MongoDB before clearing in-memory state, then delete
+  // Fire-and-forget for performance (similar to TaskSchedule cleanup)
+  syncTaskStateToMongoDB(taskId)
+    .then(() => deleteTaskStateFromMongoDB(taskId))
+    .then(() => {
+      debugLog('RuntimeState', `Synced and deleted task state for ${taskId}`);
+    })
+    .catch(err => {
+      debugLog('RuntimeState', `Failed to sync/delete task state for ${taskId}: ${err instanceof Error ? err.message : err}`);
+    });
 
   // Log final stats before clearing
   if (skipStats[taskId]) {
@@ -5278,9 +5425,57 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
     { taskId, marketplace: mpKeyForLog, timerKey, delay: loopInterval, expiresAt: nextLoopTime.toISOString() }
   );
 
+  // Generate unique execution ID for this timer (cancellation token pattern)
+  // This allows us to detect if the timer was cancelled/replaced even if callback is queued in event loop
+  const executionId = `${timerKey}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  timerExecutionIds.set(timerKey, executionId);
+
+  // Persist schedule to MongoDB for watchdog recovery (fire-and-forget for performance)
+  // The watchdog will pick up any schedules that don't fire due to memory issues
+  TaskSchedule.findOneAndUpdate(
+    { taskId, marketplace: marketplace || 'all' },
+    {
+      $set: {
+        scheduledAt: new Date(),
+        nextFireTime: nextLoopTime,
+        loopInterval,
+        status: 'PENDING',
+        executionId,
+        attempts: 0
+      }
+    },
+    { upsert: true, new: true }
+  ).catch(err => {
+    warnLog('Watchdog', `Failed to persist schedule to MongoDB: ${err instanceof Error ? err.message : err}`, { taskId, marketplace: mpKeyForLog });
+  });
+
   try {
     // Schedule the next iteration with setTimeout
     const timeoutId = setTimeout(async () => {
+      // GUARD 1: Check if this timer was cancelled (different executionId means new timer was created or timer was cancelled)
+      const currentExecutionId = timerExecutionIds.get(timerKey);
+      if (currentExecutionId !== executionId) {
+        debugLog('TimerOp',
+          `TIMER_STALE | timerKey=${timerKey} | expected=${executionId} | current=${currentExecutionId || 'deleted'}`,
+          { taskId, marketplace: mpKeyForLog, timerKey, expected: executionId, current: currentExecutionId }
+        );
+        return;
+      }
+
+      // GUARD 2: Check if timer still exists in map (may have been cleared by cleanupTaskResources)
+      if (!taskTimeouts.has(timerKey)) {
+        debugLog('TimerOp',
+          `TIMER_CANCELLED | timerKey=${timerKey} | reason=timer_not_in_map`,
+          { taskId, marketplace: mpKeyForLog, timerKey, reason: 'timer_not_in_map' }
+        );
+        timerExecutionIds.delete(timerKey);
+        return;
+      }
+
+      // Remove self from maps immediately to prevent double-execution
+      taskTimeouts.delete(timerKey);
+      timerExecutionIds.delete(timerKey);
+
       // TaskFlow logging: Timer fired
       debugLog('TimerOp',
         `TIMEOUT_FIRED | timerKey=${timerKey} | taskId=${taskId} | mp=${marketplace || 'all'}`,
@@ -5351,11 +5546,27 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
             // Start all marketplaces (legacy behavior)
             await startTask(currentTask, true);
           }
+          // Mark MongoDB schedule as COMPLETED (fire-and-forget for performance)
+          TaskSchedule.updateOne(
+            { taskId, marketplace: marketplace || 'all', executionId },
+            { $set: { status: 'COMPLETED', firedAt: new Date() } }
+          ).catch(err => {
+            debugLog('Watchdog', `Failed to mark schedule COMPLETED: ${err instanceof Error ? err.message : err}`);
+          });
+
           debugLog('TimerOp',
             `TIMER_TASK_STARTED | taskId=${taskId} | mp=${marketplace || 'all'}`,
             { taskId, marketplace: mpKeyForLog }
           );
         } else {
+          // Mark MongoDB schedule as CANCELLED since task is not running
+          TaskSchedule.updateOne(
+            { taskId, marketplace: marketplace || 'all', executionId },
+            { $set: { status: 'CANCELLED' } }
+          ).catch(err => {
+            debugLog('Watchdog', `Failed to mark schedule CANCELLED: ${err instanceof Error ? err.message : err}`);
+          });
+
           warnLog('TimerOp',
             `TIMER_ABORTED | taskId=${taskId} | reason=task_not_running | running=${currentTask?.running}`,
             { taskId, marketplace: mpKeyForLog, reason: 'task_not_running', running: currentTask?.running }
@@ -6620,17 +6831,29 @@ const clientData = {
 };
 
 // Debounced broadcasting system for efficient real-time updates
-let lastBroadcastData: string | null = null;
+let lastBroadcastHash: string | null = null;
+let lastBroadcastMessage: string | null = null;
 const HEARTBEAT_INTERVAL_MS = 30000; // 30 second heartbeat for connection health
 
+// Fast hash function for change detection (djb2 algorithm)
+function fastHash(str: string): string {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash) ^ str.charCodeAt(i);
+  }
+  return hash.toString(36);
+}
 
 async function broadcastBidRates() {
-  const broadcastStart = Date.now();
+  // Early exit if no clients connected - skip all work
+  if (clients.size === 0) {
+    return;
+  }
 
   bidRates = getAllBidRates();
 
-
-  const currentData = {
+  // Build data WITHOUT timestamp for hash comparison (timestamp always changes)
+  const dataForHash = {
     bidRates,
     bidCounts: bidStats,
     skipCounts: skipStats,
@@ -6643,8 +6866,29 @@ async function broadcastBidRates() {
     taskStatus,
     ownBidCounts,
     loopCounterStats,
-    counterbidCounts,
-    timestamp: Date.now() // Add timestamp for client to track data freshness
+    counterbidCounts
+  };
+
+  // Fast hash comparison - much cheaper than full stringify comparison
+  let hashInput: string;
+  try {
+    hashInput = JSON.stringify(dataForHash);
+  } catch (error) {
+    errorLog('BroadcastBidRates', 'Error stringifying data for hash', error);
+    return;
+  }
+
+  const currentHash = fastHash(hashInput);
+
+  // Skip if data hasn't changed since last broadcast
+  if (currentHash === lastBroadcastHash && lastBroadcastMessage) {
+    return;
+  }
+
+  // Data changed - build full message with timestamp
+  const currentData = {
+    ...dataForHash,
+    timestamp: Date.now()
   };
 
   let message: string;
@@ -6654,37 +6898,19 @@ async function broadcastBidRates() {
       data: currentData
     });
   } catch (error) {
-    errorLog('BroadcastBidRates', 'Error stringifying data', error);
-    // Log which property might be causing the issue
-    for (const [key, value] of Object.entries(currentData)) {
-      try {
-        JSON.stringify(value);
-      } catch (e) {
-        errorLog('BroadcastBidRates', `Error stringifying ${key}`, e);
-      }
+    errorLog('BroadcastBidRates', 'Error stringifying broadcast message', error);
+    return;
+  }
+
+  lastBroadcastHash = currentHash;
+  lastBroadcastMessage = message;
+
+  // Broadcast to all connected clients
+  clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
     }
-    return;
-  }
-
-  // Change detection - only broadcast if data actually changed
-  if (lastBroadcastData === message) {
-    return;
-  }
-
-  // Change detection - only broadcast if data actually changed
-  if (lastBroadcastData !== message) {
-    lastBroadcastData = message;
-
-    let activeSockets = 0;
-    clients.forEach(client => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(message);
-        activeSockets++;
-      }
-    });
-
-    const broadcastDuration = Date.now() - broadcastStart;
-  }
+  });
 }
 
 // Periodic heartbeat to maintain WebSocket connections and ensure clients stay connected
@@ -9035,6 +9261,13 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
     const safeWalletId = maskSensitiveIdentifier(task.walletId);
     errorLog('TaskFlow', `START_INTERNAL_EXIT | taskId=${taskId} | reason=wallet_not_found | walletId=${safeWalletId}`, undefined, { taskId, marketplace: mpKeyForLog, reason: 'wallet_not_found' });
     return { success: false, reason: 'wallet_not_found' };
+  }
+
+  // Load state from MongoDB on first start (not restart)
+  if (!isRestart && !activeTasks.has(taskId)) {
+    loadTaskStateFromMongoDB(taskId).catch(err => {
+      debugLog('RuntimeState', `Failed to preload state for ${taskId}: ${err instanceof Error ? err.message : err}`);
+    });
   }
 
   if (!taskWallet.encryptedPrivateKey) {
@@ -27014,6 +27247,126 @@ function checkAllParentJobsComplete(taskId: string): boolean {
  * Track when tasks first appear to be complete
  */
 const taskCompletionTracking = new Map<string, number>();
+
+/**
+ * MongoDB TaskSchedule Watchdog
+ * Recovers tasks whose in-memory timers failed to fire (due to memory pressure, GC, etc.)
+ * Runs every 5 seconds with a 3-second grace period to allow in-memory timers to fire first
+ */
+async function taskScheduleWatchdog(): Promise<void> {
+  const GRACE_PERIOD_MS = 3000; // Allow in-memory timer to fire first
+  const MAX_ATTEMPTS = 3;
+
+  try {
+    const overdueSchedules = await TaskSchedule.find({
+      status: 'PENDING',
+      nextFireTime: { $lt: new Date(Date.now() - GRACE_PERIOD_MS) }
+    }).limit(50); // Process up to 50 at a time to avoid blocking
+
+    if (overdueSchedules.length > 0) {
+      debugLog('Watchdog',
+        `SCAN_FOUND | overdue=${overdueSchedules.length} | gracePeriod=${GRACE_PERIOD_MS}ms`,
+        { overdueCount: overdueSchedules.length }
+      );
+    }
+
+    for (const schedule of overdueSchedules) {
+      // Atomically claim to prevent races between multiple server instances
+      const claimed = await TaskSchedule.findOneAndUpdate(
+        { _id: schedule._id, status: 'PENDING' },
+        { $set: { status: 'FIRING', firedAt: new Date() }, $inc: { attempts: 1 } },
+        { new: true }
+      );
+
+      if (!claimed) {
+        // Another process claimed it first
+        continue;
+      }
+
+      const task = activeTasks.get(schedule.taskId);
+      const overdueMs = Date.now() - schedule.nextFireTime.getTime();
+
+      // Check if task is still active and running
+      const mpForLog = schedule.marketplace as 'opensea' | 'magiceden' | 'blur' | undefined;
+      if (!task?.running) {
+        await TaskSchedule.updateOne({ _id: schedule._id }, { $set: { status: 'CANCELLED' } });
+        debugLog('Watchdog',
+          `RECOVERY_SKIP | taskId=${schedule.taskId} | mp=${schedule.marketplace} | reason=task_not_running`,
+          { taskId: schedule.taskId, marketplace: mpForLog, reason: 'task_not_running' }
+        );
+        continue;
+      }
+
+      // Check if in-memory timer still exists (if so, let it handle it)
+      const timerKey = schedule.marketplace === 'all' ? schedule.taskId : `${schedule.taskId}-${schedule.marketplace}`;
+      if (taskTimeouts.has(timerKey)) {
+        // Timer exists but hasn't fired yet - give it more time
+        await TaskSchedule.updateOne({ _id: schedule._id }, { $set: { status: 'PENDING' } });
+        debugLog('Watchdog',
+          `RECOVERY_DEFER | taskId=${schedule.taskId} | mp=${schedule.marketplace} | reason=timer_exists`,
+          { taskId: schedule.taskId, marketplace: mpForLog, timerKey }
+        );
+        continue;
+      }
+
+      warnLog('Watchdog',
+        `RECOVERY_TRIGGER | taskId=${schedule.taskId} | mp=${schedule.marketplace} | overdueMs=${overdueMs} | attempts=${claimed.attempts}`,
+        { taskId: schedule.taskId, marketplace: mpForLog, overdueMs, attempts: claimed.attempts }
+      );
+
+      try {
+        const marketplace = schedule.marketplace === 'all' ? undefined : schedule.marketplace;
+        await startTask(task, true, marketplace);
+
+        await TaskSchedule.updateOne({ _id: schedule._id }, { $set: { status: 'COMPLETED' } });
+        debugLog('Watchdog',
+          `RECOVERY_SUCCESS | taskId=${schedule.taskId} | mp=${schedule.marketplace}`,
+          { taskId: schedule.taskId, marketplace: mpForLog }
+        );
+      } catch (err) {
+        errorLog('Watchdog', `RECOVERY_FAILED | taskId=${schedule.taskId} | mp=${schedule.marketplace}`, err);
+
+        if (claimed.attempts >= MAX_ATTEMPTS) {
+          await TaskSchedule.updateOne({ _id: schedule._id }, { $set: { status: 'CANCELLED' } });
+          warnLog('Watchdog',
+            `RECOVERY_EXHAUSTED | taskId=${schedule.taskId} | mp=${schedule.marketplace} | attempts=${claimed.attempts}`,
+            { taskId: schedule.taskId, marketplace: mpForLog, attempts: claimed.attempts }
+          );
+        } else {
+          // Reset to PENDING to retry later
+          await TaskSchedule.updateOne({ _id: schedule._id }, { $set: { status: 'PENDING' } });
+        }
+      }
+    }
+  } catch (err) {
+    errorLog('Watchdog', 'Watchdog scan failed', err);
+  }
+}
+
+/**
+ * Cleanup old COMPLETED/CANCELLED TaskSchedule documents
+ * Runs every hour, removes documents older than 24 hours
+ */
+async function cleanupOldSchedules(): Promise<void> {
+  const RETENTION_HOURS = 24;
+  const cutoffDate = new Date(Date.now() - RETENTION_HOURS * 60 * 60 * 1000);
+
+  try {
+    const result = await TaskSchedule.deleteMany({
+      status: { $in: ['COMPLETED', 'CANCELLED'] },
+      updatedAt: { $lt: cutoffDate }
+    });
+
+    if (result.deletedCount > 0) {
+      debugLog('Watchdog',
+        `CLEANUP | deleted=${result.deletedCount} | olderThan=${RETENTION_HOURS}h`,
+        { deletedCount: result.deletedCount, retentionHours: RETENTION_HOURS }
+      );
+    }
+  } catch (err) {
+    errorLog('Watchdog', 'Schedule cleanup failed', err);
+  }
+}
 
 
 /**
