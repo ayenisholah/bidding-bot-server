@@ -81,6 +81,8 @@ import { listingPriceCache } from "./utils/listing-price-cache";
 import Listing from "./models/listing.model";
 
 const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
+// const MARKETPLACE_WS_URL = "ws://localhost:8080  ";
+
 
 // Initialize process lifecycle logging immediately on startup
 logProcessStart();
@@ -5486,6 +5488,21 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
       taskTimeouts.delete(timerKey);
       timerExecutionIds.delete(timerKey);
 
+      // FIX: Change status from SCHEDULED to STARTED immediately when timer fires
+      // This prevents false "Missing timer for SCHEDULED task" warnings from verifyScheduledTaskTimers()
+      // The health check only triggers recovery when status === 'SCHEDULED' && !hasTimer
+      // By changing status to STARTED immediately, the condition fails and no false recovery occurs
+      if (marketplace) {
+        setTaskStatus(taskId, 'STARTED', 'timer fired, starting loop', marketplace);
+      } else {
+        const timerTask = activeTasks.get(taskId);
+        if (timerTask) {
+          for (const mp of timerTask.selectedMarketplaces) {
+            setTaskStatus(taskId, 'STARTED', 'timer fired, starting loop', mp.toLowerCase());
+          }
+        }
+      }
+
       // TaskFlow logging: Timer fired
       debugLog('TimerOp',
         `TIMEOUT_FIRED | timerKey=${timerKey} | taskId=${taskId} | mp=${marketplace || 'all'}`,
@@ -6007,7 +6024,7 @@ async function recoverStuckTaskTimer(taskId: string, marketplace: string): Promi
  */
 async function verifyScheduledTaskTimers(): Promise<void> {
   // Collect diagnostic info about all SCHEDULED tasks
-  const scheduledTasks: Array<{taskId: string, mp: string, waitingTime: number, hasTimer: boolean, hasCountdown: boolean}> = [];
+  const scheduledTasks: Array<{ taskId: string, mp: string, waitingTime: number, hasTimer: boolean, hasCountdown: boolean }> = [];
 
   for (const [taskId, task] of activeTasks) {
     if (!task.running) continue;
@@ -9624,18 +9641,10 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
       }
     }
 
-    // Clear ALL parent jobs for this task from previous loops
-    let clearedParentJobs = 0;
-    for (const [parentJobId, parentJob] of parentJobs.entries()) {
-      if (parentJobId.includes(taskId)) {
-        // Delete all parent jobs for this task, regardless of loop number
-        // They will be recreated fresh for the new loop
-        parentJobs.delete(parentJobId);
-        clearedParentJobs++;
-      }
-    }
-    if (clearedParentJobs > 0) {
-    }
+    // FIX: REMOVED aggressive parent job cleanup that caused PARENT_NOT_FOUND warnings
+    // Workers from previous loops are still processing jobs that reference old parent jobs
+    // Let cleanupOldParentJobs() handle proper retention (keeps parent jobs for 2 loops)
+    // See: cleanupOldParentJobs() at line 5187, called at lines 9589 and 9616
 
     // Clear pending job creation promises for this task
     let clearedPromises = 0;
@@ -13124,8 +13133,13 @@ async function _doConnect(): Promise<void> {
       activeSubscriptions.clear();
     });
 
+    // Debug counter for message flow tracing
+    let clientHandlerCount = 0;
+
     wsManager.on('message', async (message: any) => {
       try {
+        clientHandlerCount++;
+        console.log(`[CLIENT-HANDLER] #${clientHandlerCount} | eventType=${message.eventType || message.type}`);
         // Message reception logging removed - too noisy
 
         // Handle initial data request synchronously
@@ -19804,18 +19818,19 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
     const { currencyType, currency } = getCurrencyDetailsFromTask(currentTask, "magiceden");
 
     // CRITICAL: Re-validate maxBidPrice before placing bid
+    // FIX: Always check maxBidPrice regardless of floor_price availability
     const offerEth = Number(offerPrice) / 1e18;
     const floor_price = Number(await fetchMagicEdenCollectionStats(currentTask.contract.contractAddress));
-    if (floor_price && floor_price > 0) {
-      const { maxBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "magiceden");
-      if (maxBidPriceEth > 0 && offerEth > maxBidPriceEth) {
-        errorLog('LimitCheck', `[ME-Trait-CB] ${slug} [${traitKey}] | BLOCKED: offer=${offerEth} WETH > max=${maxBidPriceEth} WETH`);
-        await logBidError(taskId, "MAX_BID_EXCEEDED", `Counterbid ${offerEth} WETH blocked - exceeds max ${maxBidPriceEth} WETH for trait ${traitKey}`, "skipped", "magiceden");
-        if (!skipStats[taskId]) skipStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
-        skipStats[taskId].magiceden++;
-        return;
-      }
-      debugLog('LimitCheck', `[ME-Trait-CB] ${slug} [${traitKey}] | PASS: offer=${offerEth} WETH <= max=${maxBidPriceEth} WETH`);
+    const { maxBidPriceEth } = await calculateBidPrice(currentTask, floor_price || 0, "magiceden");
+
+    debugLog('LimitCheck', `[ME-Trait-CB] ${slug} [${traitKey}] | floor=${floor_price || 'unavailable'} | offer=${offerEth} | max=${maxBidPriceEth} WETH`);
+
+    if (maxBidPriceEth > 0 && offerEth > maxBidPriceEth) {
+      errorLog('LimitCheck', `[ME-Trait-CB] ${slug} [${traitKey}] | BLOCKED: offer=${offerEth} WETH > max=${maxBidPriceEth} WETH (floor=${floor_price || 'unavailable'})`);
+      await logBidError(taskId, "MAX_BID_EXCEEDED", `Counterbid ${offerEth} WETH blocked - exceeds max ${maxBidPriceEth} WETH for trait ${traitKey}`, "skipped", "magiceden");
+      if (!skipStats[taskId]) skipStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
+      skipStats[taskId].magiceden++;
+      return;
     }
 
     // Fetch wallet and decrypt private key just before use
@@ -20066,17 +20081,18 @@ async function blurTraitCounterBid(data: IBlurBidData) {
     const offerEth = Number(offerPrice) / 1e18;
 
     // CRITICAL: Re-validate maxBidPrice before placing bid
+    // FIX: Always check maxBidPrice regardless of floor_price availability
     const floor_price = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
-    if (floor_price && floor_price > 0) {
-      const { maxBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "blur");
-      if (maxBidPriceEth > 0 && offerEth > maxBidPriceEth) {
-        errorLog('LimitCheck', `[Blur-Trait-CB] ${slug} [${identifier}] | BLOCKED: offer=${offerEth} BETH > max=${maxBidPriceEth} BETH`);
-        await logBidError(taskId, "MAX_BID_EXCEEDED", `Counterbid ${offerEth} BETH blocked - exceeds max ${maxBidPriceEth} BETH for trait ${identifier}`, "skipped", "blur");
-        if (!skipStats[taskId]) skipStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
-        skipStats[taskId].blur++;
-        return;
-      }
-      debugLog('LimitCheck', `[Blur-Trait-CB] ${slug} [${identifier}] | PASS: offer=${offerEth} BETH <= max=${maxBidPriceEth} BETH`);
+    const { maxBidPriceEth } = await calculateBidPrice(currentTask, floor_price || 0, "blur");
+
+    debugLog('LimitCheck', `[Blur-Trait-CB] ${slug} [${identifier}] | floor=${floor_price || 'unavailable'} | offer=${offerEth} | max=${maxBidPriceEth} BETH`);
+
+    if (maxBidPriceEth > 0 && offerEth > maxBidPriceEth) {
+      errorLog('LimitCheck', `[Blur-Trait-CB] ${slug} [${identifier}] | BLOCKED: offer=${offerEth} BETH > max=${maxBidPriceEth} BETH (floor=${floor_price || 'unavailable'})`);
+      await logBidError(taskId, "MAX_BID_EXCEEDED", `Counterbid ${offerEth} BETH blocked - exceeds max ${maxBidPriceEth} BETH for trait ${identifier}`, "skipped", "blur");
+      if (!skipStats[taskId]) skipStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
+      skipStats[taskId].blur++;
+      return;
     }
 
     if (DEBUG) {
@@ -20207,20 +20223,20 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
     const { currency, decimal, currencySymbol } = getCurrencyDetailsFromTask(currentTask, "opensea");
 
     // CRITICAL: Re-validate maxBidPrice before placing bid
-    // This is a safety check to ensure no bid exceeds the configured max/hardCap
+    // FIX: Always check maxBidPrice regardless of floor_price availability
     const offerPriceEth = Number(offerPrice) / Math.pow(10, decimal);
     const floor_price = await getOpenseaFloor(slug);
-    if (floor_price && floor_price > 0) {
-      const { maxBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "opensea");
-      if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
-        errorLog('LimitCheck', `[OS-Token-CB] ${slug}#${asset.tokenId} | BLOCKED: offer=${offerPriceEth} ${currencySymbol} > max=${maxBidPriceEth} ${currencySymbol}`);
-        await logBidError(taskId, "MAX_BID_EXCEEDED", `Counterbid ${offerPriceEth} ${currencySymbol} blocked - exceeds max ${maxBidPriceEth} ${currencySymbol} for token ${asset.tokenId}`, "skipped", "opensea");
-        if (!skipStats[taskId]) skipStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
-        skipStats[taskId].opensea++;
-        clearCounterbidPending(taskId, 'opensea', asset.tokenId.toString());
-        return;
-      }
-      debugLog('LimitCheck', `[OS-Token-CB] ${slug}#${asset.tokenId} | PASS: offer=${offerPriceEth} ${currencySymbol} <= max=${maxBidPriceEth} ${currencySymbol}`);
+    const { maxBidPriceEth } = await calculateBidPrice(currentTask, floor_price || 0, "opensea");
+
+    debugLog('LimitCheck', `[OS-Token-CB] ${slug}#${asset.tokenId} | floor=${floor_price || 'unavailable'} | offer=${offerPriceEth} | max=${maxBidPriceEth} ${currencySymbol}`);
+
+    if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
+      errorLog('LimitCheck', `[OS-Token-CB] ${slug}#${asset.tokenId} | BLOCKED: offer=${offerPriceEth} ${currencySymbol} > max=${maxBidPriceEth} ${currencySymbol} (floor=${floor_price || 'unavailable'})`);
+      await logBidError(taskId, "MAX_BID_EXCEEDED", `Counterbid ${offerPriceEth} ${currencySymbol} blocked - exceeds max ${maxBidPriceEth} ${currencySymbol} for token ${asset.tokenId}`, "skipped", "opensea");
+      if (!skipStats[taskId]) skipStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
+      skipStats[taskId].opensea++;
+      clearCounterbidPending(taskId, 'opensea', asset.tokenId.toString());
+      return;
     }
 
     const wallet = await walletCache.getWalletById(walletId);
@@ -20362,17 +20378,18 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
     const offerEth = Number(offerPrice) / Math.pow(10, decimal);
 
     // CRITICAL: Re-validate maxBidPrice before placing bid
+    // FIX: Always check maxBidPrice regardless of floor_price availability
     const floor_price = await getOpenseaFloor(slug);
-    if (floor_price && floor_price > 0) {
-      const { maxBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "opensea");
-      if (maxBidPriceEth > 0 && offerEth > maxBidPriceEth) {
-        errorLog('LimitCheck', `[OS-Trait-CB] ${slug} [${identifier}] | BLOCKED: offer=${offerEth} ${currencySymbol} > max=${maxBidPriceEth} ${currencySymbol}`);
-        await logBidError(taskId, "MAX_BID_EXCEEDED", `Counterbid ${offerEth} ${currencySymbol} blocked - exceeds max ${maxBidPriceEth} ${currencySymbol} for trait ${identifier}`, "skipped", "opensea");
-        if (!skipStats[taskId]) skipStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
-        skipStats[taskId].opensea++;
-        return;
-      }
-      debugLog('LimitCheck', `[OS-Trait-CB] ${slug} [${identifier}] | PASS: offer=${offerEth} ${currencySymbol} <= max=${maxBidPriceEth} ${currencySymbol}`);
+    const { maxBidPriceEth } = await calculateBidPrice(currentTask, floor_price || 0, "opensea");
+
+    debugLog('LimitCheck', `[OS-Trait-CB] ${slug} [${identifier}] | floor=${floor_price || 'unavailable'} | offer=${offerEth} | max=${maxBidPriceEth} ${currencySymbol}`);
+
+    if (maxBidPriceEth > 0 && offerEth > maxBidPriceEth) {
+      errorLog('LimitCheck', `[OS-Trait-CB] ${slug} [${identifier}] | BLOCKED: offer=${offerEth} ${currencySymbol} > max=${maxBidPriceEth} ${currencySymbol} (floor=${floor_price || 'unavailable'})`);
+      await logBidError(taskId, "MAX_BID_EXCEEDED", `Counterbid ${offerEth} ${currencySymbol} blocked - exceeds max ${maxBidPriceEth} ${currencySymbol} for trait ${identifier}`, "skipped", "opensea");
+      if (!skipStats[taskId]) skipStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
+      skipStats[taskId].opensea++;
+      return;
     }
 
     if (DEBUG) {
@@ -20450,18 +20467,19 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
     const { currency } = getCurrencyDetailsFromTask(currentTask, "magiceden");
 
     // CRITICAL: Re-validate maxBidPrice before placing bid
+    // FIX: Always check maxBidPrice regardless of floor_price availability
     const offerEth = Number(offerPrice) / 1e18;
     const floor_price = Number(await fetchMagicEdenCollectionStats(contractAddress));
-    if (floor_price && floor_price > 0) {
-      const { maxBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "magiceden");
-      if (maxBidPriceEth > 0 && offerEth > maxBidPriceEth) {
-        errorLog('LimitCheck', `[ME-Token-CB] ${slug} [${tokenId}] | BLOCKED: offer=${offerEth} WETH > max=${maxBidPriceEth} WETH`);
-        await logBidError(_id, "MAX_BID_EXCEEDED", `Counterbid ${offerEth} WETH blocked - exceeds max ${maxBidPriceEth} WETH for token ${tokenId}`, "skipped", "magiceden");
-        if (!skipStats[_id]) skipStats[_id] = { opensea: 0, magiceden: 0, blur: 0 };
-        skipStats[_id].magiceden++;
-        return;
-      }
-      debugLog('LimitCheck', `[ME-Token-CB] ${slug} [${tokenId}] | PASS: offer=${offerEth} WETH <= max=${maxBidPriceEth} WETH`);
+    const { maxBidPriceEth } = await calculateBidPrice(currentTask, floor_price || 0, "magiceden");
+
+    debugLog('LimitCheck', `[ME-Token-CB] ${slug} [${tokenId}] | floor=${floor_price || 'unavailable'} | offer=${offerEth} | max=${maxBidPriceEth} WETH`);
+
+    if (maxBidPriceEth > 0 && offerEth > maxBidPriceEth) {
+      errorLog('LimitCheck', `[ME-Token-CB] ${slug} [${tokenId}] | BLOCKED: offer=${offerEth} WETH > max=${maxBidPriceEth} WETH (floor=${floor_price || 'unavailable'})`);
+      await logBidError(_id, "MAX_BID_EXCEEDED", `Counterbid ${offerEth} WETH blocked - exceeds max ${maxBidPriceEth} WETH for token ${tokenId}`, "skipped", "magiceden");
+      if (!skipStats[_id]) skipStats[_id] = { opensea: 0, magiceden: 0, blur: 0 };
+      skipStats[_id].magiceden++;
+      return;
     }
 
     const bidCount = getIncrementedBidCount(MAGICEDEN, slug, _id)

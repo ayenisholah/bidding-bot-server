@@ -136,6 +136,8 @@ class WebSocketManager extends EventEmitter {
 
   // State persistence for listings (per CLIENT_CONNECTION_GUIDE.md)
   private persistentListingSubscriptions: Map<string, SubscriptionInfo> = new Map();
+  // State persistence for bidding subscriptions (to survive reconnects)
+  private persistentBiddingSubscriptions: Map<string, SubscriptionInfo> = new Map();
   private subscriptionStateFile = '.listing-subscriptions.json';
 
   constructor(config: WebSocketManagerConfig) {
@@ -511,7 +513,7 @@ class WebSocketManager extends EventEmitter {
 
   private async syncSubscriptions(): Promise<void> {
     try {
-      infoLog('WebSocket', `[SYNC] Starting subscription sync after reconnection | persistentListings=${this.persistentListingSubscriptions.size} | activeBeforeClear=${this.activeSubscriptions.size}`);
+      infoLog('WebSocket', `[SYNC] Starting subscription sync after reconnection | persistentListings=${this.persistentListingSubscriptions.size} | persistentBidding=${this.persistentBiddingSubscriptions.size} | activeBeforeClear=${this.activeSubscriptions.size}`);
 
       // First, request current subscriptions from server to verify state
       this.requestSubscriptions();
@@ -532,13 +534,19 @@ class WebSocketManager extends EventEmitter {
         infoLog('WebSocket', `[SYNC] Restoring persistent listing subscription | key=${key} | slug=${value.slug}`);
       }
 
+      // Restore persistent bidding subscriptions to active subscriptions
+      for (const [key, value] of this.persistentBiddingSubscriptions) {
+        this.activeSubscriptions.set(key, value);
+        infoLog('WebSocket', `[SYNC] Restoring persistent bidding subscription | key=${key} | slug=${value.slug}`);
+      }
+
       // Skip sync if no subscriptions
-      if (this.activeSubscriptions.size === 0 && this.persistentListingSubscriptions.size === 0) {
+      if (this.activeSubscriptions.size === 0 && this.persistentListingSubscriptions.size === 0 && this.persistentBiddingSubscriptions.size === 0) {
         infoLog('WebSocket', '[SYNC] No subscriptions to sync - skipping');
         return;
       }
 
-      infoLog('WebSocket', `[SYNC] Syncing subscriptions after reconnection | activeSubscriptions=${this.activeSubscriptions.size} | persistentListings=${this.persistentListingSubscriptions.size}`);
+      infoLog('WebSocket', `[SYNC] Syncing subscriptions after reconnection | activeSubscriptions=${this.activeSubscriptions.size} | persistentListings=${this.persistentListingSubscriptions.size} | persistentBidding=${this.persistentBiddingSubscriptions.size}`);
 
       // Simply resubscribe to all collections
       // Server subscribes to ALL marketplaces when you subscribe once
@@ -645,6 +653,9 @@ class WebSocketManager extends EventEmitter {
       this.metrics.totalMessages++;
       this.recordMessage();
 
+      // Debug logging to trace message flow
+      console.log(`[CLIENT-RECV] #${this.metrics.totalMessages} | type=${message.type || message.eventType}`);
+
       // Update last message received timestamp
       this.lastMessageReceived = Date.now();
 
@@ -699,6 +710,8 @@ class WebSocketManager extends EventEmitter {
         }
       }
 
+      // Debug logging to trace message flow before emit
+      console.log(`[CLIENT-EMIT] #${this.metrics.totalMessages} | eventType=${message.eventType}`);
       this.emit('message', message);
 
     } catch (error) {
@@ -999,6 +1012,11 @@ class WebSocketManager extends EventEmitter {
         this.savePersistentSubscriptions();
       }
 
+      // Persist bidding subscriptions (to survive reconnects)
+      if (subscriptionType === 'bidding') {
+        this.persistentBiddingSubscriptions.set(subscriptionId, subscriptionInfo);
+      }
+
       this.metrics.subscriptionCount = this.activeSubscriptions.size;
 
       // Log successful subscription with full state
@@ -1060,6 +1078,7 @@ class WebSocketManager extends EventEmitter {
 
         if (this.activeSubscriptions.has(biddingKey)) {
           this.activeSubscriptions.delete(biddingKey);
+          this.persistentBiddingSubscriptions.delete(biddingKey);
           removedKeys.push(biddingKey);
         }
         if (this.activeSubscriptions.has(listingKey)) {
@@ -1081,6 +1100,7 @@ class WebSocketManager extends EventEmitter {
 
           if (this.activeSubscriptions.has(biddingKey)) {
             this.activeSubscriptions.delete(biddingKey);
+            this.persistentBiddingSubscriptions.delete(biddingKey);
             removedKeys.push(biddingKey);
           }
           if (this.activeSubscriptions.has(listingKey)) {
@@ -1439,6 +1459,7 @@ class WebSocketManager extends EventEmitter {
 
     // Clear local state
     this.activeSubscriptions.clear();
+    this.persistentBiddingSubscriptions.clear();
   }
 }
 
