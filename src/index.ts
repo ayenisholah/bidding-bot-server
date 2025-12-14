@@ -13126,6 +13126,110 @@ function getWalletContractBalance(walletAddress: string, contractAddress: string
   return balances[walletKey]?.[contractKey]?.[marketplace] || 0;
 }
 
+// Check if a token belongs to a rarity category (LEGENDARY/EPIC/RARE)
+async function isTokenInRarityCategory(
+  collectionSlug: string,
+  contractAddress: string,
+  tokenId: string,
+  rarityCategory: "LEGENDARY" | "EPIC" | "RARE"
+): Promise<boolean> {
+  try {
+    // Fetch rarity tokens for the category (uses Redis/MongoDB caching)
+    const result = await fetchRarityTokens(
+      collectionSlug,
+      contractAddress,
+      rarityCategory
+    );
+    // Check if tokenId is in the list (compare as numbers)
+    return result.tokenIds.includes(Number(tokenId));
+  } catch (error) {
+    errorLog('Balance', `Failed to check rarity category for token ${tokenId}`, error instanceof Error ? error : new Error(String(error)));
+    return false; // Fail safe - don't count if we can't verify
+  }
+}
+
+// Check if a purchased token matches a task's criteria (bidType, tokenIds, rarity, traits)
+async function doesTokenMatchTask(
+  task: ITask,
+  contractAddress: string,
+  tokenId: string
+): Promise<boolean> {
+  const taskSlug = task.contract.slug;
+
+  // 1. Check bidType
+  switch (task.bidType) {
+    case "collection":
+      // Collection bids match any token, but still check selectedTraits if present
+      break;
+
+    case "token": {
+      // Must be in task.tokenIds (check both string and number)
+      const tokenIdStr = tokenId.toString();
+      const tokenIdNum = Number(tokenId);
+      const isInTokenIds = task.tokenIds.some(
+        id => id.toString() === tokenIdStr || Number(id) === tokenIdNum
+      );
+      if (!isInTokenIds) {
+        debugLog('Balance', `doesTokenMatchTask: Token ${tokenId} NOT in task.tokenIds | taskId=${task._id}`);
+        return false;
+      }
+      break;
+    }
+
+    case "rarity":
+      // Must be in the rarity category
+      if (task.rarityCategory) {
+        const isInCategory = await isTokenInRarityCategory(
+          taskSlug,
+          contractAddress,
+          tokenId,
+          task.rarityCategory
+        );
+        if (!isInCategory) {
+          debugLog('Balance', `doesTokenMatchTask: Token ${tokenId} NOT in ${task.rarityCategory} rarity | taskId=${task._id}`);
+          return false;
+        }
+      }
+      break;
+  }
+
+  // 2. Check selectedTraits (if present)
+  if (task.selectedTraits && Object.keys(task.selectedTraits).length > 0) {
+    // Use tokenHasTrait for each selected trait
+    for (const [marketplace, categories] of Object.entries(task.selectedTraits)) {
+      for (const [category, traits] of Object.entries(categories as Record<string, { name: string }[]>)) {
+        for (const trait of traits) {
+          const hasTrait = await tokenHasTrait(contractAddress, tokenId, category, trait.name);
+
+          if (task.traitsOperator?.value === "and") {
+            // AND: all traits must match - if one fails, return false
+            if (!hasTrait) {
+              debugLog('Balance', `doesTokenMatchTask: Token ${tokenId} missing trait ${category}:${trait.name} (AND mode) | taskId=${task._id}`);
+              return false;
+            }
+          } else {
+            // OR: at least one trait must match - if one passes, return true
+            if (hasTrait) {
+              debugLog('Balance', `doesTokenMatchTask: Token ${tokenId} has trait ${category}:${trait.name} (OR mode) | taskId=${task._id}`);
+              return true;
+            }
+          }
+        }
+      }
+    }
+    // If we get here:
+    // - AND mode: all traits matched (didn't return false) → return true
+    // - OR mode: no traits matched (didn't return true) → return false
+    const result = task.traitsOperator?.value === "and";
+    if (!result) {
+      debugLog('Balance', `doesTokenMatchTask: Token ${tokenId} has no matching traits (OR mode) | taskId=${task._id}`);
+    }
+    return result;
+  }
+
+  return true; // No trait filter, matches by default
+}
+
 async function updateBalancesForItemSold(message: any) {
   try {
     // Extract data from the ITEM_SOLD event
@@ -13182,6 +13286,36 @@ async function updateBalancesForItemSold(message: any) {
     balances[walletAddressKey][contractAddress][marketplace] =
       (balances[walletAddressKey][contractAddress][marketplace] || 0) + 1;
 
+    // Find all tasks for this wallet and contract, then check which ones match the purchased token
+    try {
+      const walletId = wallet._id?.toString();
+      const tasks = await Task.find({
+        walletId: walletId,
+        'contract.contractAddress': { $regex: new RegExp(`^${contractAddress}$`, 'i') }
+      });
+
+      let matchedTaskCount = 0;
+      for (const task of tasks) {
+        // Check if this specific token matches this task's criteria
+        const matches = await doesTokenMatchTask(task, contractAddress, tokenId);
+        if (matches) {
+          await Task.updateOne(
+            { _id: task._id },
+            { $inc: { 'stopOptions.actualPurchase': 1 } }
+          );
+          matchedTaskCount++;
+          debugLog('Balance', `ITEM_SOLD | Incremented actualPurchase for task ${task._id} | slug=${task.contract.slug} | tokenId=${tokenId} | bidType=${task.bidType}`);
+        }
+      }
+
+      if (matchedTaskCount > 0) {
+        debugLog('Balance', `ITEM_SOLD | Matched ${matchedTaskCount}/${tasks.length} task(s) | wallet=${walletAddressKey.slice(0, 10)}... | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId}`);
+      } else if (tasks.length > 0) {
+        debugLog('Balance', `ITEM_SOLD | No matching tasks for token ${tokenId} | checked ${tasks.length} task(s) | wallet=${walletAddressKey.slice(0, 10)}...`);
+      }
+    } catch (dbError) {
+      errorLog('Balance', 'Error persisting actualPurchase to database', dbError instanceof Error ? dbError : new Error(String(dbError)));
+    }
 
     // Check for auto-listing tasks
 
@@ -20193,6 +20327,7 @@ async function processBlurTraitBid(data: {
     const [traitType, traitValue] = Object.entries(traitsObj)[0];
     const identifier = `${traitType}:${traitValue}`
     const traitPriceKeyExists = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && `blur:${identifier}` in currentTask?.stopOptions?.traitPrices;
+
     const traitFloor = traitPriceKeyExists ? await fetchBlurTraitFloor(slug, { type: traitType, value: traitValue as string }) : undefined
 
     const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), false, traitFloor, identifier)
@@ -22726,6 +22861,40 @@ app.post('/api/task/cancel/:taskId', async (req, res) => {
   }
 })
 
+// Reset purchase count for a task
+app.post('/api/task/:taskId/reset-purchases', async (req, res) => {
+  try {
+    const { taskId } = req.params;
+
+    const result = await Task.findByIdAndUpdate(
+      taskId,
+      { $set: { 'stopOptions.actualPurchase': 0 } },
+      { new: true }
+    );
+
+    if (!result) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    // Clear in-memory balance cache for this task's wallet/contract
+    const walletAddress = result.wallet?.toLowerCase();
+    const contractAddress = result.contract?.contractAddress?.toLowerCase();
+    if (walletAddress && contractAddress && balances[walletAddress]?.[contractAddress]) {
+      balances[walletAddress][contractAddress] = {
+        opensea: 0,
+        magiceden: 0,
+        blur: 0
+      };
+    }
+
+    debugLog('API', `Reset actualPurchase for task ${taskId} | slug=${result.contract.slug}`);
+    res.status(200).json({ message: 'Purchase count reset', actualPurchase: 0 });
+  } catch (error: any) {
+    errorLog('API', `Failed to reset purchases | taskId=${req.params.taskId}`, error instanceof Error ? error : new Error(String(error)));
+    res.status(500).json({ error: 'Failed to reset purchase count' });
+  }
+});
+
 // Fetch floor prices for all tasks and all marketplaces
 app.post('/api/floor', async (req, res) => {
   try {
@@ -25208,22 +25377,18 @@ async function stopOption(
 
     // Check max purchase limit
     const maxPurchase = task?.stopOptions?.maxPurchase;
+    const actualPurchase = task?.stopOptions?.actualPurchase ?? 0;
 
-    // Get the current balance using the new structure
-    const walletAddress = task.wallet.toLowerCase();
-    const contractAddress = task.contract.contractAddress.toLowerCase();
-    const currentBalance = getWalletContractBalance(walletAddress, contractAddress, marketplace);
-
-    const maxPurchaseTriggered = maxPurchase && maxPurchase > 0 && currentBalance !== undefined && currentBalance >= maxPurchase;
+    const maxPurchaseTriggered = maxPurchase && maxPurchase > 0 && actualPurchase >= maxPurchase;
 
     if (maxPurchaseTriggered) {
       // Set warning flags and message
       warningBids[task._id][marketplace] = true;
       warningMessage[task._id][marketplace] =
         `Maximum purchase amount (${maxPurchase}) for ${task.contract.slug} has been reached. ` +
-        `Current balance: ${currentBalance} items.`;
+        `Current purchases: ${actualPurchase} items.`;
 
-      debugLog('StopOption', `${slug} | MAX_PURCHASE_TRIGGERED | maxPurchase=${maxPurchase} balance=${currentBalance} | result=true`, { ...metadata, wallet: walletAddress });
+      debugLog('StopOption', `${slug} | MAX_PURCHASE_TRIGGERED | maxPurchase=${maxPurchase} actualPurchase=${actualPurchase} | result=true`, metadata);
       return true;
     }
 

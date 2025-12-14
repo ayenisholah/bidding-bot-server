@@ -76,6 +76,7 @@ export interface ITask {
     minFloorPrice: number | null;
     maxFloorPrice: number | null;
     maxPurchase: number | null;
+    actualPurchase: number;
     triggerStopOptions: boolean;
     traitPrices: Record<string, { min: number; max: number }>;
   };
@@ -200,6 +201,7 @@ const TaskSchema: Schema = new Schema(
       minFloorPrice: { type: Number, required: true },
       maxFloorPrice: { type: Number, required: true },
       maxPurchase: { type: Number, required: true },
+      actualPurchase: { type: Number, default: 0 },
       triggerStopOptions: { type: Boolean, default: false },
       traitPrices: { type: Schema.Types.Mixed, default: {} },
     },
