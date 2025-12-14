@@ -4,9 +4,20 @@ import * as path from 'path';
 const DEBUG = process.env.DEBUG === 'true';
 export const LOG_DIR = path.resolve(process.cwd(), 'debug-logs');
 
-// Ensure directory exists on module load
-if (!fs.existsSync(LOG_DIR)) {
-  fs.mkdirSync(LOG_DIR, { recursive: true });
+// Ensure directory exists on module load and verify write permissions
+let CAN_WRITE_LOGS = true;
+try {
+  if (!fs.existsSync(LOG_DIR)) {
+    fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o777 });
+  }
+  // Test write permissions by creating and deleting a test file
+  const testFile = path.join(LOG_DIR, '.write-test');
+  fs.writeFileSync(testFile, 'test');
+  fs.unlinkSync(testFile);
+} catch (err) {
+  CAN_WRITE_LOGS = false;
+  console.error(`[LogWriter] CRITICAL: Cannot write to ${LOG_DIR}: ${(err as Error).message}`);
+  console.error('[LogWriter] Debug logs will NOT be saved to files! Fix volume permissions.');
 }
 
 // ============================================
@@ -176,10 +187,12 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'Scheduler': 'scheduler',
   'TimedLockManager': 'scheduler',
 
-  // BidFlow (5)
+  // BidFlow (7)
   'BidFlow': 'bidflow',
   'ScheduledBid': 'bidflow',
   'Preprocessing': 'bidflow',
+  'TokenFetch': 'bidflow',    // Token fetching from OpenSea collection items
+  'TokenTrack': 'bidflow',    // Token source tracking and deduplication in preprocessing
   'PriceCalc': 'bidflow',
   'StopOption': 'bidflow',
 
@@ -338,6 +351,9 @@ function formatMetadata(metadata?: LogMetadata): string {
 }
 
 function writeToFile(logLine: string, prefix: string): void {
+  // Skip file writes if we don't have write permissions
+  if (!CAN_WRITE_LOGS) return;
+
   const filePath = getLogFilePath(prefix);
 
   // Add to buffer instead of synchronous write

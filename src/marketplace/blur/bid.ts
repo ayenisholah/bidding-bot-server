@@ -16,8 +16,14 @@ import { blurRateLimiter } from "../../utils/blur-rate-limiter";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
 import { apiDedup } from "../../utils/api-dedup";
+import { isCollectionUnavailable, markCollectionUnavailable } from "../../utils/marketplace-availability";
+import { BoundedCache } from "../../utils/bounded-cache";
 
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
+
+// Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
+// This prevents log flooding when multiple parallel jobs hit the same balance check
+const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000);
 
 config()
 const BLUR_API_URL = `${BASE_URL}/blur`;
@@ -191,7 +197,11 @@ export async function bidOnBlur(
         wallet_address,
         slug
       );
-      errorLog('Balance', `[Blur] Insufficient BETH balance | wallet=${wallet_address.slice(0, 10)}... | slug=${slug} | bid=${offerPriceEth} | available=${bethBalance}`, error);
+      // Only log once per wallet/collection combo within 5 seconds to prevent log flooding
+      const dedupeKey = `blur-${wallet_address}-${slug}`;
+      if (insufficientBalanceLogCache.addIfNotExists(dedupeKey, Date.now())) {
+        errorLog('Balance', `[Blur] Insufficient BETH balance | wallet=${wallet_address.slice(0, 10)}... | slug=${slug} | bid=${offerPriceEth} | available=${bethBalance}`, error);
+      }
       throw error;
     }
 
@@ -1086,6 +1096,12 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
 }
 
 export async function fetchBlurCollectionStats(slug: string, priority?: number) {
+  // Check if collection is known to be unavailable on Blur
+  const unavailable = await isCollectionUnavailable('blur', slug);
+  if (unavailable) {
+    return 0; // Skip API call, already cached as unavailable
+  }
+
   const CACHE_TTL = 30; // 30 seconds cache
   const cacheKey = `blur:stats:${slug}`;
   const lockKey = `stats:${slug}`;
@@ -1136,7 +1152,14 @@ export async function fetchBlurCollectionStats(slug: string, priority?: number) 
       }
       return floor_price || 0;
     } catch (error: any) {
-      errorLog('Collection', `[Blur] Failed to fetch collection stats | slug=${slug} | status=${error?.response?.status}`, error);
+      const status = error?.response?.status;
+      if (status === 400 || status === 404) {
+        // Collection doesn't exist on Blur - cache this for 1 hour
+        await markCollectionUnavailable('blur', slug, status);
+        return 0;
+      }
+      // Only log unexpected errors
+      errorLog('Collection', `[Blur] API error | slug=${slug} | status=${status}`, error);
       return 0;
     }
 

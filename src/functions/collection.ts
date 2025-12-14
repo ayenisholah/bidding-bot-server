@@ -13,6 +13,7 @@ import { ICollectionDetails, ICollectionFee } from "../types/collection.types";
 import { setOpenseaMarketplaceFee } from "../utils/marketplace-fee-cache";
 import { errorLog, warnLog, debugLog } from "../utils/debug-file-logger";
 import { apiDedup } from "../utils/api-dedup";
+import { isCollectionUnavailable, markCollectionUnavailable } from "../utils/marketplace-availability";
 
 const collectionCache: { [key: string]: ICollectionDetails } = {};
 const MAX_CACHE_ITEMS = 1000;
@@ -268,6 +269,12 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
 }
 
 export async function getOpenseaFloor(collectionSlug: string) {
+  // Check if collection is known to be unavailable on OpenSea
+  const unavailable = await isCollectionUnavailable('opensea', collectionSlug);
+  if (unavailable) {
+    return 0; // Skip API call, already cached as unavailable
+  }
+
   const CACHE_TTL = 60; // 1 minute cache (updated from 30 seconds)
   const cacheKey = `opensea:floor:${collectionSlug}`;
   const lockKey = `floor:{opensea}:${collectionSlug}`;
@@ -331,12 +338,8 @@ export async function getOpenseaFloor(collectionSlug: string) {
       } catch (error: any) {
         // Handle 404 errors specifically - collection might be delisted or renamed (no retry)
         if (error?.response?.status === 404) {
-          warnLog('API', `[collection.ts] Collection not found on OpenSea | slug=${collectionSlug} | status=404`);
-
-          // Cache the zero floor price for a short time to avoid repeated 404s
-          if (getRedis()) {
-            await getRedis().set(cacheKey, JSON.stringify(0), 'EX', 300); // Cache for 5 minutes
-          }
+          // Collection doesn't exist on OpenSea - cache this for 1 hour
+          await markCollectionUnavailable('opensea', collectionSlug, 404);
           return 0; // Return 0 floor price for non-existent collections
         }
 
@@ -763,7 +766,7 @@ async function fetchCollectionItemsRecursive(
 
   try {
     const { data } = await apiDedup(
-      `opensea-items-${variables.collectionSlug}-${cursor || 'initial'}`,
+      `opensea-items-${variables.collectionSlug}-${hashData(variables.filter || {})}-${cursor || 'initial'}`,
       () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
         headers: {
           "x-api-key": API_KEY
@@ -787,6 +790,9 @@ async function fetchCollectionItemsRecursive(
 
     // Add current page's token IDs to our accumulated list
     const updatedTokenIds = [...allTokenIds, ...tokenIds];
+
+    // Log pagination progress with returned token count
+    debugLog('TokenFetch', `[OS] ${variables.collectionSlug} | Page ${pageNumber} | returned=${tokenIds.length} | total=${updatedTokenIds.length}${expectedCount ? ` | expected=${expectedCount}` : ''}`);
 
     // Update processing percentage if taskId is provided
     if (taskId) {
@@ -834,6 +840,17 @@ async function fetchCollectionItemsRecursive(
     }
 
     const uniqueTokenIds = [...new Set(updatedTokenIds)];
+
+    // Log final token summary
+    const duplicateCount = updatedTokenIds.length - uniqueTokenIds.length;
+    debugLog('TokenFetch', `[OS] ${variables.collectionSlug} | COMPLETE | unique=${uniqueTokenIds.length} | duplicates=${duplicateCount} | pages=${pageNumber}${taskId ? ` | taskId=${taskId}` : ''}`);
+    if (duplicateCount > 0) {
+      // Find which tokens were duplicates (only log first 20 to prevent flooding)
+      const tokenCounts = new Map<string, number>();
+      updatedTokenIds.forEach(t => tokenCounts.set(t, (tokenCounts.get(t) || 0) + 1));
+      const dups = [...tokenCounts.entries()].filter(([_, c]) => c > 1).map(([t, c]) => `${t}(${c})`);
+      debugLog('TokenFetch', `[OS] ${variables.collectionSlug} | DUPLICATES: ${dups.slice(0, 20).join(', ')}${dups.length > 20 ? ` ...+${dups.length - 20} more` : ''}`);
+    }
 
     return uniqueTokenIds;
   } catch (error) {

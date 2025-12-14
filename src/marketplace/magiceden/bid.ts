@@ -21,6 +21,7 @@ import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
 import { BoundedCache } from "../../utils/bounded-cache";
 import { apiDedup } from "../../utils/api-dedup";
+import { isCollectionUnavailable, markCollectionUnavailable } from "../../utils/marketplace-availability";
 
 // Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
 // This prevents log flooding when multiple parallel jobs hit the same balance check
@@ -1486,6 +1487,12 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
 }
 
 export async function fetchMagicEdenCollectionStats(contractAddress: string, priority?: number): Promise<string> {
+  // Check if collection is known to be unavailable on MagicEden
+  const unavailable = await isCollectionUnavailable('magiceden', contractAddress);
+  if (unavailable) {
+    return "0"; // Skip API call, already cached as unavailable
+  }
+
   const CACHE_TTL = 30; // 30 seconds cache
   const cacheKey = `magiceden:stats:${contractAddress}`;
   const lockKey = `stats:${contractAddress}`;
@@ -1526,30 +1533,41 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string, pri
       offset: 0
     };
 
-    const { data } = await apiDedup(
-      `magiceden-stats-${contractAddress.toLowerCase()}`,
-      () => limiter.schedule(priority !== undefined ? { priority } : {}, () =>
-        axiosInstance.get(`${BASE_URL}/magiceden/v4/assets`, {
-          params: queryParams,
-          headers: {
-            'x-api-key': API_KEY
-          }
-        })
-      ),
-      { category: 'MagicEden' }
-    );
-    const stats = data?.tokens[0]?.market?.floorAsk?.priceV2?.amount?.native || "0";
-    // Cache the result
-    if (stats !== undefined) {
-      try {
-        const redis = redisClient.getClient();
-        await redis.set(cacheKey, JSON.stringify(stats), 'EX', CACHE_TTL);
-      } catch (error) {
-        errorLog('Cache', `[MagicEden] Error writing stats to cache | contract=${contractAddress}`, error);
+    try {
+      const { data } = await apiDedup(
+        `magiceden-stats-${contractAddress.toLowerCase()}`,
+        () => limiter.schedule(priority !== undefined ? { priority } : {}, () =>
+          axiosInstance.get(`${BASE_URL}/magiceden/v4/assets`, {
+            params: queryParams,
+            headers: {
+              'x-api-key': API_KEY
+            }
+          })
+        ),
+        { category: 'MagicEden' }
+      );
+      const stats = data?.tokens[0]?.market?.floorAsk?.priceV2?.amount?.native || "0";
+      // Cache the result
+      if (stats !== undefined) {
+        try {
+          const redis = redisClient.getClient();
+          await redis.set(cacheKey, JSON.stringify(stats), 'EX', CACHE_TTL);
+        } catch (error) {
+          errorLog('Cache', `[MagicEden] Error writing stats to cache | contract=${contractAddress}`, error);
+        }
       }
-    }
 
-    return stats;
+      return stats;
+    } catch (error: any) {
+      const status = error?.response?.status;
+      if (status === 400 || status === 404) {
+        // Collection doesn't exist on MagicEden - cache this for 1 hour
+        await markCollectionUnavailable('magiceden', contractAddress, status);
+        return "0";
+      }
+      // Re-throw unexpected errors
+      throw error;
+    }
 
   });
   if (!result) {
