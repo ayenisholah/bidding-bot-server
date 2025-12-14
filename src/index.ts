@@ -6325,10 +6325,7 @@ function initializeQueueEventHandlers() {
       // Handle schedule job failures specially - log to file
       if (jobId.includes('-schedule')) {
         // Log scheduled job failures to file
-        const logsDir = path.join(process.cwd(), 'logs');
-        if (!fs.existsSync(logsDir)) {
-          fs.mkdirSync(logsDir, { recursive: true });
-        }
+        const logsDir = path.join(process.cwd(), 'debug-logs');
 
         // Get the job details with fallback support
         const job = await safeGetJob(queue, jobId);
@@ -17388,10 +17385,7 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
     }
 
     // Log to file
-    const logsDir = path.join(process.cwd(), 'logs');
-    if (!fs.existsSync(logsDir)) {
-      fs.mkdirSync(logsDir, { recursive: true });
-    }
+    const logsDir = path.join(process.cwd(), 'debug-logs');
 
     const errorDetails = {
       timestamp: new Date().toISOString(),
@@ -18271,10 +18265,7 @@ async function processBlurScheduledBid(task: ITask) {
 
 
     // Log to file
-    const logsDir = path.join(process.cwd(), 'logs');
-    if (!fs.existsSync(logsDir)) {
-      fs.mkdirSync(logsDir, { recursive: true });
-    }
+    const logsDir = path.join(process.cwd(), 'debug-logs');
 
     const errorDetails = {
       timestamp: new Date().toISOString(),
@@ -21332,10 +21323,7 @@ async function processMagicedenScheduledBid(task: ITask, _jobId?: string, schedu
     }
 
     // Log to file
-    const logsDir = path.join(process.cwd(), 'logs');
-    if (!fs.existsSync(logsDir)) {
-      fs.mkdirSync(logsDir, { recursive: true });
-    }
+    const logsDir = path.join(process.cwd(), 'debug-logs');
 
     const errorDetails = {
       timestamp: new Date().toISOString(),

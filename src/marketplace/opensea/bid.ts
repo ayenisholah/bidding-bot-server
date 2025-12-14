@@ -30,11 +30,8 @@ import { BoundedCache } from "../../utils/bounded-cache";
 const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000);
 
 // Performance timing utilitie
-// Ensure logs directory exists
-const logsDir = path.join(process.cwd(), 'logs');
-if (!fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir, { recursive: true });
-}
+// Use the shared debug-logs directory (handled by debug-file-logger.ts)
+const logsDir = path.join(process.cwd(), 'debug-logs');
 
 
 // Helper function to extract meaningful error messages from OpenSea API responses
