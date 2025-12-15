@@ -75,6 +75,14 @@ const retryConfig: IAxiosRetryConfig = {
       return baseDelay + jitter;
     }
 
+    // Gateway errors (502 Bad Gateway, 504 Gateway Timeout) - exponential backoff
+    if (error.response?.status === 502 || error.response?.status === 504) {
+      // Exponential backoff: 3s, 6s, 12s (max 15s) + jitter
+      const baseDelay = Math.min(3000 * Math.pow(2, retryCount - 1), 15000);
+      const jitter = 200 + Math.random() * 600; // 200-800ms jitter
+      return baseDelay + jitter;
+    }
+
     return axiosRetry.exponentialDelay(retryCount);
   },
   retryCondition: async (error: any) => {
@@ -82,8 +90,8 @@ const retryConfig: IAxiosRetryConfig = {
       return true; // Network errors
     }
     const status = error.response.status;
-    // Only retry: rate limits (429/430), timeout (408), and Cloudflare origin error (520)
-    return status === 429 || status === 430 || status === 408 || status === 520;
+    // Retry: rate limits (429/430), timeout (408), Cloudflare (520), gateway errors (502/504)
+    return status === 429 || status === 430 || status === 408 || status === 520 || status === 502 || status === 504;
   },
   onRetry: (_retryCount, _error, _requestConfig) => {
     // Only log retries in development mode or for specific debugging

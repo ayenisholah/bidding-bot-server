@@ -28,7 +28,8 @@ interface MemoryCacheEntry {
 
 class TokenTraitCache {
   private memoryCache: Map<string, MemoryCacheEntry> = new Map();
-  private accessOrder: string[] = []; // LRU tracking
+  // Memory optimization: Map-based LRU tracking instead of array (O(1) vs O(n) for updates)
+  private accessOrder: Map<string, number> = new Map(); // key -> access timestamp
 
   constructor() {
     // No need for initialization - we'll use the shared Redis client on demand
@@ -42,25 +43,34 @@ class TokenTraitCache {
   }
 
   /**
-   * Update LRU access order
+   * Update LRU access order - O(1) operation with Map
    */
   private updateAccessOrder(key: string): void {
-    const index = this.accessOrder.indexOf(key);
-    if (index > -1) {
-      this.accessOrder.splice(index, 1);
-    }
-    this.accessOrder.push(key);
+    this.accessOrder.set(key, Date.now());
   }
 
   /**
    * Evict least recently used entries if cache is full
+   * Memory optimization: find oldest by timestamp instead of maintaining sorted array
    */
   private evictLRU(): void {
-    while (this.memoryCache.size >= MEMORY_CACHE_SIZE && this.accessOrder.length > 0) {
-      const keyToEvict = this.accessOrder.shift();
-      if (keyToEvict) {
-        this.memoryCache.delete(keyToEvict);
-        // console.log(YELLOW + `[TOKEN TRAIT CACHE] Evicted LRU entry: ${keyToEvict}` + RESET);
+    while (this.memoryCache.size >= MEMORY_CACHE_SIZE && this.accessOrder.size > 0) {
+      // Find the oldest entry by timestamp
+      let oldestTimestamp = Infinity;
+      let oldestKey: string | null = null;
+
+      for (const [key, timestamp] of this.accessOrder) {
+        if (timestamp < oldestTimestamp) {
+          oldestTimestamp = timestamp;
+          oldestKey = key;
+        }
+      }
+
+      if (oldestKey) {
+        this.memoryCache.delete(oldestKey);
+        this.accessOrder.delete(oldestKey);
+      } else {
+        break;
       }
     }
   }
@@ -152,10 +162,7 @@ class TokenTraitCache {
       // Remove expired entry from memory
       if (memoryCacheEntry) {
         this.memoryCache.delete(key);
-        const index = this.accessOrder.indexOf(key);
-        if (index > -1) {
-          this.accessOrder.splice(index, 1);
-        }
+        this.accessOrder.delete(key);
       }
 
       // Check MongoDB
@@ -258,10 +265,7 @@ class TokenTraitCache {
     try {
       // Remove from memory cache
       this.memoryCache.delete(key);
-      const index = this.accessOrder.indexOf(key);
-      if (index > -1) {
-        this.accessOrder.splice(index, 1);
-      }
+      this.accessOrder.delete(key);
 
       // Remove from MongoDB
       try {
@@ -296,10 +300,7 @@ class TokenTraitCache {
       // Remove from memory cache
       for (const key of keysToRemove) {
         this.memoryCache.delete(key);
-        const index = this.accessOrder.indexOf(key);
-        if (index > -1) {
-          this.accessOrder.splice(index, 1);
-        }
+        this.accessOrder.delete(key);
       }
 
       // Remove from MongoDB
@@ -334,12 +335,29 @@ class TokenTraitCache {
       // MongoDB not available
     }
 
+    // Find oldest and newest access timestamps
+    let oldestKey: string | null = null;
+    let newestKey: string | null = null;
+    let oldestTime = Infinity;
+    let newestTime = 0;
+
+    for (const [key, timestamp] of this.accessOrder) {
+      if (timestamp < oldestTime) {
+        oldestTime = timestamp;
+        oldestKey = key;
+      }
+      if (timestamp > newestTime) {
+        newestTime = timestamp;
+        newestKey = key;
+      }
+    }
+
     return {
       memorySize: this.memoryCache.size,
-      memoryHits: this.accessOrder.length,
+      memoryHits: this.accessOrder.size,
       mongoDBSize,
-      oldestAccess: this.accessOrder[0] || null,
-      newestAccess: this.accessOrder[this.accessOrder.length - 1] || null
+      oldestAccess: oldestKey,
+      newestAccess: newestKey
     };
   }
 
@@ -350,7 +368,7 @@ class TokenTraitCache {
     try {
       // Just clear memory cache - MongoDB connection is shared
       this.memoryCache.clear();
-      this.accessOrder = [];
+      this.accessOrder.clear();
 
       console.log('[TOKEN TRAIT CACHE] Memory cache cleared');
 

@@ -104,10 +104,7 @@ const TaskRuntimeStateSchema: Schema = new Schema(
   { timestamps: true }
 );
 
-// Index for LRU eviction queries (find oldest accessed)
-TaskRuntimeStateSchema.index({ accessedAt: 1 });
-
-// TTL Index: Auto-expire documents after 7 days of no access
+// TTL Index: Auto-expire documents after 7 days of no access (also used for LRU eviction queries)
 TaskRuntimeStateSchema.index({ accessedAt: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 });
 
 const TaskRuntimeState = mongoose.model<ITaskRuntimeState>("TaskRuntimeState", TaskRuntimeStateSchema);

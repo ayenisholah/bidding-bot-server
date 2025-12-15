@@ -25,7 +25,7 @@ const TokenTraitCacheSchema: Schema = new Schema(
       rarity: { type: Number }
     }],
     lastUpdated: { type: Date, default: Date.now },
-    accessedAt: { type: Date, default: Date.now, index: true } // Index for LRU queries
+    accessedAt: { type: Date, default: Date.now } // TTL index defined below
   },
   { timestamps: true }
 );

@@ -79,25 +79,38 @@ export class BoundedCache<K, V> {
 
   private cleanup(): void {
     const now = Date.now();
-    const entries = Array.from(this.cache.entries());
-    
-    // Remove expired entries
-    entries.forEach(([key, entry]) => {
+
+    // First pass: delete expired entries (no array copy needed)
+    for (const [key, entry] of this.cache) {
       if (now - entry.timestamp > this.ttl) {
         this.cache.delete(key);
       }
-    });
+    }
 
-    // If still over capacity, remove oldest
+    // If still over capacity, delete oldest entries without sorting
+    // Memory optimization: find and delete oldest entries one at a time instead of Array.from() + sort
     if (this.cache.size >= this.maxSize) {
-      const sortedEntries = Array.from(this.cache.entries())
-        .sort((a, b) => a[1].timestamp - b[1].timestamp);
-      
-      // Remove oldest 20% of entries
-      const entriesToRemove = Math.floor(this.maxSize * 0.2);
-      sortedEntries.slice(0, entriesToRemove).forEach(([key]) => {
-        this.cache.delete(key);
-      });
+      const targetDelete = Math.floor(this.maxSize * 0.2);
+      let deleted = 0;
+
+      while (deleted < targetDelete && this.cache.size > 0) {
+        let oldestTimestamp = Infinity;
+        let oldestKey: K | null = null;
+
+        for (const [key, entry] of this.cache) {
+          if (entry.timestamp < oldestTimestamp) {
+            oldestTimestamp = entry.timestamp;
+            oldestKey = key;
+          }
+        }
+
+        if (oldestKey !== null) {
+          this.cache.delete(oldestKey);
+          deleted++;
+        } else {
+          break;
+        }
+      }
     }
 
     this.lastCleanup = now;

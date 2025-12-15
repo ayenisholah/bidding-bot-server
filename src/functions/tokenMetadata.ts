@@ -380,34 +380,18 @@ export async function tokenHasTrait(
   traitType: string,
   traitValue: any
 ): Promise<boolean> {
-  const startTime = Date.now();
-  const contractShort = contractAddress.slice(0, 10);
-
-  debugLog('Metadata', `tokenHasTrait: START | contract=${contractShort}... | tokenId=${tokenId} | traitType="${traitType}" | traitValue="${traitValue}"`);
-
   // Try cache first
-  const cacheStartTime = Date.now();
   const cachedHasTrait = await tokenTraitCache.tokenHasTrait(contractAddress, tokenId, traitType, traitValue);
-  const cacheElapsed = Date.now() - cacheStartTime;
-
   if (cachedHasTrait) {
-    debugLog('Metadata', `tokenHasTrait: CACHE HIT | contract=${contractShort}... | tokenId=${tokenId} | traitType="${traitType}" | traitValue="${traitValue}" | result=true | cacheMs=${cacheElapsed} | totalMs=${Date.now() - startTime}`);
     return true;
   }
 
-  debugLog('Metadata', `tokenHasTrait: CACHE MISS | contract=${contractShort}... | tokenId=${tokenId} | cacheMs=${cacheElapsed} | fetching metadata...`);
-
   // If not in cache, fetch metadata
-  const fetchStartTime = Date.now();
   const metadata = await fetchTokenMetadata(contractAddress, tokenId);
-  const fetchElapsed = Date.now() - fetchStartTime;
-
   if (!metadata) {
-    warnLog('Metadata', `tokenHasTrait: FETCH FAILED | contract=${contractShort}... | tokenId=${tokenId} | traitType="${traitType}" | traitValue="${traitValue}" | fetchMs=${fetchElapsed} | totalMs=${Date.now() - startTime} | returning false`);
+    warnLog('Metadata', `tokenHasTrait: FETCH FAILED | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | traitType="${traitType}" | traitValue="${traitValue}" | returning false`);
     return false;
   }
-
-  debugLog('Metadata', `tokenHasTrait: FETCH SUCCESS | contract=${contractShort}... | tokenId=${tokenId} | traitsCount=${metadata.traits.length} | fetchMs=${fetchElapsed}`);
 
   // Check if trait exists
   const matchingTrait = metadata.traits.find(trait =>
@@ -415,20 +399,7 @@ export async function tokenHasTrait(
     trait.value === traitValue
   );
 
-  const result = !!matchingTrait;
-
-  if (result) {
-    debugLog('Metadata', `tokenHasTrait: MATCH FOUND | contract=${contractShort}... | tokenId=${tokenId} | traitType="${traitType}" | traitValue="${traitValue}" | result=true | totalMs=${Date.now() - startTime}`);
-  } else {
-    // Log available values for this trait type to help debug mismatches
-    const sameTypeTrait = metadata.traits.find(t => t.trait_type === traitType);
-    const availableValue = sameTypeTrait ? sameTypeTrait.value : 'TRAIT_TYPE_NOT_FOUND';
-    const allTraitTypes = metadata.traits.map(t => t.trait_type).join(', ');
-
-    debugLog('Metadata', `tokenHasTrait: NO MATCH | contract=${contractShort}... | tokenId=${tokenId} | traitType="${traitType}" | traitValue="${traitValue}" | actualValue="${availableValue}" | allTraitTypes=[${allTraitTypes}] | result=false | totalMs=${Date.now() - startTime}`);
-  }
-
-  return result;
+  return !!matchingTrait;
 }
 
 /**
