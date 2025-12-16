@@ -160,7 +160,8 @@ export async function bidOnBlur(
   slug: string,
   expiry = 900,
   traits?: string,
-  batchInfo?: { batchNumber: number; totalBatches: number; traitIndex: number; totalTraits: number; batchSize?: number }
+  batchInfo?: { batchNumber: number; totalBatches: number; traitIndex: number; totalTraits: number; batchSize?: number },
+  source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
   try {
     // === ENHANCED BID VALIDATION ===
@@ -284,7 +285,7 @@ export async function bidOnBlur(
         }
       ]
     }
-    await submitBidToBlur(taskId, bidCount, offer_price, BLUR_API_URL, accessToken, wallet_address, submitPayload, slug, cancelPayload, expiry, traits);
+    await submitBidToBlur(taskId, bidCount, offer_price, BLUR_API_URL, accessToken, wallet_address, submitPayload, slug, cancelPayload, expiry, traits, source);
   } catch (error) {
     errorLog('Blur', `placeBlurBid failed | taskId=${taskId} | slug=${slug}`, error);
     throw error;
@@ -708,7 +709,8 @@ async function submitBidToBlur(
   slug: string,
   cancelPayload: any,
   expiry = 900,
-  traits?: string
+  traits?: string,
+  source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
   const controller = new AbortController();
   addActiveRequest(taskId, controller);
@@ -868,6 +870,11 @@ async function submitBidToBlur(
           });
         })
         trackBidRate("blur", taskId)
+
+        // Log successful bid
+        const sourceTag = source === 'counterbid' ? '-CB' : '';
+        const bidType = traits ? 'Trait' : 'Coll';
+        debugLog('BidFlow', `[Blur-${bidType}${sourceTag}] ${slug} | SUCCESS | identifier=${identifier} | price=${offerPriceEth} BETH`, { taskId, marketplace: 'blur', identifier });
 
         // Mark request as successful
         requestSuccessful = true;

@@ -268,6 +268,39 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
   }
 }
 
+// Minimal GraphQL query for fetching floor price - only returns required data
+const FloorPriceQuery = `
+  query FloorPriceQuery($collectionSlug: String!, $limit: Int, $sort: CollectionItemsSort!) {
+    collectionItems(collectionSlug: $collectionSlug, limit: $limit, sort: $sort) {
+      items {
+        bestListing {
+          pricePerItem {
+            token {
+              unit
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+interface FloorPriceResponse {
+  data: {
+    collectionItems: {
+      items: Array<{
+        bestListing: {
+          pricePerItem: {
+            token: {
+              unit: number;
+            };
+          };
+        } | null;
+      }>;
+    };
+  };
+}
+
 export async function getOpenseaFloor(collectionSlug: string) {
   // Check if collection is known to be unavailable on OpenSea
   const unavailable = await isCollectionUnavailable('opensea', collectionSlug);
@@ -301,15 +334,24 @@ export async function getOpenseaFloor(collectionSlug: string) {
     const MAX_RETRIES = 3;
     const BASE_DELAY = 500; // 500ms, 1000ms, 2000ms exponential backoff
 
-    const apiUrl = `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`;
+    const payload = {
+      operationName: "FloorPriceQuery",
+      query: FloorPriceQuery,
+      variables: {
+        collectionSlug,
+        limit: 1,
+        sort: { by: "PRICE", direction: "ASC" }
+      }
+    };
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
         const { data } = await apiDedup(
           `opensea-floor-${collectionSlug}`,
           () => openseaCircuitBreaker.execute(() =>
-            limiter.schedule({ priority: 0 }, () => axiosInstance.get<ListingsResponse>(
-              apiUrl,
+            limiter.schedule({ priority: 0 }, () => axiosInstance.post<FloorPriceResponse>(
+              `${BASE_URL}/opensea/graphql`,
+              payload,
               {
                 headers: { 'x-api-key': API_KEY }
               }
@@ -318,8 +360,8 @@ export async function getOpenseaFloor(collectionSlug: string) {
           { category: 'Collection' }
         );
 
-        // Check if listings exist and has item
-        const floor_price = Number(data?.listings[0]?.price?.current?.value) / 1e18 || 0;
+        // Extract floor price from GraphQL response
+        const floor_price = data?.data?.collectionItems?.items?.[0]?.bestListing?.pricePerItem?.token?.unit || 0;
 
         // If floor is 0 and we have retries left, retry (likely temporary API issue)
         if (floor_price === 0 && attempt < MAX_RETRIES) {
@@ -1304,65 +1346,6 @@ interface Criteria {
   };
   trait: null;
   encoded_token_ids: null;
-}
-
-interface Price {
-  current: {
-    currency: string;
-    decimals: number;
-    value: string;
-  }
-}
-
-interface OfferItem {
-  itemType: number;
-  token: string;
-  identifierOrCriteria: string;
-  startAmount: string;
-  endAmount: string;
-}
-
-interface ConsiderationItem {
-  itemType: number;
-  token: string;
-  identifierOrCriteria: string;
-  startAmount: string;
-  endAmount: string;
-  recipient: string;
-}
-
-interface ProtocolParameters {
-  offerer: string;
-  offer: OfferItem[];
-  consideration: ConsiderationItem[];
-  startTime: string;
-  endTime: string;
-  orderType: number;
-  zone: string;
-  zoneHash: string;
-  salt: string;
-  conduitKey: string;
-  totalOriginalConsiderationItems: number;
-  counter: string | number;
-}
-
-interface ProtocolData {
-  parameters: ProtocolParameters;
-  signature: string | null;
-}
-
-interface Listing {
-  order_hash: string;
-  chain: string;
-  type: string;
-  price: Price;
-  protocol_data: ProtocolData;
-  protocol_address: string;
-}
-
-interface ListingsResponse {
-  listings: Listing[];
-  next: string;
 }
 
 // GraphQL response types for collection token query

@@ -363,7 +363,8 @@ export async function bidOnOpensea(
   currency = WETH,
   contractAddress: string,
   opensea_traits?: string,
-  asset?: { contractAddress: string, tokenId: number }
+  asset?: { contractAddress: string, tokenId: number },
+  source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
 
   try {
@@ -533,6 +534,8 @@ export async function bidOnOpensea(
         trackBidRate('opensea', taskId);
 
         // Log successful token bid
+        const sourceTag = source === 'counterbid' ? '-CB' : '';
+        debugLog('BidFlow', `[OS-Token${sourceTag}] ${slug}#${asset.tokenId} | SUCCESS | orderHash=${itemOrderHash} | price=${offerPriceEthFinal} ${currencySymbol}`, { taskId, marketplace: 'opensea', tokenId: asset.tokenId.toString(), orderHash: itemOrderHash });
       }
 
       else if (opensea_traits && typeof opensea_traits !== "undefined") {
@@ -660,7 +663,7 @@ export async function bidOnOpensea(
           return
         }
 
-        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
+        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry, source)
       }
 
       else {
@@ -788,7 +791,7 @@ export async function bidOnOpensea(
         if (isTaskBlacklisted(taskId, 'opensea') || !task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
           return
         }
-        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
+        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry, source)
       }
 
     } catch (error) {
@@ -805,7 +808,7 @@ export async function bidOnOpensea(
  * Posts an offer to OpenSea.
  * @param payload - The payload of the offer.
  */
-async function submitOfferToOpensea(decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900) {
+async function submitOfferToOpensea(decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900, source: 'scheduled' | 'counterbid' = 'scheduled') {
   const [taskId] = bidCount.split(":")
   const bidStartTime = Date.now();
 
@@ -892,6 +895,10 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
   trackBidRate('opensea', taskId);
 
   // Log successful bid
+  const offerPriceEth = Number(offerPrice) / Math.pow(10, decimal);
+  const sourceTag = source === 'counterbid' ? '-CB' : '';
+  const bidType = identifier === 'collection' ? 'Coll' : 'Trait';
+  debugLog('BidFlow', `[OS-${bidType}${sourceTag}] ${slug} | SUCCESS | orderHash=${order_hash} | identifier=${identifier} | price=${offerPriceEth} ${currencySymbol}`, { taskId, marketplace: 'opensea', identifier, orderHash: order_hash });
 }
 
 /**

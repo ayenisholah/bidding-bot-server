@@ -229,7 +229,8 @@ export async function bidOnMagiceden(
   bidExpiry: number,
   currency = WETH,
   trait?: Trait,
-  tokenId?: number
+  tokenId?: number,
+  source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
 
   try {
@@ -336,7 +337,8 @@ export async function bidOnMagiceden(
       bidExpiry,
       trait,
       tokenId,
-      task // Pass the cached task
+      task, // Pass the cached task
+      source
     );
     return order;
   } catch (error) {
@@ -825,7 +827,8 @@ async function sendSignedOrderData(
   expiry: number,
   trait?: Trait,
   tokenId?: number | string,
-  cachedTask?: any // Accept cached task
+  cachedTask?: any, // Accept cached task
+  source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
   const endpoint = trait || tokenId
     ? `${BASE_URL}/magiceden/v3/rtp/ethereum/order/v3`
@@ -944,6 +947,10 @@ async function sendSignedOrderData(
       }
       trackBidRate("magiceden", taskId)
       // Log successful bid
+      const sourceTag = source === 'counterbid' ? '-CB' : '';
+      const bidType = tokenId ? 'Token' : (trait ? 'Trait' : 'Coll');
+      const offerPriceEth = Number(offerPrice) / Math.pow(10, decimal);
+      debugLog('BidFlow', `[ME-${bidType}${sourceTag}] ${slug}${tokenId ? '#' + tokenId : ''} | SUCCESS | identifier=${identifier} | price=${offerPriceEth} ${currencySymbol}`, { taskId, marketplace: 'magiceden', identifier: identifier.toString() });
       console.log(MAGENTA, successMessage, RESET);
 
       if (!task) return
@@ -989,7 +996,8 @@ export async function submitSignedOrderData(
   expiry: number,
   trait?: Trait,
   tokenId?: number | string,
-  cachedTask?: any // Accept cached task
+  cachedTask?: any, // Accept cached task
+  source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
   const task = cachedTask || currentTasks.find((task) =>
     task.contract.slug.toLowerCase() === slug.toLowerCase() &&
@@ -1132,7 +1140,8 @@ export async function submitSignedOrderData(
     expiry,
     trait,
     tokenId,
-    task // Pass the cached task
+    task, // Pass the cached task
+    source
   );
   return result;
 
