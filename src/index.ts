@@ -14801,7 +14801,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       data?.payload?.payload?.protocol_data?.parameters?.consideration?.find((item: any) => item.token.toLowerCase() === task.contract.contractAddress.toLowerCase())?.identifierOrCriteria : null;
     const traitForLog = eventType === "trait_offer" ?
       `${data?.payload?.payload?.trait_criteria?.trait_type}:${data?.payload?.payload?.trait_criteria?.trait_name}` : null;
-    const bidTypeDisplay = tokenIdForLog ? `Token #${tokenIdForLog}` : traitForLog ? `Trait: ${traitForLog}` : 'Collection';
 
     const currentTask = activeTasks.get(task._id)
     if (!currentTask) {
@@ -14829,6 +14828,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
     // Early exit if incoming bid is from one of our own wallets
     if (maker && isOurWallet(maker)) {
+      incrementOwnBidCounter('opensea', orderHash);
       debugLog('Counterbid', `[OS] ${task.contract.slug} | SKIP: Incoming bid is from our own wallet`);
       return;
     }
@@ -14921,11 +14921,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       return;  // Already being processed by another handler
     }
 
-    if (walletAddresses.includes(maker)) {
-      // Own bid skip logging removed - too noisy
-      incrementOwnBidCounter('opensea', orderHash);
-      return
-    }
+
 
     // Comprehensive logging for OpenSea counterbid
     const bidType = tokenId ? `Token #${tokenId}` : trait ? `Trait: ${trait.type}:${trait.value}` : 'Collection';
