@@ -3852,6 +3852,17 @@ async function startServer() {
     const TASK_STATE_SYNC_INTERVAL = 30000; // 30 seconds
     setInterval(syncAllActiveTaskStates, TASK_STATE_SYNC_INTERVAL);
 
+    // Start periodic message loss detection logging
+    const MSG_LOSS_CHECK_INTERVAL = 60000; // 60 seconds
+    setInterval(() => {
+      const wsReceived = wsManager?.getOpenseaBidCreatedReceived?.() || 0;
+      const ownBidsCounted = ownBidCounts['opensea'] || 0;
+      if (wsReceived > 0 || ownBidsCounted > 0) {
+        const gap = wsReceived - ownBidsCounted;
+        infoLog('MsgLoss', `CHECKPOINT | wsReceived=${wsReceived} | ownBidsCounted=${ownBidsCounted} | gap=${gap}`);
+      }
+    }, MSG_LOSS_CHECK_INTERVAL);
+
     // Load wallet addresses for self-bid detection
     await loadOurWalletAddresses();
 
@@ -13280,16 +13291,18 @@ async function _doConnect(): Promise<void> {
           return;
         }
 
-        // All messages use the queue
-        pQueue.add(() => handleMarketplaceMessage(message))
+        // Process messages directly without queue (removes competition with bulk bidding operations)
+        handleMarketplaceMessage(message).catch(error => {
+          errorLog('WsConnection', 'Error processing marketplace message', error);
+        });
 
       } catch (error) {
-        errorLog('WebSocket', 'Error in message handler', error);
+        errorLog('WsConnection', 'Error in message handler', error);
       }
     });
 
     wsManager.on('error', async (error: Error) => {
-      errorLog('WebSocket', `WebSocket connection error: connectionId=${connectionMetrics.currentConnectionId}, retryCount=${retryCount}, duration=${connectionMetrics.connectionStartTime ? Date.now() - connectionMetrics.connectionStartTime : 0}ms`, error);
+      errorLog('WsConnection', `WebSocket connection error: connectionId=${connectionMetrics.currentConnectionId}, retryCount=${retryCount}, duration=${connectionMetrics.connectionStartTime ? Date.now() - connectionMetrics.connectionStartTime : 0}ms`, error);
     });
 
     wsManager.on('server_status', (status: any) => {
@@ -13297,7 +13310,7 @@ async function _doConnect(): Promise<void> {
     });
 
     wsManager.on('max_retries_exceeded', async () => {
-      errorLog('WebSocket', `WebSocket max reconnection attempts exceeded: connectionId=${connectionMetrics.currentConnectionId}, retryCount=${MAX_RETRIES}`, new Error('Max retries exceeded'));
+      errorLog('WsConnection', `WebSocket max reconnection attempts exceeded: connectionId=${connectionMetrics.currentConnectionId}, retryCount=${MAX_RETRIES}`, new Error('Max retries exceeded'));
     });
   }
 
@@ -13305,7 +13318,7 @@ async function _doConnect(): Promise<void> {
   try {
     await wsManager.connect();
   } catch (error) {
-    errorLog('WebSocket', 'Failed to initiate WebSocket connection', error instanceof Error ? error : new Error(String(error)));
+    errorLog('WsConnection', 'Failed to initiate WebSocket connection', error instanceof Error ? error : new Error(String(error)));
     // Don't rethrow - let the WebSocketManager handle reconnection
   }
 }
@@ -13333,7 +13346,7 @@ async function handleMarketplaceMessage(message: any) {
     }
 
   } catch (error) {
-    errorLog('WebSocket', 'Error in handleMarketplaceMessage', error);
+    errorLog('WsConnection', 'Error in handleMarketplaceMessage', error);
   }
 }
 
@@ -13737,8 +13750,6 @@ async function handleCounterBidForTask(task: any, message: any) {
       // Create trace for MagicEden counterbid
 
       await handleMagicEdenCounterbid(message, task)
-    } else {
-      debugLog('Counterbid', `No matching marketplace handler | task=${task._id} | marketplace=${message.marketplace}`);
     }
   } catch (error: any) {
     errorLog('Counterbid', `Failed to process counterbid | task=${task._id} | marketplace=${message.marketplace}`, error);
@@ -13776,15 +13787,16 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       return;
     };
 
-    // Early exit if marketplace already stopped due to insufficient balance
-    if (isMarketplaceStoppedDueToBalance(task._id.toString(), 'magiceden')) {
-      debugLog('Counterbid', `[ME] ${task.contract.slug} | SKIP: Marketplace stopped (insufficient balance)`);
+    // Early exit if incoming bid is from one of our own wallets
+    // NOTE: Must be checked BEFORE balance check so own bids are always counted
+    if (maker && isOurWallet(maker)) {
+      incrementOwnBidCounter('magiceden', orderHash);
       return;
     }
 
-    // Early exit if incoming bid is from one of our own wallets
-    if (maker && isOurWallet(maker)) {
-      debugLog('Counterbid', `[ME] ${task.contract.slug} | SKIP: Incoming bid is from our own wallet`);
+    // Early exit if marketplace already stopped due to insufficient balance
+    if (isMarketplaceStoppedDueToBalance(task._id.toString(), 'magiceden')) {
+      debugLog('Counterbid', `[ME] ${task.contract.slug} | SKIP: Marketplace stopped (insufficient balance)`);
       return;
     }
 
@@ -13833,12 +13845,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
     }
 
-
-    if (walletAddresses.includes(maker)) {
-      // Own bid skip logging removed - too noisy
-      incrementOwnBidCounter('magiceden', orderHash);
-      return
-    }
 
     if (!currentTask.outbidOptions.counterbid) {
       return;
@@ -14820,16 +14826,16 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       return;
     }
 
-    // Early exit if marketplace already stopped due to insufficient balance
-    if (isMarketplaceStoppedDueToBalance(task._id.toString(), 'opensea')) {
-      debugLog('Counterbid', `[OS] ${task.contract.slug} | SKIP: Marketplace stopped (insufficient balance)`);
+    // Early exit if incoming bid is from one of our own wallets
+    // NOTE: Must be checked BEFORE balance check so own bids are always counted
+    if (maker && isOurWallet(maker)) {
+      incrementOwnBidCounter('opensea', orderHash);
       return;
     }
 
-    // Early exit if incoming bid is from one of our own wallets
-    if (maker && isOurWallet(maker)) {
-      incrementOwnBidCounter('opensea', orderHash);
-      debugLog('Counterbid', `[OS] ${task.contract.slug} | SKIP: Incoming bid is from our own wallet`);
+    // Early exit if marketplace already stopped due to insufficient balance
+    if (isMarketplaceStoppedDueToBalance(task._id.toString(), 'opensea')) {
+      debugLog('Counterbid', `[OS] ${task.contract.slug} | SKIP: Marketplace stopped (insufficient balance)`);
       return;
     }
 
@@ -25163,6 +25169,22 @@ app.get('/api/debug/all-task-statuses', (req, res) => {
     errorLog('TaskStatus', 'Error getting all task statuses', error);
     res.status(500).json({ error: 'Failed to get task statuses' });
   }
+});
+
+// Message loss detection endpoint - compare WS received vs own bid counter
+app.get('/api/message-loss-check', (req, res) => {
+  const wsReceived = wsManager?.getOpenseaBidCreatedReceived?.() || 0;
+  const ownBidsCounted = ownBidCounts['opensea'] || 0;
+  const gap = wsReceived - ownBidsCounted;
+  const lossRate = wsReceived > 0 ? ((gap / wsReceived) * 100).toFixed(2) + '%' : '0%';
+
+  res.json({
+    wsReceived,          // Messages received at WebSocket layer
+    ownBidsCounted,      // Messages that reached incrementOwnBidCounter
+    gap,                 // Difference (messages lost in processing)
+    lossRate,            // Percentage of loss
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Debug endpoint for task scheduling state

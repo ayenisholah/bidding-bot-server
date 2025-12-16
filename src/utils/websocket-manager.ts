@@ -140,6 +140,14 @@ class WebSocketManager extends EventEmitter {
   private persistentBiddingSubscriptions: Map<string, SubscriptionInfo> = new Map();
   private subscriptionStateFile = '.listing-subscriptions.json';
 
+  // ACK-based reliable delivery tracking
+  private receivedSeqNums: number[] = [];
+  private lastAckTime: number = Date.now();
+  private readonly ACK_BATCH_INTERVAL = 100; // Send ACK every 100ms
+
+  // Message loss detection counter - counts OPENSEA BID_CREATED received
+  private openseaBidCreatedReceived = 0;
+
   constructor(config: WebSocketManagerConfig) {
     super();
     this.config = {
@@ -291,6 +299,9 @@ class WebSocketManager extends EventEmitter {
 
     // Start application-level bid activity watchdog
     this.startBidActivityWatchdog();
+
+    // Start ACK timer for reliable delivery
+    this.startAckTimer();
 
     // Process queued messages
     this.processMessageQueue();
@@ -649,15 +660,32 @@ class WebSocketManager extends EventEmitter {
 
   private handleMessage(data: WebSocket.Data): void {
     try {
-      const message = JSON.parse(data.toString());
+      const parsed = JSON.parse(data.toString());
       this.metrics.totalMessages++;
       this.recordMessage();
 
-      // Debug logging to trace message flow
-      console.log(`[CLIENT-RECV] #${this.metrics.totalMessages} | type=${message.type || message.eventType}`);
-
       // Update last message received timestamp
       this.lastMessageReceived = Date.now();
+
+      // Check if this is a wrapped message with seqNum (ACK-based reliable delivery)
+      let message: any;
+      if (parsed.seqNum !== undefined && parsed.data !== undefined) {
+        // Track sequence number for batch ACK
+        this.receivedSeqNums.push(parsed.seqNum);
+
+        // Extract actual message from wrapped format
+        message = parsed.data;
+
+        // Send ACK immediately if buffer is getting large or enough time has passed
+        if (this.receivedSeqNums.length >= 50 || (Date.now() - this.lastAckTime) > this.ACK_BATCH_INTERVAL) {
+          this.sendAck();
+        }
+
+      } else {
+        // Legacy message without seqNum (backward compatibility)
+        message = parsed;
+
+      }
 
       // Handle pong messages
       if (message.type === 'pong') {
@@ -697,6 +725,11 @@ class WebSocketManager extends EventEmitter {
         const msgSlug = message.payload?.payload?.collection?.slug || message.slug;
         const msgMarketplace = message.marketplace || 'unknown';
 
+        // Message loss detection: count OPENSEA BID_CREATED messages
+        if (message.eventType === 'BID_CREATED' && msgMarketplace === 'OPENSEA') {
+          this.openseaBidCreatedReceived++;
+        }
+
         // Check if we're actually subscribed to this collection
         const isSubscribed = this.isSubscribedToSlug(msgSlug);
 
@@ -710,8 +743,6 @@ class WebSocketManager extends EventEmitter {
         }
       }
 
-      // Debug logging to trace message flow before emit
-      console.log(`[CLIENT-EMIT] #${this.metrics.totalMessages} | eventType=${message.eventType}`);
       this.emit('message', message);
 
     } catch (error) {
@@ -780,6 +811,15 @@ class WebSocketManager extends EventEmitter {
   private handleClose(event: { code: number; reason: string }): void {
     // Reset reconnecting flag
     this.isReconnecting = false;
+
+    // Send any pending ACKs before closing
+    if (this.receivedSeqNums.length > 0) {
+      this.sendAck();
+    }
+
+    // Clear ACK state
+    this.receivedSeqNums = [];
+    this.lastAckTime = Date.now();
 
     // Calculate connection duration
     const now = Date.now();
@@ -904,6 +944,43 @@ class WebSocketManager extends EventEmitter {
     this.sendMessage(pingMessage);
   }
 
+  /**
+   * Send batch ACK for received sequence numbers
+   * Called periodically (every ACK_BATCH_INTERVAL) or when buffer is large
+   */
+  private sendAck(): void {
+    if (this.receivedSeqNums.length === 0) return;
+
+    // Take all sequence numbers and clear the array
+    const seqNums = this.receivedSeqNums.splice(0);
+
+    const ackMessage = {
+      type: 'ack',
+      seqNums: seqNums,
+      clientId: this.config.clientId
+    };
+
+    try {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify(ackMessage));
+        this.lastAckTime = Date.now();
+      }
+    } catch (error) {
+      // ACK send failed - messages will be retried by proxy
+      warnLog('WebSocket', `Failed to send ACK for ${seqNums.length} messages`);
+    }
+  }
+
+  /**
+   * Start the ACK timer for batch acknowledgments
+   */
+  private startAckTimer(): void {
+    this.clearInterval('ackTimer');
+
+    this.setInterval('ackTimer', () => {
+      this.sendAck();
+    }, this.ACK_BATCH_INTERVAL);
+  }
 
   async sendMessageWithResponse(message: any, timeoutMs = 5000): Promise<any> {
     return new Promise((resolve, reject) => {
@@ -1250,6 +1327,14 @@ class WebSocketManager extends EventEmitter {
 
   getMetrics(): ConnectionMetrics {
     return { ...this.metrics };
+  }
+
+  /**
+   * Get count of OPENSEA BID_CREATED messages received.
+   * Used for message loss detection between ws-proxy and bidding-bot-server.
+   */
+  getOpenseaBidCreatedReceived(): number {
+    return this.openseaBidCreatedReceived;
   }
 
   getActiveSubscriptions(): Map<string, SubscriptionInfo> {

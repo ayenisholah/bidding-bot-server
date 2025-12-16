@@ -162,7 +162,8 @@ export type LogCategory =
   | 'metadata'
   | 'stoptask'
   | 'taskflow'  // Consolidated task lifecycle logging - ALL state transitions in one file
-  | 'system';
+  | 'system'
+  | 'wsConnection';  // Dedicated log for _doConnect() WebSocket connection errors
 
 // Prefix → Category mapping (single point of configuration)
 export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
@@ -248,8 +249,9 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'API': 'api',
   'Blockchain': 'api',
 
-  // WebSocket (1)
+  // WebSocket (2)
   'WebSocket': 'websocket',
+  'MsgLoss': 'websocket',    // Message loss detection between ws-proxy and server
 
   // Listing (5)
   'Listing': 'listing',
@@ -320,6 +322,9 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'TimerOp': 'taskflow',            // Timer creation/expiration/cleanup
   'StuckTaskCheck': 'taskflow',     // checkStuckTasks() - stuck task detection and recovery
   'TimerDiagnostic': 'taskflow',    // Periodic timer map diagnostics
+
+  // WebSocket connection error logging (dedicated file for _doConnect() errors)
+  'WsConnection': 'wsConnection',
 };
 
 // ============================================
@@ -494,7 +499,7 @@ export function getAllCategories(): LogCategory[] {
     'startup', 'task', 'scheduler', 'bidflow', 'counterbid', 'queue', 'worker',
     'database', 'redis', 'lock', 'blur', 'opensea', 'magiceden', 'api', 'websocket',
     'listing', 'collection', 'balance', 'cancellation', 'health', 'metadata', 'stoptask',
-    'taskflow', 'system'
+    'taskflow', 'system', 'wsConnection'
   ];
 }
 
