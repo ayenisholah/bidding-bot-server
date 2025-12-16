@@ -81,7 +81,7 @@ import { listingPriceCache } from "./utils/listing-price-cache";
 import Listing from "./models/listing.model";
 
 const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
-// const MARKETPLACE_WS_URL = "ws://localhost:8080  ";
+// const MARKETPLACE_WS_URL = "ws://localhost:8080";
 
 
 // Initialize process lifecycle logging immediately on startup
