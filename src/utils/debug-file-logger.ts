@@ -250,9 +250,15 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'API': 'api',
   'Blockchain': 'api',
 
-  // WebSocket (2)
+  // WebSocket (8)
   'WebSocket': 'websocket',
   'MsgLoss': 'websocket',    // Message loss detection between ws-proxy and server
+  'MsgFlow': 'websocket',    // Raw message flow tracking at earliest checkpoint
+  'WsProxyRecv': 'websocket',     // Messages received from ws-proxy (detailed tracking)
+  'WsProxyDrop': 'websocket',     // Potential drops detected during processing
+  'WsProxyLag': 'websocket',      // Latency/lag detection (message timestamp vs receive time)
+  'WsProxyReconnect': 'websocket', // ws-proxy reconnection events
+  'WsProxyStats': 'websocket',    // Periodic stats from ws-proxy message flow
 
   // Listing (5)
   'Listing': 'listing',

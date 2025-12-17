@@ -118,6 +118,10 @@ export const errorStats: BidCounts = {};
 export const skipStats: BidCounts = {};
 const counterbidCounts: BidCounts = {};
 
+// Message flow tracking counters (for debugging WebSocket message loss)
+let rawWsMessagesReceived = 0;
+let rawOurBidsReceived = 0;
+
 // ============================================
 // RESILIENT HELPER FUNCTIONS
 // ============================================
@@ -13283,7 +13287,20 @@ async function _doConnect(): Promise<void> {
 
     wsManager.on('message', async (message: any) => {
       try {
-        // Message reception logging removed - blocks event loop at high message rates
+        rawWsMessagesReceived++;
+
+        // Track ALL our bids at earliest point (before any filtering)
+        if (message.eventType === 'BID_CREATED' || message.eventType === 'item_received_bid') {
+          const maker = message.payload?.payload?.maker?.address ||
+                        message.payload?.maker?.address;
+          if (maker && isOurWallet(maker)) {
+            rawOurBidsReceived++;
+            const orderHash = message.payload?.payload?.order?.orderHash ||
+                              message.payload?.order?.orderHash ||
+                              message.orderHash;
+            debugLog('MsgFlow', `RAW_OUR_BID_RECV | #${rawOurBidsReceived} | orderHash=${orderHash?.slice(0,12)}... | eventType=${message.eventType}`);
+          }
+        }
 
         // Handle initial data request synchronously
         if (message.endpoint === "get-initial-data") {
@@ -25186,6 +25203,28 @@ app.get('/api/message-loss-check', (req, res) => {
     ownBidsCounted,      // Messages that reached incrementOwnBidCounter
     gap,                 // Difference (messages lost in processing)
     lossRate,            // Percentage of loss
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Enhanced message flow tracking endpoint (tracks from raw WebSocket receipt)
+app.get('/api/message-flow-stats', (req, res) => {
+  const wsManagerCounter = wsManager?.getOpenseaBidCreatedReceived?.() || 0;
+  const ownBidsCounted = ownBidCounts['opensea'] || 0;
+
+  res.json({
+    checkpoints: {
+      rawWsMessages: rawWsMessagesReceived,           // ALL WebSocket messages received
+      rawOurBids: rawOurBidsReceived,                 // Our bids at earliest checkpoint (before filtering)
+      wsManagerCounter,                               // OpenSea BID_CREATED counter in wsManager
+      ownBidsCounted,                                 // Final count in incrementOwnBidCounter
+    },
+    analysis: {
+      lossBeforeHandler: rawOurBidsReceived - ownBidsCounted,
+      lossPercentage: rawOurBidsReceived > 0
+        ? ((1 - ownBidsCounted / rawOurBidsReceived) * 100).toFixed(2) + '%'
+        : 'N/A'
+    },
     timestamp: new Date().toISOString()
   });
 });
