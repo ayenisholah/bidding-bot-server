@@ -851,19 +851,8 @@ async function handleInsufficientBalanceError(
     }
   }
 
-  debugLog('BidFlow', `Balance Check: Caught InsufficientBalanceError | taskId=${taskId} | marketplace=${marketplace} | identifier=${identifier}`, {
-    taskId,
-    marketplace: marketplace.toLowerCase() as 'blur' | 'opensea' | 'magiceden',
-    identifier
-  });
-
+  // Consolidated insufficient balance logging (previously 3 separate logs)
   if (currentBalance !== null && requiredBalance !== null) {
-    debugLog('BidFlow', `Balance Amounts | taskId=${taskId} | current=${currentBalance} | required=${requiredBalance} | min=${minBidPrice}`, {
-      taskId,
-      marketplace: marketplace.toLowerCase() as 'blur' | 'opensea' | 'magiceden',
-      identifier
-    });
-
     // Decision: Stop marketplace if balance < min bid price, otherwise skip this bid
     if (currentBalance < minBidPrice) {
       await stopMarketplaceDueToInsufficientBalance(
@@ -877,7 +866,8 @@ async function handleInsufficientBalanceError(
       );
       return true;
     } else {
-      debugLog('BidFlow', `SKIP BID | taskId=${taskId} | marketplace=${marketplace} | identifier=${identifier} | Balance sufficient for min but not for this bid`, {
+      // Single consolidated log for insufficient balance skip (was 3 logs)
+      debugLog('BidFlow', `SKIP BID | taskId=${taskId} | marketplace=${marketplace} | identifier=${identifier} | insufficient_balance | current=${currentBalance} | required=${requiredBalance}`, {
         taskId,
         marketplace: marketplace.toLowerCase() as 'blur' | 'opensea' | 'magiceden',
         identifier
@@ -4154,15 +4144,20 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string, mark
   const timestamp = new Date().toISOString();
   const stackTrace = new Error().stack?.split('\n').slice(2, 5).join('\n    ');
 
-  // TaskFlow logging: Capture state transition attempt
+  // TaskFlow logging: Capture state transition attempt - but skip no-op transitions
   const mpKey = marketplace?.toLowerCase() as 'opensea' | 'magiceden' | 'blur' | undefined;
   const oldStatus = mpKey ? taskStatus[taskId]?.marketplaces?.[mpKey]?.status : 'INIT';
   const caller = stackTrace?.split('\n')[0]?.trim().substring(0, 80) || 'unknown';
 
-  debugLog('StateTransition',
-    `${oldStatus || 'NONE'} → ${newStatus} | taskId=${taskId} | mp=${marketplace || 'all'} | ctx=${context || 'none'}`,
-    { taskId, marketplace: mpKey, oldStatus, newStatus, context, caller }
-  );
+  // Skip logging for no-op transitions (STARTED→STARTED, QUEUEING→QUEUEING, etc.)
+  // This was generating 6K+ redundant log lines/day
+  const isNoOpTransition = oldStatus === newStatus;
+  if (!isNoOpTransition) {
+    debugLog('StateTransition',
+      `${oldStatus || 'NONE'} → ${newStatus} | taskId=${taskId} | mp=${marketplace || 'all'} | ctx=${context || 'none'}`,
+      { taskId, marketplace: mpKey, oldStatus, newStatus, context, caller }
+    );
+  }
 
   if (!taskStatus[taskId]) {
 
@@ -7873,8 +7868,11 @@ async function processImportedTasks(tasks: ITask[]) {
     tasks.forEach(task => {
       activeTasks.set(task._id, task);
       currentTasks.push(task);
+      // Use O(1) index add instead of O(n) full rebuild after loop
+      if (task.running) {
+        addTaskToIndexes(task);
+      }
     });
-    updateTaskIndexes(currentTasks);
 
     // Start all running tasks concurrently
     const runningTasks = tasks.filter(task => task.running);
@@ -7894,7 +7892,10 @@ async function processNewTask(task: ITask) {
   try {
     activeTasks.set(task._id, task)
     currentTasks.push(task);
-    updateTaskIndexes(currentTasks);
+    // Use O(1) index add instead of O(n) full rebuild
+    if (task.running) {
+      addTaskToIndexes(task);
+    }
     await startTask(task, task.running)
   } catch (error) {
     errorLog('TaskProcessing', `Error processing new task: ${task.contract.slug}`, error);
@@ -8110,7 +8111,13 @@ async function updateTaskData(task: ITask) {
 
   currentTasks.splice(existingTaskIndex, 1, updatedTask);
   activeTasks.set(task._id, updatedTask);
-  updateTaskIndexes(currentTasks);
+
+  // Use O(1) index update instead of O(n) full rebuild
+  // Remove old task from indexes, add new task if running
+  removeTaskFromIndexes(existingTask);
+  if (updatedTask.running) {
+    addTaskToIndexes(updatedTask);
+  }
 
   if (process.env.NODE_ENV === 'development') {
     console.log(`[TaskUpdate][${task._id}] In-memory state updated successfully`);
@@ -11619,8 +11626,10 @@ async function deleteTask(task: ITask) {
     await stopTask(task, false);
     const taskIndex = currentTasks.findIndex(t => t._id === task._id);
     if (taskIndex !== -1) {
+      const taskToRemove = currentTasks[taskIndex];
       currentTasks.splice(taskIndex, 1);
-      updateTaskIndexes(currentTasks);
+      // Use O(1) index removal instead of O(n) full rebuild
+      removeTaskFromIndexes(taskToRemove);
     }
     const taskId = task._id.toString();
     activeTasks.delete(task._id);
@@ -14966,30 +14975,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const selectedTraits = transformNewTask(currentTask?.selectedTraits?.opensea)
     const bestOffer = (bestOffers[task._id]?.opensea || 0);
 
-    // =====================================================================
-    // CROSS-TYPE COUNTERBID ANALYSIS LOG
-    // This log helps detect when cross-type counterbidding will occur
-    // =====================================================================
-    const incomingBidTypeAnalysis = tokenId ? 'TOKEN' : (trait ? 'TRAIT' : 'COLLECTION');
-    const taskBidTypeAnalysis = task.bidType.toUpperCase();
-    const hasTokenIdsAnalysis = !!(task.tokenIds?.length);
-    // Fix: selectedTraits is Record<string, string[]>, not an array - use Object.keys().length
-    const hasSelectedTraitsAnalysis = !!(selectedTraits && Object.keys(selectedTraits).length > 0);
-
-    // Determine potential cross-type scenarios
-    // Fix: trait-based token tasks have hasSelectedTraits=true but hasTokenIds=false
-    let crossTypeScenario = 'SAME_TYPE';
-    const hasTokenOrTraitCriteria = hasTokenIdsAnalysis || hasSelectedTraitsAnalysis;
-
-    if (incomingBidTypeAnalysis === 'TRAIT' && (taskBidTypeAnalysis === 'TOKEN' || taskBidTypeAnalysis === 'RARITY') && hasTokenOrTraitCriteria) {
-      crossTypeScenario = 'TOKEN-vs-TRAIT';
-    } else if (incomingBidTypeAnalysis === 'COLLECTION' && (taskBidTypeAnalysis === 'TOKEN' || taskBidTypeAnalysis === 'RARITY') && hasTokenOrTraitCriteria) {
-      crossTypeScenario = 'TOKEN-vs-COLLECTION';
-    } else if (incomingBidTypeAnalysis === 'COLLECTION' && hasSelectedTraitsAnalysis && taskBidTypeAnalysis !== 'TOKEN' && taskBidTypeAnalysis !== 'RARITY') {
-      crossTypeScenario = 'TRAIT-vs-COLLECTION';
-    }
-
-    debugLog('Counterbid', `[OS] ${task.contract.slug} | COUNTERBID ANALYSIS | incomingBidType=${incomingBidTypeAnalysis} | taskBidType=${taskBidTypeAnalysis} | hasTokenIds=${hasTokenIdsAnalysis} | hasSelectedTraits=${hasSelectedTraitsAnalysis} | crossTypeScenario=${crossTypeScenario} | incomingPrice=${incomingPriceDisplay} ${symbol?.toUpperCase()}`, { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+    // Note: Removed COUNTERBID ANALYSIS log - was noise (12K+ lines/day with no action taken)
+    // Cross-type detection (TOKEN-vs-TRAIT, TOKEN-vs-COLLECTION) is handled inline in counterbid logic below
 
     const collectionOfferEth = data.event === "collection_offer" ? incomingBidAmount / Math.pow(10, decimal) : 0
 
@@ -23541,66 +23528,83 @@ app.post('/api/task/:taskId/reset-purchases', async (req, res) => {
 });
 
 // Fetch floor prices for all tasks and all marketplaces
+// Optimized: Deduplicates API calls for tasks sharing the same slug/contractAddress
 app.post('/api/floor', async (req, res) => {
   try {
     const { tasks }: { tasks: { _id: string, slug: string, contractAddress: string }[] } = req.body;
-    await pQueue.addAll(tasks.map(task => async () => {
-      const taskId = task._id;
-      const slug = task.slug;
-      const contractAddress = task.contractAddress;
 
-      // Validate taskId exists
-      if (!taskId) {
-        return;
+    // Step 1: Group tasks by unique slug+contractAddress to avoid duplicate API calls
+    const collectionToTaskIds = new Map<string, string[]>();
+    const collectionInfo = new Map<string, { slug: string, contractAddress: string }>();
+
+    for (const task of tasks) {
+      if (!task._id) continue;
+      const key = `${task.slug}:${task.contractAddress}`;
+      if (!collectionToTaskIds.has(key)) {
+        collectionToTaskIds.set(key, []);
+        collectionInfo.set(key, { slug: task.slug, contractAddress: task.contractAddress });
       }
+      collectionToTaskIds.get(key)!.push(task._id);
 
-      // Initialize floor prices and best offers objects for this task
-      // Use direct assignment to ensure objects exist before any marketplace fetches
-      floorPrices[taskId] = {
-        opensea: 0,
-        blur: 0,
-        magiceden: 0
-      };
-      bestOffers[taskId] = {
-        opensea: 0,
-        blur: 0,
-        magiceden: 0
-      };
+      // Initialize floor prices and best offers for this task
+      floorPrices[task._id] = { opensea: 0, blur: 0, magiceden: 0 };
+      bestOffers[task._id] = { opensea: 0, blur: 0, magiceden: 0 };
+    }
+
+    // Step 2: Fetch floor prices once per unique collection
+    const uniqueCollections = Array.from(collectionInfo.entries());
+
+    await pQueue.addAll(uniqueCollections.map(([key, { slug, contractAddress }]) => async () => {
+      const taskIds = collectionToTaskIds.get(key) || [];
+      if (taskIds.length === 0) return;
+
+      // Fetch floor prices and best offers for this collection once
+      let openseaFloor = 0, openseaBestOffer = 0;
+      let blurFloor = 0, blurBestOffer = 0;
+      let magicEdenFloor = 0, magicEdenBestOffer = 0;
 
       // OpenSea
       try {
-        const openseaFloorPrice = await getOpenseaFloor(slug);
-        if (floorPrices[taskId]) floorPrices[taskId].opensea = openseaFloorPrice;
-        const [topOffer] = (await fetchOpenseaOffers('COLLECTION', slug, {}) as unknown) as OpenseaOfferData[]
-        const topOfferAmount = Number(topOffer?.eth) || 0
-        if (bestOffers[taskId]) bestOffers[taskId].opensea = topOfferAmount
-      } catch (error: any) {
-        // Already initialized to 0, no need to set again
+        openseaFloor = await getOpenseaFloor(slug);
+        const [topOffer] = (await fetchOpenseaOffers('COLLECTION', slug, {}) as unknown) as OpenseaOfferData[];
+        openseaBestOffer = Number(topOffer?.eth) || 0;
+      } catch {
+        // Keep default 0
       }
 
       // Blur
       try {
-        const blurFloorPrice = await fetchBlurCollectionStats(slug);
-        if (floorPrices[taskId]) floorPrices[taskId].blur = blurFloorPrice;
-        const bestOffer = await fetchBlurBid(contractAddress, "COLLECTION", {})
-        const bestOfferAmount = bestOffer?.priceLevels?.[0]?.price ? Number(bestOffer.priceLevels[0].price) : 0
-        if (bestOffers[taskId]) bestOffers[taskId].blur = bestOfferAmount
-      } catch (error: any) {
-        // Already initialized to 0, no need to set again
+        blurFloor = await fetchBlurCollectionStats(slug);
+        const bestOffer = await fetchBlurBid(contractAddress, "COLLECTION", {});
+        blurBestOffer = bestOffer?.priceLevels?.[0]?.price ? Number(bestOffer.priceLevels[0].price) : 0;
+      } catch {
+        // Keep default 0
       }
 
       // Magic Eden
       try {
-        const magicEdenFloorPrice = await fetchMagicEdenCollectionStats(contractAddress);
-        if (floorPrices[taskId]) floorPrices[taskId].magiceden = Number(magicEdenFloorPrice);
+        magicEdenFloor = Number(await fetchMagicEdenCollectionStats(contractAddress));
+        const [bestOffer] = await fetchMagicEdenOffer("COLLECTION", contractAddress, "{}") as unknown as OpenseaOfferData[];
+        magicEdenBestOffer = Number(bestOffer?.eth) || 0;
+      } catch {
+        // Keep default 0
+      }
 
-        const [bestOffer] = await fetchMagicEdenOffer("COLLECTION", contractAddress, "{}") as unknown as OpenseaOfferData[]
-        const bestOfferAmount = Number(bestOffer?.eth) || 0
-        if (bestOffers[taskId]) bestOffers[taskId].magiceden = bestOfferAmount;
-      } catch (error: any) {
-        // Already initialized to 0, no need to set again
+      // Step 3: Assign the same result to all tasks with this collection
+      for (const taskId of taskIds) {
+        if (floorPrices[taskId]) {
+          floorPrices[taskId].opensea = openseaFloor;
+          floorPrices[taskId].blur = blurFloor;
+          floorPrices[taskId].magiceden = magicEdenFloor;
+        }
+        if (bestOffers[taskId]) {
+          bestOffers[taskId].opensea = openseaBestOffer;
+          bestOffers[taskId].blur = blurBestOffer;
+          bestOffers[taskId].magiceden = magicEdenBestOffer;
+        }
       }
     }));
+
     res.status(200).json({ floorPrices, bestOffers });
   } catch (error: any) {
     errorLog('API', 'Failed to fetch floor prices', error instanceof Error ? error : new Error(String(error)))

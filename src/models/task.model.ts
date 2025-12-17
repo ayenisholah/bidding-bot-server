@@ -100,6 +100,7 @@ export interface ITask {
   traitsOperator: { value: string; label: string };
   autoList?: boolean;
   note?: string;
+  priority: 1 | 2 | 3 | 4 | 5;
   listingConfig?: {
     selectedMarketplaces: string[];
     pricingStrategy: "FIXED_PRICING" | "DYNAMIC_PRICING";
@@ -240,6 +241,7 @@ const TaskSchema: Schema = new Schema(
     },
     autoList: { type: Boolean, default: false },
     note: { type: String, default: "" },
+    priority: { type: Number, min: 1, max: 5, default: 3 },
     listingConfig: {
       selectedMarketplaces: { type: [String] },
       pricingStrategy: {

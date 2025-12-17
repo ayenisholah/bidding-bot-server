@@ -36,11 +36,7 @@ interface BalanceResponse {
  * This is faster and more reliable than Alchemy RPC calls.
  */
 async function fetchWethBalanceGraphQL(walletAddress: string): Promise<number> {
-  const startTime = Date.now();
-
-  if (DEBUG) {
-    debugLog('Balance', `GraphQL fetch starting | wallet=${truncateAddress(walletAddress)}`);
-  }
+  // Note: Removed "GraphQL fetch starting/complete" logs - was noise (35K+ lines/day)
 
   const query = {
     operationName: "WethBalanceQuery",
@@ -80,12 +76,6 @@ async function fetchWethBalanceGraphQL(walletAddress: string): Promise<number> {
   );
 
   const balance = wethBalance ? Number(wethBalance.quantity) : 0;
-
-  if (DEBUG) {
-    const elapsed = Date.now() - startTime;
-    debugLog('Balance', `GraphQL fetch complete | wallet=${truncateAddress(walletAddress)} | balance=${balance} ETH | elapsed=${elapsed}ms`);
-  }
-
   return balance;
 }
 
@@ -168,9 +158,7 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
             errorLog('Balance', `Failed to cache balance | wallet=${walletAddress.slice(0, 10)}...`, error);
           }
 
-          if (DEBUG) {
-            debugLog('Balance', `Fresh fetch success | wallet=${truncateAddress(walletAddress)} | balance=${balance} ETH`);
-          }
+          // Note: Removed "Fresh fetch success" log - was noise (17K+ lines/day)
 
           return balance;
         } catch (error) {
@@ -212,7 +200,7 @@ export async function fetchERC20BalanceFresh(walletAddress: string, _tokenAddres
   const STALE_CACHE_EXPIRY_SECONDS = 3600; // Keep stale cache for 1 hour as fallback
   const cacheKey = `{erc20_balance:${walletAddress}}:weth`;
   const staleCacheKey = `{erc20_balance_stale:${walletAddress}}:weth`;
-  const startTime = Date.now();
+  const startTime = Date.now(); // Used for error logging (elapsed time on failures)
 
   // First try to get cached value
   try {
@@ -259,10 +247,7 @@ export async function fetchERC20BalanceFresh(walletAddress: string, _tokenAddres
               errorLog('Balance', `Failed to cache balance | wallet=${walletAddress.slice(0, 10)}...`, error);
             }
 
-            if (DEBUG) {
-              const elapsed = Date.now() - startTime;
-              debugLog('Balance', `[Fresh] Fresh fetch success | wallet=${truncateAddress(walletAddress)} | balance=${balance} ETH | elapsed=${elapsed}ms`);
-            }
+            // Note: Removed "[Fresh] Fresh fetch success" log - was noise (17K+ lines/day)
 
             return balance;
           } catch (error) {

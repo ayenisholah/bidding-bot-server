@@ -795,7 +795,7 @@ export async function bidOnOpensea(
       }
 
     } catch (error) {
-      errorLog('OpenSea', `bidOnOpensea inner error | taskId=${taskId} | slug=${slug}`, error);
+      // Note: Removed duplicate "inner error" log - error is already logged by outer catch
       throw error;
     }
   } catch (error) {
