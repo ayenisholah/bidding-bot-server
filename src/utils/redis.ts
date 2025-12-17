@@ -43,7 +43,7 @@ const getDefaultConfig = () => {
       return delay;
     },
     enableReadyCheck: true,
-    connectTimeout: 30000,
+    connectTimeout: 60000,
     // Add memory optimization settings
     dropBufferSupport: true,
     showFriendlyErrorStack: true,

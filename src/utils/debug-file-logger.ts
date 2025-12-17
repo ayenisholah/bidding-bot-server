@@ -4,10 +4,101 @@ import * as path from 'path';
 const DEBUG = process.env.DEBUG === 'true';
 export const LOG_DIR = path.resolve(process.cwd(), 'debug-logs');
 
-// Ensure directory exists on module load
-if (!fs.existsSync(LOG_DIR)) {
-  fs.mkdirSync(LOG_DIR, { recursive: true });
+// Ensure directory exists on module load and verify write permissions
+let CAN_WRITE_LOGS = true;
+try {
+  if (!fs.existsSync(LOG_DIR)) {
+    fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o777 });
+  }
+  // Test write permissions by creating and deleting a test file
+  const testFile = path.join(LOG_DIR, '.write-test');
+  fs.writeFileSync(testFile, 'test');
+  fs.unlinkSync(testFile);
+} catch (err) {
+  CAN_WRITE_LOGS = false;
+  console.error(`[LogWriter] CRITICAL: Cannot write to ${LOG_DIR}: ${(err as Error).message}`);
+  console.error('[LogWriter] Debug logs will NOT be saved to files! Fix volume permissions.');
 }
+
+// ============================================
+// ASYNC BATCHED LOG WRITER
+// ============================================
+
+/**
+ * Buffer for async batched log writes
+ * Groups log lines by file path to minimize I/O operations
+ */
+const logBuffer = new Map<string, string[]>();
+const FLUSH_INTERVAL_MS = 1000; // Flush every 1 second
+let flushIntervalId: NodeJS.Timeout | null = null;
+let isShuttingDown = false;
+
+/**
+ * Flush all buffered log lines to their respective files
+ * Uses async fs.appendFile to avoid blocking the event loop
+ */
+function flushLogBuffers(): void {
+  if (logBuffer.size === 0) return;
+
+  for (const [filePath, lines] of logBuffer) {
+    if (lines.length === 0) continue;
+
+    const content = lines.join('\n') + '\n';
+
+    // Use async append - fire and forget for performance
+    fs.appendFile(filePath, content, (err) => {
+      if (err && !isShuttingDown) {
+        // Only log to console to avoid recursion
+        console.error(`[LogWriter] Failed to write to ${filePath}: ${err.message}`);
+      }
+    });
+  }
+
+  // Clear all buffers
+  logBuffer.clear();
+}
+
+/**
+ * Synchronous flush for shutdown scenarios
+ * Blocks to ensure all logs are written before process exit
+ */
+function flushLogBuffersSync(): void {
+  if (logBuffer.size === 0) return;
+
+  for (const [filePath, lines] of logBuffer) {
+    if (lines.length === 0) continue;
+
+    try {
+      fs.appendFileSync(filePath, lines.join('\n') + '\n');
+    } catch {
+      // Silently fail on shutdown
+    }
+  }
+  logBuffer.clear();
+}
+
+// Start the flush interval
+flushIntervalId = setInterval(flushLogBuffers, FLUSH_INTERVAL_MS);
+
+// Ensure logs are flushed on process exit
+process.on('beforeExit', () => {
+  isShuttingDown = true;
+  if (flushIntervalId) {
+    clearInterval(flushIntervalId);
+    flushIntervalId = null;
+  }
+  flushLogBuffersSync();
+});
+
+process.on('SIGINT', () => {
+  isShuttingDown = true;
+  flushLogBuffersSync();
+});
+
+process.on('SIGTERM', () => {
+  isShuttingDown = true;
+  flushLogBuffersSync();
+});
 
 // ============================================
 // LOG METADATA INTERFACE
@@ -71,7 +162,8 @@ export type LogCategory =
   | 'metadata'
   | 'stoptask'
   | 'taskflow'  // Consolidated task lifecycle logging - ALL state transitions in one file
-  | 'system';
+  | 'system'
+  | 'wsConnection';  // Dedicated log for _doConnect() WebSocket connection errors
 
 // Prefix → Category mapping (single point of configuration)
 export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
@@ -96,10 +188,12 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'Scheduler': 'scheduler',
   'TimedLockManager': 'scheduler',
 
-  // BidFlow (5)
+  // BidFlow (7)
   'BidFlow': 'bidflow',
   'ScheduledBid': 'bidflow',
   'Preprocessing': 'bidflow',
+  'TokenFetch': 'bidflow',    // Token fetching from OpenSea collection items
+  'TokenTrack': 'bidflow',    // Token source tracking and deduplication in preprocessing
   'PriceCalc': 'bidflow',
   'StopOption': 'bidflow',
 
@@ -155,8 +249,9 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'API': 'api',
   'Blockchain': 'api',
 
-  // WebSocket (1)
+  // WebSocket (2)
   'WebSocket': 'websocket',
+  'MsgLoss': 'websocket',    // Message loss detection between ws-proxy and server
 
   // Listing (5)
   'Listing': 'listing',
@@ -225,6 +320,11 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'RedisState': 'taskflow',         // persistTaskState() - Redis persistence
   'LockOp': 'taskflow',             // Lock acquisition/release for counters
   'TimerOp': 'taskflow',            // Timer creation/expiration/cleanup
+  'StuckTaskCheck': 'taskflow',     // checkStuckTasks() - stuck task detection and recovery
+  'TimerDiagnostic': 'taskflow',    // Periodic timer map diagnostics
+
+  // WebSocket connection error logging (dedicated file for _doConnect() errors)
+  'WsConnection': 'wsConnection',
 };
 
 // ============================================
@@ -256,11 +356,16 @@ function formatMetadata(metadata?: LogMetadata): string {
 }
 
 function writeToFile(logLine: string, prefix: string): void {
-  try {
-    fs.appendFileSync(getLogFilePath(prefix), logLine + '\n');
-  } catch {
-    // Silently fail file write to not break app
+  // Skip file writes if we don't have write permissions
+  if (!CAN_WRITE_LOGS) return;
+
+  const filePath = getLogFilePath(prefix);
+
+  // Add to buffer instead of synchronous write
+  if (!logBuffer.has(filePath)) {
+    logBuffer.set(filePath, []);
   }
+  logBuffer.get(filePath)!.push(logLine);
 }
 
 // Format error for logging
@@ -394,7 +499,7 @@ export function getAllCategories(): LogCategory[] {
     'startup', 'task', 'scheduler', 'bidflow', 'counterbid', 'queue', 'worker',
     'database', 'redis', 'lock', 'blur', 'opensea', 'magiceden', 'api', 'websocket',
     'listing', 'collection', 'balance', 'cancellation', 'health', 'metadata', 'stoptask',
-    'taskflow', 'system'
+    'taskflow', 'system', 'wsConnection'
   ];
 }
 
@@ -421,7 +526,8 @@ export function getMarketplaceCategories(marketplace: string): LogCategory[] {
 
 /**
  * Log a debug message to both console and file.
- * Only logs when DEBUG=true environment variable is set.
+ * Only logs when DEBUG=true.
+ * EXCEPTION: 'taskflow' category always logs (critical for debugging stuck tasks).
  * Routes to category-specific log file based on prefix.
  *
  * @param prefix - Log prefix category (e.g., 'TaskScheduler', 'BidFlow', 'STARTUP')
@@ -429,7 +535,12 @@ export function getMarketplaceCategories(marketplace: string): LogCategory[] {
  * @param metadata - Optional structured metadata for filtering (taskId, marketplace, slug, etc.)
  */
 export function debugLog(prefix: string, message: string, metadata?: LogMetadata): void {
-  if (!DEBUG) return;
+  // Always log taskflow category (critical for debugging stuck tasks)
+  const category = getCategoryForPrefix(prefix);
+  const isTaskflow = category === 'taskflow';
+
+  // Skip non-taskflow logs if DEBUG is off
+  if (!isTaskflow && !DEBUG) return;
 
   const timestamp = new Date().toISOString();
   const metaStr = formatMetadata(metadata);

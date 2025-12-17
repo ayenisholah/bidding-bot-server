@@ -22,6 +22,7 @@ import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
 import { BoundedCache } from "../../utils/bounded-cache";
 import { apiDedup } from "../../utils/api-dedup";
 import { ChainValue, DEFAULT_CHAIN, getChainConfig, getCurrencyAddress, getProviderForChain, normalizeChainValue } from "../../utils/chains";
+import { isCollectionUnavailable, markCollectionUnavailable } from "../../utils/marketplace-availability";
 
 // Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
 // This prevents log flooding when multiple parallel jobs hit the same balance check
@@ -253,7 +254,8 @@ export async function bidOnMagiceden(
   bidExpiry: number,
   currency = WETH,
   trait?: Trait,
-  tokenId?: number
+  tokenId?: number,
+  source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
 
   try {
@@ -363,10 +365,12 @@ export async function bidOnMagiceden(
       bidExpiry,
       trait,
       tokenId,
-      task // Pass the cached task
+      task, // Pass the cached task
+      source
     );
     return order;
   } catch (error) {
+    errorLog('MagicEden', `generateMagicEdenOrder failed | taskId=${taskId}`, error);
     throw error;
   }
 }
@@ -436,7 +440,7 @@ async function createBidData(
     addActiveRequest(taskId, controller);
     const bidStartTime = Date.now();
 
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
 
     try {
       const { data: order } = await limiter.schedule(async () => {
@@ -455,7 +459,7 @@ async function createBidData(
               'x-api-key': API_KEY
             },
             signal: controller.signal,
-            timeout: 30000,
+            timeout: 60000,
             "axios-retry": { retries: 0 }
           }
         );
@@ -823,6 +827,7 @@ async function signOrderData(taskId: string, wallet: ethers.Wallet, signData: an
 
     return signature;
   } catch (error) {
+    errorLog('MagicEden', `signMagicEdenOrder failed | wallet=${wallet.address.slice(0, 10)}...`, error);
     throw error;
   }
 }
@@ -850,7 +855,8 @@ async function sendSignedOrderData(
   expiry: number,
   trait?: Trait,
   tokenId?: number | string,
-  cachedTask?: any // Accept cached task
+  cachedTask?: any, // Accept cached task
+  source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
   const endpoint = trait || tokenId
     ? `${BASE_URL}/magiceden/v3/rtp/ethereum/order/v3`
@@ -969,6 +975,10 @@ async function sendSignedOrderData(
       }
       trackBidRate("magiceden", taskId)
       // Log successful bid
+      const sourceTag = source === 'counterbid' ? '-CB' : '';
+      const bidType = tokenId ? 'Token' : (trait ? 'Trait' : 'Coll');
+      const offerPriceEth = Number(offerPrice) / Math.pow(10, decimal);
+      debugLog('BidFlow', `[ME-${bidType}${sourceTag}] ${slug}${tokenId ? '#' + tokenId : ''} | SUCCESS | identifier=${identifier} | price=${offerPriceEth} ${currencySymbol}`, { taskId, marketplace: 'magiceden', identifier: identifier.toString() });
       console.log(MAGENTA, successMessage, RESET);
 
       if (!task) return
@@ -1014,7 +1024,8 @@ export async function submitSignedOrderData(
   expiry: number,
   trait?: Trait,
   tokenId?: number | string,
-  cachedTask?: any // Accept cached task
+  cachedTask?: any, // Accept cached task
+  source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
   const task = cachedTask || currentTasks.find((task) =>
     task.contract.slug.toLowerCase() === slug.toLowerCase() &&
@@ -1157,7 +1168,8 @@ export async function submitSignedOrderData(
     expiry,
     trait,
     tokenId,
-    task // Pass the cached task
+    task, // Pass the cached task
+    source
   );
   return result;
 
@@ -1282,10 +1294,10 @@ async function signCancelOrder(taskId: string, cancelItem: any | undefined, priv
 export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN", contractAddress: string, identifier?: string | {
   attributeKey: string;
   attributeValue: string;
-}) {
+}, priority?: number) {
 
   if (type === "COLLECTION") {
-    const { data } = await limiter?.schedule(() =>
+    const { data } = await limiter?.schedule(priority !== undefined ? { priority } : {}, () =>
       axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection`, {
         headers: {
           'content-type': 'application/json',
@@ -1327,7 +1339,7 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
     const tasks = [
       () => apiDedup(
         `magiceden-offers-token-${contractAddress}-${identifier}`,
-        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${identifier}&sortBy=price&status=active&excludeEOA=false&limit=2`, {
+        () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v6?token=${contractAddress}:${identifier}&sortBy=price&status=active&excludeEOA=false&limit=2`, {
           headers: {
             'content-type': 'application/json',
             'x-api-key': API_KEY
@@ -1338,7 +1350,7 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
 
       () => apiDedup(
         `magiceden-offers-collection-${contractAddress}`,
-        () => limiter.schedule(() =>
+        () => limiter.schedule(priority !== undefined ? { priority } : {}, () =>
           axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sortBy=price&status=active&excludeEOA=false&limit=2`, {
             headers: {
               'content-type': 'application/json',
@@ -1388,7 +1400,7 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
     const tasks = [
       () => apiDedup(
         `magiceden-offers-collection-${contractAddress}`,
-        () => limiter.schedule(() => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sources=magiceden.io&sources=magiceden.us&limit=2&sortBy=price`, {
+        () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<MagicedenCollectionResponse>(`${BASE_URL}/magiceden/v3/rtp/ethereum/collections/${contractAddress}/bids/v1?type=collection&sources=magiceden.io&sources=magiceden.us&limit=2&sortBy=price`, {
           headers: {
             'content-type': 'application/json',
             'x-api-key': API_KEY
@@ -1400,7 +1412,7 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
         const URL = `${BASE_URL}/magiceden/v3/rtp/ethereum/orders/bids/v5?collection=${contractAddress}&attribute%5B${identifier?.attributeKey}%5D=${identifier.attributeValue}&sortBy=price&status=active&limit=2`;
         return apiDedup(
           `magiceden-offers-trait-${contractAddress}-${identifier.attributeKey}-${identifier.attributeValue}`,
-          () => limiter.schedule(() => axiosInstance.get<MagicEdenTraitOfferResponse>(
+          () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<MagicEdenTraitOfferResponse>(
             URL,
             {
               headers: {
@@ -1448,7 +1460,7 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
   }
 }
 
-export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: { attributeKey: string; attributeValue: string }) {
+export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: { attributeKey: string; attributeValue: string }, priority?: number) {
   const CACHE_TTL = 120; // 2 minutes cache for trait data
   const cacheKey = `magiceden:trait:${contractAddress}:${trait.attributeKey}:${trait.attributeValue}`;
 
@@ -1483,7 +1495,7 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
     const fullUrl = `${BASE_URL}/magiceden/v3/rtp/ethereum/tokens/v7?${queryParams.toString()}`;
     const { data } = await apiDedup(
       `magiceden-trait-floor-${contractAddress}-${trait.attributeKey}-${trait.attributeValue}`,
-      () => limiter.schedule(() => axiosInstance.get<TokenDataList>(fullUrl, {
+      () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<TokenDataList>(fullUrl, {
         headers: {
           'x-api-key': API_KEY,
         },
@@ -1511,7 +1523,13 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
   }
 }
 
-export async function fetchMagicEdenCollectionStats(contractAddress: string): Promise<string> {
+export async function fetchMagicEdenCollectionStats(contractAddress: string, priority?: number): Promise<string> {
+  // Check if collection is known to be unavailable on MagicEden
+  const unavailable = await isCollectionUnavailable('magiceden', contractAddress);
+  if (unavailable) {
+    return "0"; // Skip API call, already cached as unavailable
+  }
+
   const CACHE_TTL = 30; // 30 seconds cache
   const cacheKey = `magiceden:stats:${contractAddress}`;
   const lockKey = `stats:${contractAddress}`;
@@ -1552,30 +1570,41 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string): Pr
       offset: 0
     };
 
-    const { data } = await apiDedup(
-      `magiceden-stats-${contractAddress.toLowerCase()}`,
-      () => limiter.schedule(() =>
-        axiosInstance.get(`${BASE_URL}/magiceden/v4/assets`, {
-          params: queryParams,
-          headers: {
-            'x-api-key': API_KEY
-          }
-        })
-      ),
-      { category: 'MagicEden' }
-    );
-    const stats = data?.tokens[0]?.market?.floorAsk?.priceV2?.amount?.native || "0";
-    // Cache the result
-    if (stats !== undefined) {
-      try {
-        const redis = redisClient.getClient();
-        await redis.set(cacheKey, JSON.stringify(stats), 'EX', CACHE_TTL);
-      } catch (error) {
-        errorLog('Cache', `[MagicEden] Error writing stats to cache | contract=${contractAddress}`, error);
+    try {
+      const { data } = await apiDedup(
+        `magiceden-stats-${contractAddress.toLowerCase()}`,
+        () => limiter.schedule(priority !== undefined ? { priority } : {}, () =>
+          axiosInstance.get(`${BASE_URL}/magiceden/v4/assets`, {
+            params: queryParams,
+            headers: {
+              'x-api-key': API_KEY
+            }
+          })
+        ),
+        { category: 'MagicEden' }
+      );
+      const stats = data?.tokens[0]?.market?.floorAsk?.priceV2?.amount?.native || "0";
+      // Cache the result
+      if (stats !== undefined) {
+        try {
+          const redis = redisClient.getClient();
+          await redis.set(cacheKey, JSON.stringify(stats), 'EX', CACHE_TTL);
+        } catch (error) {
+          errorLog('Cache', `[MagicEden] Error writing stats to cache | contract=${contractAddress}`, error);
+        }
       }
-    }
 
-    return stats;
+      return stats;
+    } catch (error: any) {
+      const status = error?.response?.status;
+      if (status === 400 || status === 404) {
+        // Collection doesn't exist on MagicEden - cache this for 1 hour
+        await markCollectionUnavailable('magiceden', contractAddress, status);
+        return "0";
+      }
+      // Re-throw unexpected errors
+      throw error;
+    }
 
   });
   if (!result) {
@@ -1596,7 +1625,7 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string): Pr
   return result;
 }
 
-export async function fetchMagicEdenTokens(taskId: string, collectionId: string, limit?: number) {
+export async function fetchMagicEdenTokens(taskId: string, collectionId: string, limit?: number, priority?: number) {
   const CACHE_TTL = 60; // 1 minute cache for token listings
   const cacheKey = `magiceden:tokens:${collectionId}:${limit || 'all'}`;
   const lockKey = `tokens:${collectionId} `;
@@ -1647,7 +1676,7 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
       do {
         const { data } = await apiDedup(
           `magiceden-tokens-${collectionId}-${params.continuation || 'initial'}`,
-          () => limiter.schedule(() => axiosInstance.get<TokenResponseMagiceden>(
+          () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<TokenResponseMagiceden>(
             url,
             {
               headers: {

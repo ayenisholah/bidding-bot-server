@@ -29,6 +29,7 @@ services:
       AXIOM_TOKEN: "xaat-30ecb9c3-ce16-42f6-b824-ba8ef5c50e7c"
       API_KEY: ${API_KEY}
       RATE_LIMIT: ${RATE_LIMIT}
+      DEBUG: "true"
     depends_on:
       - mongodb
       - redis

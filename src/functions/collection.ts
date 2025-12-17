@@ -13,6 +13,7 @@ import { ICollectionDetails, ICollectionFee } from "../types/collection.types";
 import { setOpenseaMarketplaceFee } from "../utils/marketplace-fee-cache";
 import { errorLog, warnLog, debugLog } from "../utils/debug-file-logger";
 import { apiDedup } from "../utils/api-dedup";
+import { isCollectionUnavailable, markCollectionUnavailable } from "../utils/marketplace-availability";
 
 const collectionCache: { [key: string]: ICollectionDetails } = {};
 const MAX_CACHE_ITEMS = 1000;
@@ -89,7 +90,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation:
   return Promise.race([promise, timeoutPromise]);
 }
 
-export async function getCollectionDetails(slug: string, contractAddress?: string) {
+export async function getCollectionDetails(slug: string, contractAddress?: string, priority?: number) {
   if (collectionCache[slug]) {
     ensureOpenseaMarketplaceFee(collectionCache[slug]);
     return collectionCache[slug];
@@ -125,7 +126,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
         const { data: collection } = await withTimeout(
           apiDedup(
             `opensea-collection-details-${slug.toLowerCase()}`,
-            () => limiter.schedule(() => axiosInstance.get(
+            () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get(
               `${BASE_URL}/opensea/api/v2/collections/${slug}`,
               {
                 headers: {
@@ -142,43 +143,32 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
         let creator_fees: { [key: string]: number } = {};
         let enforceCreatorFee = false;
 
-        // DEBUG: Log raw fees from OpenSea API
-        debugLog('FeeDebug', `[${slug}] Raw API fees | fees=${JSON.stringify(collection?.fees)}`);
+        // FeeDebug logs removed - too noisy in production
 
         if (collection?.fees && Array.isArray(collection.fees)) {
           // Process creator fees (exclude OpenSea platform fee and optional fees)
           for (const fee of collection.fees) {
             const isOpenSeaFee = fee.recipient.toLowerCase() === OPENSEA_FEE_ADDRESS_LOWER;
 
-            // DEBUG: Log each fee being processed
-            debugLog('FeeDebug', `[${slug}] Processing fee | recipient=${fee.recipient} | fee=${fee.fee} | required=${fee.required} | isOpenSea=${isOpenSeaFee}`);
-
             // Skip OpenSea platform fee
             if (isOpenSeaFee) {
-              debugLog('FeeDebug', `[${slug}] SKIP: OpenSea platform fee`);
               continue;
             }
 
             // Skip optional creator fees (fulfiller can opt-in at fill time)
             if (!fee.required) {
-              debugLog('FeeDebug', `[${slug}] SKIP: Optional fee (required=false)`);
               continue;
             }
 
             creator_fees[fee.recipient] = fee.fee * 100;
             enforceCreatorFee = true;
-            debugLog('FeeDebug', `[${slug}] ADDED: Creator fee | recipient=${fee.recipient} | bps=${fee.fee * 100}`);
           }
         }
 
         // If no creator fees found, use default
         if (Object.keys(creator_fees).length === 0) {
           creator_fees = { null: 0 };
-          debugLog('FeeDebug', `[${slug}] No creator fees found, using default { null: 0 }`);
         }
-
-        // DEBUG: Log final creator_fees
-        debugLog('FeeDebug', `[${slug}] Final creator_fees | result=${JSON.stringify(creator_fees)} | enforceCreatorFee=${enforceCreatorFee}`);
 
         if (Object.keys(collectionCache).length >= MAX_CACHE_ITEMS) {
           delete collectionCache[Object.keys(collectionCache)[0]];
@@ -203,7 +193,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
         }
         return result;
       }),
-      30000, // 30 second timeout for entire operation
+      60000, // 60 second timeout for entire operation
       `Collection details fetch for ${slug}`
     );
 
@@ -278,7 +268,46 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
   }
 }
 
+// Minimal GraphQL query for fetching floor price - only returns required data
+const FloorPriceQuery = `
+  query FloorPriceQuery($collectionSlug: String!, $limit: Int, $sort: CollectionItemsSort!) {
+    collectionItems(collectionSlug: $collectionSlug, limit: $limit, sort: $sort) {
+      items {
+        bestListing {
+          pricePerItem {
+            token {
+              unit
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+interface FloorPriceResponse {
+  data: {
+    collectionItems: {
+      items: Array<{
+        bestListing: {
+          pricePerItem: {
+            token: {
+              unit: number;
+            };
+          };
+        } | null;
+      }>;
+    };
+  };
+}
+
 export async function getOpenseaFloor(collectionSlug: string) {
+  // Check if collection is known to be unavailable on OpenSea
+  const unavailable = await isCollectionUnavailable('opensea', collectionSlug);
+  if (unavailable) {
+    return 0; // Skip API call, already cached as unavailable
+  }
+
   const CACHE_TTL = 60; // 1 minute cache (updated from 30 seconds)
   const cacheKey = `opensea:floor:${collectionSlug}`;
   const lockKey = `floor:{opensea}:${collectionSlug}`;
@@ -305,15 +334,24 @@ export async function getOpenseaFloor(collectionSlug: string) {
     const MAX_RETRIES = 3;
     const BASE_DELAY = 500; // 500ms, 1000ms, 2000ms exponential backoff
 
-    const apiUrl = `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best?limit=1`;
+    const payload = {
+      operationName: "FloorPriceQuery",
+      query: FloorPriceQuery,
+      variables: {
+        collectionSlug,
+        limit: 1,
+        sort: { by: "PRICE", direction: "ASC" }
+      }
+    };
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
         const { data } = await apiDedup(
           `opensea-floor-${collectionSlug}`,
           () => openseaCircuitBreaker.execute(() =>
-            limiter.schedule({ priority: 0 }, () => axiosInstance.get<ListingsResponse>(
-              apiUrl,
+            limiter.schedule({ priority: 0 }, () => axiosInstance.post<FloorPriceResponse>(
+              `${BASE_URL}/opensea/graphql`,
+              payload,
               {
                 headers: { 'x-api-key': API_KEY }
               }
@@ -322,8 +360,8 @@ export async function getOpenseaFloor(collectionSlug: string) {
           { category: 'Collection' }
         );
 
-        // Check if listings exist and has item
-        const floor_price = Number(data?.listings[0]?.price?.current?.value) / 1e18 || 0;
+        // Extract floor price from GraphQL response
+        const floor_price = data?.data?.collectionItems?.items?.[0]?.bestListing?.pricePerItem?.token?.unit || 0;
 
         // If floor is 0 and we have retries left, retry (likely temporary API issue)
         if (floor_price === 0 && attempt < MAX_RETRIES) {
@@ -342,12 +380,8 @@ export async function getOpenseaFloor(collectionSlug: string) {
       } catch (error: any) {
         // Handle 404 errors specifically - collection might be delisted or renamed (no retry)
         if (error?.response?.status === 404) {
-          warnLog('API', `[collection.ts] Collection not found on OpenSea | slug=${collectionSlug} | status=404`);
-
-          // Cache the zero floor price for a short time to avoid repeated 404s
-          if (getRedis()) {
-            await getRedis().set(cacheKey, JSON.stringify(0), 'EX', 300); // Cache for 5 minutes
-          }
+          // Collection doesn't exist on OpenSea - cache this for 1 hour
+          await markCollectionUnavailable('opensea', collectionSlug, 404);
           return 0; // Return 0 floor price for non-existent collections
         }
 
@@ -624,10 +658,10 @@ export async function getAllFloorPrices(collectionSlug: string): Promise<{
   };
 }
 
-export async function getOpenseaCollectionStats(collectionSlug: string) {
+export async function getOpenseaCollectionStats(collectionSlug: string, priority?: number) {
   const { data } = await apiDedup(
     `opensea-stats-${collectionSlug.toLowerCase()}`,
-    () => limiter.schedule(() => axiosInstance.get(
+    () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get(
       `${BASE_URL}/opensea/api/v2/collections/${collectionSlug}/stats`,
       {
         headers: { 'x-api-key': API_KEY }
@@ -645,7 +679,8 @@ export async function getOpenseaCollectionStats(collectionSlug: string) {
 export async function getCollectionEvents(
   collectionSlug: string,
   eventTypes: string[] = ['all', 'cancel', 'listing', 'offer', 'order', 'sale', 'transfer'],
-  limit: number = 50
+  limit: number = 50,
+  priority?: number
 ) {
   const cacheKey = `collectionEvents:${collectionSlug}:${eventTypes.join(',')}}:${limit}`;
   const cachedData = getRedis() ? await getRedis().get(cacheKey) : null;
@@ -660,7 +695,7 @@ export async function getCollectionEvents(
 
     const { data } = await apiDedup(
       `opensea-events-${collectionSlug}-${eventTypes.sort().join(',')}-${limit}`,
-      () => limiter.schedule(() => axiosInstance.get<CollectionEventResponse>(
+      () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<CollectionEventResponse>(
         `${BASE_URL}/opensea/api/v2/events/collection/${collectionSlug}`,
         {
           params: params,
@@ -692,7 +727,8 @@ export async function fetchOpenSeaCollectionItems(
   allTokenIds: string[] = [],
   cursor?: string,
   taskId?: string,
-  expectedCount?: number
+  expectedCount?: number,
+  priority?: number
 ): Promise<string[]> {
   const CACHE_TTL = 3600; // 1 hour cache
   const cacheKey = `opensea:collection-items:${hashData(variables)}`;
@@ -722,7 +758,7 @@ export async function fetchOpenSeaCollectionItems(
         }
 
         // Fetch data
-        return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount);
+        return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount, priority);
       });
 
       if (result) {
@@ -742,7 +778,7 @@ export async function fetchOpenSeaCollectionItems(
       throw new Error('Failed to acquire lock for collection items fetch');
     } else {
       // For paginated requests, fetch directly without lock
-      return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount);
+      return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount, priority);
     }
   } catch (error) {
     errorLog('Collection', `[collection.ts] Error fetching OpenSea collection items | slug=${variables.collectionSlug}`, error);
@@ -757,7 +793,8 @@ async function fetchCollectionItemsRecursive(
   cursor?: string,
   pageNumber: number = 1,
   taskId?: string,
-  expectedCount?: number
+  expectedCount?: number,
+  priority?: number
 ): Promise<string[]> {
   const queryVariables = {
     ...variables,
@@ -771,8 +808,8 @@ async function fetchCollectionItemsRecursive(
 
   try {
     const { data } = await apiDedup(
-      `opensea-items-${variables.collectionSlug}-${cursor || 'initial'}`,
-      () => limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
+      `opensea-items-${variables.collectionSlug}-${hashData(variables.filter || {})}-${cursor || 'initial'}`,
+      () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
         headers: {
           "x-api-key": API_KEY
         },
@@ -795,6 +832,9 @@ async function fetchCollectionItemsRecursive(
 
     // Add current page's token IDs to our accumulated list
     const updatedTokenIds = [...allTokenIds, ...tokenIds];
+
+    // Log pagination progress with returned token count
+    debugLog('TokenFetch', `[OS] ${variables.collectionSlug} | Page ${pageNumber} | returned=${tokenIds.length} | total=${updatedTokenIds.length}${expectedCount ? ` | expected=${expectedCount}` : ''}`);
 
     // Update processing percentage if taskId is provided
     if (taskId) {
@@ -826,7 +866,7 @@ async function fetchCollectionItemsRecursive(
     const nextCursor = data.data.collectionItems.nextPageCursor;
 
     if (nextCursor) {
-      return fetchCollectionItemsRecursive(variables, updatedTokenIds, nextCursor, pageNumber + 1, taskId, expectedCount);
+      return fetchCollectionItemsRecursive(variables, updatedTokenIds, nextCursor, pageNumber + 1, taskId, expectedCount, priority);
     }
 
     // Reset processing percentage when done
@@ -843,9 +883,21 @@ async function fetchCollectionItemsRecursive(
 
     const uniqueTokenIds = [...new Set(updatedTokenIds)];
 
+    // Log final token summary
+    const duplicateCount = updatedTokenIds.length - uniqueTokenIds.length;
+    debugLog('TokenFetch', `[OS] ${variables.collectionSlug} | COMPLETE | unique=${uniqueTokenIds.length} | duplicates=${duplicateCount} | pages=${pageNumber}${taskId ? ` | taskId=${taskId}` : ''}`);
+    if (duplicateCount > 0) {
+      // Find which tokens were duplicates (only log first 20 to prevent flooding)
+      const tokenCounts = new Map<string, number>();
+      updatedTokenIds.forEach(t => tokenCounts.set(t, (tokenCounts.get(t) || 0) + 1));
+      const dups = [...tokenCounts.entries()].filter(([_, c]) => c > 1).map(([t, c]) => `${t}(${c})`);
+      debugLog('TokenFetch', `[OS] ${variables.collectionSlug} | DUPLICATES: ${dups.slice(0, 20).join(', ')}${dups.length > 20 ? ` ...+${dups.length - 20} more` : ''}`);
+    }
+
     return uniqueTokenIds;
   } catch (error) {
     // Return what we have so far instead of failing completely
+    errorLog('Collection', `[collection.ts] Error fetching OpenSea collection tokens, returning partial results | count=${allTokenIds.length}`, error);
     if (allTokenIds.length > 0) {
       return [...new Set(allTokenIds)];
     }
@@ -1035,7 +1087,8 @@ interface TraitWithFloorPrice {
 
 export async function fetchOpenseaTraitFloors(
   slug: string,
-  traits: Array<{ traitType: string; values: string[] }>
+  traits: Array<{ traitType: string; values: string[] }>,
+  priority?: number
 ): Promise<TraitWithFloorPrice[]> {
   const CACHE_TTL = 60; // 1 minute cache
   const traitHash = hashData(traits);
@@ -1131,7 +1184,7 @@ export async function fetchOpenseaTraitFloors(
 
       const { data } = await apiDedup(
         `opensea-trait-floors-${slug}-${hashData(traits)}`,
-        () => limiter.schedule(() =>
+        () => limiter.schedule(priority !== undefined ? { priority } : {}, () =>
           axiosInstance.post(`${BASE_URL}/opensea/graphql`, payload, {
             headers: {
               "x-api-key": API_KEY
@@ -1295,65 +1348,6 @@ interface Criteria {
   encoded_token_ids: null;
 }
 
-interface Price {
-  current: {
-    currency: string;
-    decimals: number;
-    value: string;
-  }
-}
-
-interface OfferItem {
-  itemType: number;
-  token: string;
-  identifierOrCriteria: string;
-  startAmount: string;
-  endAmount: string;
-}
-
-interface ConsiderationItem {
-  itemType: number;
-  token: string;
-  identifierOrCriteria: string;
-  startAmount: string;
-  endAmount: string;
-  recipient: string;
-}
-
-interface ProtocolParameters {
-  offerer: string;
-  offer: OfferItem[];
-  consideration: ConsiderationItem[];
-  startTime: string;
-  endTime: string;
-  orderType: number;
-  zone: string;
-  zoneHash: string;
-  salt: string;
-  conduitKey: string;
-  totalOriginalConsiderationItems: number;
-  counter: string | number;
-}
-
-interface ProtocolData {
-  parameters: ProtocolParameters;
-  signature: string | null;
-}
-
-interface Listing {
-  order_hash: string;
-  chain: string;
-  type: string;
-  price: Price;
-  protocol_data: ProtocolData;
-  protocol_address: string;
-}
-
-interface ListingsResponse {
-  listings: Listing[];
-  next: string;
-}
-
 // GraphQL response types for collection token query
 interface CollectionTokenItem {
   tokenId: string;
@@ -1378,7 +1372,7 @@ interface CollectionTokensQueryResponse {
  * @param collectionSlug - The OpenSea collection slug
  * @returns Record mapping token IDs to their contract addresses
  */
-export async function getCollectionTokenContractMap(collectionSlug: string): Promise<Record<string, string>> {
+export async function getCollectionTokenContractMap(collectionSlug: string, priority?: number): Promise<Record<string, string>> {
   const map: Record<string, string> = {};
 
   try {
@@ -1428,7 +1422,7 @@ export async function getCollectionTokenContractMap(collectionSlug: string): Pro
 
       const response: AxiosResponse<CollectionTokensQueryResponse> = await apiDedup(
         `opensea-token-contracts-${collectionSlug}-${cursor || 'initial'}`,
-        () => limiter.schedule(() =>
+        () => limiter.schedule(priority !== undefined ? { priority } : {}, () =>
           axiosInstance.post<CollectionTokensQueryResponse>(
             `${BASE_URL}/opensea/graphql`,
             payload,

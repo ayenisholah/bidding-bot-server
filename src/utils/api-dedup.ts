@@ -9,7 +9,7 @@
  * for static job IDs while still preventing duplicate API calls.
  */
 
-import { debugLog } from './debug-file-logger';
+import { debugLog, warnLog } from './debug-file-logger';
 
 // Track pending requests globally
 const pendingRequests = new Map<string, Promise<any>>();
@@ -42,13 +42,13 @@ export async function apiDedup<T>(
   key: string,
   fetchFn: () => Promise<T>,
   options?: {
-    /** Log debug messages (default: true) */
+    /** Log debug messages (default: false - disable to reduce log noise) */
     debug?: boolean;
     /** Category for debug logs (default: 'API') */
     category?: string;
   }
 ): Promise<T> {
-  const { debug = true, category = 'API' } = options || {};
+  const { debug = false, category = 'API' } = options || {};
 
   stats.totalRequests++;
 
@@ -86,7 +86,7 @@ export async function apiDedup<T>(
       pendingRequests.delete(key);
       stats.activeRequests--;
       if (debug) {
-        debugLog(category, `[Dedup] ERROR | key=${key} | elapsed=${elapsed}ms | error=${error?.message || 'unknown'}`);
+        warnLog(category, `[Dedup] ERROR | key=${key} | elapsed=${elapsed}ms | error=${error?.message || 'unknown'}`);
       }
       throw error;
     });

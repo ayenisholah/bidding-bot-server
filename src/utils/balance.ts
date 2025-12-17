@@ -4,6 +4,7 @@ import redisClient from "./redis";
 import { RED, RESET } from "..";
 import { logger, ErrorCategory } from "./logger";
 import { ChainValue, DEFAULT_CHAIN, getProviderForChain, normalizeChainValue } from "./chains";
+import { debugLog } from "./debug-file-logger";
 
 const getRedis = () => redisClient.getClient()
 
@@ -123,7 +124,6 @@ export async function fetchERC20Balance(walletAddress: string, tokenAddress: str
       console.warn('Failed to get stale cache:', error);
     }
     if (staleBalance) {
-      // console.log(`Using stale cached balance for ${walletAddress}/${tokenAddress}: ${staleBalance}`);
       return Number(staleBalance);
     }
 
@@ -146,15 +146,12 @@ export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress
   const staleCacheKey = `{erc20_balance_stale:${walletAddress}:${resolvedChain}}:${tokenAddress}`;
   const startTime = Date.now();
 
-  // console.log(`[fetchERC20BalanceFresh] Starting balance fetch for ${walletAddress}/${tokenAddress}`);
-
   // First try to get cached value
   try {
     const redis = getRedis();
     if (redis) {
       const cachedBalance = await redis.get(cacheKey);
       if (cachedBalance) {
-        // console.log(`[fetchERC20BalanceFresh] Using cached balance: ${cachedBalance}`);
         return Number(cachedBalance);
       }
     }
@@ -206,7 +203,6 @@ export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress
                   console.warn('Failed to cache balance:', error);
                 }
 
-                // console.log(`[fetchERC20BalanceFresh] Fresh balance for ${walletAddress}/${tokenAddress}: ${formattedBalance} (took ${elapsed}ms)`);
                 return formattedBalance;
               } catch (error: any) {
                 lastError = error;
@@ -252,7 +248,6 @@ export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress
       if (redis) {
         const staleBalance = await redis.get(staleCacheKey);
         if (staleBalance) {
-          // console.log(`[fetchERC20BalanceFresh] Using stale cached balance: ${staleBalance}`);
           return Number(staleBalance);
         }
       }
@@ -279,6 +274,7 @@ export async function invalidateBalanceCache(walletAddress: string, tokenAddress
     if (redis) {
       await redis.del(cacheKey);
       await redis.del(staleCacheKey);
+      debugLog('Balance', `Invalidated cache | wallet=${walletAddress.slice(0, 10)}... | token=${tokenAddress.slice(0, 10)}... | chain=${resolvedChain}`);
     }
   } catch (error) {
     console.warn('Failed to invalidate balance cache:', error);

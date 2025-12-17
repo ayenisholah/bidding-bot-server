@@ -16,8 +16,14 @@ import { blurRateLimiter } from "../../utils/blur-rate-limiter";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
 import { apiDedup } from "../../utils/api-dedup";
+import { isCollectionUnavailable, markCollectionUnavailable } from "../../utils/marketplace-availability";
+import { BoundedCache } from "../../utils/bounded-cache";
 
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
+
+// Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
+// This prevents log flooding when multiple parallel jobs hit the same balance check
+const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000);
 
 config()
 const BLUR_API_URL = `${BASE_URL}/blur`;
@@ -37,7 +43,7 @@ const authInProgress = new Map<string, Promise<string | undefined>>();
 
 // Authentication retry queue for failed attempts
 const authRetryQueue = new Map<string, { retryCount: number; nextRetryTime: number }>();
-const AUTH_RETRY_DELAY = 30000; // 30 seconds between retry attempts
+const AUTH_RETRY_DELAY = 60000; // 60 seconds between retry attempts
 const MAX_AUTH_RETRIES = 3;
 
 // Cache for transfer-restricted collections (TTL: 24 hours)
@@ -154,7 +160,8 @@ export async function bidOnBlur(
   slug: string,
   expiry = 900,
   traits?: string,
-  batchInfo?: { batchNumber: number; totalBatches: number; traitIndex: number; totalTraits: number; batchSize?: number }
+  batchInfo?: { batchNumber: number; totalBatches: number; traitIndex: number; totalTraits: number; batchSize?: number },
+  source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
   try {
     // === ENHANCED BID VALIDATION ===
@@ -191,7 +198,11 @@ export async function bidOnBlur(
         wallet_address,
         slug
       );
-      errorLog('Balance', `[Blur] Insufficient BETH balance | wallet=${wallet_address.slice(0, 10)}... | slug=${slug} | bid=${offerPriceEth} | available=${bethBalance}`, error);
+      // Only log once per wallet/collection combo within 5 seconds to prevent log flooding
+      const dedupeKey = `blur-${wallet_address}-${slug}`;
+      if (insufficientBalanceLogCache.addIfNotExists(dedupeKey, Date.now())) {
+        errorLog('Balance', `[Blur] Insufficient BETH balance | wallet=${wallet_address.slice(0, 10)}... | slug=${slug} | bid=${offerPriceEth} | available=${bethBalance}`, error);
+      }
       throw error;
     }
 
@@ -274,8 +285,9 @@ export async function bidOnBlur(
         }
       ]
     }
-    await submitBidToBlur(taskId, bidCount, offer_price, BLUR_API_URL, accessToken, wallet_address, submitPayload, slug, cancelPayload, expiry, traits);
+    await submitBidToBlur(taskId, bidCount, offer_price, BLUR_API_URL, accessToken, wallet_address, submitPayload, slug, cancelPayload, expiry, traits, source);
   } catch (error) {
+    errorLog('Blur', `placeBlurBid failed | taskId=${taskId} | slug=${slug}`, error);
     throw error;
   }
 };
@@ -602,7 +614,7 @@ async function formatBidOnBlur(
           },
           data: JSON.stringify(buildPayload),
           signal: controller.signal,
-          timeout: 30000,
+          timeout: 60000,
           "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
         });
       });
@@ -697,7 +709,8 @@ async function submitBidToBlur(
   slug: string,
   cancelPayload: any,
   expiry = 900,
-  traits?: string
+  traits?: string,
+  source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
   const controller = new AbortController();
   addActiveRequest(taskId, controller);
@@ -771,7 +784,7 @@ async function submitBidToBlur(
               },
               data: JSON.stringify(submitPayload),
               signal: controller.signal,
-              timeout: 30000,
+              timeout: 60000,
               "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
             });
           });
@@ -857,6 +870,11 @@ async function submitBidToBlur(
           });
         })
         trackBidRate("blur", taskId)
+
+        // Log successful bid
+        const sourceTag = source === 'counterbid' ? '-CB' : '';
+        const bidType = traits ? 'Trait' : 'Coll';
+        debugLog('BidFlow', `[Blur-${bidType}${sourceTag}] ${slug} | SUCCESS | identifier=${identifier} | price=${offerPriceEth} BETH`, { taskId, marketplace: 'blur', identifier });
 
         // Mark request as successful
         requestSuccessful = true;
@@ -996,14 +1014,14 @@ export async function cancelBlurBid(data: BlurCancelPayload) {
   }
 }
 
-export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | 'COLLECTION', criteriaValue: Record<string, string>) {
+export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | 'COLLECTION', criteriaValue: Record<string, string>, priority?: number) {
   const url = `${BASE_URL}/blur/v1/collections/${collection}/executable-bids`;
 
   if (criteriaType === 'TRAIT') {
     const tasks = [
       () => apiDedup(
         `blur-bids-trait-${collection}-${JSON.stringify(criteriaValue)}`,
-        () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+        () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<BlurBidResponse>(url, {
           params: {
             filters: JSON.stringify({
               criteria: {
@@ -1022,7 +1040,7 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
       ),
       () => apiDedup(
         `blur-bids-collection-${collection}`,
-        () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+        () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<BlurBidResponse>(url, {
           params: {
             filters: JSON.stringify({
               criteria: {
@@ -1062,7 +1080,7 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
   } else {
     const { data } = await apiDedup(
       `blur-bids-collection-${collection}`,
-      () => limiter.schedule(() => axiosInstance.get<BlurBidResponse>(url, {
+      () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<BlurBidResponse>(url, {
         params: {
           filters: JSON.stringify({
             criteria: {
@@ -1084,7 +1102,13 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
 
 }
 
-export async function fetchBlurCollectionStats(slug: string) {
+export async function fetchBlurCollectionStats(slug: string, priority?: number) {
+  // Check if collection is known to be unavailable on Blur
+  const unavailable = await isCollectionUnavailable('blur', slug);
+  if (unavailable) {
+    return 0; // Skip API call, already cached as unavailable
+  }
+
   const CACHE_TTL = 30; // 30 seconds cache
   const cacheKey = `blur:stats:${slug}`;
   const lockKey = `stats:${slug}`;
@@ -1117,7 +1141,7 @@ export async function fetchBlurCollectionStats(slug: string) {
       const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens`;
       const { data } = await apiDedup(
         `blur-stats-${slug}`,
-        () => limiter.schedule({ priority: 0 }, () => axiosInstance.get<BlurTokensResponse>(url, {
+        () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<BlurTokensResponse>(url, {
           headers: {
             'content-type': 'application/json',
             'x-api-key': API_KEY,
@@ -1135,7 +1159,14 @@ export async function fetchBlurCollectionStats(slug: string) {
       }
       return floor_price || 0;
     } catch (error: any) {
-      errorLog('Collection', `[Blur] Failed to fetch collection stats | slug=${slug} | status=${error?.response?.status}`, error);
+      const status = error?.response?.status;
+      if (status === 400 || status === 404) {
+        // Collection doesn't exist on Blur - cache this for 1 hour
+        await markCollectionUnavailable('blur', slug, status);
+        return 0;
+      }
+      // Only log unexpected errors
+      errorLog('Collection', `[Blur] API error | slug=${slug} | status=${status}`, error);
       return 0;
     }
 
@@ -1147,7 +1178,7 @@ export async function fetchBlurCollectionStats(slug: string) {
   return result;
 }
 
-export async function fetchBlurTraitFloor(slug: string, trait: { type: string; value: string; }) {
+export async function fetchBlurTraitFloor(slug: string, trait: { type: string; value: string; }, priority?: number) {
   try {
     const filters = {
       traits: [{
@@ -1161,7 +1192,7 @@ export async function fetchBlurTraitFloor(slug: string, trait: { type: string; v
     const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens?filters=${encodedFilters}`;
     const { data } = await apiDedup(
       `blur-trait-floor-${slug}-${trait.type}-${trait.value}`,
-      () => limiter.schedule(() =>
+      () => limiter.schedule(priority !== undefined ? { priority } : {}, () =>
         axiosInstance.get<BlurTokensResponse>(url, {
           headers: {
             'x-api-key': API_KEY,

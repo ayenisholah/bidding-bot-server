@@ -3,6 +3,7 @@ import { ERC20_MIN_ABI } from '../constants';
 import { getRedisConnection } from './redis';
 import { ChainValue, DEFAULT_CHAIN, getProviderForChain, normalizeChainValue } from './chains';
 import { logger, ErrorCategory } from './logger';
+import { warnLog } from './debug-file-logger';
 
 interface ApprovalCacheEntry {
   approved: boolean;
@@ -54,7 +55,8 @@ class ApprovalCache {
         return BigInt(entry.allowance) >= BigInt(requiredAmount);
       }
     } catch (error) {
-      console.error('[ApprovalCache] Redis error:', error);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      warnLog('Cache', `ApprovalCache: Redis read error | key=${key} | error=${errMsg}`);
     }
 
     // Cache miss - check on-chain
@@ -91,7 +93,8 @@ class ApprovalCache {
 
       return approved;
     } catch (error) {
-      console.error('[ApprovalCache] On-chain check error:', error);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      warnLog('Cache', `ApprovalCache: On-chain check error | key=${key} | error=${errMsg}`);
       return false;
     }
   }
@@ -118,7 +121,8 @@ class ApprovalCache {
       const redisKey = this.REDIS_PREFIX + key;
       await redis.setex(redisKey, this.REDIS_TTL, JSON.stringify(entry));
     } catch (error) {
-      console.error('[ApprovalCache] Failed to update Redis:', error);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      warnLog('Cache', `ApprovalCache: Failed to update Redis | key=${key} | error=${errMsg}`);
     }
   }
 
@@ -138,7 +142,8 @@ class ApprovalCache {
       const redisKey = this.REDIS_PREFIX + key;
       await redis.del(redisKey);
     } catch (error) {
-      console.error('[ApprovalCache] Failed to invalidate Redis cache:', error);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      warnLog('Cache', `ApprovalCache: Failed to invalidate Redis | key=${key} | error=${errMsg}`);
     }
   }
 
@@ -155,7 +160,8 @@ class ApprovalCache {
         await redis.del(...keys);
       }
     } catch (error) {
-      console.error('[ApprovalCache] Failed to clear Redis cache:', error);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      warnLog('Cache', `ApprovalCache: Failed to clear Redis cache | error=${errMsg}`);
     }
   }
 

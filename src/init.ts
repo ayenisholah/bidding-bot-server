@@ -30,8 +30,8 @@ const retryConfig: IAxiosRetryConfig = {
 
       // Blur endpoints need extra time due to rate limiting
       if (url.includes('/blur/')) {
-        const baseDelay = 30000; // 30 seconds for Blur
-        const progressiveDelay = baseDelay + (retryCount - 1) * 10000; // +10s each retry (30s, 40s, 50s)
+        const baseDelay = 60000; // 60 seconds for Blur
+        const progressiveDelay = baseDelay + (retryCount - 1) * 10000; // +10s each retry (60s, 70s, 80s)
         const jitter = 1000 + Math.random() * 2000; // 1-3s jitter
         // console.log(`[Blur 408] Retrying Blur endpoint after 408 (attempt ${retryCount}), waiting ${progressiveDelay + jitter}ms`);
         return progressiveDelay + jitter;
@@ -47,7 +47,7 @@ const retryConfig: IAxiosRetryConfig = {
         return exponentialDelay + jitter;
       } else {
         // Progressive delay for other 408 errors
-        const delays = [20000, 30000, 40000]; // 20s, 30s, 40s
+        const delays = [40000, 60000, 80000]; // 40s, 60s, 80s
         const delay = delays[Math.min(retryCount - 1, delays.length - 1)];
         const jitter = 200 + Math.random() * 800; // 200-1000ms jitter
         // console.log(`Retrying after 408 error (attempt ${retryCount}), waiting ${delay + jitter}ms`);
@@ -61,26 +61,37 @@ const retryConfig: IAxiosRetryConfig = {
       if (retryAfter) {
         return parseInt(retryAfter) * 1000;
       }
-      return Math.min(Math.pow(2, retryCount) * 1000, 10000); // More aggressive backoff, max 10s
+      // Exponential backoff: 2s, 4s, 8s (max 10s) + jitter
+      const baseDelay = Math.min(Math.pow(2, retryCount) * 1000, 10000);
+      const jitter = 100 + Math.random() * 400; // 100-500ms jitter
+      return baseDelay + jitter;
     }
 
-    // Other 4xx/5xx errors - quick retry
-    if (error.response && (error.response.status >= 400 && error.response.status < 600)) {
-      return Math.min(retryCount * 500, 2000); // Max 2s
+    // Cloudflare origin errors - need longer delays
+    if (error.response?.status === 520) {
+      // Exponential backoff: 5s, 15s, 30s + jitter
+      const baseDelay = Math.min(5000 * Math.pow(2, retryCount - 1), 30000);
+      const jitter = 500 + Math.random() * 1000; // 500-1500ms jitter
+      return baseDelay + jitter;
+    }
+
+    // Gateway errors (502 Bad Gateway, 504 Gateway Timeout) - exponential backoff
+    if (error.response?.status === 502 || error.response?.status === 504) {
+      // Exponential backoff: 3s, 6s, 12s (max 15s) + jitter
+      const baseDelay = Math.min(3000 * Math.pow(2, retryCount - 1), 15000);
+      const jitter = 200 + Math.random() * 600; // 200-800ms jitter
+      return baseDelay + jitter;
     }
 
     return axiosRetry.exponentialDelay(retryCount);
   },
   retryCondition: async (error: any) => {
-    // Retry on network errors and 5xx status codes
     if (!error.response) {
-      // Network error (no response)
-      return true;
+      return true; // Network errors
     }
-
-    // Retry on server errors (5xx) and specific client errors
     const status = error.response.status;
-    return status >= 500 || status === 429 || status === 430 || status === 408;
+    // Retry: rate limits (429/430), timeout (408), Cloudflare (520), gateway errors (502/504)
+    return status === 429 || status === 430 || status === 408 || status === 520 || status === 502 || status === 504;
   },
   onRetry: (_retryCount, _error, _requestConfig) => {
     // Only log retries in development mode or for specific debugging
@@ -91,7 +102,7 @@ const retryConfig: IAxiosRetryConfig = {
 };
 
 async function initialize(rateLimit: number) {
-  axiosInstance = axios.create({ timeout: 30000 });
+  axiosInstance = axios.create({ timeout: 60000 });
 
   limiter = new Bottleneck({
     minTime: 1000 / rateLimit, // Minimum time between job starts
@@ -265,6 +276,14 @@ export function scheduleWithTaskValidation(fn: () => PromiseLike<any>, taskId: s
   if (isTaskBlacklisted(taskId)) {
     // console.log(`Blocked job execution for stopped task: ${taskId}`);
     return Promise.reject(new Error(`Task ${taskId} is stopped`));
+  }
+  return limiter.schedule(fn);
+}
+
+// Schedule with priority support - lower number = higher priority (0 = highest)
+export function scheduleWithPriority<T>(fn: () => PromiseLike<T>, priority?: number): Promise<T> {
+  if (priority !== undefined) {
+    return limiter.schedule({ priority }, fn);
   }
   return limiter.schedule(fn);
 }

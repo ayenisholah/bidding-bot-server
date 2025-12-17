@@ -46,7 +46,7 @@ export async function createListing(data: IListing) {
         const freshListing = await Promise.race([
           Listing.findById(data._id),
           new Promise<any>((_, reject) =>
-            setTimeout(() => reject(new Error('Database query timeout')), 30000)
+            setTimeout(() => reject(new Error('Database query timeout')), 60000)
           )
         ]);
 

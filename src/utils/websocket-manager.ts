@@ -4,6 +4,56 @@ import { warnLog, errorLog, debugLog, infoLog } from './debug-file-logger';
 
 const DEBUG = process.env.DEBUG === 'true';
 
+/**
+ * Circular buffer for timestamp tracking
+ * Avoids array.filter() on every message which creates GC pressure
+ */
+class TimestampCircularBuffer {
+  private buffer: number[];
+  private head = 0;
+  private size = 0;
+  private readonly capacity: number;
+  private readonly windowMs: number;
+
+  constructor(capacity: number, windowMs: number) {
+    this.capacity = capacity;
+    this.windowMs = windowMs;
+    this.buffer = new Array(capacity).fill(0);
+  }
+
+  push(timestamp: number): void {
+    this.buffer[this.head] = timestamp;
+    this.head = (this.head + 1) % this.capacity;
+    if (this.size < this.capacity) {
+      this.size++;
+    }
+  }
+
+  /**
+   * Count timestamps within the time window
+   * O(size) but avoids creating new arrays
+   */
+  countWithinWindow(now: number = Date.now()): number {
+    const threshold = now - this.windowMs;
+    let count = 0;
+    for (let i = 0; i < this.size; i++) {
+      const idx = (this.head - 1 - i + this.capacity) % this.capacity;
+      if (this.buffer[idx] > threshold) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * Get message rate per minute within window
+   */
+  getMessageRate(): number {
+    const windowMinutes = this.windowMs / 60000;
+    return this.countWithinWindow() / windowMinutes;
+  }
+}
+
 export interface WebSocketManagerConfig {
   url: string;
   clientId: string;
@@ -70,7 +120,8 @@ class WebSocketManager extends EventEmitter {
   private lastPongReceived = 0;
   private missedPongs = 0;
   private latencies: number[] = [];
-  private messageTimestamps: number[] = [];
+  // Circular buffer for message timestamps (5 minute window, max 10000 messages)
+  private messageTimestamps = new TimestampCircularBuffer(10000, 300000);
   private lastMessageReceived = 0;
   private connectionStaleThreshold = 3600000; // 60 minutes without any messages - increased from 10min for low-activity collections
 
@@ -85,7 +136,17 @@ class WebSocketManager extends EventEmitter {
 
   // State persistence for listings (per CLIENT_CONNECTION_GUIDE.md)
   private persistentListingSubscriptions: Map<string, SubscriptionInfo> = new Map();
+  // State persistence for bidding subscriptions (to survive reconnects)
+  private persistentBiddingSubscriptions: Map<string, SubscriptionInfo> = new Map();
   private subscriptionStateFile = '.listing-subscriptions.json';
+
+  // ACK-based reliable delivery tracking
+  private receivedSeqNums: number[] = [];
+  private lastAckTime: number = Date.now();
+  private readonly ACK_BATCH_INTERVAL = 100; // Send ACK every 100ms
+
+  // Message loss detection counter - counts OPENSEA BID_CREATED received
+  private openseaBidCreatedReceived = 0;
 
   constructor(config: WebSocketManagerConfig) {
     super();
@@ -119,12 +180,10 @@ class WebSocketManager extends EventEmitter {
         this.ws = null;
       }
 
-// console.log(`Attempting WebSocket connection to: ${this.config.url}`);
       this.ws = new WebSocket(this.config.url);
 
       // Connection timeout
       const connectionTimeout = setTimeout(() => {
-// console.log(`WebSocket connection timeout after ${this.config.connectionTimeout}ms`);
         try {
           this.isReconnecting = false;
           if (this.ws) {
@@ -214,7 +273,17 @@ class WebSocketManager extends EventEmitter {
     this.missedPongs = 0;
 
     // Log connection established with current state
-    infoLog('WebSocket', `[CONNECTED] WebSocket connection established | connectionId=${connectionId} | totalConnections=${this.metrics.totalConnections} | activeSubscriptions=${this.activeSubscriptions.size} | persistentListings=${this.persistentListingSubscriptions.size} | activeSlugs=${this.getActiveSlugsList()}`);
+    infoLog('WebSocket', `[CONNECTED] WebSocket connection established | connectionId=${connectionId} | totalConnections=${this.metrics.totalConnections} | activeSubscriptions=${this.activeSubscriptions.size} | persistentListings=${this.persistentListingSubscriptions.size}`);
+
+    // Enable TCP keepalive for faster dead connection detection
+    try {
+      const socket = (this.ws as any)?._socket;
+      if (socket && typeof socket.setKeepAlive === 'function') {
+        socket.setKeepAlive(true, 10000); // 10 second keepalive
+      }
+    } catch {
+      // TCP keepalive not available
+    }
 
     // Send initial ping immediately after connection (per CLIENT_PROTOCOL.md)
     this.sendPing();
@@ -230,6 +299,9 @@ class WebSocketManager extends EventEmitter {
 
     // Start application-level bid activity watchdog
     this.startBidActivityWatchdog();
+
+    // Start ACK timer for reliable delivery
+    this.startAckTimer();
 
     // Process queued messages
     this.processMessageQueue();
@@ -252,7 +324,7 @@ class WebSocketManager extends EventEmitter {
       // Check for missed pongs
       if (this.lastPingSent && this.lastPingSent > this.lastPongReceived) {
         this.missedPongs++;
-        if (this.missedPongs >= 6) { // Increased from 3 to 6 for better network tolerance
+        if (this.missedPongs >= 3) { // Reduced from 6 to 3 for faster dead connection detection
 
           try {
             this.ws?.close();
@@ -292,17 +364,16 @@ class WebSocketManager extends EventEmitter {
       this.clearTimeout('pongTimeout');
       this.setTimeout('pongTimeout', () => {
         this.missedPongs++;
-// console.log(`Pong timeout - missed ${this.missedPongs}/3 pongs`);
 
-        if (this.missedPongs >= 6) { // Increased from 3 to 6 for better network tolerance
-// console.log('Max missed pongs reached, forcing reconnection');
+        if (this.missedPongs >= 3) { // Reduced from 6 to 3 for faster dead connection detection
+          warnLog('WebSocket', 'Max missed pongs reached, forcing reconnection');
           try {
             this.ws?.close();
           } catch {
             warnLog('WebSocket', 'Error closing WebSocket after max missed pongs reached');
           }
         }
-      }, 15000); // 15 second pong timeout (increased from 5s for better network tolerance)
+      }, 10000); // 10 second pong timeout (reduced from 15s for faster detection)
 
     }, this.config.heartbeatInterval);
   }
@@ -453,7 +524,7 @@ class WebSocketManager extends EventEmitter {
 
   private async syncSubscriptions(): Promise<void> {
     try {
-      infoLog('WebSocket', `[SYNC] Starting subscription sync after reconnection | persistentListings=${this.persistentListingSubscriptions.size} | activeBeforeClear=${this.activeSubscriptions.size}`);
+      infoLog('WebSocket', `[SYNC] Starting subscription sync after reconnection | persistentListings=${this.persistentListingSubscriptions.size} | persistentBidding=${this.persistentBiddingSubscriptions.size} | activeBeforeClear=${this.activeSubscriptions.size}`);
 
       // First, request current subscriptions from server to verify state
       this.requestSubscriptions();
@@ -474,13 +545,19 @@ class WebSocketManager extends EventEmitter {
         infoLog('WebSocket', `[SYNC] Restoring persistent listing subscription | key=${key} | slug=${value.slug}`);
       }
 
+      // Restore persistent bidding subscriptions to active subscriptions
+      for (const [key, value] of this.persistentBiddingSubscriptions) {
+        this.activeSubscriptions.set(key, value);
+        infoLog('WebSocket', `[SYNC] Restoring persistent bidding subscription | key=${key} | slug=${value.slug}`);
+      }
+
       // Skip sync if no subscriptions
-      if (this.activeSubscriptions.size === 0 && this.persistentListingSubscriptions.size === 0) {
+      if (this.activeSubscriptions.size === 0 && this.persistentListingSubscriptions.size === 0 && this.persistentBiddingSubscriptions.size === 0) {
         infoLog('WebSocket', '[SYNC] No subscriptions to sync - skipping');
         return;
       }
 
-      infoLog('WebSocket', `[SYNC] Syncing subscriptions after reconnection | activeSubscriptions=${this.activeSubscriptions.size} | persistentListings=${this.persistentListingSubscriptions.size}`);
+      infoLog('WebSocket', `[SYNC] Syncing subscriptions after reconnection | activeSubscriptions=${this.activeSubscriptions.size} | persistentListings=${this.persistentListingSubscriptions.size} | persistentBidding=${this.persistentBiddingSubscriptions.size}`);
 
       // Simply resubscribe to all collections
       // Server subscribes to ALL marketplaces when you subscribe once
@@ -583,12 +660,32 @@ class WebSocketManager extends EventEmitter {
 
   private handleMessage(data: WebSocket.Data): void {
     try {
-      const message = JSON.parse(data.toString());
+      const parsed = JSON.parse(data.toString());
       this.metrics.totalMessages++;
       this.recordMessage();
 
       // Update last message received timestamp
       this.lastMessageReceived = Date.now();
+
+      // Check if this is a wrapped message with seqNum (ACK-based reliable delivery)
+      let message: any;
+      if (parsed.seqNum !== undefined && parsed.data !== undefined) {
+        // Track sequence number for batch ACK
+        this.receivedSeqNums.push(parsed.seqNum);
+
+        // Extract actual message from wrapped format
+        message = parsed.data;
+
+        // Send ACK immediately if buffer is getting large or enough time has passed
+        if (this.receivedSeqNums.length >= 50 || (Date.now() - this.lastAckTime) > this.ACK_BATCH_INTERVAL) {
+          this.sendAck();
+        }
+
+      } else {
+        // Legacy message without seqNum (backward compatibility)
+        message = parsed;
+
+      }
 
       // Handle pong messages
       if (message.type === 'pong') {
@@ -610,33 +707,39 @@ class WebSocketManager extends EventEmitter {
         return;
       }
 
-      // Handle server shutdown notification
+      // Handle server shutdown notification - trigger immediate reconnection
       if (message.type === 'server_shutdown') {
-        infoLog('WebSocket', '[SHUTDOWN] Server shutdown notification received');
+        infoLog('WebSocket', '[SHUTDOWN] Server shutdown notification received - triggering reconnection');
         this.emit('server_shutdown', message);
+        // Close connection to trigger reconnection (use 1001 to indicate going away, not 1000 which prevents reconnect)
+        try {
+          this.ws?.close(1001, 'Server shutdown');
+        } catch {
+          warnLog('WebSocket', 'Error closing WebSocket on server shutdown');
+        }
         return;
       }
 
       // Log incoming bid/listing events with subscription validation
       if (message.eventType === 'BID_CREATED' || message.eventType === 'TRAIT_BID_CREATED' || message.eventType === 'LISTING_CREATED') {
         const msgSlug = message.payload?.payload?.collection?.slug || message.slug;
-        const msgContract = message.payload?.payload?.asset_contract_criteria?.address || message.contractAddress || 'unknown';
         const msgMarketplace = message.marketplace || 'unknown';
 
-        // Debug log for all incoming messages
-        infoLog('WebSocket', `[DEBUG-CLIENT] Message received | eventType=${message.eventType} | contract=${msgContract} | marketplace=${msgMarketplace}`);
+        // Message loss detection: count OPENSEA BID_CREATED messages
+        if (message.eventType === 'BID_CREATED' && msgMarketplace === 'OPENSEA') {
+          this.openseaBidCreatedReceived++;
+        }
 
         // Check if we're actually subscribed to this collection
         const isSubscribed = this.isSubscribedToSlug(msgSlug);
 
         if (!isSubscribed) {
-          // CRITICAL: We're receiving events for a collection we're NOT subscribed to!
-          warnLog('WebSocket', `[UNEXPECTED_EVENT] Received event for UNSUBSCRIBED collection | eventType=${message.eventType} | slug=${msgSlug} | marketplace=${msgMarketplace} | ourSubscriptions=${this.getActiveSlugsList()}`);
-          infoLog('WebSocket', `[DEBUG-CLIENT] Message for UNSUBSCRIBED collection | slug=${msgSlug} | ignoring=true`);
+          // Only log UNEXPECTED_EVENT for valid slugs (skip undefined/malformed - server-side noise)
+          if (msgSlug && msgSlug !== 'undefined') {
+            warnLog('WebSocket', `[UNEXPECTED_EVENT] Unsubscribed collection event | ${message.eventType} | slug=${msgSlug} | marketplace=${msgMarketplace}`);
+          }
         } else {
-          // Normal case - we are subscribed
-          debugLog('WebSocket', `[EVENT] Received ${message.eventType} for subscribed collection | slug=${msgSlug} | marketplace=${msgMarketplace}`);
-          infoLog('WebSocket', `[DEBUG-CLIENT] Message for subscribed collection | slug=${msgSlug} | processing=true`);
+          // Normal case - we are subscribed (no log needed - too noisy)
         }
       }
 
@@ -709,6 +812,15 @@ class WebSocketManager extends EventEmitter {
     // Reset reconnecting flag
     this.isReconnecting = false;
 
+    // Send any pending ACKs before closing
+    if (this.receivedSeqNums.length > 0) {
+      this.sendAck();
+    }
+
+    // Clear ACK state
+    this.receivedSeqNums = [];
+    this.lastAckTime = Date.now();
+
     // Calculate connection duration
     const now = Date.now();
     if (this.metrics.connectionStartTime) {
@@ -766,16 +878,10 @@ class WebSocketManager extends EventEmitter {
     this.metrics.totalErrors++;
     this.metrics.lastError = error;
 
-// console.log('WebSocket error:', error);
     this.emit('error', error);
 
     // If we get ECONNREFUSED or similar errors, the connection is dead
-    if (error.message?.includes('ECONNREFUSED') ||
-      error.message?.includes('ETIMEDOUT') ||
-      error.message?.includes('ENETUNREACH')) {
-// console.log('Connection error detected, will reconnect on close event');
-      // The close event will handle reconnection
-    }
+    // The close event will handle reconnection
   }
 
   private attemptReconnect(): void {
@@ -784,7 +890,7 @@ class WebSocketManager extends EventEmitter {
 
     // Check if we should stop retrying (0 means infinite retries)
     if (this.config.maxRetries > 0 && this.retryCount >= this.config.maxRetries) {
-// console.log('Max reconnection attempts exceeded');
+      warnLog('WebSocket', 'Max reconnection attempts exceeded');
       this.emit('max_retries_exceeded');
       return;
     }
@@ -804,20 +910,10 @@ class WebSocketManager extends EventEmitter {
     const jitter = exponentialDelay * jitterRange * (Math.random() - 0.5);
     const delay = Math.round(exponentialDelay + jitter);
 
-// console.log('Scheduling reconnection:', {
-      // attempt: this.retryCount + 1,
-      // maxRetries: this.config.maxRetries || 'unlimited',
-      // delayMs: delay,
-      // baseDelay: exponentialDelay,
-      // jitter: Math.round(jitter)
-    // });
-
     this.retryCount++;
 
     this.setTimeout('reconnect', () => {
-// console.log('Executing scheduled reconnection');
       this.connect().catch(() => {
-// console.log('Reconnection failed');
         // Connection will retry through its own error handling
       });
     }, delay);
@@ -848,6 +944,43 @@ class WebSocketManager extends EventEmitter {
     this.sendMessage(pingMessage);
   }
 
+  /**
+   * Send batch ACK for received sequence numbers
+   * Called periodically (every ACK_BATCH_INTERVAL) or when buffer is large
+   */
+  private sendAck(): void {
+    if (this.receivedSeqNums.length === 0) return;
+
+    // Take all sequence numbers and clear the array
+    const seqNums = this.receivedSeqNums.splice(0);
+
+    const ackMessage = {
+      type: 'ack',
+      seqNums: seqNums,
+      clientId: this.config.clientId
+    };
+
+    try {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify(ackMessage));
+        this.lastAckTime = Date.now();
+      }
+    } catch (error) {
+      // ACK send failed - messages will be retried by proxy
+      warnLog('WebSocket', `Failed to send ACK for ${seqNums.length} messages`);
+    }
+  }
+
+  /**
+   * Start the ACK timer for batch acknowledgments
+   */
+  private startAckTimer(): void {
+    this.clearInterval('ackTimer');
+
+    this.setInterval('ackTimer', () => {
+      this.sendAck();
+    }, this.ACK_BATCH_INTERVAL);
+  }
 
   async sendMessageWithResponse(message: any, timeoutMs = 5000): Promise<any> {
     return new Promise((resolve, reject) => {
@@ -890,11 +1023,8 @@ class WebSocketManager extends EventEmitter {
   }
 
   private getAdaptiveStaleThreshold(): number {
-    // Calculate message rate over the last 5 minutes
-    const now = Date.now();
-    const fiveMinutesAgo = now - 300000;
-    const recentMessages = this.messageTimestamps.filter(ts => ts > fiveMinutesAgo).length;
-    const messagesPerMinute = recentMessages / 5;
+    // Calculate message rate over the last 5 minutes using circular buffer
+    const messagesPerMinute = this.messageTimestamps.getMessageRate();
 
     // Define thresholds based on activity level
     if (messagesPerMinute > 10) {
@@ -959,6 +1089,11 @@ class WebSocketManager extends EventEmitter {
         this.savePersistentSubscriptions();
       }
 
+      // Persist bidding subscriptions (to survive reconnects)
+      if (subscriptionType === 'bidding') {
+        this.persistentBiddingSubscriptions.set(subscriptionId, subscriptionInfo);
+      }
+
       this.metrics.subscriptionCount = this.activeSubscriptions.size;
 
       // Log successful subscription with full state
@@ -1020,6 +1155,7 @@ class WebSocketManager extends EventEmitter {
 
         if (this.activeSubscriptions.has(biddingKey)) {
           this.activeSubscriptions.delete(biddingKey);
+          this.persistentBiddingSubscriptions.delete(biddingKey);
           removedKeys.push(biddingKey);
         }
         if (this.activeSubscriptions.has(listingKey)) {
@@ -1041,6 +1177,7 @@ class WebSocketManager extends EventEmitter {
 
           if (this.activeSubscriptions.has(biddingKey)) {
             this.activeSubscriptions.delete(biddingKey);
+            this.persistentBiddingSubscriptions.delete(biddingKey);
             removedKeys.push(biddingKey);
           }
           if (this.activeSubscriptions.has(listingKey)) {
@@ -1169,14 +1306,11 @@ class WebSocketManager extends EventEmitter {
   }
 
   private recordMessage(): void {
+    // Push to circular buffer - no array.filter() needed!
     this.messageTimestamps.push(Date.now());
 
-    // Keep only last 5 minutes
-    const fiveMinutesAgo = Date.now() - 300000;
-    this.messageTimestamps = this.messageTimestamps.filter(t => t > fiveMinutesAgo);
-
-    // Calculate message rate (per minute)
-    this.metrics.messageRate = this.messageTimestamps.length / 5;
+    // Calculate message rate (per minute) using circular buffer
+    this.metrics.messageRate = this.messageTimestamps.getMessageRate();
   }
 
   private updateConnectionQuality(): void {
@@ -1193,6 +1327,14 @@ class WebSocketManager extends EventEmitter {
 
   getMetrics(): ConnectionMetrics {
     return { ...this.metrics };
+  }
+
+  /**
+   * Get count of OPENSEA BID_CREATED messages received.
+   * Used for message loss detection between ws-proxy and bidding-bot-server.
+   */
+  getOpenseaBidCreatedReceived(): number {
+    return this.openseaBidCreatedReceived;
   }
 
   getActiveSubscriptions(): Map<string, SubscriptionInfo> {
@@ -1402,6 +1544,7 @@ class WebSocketManager extends EventEmitter {
 
     // Clear local state
     this.activeSubscriptions.clear();
+    this.persistentBiddingSubscriptions.clear();
   }
 }
 

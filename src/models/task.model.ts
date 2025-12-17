@@ -78,6 +78,7 @@ export interface ITask {
     minFloorPrice: number | null;
     maxFloorPrice: number | null;
     maxPurchase: number | null;
+    actualPurchase: number;
     triggerStopOptions: boolean;
     traitPrices: Record<string, { min: number; max: number }>;
   };
@@ -101,6 +102,7 @@ export interface ITask {
   traitsOperator: { value: string; label: string };
   autoList?: boolean;
   note?: string;
+  priority: 1 | 2 | 3 | 4 | 5;
   listingConfig?: {
     selectedMarketplaces: string[];
     pricingStrategy: "FIXED_PRICING" | "DYNAMIC_PRICING";
@@ -208,6 +210,7 @@ const TaskSchema: Schema = new Schema(
       minFloorPrice: { type: Number, required: true },
       maxFloorPrice: { type: Number, required: true },
       maxPurchase: { type: Number, required: true },
+      actualPurchase: { type: Number, default: 0 },
       triggerStopOptions: { type: Boolean, default: false },
       traitPrices: { type: Schema.Types.Mixed, default: {} },
     },
@@ -246,6 +249,7 @@ const TaskSchema: Schema = new Schema(
     },
     autoList: { type: Boolean, default: false },
     note: { type: String, default: "" },
+    priority: { type: Number, min: 1, max: 5, default: 3 },
     listingConfig: {
       selectedMarketplaces: { type: [String] },
       pricingStrategy: {
