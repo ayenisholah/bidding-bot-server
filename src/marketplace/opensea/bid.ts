@@ -20,8 +20,6 @@ import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
 import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
 import { apiDedup } from "../../utils/api-dedup";
-import fs from 'fs';
-import path from 'path';
 import { MAX_PAIN_OVERRIDE_ADDRESS, MAX_PAIN_SLUG, MAX_PAIN_TOKEN_OVERRIDES } from "../../maxPainOverrides";
 import { BoundedCache } from "../../utils/bounded-cache";
 
@@ -31,8 +29,6 @@ const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000)
 
 // Performance timing utilitie
 // Use the shared debug-logs directory (handled by debug-file-logger.ts)
-const logsDir = path.join(process.cwd(), 'debug-logs');
-
 
 // Helper function to extract meaningful error messages from OpenSea API responses
 function extractOpenseaErrorMessage(error: any): string {

@@ -197,8 +197,9 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'PriceCalc': 'bidflow',
   'StopOption': 'bidflow',
 
-  // Counterbid (1)
+  // Counterbid (2)
   'Counterbid': 'counterbid',
+  'BidCounter': 'counterbid',   // Track own bid counting for message loss debugging
 
   // Queue (13)
   'Queue': 'queue',

@@ -27029,6 +27029,7 @@ export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
   try {
     // Check if we've already processed this bid
     if (processedOwnBids.has(orderHash)) {
+      debugLog('BidCounter', `SKIP_DUPLICATE | marketplace=${marketplace} | orderHash=${orderHash}`);
       return ownBidCounts[marketplace] || 0;
     }
 
@@ -27039,6 +27040,8 @@ export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
       ownBidCounts[marketplace] = 0;
     }
     ownBidCounts[marketplace]++;
+
+    debugLog('BidCounter', `OWN_BID_COUNTED | marketplace=${marketplace} | orderHash=${orderHash} | total=${ownBidCounts[marketplace]}`);
 
     // Clean up old entries periodically (keep last 5000 entries)
     // Memory optimization: streaming deletion instead of Array.from() copy
