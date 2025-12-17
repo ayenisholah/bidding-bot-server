@@ -16793,7 +16793,7 @@ async function performMarketplacePreprocessing(
     if (amount) {
       const [openseaListings, magicedenListings] = await Promise.all([
         marketplace === "opensea" && availableMarketplaces.includes("opensea") ?
-          fetchOpenseaListings(taskId, task.contract.slug, amount, priority)
+          fetchOpenseaListings(taskId, task.contract.slug, amount)
             .then(result => {
               openseaApiCalled = true;
               openseaApiReturnedEmpty = result ? result.length === 0 : true;
@@ -25455,6 +25455,7 @@ app.get('/api/debug-logs/list', async (_req, res) => {
 // Download a single debug log file
 app.get('/api/debug-logs/download/:filename', async (req, res) => {
   try {
+    const { files: filesParam } = req.query as any;
     const logDir = path.join(__dirname, '..', 'debug-logs');
 
     // Check if directory exists
@@ -25472,7 +25473,7 @@ app.get('/api/debug-logs/download/:filename', async (req, res) => {
     // Filter to selected files if specified
     let filesToInclude = allFiles;
     if (filesParam) {
-      const selectedFiles = filesParam.split(',').map(f => path.basename(f.trim()));
+      const selectedFiles = filesParam.split(',').map((f: string) => path.basename(f.trim()));
       filesToInclude = allFiles.filter(f => selectedFiles.includes(f));
 
       if (filesToInclude.length === 0) {

@@ -380,7 +380,8 @@ export async function bidOnOpensea(
   currency = WETH,
   contractAddress: string,
   opensea_traits?: string,
-  asset?: { contractAddress: string, tokenId: number }
+  asset?: { contractAddress: string, tokenId: number },
+  source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
 
   try {
@@ -1322,7 +1323,8 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string, 
 export async function fetchOpenseaOffers(
   offerType: 'COLLECTION' | 'TRAIT' | 'TOKEN',
   collectionSlug: string,
-  identifiers: Record<string, string> | string
+  identifiers: Record<string, string> | string,
+  priority?: number
 ) {
   if (offerType === 'COLLECTION') {
     // Use OpenSea GraphQL API for collection offers
