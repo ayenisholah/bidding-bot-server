@@ -14812,6 +14812,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const traitForLog = eventType === "trait_offer" ?
       `${data?.payload?.payload?.trait_criteria?.trait_type}:${data?.payload?.payload?.trait_criteria?.trait_name}` : null;
 
+    // Debug: Log ALL bids reaching this handler to identify wallet mismatch issues
+    const isOurs = maker && isOurWallet(maker);
+    debugLog('BidCounter', `OS_BID_RECEIVED | slug=${task.contract.slug} | maker=${maker?.slice(0,10)}... | isOurs=${isOurs} | orderHash=${orderHash?.slice(0,10)}... | event=${eventType}`);
+
     const currentTask = activeTasks.get(task._id)
     if (!currentTask) {
       return;
