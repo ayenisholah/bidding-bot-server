@@ -13281,14 +13281,9 @@ async function _doConnect(): Promise<void> {
       activeSubscriptions.clear();
     });
 
-    // Debug counter for message flow tracing
-    let clientHandlerCount = 0;
-
     wsManager.on('message', async (message: any) => {
       try {
-        clientHandlerCount++;
-        console.log(`[CLIENT-HANDLER] #${clientHandlerCount} | eventType=${message.eventType || message.type}`);
-        // Message reception logging removed - too noisy
+        // Message reception logging removed - blocks event loop at high message rates
 
         // Handle initial data request synchronously
         if (message.endpoint === "get-initial-data") {
