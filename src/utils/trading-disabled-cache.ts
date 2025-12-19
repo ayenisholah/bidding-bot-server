@@ -20,7 +20,7 @@ class TradingDisabledCache {
 
   constructor() {
     // Max 5000 tokens with 24 hour TTL
-    this.cache = new BoundedCache<string, TradingDisabledInfo>(5000, this.CACHE_TTL);
+    this.cache = new BoundedCache<string, TradingDisabledInfo>(5000, this.CACHE_TTL, 'tradingDisabledCache');
   }
 
   /**

@@ -25,7 +25,7 @@ import { isCollectionUnavailable, markCollectionUnavailable } from "../../utils/
 
 // Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
 // This prevents log flooding when multiple parallel jobs hit the same balance check
-const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000);
+const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000, 'magicedenInsufficientBalanceLogCache');
 
 const YELLOW = '\x1b[33m';
 const GREEN = '\x1b[32m';

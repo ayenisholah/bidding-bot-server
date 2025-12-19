@@ -25,7 +25,7 @@ import { BoundedCache } from "../../utils/bounded-cache";
 
 // Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
 // This prevents log flooding when multiple parallel jobs hit the same balance check
-const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000);
+const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000, 'openseaInsufficientBalanceLogCache');
 
 // Performance timing utilitie
 // Use the shared debug-logs directory (handled by debug-file-logger.ts)

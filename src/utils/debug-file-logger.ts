@@ -292,10 +292,11 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'LimiterQueue': 'stoptask',
   'BidAbort': 'stoptask',
 
-  // Health (3)
+  // Health (4)
   'Health': 'health',
   'HealthCheck': 'health',
   'ConnectivityMonitor': 'health',
+  'EventLoop': 'health',  // Event loop lag monitoring - detects blocked event loop
 
   // Metadata (2)
   'Metadata': 'metadata',

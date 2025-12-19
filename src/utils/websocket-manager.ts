@@ -358,13 +358,8 @@ class WebSocketManager extends EventEmitter {
         return;
       }
 
-      // Send ping - server only needs event and clientId
-      this.lastPingSent = now;
-
-      this.sendMessage({
-        event: 'ping',
-        clientId: this.config.clientId
-      });
+      // Send ping with timestamp for proper latency tracking
+      this.sendPing();
 
       // Set pong timeout (per CLIENT_CONNECTION_GUIDE.md recommendation)
       this.clearTimeout('pongTimeout');
@@ -379,7 +374,7 @@ class WebSocketManager extends EventEmitter {
             warnLog('WebSocket', 'Error closing WebSocket after max missed pongs reached');
           }
         }
-      }, 10000); // 10 second pong timeout (reduced from 15s for faster detection)
+      }, 60000); // 60 second pong timeout (increased from 10s to handle high-latency backpressure conditions)
 
     }, this.config.heartbeatInterval);
   }
@@ -674,6 +669,14 @@ class WebSocketManager extends EventEmitter {
 
       // Update last message received timestamp
       this.lastMessageReceived = receiveTime;
+
+      // If we're receiving messages, the connection is alive - reduce missed pong urgency
+      // This prevents false disconnections when pongs are delayed by backpressure but messages are flowing
+      if (this.missedPongs > 0) {
+        this.missedPongs = 0;
+        this.clearTimeout('pongTimeout');
+        debugLog('WebSocket', '[HealthCheck] Reset missedPongs due to active message flow');
+      }
 
       // Check if this is a wrapped message with seqNum (ACK-based reliable delivery)
       let message: any;
@@ -989,7 +992,8 @@ class WebSocketManager extends EventEmitter {
       }
     } catch (error) {
       // ACK send failed - messages will be retried by proxy
-      warnLog('WebSocket', `Failed to send ACK for ${seqNums.length} messages`);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      warnLog('WebSocket', `Failed to send ACK for ${seqNums.length} messages | error=${errMsg}`);
     }
   }
 

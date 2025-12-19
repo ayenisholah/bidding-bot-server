@@ -23,7 +23,7 @@ const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
 
 // Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
 // This prevents log flooding when multiple parallel jobs hit the same balance check
-const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000);
+const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000, 'blurInsufficientBalanceLogCache');
 
 config()
 const BLUR_API_URL = `${BASE_URL}/blur`;

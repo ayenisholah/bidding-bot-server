@@ -16,7 +16,7 @@ class ListingPriceCache {
 
   constructor() {
     // Initialize memory cache with 10k max entries and 30 min TTL
-    this.priceCache = new BoundedCache<string, ListingPriceData>(10000, 30 * 60 * 1000);
+    this.priceCache = new BoundedCache<string, ListingPriceData>(10000, 30 * 60 * 1000, 'listingPriceCache');
   }
 
   /**

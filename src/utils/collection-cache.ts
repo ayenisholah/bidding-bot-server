@@ -27,10 +27,10 @@ class CollectionCache {
   
   constructor() {
     // 1000 items, 5 minute TTL for floor prices (they change frequently)
-    this.floorCache = new BoundedCache<string, FloorPriceData>(1000, 5 * 60 * 1000);
-    
+    this.floorCache = new BoundedCache<string, FloorPriceData>(1000, 5 * 60 * 1000, 'collectionFloorCache');
+
     // 500 items, 30 minute TTL for collection details (they change less frequently)
-    this.detailsCache = new BoundedCache<string, CollectionData>(500, 30 * 60 * 1000);
+    this.detailsCache = new BoundedCache<string, CollectionData>(500, 30 * 60 * 1000, 'collectionDetailsCache');
   }
 
   // Get floor price for a collection on a specific marketplace
