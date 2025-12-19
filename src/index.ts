@@ -3127,9 +3127,9 @@ async function startServer() {
         {
           connection: workerConnection,
           concurrency: concurrencyPerWorker,
-          lockDuration: 300000,     // 5 minutes - matches job timeout
-          stalledInterval: 60000,   // Check every 1 minute
-          maxStalledCount: 3        // 3 stall checks before failing (15 min safety net)
+          lockDuration: 60000,      // 1 minute - faster lock release on stuck jobs (was 5 min)
+          stalledInterval: 15000,   // Check every 15 seconds (was 1 min)
+          maxStalledCount: 4        // 4 stall checks before failing (1 min safety net)
         }
       );
 
@@ -3267,9 +3267,9 @@ async function startServer() {
       {
         connection: blurWorkerConnection,
         concurrency: concurrencyPerWorker, // Reduce concurrency for Blur to prevent rate limit issues
-        lockDuration: 300000,     // 5 minutes - matches job timeout
-        stalledInterval: 60000,   // Check every 1 minute
-        maxStalledCount: 3        // 3 stall checks before failing (15 min safety net)
+        lockDuration: 60000,      // 1 minute - faster lock release on stuck jobs (was 5 min)
+        stalledInterval: 15000,   // Check every 15 seconds (was 1 min)
+        maxStalledCount: 4        // 4 stall checks before failing (1 min safety net)
       }
     );
 

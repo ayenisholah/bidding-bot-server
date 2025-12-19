@@ -374,7 +374,7 @@ class WebSocketManager extends EventEmitter {
             warnLog('WebSocket', 'Error closing WebSocket after max missed pongs reached');
           }
         }
-      }, 60000); // 60 second pong timeout (increased from 10s to handle high-latency backpressure conditions)
+      }, 900000); // 15 minute pong timeout (increased from 60s to handle extreme ws-proxy backpressure latency)
 
     }, this.config.heartbeatInterval);
   }
