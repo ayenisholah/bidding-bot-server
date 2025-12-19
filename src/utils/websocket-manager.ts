@@ -731,7 +731,15 @@ class WebSocketManager extends EventEmitter {
 
       // Handle server shutdown notification - trigger immediate reconnection
       if (message.type === 'server_shutdown') {
-        infoLog('WebSocket', '[SHUTDOWN] Server shutdown notification received - triggering reconnection');
+        // Grace period: Ignore server_shutdown if we just connected (within 5 seconds)
+        // This prevents rapid reconnection cascade when ws-proxy broadcasts shutdown during our reconnection
+        const connectionAge = this.metrics.connectionStartTime ? Date.now() - this.metrics.connectionStartTime : 0;
+        if (connectionAge < 5000) {
+          infoLog('WebSocket', `[SHUTDOWN] Ignoring server_shutdown - connection too fresh (${connectionAge}ms age, need 5000ms)`);
+          return;
+        }
+
+        infoLog('WebSocket', `[SHUTDOWN] Server shutdown notification received - triggering reconnection (connectionAge=${connectionAge}ms)`);
         this.emit('server_shutdown', message);
         // Close connection to trigger reconnection (use 1001 to indicate going away, not 1000 which prevents reconnect)
         try {
