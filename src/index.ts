@@ -14136,6 +14136,13 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         return;
       }
 
+      // Only counterbid if we have an existing order for this token
+      const existingTokenOrder = orderCache.get(task._id.toString(), 'magiceden', tokenId.toString());
+      if (!existingTokenOrder) {
+        debugLog('Counterbid', `[ME] ${task.contract.slug} [${tokenId}] | SKIP: No existing bid to defend`);
+        return;
+      }
+
       const tokenOfferPriceForQueue = Math.ceil(Number(offerPrice));
 
       // Token-level deduplication with price comparison
@@ -14781,7 +14788,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       // =================================================================
       // TOKEN-vs-COLLECTION DEFENSE - For token/rarity tasks defending against collection offers
-      // This ensures token positions are defended even if we don't have existing orders in cache
+      // Only defend tokens where we have existing bids in orderCache
       // =================================================================
       if ((task.bidType.toLowerCase() === "token" || task.bidType.toLowerCase() === "rarity") && task.tokenIds?.length > 0) {
         // Check if task was stopped during earlier processing (async operations above)
@@ -14798,6 +14805,12 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           if (existingOrder) {
             // Already processed in the loop above
             continue;
+          }
+
+          // Only defend tokens where we have an existing bid in orderCache
+          const existingTokenOrder = orderCache.get(task._id.toString(), 'magiceden', targetTokenId.toString());
+          if (!existingTokenOrder) {
+            continue; // Skip tokens we don't have bids on
           }
 
           // Check our current token offer price
@@ -15272,6 +15285,14 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         }
         return;
       }
+
+      // Only counterbid if we have an existing order for this token
+      const existingTokenOrder = orderCache.get(task._id.toString(), 'opensea', tokenId.toString());
+      if (!existingTokenOrder) {
+        debugLog('Counterbid', `[OS] ${task.contract.slug} [${tokenId}] | SKIP: No existing bid to defend`);
+        return;
+      }
+
       const normalizedOfferPrice = Math.ceil(offerPrice)
       if (normalizedOfferPrice !== offerPrice) {
         debugLog('Counterbid', `[OS] ${task.contract.slug} [${tokenId}] | Normalized offer price from ${offerPrice} to ${normalizedOfferPrice}`);
@@ -15708,8 +15729,14 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             );
 
             if (hasMatchingTrait) {
+              // Only defend tokens where we have an existing bid
+              const existingTokenOrder = orderCache.get(task._id.toString(), 'opensea', targetTokenId.toString());
+              if (!existingTokenOrder) {
+                continue; // Skip tokens we don't have bids on
+              }
+
               // Token has this trait - check if we need to counterbid
-              const ourTokenPrice = orderCache.getOfferPrice(task._id, 'opensea', targetTokenId.toString()) || 0;
+              const ourTokenPrice = orderCache.getOfferPrice(task._id.toString(), 'opensea', targetTokenId.toString()) || 0;
               const ourTokenPriceEth = ourTokenPrice / Math.pow(10, decimal);
 
               // Only counterbid if incoming trait offer beats our token offer
@@ -16150,8 +16177,14 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             continue;
           }
 
+          // Only defend tokens where we have an existing bid in orderCache
+          const existingTokenOrder = orderCache.get(task._id.toString(), 'opensea', targetTokenId.toString());
+          if (!existingTokenOrder) {
+            continue; // Skip tokens we don't have bids on
+          }
+
           // Check our current token offer price
-          const ourTokenPrice = orderCache.getOfferPrice(task._id, 'opensea', targetTokenId.toString()) || 0;
+          const ourTokenPrice = orderCache.getOfferPrice(task._id.toString(), 'opensea', targetTokenId.toString()) || 0;
           const ourTokenPriceEth = ourTokenPrice / Math.pow(10, decimal);
 
           // Only counterbid if incoming collection offer beats our token offer
