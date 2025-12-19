@@ -197,8 +197,9 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'PriceCalc': 'bidflow',
   'StopOption': 'bidflow',
 
-  // Counterbid (1)
+  // Counterbid (2)
   'Counterbid': 'counterbid',
+  'BidCounter': 'counterbid',   // Track own bid counting for message loss debugging
 
   // Queue (13)
   'Queue': 'queue',
@@ -249,9 +250,15 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'API': 'api',
   'Blockchain': 'api',
 
-  // WebSocket (2)
+  // WebSocket (8)
   'WebSocket': 'websocket',
   'MsgLoss': 'websocket',    // Message loss detection between ws-proxy and server
+  'MsgFlow': 'websocket',    // Raw message flow tracking at earliest checkpoint
+  'WsProxyRecv': 'websocket',     // Messages received from ws-proxy (detailed tracking)
+  'WsProxyDrop': 'websocket',     // Potential drops detected during processing
+  'WsProxyLag': 'websocket',      // Latency/lag detection (message timestamp vs receive time)
+  'WsProxyReconnect': 'websocket', // ws-proxy reconnection events
+  'WsProxyStats': 'websocket',    // Periodic stats from ws-proxy message flow
 
   // Listing (5)
   'Listing': 'listing',
@@ -285,10 +292,11 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'LimiterQueue': 'stoptask',
   'BidAbort': 'stoptask',
 
-  // Health (3)
+  // Health (4)
   'Health': 'health',
   'HealthCheck': 'health',
   'ConnectivityMonitor': 'health',
+  'EventLoop': 'health',  // Event loop lag monitoring - detects blocked event loop
 
   // Metadata (2)
   'Metadata': 'metadata',

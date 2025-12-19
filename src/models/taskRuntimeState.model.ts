@@ -29,6 +29,20 @@ export interface MarketplaceBooleans {
   blur: boolean;
 }
 
+export interface MarketplaceDates {
+  opensea?: Date;
+  magiceden?: Date;
+  blur?: Date;
+}
+
+export interface TaskStateInfo {
+  status: 'STARTED' | 'QUEUEING' | 'RUNNING' | 'COMPLETED' | 'SCHEDULED' | 'STOPPED';
+  queuedAt?: Date;        // When task entered QUEUEING state
+  jobsTotal?: number;     // Total jobs queued for current loop
+  jobsCompleted?: number; // Jobs completed so far in current loop
+  lastActivityAt?: Date;  // Last job completion time
+}
+
 export interface ITaskRuntimeState extends Document {
   taskId: string;
 
@@ -56,6 +70,12 @@ export interface ITaskRuntimeState extends Document {
   // Warning flags per marketplace
   warningBids: MarketplaceBooleans;
 
+  // Task state for QUEUEING watchdog recovery
+  taskState?: TaskStateInfo;
+
+  // Next loop times per marketplace (for timer recovery)
+  nextLoopTimes?: MarketplaceDates;
+
   // Timestamps for cache management
   accessedAt: Date;
   createdAt: Date;
@@ -79,6 +99,24 @@ const MarketplaceBooleansSchema = new Schema({
   blur: { type: Boolean, default: false }
 }, { _id: false });
 
+const MarketplaceDatesSchema = new Schema({
+  opensea: { type: Date },
+  magiceden: { type: Date },
+  blur: { type: Date }
+}, { _id: false });
+
+const TaskStateInfoSchema = new Schema({
+  status: {
+    type: String,
+    enum: ['STARTED', 'QUEUEING', 'RUNNING', 'COMPLETED', 'SCHEDULED', 'STOPPED'],
+    default: 'STARTED'
+  },
+  queuedAt: { type: Date },
+  jobsTotal: { type: Number, default: 0 },
+  jobsCompleted: { type: Number, default: 0 },
+  lastActivityAt: { type: Date, default: Date.now }
+}, { _id: false });
+
 const TaskRuntimeStateSchema: Schema = new Schema(
   {
     taskId: { type: String, required: true, unique: true, index: true },
@@ -99,6 +137,12 @@ const TaskRuntimeStateSchema: Schema = new Schema(
 
     warningBids: { type: MarketplaceBooleansSchema, default: () => ({ opensea: false, magiceden: false, blur: false }) },
 
+    // Task state for QUEUEING watchdog recovery
+    taskState: { type: TaskStateInfoSchema },
+
+    // Next loop times per marketplace (for timer recovery)
+    nextLoopTimes: { type: MarketplaceDatesSchema },
+
     accessedAt: { type: Date, default: Date.now }
   },
   { timestamps: true }
@@ -106,6 +150,9 @@ const TaskRuntimeStateSchema: Schema = new Schema(
 
 // TTL Index: Auto-expire documents after 7 days of no access (also used for LRU eviction queries)
 TaskRuntimeStateSchema.index({ accessedAt: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 });
+
+// Index for QUEUEING watchdog: find tasks stuck in QUEUEING state
+TaskRuntimeStateSchema.index({ 'taskState.status': 1, 'taskState.queuedAt': 1 });
 
 const TaskRuntimeState = mongoose.model<ITaskRuntimeState>("TaskRuntimeState", TaskRuntimeStateSchema);
 export default TaskRuntimeState;

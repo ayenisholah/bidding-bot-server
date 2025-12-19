@@ -234,6 +234,12 @@ class WebSocketManager extends EventEmitter {
       this.ws.once('open', () => {
         clearTimeout(connectionTimeout);
         this.isReconnecting = false;
+
+        // Log successful reconnection before resetting counter
+        if (this.retryCount > 0) {
+          infoLog('WsProxyReconnect', `SUCCESS | attempts=${this.retryCount} | reconnected after ${this.retryCount} attempt(s)`);
+        }
+
         this.retryCount = 0;
         this.onConnectionEstablished();
       });
@@ -352,13 +358,8 @@ class WebSocketManager extends EventEmitter {
         return;
       }
 
-      // Send ping - server only needs event and clientId
-      this.lastPingSent = now;
-
-      this.sendMessage({
-        event: 'ping',
-        clientId: this.config.clientId
-      });
+      // Send ping with timestamp for proper latency tracking
+      this.sendPing();
 
       // Set pong timeout (per CLIENT_CONNECTION_GUIDE.md recommendation)
       this.clearTimeout('pongTimeout');
@@ -373,7 +374,7 @@ class WebSocketManager extends EventEmitter {
             warnLog('WebSocket', 'Error closing WebSocket after max missed pongs reached');
           }
         }
-      }, 10000); // 10 second pong timeout (reduced from 15s for faster detection)
+      }, 900000); // 15 minute pong timeout (increased from 60s to handle extreme ws-proxy backpressure latency)
 
     }, this.config.heartbeatInterval);
   }
@@ -659,13 +660,23 @@ class WebSocketManager extends EventEmitter {
   }
 
   private handleMessage(data: WebSocket.Data): void {
+    const receiveTime = Date.now();
+
     try {
       const parsed = JSON.parse(data.toString());
       this.metrics.totalMessages++;
       this.recordMessage();
 
       // Update last message received timestamp
-      this.lastMessageReceived = Date.now();
+      this.lastMessageReceived = receiveTime;
+
+      // If we're receiving messages, the connection is alive - reduce missed pong urgency
+      // This prevents false disconnections when pongs are delayed by backpressure but messages are flowing
+      if (this.missedPongs > 0) {
+        this.missedPongs = 0;
+        this.clearTimeout('pongTimeout');
+        debugLog('WebSocket', '[HealthCheck] Reset missedPongs due to active message flow');
+      }
 
       // Check if this is a wrapped message with seqNum (ACK-based reliable delivery)
       let message: any;
@@ -685,6 +696,17 @@ class WebSocketManager extends EventEmitter {
         // Legacy message without seqNum (backward compatibility)
         message = parsed;
 
+      }
+
+      // Latency tracking - check if message has a timestamp from ws-proxy
+      if (message.timestamp || parsed.timestamp) {
+        const msgTimestamp = message.timestamp || parsed.timestamp;
+        const latency = receiveTime - msgTimestamp;
+
+        // Log high latency (>1000ms) as warning for investigation
+        if (latency > 1000) {
+          warnLog('WsProxyLag', `latency=${latency}ms | eventType=${message.eventType || message.event || message.type || 'unknown'} | marketplace=${message.marketplace || 'unknown'}`);
+        }
       }
 
       // Handle pong messages
@@ -912,6 +934,9 @@ class WebSocketManager extends EventEmitter {
 
     this.retryCount++;
 
+    // Log reconnection attempt
+    infoLog('WsProxyReconnect', `attempt=${this.retryCount} | delay=${delay}ms | maxRetries=${this.config.maxRetries || 'infinite'} | reason=attemptReconnect`);
+
     this.setTimeout('reconnect', () => {
       this.connect().catch(() => {
         // Connection will retry through its own error handling
@@ -967,7 +992,8 @@ class WebSocketManager extends EventEmitter {
       }
     } catch (error) {
       // ACK send failed - messages will be retried by proxy
-      warnLog('WebSocket', `Failed to send ACK for ${seqNums.length} messages`);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      warnLog('WebSocket', `Failed to send ACK for ${seqNums.length} messages | error=${errMsg}`);
     }
   }
 

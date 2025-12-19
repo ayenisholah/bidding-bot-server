@@ -17,9 +17,15 @@ import { InsufficientBalanceError } from "../errors";
 import { getCachedOrFetch, CACHE_TTL, CACHE_KEYS } from "../../utils/opensea-cache";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
-import { debugLog } from "../../utils/debug-file-logger";
+import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
+import { apiDedup } from "../../utils/api-dedup";
 import { MAX_PAIN_OVERRIDE_ADDRESS, MAX_PAIN_SLUG, MAX_PAIN_TOKEN_OVERRIDES } from "../../maxPainOverrides";
 import { ChainValue, DEFAULT_CHAIN, getChainConfig, getCurrencyAddress, getMarketplaceAddress, getMarketplaceChainIdentifier, getProviderForChain } from "../../utils/chains";
+import { BoundedCache } from "../../utils/bounded-cache";
+
+// Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
+// This prevents log flooding when multiple parallel jobs hit the same balance check
+const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000, 'openseaInsufficientBalanceLogCache');
 
 // Helper function to extract meaningful error messages from OpenSea API responses
 function extractOpenseaErrorMessage(error: any): string {

@@ -119,6 +119,10 @@ export const errorStats: BidCounts = {};
 export const skipStats: BidCounts = {};
 const counterbidCounts: BidCounts = {};
 
+// Message flow tracking counters (for debugging WebSocket message loss)
+let rawWsMessagesReceived = 0;
+let rawOurBidsReceived = 0;
+
 // ============================================
 // RESILIENT HELPER FUNCTIONS
 // ============================================
@@ -424,11 +428,11 @@ let traitsToRemove: { [key: string]: string[] } = {}
 let removedTokens: { [key: string]: { opensea: string[]; magiceden: string[] } } = {}
 
 // Use BoundedCache instead of Maps for memory-efficient tracking
-const seenOrderHashes = new BoundedCache<string, number>(10000, 5 * 60 * 1000); // 10k items, 5 min TTL
-const seenBids = new BoundedCache<string, number>(10000, 30 * 60 * 1000); // 10k items, 30 min TTL
+const seenOrderHashes = new BoundedCache<string, number>(10000, 5 * 60 * 1000, 'seenOrderHashes'); // 10k items, 5 min TTL
+const seenBids = new BoundedCache<string, number>(10000, 30 * 60 * 1000, 'seenBids'); // 10k items, 30 min TTL
 
 // Track logged balance errors to prevent log flooding (only log first error per task/marketplace)
-const loggedBalanceErrors = new BoundedCache<string, number>(1000, 30 * 60 * 1000); // 1k items, 30 min TTL
+const loggedBalanceErrors = new BoundedCache<string, number>(1000, 30 * 60 * 1000, 'loggedBalanceErrors'); // 1k items, 30 min TTL
 
 // Track tokens with pending counterbid jobs to prevent duplicate bids on same token
 // Key format: "counterbid-{taskId}-{marketplace}-{tokenId}" → PendingCounterbidEntry
@@ -437,11 +441,11 @@ interface PendingCounterbidEntry {
   priceWei: number;  // Current queued price in wei
   jobId: string;     // BullMQ job ID for updating
 }
-const pendingCounterbids = new BoundedCache<string, PendingCounterbidEntry>(10000, 60 * 1000); // 10k items, 60 second TTL
+const pendingCounterbids = new BoundedCache<string, PendingCounterbidEntry>(10000, 60 * 1000, 'pendingCounterbids'); // 10k items, 60 second TTL
 
 // Unified error log cache for deduplication - prevents log flooding from repeated errors
 // Key format: "{errorType}-{taskId}-{jobId}" or similar → timestamp
-const errorLogCache = new BoundedCache<string, number>(5000, 5000); // 5k items, 5 second TTL
+const errorLogCache = new BoundedCache<string, number>(5000, 5000, 'errorLogCache'); // 5k items, 5 second TTL
 
 // =============================================================================
 // OUR WALLET ADDRESS TRACKING
@@ -580,7 +584,7 @@ interface MarketplaceTopOffer {
 }
 
 // Cache with 10k capacity and 5 min TTL (stale data auto-expires)
-const marketplaceTopOfferCache = new BoundedCache<string, MarketplaceTopOffer>(10000, 5 * 60 * 1000);
+const marketplaceTopOfferCache = new BoundedCache<string, MarketplaceTopOffer>(10000, 5 * 60 * 1000, 'marketplaceTopOfferCache');
 
 // Index for efficient cleanup by taskId
 const topOfferTaskIndex = new Map<string, Set<string>>();
@@ -3096,7 +3100,7 @@ async function startServer() {
       const worker = new Worker(
         QUEUE_NAME,
         async (job) => {
-          const jobTimeout = job.name.endsWith('_SCHEDULE') ? 900000 : 60000; // 15 minutes for scheduled jobs, 60 seconds for otherscla
+          const jobTimeout = 300000; // 5 minutes - uniform timeout for all jobs
           const abortController = new AbortController();
 
           const timeoutPromise = new Promise((_, reject) => {
@@ -3124,9 +3128,9 @@ async function startServer() {
         {
           connection: workerConnection,
           concurrency: concurrencyPerWorker,
-          lockDuration: 960000, // 16 minutes lock (covers 15-minute scheduled job timeout + buffer)
-          stalledInterval: 120000, // Check for stalled jobs every 2 minutes
-          maxStalledCount: 1 // Move to failed after 1 stall
+          lockDuration: 60000,      // 1 minute - faster lock release on stuck jobs (was 5 min)
+          stalledInterval: 15000,   // Check every 15 seconds (was 1 min)
+          maxStalledCount: 4        // 4 stall checks before failing (1 min safety net)
         }
       );
 
@@ -3232,7 +3236,7 @@ async function startServer() {
     const blurWorker = new Worker(
       BLUR_BIDDING_QUEUE,
       async (job) => {
-        const jobTimeout = job.name === BLUR_SCHEDULE ? 900000 : 60000; // 15 minutes for scheduled jobs, 60 seconds for others
+        const jobTimeout = 300000; // 5 minutes - uniform timeout for all jobs
         const abortController = new AbortController();
 
         const timeoutPromise = new Promise((_, reject) => {
@@ -3264,9 +3268,9 @@ async function startServer() {
       {
         connection: blurWorkerConnection,
         concurrency: concurrencyPerWorker, // Reduce concurrency for Blur to prevent rate limit issues
-        lockDuration: 960000, // 16 minutes lock (covers 15-minute scheduled job timeout + buffer)
-        stalledInterval: 120000, // Check for stalled jobs every 2 minutes
-        maxStalledCount: 1 // Move to failed after 1 stall
+        lockDuration: 60000,      // 1 minute - faster lock release on stuck jobs (was 5 min)
+        stalledInterval: 15000,   // Check every 15 seconds (was 1 min)
+        maxStalledCount: 4        // 4 stall checks before failing (1 min safety net)
       }
     );
 
@@ -3642,6 +3646,29 @@ async function startServer() {
       console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
     });
 
+    // Event Loop Lag Monitoring - detects when event loop is blocked
+    // This helps identify why the client might not read from WebSocket fast enough
+    let lastEventLoopCheck = Date.now();
+    const EVENT_LOOP_CHECK_INTERVAL = 1000; // Check every 1 second
+    const EVENT_LOOP_LAG_WARNING_THRESHOLD = 100; // Warn if lag > 100ms
+    const EVENT_LOOP_LAG_CRITICAL_THRESHOLD = 500; // Critical if lag > 500ms
+
+    setInterval(() => {
+      const now = Date.now();
+      const expectedTime = lastEventLoopCheck + EVENT_LOOP_CHECK_INTERVAL;
+      const lag = now - expectedTime;
+
+      if (lag > EVENT_LOOP_LAG_CRITICAL_THRESHOLD) {
+        warnLog('EventLoop', `CRITICAL lag detected: ${lag}ms - event loop severely blocked | This may cause WebSocket backpressure`);
+      } else if (lag > EVENT_LOOP_LAG_WARNING_THRESHOLD) {
+        debugLog('EventLoop', `Lag detected: ${lag}ms - event loop slightly blocked`);
+      }
+
+      lastEventLoopCheck = now;
+    }, EVENT_LOOP_CHECK_INTERVAL);
+
+    debugLog('STARTUP', 'Event loop lag monitoring initialized');
+
     // Initialize periodic cleanup for aborted tasks (every 30 minutes)
     setInterval(() => {
       cleanupAbortedTasks();
@@ -3838,6 +3865,10 @@ async function startServer() {
     // Start periodic cleanup of old TaskSchedule documents
     const SCHEDULE_CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour
     setInterval(cleanupOldSchedules, SCHEDULE_CLEANUP_INTERVAL);
+
+    // Start QUEUEING watchdog (recovers tasks stuck in QUEUEING state)
+    const QUEUEING_WATCHDOG_INTERVAL = 60000; // 60 seconds
+    setInterval(queueingTaskWatchdog, QUEUEING_WATCHDOG_INTERVAL);
 
     // Start periodic sync of task runtime state to MongoDB
     const TASK_STATE_SYNC_INTERVAL = 30000; // 30 seconds
@@ -4285,6 +4316,29 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string, mark
     if (['SCHEDULED', 'RUNNING', 'COMPLETED'].includes(newStatus)) {
       persistTaskState(taskId).catch(err => {
         warnLog('RedisState', `Failed to persist task state | taskId=${taskId}`, err);
+      });
+    }
+
+    // Persist task state to MongoDB for QUEUEING watchdog recovery
+    // This allows recovery of tasks stuck in QUEUEING state after server restart
+    if (['QUEUEING', 'RUNNING', 'COMPLETED', 'SCHEDULED', 'STOPPED'].includes(newStatus)) {
+      const taskStateUpdate: Record<string, unknown> = {
+        'taskState.status': newStatus,
+        'taskState.lastActivityAt': new Date(),
+        accessedAt: new Date()
+      };
+
+      // Track when task entered QUEUEING for timeout detection
+      if (newStatus === 'QUEUEING') {
+        taskStateUpdate['taskState.queuedAt'] = new Date();
+      }
+
+      TaskRuntimeState.updateOne(
+        { taskId },
+        { $set: taskStateUpdate },
+        { upsert: true }
+      ).catch(err => {
+        warnLog('TaskState', `Failed to persist task state to MongoDB | taskId=${taskId}`, err);
       });
     }
 
@@ -6251,6 +6305,52 @@ async function verifyScheduledTaskTimers(): Promise<void> {
     `TIMER_MAP_STATE | scheduledCount=${scheduledTasks.length} | timeoutMapSize=${taskTimeouts.size} | countdownMapSize=${taskCountdownTimers.size}`,
     { scheduledCount: scheduledTasks.length, timeoutMapSize: taskTimeouts.size, countdownMapSize: taskCountdownTimers.size }
   );
+
+  // DEFENSIVE: Check ALL active running tasks and create timers if missing
+  // This catches edge cases where tasks have no timer regardless of their status
+  // (e.g., tasks stuck in RUNNING or QUEUEING that never completed their cycle)
+  for (const [taskId, task] of activeTasks) {
+    if (!task.running) continue;
+
+    for (const mp of task.selectedMarketplaces) {
+      const mpLower = mp.toLowerCase();
+      const timerKey = `${taskId}-${mpLower}`;
+
+      // Skip if timer already exists
+      if (taskTimeouts.has(timerKey)) continue;
+
+      // Get current status
+      const mpStatus = taskStatus[taskId]?.marketplaces?.[mpLower as 'opensea' | 'magiceden' | 'blur'];
+
+      // Only create defensive timer if status indicates the task should be cycling
+      // Skip if STOPPED or CANCELLING (user explicitly stopped the task)
+      if (mpStatus?.status === 'STOPPED' || mpStatus?.status === 'CANCELLING') continue;
+
+      // Check if this task has been without a timer for too long (defensive threshold)
+      // Only trigger if status is NOT SCHEDULED (SCHEDULED tasks are handled above)
+      if (mpStatus?.status !== 'SCHEDULED') {
+        const lastUpdate = mpStatus?.lastUpdate || 0;
+        const timeSinceUpdate = Date.now() - lastUpdate;
+
+        // If more than 5 minutes since last update and no timer, create one defensively
+        if (timeSinceUpdate > 5 * 60 * 1000) {
+          warnLog('TimerHealth',
+            `DEFENSIVE_TIMER_CREATE | taskId=${taskId} | mp=${mpLower} | status=${mpStatus?.status} | timeSinceUpdate=${Math.round(timeSinceUpdate / 1000)}s`,
+            { taskId, marketplace: mpLower as 'opensea' | 'magiceden' | 'blur', status: mpStatus?.status, timeSinceUpdate }
+          );
+
+          try {
+            // Force to COMPLETED status so scheduleNextLoop works correctly
+            setTaskStatus(taskId, 'COMPLETED', 'defensive timer creation', mpLower);
+            await scheduleNextLoop(taskId, mpLower);
+            debugLog('TimerHealth', `DEFENSIVE_TIMER_SUCCESS | taskId=${taskId} | mp=${mpLower}`);
+          } catch (err) {
+            errorLog('TimerHealth', `DEFENSIVE_TIMER_FAILED | taskId=${taskId} | mp=${mpLower}`, err);
+          }
+        }
+      }
+    }
+  }
 }
 
 /**
@@ -7845,6 +7945,33 @@ async function processListingUpdateJob(job: Job): Promise<boolean> {
   }
 }
 
+/**
+ * Start tasks in batches with exponential delay between batches.
+ * Prevents all tasks from hitting ws-proxy subscriptions simultaneously.
+ * @param tasks - Array of tasks to start
+ * @param batchSize - Number of tasks per batch (default 10)
+ */
+async function startTasksInBatches(tasks: ITask[], batchSize: number = 2): Promise<void> {
+  const BASE_DELAY = 2000; // 2 second base delay
+  const MAX_DELAY = 30000; // Cap at 30 seconds
+
+  for (let i = 0; i < tasks.length; i += batchSize) {
+    const batch = tasks.slice(i, i + batchSize);
+    const batchNumber = Math.floor(i / batchSize);
+
+    debugLog('TaskStart', `Starting batch ${batchNumber + 1}/${Math.ceil(tasks.length / batchSize)} (${batch.length} tasks)`);
+
+    await Promise.all(batch.map(task => startTask(task, true)));
+
+    // Exponential delay between batches (skip delay after last batch)
+    if (i + batchSize < tasks.length) {
+      const delay = Math.min(BASE_DELAY * Math.pow(2, batchNumber), MAX_DELAY);
+      debugLog('TaskStart', `Waiting ${delay}ms before next batch...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
 async function runScheduledLoop() {
   if (!API_KEY) {
     // Don't pause queue, just skip task creation
@@ -7856,11 +7983,13 @@ async function runScheduledLoop() {
     return
   }
 
-  await Promise.all(
-    Array.from(activeTasks.entries())
-      .filter(([_, task]) => task.running)
-      .map(([_, task]) => startTask(task, true))
-  );
+  const runningActiveTasks = Array.from(activeTasks.entries())
+    .filter(([_, task]) => task.running)
+    .map(([_, task]) => task);
+
+  if (runningActiveTasks.length > 0) {
+    await startTasksInBatches(runningActiveTasks);
+  }
 }
 
 async function processImportedTasks(tasks: ITask[]) {
@@ -7875,12 +8004,10 @@ async function processImportedTasks(tasks: ITask[]) {
       }
     });
 
-    // Start all running tasks concurrently
+    // Start running tasks in batches with exponential delay
     const runningTasks = tasks.filter(task => task.running);
     if (runningTasks.length > 0) {
-      await Promise.all(
-        runningTasks.map(task => startTask(task, true))
-      );
+      await startTasksInBatches(runningTasks);
     }
 
   } catch (error) {
@@ -9615,10 +9742,10 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
 
   clearTaskTimers(taskId, marketplace)
 
-  // Initialize order cache from database for this task (non-blocking with background retry)
+  // Initialize order cache from database for this task (MUST await to fix bidCount race condition)
   // This loads active orders into memory for fast lookups during bid processing
-  // Fire-and-forget: task starts immediately, cache populates in background
-  initializeOrderCacheWithRetry(task._id.toString()).catch(() => {
+  // Without await, bidStats gets initialized from an empty cache = always 0
+  await initializeOrderCacheWithRetry(task._id.toString()).catch(() => {
     // Silently ignore - retries and errors handled internally
   });
 
@@ -10000,7 +10127,7 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
                 removeOnComplete: true,
                 removeOnFail: false,  // Keep failed jobs for retry
                 attempts: Number.MAX_SAFE_INTEGER,  // Infinite retries for SCHEDULE jobs
-                timeout: 900000, // 15 minutes instead of default 5
+                timeout: 300000, // 5 minutes - uniform timeout
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -10016,7 +10143,7 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
                 removeOnComplete: true,
                 removeOnFail: false,  // Keep failed jobs for retry
                 attempts: Number.MAX_SAFE_INTEGER,  // Infinite retries for SCHEDULE jobs
-                timeout: 900000, // 15 minutes instead of default 5
+                timeout: 300000, // 5 minutes - uniform timeout
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -10032,7 +10159,7 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
                 removeOnComplete: true,
                 removeOnFail: false,  // Keep failed jobs for retry
                 attempts: Number.MAX_SAFE_INTEGER,  // Infinite retries for SCHEDULE jobs
-                timeout: 900000, // 15 minutes instead of default 5
+                timeout: 300000, // 5 minutes - uniform timeout
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -13282,14 +13409,22 @@ async function _doConnect(): Promise<void> {
       activeSubscriptions.clear();
     });
 
-    // Debug counter for message flow tracing
-    let clientHandlerCount = 0;
-
     wsManager.on('message', async (message: any) => {
       try {
-        clientHandlerCount++;
-        console.log(`[CLIENT-HANDLER] #${clientHandlerCount} | eventType=${message.eventType || message.type}`);
-        // Message reception logging removed - too noisy
+        rawWsMessagesReceived++;
+
+        // Track ALL our bids at earliest point (before any filtering)
+        if (message.eventType === 'BID_CREATED' || message.eventType === 'item_received_bid') {
+          const maker = message.payload?.payload?.maker?.address ||
+            message.payload?.maker?.address;
+          if (maker && isOurWallet(maker)) {
+            rawOurBidsReceived++;
+            const orderHash = message.payload?.payload?.order?.orderHash ||
+              message.payload?.order?.orderHash ||
+              message.orderHash;
+            debugLog('MsgFlow', `RAW_OUR_BID_RECV | #${rawOurBidsReceived} | orderHash=${orderHash?.slice(0, 12)}... | eventType=${message.eventType}`);
+          }
+        }
 
         // Handle initial data request synchronously
         if (message.endpoint === "get-initial-data") {
@@ -14817,6 +14952,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       data?.payload?.payload?.protocol_data?.parameters?.consideration?.find((item: any) => item.token.toLowerCase() === task.contract.contractAddress.toLowerCase())?.identifierOrCriteria : null;
     const traitForLog = eventType === "trait_offer" ?
       `${data?.payload?.payload?.trait_criteria?.trait_type}:${data?.payload?.payload?.trait_criteria?.trait_name}` : null;
+
+    // Debug: Log ALL bids reaching this handler to identify wallet mismatch issues
+    const isOurs = maker && isOurWallet(maker);
+    debugLog('BidCounter', `OS_BID_RECEIVED | slug=${task.contract.slug} | maker=${maker?.slice(0, 10)}... | isOurs=${isOurs} | orderHash=${orderHash?.slice(0, 10)}... | event=${eventType}`);
 
     const currentTask = activeTasks.get(task._id)
     if (!currentTask) {
@@ -21226,9 +21365,9 @@ async function processMagicedenScheduledBid(task: ITask, _jobId?: string, schedu
   const checkpointStart = Date.now();
   let lockAcquired = false;
 
-  // Timeout protection wrapper - 600 seconds max processing time (increased from 120s for large token count tasks)
-  const TIMEOUT_DURATION = 600000; // 10 minutes
-  const TIMEOUT_WARNING_THRESHOLD = TIMEOUT_DURATION * 0.8; // Warn at 80% (8 minutes)
+  // Timeout protection wrapper - 5 minutes max processing time (uniform timeout)
+  const TIMEOUT_DURATION = 300000; // 5 minutes - uniform timeout
+  const TIMEOUT_WARNING_THRESHOLD = TIMEOUT_DURATION * 0.8; // Warn at 80% (4 minutes)
   let timeoutWarningShown = false;
 
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -25207,6 +25346,28 @@ app.get('/api/message-loss-check', (req, res) => {
   });
 });
 
+// Enhanced message flow tracking endpoint (tracks from raw WebSocket receipt)
+app.get('/api/message-flow-stats', (req, res) => {
+  const wsManagerCounter = wsManager?.getOpenseaBidCreatedReceived?.() || 0;
+  const ownBidsCounted = ownBidCounts['opensea'] || 0;
+
+  res.json({
+    checkpoints: {
+      rawWsMessages: rawWsMessagesReceived,           // ALL WebSocket messages received
+      rawOurBids: rawOurBidsReceived,                 // Our bids at earliest checkpoint (before filtering)
+      wsManagerCounter,                               // OpenSea BID_CREATED counter in wsManager
+      ownBidsCounted,                                 // Final count in incrementOwnBidCounter
+    },
+    analysis: {
+      lossBeforeHandler: rawOurBidsReceived - ownBidsCounted,
+      lossPercentage: rawOurBidsReceived > 0
+        ? ((1 - ownBidsCounted / rawOurBidsReceived) * 100).toFixed(2) + '%'
+        : 'N/A'
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Debug endpoint for task scheduling state
 app.get('/debug/scheduling', (req, res) => {
   const now = Date.now();
@@ -27022,6 +27183,7 @@ export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
   try {
     // Check if we've already processed this bid
     if (processedOwnBids.has(orderHash)) {
+      debugLog('BidCounter', `SKIP_DUPLICATE | marketplace=${marketplace} | orderHash=${orderHash}`);
       return ownBidCounts[marketplace] || 0;
     }
 
@@ -27032,6 +27194,8 @@ export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
       ownBidCounts[marketplace] = 0;
     }
     ownBidCounts[marketplace]++;
+
+    debugLog('BidCounter', `OWN_BID_COUNTED | marketplace=${marketplace} | orderHash=${orderHash} | total=${ownBidCounts[marketplace]}`);
 
     // Clean up old entries periodically (keep last 5000 entries)
     // Memory optimization: streaming deletion instead of Array.from() copy
@@ -28299,6 +28463,106 @@ async function cleanupOldSchedules(): Promise<void> {
     }
   } catch (err) {
     errorLog('Watchdog', 'Schedule cleanup failed', err);
+  }
+}
+
+/**
+ * QUEUEING Watchdog: Recovers tasks stuck in QUEUEING state for too long
+ * This complements taskScheduleWatchdog which only handles SCHEDULED tasks
+ *
+ * A task gets stuck in QUEUEING when:
+ * 1. Jobs are queued but never picked up by workers (lock contention, stalled jobs)
+ * 2. markJobAsProcessed() never called → no RUNNING transition
+ * 3. checkTaskCompletionAndScheduleNext() never triggered → no timer created
+ *
+ * Recovery strategy: Force schedule next loop to restart the task cycle
+ */
+async function queueingTaskWatchdog(): Promise<void> {
+  const QUEUEING_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes stuck in QUEUEING = problem
+  const cutoffTime = new Date(Date.now() - QUEUEING_TIMEOUT_MS);
+
+  try {
+    // Find tasks stuck in QUEUEING for too long (using MongoDB TaskRuntimeState)
+    const stuckTasks = await TaskRuntimeState.find({
+      'taskState.status': 'QUEUEING',
+      'taskState.queuedAt': { $lt: cutoffTime }
+    }).limit(20);
+
+    if (stuckTasks.length > 0) {
+      warnLog('QueueingWatchdog',
+        `SCAN_FOUND | stuck=${stuckTasks.length} | timeout=${QUEUEING_TIMEOUT_MS / 1000}s`,
+        { stuckCount: stuckTasks.length, timeoutSeconds: QUEUEING_TIMEOUT_MS / 1000 }
+      );
+    }
+
+    for (const stuck of stuckTasks) {
+      const task = activeTasks.get(stuck.taskId);
+
+      // Skip if task is not active or not running
+      if (!task?.running) {
+        // Clear stale state from MongoDB
+        await TaskRuntimeState.updateOne(
+          { taskId: stuck.taskId },
+          { $set: { 'taskState.status': 'STOPPED', 'taskState.lastActivityAt': new Date() } }
+        );
+        debugLog('QueueingWatchdog',
+          `SKIP | taskId=${stuck.taskId} | reason=task_not_active`,
+          { taskId: stuck.taskId, reason: 'task_not_active' }
+        );
+        continue;
+      }
+
+      const stuckDurationMs = stuck.taskState?.queuedAt
+        ? Date.now() - new Date(stuck.taskState.queuedAt).getTime()
+        : 0;
+
+      warnLog('QueueingWatchdog',
+        `STUCK_TASK | taskId=${stuck.taskId} | stuckFor=${Math.round(stuckDurationMs / 1000)}s | recovering...`,
+        { taskId: stuck.taskId, stuckDurationMs }
+      );
+
+      // Recovery: For each marketplace, force schedule next loop
+      for (const mp of task.selectedMarketplaces) {
+        const mpLower = mp.toLowerCase();
+        const timerKey = `${stuck.taskId}-${mpLower}`;
+
+        // Check if timer already exists (might be recovering on its own)
+        if (taskTimeouts.has(timerKey)) {
+          debugLog('QueueingWatchdog',
+            `SKIP_MP | taskId=${stuck.taskId} | mp=${mpLower} | reason=timer_exists`,
+            { taskId: stuck.taskId, marketplace: mpLower as 'opensea' | 'magiceden' | 'blur' }
+          );
+          continue;
+        }
+
+        try {
+          // Force status to COMPLETED so scheduleNextLoop can create a new timer
+          setTaskStatus(stuck.taskId, 'COMPLETED', 'queueing watchdog recovery', mpLower);
+
+          // Schedule next loop to restart the cycle
+          await scheduleNextLoop(stuck.taskId, mpLower);
+
+          debugLog('QueueingWatchdog',
+            `RECOVERY_SUCCESS | taskId=${stuck.taskId} | mp=${mpLower}`,
+            { taskId: stuck.taskId, marketplace: mpLower as 'opensea' | 'magiceden' | 'blur' }
+          );
+        } catch (err) {
+          errorLog('QueueingWatchdog',
+            `RECOVERY_FAILED | taskId=${stuck.taskId} | mp=${mpLower}`,
+            err,
+            { taskId: stuck.taskId, marketplace: mpLower as 'opensea' | 'magiceden' | 'blur' }
+          );
+        }
+      }
+
+      // Update MongoDB state to prevent immediate re-recovery
+      await TaskRuntimeState.updateOne(
+        { taskId: stuck.taskId },
+        { $set: { 'taskState.status': 'SCHEDULED', 'taskState.lastActivityAt': new Date() } }
+      );
+    }
+  } catch (err) {
+    errorLog('QueueingWatchdog', 'Watchdog scan failed', err);
   }
 }
 
