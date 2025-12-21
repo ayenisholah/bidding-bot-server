@@ -237,9 +237,10 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'RedisOperation': 'redis',
   'RedisRecovery': 'redis',
 
-  // Lock (2)
+  // Lock (3)
   'Lock': 'lock',
   'LockRelease': 'lock',
+  'CircuitBreaker': 'lock',   // Per-collection circuit breaker state changes
 
   // Marketplaces (3)
   'Blur': 'blur',

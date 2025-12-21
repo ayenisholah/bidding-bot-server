@@ -148,6 +148,13 @@ class WebSocketManager extends EventEmitter {
   // Message loss detection counter - counts OPENSEA BID_CREATED received
   private openseaBidCreatedReceived = 0;
 
+  // Backpressure detection - tracks how many handlers are still processing
+  private pendingHandlers = 0;
+  private readonly MAX_PENDING_HANDLERS = 100;
+
+  // O(1) slug lookup set for subscription validation
+  private subscribedSlugs = new Set<string>();
+
   constructor(config: WebSocketManagerConfig) {
     super();
     this.config = {
@@ -539,16 +546,19 @@ class WebSocketManager extends EventEmitter {
 
       // Clear active subscriptions to ensure clean state
       this.activeSubscriptions.clear();
+      this.subscribedSlugs.clear();
 
       // Restore persistent listing subscriptions to active subscriptions
       for (const [key, value] of this.persistentListingSubscriptions) {
         this.activeSubscriptions.set(key, value);
+        this.subscribedSlugs.add(value.slug);
         infoLog('WebSocket', `[SYNC] Restoring persistent listing subscription | key=${key} | slug=${value.slug}`);
       }
 
       // Restore persistent bidding subscriptions to active subscriptions
       for (const [key, value] of this.persistentBiddingSubscriptions) {
         this.activeSubscriptions.set(key, value);
+        this.subscribedSlugs.add(value.slug);
         infoLog('WebSocket', `[SYNC] Restoring persistent bidding subscription | key=${key} | slug=${value.slug}`);
       }
 
@@ -699,14 +709,28 @@ class WebSocketManager extends EventEmitter {
       }
 
       // Latency tracking - check if message has a timestamp from ws-proxy
-      if (message.timestamp || parsed.timestamp) {
-        const msgTimestamp = message.timestamp || parsed.timestamp;
+      const msgTimestamp = message.timestamp || parsed.timestamp || message._proxyReceiveTime;
+      const eventType = message.eventType || message.event || message.type || 'unknown';
+      const marketplace = message.marketplace || 'unknown';
+      const traceId = message._traceId || 'no-trace';
+
+      if (msgTimestamp) {
         const latency = receiveTime - msgTimestamp;
 
-        // Log high latency (>1000ms) as warning for investigation
-        if (latency > 1000) {
-          warnLog('WsProxyLag', `latency=${latency}ms | eventType=${message.eventType || message.event || message.type || 'unknown'} | marketplace=${message.marketplace || 'unknown'}`);
+        // Record latency for metrics
+        this.recordLatency(latency);
+
+        // Tiered latency logging for better visibility
+        if (latency > 5000) {
+          errorLog('WsProxyLag', `CRITICAL_LATENCY | TRACE=${traceId} | latency=${latency}ms | eventType=${eventType} | marketplace=${marketplace}`);
+        } else if (latency > 1000) {
+          warnLog('WsProxyLag', `HIGH_LATENCY | TRACE=${traceId} | latency=${latency}ms | eventType=${eventType} | marketplace=${marketplace}`);
+        } else if (latency > 100) {
+          debugLog('WsProxyLag', `MODERATE_LATENCY | TRACE=${traceId} | latency=${latency}ms | eventType=${eventType} | marketplace=${marketplace}`);
         }
+      } else {
+        // Warn if timestamp is missing - cannot track latency
+        debugLog('MsgFlow', `NO_TIMESTAMP | TRACE=${traceId} | eventType=${eventType} | marketplace=${marketplace} | cannotTrackLatency=true`);
       }
 
       // Handle pong messages
@@ -773,7 +797,27 @@ class WebSocketManager extends EventEmitter {
         }
       }
 
+      // Backpressure detection: check if handlers are queuing up
+      if (this.pendingHandlers > this.MAX_PENDING_HANDLERS) {
+        warnLog('MsgFlow', `BACKPRESSURE | pendingHandlers=${this.pendingHandlers} | maxAllowed=${this.MAX_PENDING_HANDLERS} | TRACE=${traceId} | eventType=${eventType} | dropping=true`);
+        return; // Drop message to prevent queue buildup
+      }
+
+      // Track handler timing
+      const emitStart = Date.now();
+      this.pendingHandlers++;
+
+      // Emit message to handlers
       this.emit('message', message);
+
+      // Track handler completion with setImmediate to not block current processing
+      setImmediate(() => {
+        this.pendingHandlers--;
+        const handlerDuration = Date.now() - emitStart;
+        if (handlerDuration > 100) {
+          warnLog('MsgFlow', `SLOW_HANDLER | durationMs=${handlerDuration} | TRACE=${traceId} | eventType=${eventType} | pendingHandlers=${this.pendingHandlers}`);
+        }
+      });
 
     } catch (error) {
       errorLog('WebSocket', 'Failed to parse WebSocket message', error);
@@ -788,13 +832,10 @@ class WebSocketManager extends EventEmitter {
     }
   }
 
-  // Check if we're subscribed to a specific slug
+  // Check if we're subscribed to a specific slug - O(1) lookup using Set
   private isSubscribedToSlug(slug: string): boolean {
     if (!slug) return false;
-    for (const [, info] of this.activeSubscriptions) {
-      if (info.slug === slug) return true;
-    }
-    return false;
+    return this.subscribedSlugs.has(slug);
   }
 
   private handlePong(timestamp: number): void {
@@ -1117,6 +1158,9 @@ class WebSocketManager extends EventEmitter {
 
       this.activeSubscriptions.set(subscriptionId, subscriptionInfo);
 
+      // Update O(1) slug lookup set
+      this.subscribedSlugs.add(slug);
+
       // Persist listing subscriptions (per CLIENT_CONNECTION_GUIDE.md)
       if (subscriptionType === 'listing') {
         this.persistentListingSubscriptions.set(subscriptionId, subscriptionInfo);
@@ -1228,6 +1272,18 @@ class WebSocketManager extends EventEmitter {
       }
 
       this.metrics.subscriptionCount = this.activeSubscriptions.size;
+
+      // Update O(1) slug lookup set - only remove if no other subscriptions for this slug exist
+      let slugStillSubscribed = false;
+      for (const [, info] of this.activeSubscriptions) {
+        if (info.slug === slug) {
+          slugStillSubscribed = true;
+          break;
+        }
+      }
+      if (!slugStillSubscribed) {
+        this.subscribedSlugs.delete(slug);
+      }
 
       // Log state AFTER unsubscription
       infoLog('WebSocket', `[UNSUBSCRIBE] Completed | slug=${slug} | removedKeys=${removedKeys.join(',') || 'none'} | remainingActiveSlugs=${this.getActiveSlugsList()} | totalActive=${this.activeSubscriptions.size} | totalPersistent=${this.persistentListingSubscriptions.size}`);
@@ -1579,6 +1635,7 @@ class WebSocketManager extends EventEmitter {
     // Clear local state
     this.activeSubscriptions.clear();
     this.persistentBiddingSubscriptions.clear();
+    this.subscribedSlugs.clear();
   }
 }
 

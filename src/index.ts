@@ -68,6 +68,7 @@ import { BoundedCache } from "./utils/bounded-cache";
 import { walletCache } from "./utils/wallet-cache";
 import { collectionCache } from "./utils/collection-cache";
 import { taskCircuitBreaker } from "./utils/task-circuit-breaker";
+import { openseaFloorBreakerRegistry } from "./utils/circuit-breaker";
 import { blurRateLimiter } from "./utils/blur-rate-limiter";
 import { approvalCache } from "./utils/approval-cache";
 import { blurCompletionTracker } from "./utils/blur-completion-tracker";
@@ -121,6 +122,8 @@ const counterbidCounts: BidCounts = {};
 // Message flow tracking counters (for debugging WebSocket message loss)
 let rawWsMessagesReceived = 0;
 let rawOurBidsReceived = 0;
+let bidEventsReceived = 0;        // All BID_CREATED events received at WebSocket
+let bidEventsReachingHandler = 0; // Events that reach handleCounterBid
 
 // ============================================
 // RESILIENT HELPER FUNCTIONS
@@ -3099,7 +3102,7 @@ async function startServer() {
       const worker = new Worker(
         QUEUE_NAME,
         async (job) => {
-          const jobTimeout = 300000; // 5 minutes - uniform timeout for all jobs
+          const jobTimeout = 600000; // 10 minutes - increased for WebSocket latency recovery
           const abortController = new AbortController();
 
           const timeoutPromise = new Promise((_, reject) => {
@@ -3127,9 +3130,9 @@ async function startServer() {
         {
           connection: workerConnection,
           concurrency: concurrencyPerWorker,
-          lockDuration: 60000,      // 1 minute - faster lock release on stuck jobs (was 5 min)
-          stalledInterval: 15000,   // Check every 15 seconds (was 1 min)
-          maxStalledCount: 4        // 4 stall checks before failing (1 min safety net)
+          lockDuration: 120000,      // 2 minutes - 5:1 ratio with 600s job timeout
+          stalledInterval: 15000,   // Check every 15 seconds
+          maxStalledCount: 4        // 4 stall checks = 60s safety net before force-fail
         }
       );
 
@@ -3235,7 +3238,7 @@ async function startServer() {
     const blurWorker = new Worker(
       BLUR_BIDDING_QUEUE,
       async (job) => {
-        const jobTimeout = 300000; // 5 minutes - uniform timeout for all jobs
+        const jobTimeout = 600000; // 10 minutes - increased for WebSocket latency recovery
         const abortController = new AbortController();
 
         const timeoutPromise = new Promise((_, reject) => {
@@ -3267,9 +3270,9 @@ async function startServer() {
       {
         connection: blurWorkerConnection,
         concurrency: concurrencyPerWorker, // Reduce concurrency for Blur to prevent rate limit issues
-        lockDuration: 60000,      // 1 minute - faster lock release on stuck jobs (was 5 min)
-        stalledInterval: 15000,   // Check every 15 seconds (was 1 min)
-        maxStalledCount: 4        // 4 stall checks before failing (1 min safety net)
+        lockDuration: 120000,      // 2 minutes - 5:1 ratio with 600s job timeout
+        stalledInterval: 15000,   // Check every 15 seconds
+        maxStalledCount: 4        // 4 stall checks = 60s safety net before force-fail
       }
     );
 
@@ -3883,6 +3886,20 @@ async function startServer() {
         infoLog('MsgLoss', `CHECKPOINT | wsReceived=${wsReceived} | ownBidsCounted=${ownBidsCounted} | gap=${gap}`);
       }
     }, MSG_LOSS_CHECK_INTERVAL);
+
+    // Start periodic circuit breaker stats logging and cleanup
+    const CIRCUIT_BREAKER_STATS_INTERVAL = 60000; // 60 seconds
+    setInterval(() => {
+      const openseaStats = openseaFloorBreakerRegistry.getStats();
+
+      // Only log if there are open or half-open breakers (indicates issues)
+      if (openseaStats.open > 0 || openseaStats.halfOpen > 0) {
+        warnLog('CircuitBreaker', `STATS | registry=opensea:floor | total=${openseaStats.total} | open=${openseaStats.open} | halfOpen=${openseaStats.halfOpen} | closed=${openseaStats.closed}`);
+      }
+
+      // Cleanup stale breakers (closed state, no activity for 5 minutes)
+      openseaFloorBreakerRegistry.cleanup();
+    }, CIRCUIT_BREAKER_STATS_INTERVAL);
 
     // Load wallet addresses for self-bid detection
     await loadOurWalletAddresses();
@@ -6169,30 +6186,6 @@ async function recreateTimersFromRedis(taskId: string, task: ITask): Promise<voi
 }
 
 /**
- * Clean up persisted task state from Redis when task is stopped.
- */
-async function cleanupPersistedTaskState(taskId: string): Promise<void> {
-  try {
-    const redis = getRedisConnection();
-
-    // Delete all persisted state for this task
-    await redis.del(`${REDIS_KEY_TASK_STATUS}${taskId}`);
-    await redis.del(`${REDIS_KEY_LOOP_COUNT}${taskId}`);
-    await redis.del(`${REDIS_KEY_TASK_STARTED}${taskId}`);
-    await redis.del(`${REDIS_KEY_LAST_SCHEDULE}${taskId}`);
-
-    // Delete next loop times for all marketplaces
-    for (const mp of ['opensea', 'magiceden', 'blur']) {
-      await redis.del(`${REDIS_KEY_NEXT_LOOP}${taskId}:${mp}`);
-    }
-
-    debugLog('Recovery', `Cleaned up persisted state for ${taskId}`);
-  } catch (err) {
-    errorLog('Redis', `Failed to cleanup persisted task state for ${taskId}: ${err instanceof Error ? err.message : err}`);
-  }
-}
-
-/**
  * Recover a stuck task TIMER by directly calling scheduleNextLoop() instead of going through SCHEDULE jobs.
  * This avoids the silent failure paths in startTask() and SCHEDULE job processing.
  */
@@ -7950,7 +7943,7 @@ async function processListingUpdateJob(job: Job): Promise<boolean> {
  * @param tasks - Array of tasks to start
  * @param batchSize - Number of tasks per batch (default 10)
  */
-async function startTasksInBatches(tasks: ITask[], batchSize: number = 2): Promise<void> {
+async function startTasksInBatches(tasks: ITask[], batchSize: number = 10): Promise<void> {
   const BASE_DELAY = 2000; // 2 second base delay
   const MAX_DELAY = 30000; // Cap at 30 seconds
 
@@ -7969,6 +7962,47 @@ async function startTasksInBatches(tasks: ITask[], batchSize: number = 2): Promi
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
+}
+
+/**
+ * Stop tasks in batches with exponential delay between batches.
+ * Prevents all tasks from hitting ws-proxy unsubscriptions simultaneously.
+ * @param tasks - Array of tasks to stop
+ * @param batchSize - Number of tasks per batch (default 10)
+ * @returns Array of results with success/error for each task
+ */
+async function stopTasksInBatches(tasks: ITask[], batchSize: number = 10): Promise<{ task: string; success?: boolean; error?: any }[]> {
+  const BASE_DELAY = 2000; // 2 second base delay
+  const MAX_DELAY = 30000; // Cap at 30 seconds
+  const results: { task: string; success?: boolean; error?: any }[] = [];
+
+  for (let i = 0; i < tasks.length; i += batchSize) {
+    const batch = tasks.slice(i, i + batchSize);
+    const batchNumber = Math.floor(i / batchSize);
+
+    debugLog('TaskStop', `Stopping batch ${batchNumber + 1}/${Math.ceil(tasks.length / batchSize)} (${batch.length} tasks)`);
+
+    const batchResults = await Promise.all(batch.map(async (task) => {
+      try {
+        await stopTask(task, false);
+        return { task: task.contract.slug, success: true };
+      } catch (error) {
+        errorLog('Task', `Error stopping task ${task.contract.slug}`, error);
+        return { task: task.contract.slug, error };
+      }
+    }));
+
+    results.push(...batchResults);
+
+    // Exponential delay between batches (skip delay after last batch)
+    if (i + batchSize < tasks.length) {
+      const delay = Math.min(BASE_DELAY * Math.pow(2, batchNumber), MAX_DELAY);
+      debugLog('TaskStop', `Waiting ${delay}ms before next batch...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  return results;
 }
 
 async function runScheduledLoop() {
@@ -13087,65 +13121,16 @@ async function updateMultipleTasksStatus(data: { tasks: ITask[], running: boolea
     const { tasks, running } = data;
 
     if (running) {
-      // Process all tasks in parallel
-      const startPromises = tasks.map(task =>
-        (async () => {
-          try {
-            const result = await startTask(task, true);
-            return { task: task.contract.slug, result };
-          } catch (error) {
-            errorLog('Task', `Error starting task ${task.contract.slug}`, error);
-            // Return error info instead of throwing to allow other tasks to continue
-            return { task: task.contract.slug, error };
-          }
-        })()
-      );
-
-      const results = await Promise.all(startPromises);
-
-      // Log summary of results
-      const errors = results.filter(r => r?.error);
-      const aborted = results.filter(r => r?.result && !r.result.success);
-      const succeeded = results.filter(r => r?.result?.success);
-
-      if (errors.length > 0 || aborted.length > 0) {
-        if (aborted.length > 0) {
-          const reasons = aborted.map(r => r.result?.reason || 'unknown').filter((v, i, a) => a.indexOf(v) === i);
-        }
-      } else {
-      }
+      // Start tasks in batches with exponential delay to prevent overwhelming ws-proxy
+      await startTasksInBatches(tasks);
     } else {
-      // Process all tasks with coordination to prevent race conditions
-      // Add delay between each task to avoid overwhelming the system
-      const STOP_TASK_DELAY = 100; // 100ms between each task
-      const stopPromises = tasks.map((task, index) =>
-        (async () => {
-          try {
-            // Add staggered delay to prevent all tasks from hitting the system at once
-            await new Promise(resolve => setTimeout(resolve, index * STOP_TASK_DELAY));
-
-            await stopTask(task, false);
-            return { task: task.contract.slug, success: true };
-          } catch (error) {
-            errorLog('Task', `Error stopping task ${task.contract.slug}`, error);
-            // Return error info instead of throwing to allow other tasks to continue
-            return { task: task.contract.slug, error };
-          }
-        })()
-      );
-
-      const results = await Promise.all(stopPromises);
+      // Stop tasks in batches with exponential delay to prevent overwhelming ws-proxy
+      const results = await stopTasksInBatches(tasks);
 
       // Log summary of results
       const errors = results.filter(r => r?.error);
-
-      // Add defensive check to ensure results are valid
-      if (!Array.isArray(results)) {
-        errorLog('Task', 'Invalid results from stopPromises');
-        return;
-      }
       if (errors.length > 0) {
-      } else {
+        errorLog('Task', `Failed to stop ${errors.length}/${tasks.length} tasks`);
       }
 
       // Clean up any orphaned data for stopped tasks
@@ -13412,8 +13397,12 @@ async function _doConnect(): Promise<void> {
       try {
         rawWsMessagesReceived++;
 
-        // Track ALL our bids at earliest point (before any filtering)
+        // Track ALL bid events at earliest point (before any filtering)
         if (message.eventType === 'BID_CREATED' || message.eventType === 'item_received_bid') {
+          bidEventsReceived++;
+          const traceId = message._traceId || 'no-trace';
+          debugLog('MsgFlow', `CP_BID_EVENT | #${bidEventsReceived} | traceId=${traceId} | eventType=${message.eventType}`);
+
           const maker = message.payload?.payload?.maker?.address ||
             message.payload?.maker?.address;
           if (maker && isOurWallet(maker)) {
@@ -13816,6 +13805,11 @@ async function triggerAutoListingForPurchase(
 
 async function handleCounterBid(message: any) {
   try {
+    // Track bid events reaching handler
+    bidEventsReachingHandler++;
+    const traceId = message._traceId || 'no-trace';
+    debugLog('MsgFlow', `CP_HANDLER | #${bidEventsReachingHandler} | traceId=${traceId}`);
+
     // Mark that we received a bid event for the watchdog
     wsManager?.markBidEventReceived();
 
@@ -17522,8 +17516,8 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
 
   let lockAcquired = false;
 
-  // Timeout protection wrapper - 300 seconds max processing time
-  const TIMEOUT_DURATION = 300000; // 5 minutes
+  // Timeout protection wrapper - 600 seconds max processing time (increased for WebSocket latency)
+  const TIMEOUT_DURATION = 600000; // 10 minutes
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => {
       reject(new Error(`OpenSea scheduled bid timeout after ${TIMEOUT_DURATION}ms for task ${taskId}`));
@@ -21382,8 +21376,8 @@ async function processMagicedenScheduledBid(task: ITask, _jobId?: string, schedu
   const checkpointStart = Date.now();
   let lockAcquired = false;
 
-  // Timeout protection wrapper - 5 minutes max processing time (uniform timeout)
-  const TIMEOUT_DURATION = 300000; // 5 minutes - uniform timeout
+  // Timeout protection wrapper - 10 minutes max processing time (increased for WebSocket latency)
+  const TIMEOUT_DURATION = 600000; // 10 minutes
   const TIMEOUT_WARNING_THRESHOLD = TIMEOUT_DURATION * 0.8; // Warn at 80% (4 minutes)
   let timeoutWarningShown = false;
 
@@ -25380,6 +25374,24 @@ app.get('/api/message-flow-stats', (req, res) => {
       lossPercentage: rawOurBidsReceived > 0
         ? ((1 - ownBidsCounted / rawOurBidsReceived) * 100).toFixed(2) + '%'
         : 'N/A'
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Bid flow checkpoints endpoint - tracks bid events through the pipeline
+app.get('/api/bid-flow-checkpoints', (req, res) => {
+  res.json({
+    wsMessagesTotal: rawWsMessagesReceived,
+    bidEventsReceived,
+    bidEventsReachingHandler,
+    ownBidsCounted: {
+      opensea: ownBidCounts['opensea'] || 0,
+      magiceden: ownBidCounts['magiceden'] || 0,
+      blur: ownBidCounts['blur'] || 0,
+    },
+    gaps: {
+      wsToHandler: bidEventsReceived - bidEventsReachingHandler,
     },
     timestamp: new Date().toISOString()
   });

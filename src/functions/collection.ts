@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { AxiosResponse } from 'axios';
 import { axiosInstance, limiter } from "../init"; // Import Redis client
 import { DistributedLockManager } from "../utils/lock";
-import { CircuitBreaker } from "../utils/circuit-breaker";
+import { openseaFloorBreakerRegistry } from "../utils/circuit-breaker";
 import { API_KEY } from "..";
 import redisClient from '../utils/redis';
 import { CollectionItemsListQuery } from "../queries";
@@ -72,14 +72,6 @@ const getRedis = () => redisClient.getClient();
 const lockManager = new DistributedLockManager({
   lockPrefix: 'collection:fetch:',
   defaultTTLSeconds: 300 // Reduced from 10 hours to 5 minutes
-});
-
-// Circuit breaker for OpenSea API calls to prevent retry storms
-// Updated settings to be less aggressive after 2025-12-02 outage analysis
-const openseaCircuitBreaker = new CircuitBreaker({
-  failureThreshold: 10,    // Open circuit after 10 consecutive failures (increased from 5)
-  resetTimeout: 120000,    // Wait 120s before attempting recovery (increased from 60s)
-  halfOpenRequests: 5      // Test recovery with 5 requests (increased from 3)
 });
 
 // Helper function to add timeout to promises
@@ -346,9 +338,11 @@ export async function getOpenseaFloor(collectionSlug: string) {
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
+        // Use per-collection circuit breaker to isolate failures
+        const breaker = openseaFloorBreakerRegistry.getBreaker(collectionSlug);
         const { data } = await apiDedup(
           `opensea-floor-${collectionSlug}`,
-          () => openseaCircuitBreaker.execute(() =>
+          () => breaker.execute(() =>
             limiter.schedule({ priority: 0 }, () => axiosInstance.post<FloorPriceResponse>(
               `${BASE_URL}/opensea/graphql`,
               payload,
