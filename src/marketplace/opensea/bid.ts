@@ -362,6 +362,12 @@ export async function bidOnOpensea(
   asset?: { contractAddress: string, tokenId: number },
   source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
+  // OpenSea requires minimum 10 minutes (600 seconds) expiration
+  // Enforce minimum to prevent "Expiration time must be at least 10 minutes past submission time" errors
+  const OPENSEA_MIN_EXPIRY = 900; // 15 minutes in seconds
+  if (expiry < OPENSEA_MIN_EXPIRY) {
+    expiry = OPENSEA_MIN_EXPIRY;
+  }
 
   try {
     // Initialize timing tracker

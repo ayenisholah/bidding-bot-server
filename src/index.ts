@@ -3102,7 +3102,7 @@ async function startServer() {
       const worker = new Worker(
         QUEUE_NAME,
         async (job) => {
-          const jobTimeout = 600000; // 10 minutes - increased for WebSocket latency recovery
+          const jobTimeout = 900000; // 15 minutes - increased for event loop recovery
           const abortController = new AbortController();
 
           const timeoutPromise = new Promise((_, reject) => {
@@ -3130,9 +3130,9 @@ async function startServer() {
         {
           connection: workerConnection,
           concurrency: concurrencyPerWorker,
-          lockDuration: 120000,      // 2 minutes - 5:1 ratio with 600s job timeout
-          stalledInterval: 15000,   // Check every 15 seconds
-          maxStalledCount: 4        // 4 stall checks = 60s safety net before force-fail
+          lockDuration: 300000,      // 5 minutes - handles event loop blocks up to 4+ minutes
+          stalledInterval: 30000,   // Check every 30 seconds
+          maxStalledCount: 6        // 6 stall checks = 180s safety net before force-fail
         }
       );
 
@@ -3238,7 +3238,7 @@ async function startServer() {
     const blurWorker = new Worker(
       BLUR_BIDDING_QUEUE,
       async (job) => {
-        const jobTimeout = 600000; // 10 minutes - increased for WebSocket latency recovery
+        const jobTimeout = 900000; // 15 minutes - increased for event loop recovery
         const abortController = new AbortController();
 
         const timeoutPromise = new Promise((_, reject) => {
@@ -3270,9 +3270,9 @@ async function startServer() {
       {
         connection: blurWorkerConnection,
         concurrency: concurrencyPerWorker, // Reduce concurrency for Blur to prevent rate limit issues
-        lockDuration: 120000,      // 2 minutes - 5:1 ratio with 600s job timeout
-        stalledInterval: 15000,   // Check every 15 seconds
-        maxStalledCount: 4        // 4 stall checks = 60s safety net before force-fail
+        lockDuration: 300000,      // 5 minutes - handles event loop blocks up to 4+ minutes
+        stalledInterval: 30000,   // Check every 30 seconds
+        maxStalledCount: 6        // 6 stall checks = 180s safety net before force-fail
       }
     );
 
@@ -3438,7 +3438,7 @@ async function startServer() {
         maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE) || 100, // Increased to handle high concurrency
         minPoolSize: Number(process.env.MONGO_MIN_POOL_SIZE) || 30, // More warm connections for faster startup
         maxIdleTimeMS: 60000, // Keep connections open longer for frequent queries
-        waitQueueTimeoutMS: 10000, // Max wait time for connection from pool
+        waitQueueTimeoutMS: 60000, // Max wait time for connection from pool (increased from 10s to handle event loop blocks)
 
         // Performance optimizations
         retryWrites: true,
@@ -6375,6 +6375,11 @@ async function cleanupStuckJobs(): Promise<void> {
 
     // Helper function to process stuck jobs
     const processStuckJob = async (job: Job, queueName: string, state: 'delayed' | 'waiting') => {
+      // Null check to prevent TypeError when job is undefined (can happen if job deleted between fetch and process)
+      if (!job) {
+        debugLog('StuckJobCleanup', `SKIP_UNDEFINED_JOB | queue=${queueName} | state=${state}`);
+        return;
+      }
       const stuckSince = Date.now() - (job.timestamp || 0);
       const stuckSeconds = Math.round(stuckSince / 1000);
       const isScheduleJob = SCHEDULE_JOBS.includes(job.name);
@@ -10160,7 +10165,7 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
                 removeOnComplete: true,
                 removeOnFail: false,  // Keep failed jobs for retry
                 attempts: Number.MAX_SAFE_INTEGER,  // Infinite retries for SCHEDULE jobs
-                timeout: 300000, // 5 minutes - uniform timeout
+                timeout: 600000, // 10 minutes - increased for event loop recovery
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -10176,7 +10181,7 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
                 removeOnComplete: true,
                 removeOnFail: false,  // Keep failed jobs for retry
                 attempts: Number.MAX_SAFE_INTEGER,  // Infinite retries for SCHEDULE jobs
-                timeout: 300000, // 5 minutes - uniform timeout
+                timeout: 600000, // 10 minutes - increased for event loop recovery
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -10192,7 +10197,7 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
                 removeOnComplete: true,
                 removeOnFail: false,  // Keep failed jobs for retry
                 attempts: Number.MAX_SAFE_INTEGER,  // Infinite retries for SCHEDULE jobs
-                timeout: 300000, // 5 minutes - uniform timeout
+                timeout: 600000, // 10 minutes - increased for event loop recovery
                 backoff: {
                   type: 'exponential',
                   delay: 2000,
@@ -17516,8 +17521,8 @@ async function processOpenseaScheduledBid(task: ITask, scheduleJob?: Job) {
 
   let lockAcquired = false;
 
-  // Timeout protection wrapper - 600 seconds max processing time (increased for WebSocket latency)
-  const TIMEOUT_DURATION = 600000; // 10 minutes
+  // Timeout protection wrapper - 900 seconds max processing time (increased for event loop recovery)
+  const TIMEOUT_DURATION = 900000; // 15 minutes
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => {
       reject(new Error(`OpenSea scheduled bid timeout after ${TIMEOUT_DURATION}ms for task ${taskId}`));
@@ -21376,9 +21381,9 @@ async function processMagicedenScheduledBid(task: ITask, _jobId?: string, schedu
   const checkpointStart = Date.now();
   let lockAcquired = false;
 
-  // Timeout protection wrapper - 10 minutes max processing time (increased for WebSocket latency)
-  const TIMEOUT_DURATION = 600000; // 10 minutes
-  const TIMEOUT_WARNING_THRESHOLD = TIMEOUT_DURATION * 0.8; // Warn at 80% (4 minutes)
+  // Timeout protection wrapper - 15 minutes max processing time (increased for event loop recovery)
+  const TIMEOUT_DURATION = 900000; // 15 minutes
+  const TIMEOUT_WARNING_THRESHOLD = TIMEOUT_DURATION * 0.8; // Warn at 80% (12 minutes)
   let timeoutWarningShown = false;
 
   const timeoutPromise = new Promise<never>((_, reject) => {
