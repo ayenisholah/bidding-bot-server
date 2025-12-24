@@ -3990,6 +3990,11 @@ process.on('SIGINT', async () => {
   seenOrderHashes.clear();
   seenBids.clear();
 
+  // Clear task status history (memory leak fix - 2025-12-24)
+  for (const taskId in taskStatusHistory) {
+    delete taskStatusHistory[taskId];
+  }
+
   logProcessExit(0, 'SIGINT graceful shutdown');
   process.exit(0);
 });
@@ -4067,6 +4072,12 @@ process.on('SIGTERM', async () => {
 
   seenOrderHashes.clear();
   seenBids.clear();
+
+  // Clear task status history (memory leak fix - 2025-12-24)
+  for (const taskId in taskStatusHistory) {
+    delete taskStatusHistory[taskId];
+  }
+
   logProcessExit(0, 'SIGTERM graceful shutdown');
   process.exit(0);
 });
@@ -4245,6 +4256,12 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string, mark
       stack: stackTrace
     });
 
+    // Trim to prevent unbounded memory growth (keep last 100 entries)
+    const MAX_STATUS_HISTORY = 100;
+    if (taskStatusHistory[taskId].length > MAX_STATUS_HISTORY) {
+      taskStatusHistory[taskId] = taskStatusHistory[taskId].slice(-MAX_STATUS_HISTORY);
+    }
+
     // TaskFlow logging: Initial task status created
     debugLog('StateTransition',
       `INIT_CREATED | taskId=${taskId} | marketplaces=[${selectedMarketplaces.join(',')}] | status=${newStatus}`,
@@ -4326,6 +4343,12 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string, mark
       marketplace,
       stack: stackTrace
     });
+
+    // Trim to prevent unbounded memory growth (keep last 100 entries)
+    const MAX_STATUS_HISTORY = 100;
+    if (taskStatusHistory[taskId].length > MAX_STATUS_HISTORY) {
+      taskStatusHistory[taskId] = taskStatusHistory[taskId].slice(-MAX_STATUS_HISTORY);
+    }
 
     // Persist state to Redis for important status changes (for crash recovery)
     // Only persist for statuses that matter for recovery: SCHEDULED, RUNNING, COMPLETED
@@ -4586,6 +4609,9 @@ function cleanupTaskResources(taskId: string, preserveWarnings = false): void {
   }
 
   delete bestOffers[taskId];
+
+  // Clean up task status history (memory leak fix - 2025-12-24)
+  delete taskStatusHistory[taskId];
 
   // Clear scheduling tracking
   lastScheduleTimes.delete(taskId);

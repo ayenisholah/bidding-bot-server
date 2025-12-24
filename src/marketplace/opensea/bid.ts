@@ -712,24 +712,18 @@ export async function bidOnOpensea(
         delete payload.criteria.trait
 
 
-        const counter = await SEAPORT_CONTRACT.getCounter(wallet_address)
+        const buildPayload = {
+          quantity: 1,
+          criteria: payload.criteria,
+          offerer: wallet_address,
+          protocol_address: SEAPORT_1_6
+        };
 
-        // Note: For collection bids without traits, we're using hardcoded data instead of calling buildOffer
-        const data = {
-          partialParameters: {
-            consideration: [{
-              itemType: 4,
-              token: contractAddress,
-              identifierOrCriteria: 0,
-              startAmount: "1",
-              endAmount: "1",
-              recipient: wallet_address
-            }],
-            zone: "0x000056f7000000ece9003ca63978907a00ffd100",
-            zoneHash: "0x0000000000000000000000000000000000000000000000000000000000000000"
-          },
-          encodedTokenIds: ""
-        }
+        // Use buildOffer API to get correct itemType for both ERC-721 and ERC-1155 collections
+        const [data, counter] = await Promise.all([
+          buildOffer(taskId, buildPayload),
+          SEAPORT_CONTRACT.getCounter(wallet_address)
+        ]);
 
 
         if (!data || !data.partialParameters) {
