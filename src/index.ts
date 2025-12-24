@@ -3901,6 +3901,27 @@ async function startServer() {
       openseaFloorBreakerRegistry.cleanup();
     }, CIRCUIT_BREAKER_STATS_INTERVAL);
 
+    // Start periodic orphan scan for parentJobs/processedJobsPerParent
+    // Removes entries for tasks that no longer exist (safety net for edge cases)
+    const ORPHAN_SCAN_INTERVAL = 5 * 60 * 1000; // 5 minutes
+    setInterval(() => {
+      const activeTaskIds = new Set(activeTasks.keys());
+      let orphanedCount = 0;
+
+      for (const [key, value] of parentJobs.entries()) {
+        const taskId = value.taskId;
+        if (!activeTaskIds.has(taskId)) {
+          parentJobs.delete(key);
+          processedJobsPerParent.delete(key);
+          orphanedCount++;
+        }
+      }
+
+      if (orphanedCount > 0) {
+        debugLog('Cleanup', `ORPHAN_SCAN | removed ${orphanedCount} orphaned parent jobs`);
+      }
+    }, ORPHAN_SCAN_INTERVAL);
+
     // Load wallet addresses for self-bid detection
     await loadOurWalletAddresses();
 
