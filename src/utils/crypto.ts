@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { config } from "dotenv"
 import { getRedisConnection } from '../utils/redis'
-import { errorLog, warnLog } from './debug-file-logger'
+import { debugLog, errorLog, warnLog } from './debug-file-logger'
 
 config()
 
@@ -390,27 +390,72 @@ export function getDecryptionCacheStats(): { size: number; maxSize: number; ttl:
   };
 }
 
+// Password encryption using GCM mode (secure, non-deterministic)
+// Format: "gcm:iv:authTag:encrypted" for new GCM encrypted passwords
+// Legacy ECB format: just hex string (no colons) - for backward compatibility
 export function encryptPassword(password: string): string {
-  const key = getPasswordEncryptionKey();
+  debugLog('Crypto', 'ENCRYPT_PASSWORD | mode=GCM | ivLength=16');
 
-  // Use ECB mode for deterministic encryption (same input = same output)
-  const cipher = crypto.createCipheriv(DETERMINISTIC_ALGORITHM, key, null);
+  const key = getPasswordEncryptionKey();
+  const iv = crypto.randomBytes(16);
+
+  // Use GCM mode for secure encryption
+  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
 
   let encrypted = cipher.update(password, "utf8", "hex");
   encrypted += cipher.final("hex");
 
-  return encrypted;
+  const authTag = cipher.getAuthTag();
+
+  // Prefix with "gcm:" to identify new format
+  const result = `gcm:${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
+
+  debugLog('Crypto', `ENCRYPT_PASSWORD | SUCCESS | format=gcm:iv:authTag:encrypted | outputLength=${result.length}`);
+  return result;
 }
 
 export function decryptPassword(encryptedPassword: string): string {
+  const isGcmFormat = encryptedPassword.startsWith('gcm:');
+  debugLog('Crypto', `DECRYPT_PASSWORD | inputLength=${encryptedPassword.length} | format=${isGcmFormat ? 'GCM' : 'LEGACY_ECB'}`);
+
   const key = getPasswordEncryptionKey();
 
   try {
+    // Check if this is new GCM format (starts with "gcm:")
+    if (isGcmFormat) {
+      debugLog('Crypto', 'DECRYPT_PASSWORD | mode=GCM | parsing iv:authTag:encrypted');
+
+      // New GCM format: gcm:iv:authTag:encrypted
+      const parts = encryptedPassword.slice(4).split(':'); // Remove "gcm:" prefix
+      if (parts.length !== 3) {
+        throw new Error('Invalid GCM encrypted password format');
+      }
+
+      const [ivHex, authTagHex, encrypted] = parts;
+      const iv = Buffer.from(ivHex, 'hex');
+      const authTag = Buffer.from(authTagHex, 'hex');
+
+      const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+      decipher.setAuthTag(authTag);
+
+      let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+      decrypted += decipher.final('utf8');
+
+      debugLog('Crypto', 'DECRYPT_PASSWORD | SUCCESS');
+      return decrypted;
+    }
+
+    // Legacy ECB format (no colons or doesn't start with "gcm:")
+    // This provides backward compatibility during migration
+    warnLog('Crypto', 'Decrypting password with legacy ECB mode - will be re-encrypted with GCM on next use');
+    debugLog('Crypto', 'DECRYPT_PASSWORD | LEGACY_ECB_FALLBACK | migrating to GCM on next use');
+
     const decipher = crypto.createDecipheriv(DETERMINISTIC_ALGORITHM, key, null);
 
     let decrypted = decipher.update(encryptedPassword, "hex", "utf8");
     decrypted += decipher.final("utf8");
 
+    debugLog('Crypto', 'DECRYPT_PASSWORD | SUCCESS');
     return decrypted;
   } catch (error) {
     errorLog('Crypto', 'Failed to decrypt password', error);

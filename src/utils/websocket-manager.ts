@@ -148,6 +148,10 @@ class WebSocketManager extends EventEmitter {
   // Message loss detection counter - counts OPENSEA BID_CREATED received
   private openseaBidCreatedReceived = 0;
 
+  // Send failure tracking for connection health
+  private sendFailureCount = 0;
+  private readonly MAX_SEND_FAILURES = 3;
+
   // Backpressure detection - tracks how many handlers are still processing
   private pendingHandlers = 0;
   private readonly MAX_PENDING_HANDLERS = 100;
@@ -284,6 +288,7 @@ class WebSocketManager extends EventEmitter {
     // Initialize message tracking
     this.lastMessageReceived = Date.now();
     this.missedPongs = 0;
+    this.sendFailureCount = 0; // Reset send failure counter on successful connection
 
     // Log connection established with current state
     infoLog('WebSocket', `[CONNECTED] WebSocket connection established | connectionId=${connectionId} | totalConnections=${this.metrics.totalConnections} | activeSubscriptions=${this.activeSubscriptions.size} | persistentListings=${this.persistentListingSubscriptions.size}`);
@@ -315,6 +320,9 @@ class WebSocketManager extends EventEmitter {
 
     // Start ACK timer for reliable delivery
     this.startAckTimer();
+
+    // Start connection verifier for proactive health checks
+    this.startConnectionVerifier();
 
     // Process queued messages
     this.processMessageQueue();
@@ -381,7 +389,7 @@ class WebSocketManager extends EventEmitter {
             warnLog('WebSocket', 'Error closing WebSocket after max missed pongs reached');
           }
         }
-      }, 900000); // 15 minute pong timeout (increased from 60s to handle extreme ws-proxy backpressure latency)
+      }, 120000); // 2 minute pong timeout (reduced from 15min for faster dead connection detection)
 
     }, this.config.heartbeatInterval);
   }
@@ -528,6 +536,47 @@ class WebSocketManager extends EventEmitter {
       // Send a ping to verify connection is still alive
       this.sendPing();
     }
+  }
+
+  /**
+   * Proactive connection health check - runs every 30 seconds
+   * Verifies the socket is actually writable by sending a test ping
+   */
+  private startConnectionVerifier(): void {
+    this.clearInterval('connectionVerifier');
+
+    this.setInterval('connectionVerifier', () => {
+      // Check if we think we're connected
+      if (!this.isConnected()) {
+        warnLog('WebSocket', 'CONNECTION_VERIFIER | not connected | attempting reconnect');
+        this.connect().catch(() => {
+          // Will retry through error handling
+        });
+        return;
+      }
+
+      // Check if socket is actually writable by sending a test message
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        const testMessage = {
+          event: 'ping',
+          clientId: this.config.clientId,
+          timestamp: Date.now(),
+          _verifier: true // Mark as verifier ping
+        };
+
+        try {
+          this.ws.send(JSON.stringify(testMessage), (err) => {
+            if (err) {
+              warnLog('WebSocket', `CONNECTION_VERIFIER | socket not writable | error=${err.message}`);
+              this.forceReconnect('socket_not_writable');
+            }
+          });
+        } catch (error) {
+          warnLog('WebSocket', `CONNECTION_VERIFIER | send threw exception | error=${(error as Error).message}`);
+          this.forceReconnect('socket_send_exception');
+        }
+      }
+    }, 30000); // Check every 30 seconds
   }
 
   private async syncSubscriptions(): Promise<void> {
@@ -951,8 +1000,53 @@ class WebSocketManager extends EventEmitter {
 
     this.emit('error', error);
 
-    // If we get ECONNREFUSED or similar errors, the connection is dead
-    // The close event will handle reconnection
+    // Check for DNS resolution errors - these need immediate reconnection
+    // as the close event may not fire properly for DNS failures
+    const errorMessage = error.message || '';
+    const isDnsError = errorMessage.includes('EAI_AGAIN') ||
+                       errorMessage.includes('ENOTFOUND') ||
+                       errorMessage.includes('getaddrinfo') ||
+                       errorMessage.includes('ECONNREFUSED');
+
+    if (isDnsError) {
+      warnLog('WebSocket', `DNS_OR_NETWORK_ERROR | error=${errorMessage} | retryCount=${this.retryCount} | triggering reconnect`);
+      // Don't wait for close event - trigger reconnection directly
+      this.isReconnecting = false;
+      this.attemptReconnect();
+    }
+    // For other errors, the close event will handle reconnection
+  }
+
+  /**
+   * Handle send failures - force reconnection after multiple failures
+   */
+  private handleSendFailure(error?: Error): void {
+    this.sendFailureCount++;
+    const errorMsg = error?.message || 'unknown';
+
+    if (this.sendFailureCount >= this.MAX_SEND_FAILURES) {
+      warnLog('WebSocket', `SEND_FAILURES_EXCEEDED | count=${this.sendFailureCount} | lastError=${errorMsg} | forcing reconnect`);
+      this.sendFailureCount = 0;
+      this.forceReconnect('send_failures_exceeded');
+    } else {
+      debugLog('WebSocket', `SEND_FAILURE | count=${this.sendFailureCount}/${this.MAX_SEND_FAILURES} | error=${errorMsg}`);
+    }
+  }
+
+  /**
+   * Force reconnection with a specific reason
+   */
+  private forceReconnect(reason: string): void {
+    warnLog('WebSocket', `FORCE_RECONNECT | reason=${reason} | connectionId=${this.metrics.currentConnectionId}`);
+    try {
+      if (this.ws) {
+        this.ws.close(1001, reason);
+      }
+    } catch {
+      // Close failed, manually trigger reconnect
+      this.isReconnecting = false;
+      this.attemptReconnect();
+    }
   }
 
   private attemptReconnect(): void {
@@ -996,13 +1090,48 @@ class WebSocketManager extends EventEmitter {
   sendMessage(message: any): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       try {
-        this.ws.send(JSON.stringify(message));
-      } catch {
+        this.ws.send(JSON.stringify(message), (err) => {
+          if (err) {
+            this.handleSendFailure(err);
+            this.queueMessage(message);
+          } else {
+            // Reset failure count on successful send
+            this.sendFailureCount = 0;
+          }
+        });
+      } catch (error) {
         warnLog('WebSocket', 'Failed to send message - queueing for retry');
+        this.handleSendFailure(error as Error);
         this.queueMessage(message);
       }
     } else {
       this.queueMessage(message);
+    }
+  }
+
+  /**
+   * Send a message with callback verification for critical messages (pings, subscriptions)
+   */
+  private sendMessageWithCallback(message: any, onSuccess?: () => void, onError?: (err: Error) => void): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+
+    try {
+      this.ws.send(JSON.stringify(message), (err) => {
+        if (err) {
+          errorLog('WebSocket', `SEND_FAILED | type=${message.event || message.type || 'unknown'} | error=${err.message}`);
+          this.handleSendFailure(err);
+          if (onError) onError(err);
+        } else {
+          this.sendFailureCount = 0;
+          if (onSuccess) onSuccess();
+        }
+      });
+      return true;
+    } catch (error) {
+      this.handleSendFailure(error as Error);
+      return false;
     }
   }
 

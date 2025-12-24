@@ -18,6 +18,12 @@ config()
 
 const divider = 10000;
 const openseaFee = Number(getOpenseaMarketplaceFee());
+
+// Ceiling division for BigInt - rounds UP to ensure fees are never under-calculated
+// Standard BigInt division truncates toward zero, which can result in 0 fees for small amounts
+function ceilDiv(numerator: bigint, denominator: bigint): bigint {
+  return (numerator + denominator - 1n) / denominator;
+}
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY
 const API_KEY = process.env.API_KEY;
 const types = {
@@ -251,8 +257,8 @@ export const listOnOpensea = async (
           itemType: 0,
           token: "0x0000000000000000000000000000000000000000",
           identifierOrCriteria: 0,
-          startAmount: ((offerPrice * BigInt(fee)) / BigInt(divider)).toString(),
-          endAmount: ((offerPrice * BigInt(fee)) / BigInt(divider)).toString(),
+          startAmount: ceilDiv(offerPrice * BigInt(fee), BigInt(divider)).toString(),
+          endAmount: ceilDiv(offerPrice * BigInt(fee), BigInt(divider)).toString(),
           recipient: address
         };
         creatorFeeConsideration.push(consideration_item);
@@ -279,8 +285,8 @@ export const listOnOpensea = async (
     itemType: 0,
     token: "0x0000000000000000000000000000000000000000",
     identifierOrCriteria: 0,
-    startAmount: ((offerPrice * BigInt(openseaFee)) / BigInt(divider)).toString(),
-    endAmount: ((offerPrice * BigInt(openseaFee)) / BigInt(divider)).toString(),
+    startAmount: ceilDiv(offerPrice * BigInt(openseaFee), BigInt(divider)).toString(),
+    endAmount: ceilDiv(offerPrice * BigInt(openseaFee), BigInt(divider)).toString(),
     recipient: '0x0000a26b00c1f0df003000390027140000faa719'
   };
 

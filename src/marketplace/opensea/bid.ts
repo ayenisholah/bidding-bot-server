@@ -1,5 +1,6 @@
 
 
+import crypto from 'crypto';
 import { ethers, Wallet } from "ethers";
 import { BASE_URL, SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
@@ -87,13 +88,39 @@ const SEAPORT_CONTRACT = new ethers.Contract(SEAPORT_CONTRACT_ADDRESS, SEAPORT_M
 const DIVIDER = 10000n;
 const BASIS_MAP: { [key: number]: number } = { 2: 1e16, 3: 1e15, 4: 1e14 };
 
+// Ceiling division for BigInt - rounds UP to ensure fees are never under-calculated
+// Standard BigInt division truncates toward zero, which can result in 0 fees for small bids
+// Example: (39n * 250n) / 10000n = 0n (wrong), but ceilDiv gives 1n (correct)
+function ceilDiv(numerator: bigint, denominator: bigint): bigint {
+  return (numerator + denominator - 1n) / denominator;
+}
+
 // Wallet cache to avoid recreating wallet instances
-const walletCache = new Map<string, Wallet>();
+// Uses hashed private key as cache key for security (never store plaintext keys as map keys)
+// 60-second TTL to limit exposure window if memory is compromised
+const walletCache = new BoundedCache<string, Wallet>(50, 60 * 1000, 'openseaWalletCache');
+
+function hashPrivateKey(privateKey: string): string {
+  return crypto.createHash('sha256').update(privateKey).digest('hex');
+}
+
 function getWallet(privateKey: string): Wallet {
-  if (!walletCache.has(privateKey)) {
-    walletCache.set(privateKey, new Wallet(privateKey, provider));
+  const cacheKey = hashPrivateKey(privateKey);
+  // Only log first 8 chars of hash for security (never log full key or hash)
+  const keyPrefix = cacheKey.substring(0, 8);
+
+  const cached = walletCache.get(cacheKey);
+  if (cached) {
+    debugLog('Security', `WALLET_CACHE | HIT | keyPrefix=${keyPrefix}`);
+    return cached;
   }
-  return walletCache.get(privateKey)!;
+
+  debugLog('Security', `WALLET_CACHE | MISS | keyPrefix=${keyPrefix} | creating new Wallet instance`);
+  const wallet = new Wallet(privateKey, provider);
+  walletCache.set(cacheKey, wallet);
+  debugLog('Security', `WALLET_CACHE | SET | keyPrefix=${keyPrefix} | cacheSize=${walletCache.size} | ttl=60s`);
+
+  return wallet;
 }
 
 // Caching infrastructure for multi-contract collection resolution
@@ -455,8 +482,8 @@ export async function bidOnOpensea(
           itemType: 1,
           token: currency,
           identifierOrCriteria: "0",
-          startAmount: ((offerPrice * openseaMarketplaceFeeBps) / DIVIDER).toString(),
-          endAmount: ((offerPrice * openseaMarketplaceFeeBps) / DIVIDER).toString(),
+          startAmount: ceilDiv(offerPrice * openseaMarketplaceFeeBps, DIVIDER).toString(),
+          endAmount: ceilDiv(offerPrice * openseaMarketplaceFeeBps, DIVIDER).toString(),
           recipient: OPENSEA_FEE_ADDRESS
         };
 
@@ -475,7 +502,7 @@ export async function bidOnOpensea(
           }
 
           // Add all creator fees (OpenSea requires all fees marked as required=true)
-          const feeAmount = ((offerPrice * fee) / DIVIDER).toString();
+          const feeAmount = ceilDiv(offerPrice * fee, DIVIDER).toString();
 
           const consideration_item = {
             itemType: 1,
@@ -618,8 +645,8 @@ export async function bidOnOpensea(
           itemType: 1,
           token: currency,
           identifierOrCriteria: 0,
-          startAmount: ((offerPrice * openseaMarketplaceFeeBps) / DIVIDER).toString(),
-          endAmount: ((offerPrice * openseaMarketplaceFeeBps) / DIVIDER).toString(),
+          startAmount: ceilDiv(offerPrice * openseaMarketplaceFeeBps, DIVIDER).toString(),
+          endAmount: ceilDiv(offerPrice * openseaMarketplaceFeeBps, DIVIDER).toString(),
           recipient: OPENSEA_FEE_ADDRESS
         };
         payload.protocol_data.parameters.consideration.push(opensea_consideration);
@@ -638,8 +665,8 @@ export async function bidOnOpensea(
             itemType: 1,
             token: currency,
             identifierOrCriteria: 0,
-            startAmount: ((offerPrice * fee) / DIVIDER).toString(),
-            endAmount: ((offerPrice * fee) / DIVIDER).toString(),
+            startAmount: ceilDiv(offerPrice * fee, DIVIDER).toString(),
+            endAmount: ceilDiv(offerPrice * fee, DIVIDER).toString(),
             recipient: address
           };
 
@@ -742,8 +769,8 @@ export async function bidOnOpensea(
           itemType: 1,
           token: currency,
           identifierOrCriteria: 0,
-          startAmount: ((offerPrice * openseaMarketplaceFeeBps) / DIVIDER).toString(),
-          endAmount: ((offerPrice * openseaMarketplaceFeeBps) / DIVIDER).toString(),
+          startAmount: ceilDiv(offerPrice * openseaMarketplaceFeeBps, DIVIDER).toString(),
+          endAmount: ceilDiv(offerPrice * openseaMarketplaceFeeBps, DIVIDER).toString(),
           recipient: OPENSEA_FEE_ADDRESS
         };
         payload.protocol_data.parameters.consideration.push(opensea_consideration);
@@ -762,8 +789,8 @@ export async function bidOnOpensea(
             itemType: 1,
             token: currency,
             identifierOrCriteria: 0,
-            startAmount: ((offerPrice * fee) / DIVIDER).toString(),
-            endAmount: ((offerPrice * fee) / DIVIDER).toString(),
+            startAmount: ceilDiv(offerPrice * fee, DIVIDER).toString(),
+            endAmount: ceilDiv(offerPrice * fee, DIVIDER).toString(),
             recipient: address
           };
 
