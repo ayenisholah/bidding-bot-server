@@ -723,6 +723,35 @@ class WebSocketManager extends EventEmitter {
 
     try {
       const parsed = JSON.parse(data.toString());
+
+      // Handle batch messages from ws-proxy (sent when buffer >= 50%)
+      if (parsed.type === 'batch' && Array.isArray(parsed.messages)) {
+        infoLog('WebSocket', `[BATCH_RECV] Received batch of ${parsed.count} messages`);
+        for (const batchedMessage of parsed.messages) {
+          // Process each message individually by recursively calling with wrapped data
+          this.processSingleMessage(batchedMessage, receiveTime);
+        }
+        return;
+      }
+
+      // Single message processing
+      this.processSingleMessage(parsed, receiveTime);
+
+    } catch (error) {
+      errorLog('WebSocket', 'Failed to parse WebSocket message', error);
+
+      // Still emit the raw message even if parsing fails
+      // This helps prevent message loss
+      try {
+        this.emit('message', { raw: data.toString(), parseError: true });
+      } catch (emitError) {
+        errorLog('WebSocket', 'Failed to emit raw message after parse error', emitError);
+      }
+    }
+  }
+
+  private processSingleMessage(parsed: any, receiveTime: number): void {
+    try {
       this.metrics.totalMessages++;
       this.recordMessage();
 
@@ -869,15 +898,7 @@ class WebSocketManager extends EventEmitter {
       });
 
     } catch (error) {
-      errorLog('WebSocket', 'Failed to parse WebSocket message', error);
-
-      // Still emit the raw message even if parsing fails
-      // This helps prevent message loss
-      try {
-        this.emit('message', { raw: data.toString(), parseError: true });
-      } catch (emitError) {
-        errorLog('WebSocket', 'Failed to emit raw message after parse error', emitError);
-      }
+      errorLog('WebSocket', 'Failed to process single message', error);
     }
   }
 
