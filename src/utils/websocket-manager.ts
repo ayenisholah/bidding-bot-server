@@ -90,6 +90,15 @@ export interface SubscriptionInfo {
 }
 
 class WebSocketManager extends EventEmitter {
+  // Static event type mapping - created once, used for all events (2025-12-29 optimization)
+  private static readonly EVENT_TYPE_MAP: Record<string, string> = {
+    'bid_created': 'BID_CREATED',
+    'trait_offer': 'BID_CREATED',      // Trait offers are also bid events
+    'collection_offer': 'BID_CREATED', // Collection offers are also bid events
+    'listing_created': 'LISTING_CREATED',
+    'item_sold': 'ITEM_SOLD'
+  };
+
   private ws: WebSocket | null = null;
   private config: Required<WebSocketManagerConfig>;
   private intervals: Map<string, NodeJS.Timeout> = new Map();
@@ -155,6 +164,11 @@ class WebSocketManager extends EventEmitter {
   // Backpressure detection - tracks how many handlers are still processing
   private pendingHandlers = 0;
   private readonly MAX_PENDING_HANDLERS = 100;
+
+  // Accurate handler tracking with completion callbacks (2025-12-29 optimization)
+  // handlerIdCounter assigns unique IDs, activeHandlers tracks in-flight handlers
+  private handlerIdCounter = 0;
+  private activeHandlers = new Set<number>();
 
   // O(1) slug lookup set for subscription validation
   private subscribedSlugs = new Set<string>();
@@ -724,9 +738,39 @@ class WebSocketManager extends EventEmitter {
     try {
       const parsed = JSON.parse(data.toString());
 
-      // Handle batch messages from ws-proxy (sent when buffer >= 50%)
+      // Handle new batch format from BatchAggregator (events array with normalized events)
+      if (parsed.type === 'batch' && Array.isArray(parsed.events)) {
+        const batchSize = parsed.events.length;
+        const batchTimestamp = parsed.timestamp || receiveTime;
+        const latency = receiveTime - batchTimestamp;
+
+        infoLog('WebSocket', `[BATCH_RECV] Received batch of ${batchSize} events | subscriptionType=${parsed.subscriptionType} | latency=${latency}ms`);
+
+        // Emit batch event for optimized processing (handlers can process all events at once)
+        this.emit('batch', {
+          events: parsed.events,
+          count: parsed.count || batchSize,
+          subscriptionType: parsed.subscriptionType,
+          receivedAt: batchTimestamp,
+          localReceiveTime: receiveTime
+        });
+
+        // Process events asynchronously in chunks for backward compatibility
+        // This ensures existing handlers continue to work without blocking event loop
+        // (2025-12-29 optimization: replaces synchronous for-loop with async chunked processing)
+        this.processBatchEvents(parsed.events, receiveTime).catch(error => {
+          errorLog('WebSocket', 'Error in async batch processing', error);
+        });
+
+        // Track batch metrics
+        this.metrics.totalMessages += batchSize;
+        this.recordLatency(latency);
+        return;
+      }
+
+      // Handle legacy batch messages from ws-proxy (old format with messages array)
       if (parsed.type === 'batch' && Array.isArray(parsed.messages)) {
-        infoLog('WebSocket', `[BATCH_RECV] Received batch of ${parsed.count} messages`);
+        infoLog('WebSocket', `[BATCH_RECV_LEGACY] Received legacy batch of ${parsed.count} messages`);
         for (const batchedMessage of parsed.messages) {
           // Process each message individually by recursively calling with wrapped data
           this.processSingleMessage(batchedMessage, receiveTime);
@@ -746,6 +790,59 @@ class WebSocketManager extends EventEmitter {
         this.emit('message', { raw: data.toString(), parseError: true });
       } catch (emitError) {
         errorLog('WebSocket', 'Failed to emit raw message after parse error', emitError);
+      }
+    }
+  }
+
+  /**
+   * Transform a normalized batch event to handler-compatible format.
+   * Uses static EVENT_TYPE_MAP to avoid per-event object creation.
+   * (2025-12-29 optimization: extracted from inline loop)
+   */
+  private transformBatchEvent(event: any): any {
+    // Use rawPayload as base (preserves original nested structure for handlers)
+    const messageForHandlers: any = event.rawPayload ? { ...event.rawPayload } : { ...event };
+
+    // Map normalized eventType to uppercase for handler routing using static map
+    if (event.eventType) {
+      messageForHandlers.eventType = WebSocketManager.EVENT_TYPE_MAP[event.eventType] || event.eventType.toUpperCase();
+    }
+
+    // Map normalized marketplace to uppercase for handler routing
+    if (event.marketplace) {
+      messageForHandlers.marketplace = event.marketplace.toUpperCase();
+    }
+
+    // Preserve normalized fields for handlers that use them
+    messageForHandlers._normalizedEvent = event;
+    messageForHandlers.slug = event.slug || messageForHandlers.slug;
+    messageForHandlers.orderHash = event.orderHash || messageForHandlers.orderHash;
+    messageForHandlers.maker = event.maker || messageForHandlers.maker;
+
+    return messageForHandlers;
+  }
+
+  /**
+   * Process batch events asynchronously in chunks.
+   * Yields to event loop every CHUNK_SIZE events to prevent blocking.
+   * (2025-12-29 optimization: replaces synchronous for-loop)
+   */
+  private async processBatchEvents(events: any[], receiveTime: number): Promise<void> {
+    const CHUNK_SIZE = 20;
+    const totalEvents = events.length;
+
+    for (let i = 0; i < totalEvents; i += CHUNK_SIZE) {
+      const chunkEnd = Math.min(i + CHUNK_SIZE, totalEvents);
+
+      // Process this chunk
+      for (let j = i; j < chunkEnd; j++) {
+        const message = this.transformBatchEvent(events[j]);
+        this.processSingleMessage(message, receiveTime);
+      }
+
+      // Yield to event loop between chunks (not after last chunk)
+      if (chunkEnd < totalEvents) {
+        await new Promise<void>(resolve => setImmediate(resolve));
       }
     }
   }
@@ -856,10 +953,14 @@ class WebSocketManager extends EventEmitter {
       if (message.eventType === 'BID_CREATED' || message.eventType === 'TRAIT_BID_CREATED' || message.eventType === 'LISTING_CREATED') {
         const msgSlug = message.payload?.payload?.collection?.slug || message.slug;
         const msgMarketplace = message.marketplace || 'unknown';
+        const orderHash = message.payload?.payload?.order_hash || message.id || 'unknown';
+        const maker = message.payload?.payload?.maker?.address || 'unknown';
 
         // Message loss detection: count OPENSEA BID_CREATED messages
         if (message.eventType === 'BID_CREATED' && msgMarketplace === 'OPENSEA') {
           this.openseaBidCreatedReceived++;
+          // CP4: Log message received from ws-proxy
+          infoLog('MsgDelivery', `CP4_WS_RECV | orderHash=${String(orderHash).substring(0,16)} | maker=${String(maker).substring(0,10)} | slug=${msgSlug || 'unknown'} | total=${this.openseaBidCreatedReceived}`);
         }
 
         // Check if we're actually subscribed to this collection
@@ -876,26 +977,42 @@ class WebSocketManager extends EventEmitter {
       }
 
       // Backpressure detection: check if handlers are queuing up
-      if (this.pendingHandlers > this.MAX_PENDING_HANDLERS) {
-        warnLog('MsgFlow', `BACKPRESSURE | pendingHandlers=${this.pendingHandlers} | maxAllowed=${this.MAX_PENDING_HANDLERS} | TRACE=${traceId} | eventType=${eventType} | dropping=true`);
+      // Use activeHandlers.size for accurate count (vs pendingHandlers for backward compat)
+      if (this.activeHandlers.size > this.MAX_PENDING_HANDLERS) {
+        warnLog('MsgFlow', `BACKPRESSURE | activeHandlers=${this.activeHandlers.size} | maxAllowed=${this.MAX_PENDING_HANDLERS} | TRACE=${traceId} | eventType=${eventType} | dropping=true`);
         return; // Drop message to prevent queue buildup
       }
 
-      // Track handler timing
+      // Track handler timing with accurate completion callback (2025-12-29 optimization)
       const emitStart = Date.now();
-      this.pendingHandlers++;
+      const handlerId = ++this.handlerIdCounter;
+      this.activeHandlers.add(handlerId);
+      this.pendingHandlers++; // Keep legacy counter for backward compatibility
 
-      // Emit message to handlers
-      this.emit('message', message);
-
-      // Track handler completion with setImmediate to not block current processing
-      setImmediate(() => {
-        this.pendingHandlers--;
-        const handlerDuration = Date.now() - emitStart;
-        if (handlerDuration > 100) {
-          warnLog('MsgFlow', `SLOW_HANDLER | durationMs=${handlerDuration} | TRACE=${traceId} | eventType=${eventType} | pendingHandlers=${this.pendingHandlers}`);
+      // Create completion callback that handlers should call when done
+      const done = () => {
+        if (this.activeHandlers.has(handlerId)) {
+          this.activeHandlers.delete(handlerId);
+          this.pendingHandlers--;
+          const handlerDuration = Date.now() - emitStart;
+          if (handlerDuration > 100) {
+            warnLog('MsgFlow', `SLOW_HANDLER | durationMs=${handlerDuration} | TRACE=${traceId} | eventType=${eventType} | activeHandlers=${this.activeHandlers.size}`);
+          }
         }
-      });
+      };
+
+      // Emit message to handlers with completion callback
+      // Handlers should call done() when finished (async or sync)
+      this.emit('message', message, done);
+
+      // Fallback: if handler doesn't call done() within 30s, clean up automatically
+      // This prevents memory leaks from handlers that don't implement the callback
+      setTimeout(() => {
+        if (this.activeHandlers.has(handlerId)) {
+          debugLog('MsgFlow', `HANDLER_TIMEOUT | handlerId=${handlerId} | TRACE=${traceId} | eventType=${eventType} | cleaning up after 30s`);
+          done();
+        }
+      }, 30000);
 
     } catch (error) {
       errorLog('WebSocket', 'Failed to process single message', error);

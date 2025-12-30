@@ -80,9 +80,15 @@ import { clearUnavailabilityCache } from "./utils/marketplace-availability";
 
 import { listingPriceCache } from "./utils/listing-price-cache";
 import Listing from "./models/listing.model";
+import { initializePullConsumer, PullConsumer } from "./pull";
 
-const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io";
-// const MARKETPLACE_WS_URL = "ws://localhost:8080";
+// WebSocket URL - defaults to local ws-proxy for development
+const MARKETPLACE_WS_URL = "ws://localhost:8080"
+// const MARKETPLACE_WS_URL = process.env.MARKETPLACE_WS_URL || "ws://localhost:8080" 
+// Pull mode configuration (disabled by default, set USE_PULL_MODE=true to enable)
+const USE_PULL_MODE = process.env.USE_PULL_MODE === 'true';
+const WS_PROXY_HTTP_URL = 'ws://localhost:8080';
+// const WS_PROXY_HTTP_URL = process.env.WS_PROXY_HTTP_URL || 'http://localhost:8080';
 
 
 // Initialize process lifecycle logging immediately on startup
@@ -124,6 +130,13 @@ let rawWsMessagesReceived = 0;
 let rawOurBidsReceived = 0;
 let bidEventsReceived = 0;        // All BID_CREATED events received at WebSocket
 let bidEventsReachingHandler = 0; // Events that reach handleCounterBid
+
+// Delivery checkpoint counters (for diagnosing 80% delivery rate issue)
+const deliveryCheckpoints = {
+  cp5_handler: 0,     // Messages reaching handleOpenseaCounterbid
+  cp6_walletCheck: 0, // Messages passing through wallet check
+  cp7_ownBidCounted: 0, // Own bids successfully counted
+};
 
 // ============================================
 // RESILIENT HELPER FUNCTIONS
@@ -1822,6 +1835,7 @@ const server = http.createServer(app);
 debugLog('STARTUP', 'HTTP server created');
 const wss = new WebSocketServer({ server });
 export let wsManager: WebSocketManager;
+export let pullConsumer: PullConsumer | null = null;
 let retryCount: number = 0;
 
 // WebSocket Connection Metrics
@@ -3988,6 +4002,17 @@ process.on('SIGINT', async () => {
     wsManager.disconnect();
   }
 
+  // Stop pull consumer if running
+  if (pullConsumer && pullConsumer.isRunning()) {
+    infoLog('Lifecycle', 'Stopping pull consumer...');
+    try {
+      await pullConsumer.stop();
+      infoLog('Lifecycle', 'Pull consumer stopped');
+    } catch (e) {
+      warnLog('Lifecycle', `Failed to stop pull consumer: ${e}`);
+    }
+  }
+
   // Clean up all active tasks (memory leak fix)
   infoLog('Lifecycle', `Cleaning up ${activeTasks.size} active tasks...`);
   for (const taskId of activeTasks.keys()) {
@@ -4070,6 +4095,17 @@ process.on('SIGTERM', async () => {
   if (wsManager) {
     wsManager.removeAllListeners();
     wsManager.disconnect();
+  }
+
+  // Stop pull consumer if running
+  if (pullConsumer && pullConsumer.isRunning()) {
+    infoLog('Lifecycle', 'Stopping pull consumer...');
+    try {
+      await pullConsumer.stop();
+      infoLog('Lifecycle', 'Pull consumer stopped');
+    } catch (e) {
+      warnLog('Lifecycle', `Failed to stop pull consumer: ${e}`);
+    }
   }
 
   // Clean up all active tasks (memory leak fix)
@@ -13354,7 +13390,45 @@ function startConnectionMonitoring() {
 let isConnecting = false;
 let connectionPromise: Promise<void> | null = null;
 
+/**
+ * Initialize pull consumer for cursor-based event consumption
+ * This replaces WebSocket push-based delivery with HTTP pull-based polling
+ */
+async function initializePullMode(): Promise<void> {
+  if (pullConsumer) {
+    if (pullConsumer.isRunning()) {
+      infoLog('PullConsumer', 'Pull consumer already running');
+      return;
+    }
+    // Restart if stopped
+    await pullConsumer.start();
+    return;
+  }
+
+  infoLog('PullConsumer', `Initializing pull mode with proxy URL: ${WS_PROXY_HTTP_URL}`);
+
+  pullConsumer = await initializePullConsumer({
+    proxyUrl: WS_PROXY_HTTP_URL,
+    redis: getRedisConnection(),
+    pullIntervalMs: 50,
+    batchSize: 1000,
+    getRelevantTasks: getRelevantTasks,
+    handleOpenseaCounterbid: handleOpenseaCounterbid,
+    handleMagicEdenCounterbid: handleMagicEdenCounterbid,
+    handleBlurCounterbid: handleBlurCounterbid,
+  });
+
+  await pullConsumer.start();
+  infoLog('PullConsumer', 'Pull consumer started successfully');
+}
+
 async function connectWebSocket(): Promise<void> {
+  // Use pull mode if enabled
+  if (USE_PULL_MODE) {
+    await initializePullMode();
+    return;
+  }
+
   // Return existing connection attempt if already in progress
   if (isConnecting && connectionPromise) {
     return connectionPromise;
@@ -13445,7 +13519,39 @@ async function _doConnect(): Promise<void> {
       activeSubscriptions.clear();
     });
 
-    wsManager.on('message', async (message: any) => {
+    // Batch event handler for optimized processing
+    // Batches are emitted by ws-proxy's BatchAggregator (100ms windows)
+    // Individual events are also processed via 'message' event for backward compatibility
+    wsManager.on('batch', (batch: { events: any[]; count: number; subscriptionType: string; receivedAt: number; localReceiveTime: number }) => {
+      try {
+        const processingLatency = Date.now() - batch.localReceiveTime;
+        const proxyLatency = batch.localReceiveTime - batch.receivedAt;
+
+        infoLog('WebSocket', `[BATCH_PROC] Processing batch | count=${batch.count} | subscriptionType=${batch.subscriptionType} | proxyLatency=${proxyLatency}ms | processingLatency=${processingLatency}ms`);
+
+        // Group events by collection for efficient O(1) task matching
+        const byCollection = new Map<string, any[]>();
+        for (const event of batch.events) {
+          const key = event.slug || event.contractAddress || 'unknown';
+          const existing = byCollection.get(key);
+          if (existing) {
+            existing.push(event);
+          } else {
+            byCollection.set(key, [event]);
+          }
+        }
+
+        debugLog('WebSocket', `[BATCH_GROUPED] Collections in batch: ${byCollection.size} | keys: ${Array.from(byCollection.keys()).slice(0, 5).join(', ')}${byCollection.size > 5 ? '...' : ''}`);
+
+        // Note: Individual events are already processed via processSingleMessage -> 'message' event
+        // This batch handler is primarily for metrics and future optimizations (e.g., bulk dedup)
+      } catch (error) {
+        errorLog('WebSocket', `[BATCH_ERROR] Error processing batch: ${error}`);
+      }
+    });
+
+    // Message handler with completion callback for accurate backpressure tracking (2025-12-29 optimization)
+    wsManager.on('message', async (message: any, done?: () => void) => {
       try {
         rawWsMessagesReceived++;
 
@@ -13473,16 +13579,23 @@ async function _doConnect(): Promise<void> {
             data: clientData
           };
           wsManager.sendMessage(initialDataMessage);
+          done?.(); // Signal completion for simple sync handlers
           return;
         }
 
-        // Process messages directly without queue (removes competition with bulk bidding operations)
-        handleMarketplaceMessage(message).catch(error => {
-          errorLog('WsConnection', 'Error processing marketplace message', error);
-        });
+        // Process messages without blocking (fire-and-forget with completion tracking)
+        // Use .finally() to signal done() when handler completes without serializing messages
+        handleMarketplaceMessage(message)
+          .catch(error => {
+            errorLog('WsConnection', 'Error processing marketplace message', error);
+          })
+          .finally(() => {
+            done?.(); // Signal handler completion for backpressure tracking
+          });
 
       } catch (error) {
         errorLog('WsConnection', 'Error in message handler', error);
+        done?.(); // Signal completion even on sync error to prevent handler leak
       }
     });
 
@@ -15011,8 +15124,17 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const traitForLog = eventType === "trait_offer" ?
       `${data?.payload?.payload?.trait_criteria?.trait_type}:${data?.payload?.payload?.trait_criteria?.trait_name}` : null;
 
+    // CP5: Log handler entry
+    deliveryCheckpoints.cp5_handler++;
+    infoLog('MsgDelivery', `CP5_HANDLER | orderHash=${orderHash?.substring(0, 16) || 'unknown'} | maker=${maker?.substring(0, 10) || 'unknown'} | slug=${task.contract.slug} | event=${eventType} | total=${deliveryCheckpoints.cp5_handler}`);
+
     // Debug: Log ALL bids reaching this handler to identify wallet mismatch issues
     const isOurs = maker && isOurWallet(maker);
+
+    // CP6: Log wallet ownership check result
+    deliveryCheckpoints.cp6_walletCheck++;
+    infoLog('MsgDelivery', `CP6_WALLET | orderHash=${orderHash?.substring(0, 16) || 'unknown'} | maker=${maker?.substring(0, 10) || 'unknown'} | isOurs=${isOurs} | walletSetSize=${ourWalletAddresses.size} | total=${deliveryCheckpoints.cp6_walletCheck}`);
+
     debugLog('BidCounter', `OS_BID_RECEIVED | slug=${task.contract.slug} | maker=${maker?.slice(0, 10)}... | isOurs=${isOurs} | orderHash=${orderHash?.slice(0, 10)}... | event=${eventType}`);
 
     const currentTask = activeTasks.get(task._id)
@@ -25449,6 +25571,61 @@ app.get('/api/bid-flow-checkpoints', (req, res) => {
   });
 });
 
+// Delivery checkpoints endpoint - detailed message flow analysis for diagnosing delivery loss
+// Use this to identify WHERE messages are being lost in the WebSocket → Handler → BidCounter flow
+app.get('/api/delivery-checkpoints', (req, res) => {
+  const cp4_wsRecv = wsManager?.getOpenseaBidCreatedReceived?.() || 0;
+
+  res.json({
+    description: 'Server-side delivery checkpoints (CP4-CP7) for OpenSea item_received_bid events',
+    checkpoints: {
+      cp4_wsRecv,                                     // WebSocket manager received
+      cp5_handler: deliveryCheckpoints.cp5_handler,   // Reached handleOpenseaCounterbid
+      cp6_walletCheck: deliveryCheckpoints.cp6_walletCheck, // Passed through wallet check
+      cp7_ownBidCounted: deliveryCheckpoints.cp7_ownBidCounted, // Own bids successfully counted
+    },
+    gaps: {
+      cp4_to_cp5: cp4_wsRecv - deliveryCheckpoints.cp5_handler,
+      cp5_to_cp6: deliveryCheckpoints.cp5_handler - deliveryCheckpoints.cp6_walletCheck,
+      cp6_to_cp7_ownBids: deliveryCheckpoints.cp6_walletCheck - deliveryCheckpoints.cp7_ownBidCounted,
+    },
+    notes: {
+      cp4_to_cp5_gap: 'Messages lost between WebSocket receipt and handler entry (task filtering, event type filtering)',
+      cp5_to_cp6_gap: 'Should always be 0 - these happen in sequence',
+      cp6_to_cp7_gap: 'Non-own bids (expected to be most messages) + duplicates filtered',
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Pull consumer metrics endpoint
+app.get('/api/pull-metrics', (req, res) => {
+  if (!USE_PULL_MODE) {
+    return res.status(404).json({
+      error: 'Pull mode disabled',
+      mode: 'websocket',
+      hint: 'Remove USE_PULL_MODE=false to enable pull-based event consumption (default)'
+    });
+  }
+
+  if (!pullConsumer) {
+    return res.status(503).json({
+      error: 'Pull consumer not initialized',
+      mode: 'pull',
+      running: false
+    });
+  }
+
+  const metrics = pullConsumer.getMetrics();
+  res.json({
+    mode: 'pull',
+    running: pullConsumer.isRunning(),
+    proxyUrl: WS_PROXY_HTTP_URL,
+    ...metrics,
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Debug endpoint for task scheduling state
 app.get('/debug/scheduling', (req, res) => {
   const now = Date.now();
@@ -27303,6 +27480,10 @@ export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
       ownBidCounts[marketplace] = 0;
     }
     ownBidCounts[marketplace]++;
+
+    // CP7: Increment delivery checkpoint for successful own bid count
+    deliveryCheckpoints.cp7_ownBidCounted++;
+    infoLog('MsgDelivery', `CP7_OWN_BID_COUNTED | marketplace=${marketplace} | orderHash=${orderHash?.substring(0, 16) || 'unknown'} | total=${deliveryCheckpoints.cp7_ownBidCounted}`);
 
     debugLog('BidCounter', `OWN_BID_COUNTED | marketplace=${marketplace} | orderHash=${orderHash} | total=${ownBidCounts[marketplace]}`);
 
