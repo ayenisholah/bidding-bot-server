@@ -68,7 +68,7 @@ export interface EventLogStats {
  * Pull consumer configuration
  */
 export interface PullConsumerConfig {
-  proxyUrl: string;           // ws-proxy URL (e.g., http://localhost:8080)
+  proxyUrl: string;           // ws-proxy URL (e.g., https://nfttools-ws-proxy.nfttools.io/)
   pullIntervalMs?: number;    // How often to pull (default 50ms)
   batchSize?: number;         // Max events per pull (default 1000)
 }

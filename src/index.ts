@@ -83,13 +83,9 @@ import Listing from "./models/listing.model";
 import { initializePullConsumer, PullConsumer } from "./pull";
 
 // WebSocket URL - defaults to local ws-proxy for development
-const MARKETPLACE_WS_URL = "ws://localhost:8080"
-// const MARKETPLACE_WS_URL = process.env.MARKETPLACE_WS_URL || "ws://localhost:8080" 
-// Pull mode configuration (disabled by default, set USE_PULL_MODE=true to enable)
+const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io"
 const USE_PULL_MODE = process.env.USE_PULL_MODE === 'true';
-const WS_PROXY_HTTP_URL = 'ws://localhost:8080';
-// const WS_PROXY_HTTP_URL = process.env.WS_PROXY_HTTP_URL || 'http://localhost:8080';
-
+const WS_PROXY_HTTP_URL = 'wss://nfttools-ws-proxy.nfttools.io';
 
 // Initialize process lifecycle logging immediately on startup
 logProcessStart();
@@ -112,7 +108,8 @@ const DEBUG = process.env.DEBUG === 'true';
 
 const bidStats: BidCounts = {};
 const ownBidCounts: { [marketplace: string]: number } = {};
-const processedOwnBids: Set<string> = new Set(); // Track processed own bid hashes
+// Track processed own bid hashes - BoundedCache with 1hr TTL prevents memory leak
+const processedOwnBids = new BoundedCache<string, number>('processedOwnBids', 50000, 3600000);
 const currentTokenIds: BottomListings = {};
 const currentTraits: CurrentTraits = {}
 export const taskStatus: TaskStatus = {};
@@ -136,6 +133,17 @@ const deliveryCheckpoints = {
   cp5_handler: 0,     // Messages reaching handleOpenseaCounterbid
   cp6_walletCheck: 0, // Messages passing through wallet check
   cp7_ownBidCounted: 0, // Own bids successfully counted
+};
+
+// Test wallet verification counters (must match ws-proxy)
+const testWalletCounters = {
+  wallet: '0x1b8afd0de8a9368ce635be8b9572c65d8f590b21', // lowercase
+  slug: 'azuki',
+  cp4_wsRecv: 0,       // Received from ws-proxy
+  cp5_handler: 0,      // Reached counterbid handler
+  cp6_walletCheck: 0,  // Passed wallet check
+  cp7_ownBidCounted: 0, // Counted as own bid
+  orderHashes: [] as string[],
 };
 
 // ============================================
@@ -13610,6 +13618,17 @@ async function _doConnect(): Promise<void> {
     wsManager.on('max_retries_exceeded', async () => {
       errorLog('WsConnection', `WebSocket max reconnection attempts exceeded: connectionId=${connectionMetrics.currentConnectionId}, retryCount=${MAX_RETRIES}`, new Error('Max retries exceeded'));
     });
+
+    // Test wallet verification: track CP4 events from websocket-manager
+    wsManager.on('testWalletEvent', (event: { checkpoint: string; orderHash: string; maker: string; slug: string }) => {
+      if (event.checkpoint === 'CP4') {
+        testWalletCounters.cp4_wsRecv++;
+        if (event.orderHash && !testWalletCounters.orderHashes.includes(event.orderHash)) {
+          testWalletCounters.orderHashes.push(event.orderHash);
+        }
+        console.log(`[TEST_VERIFY] CP4_WS_RECV (counter) | orderHash=${event.orderHash?.substring(0, 16)} | count=${testWalletCounters.cp4_wsRecv}`);
+      }
+    });
   }
 
   // Connect with error handling
@@ -13627,7 +13646,18 @@ async function _doConnect(): Promise<void> {
  * Handles both counterbid messages and listing price updates
  */
 async function handleMarketplaceMessage(message: any) {
-  // Route logging removed - too noisy
+  // Normalize event type field - handle both message.event (OpenSea) and message.eventType (normalized)
+  // This fixes the mismatch where messages arrive with message.event but handlers check message.eventType
+  if (!message.eventType && message.event) {
+    const eventMap: Record<string, string> = {
+      'item_received_bid': 'BID_CREATED',
+      'trait_offer': 'BID_CREATED',
+      'collection_offer': 'BID_CREATED',
+      'item_listed': 'LISTING_CREATED',
+      'item_sold': 'ITEM_SOLD',
+    };
+    message.eventType = eventMap[message.event] || message.event.toUpperCase();
+  }
 
   try {
     if (message.eventType === 'BID_CREATED') {
@@ -15128,12 +15158,27 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     deliveryCheckpoints.cp5_handler++;
     infoLog('MsgDelivery', `CP5_HANDLER | orderHash=${orderHash?.substring(0, 16) || 'unknown'} | maker=${maker?.substring(0, 10) || 'unknown'} | slug=${task.contract.slug} | event=${eventType} | total=${deliveryCheckpoints.cp5_handler}`);
 
+    // Test wallet verification: CP5_HANDLER
+    if (maker === testWalletCounters.wallet && task.contract.slug === testWalletCounters.slug) {
+      testWalletCounters.cp5_handler++;
+      if (orderHash && !testWalletCounters.orderHashes.includes(orderHash)) {
+        testWalletCounters.orderHashes.push(orderHash);
+      }
+      console.log(`[TEST_VERIFY] CP5_HANDLER | maker=${maker?.substring(0, 10)} | slug=${task.contract.slug} | orderHash=${orderHash?.substring(0, 16) || 'unknown'} | count=${testWalletCounters.cp5_handler}`);
+    }
+
     // Debug: Log ALL bids reaching this handler to identify wallet mismatch issues
     const isOurs = maker && isOurWallet(maker);
 
     // CP6: Log wallet ownership check result
     deliveryCheckpoints.cp6_walletCheck++;
     infoLog('MsgDelivery', `CP6_WALLET | orderHash=${orderHash?.substring(0, 16) || 'unknown'} | maker=${maker?.substring(0, 10) || 'unknown'} | isOurs=${isOurs} | walletSetSize=${ourWalletAddresses.size} | total=${deliveryCheckpoints.cp6_walletCheck}`);
+
+    // Test wallet verification: CP6_WALLET
+    if (maker === testWalletCounters.wallet && task.contract.slug === testWalletCounters.slug) {
+      testWalletCounters.cp6_walletCheck++;
+      console.log(`[TEST_VERIFY] CP6_WALLET | isOurs=${isOurs} | orderHash=${orderHash?.substring(0, 16) || 'unknown'} | count=${testWalletCounters.cp6_walletCheck}`);
+    }
 
     debugLog('BidCounter', `OS_BID_RECEIVED | slug=${task.contract.slug} | maker=${maker?.slice(0, 10)}... | isOurs=${isOurs} | orderHash=${orderHash?.slice(0, 10)}... | event=${eventType}`);
 
@@ -25598,6 +25643,45 @@ app.get('/api/delivery-checkpoints', (req, res) => {
   });
 });
 
+// Test wallet verification stats endpoint - for comparing with ws-proxy counters
+app.get('/api/test-verify-stats', (req, res) => {
+  res.json({
+    description: 'Test wallet verification counters for Azuki test wallet',
+    config: {
+      wallet: testWalletCounters.wallet,
+      slug: testWalletCounters.slug,
+    },
+    counts: {
+      cp4_wsRecv: testWalletCounters.cp4_wsRecv,
+      cp5_handler: testWalletCounters.cp5_handler,
+      cp6_walletCheck: testWalletCounters.cp6_walletCheck,
+      cp7_ownBidCounted: testWalletCounters.cp7_ownBidCounted,
+    },
+    gaps: {
+      cp4_to_cp5: testWalletCounters.cp4_wsRecv - testWalletCounters.cp5_handler,
+      cp5_to_cp6: testWalletCounters.cp5_handler - testWalletCounters.cp6_walletCheck,
+      cp6_to_cp7: testWalletCounters.cp6_walletCheck - testWalletCounters.cp7_ownBidCounted,
+    },
+    orderHashCount: testWalletCounters.orderHashes.length,
+    orderHashes: testWalletCounters.orderHashes.slice(-20),
+    notes: {
+      cp4: 'Received from ws-proxy WebSocket',
+      cp5: 'Reached handleOpenseaCounterbid for this wallet+slug',
+      cp6: 'Passed through isOurWallet check',
+      cp7: 'Successfully counted in incrementOwnBidCounter',
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Full order hashes for comparison with ws-proxy (use for missing message detection)
+app.get('/api/test-verify-stats/hashes', (req, res) => {
+  res.json({
+    count: testWalletCounters.orderHashes.length,
+    orderHashes: testWalletCounters.orderHashes, // Full list for comparison
+  });
+});
+
 // Pull consumer metrics endpoint
 app.get('/api/pull-metrics', (req, res) => {
   if (!USE_PULL_MODE) {
@@ -27467,15 +27551,13 @@ export function trackBidRate(marketplace: 'opensea' | 'magiceden' | 'blur', task
  */
 export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', orderHash: string) {
   try {
-    // Check if we've already processed this bid
-    if (processedOwnBids.has(orderHash)) {
+    // Use addIfNotExists for atomic check-and-add (returns false if already exists)
+    if (!processedOwnBids.addIfNotExists(orderHash, Date.now())) {
       debugLog('BidCounter', `SKIP_DUPLICATE | marketplace=${marketplace} | orderHash=${orderHash}`);
       return ownBidCounts[marketplace] || 0;
     }
 
-    // Mark this bid as processed
-    processedOwnBids.add(orderHash);
-
+    // New bid - increment counter
     if (!ownBidCounts[marketplace]) {
       ownBidCounts[marketplace] = 0;
     }
@@ -27485,17 +27567,16 @@ export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
     deliveryCheckpoints.cp7_ownBidCounted++;
     infoLog('MsgDelivery', `CP7_OWN_BID_COUNTED | marketplace=${marketplace} | orderHash=${orderHash?.substring(0, 16) || 'unknown'} | total=${deliveryCheckpoints.cp7_ownBidCounted}`);
 
+    // Test wallet verification: CP7_OWN_BID_COUNTED
+    // Check if this orderHash was from the test wallet (based on orderHashes collected at earlier checkpoints)
+    if (marketplace === 'opensea' && testWalletCounters.orderHashes.includes(orderHash)) {
+      testWalletCounters.cp7_ownBidCounted++;
+      console.log(`[TEST_VERIFY] CP7_OWN_BID_COUNTED | orderHash=${orderHash?.substring(0, 16)} | count=${testWalletCounters.cp7_ownBidCounted}`);
+    }
+
     debugLog('BidCounter', `OWN_BID_COUNTED | marketplace=${marketplace} | orderHash=${orderHash} | total=${ownBidCounts[marketplace]}`);
 
-    // Clean up old entries periodically (keep last 5000 entries)
-    // Memory optimization: streaming deletion instead of Array.from() copy
-    if (processedOwnBids.size > 10000) {
-      let deleteCount = processedOwnBids.size - 5000;
-      for (const entry of processedOwnBids) {
-        if (deleteCount-- <= 0) break;
-        processedOwnBids.delete(entry);
-      }
-    }
+    // BoundedCache handles TTL and capacity cleanup automatically - no manual cleanup needed
 
     return ownBidCounts[marketplace];
   } catch (error) {

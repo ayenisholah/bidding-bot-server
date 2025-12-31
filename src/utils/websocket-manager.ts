@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import { warnLog, errorLog, debugLog, infoLog } from './debug-file-logger';
+import { BoundedCache } from './bounded-cache';
 
 const DEBUG = process.env.DEBUG === 'true';
 
@@ -165,6 +166,10 @@ class WebSocketManager extends EventEmitter {
   private pendingHandlers = 0;
   private readonly MAX_PENDING_HANDLERS = 100;
 
+  // Message queue for backpressure - queue messages instead of dropping
+  private messageQueue: Array<{ message: any; traceId: string; eventType: string }> = [];
+  private readonly MAX_QUEUE_SIZE = 1000; // Max queued messages before dropping
+
   // Accurate handler tracking with completion callbacks (2025-12-29 optimization)
   // handlerIdCounter assigns unique IDs, activeHandlers tracks in-flight handlers
   private handlerIdCounter = 0;
@@ -172,6 +177,10 @@ class WebSocketManager extends EventEmitter {
 
   // O(1) slug lookup set for subscription validation
   private subscribedSlugs = new Set<string>();
+
+  // Server-side message deduplication safety net (30s TTL, 50K capacity)
+  // Catches any duplicates that slip through ws-proxy deduplication
+  private seenWsMessages = new BoundedCache<string, number>('seenWsMessages', 50000, 30000);
 
   constructor(config: WebSocketManagerConfig) {
     super();
@@ -744,7 +753,10 @@ class WebSocketManager extends EventEmitter {
         const batchTimestamp = parsed.timestamp || receiveTime;
         const latency = receiveTime - batchTimestamp;
 
-        infoLog('WebSocket', `[BATCH_RECV] Received batch of ${batchSize} events | subscriptionType=${parsed.subscriptionType} | latency=${latency}ms`);
+        // Enhanced batch latency logging with tier-based severity
+        const logLevel = latency > 5000 ? 'error' : latency > 1000 ? 'warn' : 'info';
+        const logFn = logLevel === 'error' ? errorLog : logLevel === 'warn' ? warnLog : infoLog;
+        logFn('BatchLatency', `BATCH_RECV | events=${batchSize} | subscriptionType=${parsed.subscriptionType} | latency=${latency}ms | batchTimestamp=${batchTimestamp}`);
 
         // Emit batch event for optimized processing (handlers can process all events at once)
         this.emit('batch', {
@@ -758,7 +770,8 @@ class WebSocketManager extends EventEmitter {
         // Process events asynchronously in chunks for backward compatibility
         // This ensures existing handlers continue to work without blocking event loop
         // (2025-12-29 optimization: replaces synchronous for-loop with async chunked processing)
-        this.processBatchEvents(parsed.events, receiveTime).catch(error => {
+        // (2025-12-31 fix: pass batchTimestamp for accurate per-event latency tracking)
+        this.processBatchEvents(parsed.events, receiveTime, batchTimestamp).catch(error => {
           errorLog('WebSocket', 'Error in async batch processing', error);
         });
 
@@ -798,8 +811,9 @@ class WebSocketManager extends EventEmitter {
    * Transform a normalized batch event to handler-compatible format.
    * Uses static EVENT_TYPE_MAP to avoid per-event object creation.
    * (2025-12-29 optimization: extracted from inline loop)
+   * (2025-12-31 fix: added batchTimestamp fallback for accurate latency tracking)
    */
-  private transformBatchEvent(event: any): any {
+  private transformBatchEvent(event: any, batchTimestamp?: number): any {
     // Use rawPayload as base (preserves original nested structure for handlers)
     const messageForHandlers: any = event.rawPayload ? { ...event.rawPayload } : { ...event };
 
@@ -814,7 +828,9 @@ class WebSocketManager extends EventEmitter {
     }
 
     // Preserve normalized fields for handlers that use them
-    messageForHandlers._normalizedEvent = event;
+    // If event lacks receivedAt, use batchTimestamp as fallback (2025-12-31 fix)
+    const normalizedEventWithTimestamp = event.receivedAt ? event : { ...event, receivedAt: batchTimestamp };
+    messageForHandlers._normalizedEvent = normalizedEventWithTimestamp;
     messageForHandlers.slug = event.slug || messageForHandlers.slug;
     messageForHandlers.orderHash = event.orderHash || messageForHandlers.orderHash;
     messageForHandlers.maker = event.maker || messageForHandlers.maker;
@@ -826,8 +842,9 @@ class WebSocketManager extends EventEmitter {
    * Process batch events asynchronously in chunks.
    * Yields to event loop every CHUNK_SIZE events to prevent blocking.
    * (2025-12-29 optimization: replaces synchronous for-loop)
+   * (2025-12-31 fix: added batchTimestamp for accurate per-event latency tracking)
    */
-  private async processBatchEvents(events: any[], receiveTime: number): Promise<void> {
+  private async processBatchEvents(events: any[], receiveTime: number, batchTimestamp?: number): Promise<void> {
     const CHUNK_SIZE = 20;
     const totalEvents = events.length;
 
@@ -836,7 +853,7 @@ class WebSocketManager extends EventEmitter {
 
       // Process this chunk
       for (let j = i; j < chunkEnd; j++) {
-        const message = this.transformBatchEvent(events[j]);
+        const message = this.transformBatchEvent(events[j], batchTimestamp);
         this.processSingleMessage(message, receiveTime);
       }
 
@@ -884,9 +901,13 @@ class WebSocketManager extends EventEmitter {
       }
 
       // Latency tracking - check if message has a timestamp from ws-proxy
-      const msgTimestamp = message.timestamp || parsed.timestamp || message._proxyReceiveTime;
+      // Priority: _normalizedEvent.receivedAt (most accurate) > timestamp > _proxyReceiveTime
+      const normalizedEvent = message._normalizedEvent;
+      const originalReceivedAt = normalizedEvent?.receivedAt;
+      const msgTimestamp = originalReceivedAt || message.timestamp || parsed.timestamp || message._proxyReceiveTime;
       const eventType = message.eventType || message.event || message.type || 'unknown';
       const marketplace = message.marketplace || 'unknown';
+      const slug = normalizedEvent?.slug || message.slug || message.payload?.payload?.collection?.slug || 'unknown';
       const traceId = message._traceId || 'no-trace';
 
       if (msgTimestamp) {
@@ -895,14 +916,16 @@ class WebSocketManager extends EventEmitter {
         // Record latency for metrics
         this.recordLatency(latency);
 
-        // Tiered latency logging for better visibility
+        // Enhanced per-event latency logging using EventLatency prefix
+        // This provides detailed breakdown for each event, not just batch
         if (latency > 5000) {
-          errorLog('WsProxyLag', `CRITICAL_LATENCY | TRACE=${traceId} | latency=${latency}ms | eventType=${eventType} | marketplace=${marketplace}`);
+          errorLog('EventLatency', `CRITICAL | latency=${latency}ms | eventType=${eventType} | marketplace=${marketplace} | slug=${slug} | receivedAt=${msgTimestamp} | now=${receiveTime} | TRACE=${traceId}`);
         } else if (latency > 1000) {
-          warnLog('WsProxyLag', `HIGH_LATENCY | TRACE=${traceId} | latency=${latency}ms | eventType=${eventType} | marketplace=${marketplace}`);
+          warnLog('EventLatency', `HIGH | latency=${latency}ms | eventType=${eventType} | marketplace=${marketplace} | slug=${slug} | TRACE=${traceId}`);
         } else if (latency > 100) {
-          debugLog('WsProxyLag', `MODERATE_LATENCY | TRACE=${traceId} | latency=${latency}ms | eventType=${eventType} | marketplace=${marketplace}`);
+          debugLog('EventLatency', `MODERATE | latency=${latency}ms | eventType=${eventType} | marketplace=${marketplace} | slug=${slug} | TRACE=${traceId}`);
         }
+        // Don't log normal latency (<100ms) to avoid log flooding
       } else {
         // Warn if timestamp is missing - cannot track latency
         debugLog('MsgFlow', `NO_TIMESTAMP | TRACE=${traceId} | eventType=${eventType} | marketplace=${marketplace} | cannotTrackLatency=true`);
@@ -961,6 +984,14 @@ class WebSocketManager extends EventEmitter {
           this.openseaBidCreatedReceived++;
           // CP4: Log message received from ws-proxy
           infoLog('MsgDelivery', `CP4_WS_RECV | orderHash=${String(orderHash).substring(0,16)} | maker=${String(maker).substring(0,10)} | slug=${msgSlug || 'unknown'} | total=${this.openseaBidCreatedReceived}`);
+
+          // Test wallet verification: CP4_WS_RECV
+          const makerLower = String(maker).toLowerCase();
+          if (makerLower === '0x1b8afd0de8a9368ce635be8b9572c65d8f590b21' && msgSlug === 'azuki') {
+            console.log(`[TEST_VERIFY] CP4_WS_RECV | maker=${makerLower.substring(0,10)} | slug=${msgSlug} | orderHash=${String(orderHash).substring(0,16)}`);
+            // Emit for counter tracking in index.ts
+            this.emit('testWalletEvent', { checkpoint: 'CP4', orderHash: String(orderHash), maker: makerLower, slug: msgSlug });
+          }
         }
 
         // Check if we're actually subscribed to this collection
@@ -976,46 +1007,100 @@ class WebSocketManager extends EventEmitter {
         }
       }
 
-      // Backpressure detection: check if handlers are queuing up
-      // Use activeHandlers.size for accurate count (vs pendingHandlers for backward compat)
-      if (this.activeHandlers.size > this.MAX_PENDING_HANDLERS) {
-        warnLog('MsgFlow', `BACKPRESSURE | activeHandlers=${this.activeHandlers.size} | maxAllowed=${this.MAX_PENDING_HANDLERS} | TRACE=${traceId} | eventType=${eventType} | dropping=true`);
-        return; // Drop message to prevent queue buildup
-      }
+      // Server-side deduplication safety net
+      // Catches any duplicates that slip through ws-proxy deduplication (e.g., network retries)
+      if (message.eventType === 'BID_CREATED' || message.eventType === 'TRAIT_BID_CREATED' ||
+          message.eventType === 'LISTING_CREATED' || message.eventType === 'ITEM_SOLD') {
+        const msgMarketplace = message.marketplace || message._normalizedEvent?.marketplace || 'unknown';
+        const dedupOrderHash = message.payload?.payload?.order_hash ||
+                               message.orderHash ||
+                               message._normalizedEvent?.orderHash ||
+                               message.id ||
+                               message.data?.id;
 
-      // Track handler timing with accurate completion callback (2025-12-29 optimization)
-      const emitStart = Date.now();
-      const handlerId = ++this.handlerIdCounter;
-      this.activeHandlers.add(handlerId);
-      this.pendingHandlers++; // Keep legacy counter for backward compatibility
-
-      // Create completion callback that handlers should call when done
-      const done = () => {
-        if (this.activeHandlers.has(handlerId)) {
-          this.activeHandlers.delete(handlerId);
-          this.pendingHandlers--;
-          const handlerDuration = Date.now() - emitStart;
-          if (handlerDuration > 100) {
-            warnLog('MsgFlow', `SLOW_HANDLER | durationMs=${handlerDuration} | TRACE=${traceId} | eventType=${eventType} | activeHandlers=${this.activeHandlers.size}`);
+        if (dedupOrderHash && dedupOrderHash !== 'unknown') {
+          const dedupKey = `${msgMarketplace}:${dedupOrderHash}`;
+          // addIfNotExists returns false if key already exists (duplicate)
+          if (!this.seenWsMessages.addIfNotExists(dedupKey, Date.now())) {
+            // Duplicate message - already processed, skip silently
+            // Only log at debug level to avoid flooding
+            debugLog('MsgDedup', `SERVER_DEDUP_BLOCKED | marketplace=${msgMarketplace} | orderHash=${String(dedupOrderHash).substring(0,16)} | eventType=${eventType}`);
+            return;
           }
         }
-      };
+      }
 
-      // Emit message to handlers with completion callback
-      // Handlers should call done() when finished (async or sync)
-      this.emit('message', message, done);
-
-      // Fallback: if handler doesn't call done() within 30s, clean up automatically
-      // This prevents memory leaks from handlers that don't implement the callback
-      setTimeout(() => {
-        if (this.activeHandlers.has(handlerId)) {
-          debugLog('MsgFlow', `HANDLER_TIMEOUT | handlerId=${handlerId} | TRACE=${traceId} | eventType=${eventType} | cleaning up after 30s`);
-          done();
+      // Backpressure detection: queue messages instead of dropping
+      if (this.activeHandlers.size >= this.MAX_PENDING_HANDLERS) {
+        // Queue message for later processing instead of dropping
+        if (this.messageQueue.length < this.MAX_QUEUE_SIZE) {
+          this.messageQueue.push({ message, traceId, eventType });
+          if (this.messageQueue.length % 100 === 0) {
+            debugLog('MsgFlow', `QUEUE_BACKPRESSURE | queueSize=${this.messageQueue.length} | activeHandlers=${this.activeHandlers.size}`);
+          }
+        } else {
+          // Queue is full - now we have to drop
+          warnLog('MsgFlow', `QUEUE_FULL_DROP | queueSize=${this.messageQueue.length} | activeHandlers=${this.activeHandlers.size} | TRACE=${traceId} | eventType=${eventType}`);
         }
-      }, 30000);
+        return;
+      }
+
+      // Process this message now
+      this.processMessageWithHandler(message, traceId, eventType);
 
     } catch (error) {
       errorLog('WebSocket', 'Failed to process single message', error);
+    }
+  }
+
+  /**
+   * Process a message with handler tracking and queue draining.
+   * Called directly for new messages or from queue when capacity frees up.
+   */
+  private processMessageWithHandler(message: any, traceId: string, eventType: string): void {
+    const emitStart = Date.now();
+    const handlerId = ++this.handlerIdCounter;
+    this.activeHandlers.add(handlerId);
+    this.pendingHandlers++; // Keep legacy counter for backward compatibility
+
+    // Create completion callback that handlers should call when done
+    const done = () => {
+      if (this.activeHandlers.has(handlerId)) {
+        this.activeHandlers.delete(handlerId);
+        this.pendingHandlers--;
+        const handlerDuration = Date.now() - emitStart;
+        if (handlerDuration > 100) {
+          warnLog('MsgFlow', `SLOW_HANDLER | durationMs=${handlerDuration} | TRACE=${traceId} | eventType=${eventType} | activeHandlers=${this.activeHandlers.size}`);
+        }
+
+        // Process queued messages when capacity frees up
+        this.drainMessageQueue();
+      }
+    };
+
+    // Emit message to handlers with completion callback
+    this.emit('message', message, done);
+
+    // Fallback: if handler doesn't call done() within 30s, clean up automatically
+    setTimeout(() => {
+      if (this.activeHandlers.has(handlerId)) {
+        debugLog('MsgFlow', `HANDLER_TIMEOUT | handlerId=${handlerId} | TRACE=${traceId} | eventType=${eventType} | cleaning up after 30s`);
+        done();
+      }
+    }, 30000);
+  }
+
+  /**
+   * Drain messages from the queue when handler capacity is available.
+   * Called after each handler completes.
+   */
+  private drainMessageQueue(): void {
+    // Process queued messages while we have capacity
+    while (this.messageQueue.length > 0 && this.activeHandlers.size < this.MAX_PENDING_HANDLERS) {
+      const queued = this.messageQueue.shift();
+      if (queued) {
+        this.processMessageWithHandler(queued.message, queued.traceId, queued.eventType);
+      }
     }
   }
 

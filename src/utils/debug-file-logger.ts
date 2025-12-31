@@ -251,16 +251,20 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'API': 'api',
   'Blockchain': 'api',
 
-  // WebSocket (9)
+  // WebSocket (13)
   'WebSocket': 'websocket',
   'MsgLoss': 'websocket',    // Message loss detection between ws-proxy and server
   'MsgFlow': 'websocket',    // Raw message flow tracking at earliest checkpoint
   'MsgDelivery': 'websocket', // Delivery checkpoint logging (CP4-CP7) for message flow analysis
+  'MsgDedup': 'websocket',   // Server-side message deduplication safety net logs
   'WsProxyRecv': 'websocket',     // Messages received from ws-proxy (detailed tracking)
   'WsProxyDrop': 'websocket',     // Potential drops detected during processing
   'WsProxyLag': 'websocket',      // Latency/lag detection (message timestamp vs receive time)
   'WsProxyReconnect': 'websocket', // ws-proxy reconnection events
   'WsProxyStats': 'websocket',    // Periodic stats from ws-proxy message flow
+  'BatchLatency': 'websocket',    // Batch-level latency tracking (oldestEventAge, sendDuration)
+  'EventLatency': 'websocket',    // Per-event latency breakdown in batch processing
+  'BatchBackpressure': 'websocket', // WebSocket backpressure detection (buffer full, drain timeout)
 
   // Listing (5)
   'Listing': 'listing',

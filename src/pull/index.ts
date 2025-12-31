@@ -36,7 +36,7 @@ type CounterbidHandler = (data: any, task: ITask) => Promise<void>;
  * Configuration for initializing the pull consumer
  */
 export interface PullConsumerInitConfig {
-  // ws-proxy URL (e.g., http://localhost:8080)
+  // ws-proxy URL (e.g., https://nfttools-ws-proxy.nfttools.io/)
   proxyUrl: string;
 
   // Redis instance for cursor persistence
