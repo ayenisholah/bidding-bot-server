@@ -166,8 +166,8 @@ class WebSocketManager extends EventEmitter {
   private pendingHandlers = 0;
   private readonly MAX_PENDING_HANDLERS = 100;
 
-  // Message queue for backpressure - queue messages instead of dropping
-  private messageQueue: Array<{ message: any; traceId: string; eventType: string }> = [];
+  // Incoming message queue for backpressure - queue messages instead of dropping
+  private incomingMessageQueue: Array<{ message: any; traceId: string; eventType: string }> = [];
   private readonly MAX_QUEUE_SIZE = 1000; // Max queued messages before dropping
 
   // Accurate handler tracking with completion callbacks (2025-12-29 optimization)
@@ -180,7 +180,7 @@ class WebSocketManager extends EventEmitter {
 
   // Server-side message deduplication safety net (30s TTL, 50K capacity)
   // Catches any duplicates that slip through ws-proxy deduplication
-  private seenWsMessages = new BoundedCache<string, number>('seenWsMessages', 50000, 30000);
+  private seenWsMessages = new BoundedCache<string, number>(50000, 30000, 'seenWsMessages');
 
   constructor(config: WebSocketManagerConfig) {
     super();
@@ -1033,14 +1033,14 @@ class WebSocketManager extends EventEmitter {
       // Backpressure detection: queue messages instead of dropping
       if (this.activeHandlers.size >= this.MAX_PENDING_HANDLERS) {
         // Queue message for later processing instead of dropping
-        if (this.messageQueue.length < this.MAX_QUEUE_SIZE) {
-          this.messageQueue.push({ message, traceId, eventType });
-          if (this.messageQueue.length % 100 === 0) {
-            debugLog('MsgFlow', `QUEUE_BACKPRESSURE | queueSize=${this.messageQueue.length} | activeHandlers=${this.activeHandlers.size}`);
+        if (this.incomingMessageQueue.length < this.MAX_QUEUE_SIZE) {
+          this.incomingMessageQueue.push({ message, traceId, eventType });
+          if (this.incomingMessageQueue.length % 100 === 0) {
+            debugLog('MsgFlow', `QUEUE_BACKPRESSURE | queueSize=${this.incomingMessageQueue.length} | activeHandlers=${this.activeHandlers.size}`);
           }
         } else {
           // Queue is full - now we have to drop
-          warnLog('MsgFlow', `QUEUE_FULL_DROP | queueSize=${this.messageQueue.length} | activeHandlers=${this.activeHandlers.size} | TRACE=${traceId} | eventType=${eventType}`);
+          warnLog('MsgFlow', `QUEUE_FULL_DROP | queueSize=${this.incomingMessageQueue.length} | activeHandlers=${this.activeHandlers.size} | TRACE=${traceId} | eventType=${eventType}`);
         }
         return;
       }
@@ -1096,8 +1096,8 @@ class WebSocketManager extends EventEmitter {
    */
   private drainMessageQueue(): void {
     // Process queued messages while we have capacity
-    while (this.messageQueue.length > 0 && this.activeHandlers.size < this.MAX_PENDING_HANDLERS) {
-      const queued = this.messageQueue.shift();
+    while (this.incomingMessageQueue.length > 0 && this.activeHandlers.size < this.MAX_PENDING_HANDLERS) {
+      const queued = this.incomingMessageQueue.shift();
       if (queued) {
         this.processMessageWithHandler(queued.message, queued.traceId, queued.eventType);
       }

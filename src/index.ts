@@ -109,7 +109,7 @@ const DEBUG = process.env.DEBUG === 'true';
 const bidStats: BidCounts = {};
 const ownBidCounts: { [marketplace: string]: number } = {};
 // Track processed own bid hashes - BoundedCache with 1hr TTL prevents memory leak
-const processedOwnBids = new BoundedCache<string, number>('processedOwnBids', 50000, 3600000);
+const processedOwnBids = new BoundedCache<string, number>(50000, 3600000, 'processedOwnBids');
 const currentTokenIds: BottomListings = {};
 const currentTraits: CurrentTraits = {}
 export const taskStatus: TaskStatus = {};
