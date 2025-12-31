@@ -164,7 +164,7 @@ class WebSocketManager extends EventEmitter {
 
   // Backpressure detection - tracks how many handlers are still processing
   private pendingHandlers = 0;
-  private readonly MAX_PENDING_HANDLERS = 100;
+  private readonly MAX_PENDING_HANDLERS = 200; // Increased from 100 to handle burst traffic better
 
   // Incoming message queue for backpressure - queue messages instead of dropping
   private incomingMessageQueue: Array<{ message: any; traceId: string; eventType: string }> = [];
@@ -1081,13 +1081,13 @@ class WebSocketManager extends EventEmitter {
     // Emit message to handlers with completion callback
     this.emit('message', message, done);
 
-    // Fallback: if handler doesn't call done() within 30s, clean up automatically
+    // Fallback: if handler doesn't call done() within 10s, clean up automatically
     setTimeout(() => {
       if (this.activeHandlers.has(handlerId)) {
-        debugLog('MsgFlow', `HANDLER_TIMEOUT | handlerId=${handlerId} | TRACE=${traceId} | eventType=${eventType} | cleaning up after 30s`);
+        debugLog('MsgFlow', `HANDLER_TIMEOUT | handlerId=${handlerId} | TRACE=${traceId} | eventType=${eventType} | cleaning up after 10s`);
         done();
       }
-    }, 30000);
+    }, 10000);
   }
 
   /**
