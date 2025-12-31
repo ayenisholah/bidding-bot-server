@@ -14013,6 +14013,7 @@ async function handleCounterBid(message: any) {
     const { contractAddress, slug } = getMarketplaceDetails(message);
 
     if (!contractAddress && !slug) {
+      warnLog('MsgDelivery', `CP_NO_COLLECTION | eventType=${message.eventType || message.event || 'unknown'} | marketplace=${message.marketplace || 'unknown'} | keys=${Object.keys(message.payload || {}).slice(0, 5).join(',')}`);
       return;
     }
 
@@ -14023,8 +14024,13 @@ async function handleCounterBid(message: any) {
       return;
     }
 
-    // Await all task handlers to ensure deduplication cache is updated before processing next message
-    await Promise.all(relevantTasks.map(task => handleCounterBidForTask(task, message)))
+    // Fire-and-forget counterbid processing (extreme scale optimization)
+    // pendingCounterbids cache provides dedup; no need to await all tasks which blocks handler
+    relevantTasks.forEach(task => {
+      handleCounterBidForTask(task, message).catch(err => {
+        errorLog('CounterbidError', `Task ${task._id}: ${err.message}`);
+      });
+    });
 
   } catch (error) {
     errorLog('Counterbid', 'Error in handleCounterBid', error);
@@ -15184,19 +15190,23 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
     const currentTask = activeTasks.get(task._id)
     if (!currentTask) {
+      debugLog('MsgDelivery', `CP_TASK_NOT_FOUND | taskId=${task._id} | slug=${task.contract?.slug} | orderHash=${orderHash?.substring(0, 16) || 'unknown'} | maker=${maker?.substring(0, 10) || 'unknown'}`);
       return;
     }
 
     if (!currentTask?.running) {
+      debugLog('MsgDelivery', `CP_TASK_NOT_RUNNING | taskId=${task._id} | slug=${task.contract?.slug} | running=${currentTask?.running} | orderHash=${orderHash?.substring(0, 16) || 'unknown'}`);
       return;
     }
 
     const taskMarketplaces = currentTask.selectedMarketplaces.map((market) => market.toLowerCase());
     if (!taskMarketplaces.includes("opensea")) {
+      debugLog('MsgDelivery', `CP_NOT_SELECTED | taskId=${task._id} | slug=${task.contract?.slug} | selected=${taskMarketplaces.join(',')}`);
       return;
     }
 
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) {
+      warnLog('MsgDelivery', `CP_NOT_ENABLED | OpenSea globally disabled`);
       return;
     }
 
@@ -15250,6 +15260,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     }
 
     if (!Number.isFinite(incomingBidAmount)) {
+      errorLog('MsgDelivery', `CP_CURRENCY_FAIL | slug=${task.contract?.slug} | symbol=${symbol} | etherPrice=${etherPrice} | base_price=${base_price} | incomingBidAmount=${incomingBidAmount} | currencyType=${currencyType}`);
       return;
     }
 
@@ -25620,6 +25631,7 @@ app.get('/api/bid-flow-checkpoints', (req, res) => {
 // Use this to identify WHERE messages are being lost in the WebSocket → Handler → BidCounter flow
 app.get('/api/delivery-checkpoints', (req, res) => {
   const cp4_wsRecv = wsManager?.getOpenseaBidCreatedReceived?.() || 0;
+  const walletAddressesArray = Array.from(ourWalletAddresses);
 
   res.json({
     description: 'Server-side delivery checkpoints (CP4-CP7) for OpenSea item_received_bid events',
@@ -25634,10 +25646,15 @@ app.get('/api/delivery-checkpoints', (req, res) => {
       cp5_to_cp6: deliveryCheckpoints.cp5_handler - deliveryCheckpoints.cp6_walletCheck,
       cp6_to_cp7_ownBids: deliveryCheckpoints.cp6_walletCheck - deliveryCheckpoints.cp7_ownBidCounted,
     },
+    walletInfo: {
+      count: ourWalletAddresses.size,
+      sample: walletAddressesArray.slice(0, 3).map(w => `${w.substring(0, 10)}...`), // First 3 wallets (truncated)
+    },
     notes: {
       cp4_to_cp5_gap: 'Messages lost between WebSocket receipt and handler entry (task filtering, event type filtering)',
       cp5_to_cp6_gap: 'Should always be 0 - these happen in sequence',
       cp6_to_cp7_gap: 'Non-own bids (expected to be most messages) + duplicates filtered',
+      walletInfo: 'If count is 0, wallet addresses not loaded - check loadOurWalletAddresses()',
     },
     timestamp: new Date().toISOString()
   });
@@ -25707,6 +25724,57 @@ app.get('/api/pull-metrics', (req, res) => {
     proxyUrl: WS_PROXY_HTTP_URL,
     ...metrics,
     timestamp: new Date().toISOString()
+  });
+});
+
+// Test metrics endpoint for extreme scale testing (100x100)
+// Unified view of test wallet tracking through the server
+app.get('/api/test-metrics', (req, res) => {
+  const wsReceived = wsManager?.getOpenseaBidCreatedReceived?.() || 0;
+
+  // Calculate delivery metrics
+  const serverDeliveryRate = testWalletCounters.cp4_wsRecv > 0
+    ? ((testWalletCounters.cp7_ownBidCounted / testWalletCounters.cp4_wsRecv) * 100).toFixed(2)
+    : '0.00';
+
+  res.json({
+    timestamp: new Date().toISOString(),
+    testWallet: {
+      wallet: testWalletCounters.wallet,
+      slug: testWalletCounters.slug,
+    },
+    checkpoints: {
+      cp4_wsRecv: testWalletCounters.cp4_wsRecv,
+      cp5_handler: testWalletCounters.cp5_handler,
+      cp6_walletCheck: testWalletCounters.cp6_walletCheck,
+      cp7_ownBidCounted: testWalletCounters.cp7_ownBidCounted,
+    },
+    gaps: {
+      cp4_to_cp5: testWalletCounters.cp4_wsRecv - testWalletCounters.cp5_handler,
+      cp5_to_cp6: testWalletCounters.cp5_handler - testWalletCounters.cp6_walletCheck,
+      cp6_to_cp7: testWalletCounters.cp6_walletCheck - testWalletCounters.cp7_ownBidCounted,
+    },
+    ownBidCounts: {
+      opensea: ownBidCounts['opensea'] || 0,
+      magiceden: ownBidCounts['magiceden'] || 0,
+      blur: ownBidCounts['blur'] || 0,
+      total: (ownBidCounts['opensea'] || 0) + (ownBidCounts['magiceden'] || 0) + (ownBidCounts['blur'] || 0),
+    },
+    wsManager: {
+      openseaBidCreatedReceived: wsReceived,
+      pendingHandlers: wsManager ? (wsManager as any).activeHandlers?.size || 0 : 0,
+      queueSize: wsManager ? (wsManager as any).incomingMessageQueue?.length || 0 : 0,
+    },
+    delivery: {
+      serverDeliveryRate: `${serverDeliveryRate}%`,
+      orderHashCount: testWalletCounters.orderHashes.length,
+      recentOrderHashes: testWalletCounters.orderHashes.slice(-10), // Last 10
+    },
+    handlers: {
+      maxPendingHandlers: 500, // Updated for extreme scale
+      maxQueueSize: 5000,      // Updated for extreme scale
+      handlerTimeoutMs: 5000,  // Updated for extreme scale
+    },
   });
 });
 

@@ -164,11 +164,11 @@ class WebSocketManager extends EventEmitter {
 
   // Backpressure detection - tracks how many handlers are still processing
   private pendingHandlers = 0;
-  private readonly MAX_PENDING_HANDLERS = 200; // Increased from 100 to handle burst traffic better
+  private readonly MAX_PENDING_HANDLERS = 500; // Increased for extreme scale (100x100 target)
 
   // Incoming message queue for backpressure - queue messages instead of dropping
   private incomingMessageQueue: Array<{ message: any; traceId: string; eventType: string }> = [];
-  private readonly MAX_QUEUE_SIZE = 1000; // Max queued messages before dropping
+  private readonly MAX_QUEUE_SIZE = 5000; // 5x increase for extreme scale (100x100 target)
 
   // Accurate handler tracking with completion callbacks (2025-12-29 optimization)
   // handlerIdCounter assigns unique IDs, activeHandlers tracks in-flight handlers
@@ -178,9 +178,9 @@ class WebSocketManager extends EventEmitter {
   // O(1) slug lookup set for subscription validation
   private subscribedSlugs = new Set<string>();
 
-  // Server-side message deduplication safety net (30s TTL, 50K capacity)
+  // Server-side message deduplication safety net (30s TTL, 100K capacity for extreme scale)
   // Catches any duplicates that slip through ws-proxy deduplication
-  private seenWsMessages = new BoundedCache<string, number>(50000, 30000, 'seenWsMessages');
+  private seenWsMessages = new BoundedCache<string, number>(100000, 30000, 'seenWsMessages');
 
   constructor(config: WebSocketManagerConfig) {
     super();
@@ -1081,13 +1081,13 @@ class WebSocketManager extends EventEmitter {
     // Emit message to handlers with completion callback
     this.emit('message', message, done);
 
-    // Fallback: if handler doesn't call done() within 10s, clean up automatically
+    // Fallback: if handler doesn't call done() within 5s, clean up automatically (reduced for extreme scale)
     setTimeout(() => {
       if (this.activeHandlers.has(handlerId)) {
-        debugLog('MsgFlow', `HANDLER_TIMEOUT | handlerId=${handlerId} | TRACE=${traceId} | eventType=${eventType} | cleaning up after 10s`);
+        debugLog('MsgFlow', `HANDLER_TIMEOUT | handlerId=${handlerId} | TRACE=${traceId} | eventType=${eventType} | cleaning up after 5s`);
         done();
       }
-    }, 10000);
+    }, 5000);
   }
 
   /**
