@@ -162,20 +162,8 @@ class WebSocketManager extends EventEmitter {
   private sendFailureCount = 0;
   private readonly MAX_SEND_FAILURES = 3;
 
-  // Backpressure detection - tracks how many handlers are still processing
-  private pendingHandlers = 0;
-  private readonly MAX_PENDING_HANDLERS = 500; // Increased for extreme scale (100x100 target)
-
-  // Incoming message queue for backpressure - queue messages instead of dropping
-  private incomingMessageQueue: Array<{ message: any; traceId: string; eventType: string }> = [];
-  private readonly MAX_QUEUE_SIZE = 5000; // 5x increase for extreme scale (100x100 target)
-
-  // Accurate handler tracking with completion callbacks (2025-12-29 optimization)
-  // handlerIdCounter assigns unique IDs, activeHandlers tracks in-flight handlers
-  private handlerIdCounter = 0;
-  private activeHandlers = new Set<number>();
-
   // O(1) slug lookup set for subscription validation
+  // (2025-12-31: Removed backpressure queue - now using fire-and-forget for <100ms latency)
   private subscribedSlugs = new Set<string>();
 
   // Server-side message deduplication safety net (30s TTL, 100K capacity for extreme scale)
@@ -839,15 +827,26 @@ class WebSocketManager extends EventEmitter {
   }
 
   /**
-   * Process batch events asynchronously in chunks.
-   * Yields to event loop every CHUNK_SIZE events to prevent blocking.
-   * (2025-12-29 optimization: replaces synchronous for-loop)
+   * Process batch events - synchronously for small batches, async for large.
+   * (2025-12-29 optimization: replaces synchronous for-loop for large batches)
    * (2025-12-31 fix: added batchTimestamp for accurate per-event latency tracking)
+   * (2025-12-31 optimization: small batches (<=50) processed synchronously for <100ms latency target)
    */
   private async processBatchEvents(events: any[], receiveTime: number, batchTimestamp?: number): Promise<void> {
-    const CHUNK_SIZE = 20;
     const totalEvents = events.length;
 
+    // For small batches, process synchronously (no yields) - achieves <100ms latency
+    // (2025-12-31 optimization: async chunking was adding 25-125ms overhead)
+    if (totalEvents <= 50) {
+      for (const event of events) {
+        const message = this.transformBatchEvent(event, batchTimestamp);
+        this.processSingleMessage(message, receiveTime);
+      }
+      return;
+    }
+
+    // For large batches (>50 events), yield to event loop between chunks to prevent blocking
+    const CHUNK_SIZE = 20;
     for (let i = 0; i < totalEvents; i += CHUNK_SIZE) {
       const chunkEnd = Math.min(i + CHUNK_SIZE, totalEvents);
 
@@ -1030,77 +1029,14 @@ class WebSocketManager extends EventEmitter {
         }
       }
 
-      // Backpressure detection: queue messages instead of dropping
-      if (this.activeHandlers.size >= this.MAX_PENDING_HANDLERS) {
-        // Queue message for later processing instead of dropping
-        if (this.incomingMessageQueue.length < this.MAX_QUEUE_SIZE) {
-          this.incomingMessageQueue.push({ message, traceId, eventType });
-          if (this.incomingMessageQueue.length % 100 === 0) {
-            debugLog('MsgFlow', `QUEUE_BACKPRESSURE | queueSize=${this.incomingMessageQueue.length} | activeHandlers=${this.activeHandlers.size}`);
-          }
-        } else {
-          // Queue is full - now we have to drop
-          warnLog('MsgFlow', `QUEUE_FULL_DROP | queueSize=${this.incomingMessageQueue.length} | activeHandlers=${this.activeHandlers.size} | TRACE=${traceId} | eventType=${eventType}`);
-        }
-        return;
-      }
-
-      // Process this message now
-      this.processMessageWithHandler(message, traceId, eventType);
+      // FIRE-AND-FORGET: Emit message immediately without queueing
+      // (2025-12-31 optimization: Removed handler backpressure queue that was causing MINUTES of latency)
+      // The old architecture waited for handlers to complete - this is wrong for real-time events.
+      // Now we just emit and let handlers run concurrently without blocking the message pipeline.
+      this.emit('message', message);
 
     } catch (error) {
       errorLog('WebSocket', 'Failed to process single message', error);
-    }
-  }
-
-  /**
-   * Process a message with handler tracking and queue draining.
-   * Called directly for new messages or from queue when capacity frees up.
-   */
-  private processMessageWithHandler(message: any, traceId: string, eventType: string): void {
-    const emitStart = Date.now();
-    const handlerId = ++this.handlerIdCounter;
-    this.activeHandlers.add(handlerId);
-    this.pendingHandlers++; // Keep legacy counter for backward compatibility
-
-    // Create completion callback that handlers should call when done
-    const done = () => {
-      if (this.activeHandlers.has(handlerId)) {
-        this.activeHandlers.delete(handlerId);
-        this.pendingHandlers--;
-        const handlerDuration = Date.now() - emitStart;
-        if (handlerDuration > 100) {
-          warnLog('MsgFlow', `SLOW_HANDLER | durationMs=${handlerDuration} | TRACE=${traceId} | eventType=${eventType} | activeHandlers=${this.activeHandlers.size}`);
-        }
-
-        // Process queued messages when capacity frees up
-        this.drainMessageQueue();
-      }
-    };
-
-    // Emit message to handlers with completion callback
-    this.emit('message', message, done);
-
-    // Fallback: if handler doesn't call done() within 5s, clean up automatically (reduced for extreme scale)
-    setTimeout(() => {
-      if (this.activeHandlers.has(handlerId)) {
-        debugLog('MsgFlow', `HANDLER_TIMEOUT | handlerId=${handlerId} | TRACE=${traceId} | eventType=${eventType} | cleaning up after 5s`);
-        done();
-      }
-    }, 5000);
-  }
-
-  /**
-   * Drain messages from the queue when handler capacity is available.
-   * Called after each handler completes.
-   */
-  private drainMessageQueue(): void {
-    // Process queued messages while we have capacity
-    while (this.incomingMessageQueue.length > 0 && this.activeHandlers.size < this.MAX_PENDING_HANDLERS) {
-      const queued = this.incomingMessageQueue.shift();
-      if (queued) {
-        this.processMessageWithHandler(queued.message, queued.traceId, queued.eventType);
-      }
     }
   }
 
