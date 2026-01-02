@@ -174,7 +174,7 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'ServerRestart': 'startup',
   'BullMQInit': 'startup',
 
-  // Task (7)
+  // Task (8)
   'Task': 'task',
   'TaskStart': 'task',
   'TaskStatusCheck': 'task',
@@ -182,6 +182,7 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'TaskStatus': 'task',
   'TaskStateUpdate': 'task',
   'TaskRecovery': 'taskflow',  // Moved to taskflow for consolidated lifecycle logging
+  'TaskIndex': 'taskflow',     // Task index add/remove operations (contractToTasksMap, slugToTasksMap)
 
   // Scheduler (3)
   'TaskScheduler': 'scheduler',

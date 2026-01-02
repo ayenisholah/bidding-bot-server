@@ -128,23 +128,6 @@ let rawOurBidsReceived = 0;
 let bidEventsReceived = 0;        // All BID_CREATED events received at WebSocket
 let bidEventsReachingHandler = 0; // Events that reach handleCounterBid
 
-// Delivery checkpoint counters (for diagnosing 80% delivery rate issue)
-const deliveryCheckpoints = {
-  cp5_handler: 0,     // Messages reaching handleOpenseaCounterbid
-  cp6_walletCheck: 0, // Messages passing through wallet check
-  cp7_ownBidCounted: 0, // Own bids successfully counted
-};
-
-// Test wallet verification counters (must match ws-proxy)
-const testWalletCounters = {
-  wallet: '0x1b8afd0de8a9368ce635be8b9572c65d8f590b21', // lowercase
-  slug: 'azuki',
-  cp4_wsRecv: 0,       // Received from ws-proxy
-  cp5_handler: 0,      // Reached counterbid handler
-  cp6_walletCheck: 0,  // Passed wallet check
-  cp7_ownBidCounted: 0, // Counted as own bid
-  orderHashes: [] as string[],
-};
 
 // ============================================
 // RESILIENT HELPER FUNCTIONS
@@ -160,6 +143,26 @@ async function initializeOrderCacheWithRetry(taskId: string, maxRetries = 3): Pr
     try {
       await orderCache.initializeFromDatabase(taskId);
       debugLog('Cache', `Order cache initialized for task ${taskId} on attempt ${attempt}`);
+
+      // Register existing orders in ownBidCounter so counts persist across task restarts
+      // This ensures the bid counter reflects existing bids, not just new WebSocket events
+      // Use skipDedup=true because these orderHashes may already be in the processedOwnBids cache
+      // from when the bids were originally placed (before task stop/restart)
+      const existingOrders = orderCache.getActiveByTask(taskId);
+      let countedByMarketplace: Record<string, number> = {};
+
+      for (const order of existingOrders) {
+        if (order.orderHash && order.marketplace) {
+          const mp = order.marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
+          incrementOwnBidCounter(mp, order.orderHash, true); // skipDedup=true for existing orders
+          countedByMarketplace[mp] = (countedByMarketplace[mp] || 0) + 1;
+        }
+      }
+
+      if (existingOrders.length > 0) {
+        infoLog('BidCounter', `INIT_FROM_CACHE | taskId=${taskId} | orders=${existingOrders.length} | byMarketplace=${JSON.stringify(countedByMarketplace)}`);
+      }
+
       return;
     } catch (err) {
       const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000); // 1s, 2s, 4s... max 10s
@@ -1676,6 +1679,7 @@ function getRelevantTasks(contractAddress?: string, slug?: string): ITask[] {
 function addTaskToIndexes(task: ITask): void {
   if (!task.running || !task.contract) return;
 
+  const taskId = task._id.toString();
   const contractKey = task.contract.contractAddress?.toLowerCase();
   const slugKey = task.contract.slug?.toLowerCase();
 
@@ -1693,17 +1697,30 @@ function addTaskToIndexes(task: ITask): void {
     slugToTasksMap.get(slugKey)!.add(task);
   }
 
-  // Removed console.log for task indexes
+  debugLog('TaskIndex', `ADD | taskId=${taskId} | slug=${slugKey} | contract=${contractKey?.slice(0, 10)}...`);
 }
 
 // Remove a single task from the indexes
+// Note: Uses taskId matching instead of reference equality because task objects
+// are recreated via spread operator on start/stop, making Set.delete(task) fail silently
 function removeTaskFromIndexes(task: ITask): void {
+  const taskId = task._id.toString();
   const contractKey = task.contract?.contractAddress?.toLowerCase();
   const slugKey = task.contract?.slug?.toLowerCase();
 
+  let removedFromContract = false;
+  let removedFromSlug = false;
+
   if (contractKey && contractToTasksMap.has(contractKey)) {
     const contractTasks = contractToTasksMap.get(contractKey)!;
-    contractTasks.delete(task);
+    // Find task by ID instead of reference (Set.delete uses reference equality)
+    for (const t of contractTasks) {
+      if (t._id.toString() === taskId) {
+        contractTasks.delete(t);
+        removedFromContract = true;
+        break;
+      }
+    }
     if (contractTasks.size === 0) {
       contractToTasksMap.delete(contractKey);
     }
@@ -1711,13 +1728,20 @@ function removeTaskFromIndexes(task: ITask): void {
 
   if (slugKey && slugToTasksMap.has(slugKey)) {
     const slugTasks = slugToTasksMap.get(slugKey)!;
-    slugTasks.delete(task);
+    // Find task by ID instead of reference (Set.delete uses reference equality)
+    for (const t of slugTasks) {
+      if (t._id.toString() === taskId) {
+        slugTasks.delete(t);
+        removedFromSlug = true;
+        break;
+      }
+    }
     if (slugTasks.size === 0) {
       slugToTasksMap.delete(slugKey);
     }
   }
 
-  // Removed console.log for task indexes
+  debugLog('TaskIndex', `REMOVE | taskId=${taskId} | slug=${slugKey} | contract=${contractKey?.slice(0, 10)}... | removedFromContract=${removedFromContract} | removedFromSlug=${removedFromSlug}`);
 }
 
 export const OPENSEA_SCHEDULE = "OPENSEA_SCHEDULE"
@@ -1789,7 +1813,7 @@ app.use(helmet({
       scriptSrc: ["'self'", "'unsafe-inline'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: ["'self'", "wss:", "https:", "https://nfttools-ws-proxy.nfttools.io", "https://updates.nfttools.io"],
+      connectSrc: ["'self'", "wss:", "https:", "wss://nfttools-ws-proxy.nfttools.io", "https://updates.nfttools.io"],
       fontSrc: ["'self'"],
       objectSrc: ["'none'"],
       mediaSrc: ["'self'"],
@@ -4712,7 +4736,8 @@ function cleanupTaskResources(taskId: string, preserveWarnings = false): void {
   taskRestartCounts.delete(taskId);
 
   // Memory leak fixes - clean up task-specific data structures that were missing cleanup
-  delete ownBidCounts[taskId];
+  // Note: ownBidCounts is keyed by marketplace (opensea/magiceden/blur), not taskId - so we don't delete here
+  // Note: counterbidCounts is keyed by taskId so this is valid
   delete counterbidCounts[taskId];
   taskPreprocessing.delete(taskId);
   scheduledJobLocks.delete(taskId);
@@ -9871,12 +9896,15 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
 
   clearTaskTimers(taskId, marketplace)
 
-  // Initialize order cache from database for this task (non-blocking with background retry)
+  // Initialize order cache from database for this task
   // This loads active orders into memory for fast lookups during bid processing
-  // Fire-and-forget: task starts immediately, cache populates in background
-  initializeOrderCacheWithRetry(task._id.toString()).catch(() => {
-    // Silently ignore - retries and errors handled internally
-  });
+  // Also registers existing orders in incrementOwnBidCounter so counts persist across task restarts
+  try {
+    await initializeOrderCacheWithRetry(task._id.toString());
+  } catch (err) {
+    // Continue even if cache init fails - it will retry in background
+    warnLog('Cache', `Order cache init failed for task ${task._id.toString()}, continuing with empty cache`);
+  }
 
   // Initialize bidStats for this task from cache (uses order cache instead of DB query)
   // This ensures the UI shows correct active bid count immediately
@@ -13619,16 +13647,7 @@ async function _doConnect(): Promise<void> {
       errorLog('WsConnection', `WebSocket max reconnection attempts exceeded: connectionId=${connectionMetrics.currentConnectionId}, retryCount=${MAX_RETRIES}`, new Error('Max retries exceeded'));
     });
 
-    // Test wallet verification: track CP4 events from websocket-manager
-    wsManager.on('testWalletEvent', (event: { checkpoint: string; orderHash: string; maker: string; slug: string }) => {
-      if (event.checkpoint === 'CP4') {
-        testWalletCounters.cp4_wsRecv++;
-        if (event.orderHash && !testWalletCounters.orderHashes.includes(event.orderHash)) {
-          testWalletCounters.orderHashes.push(event.orderHash);
-        }
-        console.log(`[TEST_VERIFY] CP4_WS_RECV (counter) | orderHash=${event.orderHash?.substring(0, 16)} | count=${testWalletCounters.cp4_wsRecv}`);
-      }
-    });
+
   }
 
   // Connect with error handling
@@ -15160,31 +15179,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const traitForLog = eventType === "trait_offer" ?
       `${data?.payload?.payload?.trait_criteria?.trait_type}:${data?.payload?.payload?.trait_criteria?.trait_name}` : null;
 
-    // CP5: Log handler entry
-    deliveryCheckpoints.cp5_handler++;
-    infoLog('MsgDelivery', `CP5_HANDLER | orderHash=${orderHash?.substring(0, 16) || 'unknown'} | maker=${maker?.substring(0, 10) || 'unknown'} | slug=${task.contract.slug} | event=${eventType} | total=${deliveryCheckpoints.cp5_handler}`);
-
-    // Test wallet verification: CP5_HANDLER
-    if (maker === testWalletCounters.wallet && task.contract.slug === testWalletCounters.slug) {
-      testWalletCounters.cp5_handler++;
-      if (orderHash && !testWalletCounters.orderHashes.includes(orderHash)) {
-        testWalletCounters.orderHashes.push(orderHash);
-      }
-      console.log(`[TEST_VERIFY] CP5_HANDLER | maker=${maker?.substring(0, 10)} | slug=${task.contract.slug} | orderHash=${orderHash?.substring(0, 16) || 'unknown'} | count=${testWalletCounters.cp5_handler}`);
-    }
 
     // Debug: Log ALL bids reaching this handler to identify wallet mismatch issues
-    const isOurs = maker && isOurWallet(maker);
-
-    // CP6: Log wallet ownership check result
-    deliveryCheckpoints.cp6_walletCheck++;
-    infoLog('MsgDelivery', `CP6_WALLET | orderHash=${orderHash?.substring(0, 16) || 'unknown'} | maker=${maker?.substring(0, 10) || 'unknown'} | isOurs=${isOurs} | walletSetSize=${ourWalletAddresses.size} | total=${deliveryCheckpoints.cp6_walletCheck}`);
-
-    // Test wallet verification: CP6_WALLET
-    if (maker === testWalletCounters.wallet && task.contract.slug === testWalletCounters.slug) {
-      testWalletCounters.cp6_walletCheck++;
-      console.log(`[TEST_VERIFY] CP6_WALLET | isOurs=${isOurs} | orderHash=${orderHash?.substring(0, 16) || 'unknown'} | count=${testWalletCounters.cp6_walletCheck}`);
-    }
+    const isOurs = maker && isOurWallet(maker)
 
     debugLog('BidCounter', `OS_BID_RECEIVED | slug=${task.contract.slug} | maker=${maker?.slice(0, 10)}... | isOurs=${isOurs} | orderHash=${orderHash?.slice(0, 10)}... | event=${eventType}`);
 
@@ -15221,6 +15218,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     if (isMarketplaceStoppedDueToBalance(task._id.toString(), 'opensea')) {
       debugLog('Counterbid', `[OS] ${task.contract.slug} | SKIP: Marketplace stopped (insufficient balance)`);
       return;
+
     }
 
     const expiry = getExpiry(currentTask.bidDuration)
@@ -25627,77 +25625,6 @@ app.get('/api/bid-flow-checkpoints', (req, res) => {
   });
 });
 
-// Delivery checkpoints endpoint - detailed message flow analysis for diagnosing delivery loss
-// Use this to identify WHERE messages are being lost in the WebSocket → Handler → BidCounter flow
-app.get('/api/delivery-checkpoints', (req, res) => {
-  const cp4_wsRecv = wsManager?.getOpenseaBidCreatedReceived?.() || 0;
-  const walletAddressesArray = Array.from(ourWalletAddresses);
-
-  res.json({
-    description: 'Server-side delivery checkpoints (CP4-CP7) for OpenSea item_received_bid events',
-    checkpoints: {
-      cp4_wsRecv,                                     // WebSocket manager received
-      cp5_handler: deliveryCheckpoints.cp5_handler,   // Reached handleOpenseaCounterbid
-      cp6_walletCheck: deliveryCheckpoints.cp6_walletCheck, // Passed through wallet check
-      cp7_ownBidCounted: deliveryCheckpoints.cp7_ownBidCounted, // Own bids successfully counted
-    },
-    gaps: {
-      cp4_to_cp5: cp4_wsRecv - deliveryCheckpoints.cp5_handler,
-      cp5_to_cp6: deliveryCheckpoints.cp5_handler - deliveryCheckpoints.cp6_walletCheck,
-      cp6_to_cp7_ownBids: deliveryCheckpoints.cp6_walletCheck - deliveryCheckpoints.cp7_ownBidCounted,
-    },
-    walletInfo: {
-      count: ourWalletAddresses.size,
-      sample: walletAddressesArray.slice(0, 3).map(w => `${w.substring(0, 10)}...`), // First 3 wallets (truncated)
-    },
-    notes: {
-      cp4_to_cp5_gap: 'Messages lost between WebSocket receipt and handler entry (task filtering, event type filtering)',
-      cp5_to_cp6_gap: 'Should always be 0 - these happen in sequence',
-      cp6_to_cp7_gap: 'Non-own bids (expected to be most messages) + duplicates filtered',
-      walletInfo: 'If count is 0, wallet addresses not loaded - check loadOurWalletAddresses()',
-    },
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Test wallet verification stats endpoint - for comparing with ws-proxy counters
-app.get('/api/test-verify-stats', (req, res) => {
-  res.json({
-    description: 'Test wallet verification counters for Azuki test wallet',
-    config: {
-      wallet: testWalletCounters.wallet,
-      slug: testWalletCounters.slug,
-    },
-    counts: {
-      cp4_wsRecv: testWalletCounters.cp4_wsRecv,
-      cp5_handler: testWalletCounters.cp5_handler,
-      cp6_walletCheck: testWalletCounters.cp6_walletCheck,
-      cp7_ownBidCounted: testWalletCounters.cp7_ownBidCounted,
-    },
-    gaps: {
-      cp4_to_cp5: testWalletCounters.cp4_wsRecv - testWalletCounters.cp5_handler,
-      cp5_to_cp6: testWalletCounters.cp5_handler - testWalletCounters.cp6_walletCheck,
-      cp6_to_cp7: testWalletCounters.cp6_walletCheck - testWalletCounters.cp7_ownBidCounted,
-    },
-    orderHashCount: testWalletCounters.orderHashes.length,
-    orderHashes: testWalletCounters.orderHashes.slice(-20),
-    notes: {
-      cp4: 'Received from ws-proxy WebSocket',
-      cp5: 'Reached handleOpenseaCounterbid for this wallet+slug',
-      cp6: 'Passed through isOurWallet check',
-      cp7: 'Successfully counted in incrementOwnBidCounter',
-    },
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Full order hashes for comparison with ws-proxy (use for missing message detection)
-app.get('/api/test-verify-stats/hashes', (req, res) => {
-  res.json({
-    count: testWalletCounters.orderHashes.length,
-    orderHashes: testWalletCounters.orderHashes, // Full list for comparison
-  });
-});
 
 // Pull consumer metrics endpoint
 app.get('/api/pull-metrics', (req, res) => {
@@ -25727,56 +25654,6 @@ app.get('/api/pull-metrics', (req, res) => {
   });
 });
 
-// Test metrics endpoint for extreme scale testing (100x100)
-// Unified view of test wallet tracking through the server
-app.get('/api/test-metrics', (req, res) => {
-  const wsReceived = wsManager?.getOpenseaBidCreatedReceived?.() || 0;
-
-  // Calculate delivery metrics
-  const serverDeliveryRate = testWalletCounters.cp4_wsRecv > 0
-    ? ((testWalletCounters.cp7_ownBidCounted / testWalletCounters.cp4_wsRecv) * 100).toFixed(2)
-    : '0.00';
-
-  res.json({
-    timestamp: new Date().toISOString(),
-    testWallet: {
-      wallet: testWalletCounters.wallet,
-      slug: testWalletCounters.slug,
-    },
-    checkpoints: {
-      cp4_wsRecv: testWalletCounters.cp4_wsRecv,
-      cp5_handler: testWalletCounters.cp5_handler,
-      cp6_walletCheck: testWalletCounters.cp6_walletCheck,
-      cp7_ownBidCounted: testWalletCounters.cp7_ownBidCounted,
-    },
-    gaps: {
-      cp4_to_cp5: testWalletCounters.cp4_wsRecv - testWalletCounters.cp5_handler,
-      cp5_to_cp6: testWalletCounters.cp5_handler - testWalletCounters.cp6_walletCheck,
-      cp6_to_cp7: testWalletCounters.cp6_walletCheck - testWalletCounters.cp7_ownBidCounted,
-    },
-    ownBidCounts: {
-      opensea: ownBidCounts['opensea'] || 0,
-      magiceden: ownBidCounts['magiceden'] || 0,
-      blur: ownBidCounts['blur'] || 0,
-      total: (ownBidCounts['opensea'] || 0) + (ownBidCounts['magiceden'] || 0) + (ownBidCounts['blur'] || 0),
-    },
-    wsManager: {
-      openseaBidCreatedReceived: wsReceived,
-      pendingHandlers: wsManager ? (wsManager as any).activeHandlers?.size || 0 : 0,
-      queueSize: wsManager ? (wsManager as any).incomingMessageQueue?.length || 0 : 0,
-    },
-    delivery: {
-      serverDeliveryRate: `${serverDeliveryRate}%`,
-      orderHashCount: testWalletCounters.orderHashes.length,
-      recentOrderHashes: testWalletCounters.orderHashes.slice(-10), // Last 10
-    },
-    handlers: {
-      maxPendingHandlers: 500, // Updated for extreme scale
-      maxQueueSize: 5000,      // Updated for extreme scale
-      handlerTimeoutMs: 5000,  // Updated for extreme scale
-    },
-  });
-});
 
 // Debug endpoint for task scheduling state
 app.get('/debug/scheduling', (req, res) => {
@@ -27616,12 +27493,18 @@ export function trackBidRate(marketplace: 'opensea' | 'magiceden' | 'blur', task
 
 /**
  * Increments memory-based counter for our own bids when we detect we're the maker
+ * @param skipDedup - When true, suppresses duplicate log messages (used when loading existing orders at task start)
+ *                    Note: Deduplication ALWAYS happens regardless of this flag - it only controls logging
  */
-export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', orderHash: string) {
+export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', orderHash: string, skipDedup: boolean = false) {
   try {
-    // Use addIfNotExists for atomic check-and-add (returns false if already exists)
+    // ALWAYS use addIfNotExists for atomic check-and-add - skipDedup only controls logging, NOT whether to skip duplicates
+    // This fixes the bug where skipDedup=true caused the same orderHash to be counted multiple times
     if (!processedOwnBids.addIfNotExists(orderHash, Date.now())) {
-      debugLog('BidCounter', `SKIP_DUPLICATE | marketplace=${marketplace} | orderHash=${orderHash}`);
+      // Already counted in this session - skip (only log if not in skipDedup mode to reduce noise during cache init)
+      if (!skipDedup) {
+        debugLog('BidCounter', `SKIP_DUPLICATE | marketplace=${marketplace} | orderHash=${orderHash}`);
+      }
       return ownBidCounts[marketplace] || 0;
     }
 
@@ -27630,17 +27513,6 @@ export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
       ownBidCounts[marketplace] = 0;
     }
     ownBidCounts[marketplace]++;
-
-    // CP7: Increment delivery checkpoint for successful own bid count
-    deliveryCheckpoints.cp7_ownBidCounted++;
-    infoLog('MsgDelivery', `CP7_OWN_BID_COUNTED | marketplace=${marketplace} | orderHash=${orderHash?.substring(0, 16) || 'unknown'} | total=${deliveryCheckpoints.cp7_ownBidCounted}`);
-
-    // Test wallet verification: CP7_OWN_BID_COUNTED
-    // Check if this orderHash was from the test wallet (based on orderHashes collected at earlier checkpoints)
-    if (marketplace === 'opensea' && testWalletCounters.orderHashes.includes(orderHash)) {
-      testWalletCounters.cp7_ownBidCounted++;
-      console.log(`[TEST_VERIFY] CP7_OWN_BID_COUNTED | orderHash=${orderHash?.substring(0, 16)} | count=${testWalletCounters.cp7_ownBidCounted}`);
-    }
 
     debugLog('BidCounter', `OWN_BID_COUNTED | marketplace=${marketplace} | orderHash=${orderHash} | total=${ownBidCounts[marketplace]}`);
 

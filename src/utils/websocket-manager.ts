@@ -779,6 +779,26 @@ class WebSocketManager extends EventEmitter {
         return;
       }
 
+      // Handle new single-event format from multi-process architecture (2025-12-31)
+      // Format: { type: "event", marketplace, eventType, subscriptionType, slug, contractAddress, ... }
+      if (parsed.type === 'event') {
+        const latency = receiveTime - (parsed.receivedAt || receiveTime);
+
+        // Log latency for single events
+        if (latency > 100) {
+          const logFn = latency > 5000 ? errorLog : latency > 1000 ? warnLog : debugLog;
+          logFn('EventLatency', `SINGLE_EVENT | latency=${latency}ms | marketplace=${parsed.marketplace} | eventType=${parsed.eventType} | slug=${parsed.slug}`);
+        }
+
+        // Transform to handler-compatible format using same logic as batch events
+        const message = this.transformBatchEvent(parsed, parsed.receivedAt);
+        this.processSingleMessage(message, receiveTime);
+
+        // Track metrics
+        this.recordLatency(latency);
+        return;
+      }
+
       // Single message processing
       this.processSingleMessage(parsed, receiveTime);
 
@@ -846,7 +866,7 @@ class WebSocketManager extends EventEmitter {
     }
 
     // For large batches (>50 events), yield to event loop between chunks to prevent blocking
-    const CHUNK_SIZE = 20;
+    const CHUNK_SIZE = 50;
     for (let i = 0; i < totalEvents; i += CHUNK_SIZE) {
       const chunkEnd = Math.min(i + CHUNK_SIZE, totalEvents);
 
@@ -982,15 +1002,7 @@ class WebSocketManager extends EventEmitter {
         if (message.eventType === 'BID_CREATED' && msgMarketplace === 'OPENSEA') {
           this.openseaBidCreatedReceived++;
           // CP4: Log message received from ws-proxy
-          infoLog('MsgDelivery', `CP4_WS_RECV | orderHash=${String(orderHash).substring(0,16)} | maker=${String(maker).substring(0,10)} | slug=${msgSlug || 'unknown'} | total=${this.openseaBidCreatedReceived}`);
-
-          // Test wallet verification: CP4_WS_RECV
-          const makerLower = String(maker).toLowerCase();
-          if (makerLower === '0x1b8afd0de8a9368ce635be8b9572c65d8f590b21' && msgSlug === 'azuki') {
-            console.log(`[TEST_VERIFY] CP4_WS_RECV | maker=${makerLower.substring(0,10)} | slug=${msgSlug} | orderHash=${String(orderHash).substring(0,16)}`);
-            // Emit for counter tracking in index.ts
-            this.emit('testWalletEvent', { checkpoint: 'CP4', orderHash: String(orderHash), maker: makerLower, slug: msgSlug });
-          }
+          infoLog('MsgDelivery', `CP4_WS_RECV | orderHash=${String(orderHash).substring(0,16)} | maker=${String(maker).substring(0,10)} | slug=${msgSlug || 'unknown'} | total=${this.openseaBidCreatedReceived}`);         
         }
 
         // Check if we're actually subscribed to this collection
@@ -1484,8 +1496,11 @@ class WebSocketManager extends EventEmitter {
   }
 
   async unsubscribe(slug: string, contractAddress: string, marketplace?: string): Promise<void> {
+    // Normalize marketplace to lowercase to match subscription keys
+    const normalizedMarketplace = marketplace?.toLowerCase();
+
     // Log state BEFORE unsubscription
-    infoLog('WebSocket', `[UNSUBSCRIBE] Starting unsubscription | slug=${slug} | contractAddress=${contractAddress} | marketplace=${marketplace || 'ALL'} | currentActiveSlugs=${this.getActiveSlugsList()} | totalActive=${this.activeSubscriptions.size}`);
+    infoLog('WebSocket', `[UNSUBSCRIBE] Starting unsubscription | slug=${slug} | contractAddress=${contractAddress} | marketplace=${normalizedMarketplace || 'ALL'} | currentActiveSlugs=${this.getActiveSlugsList()} | totalActive=${this.activeSubscriptions.size}`);
 
     // Handle both bidding and listing unsubscriptions
     const unsubscribeBidding = {
@@ -1514,10 +1529,10 @@ class WebSocketManager extends EventEmitter {
       const removedKeys: string[] = [];
 
       // Update local state
-      if (marketplace) {
+      if (normalizedMarketplace) {
         // Remove specific marketplace subscription
-        const biddingKey = `${slug}:${marketplace}:bidding`;
-        const listingKey = `${slug}:${marketplace}:listing`;
+        const biddingKey = `${slug}:${normalizedMarketplace}:bidding`;
+        const listingKey = `${slug}:${normalizedMarketplace}:listing`;
 
         if (this.activeSubscriptions.has(biddingKey)) {
           this.activeSubscriptions.delete(biddingKey);
@@ -1537,7 +1552,8 @@ class WebSocketManager extends EventEmitter {
         }
       } else {
         // Remove all marketplaces for this collection
-        ['OPENSEA', 'MAGICEDEN', 'BLUR'].forEach(m => {
+        // NOTE: Use lowercase marketplace names to match how subscriptions are stored (opensea, not OPENSEA)
+        ['opensea', 'magiceden', 'blur'].forEach(m => {
           const biddingKey = `${slug}:${m}:bidding`;
           const listingKey = `${slug}:${m}:listing`;
 
