@@ -123,6 +123,64 @@ function getWallet(privateKey: string): Wallet {
   return wallet;
 }
 
+// ============================================================================
+// HTTP Request Abort Infrastructure
+// Track active requests for abort capability during task stop
+// ============================================================================
+const activeRequests = new Map<string, AbortController[]>();
+
+function addActiveRequest(taskId: string, controller: AbortController): void {
+  if (!activeRequests.has(taskId)) {
+    activeRequests.set(taskId, []);
+  }
+  activeRequests.get(taskId)!.push(controller);
+  debugLog('HttpAbort', `REGISTER | marketplace=opensea | taskId=${taskId} | activeCount=${activeRequests.get(taskId)?.length || 0}`);
+}
+
+function removeActiveRequest(taskId: string, controller: AbortController): void {
+  const controllers = activeRequests.get(taskId);
+  if (controllers) {
+    const index = controllers.indexOf(controller);
+    if (index > -1) controllers.splice(index, 1);
+    if (controllers.length === 0) activeRequests.delete(taskId);
+  }
+  debugLog('HttpAbort', `DEREGISTER | marketplace=opensea | taskId=${taskId} | remainingCount=${activeRequests.get(taskId)?.length || 0}`);
+}
+
+/**
+ * Cancel all active OpenSea HTTP requests for a task.
+ * Called during stopTask Phase 0 for immediate abort.
+ * @param taskId - The task ID to cancel requests for
+ * @returns Number of requests cancelled
+ */
+export async function cancelOpenseaRequest(taskId: string): Promise<number> {
+  const controllers = activeRequests.get(taskId);
+  if (!controllers || controllers.length === 0) {
+    debugLog('HttpAbort', `CANCEL_NOOP | marketplace=opensea | taskId=${taskId} | reason=no_active_requests`);
+    return 0;
+  }
+
+  const count = controllers.length;
+  debugLog('HttpAbort', `CANCEL_START | marketplace=opensea | taskId=${taskId} | activeRequestCount=${count}`);
+
+  let cancelledCount = 0;
+  for (let i = 0; i < controllers.length; i++) {
+    try {
+      controllers[i].abort();
+      cancelledCount++;
+      debugLog('HttpAbort', `ABORT_REQUEST | marketplace=opensea | taskId=${taskId} | requestIndex=${i}`);
+    } catch (err) {
+      errorLog('HttpAbort', `ABORT_ERROR | marketplace=opensea | taskId=${taskId} | requestIndex=${i} | error=${(err as Error).message}`, err);
+    }
+  }
+
+  activeRequests.delete(taskId);
+  debugLog('HttpAbort', `CANCEL_COMPLETE | marketplace=opensea | taskId=${taskId} | cancelledCount=${cancelledCount}`);
+
+  return cancelledCount;
+}
+
+// ============================================================================
 // Caching infrastructure for multi-contract collection resolution
 const multiContractSlugCache = new Map<string, boolean>();
 const contractMapCache = new Map<string, Record<string, string>>();
@@ -231,8 +289,6 @@ const types = {
     }
   ]
 };
-
-const activeRequests = new Map<string, AbortController[]>();
 
 /**
  * Resolves the correct contract address for a given token ID in a collection.
@@ -845,6 +901,10 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
 
   debugLog('InFlightBid', `ENTERING_LIMITER | taskId=${taskId} | marketplace=opensea | collection=${payload.criteria?.collection?.slug} | timestamp=${bidStartTime}`, { taskId, marketplace: 'opensea' });
 
+  // Create AbortController for HTTP request abort capability
+  const controller = new AbortController();
+  addActiveRequest(taskId, controller);
+
   let offer: OpenseaOffer;
   try {
     const response = await limiter.schedule(async () => {
@@ -867,7 +927,8 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
           "Expires": "0", // ⛔ Forces fresh reques
         },
         data: JSON.stringify(payload),
-        "axios-retry": { retries: 0 }
+        signal: controller.signal,
+        "axios-retry": { retries: 3 }
       });
     });
     offer = response.data;
@@ -875,8 +936,15 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
     debugLog('InFlightBid', `BID_PLACED | taskId=${taskId} | marketplace=opensea | collection=${payload.criteria?.collection?.slug} | totalTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'opensea' });
 
   } catch (error) {
+    // Handle abort gracefully - don't log as error
+    if (axios.isCancel(error)) {
+      debugLog('HttpAbort', `ABORT_CAUGHT | marketplace=opensea | taskId=${taskId} | function=submitOfferToOpensea`);
+      return;
+    }
     errorLog('API', `[OpenSea] Failed to submit offer | taskId=${taskId} | collection=${payload.criteria.collection.slug} | bidAmount=${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} | status=${(error as any)?.response?.status} | ${extractOpenseaErrorMessage(error)}`, error);
     throw error;
+  } finally {
+    removeActiveRequest(taskId, controller);
   }
 
   const order_hash = offer.order_hash
@@ -956,20 +1024,14 @@ async function buildOffer(taskId: string, buildPayload: any) {
     return data;
   } catch (error: any) {
     if (axios.isCancel(error)) {
+      debugLog('HttpAbort', `ABORT_CAUGHT | marketplace=opensea | taskId=${taskId} | function=buildOffer`);
       return null;
     }
 
     errorLog('API', `[OpenSea] Failed to build offer | taskId=${taskId} | status=${error?.response?.status} | ${extractOpenseaErrorMessage(error)}`, error);
     throw error;
   } finally {
-    const controllers = activeRequests.get(taskId) || [];
-    const index = controllers.indexOf(controller);
-    if (index >= 0) {
-      controllers.splice(index, 1);
-    }
-    if (controllers.length === 0) {
-      activeRequests.delete(taskId);
-    }
+    removeActiveRequest(taskId, controller);
   }
 }
 
@@ -1180,6 +1242,10 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
 
   const parameters = offer as any;
 
+  // Create AbortController for HTTP request abort capability
+  const controller = new AbortController();
+  addActiveRequest(taskId, controller);
+
   // Fix contract addresses in consideration items
   if (collectionSlug && parameters?.consideration) {
     for (const item of parameters.consideration) {
@@ -1219,12 +1285,14 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
           "Pragma": "no-cache",
           "Expires": "0",
         },
-        "axios-retry": { retries: 0 },
+        signal: controller.signal,
+        "axios-retry": { retries: 3 },
       });
     })
     return data
   } catch (error: any) {
     if (axios.isCancel(error)) {
+      debugLog('HttpAbort', `ABORT_CAUGHT | marketplace=opensea | taskId=${taskId} | function=postItemOffer`);
       return null;
     }
 
@@ -1354,6 +1422,8 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
 
     errorLog('API', `[OpenSea] Failed to post item offer | taskId=${taskId} | status=${error?.response?.status} | ${errorMessage}`, error);
     throw error;
+  } finally {
+    removeActiveRequest(taskId, controller);
   }
 }
 
@@ -2369,56 +2439,6 @@ interface ItemOfferSpecification {
   priceWei: bigint
   expirationSeconds: bigint
   walletAddress: string
-}
-
-export async function cancelOpenseaRequest(taskId: string): Promise<{ success: boolean; cancelledCount: number; error?: string }> {
-  // Input validation
-  if (!taskId || typeof taskId !== 'string') {
-    warnLog('API', `[OpenSea] Invalid taskId provided to cancelOpenseaRequest | taskId=${taskId}`);
-    return { success: false, cancelledCount: 0, error: 'Invalid taskId' };
-  }
-
-  const controllers = activeRequests.get(taskId);
-  if (!controllers || controllers.length === 0) {
-    return { success: false, cancelledCount: 0 };
-  }
-
-  try {
-    let cancelledCount = 0;
-
-    // Cancel all controllers with timeout protection
-    await Promise.all(controllers.map(async (controller) => {
-      try {
-        const timeoutPromise = new Promise<void>((_, reject) => {
-          setTimeout(() => reject(new Error('Abort timeout')), 5000);
-        });
-
-        const abortPromise = new Promise<void>((resolve) => {
-          controller.abort();
-          resolve();
-        });
-
-        await Promise.race([abortPromise, timeoutPromise]);
-        cancelledCount++;
-      } catch (error) {
-        warnLog('API', `[OpenSea] Failed to abort request controller | taskId=${taskId} | ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }));
-
-    activeRequests.delete(taskId);
-
-    return { success: true, cancelledCount };
-  } catch (error) {
-    errorLog('API', `[OpenSea] Failed to cancel requests | taskId=${taskId}`, error);
-    return { success: false, cancelledCount: 0, error: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-function addActiveRequest(taskId: string, controller: AbortController) {
-  if (!activeRequests.has(taskId)) {
-    activeRequests.set(taskId, []);
-  }
-  activeRequests.get(taskId)?.push(controller);
 }
 
 export interface OpenseaOfferData {

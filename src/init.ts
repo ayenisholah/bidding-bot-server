@@ -4,6 +4,7 @@ import axiosRetry, { IAxiosRetryConfig } from "axios-retry";
 import { config } from "dotenv";
 import { RATE_LIMIT, rps } from ".";
 import { wrapAxiosInstance, jobContext } from "./utils/axios-wrapper";
+import { debugLog, infoLog, warnLog, errorLog } from "./utils/debug-file-logger";
 
 config()
 
@@ -201,6 +202,165 @@ setInterval(() => {
 // Task blacklist for preventing stopped tasks from executing
 // Now supports marketplace-specific blacklisting
 const taskBlacklist = new Map<string, Set<string>>();
+
+// ============================================
+// PENDING LIMITER JOB TRACKING (for abort capability)
+// ============================================
+
+/**
+ * Tracks pending limiter jobs by taskId for abort capability.
+ * When a task is stopped, we can reject all its pending jobs immediately
+ * instead of letting them waste rate limit slots.
+ */
+interface PendingLimiterJob {
+  taskId: string;
+  marketplace: string;
+  reject: (reason: Error) => void;
+  jobId: string;
+  controller: AbortController;
+  queuedAt: number;
+}
+
+// Map taskId -> Set of pending jobs
+const pendingLimiterJobs = new Map<string, Set<PendingLimiterJob>>();
+
+/**
+ * Schedule a function through the rate limiter with abort capability.
+ * Jobs can be aborted when a task is stopped via abortPendingLimiterJobs().
+ *
+ * @param taskId - Task ID for tracking/abort
+ * @param marketplace - Marketplace for logging
+ * @param fn - Function to execute (receives optional AbortSignal)
+ * @param jobId - Optional job ID for logging (defaults to generated ID)
+ * @returns Promise that resolves with function result or rejects if aborted
+ */
+export async function scheduleWithAbort<T>(
+  taskId: string,
+  marketplace: string,
+  fn: (signal?: AbortSignal) => Promise<T>,
+  jobId?: string
+): Promise<T> {
+  // Early blacklist check before even queueing
+  if (isTaskBlacklisted(taskId, marketplace)) {
+    debugLog('LimiterAbort', `BLACKLIST_REJECT | taskId=${taskId} | marketplace=${marketplace} | reason=task_blacklisted_before_queue`);
+    throw new Error(`Task ${taskId} is blacklisted for ${marketplace}`);
+  }
+
+  const controller = new AbortController();
+  const actualJobId = jobId || `${taskId}-${marketplace}-${Date.now()}`;
+
+  return new Promise<T>((resolve, reject) => {
+    const pendingJob: PendingLimiterJob = {
+      taskId,
+      marketplace,
+      reject,
+      jobId: actualJobId,
+      controller,
+      queuedAt: Date.now()
+    };
+
+    // Add to pending tracking
+    if (!pendingLimiterJobs.has(taskId)) {
+      pendingLimiterJobs.set(taskId, new Set());
+    }
+    pendingLimiterJobs.get(taskId)!.add(pendingJob);
+
+    const pendingCount = pendingLimiterJobs.get(taskId)?.size || 0;
+    debugLog('LimiterPending', `ADD | taskId=${taskId} | marketplace=${marketplace} | jobId=${actualJobId} | pendingCount=${pendingCount}`);
+
+    limiter.schedule({ id: actualJobId }, async () => {
+      // Remove from pending tracking since we're now executing
+      pendingLimiterJobs.get(taskId)?.delete(pendingJob);
+      const remainingPending = pendingLimiterJobs.get(taskId)?.size || 0;
+      debugLog('LimiterPending', `EXECUTE | taskId=${taskId} | jobId=${actualJobId} | remainingPending=${remainingPending}`);
+
+      // Check blacklist again after dequeue (task may have been stopped while waiting)
+      if (isTaskBlacklisted(taskId, marketplace)) {
+        debugLog('LimiterAbort', `BLACKLIST_ABORT | taskId=${taskId} | marketplace=${marketplace} | jobId=${actualJobId} | reason=task_blacklisted_while_in_queue`);
+        throw new Error(`Task ${taskId} aborted - blacklisted while in limiter queue`);
+      }
+
+      // Check if we were aborted while waiting in queue
+      if (controller.signal.aborted) {
+        debugLog('LimiterAbort', `SIGNAL_ABORT | taskId=${taskId} | jobId=${actualJobId} | reason=abort_signal_triggered`);
+        throw new Error(`Task ${taskId} aborted - signal triggered`);
+      }
+
+      // Execute the actual function, passing the signal for HTTP abort capability
+      return fn(controller.signal);
+    })
+    .then((result) => {
+      debugLog('LimiterPending', `COMPLETE | taskId=${taskId} | jobId=${actualJobId} | result=success`);
+      resolve(result);
+    })
+    .catch((err) => {
+      // Clean up in case of error (may already be deleted if aborted)
+      pendingLimiterJobs.get(taskId)?.delete(pendingJob);
+      debugLog('LimiterPending', `FAILED | taskId=${taskId} | jobId=${actualJobId} | error=${err.message}`);
+      reject(err);
+    });
+  });
+}
+
+/**
+ * Abort all pending limiter jobs for a task.
+ * Called during stopTask() to immediately cancel jobs waiting in the limiter queue.
+ *
+ * @param taskId - Task ID to abort jobs for
+ * @returns Number of jobs aborted
+ */
+export function abortPendingLimiterJobs(taskId: string): number {
+  const pending = pendingLimiterJobs.get(taskId);
+  if (!pending || pending.size === 0) {
+    debugLog('LimiterAbort', `ABORT_START | taskId=${taskId} | pendingJobCount=0`);
+    return 0;
+  }
+
+  infoLog('LimiterAbort', `ABORT_START | taskId=${taskId} | pendingJobCount=${pending.size}`);
+
+  let abortedCount = 0;
+  for (const job of pending) {
+    try {
+      // Abort the controller (will cancel HTTP request if in flight)
+      job.controller.abort();
+
+      // Reject the promise
+      job.reject(new Error(`Task ${taskId} stopped - limiter job aborted`));
+
+      debugLog('LimiterAbort', `ABORT_JOB | taskId=${taskId} | marketplace=${job.marketplace} | jobId=${job.jobId} | waitedMs=${Date.now() - job.queuedAt}`);
+      abortedCount++;
+    } catch (err) {
+      errorLog('LimiterAbort', `ABORT_ERROR | taskId=${taskId} | jobId=${job.jobId}`, err);
+    }
+  }
+
+  // Clear the set
+  pendingLimiterJobs.delete(taskId);
+
+  infoLog('LimiterAbort', `ABORT_COMPLETE | taskId=${taskId} | abortedCount=${abortedCount}`);
+  return abortedCount;
+}
+
+/**
+ * Get count of pending limiter jobs for a task.
+ * Useful for monitoring and debugging.
+ */
+export function getPendingLimiterJobCount(taskId: string): number {
+  return pendingLimiterJobs.get(taskId)?.size || 0;
+}
+
+/**
+ * Get all pending limiter job counts by task.
+ * Returns a summary object for monitoring.
+ */
+export function getAllPendingLimiterJobs(): { taskId: string; count: number; marketplaces: string[] }[] {
+  const result: { taskId: string; count: number; marketplaces: string[] }[] = [];
+  for (const [taskId, jobs] of pendingLimiterJobs) {
+    const marketplaces = [...new Set([...jobs].map(j => j.marketplace))];
+    result.push({ taskId, count: jobs.size, marketplaces });
+  }
+  return result;
+}
 
 export function cancelTaskJobs(taskId: string, marketplace?: string) {
   if (!limiter) return { cancelled: 0, blacklisted: false };

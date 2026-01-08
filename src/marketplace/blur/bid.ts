@@ -96,50 +96,50 @@ function addActiveRequest(taskId: string, controller: AbortController) {
     activeRequests.set(taskId, []);
   }
   activeRequests.get(taskId)?.push(controller);
+  debugLog('HttpAbort', `REGISTER | marketplace=blur | taskId=${taskId} | activeCount=${activeRequests.get(taskId)?.length || 0}`);
 }
 
-export async function cancelBlurRequest(taskId: string): Promise<{ success: boolean; cancelledCount: number; error?: string }> {
+function removeActiveRequest(taskId: string, controller: AbortController): void {
+  const controllers = activeRequests.get(taskId);
+  if (controllers) {
+    const index = controllers.indexOf(controller);
+    if (index > -1) controllers.splice(index, 1);
+    if (controllers.length === 0) activeRequests.delete(taskId);
+  }
+  debugLog('HttpAbort', `DEREGISTER | marketplace=blur | taskId=${taskId} | remainingCount=${activeRequests.get(taskId)?.length || 0}`);
+}
+
+export async function cancelBlurRequest(taskId: string): Promise<number> {
   // Input validation
   if (!taskId || typeof taskId !== 'string') {
-    warnLog('API', `[Blur] Invalid taskId provided to cancelBlurRequest | taskId=${taskId}`);
-    return { success: false, cancelledCount: 0, error: 'Invalid taskId' };
+    warnLog('HttpAbort', `CANCEL_INVALID | marketplace=blur | taskId=${taskId} | reason=invalid_taskId`);
+    return 0;
   }
 
   const controllers = activeRequests.get(taskId);
   if (!controllers || controllers.length === 0) {
-
-    return { success: false, cancelledCount: 0 };
+    debugLog('HttpAbort', `CANCEL_NOOP | marketplace=blur | taskId=${taskId} | reason=no_active_requests`);
+    return 0;
   }
 
-  try {
-    let cancelledCount = 0;
+  const count = controllers.length;
+  debugLog('HttpAbort', `CANCEL_START | marketplace=blur | taskId=${taskId} | activeRequestCount=${count}`);
 
-    // Cancel all controllers with timeout protection
-    await Promise.all(controllers.map(async (controller) => {
-      try {
-        const timeoutPromise = new Promise<void>((_, reject) => {
-          setTimeout(() => reject(new Error('Abort timeout')), 5000);
-        });
-
-        const abortPromise = new Promise<void>((resolve) => {
-          controller.abort();
-          resolve();
-        });
-
-        await Promise.race([abortPromise, timeoutPromise]);
-        cancelledCount++;
-      } catch (error) {
-        errorLog('API', `[Blur] Failed to abort request controller | taskId=${taskId}`, error);
-      }
-    }));
-
-    activeRequests.delete(taskId);
-
-    return { success: true, cancelledCount };
-  } catch (error) {
-    errorLog('API', `[Blur] Failed to cancel requests | taskId=${taskId} | ${error instanceof Error ? error.message : String(error)}`, error);
-    return { success: false, cancelledCount: 0, error: error instanceof Error ? error.message : String(error) };
+  let cancelledCount = 0;
+  for (let i = 0; i < controllers.length; i++) {
+    try {
+      controllers[i].abort();
+      cancelledCount++;
+      debugLog('HttpAbort', `ABORT_REQUEST | marketplace=blur | taskId=${taskId} | requestIndex=${i}`);
+    } catch (err) {
+      errorLog('HttpAbort', `ABORT_ERROR | marketplace=blur | taskId=${taskId} | requestIndex=${i} | error=${(err as Error).message}`, err);
+    }
   }
+
+  activeRequests.delete(taskId);
+  debugLog('HttpAbort', `CANCEL_COMPLETE | marketplace=blur | taskId=${taskId} | cancelledCount=${cancelledCount}`);
+
+  return cancelledCount;
 }
 
 /**
@@ -615,7 +615,7 @@ async function formatBidOnBlur(
           data: JSON.stringify(buildPayload),
           signal: controller.signal,
           timeout: 60000,
-          "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
+          "axios-retry": { retries: 3 } // Enable retries for transient errors (520/502/504)
         });
       });
 
@@ -785,7 +785,7 @@ async function submitBidToBlur(
               data: JSON.stringify(submitPayload),
               signal: controller.signal,
               timeout: 60000,
-              "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
+              "axios-retry": { retries: 3 } // Enable retries for transient errors (520/502/504)
             });
           });
           break; // Success, exit retry loop

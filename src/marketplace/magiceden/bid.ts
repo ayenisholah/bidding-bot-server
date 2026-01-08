@@ -432,7 +432,7 @@ async function createBidData(
             },
             signal: controller.signal,
             timeout: 60000,
-            "axios-retry": { retries: 0 }
+            "axios-retry": { retries: 3 }
           }
         );
       });
@@ -884,7 +884,7 @@ async function sendSignedOrderData(
               'x-api-key': API_KEY,
             },
             signal: controller.signal,
-            "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
+            "axios-retry": { retries: 3 } // Enable retries for transient errors (520/502/504)
           }
         );
       });
@@ -2193,48 +2193,37 @@ interface Media {
   image: string;
 }
 
-export async function cancelMagicedenRequest(taskId: string): Promise<{ success: boolean; cancelledCount: number; error?: string }> {
+export async function cancelMagicedenRequest(taskId: string): Promise<number> {
   // Input validation
   if (!taskId || typeof taskId !== 'string') {
-    warnLog('API', `[MagicEden] Invalid taskId provided to cancelMagicedenRequest | taskId=${taskId}`);
-    return { success: false, cancelledCount: 0, error: 'Invalid taskId' };
+    warnLog('HttpAbort', `CANCEL_INVALID | marketplace=magiceden | taskId=${taskId} | reason=invalid_taskId`);
+    return 0;
   }
 
   const controllers = activeRequests.get(taskId);
   if (!controllers || controllers.length === 0) {
-
-    return { success: false, cancelledCount: 0 };
+    debugLog('HttpAbort', `CANCEL_NOOP | marketplace=magiceden | taskId=${taskId} | reason=no_active_requests`);
+    return 0;
   }
 
-  try {
-    let cancelledCount = 0;
+  const count = controllers.length;
+  debugLog('HttpAbort', `CANCEL_START | marketplace=magiceden | taskId=${taskId} | activeRequestCount=${count}`);
 
-    // Cancel all controllers with timeout protection
-    await Promise.all(controllers.map(async (controller) => {
-      try {
-        const timeoutPromise = new Promise<void>((_, reject) => {
-          setTimeout(() => reject(new Error('Abort timeout')), 5000);
-        });
-
-        const abortPromise = new Promise<void>((resolve) => {
-          controller.abort();
-          resolve();
-        });
-
-        await Promise.race([abortPromise, timeoutPromise]);
-        cancelledCount++;
-      } catch (error) {
-        warnLog('API', `[MagicEden] Failed to abort request controller | taskId=${taskId} | ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }));
-
-    activeRequests.delete(taskId);
-
-    return { success: true, cancelledCount };
-  } catch (error) {
-    errorLog('API', `[MagicEden] Failed to cancel requests | taskId=${taskId} | ${error instanceof Error ? error.message : String(error)}`, error);
-    return { success: false, cancelledCount: 0, error: error instanceof Error ? error.message : String(error) };
+  let cancelledCount = 0;
+  for (let i = 0; i < controllers.length; i++) {
+    try {
+      controllers[i].abort();
+      cancelledCount++;
+      debugLog('HttpAbort', `ABORT_REQUEST | marketplace=magiceden | taskId=${taskId} | requestIndex=${i}`);
+    } catch (err) {
+      errorLog('HttpAbort', `ABORT_ERROR | marketplace=magiceden | taskId=${taskId} | requestIndex=${i} | error=${(err as Error).message}`, err);
+    }
   }
+
+  activeRequests.delete(taskId);
+  debugLog('HttpAbort', `CANCEL_COMPLETE | marketplace=magiceden | taskId=${taskId} | cancelledCount=${cancelledCount}`);
+
+  return cancelledCount;
 }
 
 function addActiveRequest(taskId: string, controller: AbortController) {
@@ -2242,6 +2231,17 @@ function addActiveRequest(taskId: string, controller: AbortController) {
     activeRequests.set(taskId, []);
   }
   activeRequests.get(taskId)?.push(controller);
+  debugLog('HttpAbort', `REGISTER | marketplace=magiceden | taskId=${taskId} | activeCount=${activeRequests.get(taskId)?.length || 0}`);
+}
+
+function removeActiveRequest(taskId: string, controller: AbortController): void {
+  const controllers = activeRequests.get(taskId);
+  if (controllers) {
+    const index = controllers.indexOf(controller);
+    if (index > -1) controllers.splice(index, 1);
+    if (controllers.length === 0) activeRequests.delete(taskId);
+  }
+  debugLog('HttpAbort', `DEREGISTER | marketplace=magiceden | taskId=${taskId} | remainingCount=${activeRequests.get(taskId)?.length || 0}`);
 }
 
 interface TokenDataList {

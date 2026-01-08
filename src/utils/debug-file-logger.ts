@@ -183,6 +183,7 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'TaskStateUpdate': 'task',
   'TaskRecovery': 'taskflow',  // Moved to taskflow for consolidated lifecycle logging
   'TaskIndex': 'taskflow',     // Task index add/remove operations (contractToTasksMap, slugToTasksMap)
+  'TaskRetry': 'taskflow',     // Failed task start/stop retry operations
 
   // Scheduler (3)
   'TaskScheduler': 'scheduler',
@@ -202,7 +203,7 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'Counterbid': 'counterbid',
   'BidCounter': 'counterbid',   // Track own bid counting for message loss debugging
 
-  // Queue (13)
+  // Queue (15)
   'Queue': 'queue',
   'BlurQueue': 'queue',
   'BlurQueueEvents': 'queue',
@@ -215,7 +216,9 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'JobRetry': 'queue',
   'Performance': 'queue',
   'BulkJobs': 'queue',
+  'BulkJobsPerf': 'queue',       // Performance timing for processBulkJobs bottleneck detection
   'StuckJobCleanup': 'queue',
+  'QueueStats': 'queue',         // Periodic queue stats (waiting, active counts) for monitoring
 
   // Worker (6)
   'Worker': 'worker',
@@ -283,21 +286,27 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   // Balance (1)
   'Balance': 'balance',
 
-  // Cancellation (7)
+  // Cancellation (8)
   'Cancel': 'cancellation',
   'CancellationTracking': 'cancellation',
+  'CancellationWorker': 'cancellation',  // Job processor completion tracking for stopTask debugging
   'OrderCleanup': 'cancellation',
   'BulkCancelOpensea': 'cancellation',
   'BulkCancelMagiceden': 'cancellation',
   'ValidateBidCount': 'cancellation',
   'TopBids': 'cancellation',
 
-  // StopTask Flow (5) - Detailed stopTask debugging
+  // StopTask Flow (10) - Detailed stopTask debugging
   'StopTask': 'stoptask',
   'StopTaskFlow': 'stoptask',
   'InFlightBid': 'stoptask',
   'LimiterQueue': 'stoptask',
   'BidAbort': 'stoptask',
+  'LimiterAbort': 'stoptask',     // Limiter queue abort operations (abortPendingLimiterJobs)
+  'LimiterPending': 'stoptask',   // Pending job tracking (scheduleWithAbort)
+  'HttpAbort': 'stoptask',        // HTTP request abort operations (cancelOpenSeaRequest, cancelMagicEdenRequest)
+  'BulkAbort': 'stoptask',        // Bulk stop abort coordination (Phase 0 in stopTask/stopTasksInBatches)
+  'JobSkip': 'stoptask',          // Worker-level job skips due to blacklist check
 
   // Health (4)
   'Health': 'health',
@@ -337,6 +346,27 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'TimerOp': 'taskflow',            // Timer creation/expiration/cleanup
   'StuckTaskCheck': 'taskflow',     // checkStuckTasks() - stuck task detection and recovery
   'TimerDiagnostic': 'taskflow',    // Periodic timer map diagnostics
+  'DirectExecution': 'taskflow',    // executeMarketplaceBidLoop() - direct timer execution (replaces SCHEDULE jobs)
+  'LoopStats': 'taskflow',          // Loop counter operations (loopCounterStats increments)
+  'StatsReset': 'taskflow',         // Skip/error stats resets at loop start
+
+  // Bulk Start and StartTask Flow (all go to taskflow-YYYY-MM-DD.log)
+  'BulkStart': 'taskflow',          // startTasksInBatches() - bulk task start operations
+  'StartTask': 'taskflow',          // startTask() - individual task start entry with retry logic
+  'StartInternal': 'taskflow',      // startTaskInternal() - core task start implementation
+  'TaskInit': 'taskflow',           // Task initialization phases (order cache, bid stats, approvals, etc.)
+  'MarketplaceExec': 'taskflow',    // executeMarketplaceBidLoop() - marketplace execution scheduling
+  'BulkUpdate': 'taskflow',         // updateMultipleTasksStatus() - API entry point for bulk start/stop
+
+  // Job Processing Debug Logging (all go to taskflow-YYYY-MM-DD.log)
+  // Added 2026-01-06 to diagnose job queueing and execution issues
+  'ParentJobOp': 'taskflow',        // Parent job create/update/delete/lookup operations
+  'JobQueue': 'taskflow',           // Job queueing in processBulkJobs - entry, chunks, capacity wait
+  'RecoveryMech': 'taskflow',       // Recovery mechanism triggers (queueingTaskWatchdog, checkStuckTasks, orphanRecovery)
+  'WorkerJob': 'taskflow',          // Worker job processing flow - job received, processed, skipped
+  'CapacityWait': 'taskflow',       // Queue capacity wait loops with timing and counts
+  'ChunkProcess': 'taskflow',       // Chunk processing in processBulkJobs - timing and job counts
+  'MarkJob': 'taskflow',            // markJobAsProcessed flow - entry, lookup, success, silent returns
 
   // WebSocket connection error logging (dedicated file for _doConnect() errors)
   'WsConnection': 'wsConnection',

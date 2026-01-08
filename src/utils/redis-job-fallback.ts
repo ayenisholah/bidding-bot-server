@@ -1,6 +1,6 @@
 import { Job, Queue } from 'bullmq';
 import { withRedisRetry } from './redis';
-import { errorLog } from './debug-file-logger';
+import { errorLog, debugLog } from './debug-file-logger';
 
 interface JobFallbackData {
   jobId: string;
@@ -214,46 +214,8 @@ export async function getQueueHealth(queue: Queue): Promise<{
   }
 }
 
-/**
- * Recover stuck jobs from fallback store
- */
-export async function recoverStuckJobs(
-  taskId: string,
-  expectedCounts: { [marketplace: string]: number },
-  actualCounts: { [marketplace: string]: number },
-  updateCallback: (taskId: string, marketplace: string, increment: number) => Promise<void>
-): Promise<void> {
-  // console.log(`[JobFallback] Checking for stuck jobs for task ${taskId}`);
-  
-  const fallbackJobs = jobFallbackStore.getByTaskId(taskId);
-  // console.log(`[JobFallback] Found ${fallbackJobs.length} jobs in fallback store`);
-
-  for (const marketplace of Object.keys(expectedCounts)) {
-    const expected = expectedCounts[marketplace];
-    const actual = actualCounts[marketplace] || 0;
-    const missing = expected - actual;
-
-    if (missing > 0) {
-      // console.log(`[JobFallback] Task ${taskId} missing ${missing} ${marketplace} jobs`);
-      
-      // Count jobs in fallback for this marketplace
-      const fallbackCount = fallbackJobs.filter(j => j.marketplace === marketplace).length;
-      
-      if (fallbackCount > 0) {
-        // console.log(`[JobFallback] Recovering ${Math.min(fallbackCount, missing)} ${marketplace} jobs from fallback`);
-        
-        // Update counter for recovered jobs
-        await updateCallback(taskId, marketplace, Math.min(fallbackCount, missing));
-        
-        // Clean up processed jobs
-        fallbackJobs
-          .filter(j => j.marketplace === marketplace)
-          .slice(0, missing)
-          .forEach(j => jobFallbackStore.delete(j.jobId));
-      }
-    }
-  }
-}
+// NOTE: recoverStuckJobs() removed - recovery logic was causing issues
+// See docs/RECOVERY-FUNCTIONS.md for historical documentation
 
 // Periodic cleanup
 setInterval(() => {
