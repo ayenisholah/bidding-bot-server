@@ -3,7 +3,6 @@ import { limiter, isTaskBlacklisted, axiosInstance } from "../../init";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, pQueue, RESET, trackBidRate, GOLD, updateTaskCancellationPercentage } from "../..";
 import { config } from "dotenv";
 import { DistributedLockManager } from "../../utils/lock";
-import Order from '../../models/order.model';
 import { orderCache } from '../../utils/order-cache';
 import { withRetry } from '../../utils/db-retry';
 import redisClient from '../../utils/redis';
@@ -580,6 +579,12 @@ async function formatBidOnBlur(
   buildPayload: any,
   privateKey?: string
 ) {
+  // Early blacklist check BEFORE entering limiter queue (Fix 3: Bids after stopTask)
+  if (isTaskBlacklisted(taskId, 'blur')) {
+    debugLog('InFlightBid', `FORMAT_BLOCKED_EARLY | taskId=${taskId} | marketplace=blur | reason=blacklisted`, { taskId, marketplace: 'blur' });
+    return null;
+  }
+
   const controller = new AbortController();
   addActiveRequest(taskId, controller);
 
@@ -712,6 +717,14 @@ async function submitBidToBlur(
   traits?: string,
   source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
+  const [parsedTaskId] = bidCount.split(":");
+
+  // Early blacklist check BEFORE creating AbortController and entering limiter queue (Fix 3: Bids after stopTask)
+  if (isTaskBlacklisted(parsedTaskId, 'blur')) {
+    debugLog('InFlightBid', `SUBMIT_BLOCKED_EARLY | taskId=${parsedTaskId} | marketplace=blur | reason=blacklisted`, { taskId: parsedTaskId, marketplace: 'blur' });
+    return;
+  }
+
   const controller = new AbortController();
   addActiveRequest(taskId, controller);
 
@@ -721,13 +734,7 @@ async function submitBidToBlur(
     // Calculate formatted ETH price for logging
     const offerPriceEth = (Math.round(Number(formatUnits(offer_price.toString(), 18)) * 100) / 100).toFixed(2);
 
-    const [parsedTaskId] = bidCount.split(":")
     const bidStartTime = Date.now();
-
-    if (isTaskBlacklisted(parsedTaskId, 'blur')) {
-      debugLog('InFlightBid', `BLOCKED_EARLY | taskId=${parsedTaskId} | marketplace=blur | reason=blacklisted`, { taskId: parsedTaskId, marketplace: 'blur' });
-      return;
-    }
     const currentTask = activeTasks.get(parsedTaskId)
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("BLUR".toLowerCase())) return
     let running = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase())
@@ -844,31 +851,20 @@ async function submitBidToBlur(
           identifier = "collection"
         }
 
-        const expiresAt = new Date(Date.now() + expiry * 1000);
-        const orderData = {
-          slug: slug,
+        const expiresAt = Date.now() + expiry * 1000;
+        const createdAt = Date.now();
+        // Store order in Redis cache (no MongoDB write - Redis is primary storage)
+        await orderCache.set({
+          _id: orderCache.generateOrderId(),
           orderHash: JSON.stringify(cancelPayload),
           expiresAt: expiresAt,
           offerPrice: offer_price.toString(),
+          createdAt: createdAt,
           identifier: identifier,
-          taskId: taskId,
-          marketplace: "blur"
-        };
-        await withRetry(async () => {
-          const savedOrder = await Order.create(orderData);
-          // Update in-memory cache
-          orderCache.set({
-            _id: savedOrder._id.toString(),
-            orderHash: savedOrder.orderHash,
-            expiresAt: savedOrder.expiresAt.getTime(),
-            offerPrice: savedOrder.offerPrice,
-            createdAt: savedOrder.createdAt.getTime(),
-            identifier: savedOrder.identifier,
-            marketplace: savedOrder.marketplace,
-            slug: savedOrder.slug,
-            taskId: savedOrder.taskId
-          });
-        })
+          marketplace: "blur",
+          slug: slug,
+          taskId: taskId
+        });
         trackBidRate("blur", taskId)
 
         // Log successful bid

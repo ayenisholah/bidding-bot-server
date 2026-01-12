@@ -7,7 +7,6 @@ import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
 import { config } from "dotenv";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, trackBidRate, updateTaskCancellationPercentage } from "../..";
 import { DistributedLockManager } from '../../utils/lock';
-import Order from '../../models/order.model';
 import { orderCache } from '../../utils/order-cache';
 import { withRetry } from '../../utils/db-retry';
 import redisClient from '../../utils/redis';
@@ -178,28 +177,23 @@ export async function cleanupMagicEden() {
     orderBatchQueue.length = 0;
 
     try {
-      const savedOrders = await withRetry(async () => {
-        return await Order.insertMany(batch);
-      });
-
-      // Sync cache: add saved orders to in-memory cache
-      if (savedOrders && Array.isArray(savedOrders)) {
-        for (const order of savedOrders) {
-          orderCache.set({
-            _id: order._id.toString(),
-            orderHash: order.orderHash,
-            expiresAt: new Date(order.expiresAt).getTime(),
-            offerPrice: order.offerPrice,
-            createdAt: new Date(order.createdAt).getTime(),
-            identifier: order.identifier,
-            marketplace: order.marketplace,
-            slug: order.slug,
-            taskId: order.taskId
-          });
-        }
-      }
+      // Transform batch items to CachedOrder format and store directly in Redis
+      const createdAt = Date.now();
+      const cachedOrders = batch.map(order => ({
+        _id: orderCache.generateOrderId(),
+        orderHash: order.orderHash,
+        expiresAt: order.expiresAt instanceof Date ? order.expiresAt.getTime() : order.expiresAt,
+        offerPrice: order.offerPrice,
+        createdAt: createdAt,
+        identifier: order.identifier,
+        marketplace: order.marketplace,
+        slug: order.slug,
+        taskId: order.taskId
+      }));
+      // Store all orders in Redis cache (no MongoDB write - Redis is primary storage)
+      await orderCache.setMany(cachedOrders);
     } catch (error) {
-      errorLog('Database', `[MagicEden] Failed to create orders during cleanup | count=${batch.length}`, error);
+      errorLog('Database', `[MagicEden] Failed to create orders in cache during cleanup | count=${batch.length}`, error);
     }
   }
 }
@@ -406,6 +400,12 @@ async function createBidData(
     source: MAGICEDEN_CONFIG.domain,
     params: params
   };
+
+  // Early blacklist check BEFORE entering limiter queue (Fix 3: Bids after stopTask)
+  if (isTaskBlacklisted(taskId, 'magiceden')) {
+    debugLog('InFlightBid', `CREATE_BID_BLOCKED_EARLY | taskId=${taskId} | marketplace=magiceden | reason=blacklisted`, { taskId, marketplace: 'magiceden' });
+    return null;
+  }
 
   try {
     const controller = new AbortController();
@@ -921,26 +921,24 @@ async function sendSignedOrderData(
 
           if (batch.length > 0) {
             try {
-              const savedOrders = await withRetry(async () => {
-                return await Order.insertMany(batch);
-              });
-              // Update in-memory cache for all saved orders
-              for (const savedOrder of savedOrders) {
-                orderCache.set({
-                  _id: savedOrder._id.toString(),
-                  orderHash: savedOrder.orderHash,
-                  expiresAt: new Date(savedOrder.expiresAt).getTime(),
-                  offerPrice: savedOrder.offerPrice,
-                  createdAt: new Date(savedOrder.createdAt).getTime(),
-                  identifier: savedOrder.identifier,
-                  marketplace: savedOrder.marketplace,
-                  slug: savedOrder.slug,
-                  taskId: savedOrder.taskId
-                });
-              }
+              // Transform batch items to CachedOrder format and store directly in Redis
+              const createdAt = Date.now();
+              const cachedOrders = batch.map(order => ({
+                _id: orderCache.generateOrderId(),
+                orderHash: order.orderHash,
+                expiresAt: order.expiresAt instanceof Date ? order.expiresAt.getTime() : order.expiresAt,
+                offerPrice: order.offerPrice,
+                createdAt: createdAt,
+                identifier: order.identifier,
+                marketplace: order.marketplace,
+                slug: order.slug,
+                taskId: order.taskId
+              }));
+              // Store all orders in Redis cache (no MongoDB write - Redis is primary storage)
+              await orderCache.setMany(cachedOrders);
             } catch (error) {
               // Log error but don't fail the bid
-              errorLog('Database', `[MagicEden] Failed to batch create orders | count=${batch.length}`, error);
+              errorLog('Database', `[MagicEden] Failed to batch create orders in cache | count=${batch.length}`, error);
             }
           }
         }, 100); // Batch every 100ms

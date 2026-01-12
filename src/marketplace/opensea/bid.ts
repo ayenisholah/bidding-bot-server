@@ -8,7 +8,7 @@ import { activeTasks, API_KEY, decrementBidCount, pQueue, trackBidRate, updateTa
 import { getCollectionDetails, getCollectionTokenContractMap } from "../../functions/collection";
 import { config } from "dotenv";
 import axios from "axios";
-import Order from '../../models/order.model';
+import { v4 as uuidv4 } from 'uuid';
 import { orderCache } from '../../utils/order-cache';
 import { withRetry } from '../../utils/db-retry'
 import { USDC, WETH } from "../../utils/currencies";
@@ -590,30 +590,18 @@ export async function bidOnOpensea(
 
         const sanitizedExpiry = expiry > 900 ? expiry : 900
         if (offerPrice && itemOrderHash && sanitizedExpiry && slug && taskId && asset.tokenId) {
-          const expiresAt = new Date(Date.now() + sanitizedExpiry * 1000);
-          const orderData = {
-            slug: slug,
+          const expiresAt = Date.now() + sanitizedExpiry * 1000;
+          // Store order in Redis cache (source of truth) with TTL
+          await orderCache.set({
+            _id: uuidv4(),
             orderHash: itemOrderHash,
             expiresAt: expiresAt,
             offerPrice: offerPrice.toString(),
+            createdAt: Date.now(),
             identifier: asset.tokenId.toString(),
-            taskId: taskId,
-            marketplace: 'opensea'
-          };
-          await withRetry(async () => {
-            const savedOrder = await Order.create(orderData);
-            // Update in-memory cache
-            orderCache.set({
-              _id: savedOrder._id.toString(),
-              orderHash: savedOrder.orderHash,
-              expiresAt: savedOrder.expiresAt.getTime(),
-              offerPrice: savedOrder.offerPrice,
-              createdAt: savedOrder.createdAt.getTime(),
-              identifier: savedOrder.identifier,
-              marketplace: savedOrder.marketplace,
-              slug: savedOrder.slug,
-              taskId: savedOrder.taskId
-            });
+            marketplace: 'opensea',
+            slug: slug,
+            taskId: taskId
           });
         }
         trackBidRate('opensea', taskId);
@@ -957,30 +945,19 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
   const sanitizedExpiry = expiry > 900 ? expiry : 900
 
   if (offerPrice && order_hash && sanitizedExpiry && slug && taskId && identifier) {
-    const expiresAt = new Date(Date.now() + sanitizedExpiry * 1000);
-    const orderData = {
-      slug: slug,
+    const expiresAt = Date.now() + sanitizedExpiry * 1000;
+    const createdAt = Date.now();
+    // Store order in Redis cache (no MongoDB write - Redis is primary storage)
+    await orderCache.set({
+      _id: orderCache.generateOrderId(),
       orderHash: order_hash,
       expiresAt: expiresAt,
       offerPrice: offerPrice.toString(),
+      createdAt: createdAt,
       identifier: identifier,
-      taskId: taskId,
-      marketplace: 'opensea'
-    };
-    await withRetry(async () => {
-      const savedOrder = await Order.create(orderData);
-      // Update in-memory cache
-      orderCache.set({
-        _id: savedOrder._id.toString(),
-        orderHash: savedOrder.orderHash,
-        expiresAt: savedOrder.expiresAt.getTime(),
-        offerPrice: savedOrder.offerPrice,
-        createdAt: savedOrder.createdAt.getTime(),
-        identifier: savedOrder.identifier,
-        marketplace: savedOrder.marketplace,
-        slug: savedOrder.slug,
-        taskId: savedOrder.taskId
-      });
+      marketplace: 'opensea',
+      slug: slug,
+      taskId: taskId
     });
   }
   trackBidRate('opensea', taskId);
@@ -997,6 +974,12 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
  * @param buildPayload - The payload to build the offer.
  */
 async function buildOffer(taskId: string, buildPayload: any) {
+  // Early blacklist check BEFORE entering limiter queue (Fix 3: Bids after stopTask)
+  if (isTaskBlacklisted(taskId, 'opensea')) {
+    debugLog('InFlightBid', `BUILD_BLOCKED_EARLY | taskId=${taskId} | marketplace=opensea | reason=blacklisted`, { taskId, marketplace: 'opensea' });
+    return null;
+  }
+
   const controller = new AbortController();
   addActiveRequest(taskId, controller);
   const buildStartTime = Date.now();
@@ -1058,10 +1041,12 @@ async function cancelOrderInternal(orderHash: string, protocolAddress: string, p
     }
 
     const response = await limiter.schedule(() => axiosInstance.post(url, body, { headers }))
-    decrementBidCount('opensea', taskId)
 
     // Only update tracking if requested (for synchronized cancellation control)
+    // When updateTracking=false, the caller (bulkCancelOpenseaBid) handles all tracking
     if (updateTracking) {
+      // Decrement bidStats for UI display
+      decrementBidCount('opensea', taskId)
       // Track cancellation completion
       cancellationTracker.recordCompletion(taskId, 1, 'opensea');
 
@@ -1236,6 +1221,12 @@ async function fetchMakerOfferForToken(
 }
 
 async function postItemOffer(taskId: string, offer: unknown, signature: string, slug?: string) {
+  // Early blacklist check BEFORE entering limiter queue (Fix 3: Bids after stopTask)
+  if (isTaskBlacklisted(taskId, 'opensea')) {
+    debugLog('InFlightBid', `POST_OFFER_BLOCKED_EARLY | taskId=${taskId} | marketplace=opensea | reason=blacklisted`, { taskId, marketplace: 'opensea' });
+    return null;
+  }
+
   const task = activeTasks.get(taskId);
   const collectionSlug = slug || task?.contract?.slug?.toLowerCase();
   const bidStartTime = Date.now();
@@ -1341,46 +1332,28 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
             const offerPriceEth = Number(existingOffer.currentPrice) / Math.pow(10, decimal);
             const offerPriceWei = existingOffer.currentPrice;
 
-            // MONGODB SAVE log
-            debugLog('API', `[OpenSea] ORDER_ALREADY_EXISTS saving to MongoDB | taskId=${taskId} | orderHash=${existingOffer.orderHash.slice(0, 16)}... | token=${existingOffer.tokenId} | price=${offerPriceEth} ETH`, {
+            // REDIS CACHE SAVE log
+            const orderId = orderCache.generateOrderId();
+            debugLog('API', `[OpenSea] ORDER_ALREADY_EXISTS saving to Redis cache | taskId=${taskId} | orderId=${orderId} | orderHash=${existingOffer.orderHash.slice(0, 16)}... | token=${existingOffer.tokenId} | price=${offerPriceEth} ETH`, {
               taskId,
               marketplace: 'opensea',
               tokenId: existingOffer.tokenId,
               orderHash: existingOffer.orderHash
             });
 
-            // Store in MongoDB Order model
-            const orderData = {
-              slug: existingOffer.slug || collectionSlug || '',
+            // Store order in Redis cache (no MongoDB write - Redis is primary storage)
+            const expiresAtTimestamp = expiresAt.getTime();
+            const createdAt = Date.now();
+            await orderCache.set({
+              _id: orderId,
               orderHash: existingOffer.orderHash,
-              expiresAt: expiresAt,
+              expiresAt: expiresAtTimestamp,
               offerPrice: offerPriceEth.toString(),
+              createdAt: createdAt,
               identifier: existingOffer.tokenId,
-              taskId: taskId,
-              marketplace: 'opensea'
-            };
-
-            const savedOrder = await Order.create(orderData);
-
-            // ORDERCACHE UPDATE log
-            debugLog('API', `[OpenSea] ORDER_ALREADY_EXISTS updating orderCache | taskId=${taskId} | orderId=${savedOrder._id}`, {
-              taskId,
               marketplace: 'opensea',
-              tokenId: existingOffer.tokenId,
-              orderHash: existingOffer.orderHash
-            });
-
-            // Update in-memory orderCache
-            orderCache.set({
-              _id: savedOrder._id.toString(),
-              orderHash: savedOrder.orderHash,
-              expiresAt: savedOrder.expiresAt.getTime(),
-              offerPrice: savedOrder.offerPrice,
-              createdAt: savedOrder.createdAt.getTime(),
-              identifier: savedOrder.identifier,
-              marketplace: savedOrder.marketplace,
-              slug: savedOrder.slug,
-              taskId: savedOrder.taskId
+              slug: existingOffer.slug || collectionSlug || '',
+              taskId: taskId
             });
 
             // TOP OFFER CACHE UPDATE log

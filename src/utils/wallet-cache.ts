@@ -22,6 +22,12 @@ class WalletCache {
   private password: string | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;
 
+  // In-flight request tracking to prevent thundering herd problem
+  // When multiple parallel requests come for the same wallet, only one MongoDB query is made
+  private inFlightById: Map<string, Promise<IWallet | null>> = new Map();
+  private inFlightByAddress: Map<string, Promise<IWallet | null>> = new Map();
+  private inFlightByTaskId: Map<string, Promise<IWallet[]>> = new Map();
+
   constructor() {
     // Start cleanup interval
     this.cleanupInterval = setInterval(() => this.cleanup(), 60 * 1000); // Run every minute
@@ -56,7 +62,7 @@ class WalletCache {
 
   async getWallet(address: string): Promise<IWallet | null> {
     const normalizedAddress = address.toLowerCase();
-    
+
     // Check cache first
     const cached = this.cache.get(normalizedAddress);
     if (cached) {
@@ -64,26 +70,40 @@ class WalletCache {
       return cached as unknown as IWallet;
     }
 
-    // Cache miss - fetch from database
-    try {
-      const wallet = await Wallet.findOne({ address: normalizedAddress }).lean();
-      if (wallet) {
-        this.cache.set(normalizedAddress, {
-          _id: wallet._id,
-          address: wallet.address,
-          encryptedPrivateKey: wallet.encryptedPrivateKey,
-          name: wallet.name,
-          user: String(wallet.user),
-          tasks: (wallet as any).tasks,
-          lastUsed: Date.now()
-        });
-        return wallet;
-      }
-    } catch (error) {
-      errorLog('[Database]', `Failed to fetch wallet from database - address=${address}`, error as Error);
+    // Check if there's already an in-flight request for this address
+    const inFlight = this.inFlightByAddress.get(normalizedAddress);
+    if (inFlight) {
+      return inFlight;
     }
 
-    return null;
+    // Create new request and track it to prevent thundering herd
+    const request = (async (): Promise<IWallet | null> => {
+      try {
+        const wallet = await Wallet.findOne({ address: normalizedAddress }).lean();
+        if (wallet) {
+          this.cache.set(normalizedAddress, {
+            _id: wallet._id,
+            address: wallet.address,
+            encryptedPrivateKey: wallet.encryptedPrivateKey,
+            name: wallet.name,
+            user: String(wallet.user),
+            tasks: (wallet as any).tasks,
+            lastUsed: Date.now()
+          });
+          return wallet;
+        }
+        return null;
+      } catch (error) {
+        errorLog('[Database]', `Failed to fetch wallet from database - address=${address}`, error as Error);
+        return null;
+      } finally {
+        // Cleanup in-flight tracking
+        this.inFlightByAddress.delete(normalizedAddress);
+      }
+    })();
+
+    this.inFlightByAddress.set(normalizedAddress, request);
+    return request;
   }
 
   async getDecryptedPrivateKey(wallet: IWallet): Promise<string | null> {
@@ -123,27 +143,41 @@ class WalletCache {
       return allWallets.filter(w => w.tasks && Array.isArray(w.tasks) && w.tasks.includes(taskId)) as unknown as IWallet[];
     }
 
-    // Fallback to database
-    try {
-      const wallets = await Wallet.find({ tasks: taskId }).lean();
-      // Update cache
-      for (const wallet of wallets) {
-        const address = wallet.address.toLowerCase();
-        this.cache.set(address, {
-          _id: wallet._id,
-          address: wallet.address,
-          encryptedPrivateKey: wallet.encryptedPrivateKey,
-          name: wallet.name,
-          user: String(wallet.user),
-          tasks: (wallet as any).tasks,
-          lastUsed: Date.now()
-        });
-      }
-      return wallets;
-    } catch (error) {
-      errorLog('[Database]', `Failed to find wallets for task - taskId=${taskId}`, error as Error);
-      return [];
+    // Check if there's already an in-flight request for this task ID
+    const inFlight = this.inFlightByTaskId.get(taskId);
+    if (inFlight) {
+      return inFlight;
     }
+
+    // Create new request and track it to prevent thundering herd
+    const request = (async (): Promise<IWallet[]> => {
+      try {
+        const wallets = await Wallet.find({ tasks: taskId }).lean();
+        // Update cache
+        for (const wallet of wallets) {
+          const address = wallet.address.toLowerCase();
+          this.cache.set(address, {
+            _id: wallet._id,
+            address: wallet.address,
+            encryptedPrivateKey: wallet.encryptedPrivateKey,
+            name: wallet.name,
+            user: String(wallet.user),
+            tasks: (wallet as any).tasks,
+            lastUsed: Date.now()
+          });
+        }
+        return wallets;
+      } catch (error) {
+        errorLog('[Database]', `Failed to find wallets for task - taskId=${taskId}`, error as Error);
+        return [];
+      } finally {
+        // Cleanup in-flight tracking
+        this.inFlightByTaskId.delete(taskId);
+      }
+    })();
+
+    this.inFlightByTaskId.set(taskId, request);
+    return request;
   }
 
   async getAllWallets(): Promise<IWallet[]> {
@@ -167,28 +201,42 @@ class WalletCache {
         return cached as unknown as IWallet;
       }
     }
-    
-    // Cache miss - fetch from database
-    try {
-      const wallet = await Wallet.findById(walletId).lean();
-      if (wallet) {
-        const address = wallet.address.toLowerCase();
-        this.cache.set(address, {
-          _id: wallet._id,
-          address: wallet.address,
-          encryptedPrivateKey: wallet.encryptedPrivateKey,
-          name: wallet.name,
-          user: String(wallet.user),
-          tasks: (wallet as any).tasks,
-          lastUsed: Date.now()
-        });
-        return wallet;
-      }
-    } catch (error) {
-      errorLog('[Database]', `Failed to fetch wallet by ID from database - walletId=${walletId}`, error as Error);
+
+    // Check if there's already an in-flight request for this wallet ID
+    const inFlight = this.inFlightById.get(walletId);
+    if (inFlight) {
+      return inFlight;
     }
 
-    return null;
+    // Create new request and track it to prevent thundering herd
+    const request = (async (): Promise<IWallet | null> => {
+      try {
+        const wallet = await Wallet.findById(walletId).lean();
+        if (wallet) {
+          const address = wallet.address.toLowerCase();
+          this.cache.set(address, {
+            _id: wallet._id,
+            address: wallet.address,
+            encryptedPrivateKey: wallet.encryptedPrivateKey,
+            name: wallet.name,
+            user: String(wallet.user),
+            tasks: (wallet as any).tasks,
+            lastUsed: Date.now()
+          });
+          return wallet;
+        }
+        return null;
+      } catch (error) {
+        errorLog('[Database]', `Failed to fetch wallet by ID from database - walletId=${walletId}`, error as Error);
+        return null;
+      } finally {
+        // Cleanup in-flight tracking
+        this.inFlightById.delete(walletId);
+      }
+    })();
+
+    this.inFlightById.set(walletId, request);
+    return request;
   }
 
   invalidateWallet(address: string) {

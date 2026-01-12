@@ -203,6 +203,15 @@ setInterval(() => {
 // Now supports marketplace-specific blacklisting
 const taskBlacklist = new Map<string, Set<string>>();
 
+// Fix 5: Cache for blacklist checks to reduce redundant lookups
+// Cache TTL of 100ms - checks within the same millisecond window return cached result
+interface BlacklistCacheEntry {
+  result: boolean;
+  timestamp: number;
+}
+const blacklistCheckCache = new Map<string, BlacklistCacheEntry>();
+const BLACKLIST_CACHE_TTL = 100; // 100ms cache
+
 // ============================================
 // PENDING LIMITER JOB TRACKING (for abort capability)
 // ============================================
@@ -310,15 +319,18 @@ export async function scheduleWithAbort<T>(
  * @returns Number of jobs aborted
  */
 export function abortPendingLimiterJobs(taskId: string): number {
+  const startTime = Date.now();
   const pending = pendingLimiterJobs.get(taskId);
   if (!pending || pending.size === 0) {
-    debugLog('LimiterAbort', `ABORT_START | taskId=${taskId} | pendingJobCount=0`);
+    debugLog('StopBlacklist', `LIMITER_ABORT_START | taskId=${taskId} | pendingJobCount=0`);
     return 0;
   }
 
-  infoLog('LimiterAbort', `ABORT_START | taskId=${taskId} | pendingJobCount=${pending.size}`);
+  infoLog('StopBlacklist', `LIMITER_ABORT_START | taskId=${taskId} | pendingJobCount=${pending.size} | timestamp=${startTime}`);
 
   let abortedCount = 0;
+  const marketplaceCounts: Record<string, number> = {};
+
   for (const job of pending) {
     try {
       // Abort the controller (will cancel HTTP request if in flight)
@@ -327,17 +339,21 @@ export function abortPendingLimiterJobs(taskId: string): number {
       // Reject the promise
       job.reject(new Error(`Task ${taskId} stopped - limiter job aborted`));
 
-      debugLog('LimiterAbort', `ABORT_JOB | taskId=${taskId} | marketplace=${job.marketplace} | jobId=${job.jobId} | waitedMs=${Date.now() - job.queuedAt}`);
+      const waitedMs = Date.now() - job.queuedAt;
+      debugLog('StopBlacklist', `LIMITER_ABORT_JOB | taskId=${taskId} | marketplace=${job.marketplace} | jobId=${job.jobId} | waitedMs=${waitedMs}`);
       abortedCount++;
+      marketplaceCounts[job.marketplace] = (marketplaceCounts[job.marketplace] || 0) + 1;
     } catch (err) {
-      errorLog('LimiterAbort', `ABORT_ERROR | taskId=${taskId} | jobId=${job.jobId}`, err);
+      errorLog('StopBlacklist', `LIMITER_ABORT_ERROR | taskId=${taskId} | jobId=${job.jobId}`, err);
     }
   }
 
   // Clear the set
   pendingLimiterJobs.delete(taskId);
 
-  infoLog('LimiterAbort', `ABORT_COMPLETE | taskId=${taskId} | abortedCount=${abortedCount}`);
+  const elapsedMs = Date.now() - startTime;
+  const mpBreakdown = Object.entries(marketplaceCounts).map(([mp, count]) => `${mp}=${count}`).join(', ');
+  infoLog('StopBlacklist', `LIMITER_ABORT_COMPLETE | taskId=${taskId} | abortedCount=${abortedCount} | byMarketplace={${mpBreakdown}} | elapsedMs=${elapsedMs}`);
   return abortedCount;
 }
 
@@ -363,78 +379,139 @@ export function getAllPendingLimiterJobs(): { taskId: string; count: number; mar
 }
 
 export function cancelTaskJobs(taskId: string, marketplace?: string) {
-  if (!limiter) return { cancelled: 0, blacklisted: false };
+  const startTime = Date.now();
+  infoLog('StopBlacklist', `BLACKLIST_ADD_START | taskId=${taskId} | marketplace=${marketplace || '*'} | timestamp=${startTime}`);
+
+  if (!limiter) {
+    warnLog('StopBlacklist', `BLACKLIST_NO_LIMITER | taskId=${taskId} | limiterNotInitialized=true`);
+    return { cancelled: 0, blacklisted: false };
+  }
+
+  // Check if already blacklisted
+  const wasAlreadyBlacklisted = isTaskBlacklisted(taskId, marketplace);
 
   // Add to blacklist to prevent new jobs
   if (!taskBlacklist.has(taskId)) {
     taskBlacklist.set(taskId, new Set());
+    debugLog('StopBlacklist', `BLACKLIST_CREATE_ENTRY | taskId=${taskId}`);
   }
 
   if (marketplace) {
     // Marketplace-specific blacklist
     taskBlacklist.get(taskId)!.add(marketplace.toLowerCase());
-    // console.log(`Task ${taskId} blacklisted for marketplace: ${marketplace}`);
+    infoLog('StopBlacklist', `BLACKLIST_ADD_MP | taskId=${taskId} | marketplace=${marketplace.toLowerCase()} | wasAlreadyBlacklisted=${wasAlreadyBlacklisted}`);
   } else {
     // Full task blacklist - add special marker
     taskBlacklist.get(taskId)!.add('*');
-    // console.log(`Task ${taskId} fully blacklisted`);
+    infoLog('StopBlacklist', `BLACKLIST_ADD_FULL | taskId=${taskId} | marker=* | wasAlreadyBlacklisted=${wasAlreadyBlacklisted}`);
+  }
+
+  // Fix 5: Invalidate cache entries for this task to ensure immediate effect
+  // Delete all cache entries that start with this taskId
+  for (const cacheKey of blacklistCheckCache.keys()) {
+    if (cacheKey.startsWith(`${taskId}-`)) {
+      blacklistCheckCache.delete(cacheKey);
+    }
   }
 
   // Get current limiter queue size for reporting
   const counts = limiter.counts();
   const queuedJobs = counts.RECEIVED + counts.QUEUED;
 
-  // console.log(`Current limiter queue: ${queuedJobs} jobs`);
+  const elapsedMs = Date.now() - startTime;
+  infoLog('StopBlacklist', `BLACKLIST_ADD_COMPLETE | taskId=${taskId} | marketplace=${marketplace || '*'} | queuedJobs=${queuedJobs} | limiterRunning=${counts.RUNNING} | elapsedMs=${elapsedMs}`);
 
   return { cancelled: 0, blacklisted: true, queuedJobs };
 }
 
 export function removeTaskFromBlacklist(taskId: string, marketplace?: string) {
-  const taskEntry = taskBlacklist.get(taskId);
-  if (!taskEntry) return false;
+  const startTime = Date.now();
+  debugLog('StopBlacklist', `BLACKLIST_REMOVE_START | taskId=${taskId} | marketplace=${marketplace || '*'}`);
 
+  const taskEntry = taskBlacklist.get(taskId);
+  if (!taskEntry) {
+    debugLog('StopBlacklist', `BLACKLIST_REMOVE_NOT_FOUND | taskId=${taskId} | entryNotFound=true`);
+    return false;
+  }
+
+  const beforeSize = taskEntry.size;
+  const beforeMarketplaces = [...taskEntry].join(',');
   let wasRemoved = false;
 
   if (marketplace) {
     // Remove specific marketplace from blacklist
     wasRemoved = taskEntry.delete(marketplace.toLowerCase());
     if (wasRemoved) {
-      // console.log(`Task ${taskId} removed from blacklist for marketplace: ${marketplace}`);
+      infoLog('StopBlacklist', `BLACKLIST_REMOVE_MP | taskId=${taskId} | marketplace=${marketplace.toLowerCase()} | beforeSize=${beforeSize} | afterSize=${taskEntry.size}`);
     }
     // Clean up empty entries
     if (taskEntry.size === 0) {
       taskBlacklist.delete(taskId);
+      debugLog('StopBlacklist', `BLACKLIST_REMOVE_CLEANUP | taskId=${taskId} | entryDeleted=true`);
     }
   } else {
     // Remove entire task from blacklist
     taskBlacklist.delete(taskId);
     wasRemoved = true;
-    // console.log(`Task ${taskId} fully removed from blacklist - all marketplaces can execute again`);
+    infoLog('StopBlacklist', `BLACKLIST_REMOVE_FULL | taskId=${taskId} | removedMarketplaces=${beforeMarketplaces} | count=${beforeSize}`);
   }
+
+  // Fix 5: Invalidate cache entries for this task to ensure immediate effect
+  for (const cacheKey of blacklistCheckCache.keys()) {
+    if (cacheKey.startsWith(`${taskId}-`)) {
+      blacklistCheckCache.delete(cacheKey);
+    }
+  }
+
+  const elapsedMs = Date.now() - startTime;
+  debugLog('StopBlacklist', `BLACKLIST_REMOVE_COMPLETE | taskId=${taskId} | wasRemoved=${wasRemoved} | elapsedMs=${elapsedMs}`);
 
   return wasRemoved;
 }
 
 export function isTaskBlacklisted(taskId: string, marketplace?: string): boolean {
-  const taskEntry = taskBlacklist.get(taskId);
-  if (!taskEntry) return false;
+  // Fix 5: Check cache first to avoid redundant lookups
+  const cacheKey = `${taskId}-${marketplace || '*'}`;
+  const cached = blacklistCheckCache.get(cacheKey);
+  const now = Date.now();
 
-  // Check if fully blacklisted
-  if (taskEntry.has('*')) return true;
-
-  // Check marketplace-specific blacklist
-  if (marketplace) {
-    return taskEntry.has(marketplace.toLowerCase());
+  if (cached && (now - cached.timestamp) < BLACKLIST_CACHE_TTL) {
+    // Cache hit - return cached result without logging (reduces log noise)
+    return cached.result;
   }
 
-  // If no marketplace specified, check if any marketplace is blacklisted
-  return taskEntry.size > 0;
+  // Cache miss - perform actual check
+  const taskEntry = taskBlacklist.get(taskId);
+  let result: boolean;
+  let reason: string;
+
+  if (!taskEntry) {
+    result = false;
+    reason = 'no_entry';
+  } else if (taskEntry.has('*')) {
+    result = true;
+    reason = 'full_blacklist';
+  } else if (marketplace) {
+    result = taskEntry.has(marketplace.toLowerCase());
+    reason = 'mp_specific';
+  } else {
+    result = taskEntry.size > 0;
+    reason = 'any_mp_blacklisted';
+  }
+
+  // Cache the result
+  blacklistCheckCache.set(cacheKey, { result, timestamp: now });
+
+  // Only log cache misses (actual checks) to reduce log noise
+  debugLog('StopBlacklist', `BLACKLIST_CHECK | taskId=${taskId} | marketplace=${marketplace || '*'} | result=${result} | reason=${reason} | cached=false`);
+
+  return result;
 }
 
 // Enhanced limiter scheduling with task validation
 export function scheduleWithTaskValidation(fn: () => PromiseLike<any>, taskId: string) {
   if (isTaskBlacklisted(taskId)) {
-    // console.log(`Blocked job execution for stopped task: ${taskId}`);
+    debugLog('StopBlacklist', `SCHEDULE_BLOCKED | taskId=${taskId} | reason=task_blacklisted`);
     return Promise.reject(new Error(`Task ${taskId} is stopped`));
   }
   return limiter.schedule(fn);

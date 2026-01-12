@@ -163,7 +163,8 @@ export type LogCategory =
   | 'stoptask'
   | 'taskflow'  // Consolidated task lifecycle logging - ALL state transitions in one file
   | 'system'
-  | 'wsConnection';  // Dedicated log for _doConnect() WebSocket connection errors
+  | 'wsConnection'  // Dedicated log for _doConnect() WebSocket connection errors
+  | 'taskperf';  // Performance profiling for task startup operations
 
 // Prefix → Category mapping (single point of configuration)
 export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
@@ -296,7 +297,7 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'ValidateBidCount': 'cancellation',
   'TopBids': 'cancellation',
 
-  // StopTask Flow (10) - Detailed stopTask debugging
+  // StopTask Flow (20) - Detailed stopTask debugging
   'StopTask': 'stoptask',
   'StopTaskFlow': 'stoptask',
   'InFlightBid': 'stoptask',
@@ -307,6 +308,17 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'HttpAbort': 'stoptask',        // HTTP request abort operations (cancelOpenSeaRequest, cancelMagicEdenRequest)
   'BulkAbort': 'stoptask',        // Bulk stop abort coordination (Phase 0 in stopTask/stopTasksInBatches)
   'JobSkip': 'stoptask',          // Worker-level job skips due to blacklist check
+  // New StopTask Debug Prefixes (added 2026-01-08)
+  'StopPhase': 'stoptask',        // Phase entry/exit with timing (Phase 0-3)
+  'StopBlacklist': 'stoptask',    // Blacklist add/remove/check operations
+  'StopJobRemoval': 'stoptask',   // Job removal pass 1/2 with per-job details
+  'StopCancelOrder': 'stoptask',  // Individual order cancellation tracking
+  'StopCancelBatch': 'stoptask',  // Batch cancellation summary
+  'StopTracker': 'stoptask',      // Cancellation tracker operations
+  'StopPercentage': 'stoptask',   // Percentage calculation and updates
+  'StopCleanup': 'stoptask',      // Resource cleanup operations
+  'StopTiming': 'stoptask',       // Performance timing measurements
+  'StopRace': 'stoptask',         // Potential race condition detection
 
   // Health (4)
   'Health': 'health',
@@ -370,6 +382,15 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
 
   // WebSocket connection error logging (dedicated file for _doConnect() errors)
   'WsConnection': 'wsConnection',
+
+  // Task Performance Profiling (all go to taskperf-YYYY-MM-DD.log)
+  // Added 2026-01-08 to diagnose task startup performance bottlenecks
+  'PerfEntry': 'taskperf',           // Function entry with timestamp
+  'PerfExit': 'taskperf',            // Function exit with duration
+  'PerfPhase': 'taskperf',           // Phase completion within a function
+  'PerfBlock': 'taskperf',           // Blocking operation start/end
+  'PerfLoop': 'taskperf',            // Loop iteration timing
+  'PerfAwait': 'taskperf',           // Await operation timing
 };
 
 // ============================================
@@ -544,7 +565,7 @@ export function getAllCategories(): LogCategory[] {
     'startup', 'task', 'scheduler', 'bidflow', 'counterbid', 'queue', 'worker',
     'database', 'redis', 'lock', 'blur', 'opensea', 'magiceden', 'api', 'websocket',
     'listing', 'collection', 'balance', 'cancellation', 'health', 'metadata', 'stoptask',
-    'taskflow', 'system', 'wsConnection'
+    'taskflow', 'system', 'wsConnection', 'taskperf'
   ];
 }
 
