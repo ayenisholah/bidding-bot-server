@@ -170,6 +170,13 @@ class WebSocketManager extends EventEmitter {
   // Catches any duplicates that slip through ws-proxy deduplication
   private seenWsMessages = new BoundedCache<string, number>(100000, 30000, 'seenWsMessages');
 
+  // Rate limiting for WebSocket events - prevents event loop overwhelming
+  // (2026-01-15: Added as part of crash prevention - WebSocket flood was primary crash suspect)
+  private readonly WS_RATE_LIMIT = 200; // Max events per second
+  private wsEventCountThisSecond = 0;
+  private wsRateLimitWindowStart = Date.now();
+  private wsEventsDroppedByRateLimit = 0; // Counter for monitoring
+
   constructor(config: WebSocketManagerConfig) {
     super();
     this.config = {
@@ -590,6 +597,24 @@ class WebSocketManager extends EventEmitter {
     }, 30000); // Check every 30 seconds
   }
 
+  /**
+   * Rate limiting check for WebSocket events - prevents event loop overwhelming
+   * (2026-01-15: Added as part of crash prevention - WebSocket flood was primary crash suspect)
+   *
+   * Uses a rolling 1-second window. Returns true if rate limit exceeded (event should be dropped).
+   * Max 200 events per second - if exceeded, events are silently dropped.
+   */
+  private checkWsRateLimit(): boolean {
+    const now = Date.now();
+    if (now - this.wsRateLimitWindowStart >= 1000) {
+      // New window - reset counter
+      this.wsEventCountThisSecond = 0;
+      this.wsRateLimitWindowStart = now;
+    }
+    this.wsEventCountThisSecond++;
+    return this.wsEventCountThisSecond > this.WS_RATE_LIMIT;
+  }
+
   private async syncSubscriptions(): Promise<void> {
     try {
       infoLog('WebSocket', `[SYNC] Starting subscription sync after reconnection | persistentListings=${this.persistentListingSubscriptions.size} | persistentBidding=${this.persistentBiddingSubscriptions.size} | activeBeforeClear=${this.activeSubscriptions.size}`);
@@ -885,6 +910,13 @@ class WebSocketManager extends EventEmitter {
 
   private processSingleMessage(parsed: any, receiveTime: number): void {
     try {
+      // Rate limiting - prevent event loop overwhelming from WebSocket floods
+      // (2026-01-15: Added as part of crash prevention - WebSocket flood was primary crash suspect)
+      if (this.checkWsRateLimit()) {
+        this.wsEventsDroppedByRateLimit++;
+        return; // Drop event silently - no logging to avoid log flood
+      }
+
       this.metrics.totalMessages++;
       this.recordMessage();
 

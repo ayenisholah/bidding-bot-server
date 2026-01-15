@@ -350,6 +350,36 @@ const taskStatusHistory: { [taskId: string]: TaskStatusChange[] } = {};
 const processedMessages = new Map<string, number>();
 const MESSAGE_TTL = 5 * 60 * 1000; // 5 minutes
 
+// WebSocket Event Flood Prevention - Early deduplication at entry point (2026-01-15)
+// Prevents event loop blocking from processing duplicate events (~30+ events in 1-2ms crash pattern)
+const recentOrderHashes = new Set<string>();
+let recentOrderHashesList: string[] = []; // For FIFO cleanup
+const MAX_RECENT_HASHES = 5000;
+
+/**
+ * Check if an orderHash was recently processed - O(1) Set lookup
+ * This provides early deduplication BEFORE any event processing to prevent event loop blocking
+ */
+function isDuplicateOrderHash(orderHash: string): boolean {
+  if (!orderHash) return false;
+
+  if (recentOrderHashes.has(orderHash)) {
+    return true; // DUPLICATE - skip processing entirely
+  }
+
+  // Add to tracking
+  recentOrderHashes.add(orderHash);
+  recentOrderHashesList.push(orderHash);
+
+  // FIFO cleanup when exceeding limit
+  if (recentOrderHashesList.length > MAX_RECENT_HASHES) {
+    const oldest = recentOrderHashesList.shift();
+    if (oldest) recentOrderHashes.delete(oldest);
+  }
+
+  return false; // NOT duplicate - process normally
+}
+
 // Blur rate limiting is now handled by BlurRateLimiter class
 const QUEUE_NAME = 'BIDDING_BOT';
 const BLUR_BIDDING_QUEUE = 'BLUR_BIDDING_QUEUE';
@@ -9263,7 +9293,7 @@ async function updateTaskData(task: ITask) {
   return { success: true, data: dbTask.toObject() };
 }
 
-const DRAIN_THRESHOLD = 450000; // 90% of MAX_QUEUE_JOBS - triggers backpressure early
+const DRAIN_THRESHOLD = 45000; // 90% of MAX_QUEUE_JOBS - triggers backpressure early
 
 const BLUR_JOBS = [
   'BLUR_COLLECTION_BID',
@@ -9310,7 +9340,7 @@ async function waitForQueueDrain(): Promise<void> {
   }
 }
 
-const MAX_QUEUE_JOBS = 500000; // Hard limit for queue capacity
+const MAX_QUEUE_JOBS = 50000; // Hard limit for queue capacity
 // Helper function to get total jobs in all queues
 async function getTotalJobsInQueues(): Promise<number> {
   const [counts, blurCounts] = await Promise.all([
@@ -14528,6 +14558,18 @@ async function _doConnect(): Promise<void> {
       try {
         rawWsMessagesReceived++;
 
+        // Early deduplication - prevent event loop blocking from duplicate events (2026-01-15)
+        // Crash analysis showed ~30+ duplicate events in 1-2ms before crash
+        const orderHash = message?.payload?.payload?.order_hash ||
+                          message?.payload?.payload?.order?.orderHash ||
+                          message?.payload?.order?.orderHash ||
+                          message?.orderHash ||
+                          message?._normalizedEvent?.orderHash;
+        if (orderHash && isDuplicateOrderHash(orderHash)) {
+          done?.(); // Signal completion without processing
+          return;   // Skip entirely - no logging, no processing
+        }
+
         // Track ALL bid events at earliest point (before any filtering)
         if (message.eventType === 'BID_CREATED' || message.eventType === 'item_received_bid') {
           bidEventsReceived++;
@@ -16115,11 +16157,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const traitForLog = eventType === "trait_offer" ?
       `${data?.payload?.payload?.trait_criteria?.trait_type}:${data?.payload?.payload?.trait_criteria?.trait_name}` : null;
 
-
-    // Debug: Log ALL bids reaching this handler to identify wallet mismatch issues
-    const isOurs = maker && isOurWallet(maker)
-
-    debugLog('BidCounter', `OS_BID_RECEIVED | slug=${task.contract.slug} | maker=${maker?.slice(0, 10)}... | isOurs=${isOurs} | orderHash=${orderHash?.slice(0, 10)}... | event=${eventType}`);
 
     const currentTask = activeTasks.get(task._id)
     if (!currentTask) {
@@ -28534,10 +28571,7 @@ export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
     // ALWAYS use addIfNotExists for atomic check-and-add - skipDedup only controls logging, NOT whether to skip duplicates
     // This fixes the bug where skipDedup=true caused the same orderHash to be counted multiple times
     if (!processedOwnBids.addIfNotExists(orderHash, Date.now())) {
-      // Already counted in this session - skip (only log if not in skipDedup mode to reduce noise during cache init)
-      if (!skipDedup) {
-        debugLog('BidCounter', `SKIP_DUPLICATE | marketplace=${marketplace} | orderHash=${orderHash}`);
-      }
+      // Already counted in this session - skip silently (duplicates are expected behavior)
       return ownBidCounts[marketplace] || 0;
     }
 

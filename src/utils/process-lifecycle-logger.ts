@@ -39,6 +39,13 @@ const getLogFilePath = () => {
 let memoryMonitorInterval: NodeJS.Timeout | null = null;
 const MEMORY_MONITOR_INTERVAL = 5 * 60 * 1000;
 
+// OOM Prevention thresholds (2026-01-15)
+// RSS can grow without heap growth (external buffers, native code)
+const MEMORY_WARNING_MB = 2000;  // 2GB warning threshold
+const MEMORY_CRITICAL_MB = 3000; // 3GB critical - trigger GC
+const MEMORY_GUARD_INTERVAL = 30 * 1000; // Check every 30 seconds
+let memoryGuardInterval: NodeJS.Timeout | null = null;
+
 // Track if we've already warned about write failures to avoid spam
 let writeFailureWarned = false;
 
@@ -102,6 +109,9 @@ export function logProcessStart(): void {
 
   // Start memory monitoring
   startMemoryMonitor();
+
+  // Start OOM prevention memory guard (2026-01-15)
+  startMemoryGuard();
 
   // Register signal handlers
   registerSignalHandlers();
@@ -201,6 +211,76 @@ export function stopMemoryMonitor(): void {
 }
 
 /**
+ * Start proactive memory guard to prevent OOM kills (2026-01-15)
+ * Monitors RSS and triggers GC when approaching critical thresholds.
+ * Requires Node.js started with --expose-gc flag for global.gc() to work.
+ */
+function startMemoryGuard(): void {
+  if (memoryGuardInterval) {
+    clearInterval(memoryGuardInterval);
+  }
+
+  memoryGuardInterval = setInterval(() => {
+    const usage = process.memoryUsage();
+    const rssMB = Math.round(usage.rss / 1024 / 1024);
+    const heapUsedMB = Math.round(usage.heapUsed / 1024 / 1024);
+
+    if (rssMB > MEMORY_CRITICAL_MB) {
+      // CRITICAL - Log and force GC if available
+      writeLogSync('ERROR', '🚨 MEMORY_CRITICAL', {
+        rss: rssMB,
+        heapUsed: heapUsedMB,
+        threshold: MEMORY_CRITICAL_MB,
+        action: 'attempting_gc',
+      });
+
+      // Force garbage collection if available (requires --expose-gc flag)
+      if (typeof global.gc === 'function') {
+        const rssBefore = rssMB;
+        const heapBefore = heapUsedMB;
+        global.gc();
+        const usageAfter = process.memoryUsage();
+        const rssAfter = Math.round(usageAfter.rss / 1024 / 1024);
+        const heapAfter = Math.round(usageAfter.heapUsed / 1024 / 1024);
+        writeLogSync('INFO', '🧹 FORCED_GC_COMPLETE', {
+          rssBefore,
+          rssAfter,
+          rssFreed: rssBefore - rssAfter,
+          heapBefore,
+          heapAfter,
+          heapFreed: heapBefore - heapAfter,
+        });
+      } else {
+        writeLogSync('WARN', '⚠️ GC_NOT_AVAILABLE', {
+          message: 'global.gc() not available - start Node.js with --expose-gc flag',
+        });
+      }
+    } else if (rssMB > MEMORY_WARNING_MB) {
+      // WARNING - Log but don't take action yet
+      writeLogSync('WARN', '⚠️ MEMORY_WARNING', {
+        rss: rssMB,
+        heapUsed: heapUsedMB,
+        threshold: MEMORY_WARNING_MB,
+        criticalThreshold: MEMORY_CRITICAL_MB,
+      });
+    }
+  }, MEMORY_GUARD_INTERVAL);
+
+  // Don't keep process alive just for memory guard
+  memoryGuardInterval.unref();
+}
+
+/**
+ * Stop memory guard (call on shutdown)
+ */
+export function stopMemoryGuard(): void {
+  if (memoryGuardInterval) {
+    clearInterval(memoryGuardInterval);
+    memoryGuardInterval = null;
+  }
+}
+
+/**
  * Register handlers for process signals
  */
 function registerSignalHandlers(): void {
@@ -242,6 +322,7 @@ function registerSignalHandlers(): void {
   // exit - emitted when process is about to exit
   process.on('exit', (code) => {
     stopMemoryMonitor();
+    stopMemoryGuard();
     writeLogSync('INFO', `🛑 PROCESS EXIT`, {
       exitCode: code,
       pid: process.pid,
