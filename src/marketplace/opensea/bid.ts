@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { ethers, Wallet } from "ethers";
 import { BASE_URL, SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
-import { activeTasks, API_KEY, decrementBidCount, pQueue, trackBidRate, updateTaskCancellationPercentage, updateTopOfferAfterOurBid } from "../..";
+import { activeTasks, API_KEY, decrementBidCount, pQueue, trackBidRate, incrementOwnBidCounter, updateTaskCancellationPercentage, updateTopOfferAfterOurBid } from "../..";
 import { getCollectionDetails, getCollectionTokenContractMap } from "../../functions/collection";
 import { config } from "dotenv";
 import axios from "axios";
@@ -134,7 +134,6 @@ function addActiveRequest(taskId: string, controller: AbortController): void {
     activeRequests.set(taskId, []);
   }
   activeRequests.get(taskId)!.push(controller);
-  debugLog('HttpAbort', `REGISTER | marketplace=opensea | taskId=${taskId} | activeCount=${activeRequests.get(taskId)?.length || 0}`);
 }
 
 function removeActiveRequest(taskId: string, controller: AbortController): void {
@@ -144,7 +143,6 @@ function removeActiveRequest(taskId: string, controller: AbortController): void 
     if (index > -1) controllers.splice(index, 1);
     if (controllers.length === 0) activeRequests.delete(taskId);
   }
-  debugLog('HttpAbort', `DEREGISTER | marketplace=opensea | taskId=${taskId} | remainingCount=${activeRequests.get(taskId)?.length || 0}`);
 }
 
 /**
@@ -603,12 +601,9 @@ export async function bidOnOpensea(
             slug: slug,
             taskId: taskId
           });
+          // Track bid rate ONLY for successfully placed bids
+          trackBidRate('opensea', taskId);
         }
-        trackBidRate('opensea', taskId);
-
-        // Log successful token bid
-        const sourceTag = source === 'counterbid' ? '-CB' : '';
-        debugLog('BidFlow', `[OS-Token${sourceTag}] ${slug}#${asset.tokenId} | SUCCESS | orderHash=${itemOrderHash} | price=${offerPriceEthFinal} ${currencySymbol}`, { taskId, marketplace: 'opensea', tokenId: asset.tokenId.toString(), orderHash: itemOrderHash });
       }
 
       else if (opensea_traits && typeof opensea_traits !== "undefined") {
@@ -887,8 +882,6 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
   const task = activeTasks.get(taskId)
   if (!task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) return
 
-  debugLog('InFlightBid', `ENTERING_LIMITER | taskId=${taskId} | marketplace=opensea | collection=${payload.criteria?.collection?.slug} | timestamp=${bidStartTime}`, { taskId, marketplace: 'opensea' });
-
   // Create AbortController for HTTP request abort capability
   const controller = new AbortController();
   addActiveRequest(taskId, controller);
@@ -901,8 +894,6 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
         debugLog('InFlightBid', `BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=opensea | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'opensea' });
         throw new Error('Task stopped while waiting in limiter queue');
       }
-
-      debugLog('InFlightBid', `EXECUTING_REQUEST | taskId=${taskId} | marketplace=opensea | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'opensea' });
 
       return axiosInstance.request<OpenseaOffer>({
         method: 'POST',
@@ -959,14 +950,9 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
       slug: slug,
       taskId: taskId
     });
+    // Track bid rate ONLY for successfully placed bids
+    trackBidRate('opensea', taskId);
   }
-  trackBidRate('opensea', taskId);
-
-  // Log successful bid
-  const offerPriceEth = Number(offerPrice) / Math.pow(10, decimal);
-  const sourceTag = source === 'counterbid' ? '-CB' : '';
-  const bidType = identifier === 'collection' ? 'Coll' : 'Trait';
-  debugLog('BidFlow', `[OS-${bidType}${sourceTag}] ${slug} | SUCCESS | orderHash=${order_hash} | identifier=${identifier} | price=${offerPriceEth} ${currencySymbol}`, { taskId, marketplace: 'opensea', identifier, orderHash: order_hash });
 }
 
 /**
@@ -1373,6 +1359,12 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
               offerPriceWei,
               makerAddress
             );
+
+            // NOTE: Do NOT track bid rate here - this is an existing order, not a new bid
+            // trackBidRate('opensea', taskId); // REMOVED: prevents double-counting existing orders
+
+            // Increment ownBidCounter - this is a confirmed bid in cache
+            incrementOwnBidCounter('opensea', existingOffer.orderHash);
 
             // SYNC SUCCESS log (warnLog for visibility - always logged)
             warnLog('API', `[OpenSea] ORDER_ALREADY_EXISTS SYNC SUCCESS | taskId=${taskId} | orderHash=${existingOffer.orderHash} | token=${existingOffer.tokenId} | price=${offerPriceEth} ETH | slug=${existingOffer.slug} | expiresAt=${expiresAt.toISOString()}`);

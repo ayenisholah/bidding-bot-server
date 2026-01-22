@@ -2,7 +2,6 @@ import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import PQueue from 'p-queue';
 import { warnLog, errorLog, debugLog, infoLog } from './debug-file-logger';
-import { BoundedCache } from './bounded-cache';
 import { config } from 'dotenv';
 
 config()
@@ -99,15 +98,6 @@ export interface SubscriptionInfo {
 }
 
 class WebSocketManager extends EventEmitter {
-  // Static event type mapping - created once, used for all events (2025-12-29 optimization)
-  private static readonly EVENT_TYPE_MAP: Record<string, string> = {
-    'bid_created': 'BID_CREATED',
-    'trait_offer': 'BID_CREATED',      // Trait offers are also bid events
-    'collection_offer': 'BID_CREATED', // Collection offers are also bid events
-    'listing_created': 'LISTING_CREATED',
-    'item_sold': 'ITEM_SOLD'
-  };
-
   private ws: WebSocket | null = null;
   private config: Required<WebSocketManagerConfig>;
   private intervals: Map<string, NodeJS.Timeout> = new Map();
@@ -178,10 +168,6 @@ class WebSocketManager extends EventEmitter {
   // O(1) slug lookup set for subscription validation
   // (2025-12-31: Removed backpressure queue - now using fire-and-forget for <100ms latency)
   private subscribedSlugs = new Set<string>();
-
-  // Server-side message deduplication safety net (30s TTL, 100K capacity for extreme scale)
-  // Catches any duplicates that slip through ws-proxy deduplication
-  private seenWsMessages = new BoundedCache<string, number>(100000, 30000, 'seenWsMessages');
 
   // p-queue for bounded concurrent message processing with backpressure
   // (2026-01-15: Replaces custom worker pool with p-queue for better timeout handling)
@@ -325,7 +311,8 @@ class WebSocketManager extends EventEmitter {
     this.sendFailureCount = 0; // Reset send failure counter on successful connection
 
     // Log connection established with current state
-    infoLog('WebSocket', `[CONNECTED] WebSocket connection established | connectionId=${connectionId} | totalConnections=${this.metrics.totalConnections} | activeSubscriptions=${this.activeSubscriptions.size} | persistentListings=${this.persistentListingSubscriptions.size}`);
+    infoLog('WebSocket', `[CONNECT] Established | connectionId=${connectionId} | totalConnections=${this.metrics.totalConnections} | activeSubscriptions=${this.activeSubscriptions.size}`);
+    debugLog('WebSocket', `[CONNECT] Details | persistentListings=${this.persistentListingSubscriptions.size} | queueSize=${this.messageQueue.size}`);
 
     // Enable TCP keepalive for faster dead connection detection
     try {
@@ -456,13 +443,9 @@ class WebSocketManager extends EventEmitter {
       // Check for various health indicators
       const now = Date.now();
       const timeSinceLastMessage = this.lastMessageReceived ? now - this.lastMessageReceived : 0;
-      const timeSinceLastPong = this.lastPongReceived ? now - this.lastPongReceived : 0;
-
-      // Health status logged only when issues detected (see force reconnection and subscription verification below)
 
       // Force reconnection if connection appears severely degraded
       if (timeSinceLastMessage > 3600000) { // 60 minutes (increased from 10min)
-        // console.log('Forcing reconnection due to severely stale connection');
         try {
           this.ws?.close();
         } catch {
@@ -472,7 +455,6 @@ class WebSocketManager extends EventEmitter {
 
       // Periodic subscription verification (every 5 minutes)
       if (this.activeSubscriptions.size > 0 && timeSinceLastMessage > 300000) { // 5 minutes
-        // console.log('Performing periodic subscription verification');
         this.verifySubscriptions().catch(() => {
           warnLog('WebSocket', 'Periodic subscription verification failed');
         });
@@ -488,10 +470,20 @@ class WebSocketManager extends EventEmitter {
       // Check if server status messages are being received
       this.checkServerStatusHealth();
 
-      // Log queue health every minute if queue size > 1000
+      // Queue health monitoring - always log every minute
       const queueSize = this.messageQueue.size;
-      if (queueSize > 1000) {
-        infoLog('QueueHealth', `Periodic queue check | size=${queueSize} | pending=${this.messageQueue.pending} | running=${this.messageQueue.pending - queueSize}`);
+      const queuePending = this.messageQueue.pending;
+
+      debugLog('QueueHealth', `Periodic check | size=${queueSize} | pending=${queuePending} | running=${queuePending - queueSize}`);
+
+      // Warn on high queue depth
+      if (queueSize > 5000) {
+        warnLog('QueueHealth', `High queue depth | size=${queueSize} | pending=${queuePending} | considerScaling=true`);
+      }
+
+      // Error on critical queue depth
+      if (queueSize > 20000) {
+        errorLog('QueueHealth', `CRITICAL queue depth | size=${queueSize} | pending=${queuePending} | systemOverloaded=true`);
       }
 
     }, 60000); // Check every minute
@@ -610,8 +602,6 @@ class WebSocketManager extends EventEmitter {
       // Wait a bit for server response
       await new Promise(resolve => setTimeout(resolve, 1000));
 
-      // Log what we had before clearing
-      const previousSlugs = this.getActiveSlugsList();
 
       // Clear active subscriptions to ensure clean state
       this.activeSubscriptions.clear();
@@ -641,7 +631,7 @@ class WebSocketManager extends EventEmitter {
       const failedSubscriptions: string[] = [];
 
       // Use activeSubscriptions which now includes persistent listings
-      for (const [subscriptionId, subInfo] of this.activeSubscriptions) {
+      for (const [_subscriptionId, subInfo] of this.activeSubscriptions) {
         const subscriptionType = subInfo.subscriptionType || 'bidding';
         const isListing = subscriptionType === 'listing';
         const trackingSet = isListing ? subscribedListings : subscribedSlugs;
@@ -735,194 +725,97 @@ class WebSocketManager extends EventEmitter {
     const receiveTime = Date.now();
 
     try {
-      const parsed = JSON.parse(data.toString());
+      const message = JSON.parse(data.toString());
 
-      // Handle new batch format from BatchAggregator (events array with normalized events)
-      if (parsed.type === 'batch' && Array.isArray(parsed.events)) {
-        const batchSize = parsed.events.length;
-        const batchTimestamp = parsed.timestamp || receiveTime;
-        const latency = receiveTime - batchTimestamp;
+      debugLog('WebSocket', `CP1_RAW_RECV | length=${data.toString().length} | receiveTime=${receiveTime}`);
 
-        // DEBUG: Log first event structure
-        if (parsed.events && parsed.events.length > 0) {
-          const firstEvent = parsed.events[0];
-          console.log(`[BatchDebug] First event keys: ${Object.keys(firstEvent).join(',')}`);
-          console.log(`[BatchDebug] First event marketplace: "${firstEvent.marketplace}"`);
-          console.log(`[BatchDebug] First event hasRawPayload: ${!!firstEvent.rawPayload}`);
-          if (firstEvent.rawPayload) {
-            console.log(`[BatchDebug] rawPayload keys: ${Object.keys(firstEvent.rawPayload).join(',')}`);
-          }
-        }
+      // After parsing
+      debugLog('WebSocket', `CP2_PARSED | marketplace=${message.marketplace} | eventType=${message.eventType} | event=${message.event} | type=${message.type} | orderHash=${message.orderHash?.substring(0,16)}`);
 
-        // Enhanced batch latency logging with tier-based severity
-        const logLevel = latency > 5000 ? 'error' : latency > 1000 ? 'warn' : 'info';
-        const logFn = logLevel === 'error' ? errorLog : logLevel === 'warn' ? warnLog : infoLog;
-        logFn('BatchLatency', `BATCH_RECV | events=${batchSize} | subscriptionType=${parsed.subscriptionType} | latency=${latency}ms | batchTimestamp=${batchTimestamp}`);
-
-        // Emit batch event for optimized processing (handlers can process all events at once)
-        this.emit('batch', {
-          events: parsed.events,
-          count: parsed.count || batchSize,
-          subscriptionType: parsed.subscriptionType,
-          receivedAt: batchTimestamp,
-          localReceiveTime: receiveTime
-        });
-
-        // Process events asynchronously in chunks for backward compatibility
-        // This ensures existing handlers continue to work without blocking event loop
-        // (2025-12-29 optimization: replaces synchronous for-loop with async chunked processing)
-        // (2025-12-31 fix: pass batchTimestamp for accurate per-event latency tracking)
-        this.processBatchEvents(parsed.events, receiveTime, batchTimestamp).catch(error => {
-          errorLog('WebSocket', 'Error in async batch processing', error);
-        });
-
-        // Track batch metrics
-        this.metrics.totalMessages += batchSize;
-        this.recordLatency(latency);
+      // Handle control messages (pong, server_status, etc.)
+      if (this.isControlMessage(message)) {
+        this.processControlMessage(message, receiveTime);
         return;
       }
 
-      // Handle legacy batch messages from ws-proxy (old format with messages array)
-      if (parsed.type === 'batch' && Array.isArray(parsed.messages)) {
-        for (const batchedMessage of parsed.messages) {
-          // Process each message individually by recursively calling with wrapped data
-          this.processSingleMessage(batchedMessage, receiveTime);
-        }
-        return;
-      }
-
-      // Handle new single-event format from multi-process architecture (2025-12-31)
-      // Format: { type: "event", marketplace, eventType, subscriptionType, slug, contractAddress, ... }
-      if (parsed.type === 'event') {
-        const latency = receiveTime - (parsed.receivedAt || receiveTime);
-
-        // Log latency for single events
-        if (latency > 100) {
-          const logFn = latency > 5000 ? errorLog : latency > 1000 ? warnLog : debugLog;
-          logFn('EventLatency', `SINGLE_EVENT | latency=${latency}ms | marketplace=${parsed.marketplace} | eventType=${parsed.eventType} | slug=${parsed.slug}`);
-        }
-
-        // Transform to handler-compatible format using same logic as batch events
-        const message = this.transformBatchEvent(parsed, parsed.receivedAt);
-        this.processSingleMessage(message, receiveTime);
-
-        // Track metrics
-        this.recordLatency(latency);
-        return;
-      }
-
-      // Single message processing
-      this.processSingleMessage(parsed, receiveTime);
+      // All other messages are marketplace events - process directly
+      this.processSingleMessage(message, receiveTime);
 
     } catch (error) {
       errorLog('WebSocket', 'Failed to parse WebSocket message', error);
-
-      // Still emit the raw message even if parsing fails
-      // This helps prevent message loss
-      try {
-        this.emit('message', { raw: data.toString(), parseError: true });
-      } catch (emitError) {
-        errorLog('WebSocket', 'Failed to emit raw message after parse error', emitError);
-      }
+      // Emit raw message for recovery
+      this.emit('message', { raw: data.toString(), parseError: true });
     }
   }
 
   /**
-   * Transform a normalized batch event to handler-compatible format.
-   * Uses static EVENT_TYPE_MAP to avoid per-event object creation.
-   * (2025-12-29 optimization: extracted from inline loop)
-   * (2025-12-31 fix: added batchTimestamp fallback for accurate latency tracking)
+   * Check if message is a control message (not a marketplace event)
    */
-  private transformBatchEvent(event: any, batchTimestamp?: number): any {
-    // Use rawPayload as base (preserves original nested structure for handlers)
-    const messageForHandlers: any = event.rawPayload ? { ...event.rawPayload } : { ...event };
-
-    // Map normalized eventType to uppercase for handler routing using static map
-    if (event.eventType) {
-      messageForHandlers.eventType = WebSocketManager.EVENT_TYPE_MAP[event.eventType] || event.eventType.toUpperCase();
-    }
-
-    // Map normalized marketplace to uppercase for handler routing
-    if (event.marketplace) {
-      console.log(`[TransformDebug] event.marketplace="${event.marketplace}" (before transform)`);
-      messageForHandlers.marketplace = event.marketplace.toUpperCase();
-      console.log(`[TransformDebug] messageForHandlers.marketplace="${messageForHandlers.marketplace}" (after transform)`);
-    } else {
-      console.log(`[TransformDebug] event.marketplace is MISSING | eventKeys=${Object.keys(event).join(',')}`);
-    }
-
-    // Preserve normalized fields for handlers that use them
-    // If event lacks receivedAt, use batchTimestamp as fallback (2025-12-31 fix)
-    const normalizedEventWithTimestamp = event.receivedAt ? event : { ...event, receivedAt: batchTimestamp };
-    messageForHandlers._normalizedEvent = normalizedEventWithTimestamp;
-    messageForHandlers.slug = event.slug || messageForHandlers.slug;
-    messageForHandlers.orderHash = event.orderHash || messageForHandlers.orderHash;
-    messageForHandlers.maker = event.maker || messageForHandlers.maker;
-
-    return messageForHandlers;
+  private isControlMessage(message: any): boolean {
+    const controlTypes = ['pong', 'subscription_sync', 'server_status', 'server_shutdown'];
+    return controlTypes.includes(message.type);
   }
 
   /**
-   * Process batch events - synchronously for small batches, async for large.
-   * (2025-12-29 optimization: replaces synchronous for-loop for large batches)
-   * (2025-12-31 fix: added batchTimestamp for accurate per-event latency tracking)
-   * (2025-12-31 optimization: small batches (<=50) processed synchronously for <100ms latency target)
+   * Process control messages (pong, server_status, etc.)
    */
-  private async processBatchEvents(events: any[], receiveTime: number, batchTimestamp?: number): Promise<void> {
-    const totalEvents = events.length;
-
-    // For small batches, process synchronously (no yields) - achieves <100ms latency
-    // (2025-12-31 optimization: async chunking was adding 25-125ms overhead)
-    if (totalEvents <= 50) {
-      for (const event of events) {
-        const message = this.transformBatchEvent(event, batchTimestamp);
-        this.processSingleMessage(message, receiveTime);
-      }
-      return;
-    }
-
-    // For large batches (>50 events), yield to event loop between chunks to prevent blocking
-    const CHUNK_SIZE = 50;
-    for (let i = 0; i < totalEvents; i += CHUNK_SIZE) {
-      const chunkEnd = Math.min(i + CHUNK_SIZE, totalEvents);
-
-      // Process this chunk
-      for (let j = i; j < chunkEnd; j++) {
-        const message = this.transformBatchEvent(events[j], batchTimestamp);
-        this.processSingleMessage(message, receiveTime);
-      }
-
-      // Yield to event loop between chunks (not after last chunk)
-      if (chunkEnd < totalEvents) {
-        await new Promise<void>(resolve => setImmediate(resolve));
-      }
-    }
+  private processControlMessage(message: any, receiveTime: number): void {
+    debugLog('WebSocket', `CP_CONTROL | type=${message.type}`);
+    // Control messages are handled in processMessageAsync
+    this.processSingleMessage(message, receiveTime);
   }
 
   private processSingleMessage(parsed: any, receiveTime: number): void {
     try {
+      // Normalize message format (minimal transformation)
+      const message = this.normalizeMessage(parsed);
+
       // Log queue health warnings at thresholds
       const queueSize = this.messageQueue.size;
 
+      debugLog('WebSocket', `CP4_QUEUE | queueSize=${queueSize} | pending=${this.messageQueue.pending} | orderHash=${message.orderHash?.substring(0,16)}`);
+
       if (queueSize > 10000 && queueSize % 1000 === 0) {
-        // Log every 1000 messages above 10k threshold
-        warnLog('QueueHealth', `High queue size | size=${queueSize} | pending=${this.messageQueue.pending} | consider scaling`);
-      } else if (queueSize > 5000 && queueSize % 500 === 0) {
-        // Log every 500 messages between 5k-10k
-        infoLog('QueueHealth', `Elevated queue size | size=${queueSize} | pending=${this.messageQueue.pending}`);
+        warnLog('QueueHealth', `High queue size | size=${queueSize} | pending=${this.messageQueue.pending}`);
       }
 
       // Queue the message for processing via p-queue
       this.messageQueue.add(async () => {
-        await this.processMessageAsync(parsed, receiveTime);
+        await this.processMessageAsync(message, receiveTime);
       }).catch(err => {
-        // Use structured logging instead of console.error
         errorLog('QueueError', `Message processing error | error=${err.message}`, err);
       });
     } catch (err) {
-      // Use structured logging instead of console.error
       errorLog('QueueError', `processSingleMessage error | error=${(err as Error).message}`, err);
     }
+  }
+
+  /**
+   * Minimal message normalization - ensures marketplace is uppercase for routing
+   * ws-proxy already sends messages in handler-compatible format
+   */
+  private normalizeMessage(message: any): any {
+    // Ensure marketplace is uppercase for routing (handlers expect 'OPENSEA', 'BLUR', etc.)
+    if (message.marketplace && typeof message.marketplace === 'string') {
+      message.marketplace = message.marketplace.toUpperCase();
+    }
+
+    // Ensure eventType exists for routing (fallback to event field)
+    if (!message.eventType && message.event) {
+      // Map common event names to eventType
+      const eventMap: Record<string, string> = {
+        'item_received_bid': 'BID_CREATED',
+        'trait_offer': 'BID_CREATED',
+        'collection_offer': 'BID_CREATED',
+        'item_listed': 'LISTING_CREATED',
+        'item_sold': 'ITEM_SOLD'
+      };
+      message.eventType = eventMap[message.event] || message.event.toUpperCase();
+    }
+
+    debugLog('WebSocket', `CP3_NORMALIZE | marketplace=${message.marketplace} | eventType=${message.eventType} | event=${message.event} | orderHash=${message.orderHash?.substring(0,16)}`);
+
+    return message;
   }
 
   /**
@@ -931,6 +824,8 @@ class WebSocketManager extends EventEmitter {
    */
   private async processMessageAsync(parsed: any, receiveTime: number): Promise<void> {
     try {
+      debugLog('WebSocket', `CP5_PROCESS_START | orderHash=${parsed.orderHash?.substring(0,16)} | slug=${parsed.slug} | eventType=${parsed.eventType}`);
+
       this.metrics.totalMessages++;
       this.recordMessage();
 
@@ -969,10 +864,8 @@ class WebSocketManager extends EventEmitter {
       const normalizedEvent = message._normalizedEvent;
       const originalReceivedAt = normalizedEvent?.receivedAt;
       const msgTimestamp = originalReceivedAt || message.timestamp || parsed.timestamp || message._proxyReceiveTime;
-      const eventType = message.eventType || message.event || message.type || 'unknown';
       const marketplace = message.marketplace || 'unknown';
       const slug = normalizedEvent?.slug || message.slug || message.payload?.payload?.collection?.slug || 'unknown';
-      const traceId = message._traceId || 'no-trace';
 
       if (msgTimestamp) {
         const latency = receiveTime - msgTimestamp;
@@ -980,16 +873,15 @@ class WebSocketManager extends EventEmitter {
         // Record latency for metrics
         this.recordLatency(latency);
 
-        // Enhanced per-event latency logging using EventLatency prefix
-        // This provides detailed breakdown for each event, not just batch
+        // Tier-based latency logging
         if (latency > 5000) {
-          errorLog('EventLatency', `CRITICAL | latency=${latency}ms | eventType=${eventType} | marketplace=${marketplace} | slug=${slug} | receivedAt=${msgTimestamp} | now=${receiveTime} | TRACE=${traceId}`);
+          errorLog('EventLatency', `CRITICAL | latency=${latency}ms | marketplace=${marketplace} | slug=${slug} | orderHash=${parsed.orderHash?.substring(0,16)}`);
         } else if (latency > 1000) {
-          warnLog('EventLatency', `HIGH | latency=${latency}ms | eventType=${eventType} | marketplace=${marketplace} | slug=${slug} | TRACE=${traceId}`);
+          warnLog('EventLatency', `HIGH | latency=${latency}ms | marketplace=${marketplace} | slug=${slug}`);
+        } else if (latency > 100) {
+          debugLog('EventLatency', `MODERATE | latency=${latency}ms | marketplace=${marketplace}`);
         }
-        // Don't log MODERATE latency (100-1000ms) or normal latency (<100ms) to avoid log flooding
       }
-      // Note: Missing timestamps are expected for some message types - no logging to avoid noise
 
       // Handle pong messages
       if (message.type === 'pong') {
@@ -1034,8 +926,6 @@ class WebSocketManager extends EventEmitter {
       if (message.eventType === 'BID_CREATED' || message.eventType === 'TRAIT_BID_CREATED' || message.eventType === 'LISTING_CREATED') {
         const msgSlug = message.payload?.payload?.collection?.slug || message.slug;
         const msgMarketplace = message.marketplace || 'unknown';
-        const orderHash = message.payload?.payload?.order_hash || message.id || 'unknown';
-        const maker = message.payload?.payload?.maker?.address || 'unknown';
 
         // Message loss detection: count OPENSEA BID_CREATED messages
         if (message.eventType === 'BID_CREATED' && msgMarketplace === 'OPENSEA') {
@@ -1055,44 +945,16 @@ class WebSocketManager extends EventEmitter {
         }
       }
 
-      // Server-side deduplication safety net
-      // Catches any duplicates that slip through ws-proxy deduplication (e.g., network retries)
-      if (message.eventType === 'BID_CREATED' || message.eventType === 'TRAIT_BID_CREATED' ||
-        message.eventType === 'LISTING_CREATED' || message.eventType === 'ITEM_SOLD') {
-        const msgMarketplace = message.marketplace || message._normalizedEvent?.marketplace || 'unknown';
-        const dedupOrderHash = message.payload?.payload?.order_hash ||
-          message.orderHash ||
-          message._normalizedEvent?.orderHash ||
-          message.id ||
-          message.data?.id;
-
-        if (dedupOrderHash && dedupOrderHash !== 'unknown') {
-          const dedupKey = `${msgMarketplace}:${dedupOrderHash}`;
-
-          // Debug logging: Track test messages at global dedup checkpoint
-          const maker = message.payload?.payload?.maker?.address?.toLowerCase();
-          if (maker === '0x1b8afd0de8a9368ce635be8b9572c65d8f590b21') {
-            const alreadyProcessed = this.seenWsMessages.has(dedupKey);
-            if (alreadyProcessed) {
-              debugLog('WebSocket', `[WsManager] TEST_BID_FILTERED_GLOBAL_DEDUP | orderHash=${dedupOrderHash.substring(0, 16)} | dedupKey=${dedupKey}`);
-            } else {
-              debugLog('WebSocket', `[WsManager] TEST_BID_PASSED_GLOBAL_DEDUP | orderHash=${dedupOrderHash.substring(0, 16)}`);
-            }
-          }
-
-          // addIfNotExists returns false if key already exists (duplicate)
-          if (!this.seenWsMessages.addIfNotExists(dedupKey, Date.now())) {
-            // Duplicate message - already processed, skip silently
-            return;
-          }
-        }
-      }
-
       // FIRE-AND-FORGET: Emit message immediately without queueing
       // (2025-12-31 optimization: Removed handler backpressure queue that was causing MINUTES of latency)
       // The old architecture waited for handlers to complete - this is wrong for real-time events.
       // Now we just emit and let handlers run concurrently without blocking the message pipeline.
+
+      debugLog('WebSocket', `CP6_EMIT | orderHash=${message.orderHash?.substring(0,16)} | marketplace=${message.marketplace} | eventType=${message.eventType}`);
+
       this.emit('message', message);
+
+      debugLog('WebSocket', `CP7_COMPLETE | orderHash=${message.orderHash?.substring(0,16)} | processingTime=${Date.now() - receiveTime}ms`);
 
     } catch (error) {
       errorLog('WebSocket', 'Failed to process single message', error);
@@ -1169,21 +1031,10 @@ class WebSocketManager extends EventEmitter {
 
     this.metrics.connectionQuality = 'disconnected';
 
-    // CRITICAL: Always log disconnections to help diagnose issues
-    const disconnectInfo = {
-      code: event.code,
-      reason: event.reason || 'unknown',
-      connectionDurationMinutes: this.metrics.connectionDuration ? Math.floor(this.metrics.connectionDuration / 60000) : 0,
-      lastMessageAge: this.lastMessageReceived ? now - this.lastMessageReceived : 'never',
-      lastPongAge: this.lastPongReceived ? now - this.lastPongReceived : 'never',
-      lastBidEventAge: this.lastBidEventReceived ? now - this.lastBidEventReceived : 'never',
-      lastServerStatusAge: this.lastServerStatusReceived ? now - this.lastServerStatusReceived : 'never',
-      missedPongs: this.missedPongs,
-      activeSubscriptions: this.activeSubscriptions.size,
-      persistentListings: this.persistentListingSubscriptions.size,
-      messagesReceived: this.metrics.totalMessages
-    };
-    errorLog('WebSocket', `DISCONNECTED: ${JSON.stringify(disconnectInfo)}`);
+    // Enhanced disconnect logging
+    const disconnectDuration = this.metrics.connectionDuration ? Math.floor(this.metrics.connectionDuration / 60000) : 0;
+    infoLog('WebSocket', `[DISCONNECT] Connection closed | code=${event.code} | reason=${event.reason} | durationMinutes=${disconnectDuration}`);
+    debugLog('WebSocket', `[DISCONNECT] State | missedPongs=${this.missedPongs} | lastMessageAge=${now - this.lastMessageReceived}ms | activeSubscriptions=${this.activeSubscriptions.size}`);
 
     // Clear intervals and timeouts
     this.clearAllIntervals();
@@ -1484,7 +1335,8 @@ class WebSocketManager extends EventEmitter {
     };
 
     // Log subscription attempt
-    infoLog('WebSocket', `[SUBSCRIBE] Subscribing to collection | slug=${slug} | contractAddress=${contractAddress} | marketplace=${marketplace} | type=${subscriptionType} | event=${eventName}`);
+    infoLog('WebSocket', `[SUBSCRIBE] Starting | slug=${slug} | marketplace=${marketplace} | type=${subscriptionType}`);
+    debugLog('WebSocket', `[SUBSCRIBE] Sending | event=${eventName} | contractAddress=${contractAddress}`);
 
     try {
       // Send message without waiting for response
@@ -1518,7 +1370,7 @@ class WebSocketManager extends EventEmitter {
       this.metrics.subscriptionCount = this.activeSubscriptions.size;
 
       // Log successful subscription with full state
-      infoLog('WebSocket', `[SUBSCRIBE] Successfully subscribed | subscriptionId=${subscriptionId} | totalActive=${this.activeSubscriptions.size} | totalPersistent=${this.persistentListingSubscriptions.size} | allActiveSlugs=${this.getActiveSlugsList()}`);
+      infoLog('WebSocket', `[SUBSCRIBE] Complete | subscriptionId=${subscriptionId} | totalActive=${this.activeSubscriptions.size} | activeSlugs=${this.getActiveSlugsList()}`);
 
       this.emit('subscribed', { slug, marketplace, subscriptionType });
 
@@ -1542,7 +1394,7 @@ class WebSocketManager extends EventEmitter {
     const normalizedMarketplace = marketplace?.toLowerCase();
 
     // Log state BEFORE unsubscription
-    infoLog('WebSocket', `[UNSUBSCRIBE] Starting unsubscription | slug=${slug} | contractAddress=${contractAddress} | marketplace=${normalizedMarketplace || 'ALL'} | currentActiveSlugs=${this.getActiveSlugsList()} | totalActive=${this.activeSubscriptions.size}`);
+    infoLog('WebSocket', `[UNSUBSCRIBE] Starting | slug=${slug} | marketplace=${normalizedMarketplace || 'ALL'}`);
 
     // Handle both bidding and listing unsubscriptions
     const unsubscribeBidding = {
@@ -1628,7 +1480,7 @@ class WebSocketManager extends EventEmitter {
       }
 
       // Log state AFTER unsubscription
-      infoLog('WebSocket', `[UNSUBSCRIBE] Completed | slug=${slug} | removedKeys=${removedKeys.join(',') || 'none'} | remainingActiveSlugs=${this.getActiveSlugsList()} | totalActive=${this.activeSubscriptions.size} | totalPersistent=${this.persistentListingSubscriptions.size}`);
+      infoLog('WebSocket', `[UNSUBSCRIBE] Complete | slug=${slug} | removedKeys=${removedKeys.join(',') || 'none'} | remainingActive=${this.activeSubscriptions.size} | activeSlugs=${this.getActiveSlugsList()}`);
 
       this.emit('unsubscribed', { slug, marketplace });
 
@@ -1772,14 +1624,6 @@ class WebSocketManager extends EventEmitter {
    */
   getOpenseaBidCreatedReceived(): number {
     return this.openseaBidCreatedReceived;
-  }
-
-  /**
-   * Get size of seenWsMessages deduplication cache.
-   * Used for diagnostics and monitoring of global WebSocket message deduplication.
-   */
-  getSeenWsMessagesSize(): number {
-    return this.seenWsMessages.size;
   }
 
   getActiveSubscriptions(): Map<string, SubscriptionInfo> {

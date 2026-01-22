@@ -95,7 +95,6 @@ function addActiveRequest(taskId: string, controller: AbortController) {
     activeRequests.set(taskId, []);
   }
   activeRequests.get(taskId)?.push(controller);
-  debugLog('HttpAbort', `REGISTER | marketplace=blur | taskId=${taskId} | activeCount=${activeRequests.get(taskId)?.length || 0}`);
 }
 
 function removeActiveRequest(taskId: string, controller: AbortController): void {
@@ -105,7 +104,6 @@ function removeActiveRequest(taskId: string, controller: AbortController): void 
     if (index > -1) controllers.splice(index, 1);
     if (controllers.length === 0) activeRequests.delete(taskId);
   }
-  debugLog('HttpAbort', `DEREGISTER | marketplace=blur | taskId=${taskId} | remainingCount=${activeRequests.get(taskId)?.length || 0}`);
 }
 
 export async function cancelBlurRequest(taskId: string): Promise<number> {
@@ -740,8 +738,6 @@ async function submitBidToBlur(
     let running = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase())
     if (!running) return
 
-    debugLog('InFlightBid', `ENTERING_LIMITER | taskId=${parsedTaskId} | marketplace=blur | collection=${slug} | timestamp=${bidStartTime}`, { taskId: parsedTaskId, marketplace: 'blur' });
-
     // Try to reserve a request slot atomically
     let reserved = false;
     let retryCount = 0;
@@ -777,8 +773,6 @@ async function submitBidToBlur(
               debugLog('InFlightBid', `BLOCKED_POST_QUEUE | taskId=${parsedTaskId} | marketplace=blur | waitTime=${Date.now() - bidStartTime}ms`, { taskId: parsedTaskId, marketplace: 'blur' });
               throw new Error('Task stopped while waiting in limiter queue');
             }
-
-            debugLog('InFlightBid', `EXECUTING_REQUEST | taskId=${parsedTaskId} | marketplace=blur | waitTime=${Date.now() - bidStartTime}ms`, { taskId: parsedTaskId, marketplace: 'blur' });
 
             return axiosInstance.request({
               method: 'POST',
@@ -866,11 +860,6 @@ async function submitBidToBlur(
           taskId: taskId
         });
         trackBidRate("blur", taskId)
-
-        // Log successful bid
-        const sourceTag = source === 'counterbid' ? '-CB' : '';
-        const bidType = traits ? 'Trait' : 'Coll';
-        debugLog('BidFlow', `[Blur-${bidType}${sourceTag}] ${slug} | SUCCESS | identifier=${identifier} | price=${offerPriceEth} BETH`, { taskId, marketplace: 'blur', identifier });
 
         // Mark request as successful
         requestSuccessful = true;

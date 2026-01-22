@@ -33,11 +33,106 @@ const FLUSH_INTERVAL_MS = 1000; // Flush every 1 second
 let flushIntervalId: NodeJS.Timeout | null = null;
 let isShuttingDown = false;
 
+// Log rotation and cleanup state
+let currentLogDate: string = new Date().toISOString().split('T')[0];
+let cleanupIntervalId: NodeJS.Timeout | null = null;
+
+// Configuration
+const CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const LOG_RETENTION_HOURS = (() => {
+  const value = parseInt(process.env.LOG_RETENTION_HOURS || '24', 10);
+  return isNaN(value) || value < 0 ? 24 : value;
+})();
+const LOG_RETENTION_MS = LOG_RETENTION_HOURS * 60 * 60 * 1000;
+
+/**
+ * Check if date has changed and log rotation is needed.
+ */
+function shouldRotateLogFiles(): boolean {
+  const newDate = new Date().toISOString().split('T')[0];
+  return newDate !== currentLogDate;
+}
+
+/**
+ * Rotate to new date-stamped log files.
+ * Flushes current buffers before updating date.
+ */
+function rotateLogFiles(): void {
+  const oldDate = currentLogDate;
+  const newDate = new Date().toISOString().split('T')[0];
+
+  // Flush pending logs to old date files first
+  if (logBuffer.size > 0) {
+    for (const [filePath, lines] of logBuffer) {
+      if (lines.length > 0) {
+        try {
+          fs.appendFileSync(filePath, lines.join('\n') + '\n');
+        } catch {
+          // Silently fail rotation flush
+        }
+      }
+    }
+    logBuffer.clear();
+  }
+
+  // Update to new date
+  currentLogDate = newDate;
+  console.log(`[LogWriter] LOG_ROTATION | ${oldDate} → ${newDate}`);
+}
+
+/**
+ * Scan and delete log files older than retention period.
+ * Runs asynchronously without blocking logging.
+ */
+async function cleanupOldLogFiles(): Promise<void> {
+  if (!CAN_WRITE_LOGS) return;
+  if (LOG_RETENTION_HOURS === 0) return; // Cleanup disabled
+
+  try {
+    const files = await fs.promises.readdir(LOG_DIR);
+    const now = Date.now();
+    const cutoffTime = now - LOG_RETENTION_MS;
+    let deletedCount = 0;
+    let failedCount = 0;
+
+    for (const file of files) {
+      if (!file.endsWith('.log')) continue;
+
+      const filePath = path.join(LOG_DIR, file);
+
+      try {
+        const stats = await fs.promises.stat(filePath);
+
+        if (stats.mtimeMs < cutoffTime) {
+          await fs.promises.unlink(filePath);
+          deletedCount++;
+          const ageHours = Math.round((now - stats.mtimeMs) / (60 * 60 * 1000));
+          console.log(`[LogWriter] CLEANUP | Deleted: ${file} (age: ${ageHours}h)`);
+        }
+      } catch (err) {
+        failedCount++;
+        console.warn(`[LogWriter] CLEANUP_FAILED | file=${file} | ${(err as Error).message}`);
+      }
+    }
+
+    if (deletedCount > 0 || failedCount > 0) {
+      console.log(`[LogWriter] CLEANUP_COMPLETE | deleted=${deletedCount} | failed=${failedCount} | retention=${LOG_RETENTION_HOURS}h`);
+    }
+  } catch (err) {
+    console.warn(`[LogWriter] CLEANUP_ERROR | ${(err as Error).message}`);
+  }
+}
+
 /**
  * Flush all buffered log lines to their respective files
  * Uses async fs.appendFile to avoid blocking the event loop
  */
 function flushLogBuffers(): void {
+  // Check for date change and rotate if needed
+  if (shouldRotateLogFiles()) {
+    rotateLogFiles();
+  }
+
   if (logBuffer.size === 0) return;
 
   for (const [filePath, lines] of logBuffer) {
@@ -80,23 +175,58 @@ function flushLogBuffersSync(): void {
 // Start the flush interval
 flushIntervalId = setInterval(flushLogBuffers, FLUSH_INTERVAL_MS);
 
+// Start periodic cleanup interval (every 6 hours)
+cleanupIntervalId = setInterval(() => {
+  cleanupOldLogFiles().catch(err =>
+    console.warn(`[LogWriter] Cleanup interval failed: ${err.message}`)
+  );
+}, CLEANUP_INTERVAL_MS);
+
+// Run initial cleanup after 10 seconds (allow startup to complete)
+setTimeout(() => {
+  cleanupOldLogFiles().catch(err =>
+    console.warn(`[LogWriter] Initial cleanup failed: ${err.message}`)
+  );
+}, 10000);
+
 // Ensure logs are flushed on process exit
 process.on('beforeExit', () => {
   isShuttingDown = true;
+
+  // Stop intervals
   if (flushIntervalId) {
     clearInterval(flushIntervalId);
     flushIntervalId = null;
   }
+  if (cleanupIntervalId) {
+    clearInterval(cleanupIntervalId);
+    cleanupIntervalId = null;
+  }
+
   flushLogBuffersSync();
 });
 
 process.on('SIGINT', () => {
   isShuttingDown = true;
+
+  // Stop intervals
+  if (cleanupIntervalId) {
+    clearInterval(cleanupIntervalId);
+    cleanupIntervalId = null;
+  }
+
   flushLogBuffersSync();
 });
 
 process.on('SIGTERM', () => {
   isShuttingDown = true;
+
+  // Stop intervals
+  if (cleanupIntervalId) {
+    clearInterval(cleanupIntervalId);
+    cleanupIntervalId = null;
+  }
+
   flushLogBuffersSync();
 });
 
@@ -116,6 +246,7 @@ export interface LogMetadata {
   traitKey?: string;
   jobId?: string;
   orderHash?: string;
+  
   wallet?: string;
   identifier?: string;
   [key: string]: unknown; // Extensible for additional context
@@ -164,7 +295,8 @@ export type LogCategory =
   | 'taskflow'  // Consolidated task lifecycle logging - ALL state transitions in one file
   | 'system'
   | 'wsConnection'  // Dedicated log for _doConnect() WebSocket connection errors
-  | 'taskperf';  // Performance profiling for task startup operations
+  | 'taskperf'  // Performance profiling for task startup operations
+  | 'memory';  // Memory monitoring logs for crash debugging
 
 // Prefix → Category mapping (single point of configuration)
 export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
@@ -325,6 +457,9 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'HealthCheck': 'health',
   'ConnectivityMonitor': 'health',
   'EventLoop': 'health',  // Event loop lag monitoring - detects blocked event loop
+
+  // Memory (1)
+  'MemoryMonitor': 'memory',  // Memory monitoring logs for crash debugging
 
   // Metadata (2)
   'Metadata': 'metadata',

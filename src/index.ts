@@ -77,14 +77,13 @@ import { cancellationDebugLogger } from "./utils/cancellation-debug-logger";
 import { debugLog, errorLog, warnLog, infoLog, getAllCategories, type LogCategory } from "./utils/debug-file-logger";
 import { exportLogs, logsToCSV, logsToJSON, type LogFilters } from "./utils/log-export-handler";
 import { clearUnavailabilityCache } from "./utils/marketplace-availability";
-import { testBidCounter } from "./utils/test-bid-counter";
-import { testMessageRegistry } from "./utils/test-message-registry";
 
 import { listingPriceCache } from "./utils/listing-price-cache";
 import Listing from "./models/listing.model";
 import { MarketplaceBidRateTracker } from "./utils/metrics-rate-tracker";
 import { BroadcastManager } from "./utils/broadcast-manager";
 import { reconcileBidStatsWithCache } from "./utils/metrics-reconciliation";
+import { memorySnapshotService } from "./services/memory-snapshot.service";
 
 // Global type declarations
 declare global {
@@ -93,8 +92,8 @@ declare global {
 
 // Refactored modules - utilities and state management
 import { isDuplicateOrderHash } from "./utils/deduplication";
-import { loadOurWalletAddresses, addOurWalletAddress, removeOurWalletAddress, isOurWallet } from "./utils/wallet-tracking";
-import { getTaskIdForLog, parseOpenSeaResponseData, maskSensitiveIdentifier, extractDetailedOpenSeaError } from "./utils/task-helpers";
+import { loadOurWalletAddresses, isOurWallet } from "./utils/wallet-tracking";
+import { getTaskIdForLog, maskSensitiveIdentifier, extractDetailedOpenSeaError } from "./utils/task-helpers";
 import {
   isMarketplaceStoppedDueToBalance,
   stopMarketplaceDueToInsufficientBalance,
@@ -108,6 +107,7 @@ import {
   bidStats,
   ownBidCounts,
   processedOwnBids,
+  addOwnBidIfNotExists,
   currentTokenIds,
   currentTraits,
   taskStatus,
@@ -135,27 +135,14 @@ import {
   incrementNoMarketplaceMatchCounter,
   incrementFilteredCounter,
   incrementOwnBidsDeduplicated,
-  initializeOrderCacheWithRetry,
-  addBulkWithRetry,
-  syncTaskStateToRedis,
-  loadTaskStateFromRedis,
-  deleteTaskStateFromRedis,
   syncAllActiveTaskStates,
   type BidCounts,
-  type WalletBalances,
-  type BottomListings,
-  type CurrentTraits,
-  type TaskStatus,
-  type MarketplaceTaskStatus,
-  type MarketplaceStatus,
-  type WarningBids,
-  type WarningMessage,
-  type CollectionFloorState
+  type MarketplaceStatus
 } from "./state/global-state";
 
 // WebSocket URL - defaults to local ws-proxy for development
-// const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io/";
-const MARKETPLACE_WS_URL = "ws://localhost:8080/";
+const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io/";
+// const MARKETPLACE_WS_URL = "ws://localhost:8080/";
 
 
 // Initialize process lifecycle logging immediately on startup
@@ -2553,6 +2540,11 @@ async function startServer() {
 
     console.log('[STARTUP] BullMQ queues initialized');
 
+    // Initialize memory snapshot service
+    const redis = getRedisConnection();
+    memorySnapshotService.initialize(redis, queue, blurQueue);
+    console.log('[STARTUP] Memory snapshot service initialized');
+
     // Initialize queue event handlers
     initializeQueueEventHandlers();
 
@@ -3289,6 +3281,31 @@ async function startServer() {
     setInterval(() => {
       cleanupAbortedTasks();
     }, 30 * 60 * 1000); // 30 minutes
+
+    // Initialize memory monitoring (every 15 minutes)
+    const FIFTEEN_MINUTES = 15 * 60 * 1000;
+
+    // Initial snapshot (30 seconds after startup)
+    setTimeout(async () => {
+      try {
+        await memorySnapshotService.takeSnapshot();
+        infoLog('MemoryMonitor', 'Initial memory snapshot completed');
+      } catch (error) {
+        errorLog('MemoryMonitor', 'Initial snapshot failed', error as Error);
+      }
+    }, 30000);
+
+    // Recurring snapshots every 15 minutes
+    setInterval(async () => {
+      try {
+        await memorySnapshotService.takeSnapshot();
+        debugLog('MemoryMonitor', 'Scheduled memory snapshot completed');
+      } catch (error) {
+        errorLog('MemoryMonitor', 'Scheduled snapshot failed', error as Error);
+      }
+    }, FIFTEEN_MINUTES);
+
+    debugLog('STARTUP', 'Memory monitoring initialized (15-minute interval)');
 
     // Start all tasks that have running: true in database
     // This handles server restarts where tasks were previously running
@@ -9809,9 +9826,12 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
       const mp = order.marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
       counts[mp]++;
 
-      // Register in ownBidCounter for sync
+      // Pre-populate dedup Set WITHOUT incrementing counter
+      // Only WebSocket confirmations should increment ownBidCounts
       if (order.orderHash) {
-        incrementOwnBidCounter(mp, order.orderHash, true);
+        const normalizedHash = order.orderHash.startsWith('0x') ? order.orderHash : `0x${order.orderHash}`;
+        processedOwnBids.add(normalizedHash);
+        debugLog('TaskInit', `Pre-populated dedup cache | marketplace=${mp} | orderHash=${normalizedHash.substring(0, 16)} | taskId=${task._id}`);
       }
     }
 
@@ -10835,6 +10855,10 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
         delete bidStats[taskId];
         await orderCache.deleteByTask(taskId);
 
+        // Clear processedOwnBids cache - prevents memory leak and ensures fresh start on task restart
+        processedOwnBids.clear();
+        debugLog('StopTask', `Cleared processedOwnBids cache | taskId=${taskId} | size=${processedOwnBids.size}`, { taskId });
+
         // All marketplace cancellation jobs complete - safe to cleanup tracking data
         infoLog('CancellationTracking', `CLEANUP_ON_COMPLETE | taskId=${taskId} | reason=all_marketplaces_complete`, { taskId });
         cancellationTracker.clearTracking(taskId);
@@ -11021,6 +11045,10 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
           if (bidStats[taskId]) {
             delete bidStats[taskId];
           }
+
+          // Clear processedOwnBids cache - prevents memory leak and ensures fresh start on task restart
+          processedOwnBids.clear();
+          debugLog('StopTask', `Cleared processedOwnBids cache | taskId=${taskId} | size=${processedOwnBids.size}`, { taskId });
 
           // Log AFTER snapshot
           const orderCountAfter = await orderCache.countByTask(taskId);
@@ -13844,8 +13872,6 @@ async function _doConnect(): Promise<void> {
         const processingLatency = Date.now() - batch.localReceiveTime;
         const proxyLatency = batch.localReceiveTime - batch.receivedAt;
 
-        infoLog('WebSocket', `[BATCH_PROC] Processing batch | count=${batch.count} | subscriptionType=${batch.subscriptionType} | proxyLatency=${proxyLatency}ms | processingLatency=${processingLatency}ms`);
-
         // Group events by collection for efficient O(1) task matching
         const byCollection = new Map<string, any[]>();
         for (const event of batch.events) {
@@ -13858,8 +13884,6 @@ async function _doConnect(): Promise<void> {
           }
         }
 
-        debugLog('WebSocket', `[BATCH_GROUPED] Collections in batch: ${byCollection.size} | keys: ${Array.from(byCollection.keys()).slice(0, 5).join(', ')}${byCollection.size > 5 ? '...' : ''}`);
-
         // Note: Individual events are already processed via processSingleMessage -> 'message' event
         // This batch handler is primarily for metrics and future optimizations (e.g., bulk dedup)
       } catch (error) {
@@ -13871,11 +13895,6 @@ async function _doConnect(): Promise<void> {
     wsManager.on('message', async (message: any, done?: () => void) => {
       try {
         incrementRawWsMessagesReceived();
-
-        // Log first message and every 100th to confirm connection is working
-        if (rawWsMessagesReceived === 1 || rawWsMessagesReceived % 100 === 0) {
-          infoLog('WebSocket', `MSG_RECV | total=${rawWsMessagesReceived} | type=${message.type || message.eventType || 'unknown'} | marketplace=${message.marketplace || 'unknown'}`);
-        }
 
         // Track ALL bid events at earliest point (before any filtering)
         if (message.eventType === 'BID_CREATED' || message.eventType === 'item_received_bid') {
@@ -13907,7 +13926,6 @@ async function _doConnect(): Promise<void> {
 
         // Process messages without blocking (fire-and-forget with completion tracking)
         // Use .finally() to signal done() when handler completes without serializing messages
-        // Note: testBidCounter moved to handleMarketplaceMessage entry point for accurate downstream counting
         handleMarketplaceMessage(message)
           .catch(error => {
             errorLog('WsConnection', 'Error processing marketplace message', error);
@@ -13952,40 +13970,11 @@ async function _doConnect(): Promise<void> {
  * Handles both counterbid messages and listing price updates
  */
 async function handleMarketplaceMessage(message: any) {
-  // Extract os2TraceId from message for end-to-end delivery verification
-  const os2TraceId = message?.payload?.payload?.os2TraceId || message?.os2TraceId;
 
-  // Log receipt of OS2 message with trace ID
-  if (os2TraceId) {
-    const orderHash = message?.order_hash || message?.payload?.payload?.order_hash;
-    const slug = message?.slug || message?.payload?.payload?.collection?.slug;
-    const maker = message?.maker || message?.payload?.payload?.maker?.address;
-    console.log(`[OS2-Recv] os2TraceId=${os2TraceId} | orderHash=${orderHash} | slug=${slug} | maker=${maker}`);
-  }
-
-  // Test counter: Verify OS2 messages reach this handler (downstream measurement point)
-  testBidCounter.checkAndCount(message);
-
-  // Debug logging: Track test messages reaching the handler (after global dedup)
-  const tempMaker = message?.payload?.payload?.maker?.address?.toLowerCase();
-  if (tempMaker === '0x1b8afd0de8a9368ce635be8b9572c65d8f590b21') {
-    const tempOrderHash = message?.order_hash || message?.payload?.payload?.order_hash;
-    debugLog('BidFlow', `[Server] TEST_BID_REACHED_HANDLER | orderHash=${tempOrderHash?.substring(0, 16)} | eventType=${message.event}`);
-  }
-
-  // Debug logging: Track test bids through the pipeline
-  const testWallet = '0x1b8afd0de8a9368ce635be8b9572c65d8f590b21';
-  const testContract = '0xed5af388653567af2f388e6224dc7c4b3241c544';
-  const testSlug = 'azuki';
   const extractedMaker = (message?.payload?.payload?.maker?.address)?.toLowerCase();
   const extractedContract = (message?.payload?.payload?.asset_contract_criteria?.address)?.toLowerCase();
   const extractedSlug = (message?.payload?.payload?.collection?.slug)?.toLowerCase();
   const extractedOrderHash = message?.order_hash || message?.payload?.payload?.order_hash;
-  const isTestMatch = extractedMaker === testWallet && extractedContract === testContract && extractedSlug === testSlug;
-
-  if (isTestMatch) {
-    debugLog('TestFlow', `[Match] orderHash=${extractedOrderHash?.substring(0, 16)} | entering handleMarketplaceMessage`);
-  }
 
   // Normalize event type field - handle both message.event (OpenSea) and message.eventType (normalized)
   // This fixes the mismatch where messages arrive with message.event but handlers check message.eventType
@@ -14343,7 +14332,6 @@ async function handleCounterBid(message: any) {
     // Track bid events reaching handler
     incrementBidEventsReachingHandler();
     const traceId = message._traceId || 'no-trace';
-    debugLog('MsgFlow', `CP_HANDLER | #${bidEventsReachingHandler} | traceId=${traceId}`);
 
     // Mark that we received a bid event for the watchdog
     wsManager?.markBidEventReceived();
@@ -14427,9 +14415,6 @@ async function handleCounterBidForTask(task: any, message: any) {
       await handleBlurCounterbid(message['1'], task)
     }
     else if (selectedMarketplaces.includes('opensea') && message.marketplace === OPENSEA) {
-      if (isTestMessage) {
-        debugLog('BidFlow', `[Route] CALLING_OPENSEA_HANDLER | orderHash=${orderHash?.substring(0, 16)} | taskId=${task._id}`);
-      }
       await handleOpenseaCounterbid(message, task)
     }
     else if (selectedMarketplaces.includes('magiceden') && message.marketplace === MAGICEDEN) {
@@ -14440,17 +14425,6 @@ async function handleCounterBidForTask(task: any, message: any) {
     else {
       // Message didn't match any marketplace routing condition
       incrementNoMarketplaceMatchCounter();
-
-      // Log for ALL our wallet messages (not just test)
-      const maker = message?.payload?.payload?.maker?.address;
-      if (maker && isOurWallet(maker)) {
-        const orderHash = message?.order_hash || message?.payload?.payload?.order_hash;
-        debugLog('BidFlow', `[Route] NO_MARKETPLACE_MATCH_OWN_WALLET | orderHash=${orderHash?.substring(0, 16)} | marketplace="${message.marketplace}" | type=${typeof message.marketplace} | selectedMarketplaces=${selectedMarketplaces.join(',')} | OPENSEA_CONST="${OPENSEA}" | messageKeys=${Object.keys(message).join(',')}`);
-      }
-
-      if (isTestMessage) {
-        debugLog('BidFlow', `[Route] NO_MARKETPLACE_MATCH | orderHash=${orderHash?.substring(0, 16)} | marketplace=${message.marketplace} | selectedMarketplaces=${selectedMarketplaces.join(',')} | OPENSEA=${OPENSEA}`);
-      }
     }
   } catch (error: any) {
     errorLog('Counterbid', `Failed to process counterbid | task=${task._id} | marketplace=${message.marketplace}`, error);
@@ -14694,7 +14668,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       // Only counterbid if we have an existing order for this token
       const existingTokenOrder = await orderCache.get(task._id.toString(), 'magiceden', tokenId.toString());
       if (!existingTokenOrder) {
-        debugLog('Counterbid', `[ME] ${task.contract.slug} [${tokenId}] | SKIP: No existing bid to defend`);
         return;
       }
 
@@ -15493,113 +15466,56 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const base_price_raw = Number(data?.payload?.payload?.base_price);
     const symbol = data?.payload?.payload?.payment_token?.symbol?.toLowerCase();
     const paymentTokenDecimal = Number(data?.payload?.payload?.payment_token?.decimals);
-    const incomingPriceDisplay = base_price_raw / Math.pow(10, paymentTokenDecimal);
 
-    // Determine bid type for logging
-    const tokenIdForLog = eventType === "item_received_bid" ?
-      data?.payload?.payload?.protocol_data?.parameters?.consideration?.find((item: any) => item.token.toLowerCase() === task.contract.contractAddress.toLowerCase())?.identifierOrCriteria : null;
-    const traitForLog = eventType === "trait_offer" ?
-      `${data?.payload?.payload?.trait_criteria?.trait_type}:${data?.payload?.payload?.trait_criteria?.trait_name}` : null;
-
-    // Test flow tracking: Check if this bid matches test criteria
-    const testWallet = '0x1b8afd0de8a9368ce635be8b9572c65d8f590b21';
-    const testContract = '0xed5af388653567af2f388e6224dc7c4b3241c544';
-    const testSlug = 'azuki';
     const extractedContract = data?.payload?.payload?.asset_contract_criteria?.address?.toLowerCase();
     const extractedSlug = data?.payload?.payload?.collection?.slug?.toLowerCase();
-    const isTestMatch = maker === testWallet && extractedContract === testContract && extractedSlug === testSlug;
 
-    // DEBUG: Log full message structure for test wallet
-    if (maker === testWallet) {
-      console.log(`[PayloadDebug] orderHash=${orderHash?.substring(0, 16)} | topLevelKeys=${Object.keys(data).join(',')} | hasPayload=${!!data.payload} | hasNestedPayload=${!!data?.payload?.payload} | hasAssetCriteria=${!!data?.payload?.payload?.asset_contract_criteria} | contractAddress=${data?.payload?.payload?.asset_contract_criteria?.address}`);
-
-      // Log the FULL nested structure (truncated to 1000 chars)
-      console.log(`[PayloadDebug] FULL_STRUCTURE | ${JSON.stringify(data, null, 2).substring(0, 1000)}`);
-    }
-
-    // DEBUG: Log ALL test wallet messages to see what values we're getting
-    if (maker === testWallet) {
-      debugLog('BidFlow', `[OpenSea] TEST_WALLET_VALUES | orderHash=${orderHash?.substring(0, 16)} | maker=${maker} | extractedContract=${extractedContract} | extractedSlug=${extractedSlug} | isTestMatch=${isTestMatch}`);
-    }
-
-    // ENTRY LOGGING: Log when test bids enter handleOpenseaCounterbid
-    if (isTestMatch) {
-      debugLog('BidFlow', `[OpenSea] ENTERED_HANDLER | orderHash=${orderHash?.substring(0, 16)} | maker=${maker?.substring(0, 10)}`);
-    }
-
-    // Track entry checkpoint for test messages
-    testMessageRegistry.trackCheckpoint(orderHash, 'OPENSEA_HANDLER_ENTRY', 'PASS', undefined, maker, extractedContract, extractedSlug);
+    // Checkpoint 10: Log handler entry
+    debugLog('BidFlow', `OpenSea handler entry | msg.event=${eventType} | msg.eventType=${data.eventType} | orderHash=${orderHash?.substring(0, 16)} | maker=${maker?.substring(0, 10)} | taskId=${task._id}`);
 
     const currentTask = activeTasks.get(task._id)
     if (!currentTask) {
       incrementFilteredCounter('taskNotFound');
-      if (isTestMatch) {
-        debugLog('BidFlow', `[OpenSea] CP_TASK_NOT_FOUND | orderHash=${orderHash?.substring(0, 16)} | taskId=${task._id}`);
-      }
       debugLog('MsgDelivery', `CP_TASK_NOT_FOUND | taskId=${task._id} | slug=${task.contract?.slug} | orderHash=${orderHash?.substring(0, 16) || 'unknown'} | maker=${maker?.substring(0, 10) || 'unknown'}`);
-      testMessageRegistry.trackCheckpoint(orderHash, 'TASK_NOT_FOUND', 'FILTER', 'task not in activeTasks', maker, extractedContract, extractedSlug);
       return;
     }
 
     if (!currentTask?.running) {
       incrementFilteredCounter('taskNotRunning');
-      if (isTestMatch) {
-        debugLog('BidFlow', `[OpenSea] CP_TASK_NOT_RUNNING | orderHash=${orderHash?.substring(0, 16)} | status=${currentTask?.running}`);
-      }
+
       debugLog('MsgDelivery', `CP_TASK_NOT_RUNNING | taskId=${task._id} | slug=${task.contract?.slug} | running=${currentTask?.running} | orderHash=${orderHash?.substring(0, 16) || 'unknown'}`);
-      testMessageRegistry.trackCheckpoint(orderHash, 'TASK_NOT_RUNNING', 'FILTER', 'task.running=false', maker, extractedContract, extractedSlug);
       return;
     }
 
     const taskMarketplaces = currentTask.selectedMarketplaces.map((market) => market.toLowerCase());
     if (!taskMarketplaces.includes("opensea")) {
       incrementFilteredCounter('openseaNotSelected');
-      if (isTestMatch) {
-        debugLog('BidFlow', `[OpenSea] CP_NOT_SELECTED | orderHash=${orderHash?.substring(0, 16)} | selected=${taskMarketplaces.join(',')}`);
-      }
       debugLog('MsgDelivery', `CP_NOT_SELECTED | taskId=${task._id} | slug=${task.contract?.slug} | selected=${taskMarketplaces.join(',')}`);
-      testMessageRegistry.trackCheckpoint(orderHash, 'OPENSEA_NOT_SELECTED', 'FILTER', 'opensea not in task.selectedMarketplaces', maker, extractedContract, extractedSlug);
       return;
     }
 
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) {
       incrementFilteredCounter('openseaNotEnabled');
-      if (isTestMatch) {
-        debugLog('BidFlow', `[OpenSea] CP_NOT_ENABLED | orderHash=${orderHash?.substring(0, 16)}`);
-      }
       warnLog('MsgDelivery', `CP_NOT_ENABLED | OpenSea globally disabled`);
-      if (isTestMatch) {
-        debugLog('TestFlow', `[Filtered] orderHash=${orderHash?.substring(0, 16)} | reason=opensea_globally_disabled`);
-      }
-      testMessageRegistry.trackCheckpoint(orderHash, 'OPENSEA_NOT_ENABLED', 'FILTER', 'opensea globally disabled', maker, extractedContract, extractedSlug);
       return;
     }
 
     // Early exit if incoming bid is from one of our own wallets
     // NOTE: Must be checked BEFORE balance check so own bids are always counted
     if (maker && isOurWallet(maker)) {
-      if (isTestMatch) {
-        debugLog('BidFlow', `[OpenSea] CALLING_INCREMENT_OWN_BID_COUNTER | orderHash=${orderHash?.substring(0, 16)} | maker=${maker}`);
-        debugLog('TestFlow', `[OwnWallet] orderHash=${orderHash?.substring(0, 16)} | incrementing ownBidCounter`);
-      }
-      testMessageRegistry.trackCheckpoint(orderHash, 'INCREMENT_OWN_BID_COUNTER', 'PASS', undefined, maker, extractedContract, extractedSlug);
+      debugLog('BidFlow', `Own wallet bid detected | orderHash=${orderHash?.substring(0, 16)} | maker=${maker?.substring(0, 10)} | taskId=${task._id} | calling incrementOwnBidCounter`);
       incrementOwnBidCounter('opensea', orderHash);
       return;
-    } else if (isTestMatch) {
-      debugLog('BidFlow', `[OpenSea] NOT_OUR_WALLET: Skipping counter | orderHash=${orderHash?.substring(0, 16)} | maker=${maker}`);
-      debugLog('TestFlow', `[NotOurWallet] orderHash=${orderHash?.substring(0, 16)} | maker=${maker} | skipping ownBidCounter`);
-      testMessageRegistry.trackCheckpoint(orderHash, 'NOT_OUR_WALLET', 'FILTER', 'maker not in ourWallets', maker, extractedContract, extractedSlug);
     }
+
+    // External bid detected - process counterbid
+    debugLog('BidFlow', `External bid detected | orderHash=${orderHash?.substring(0, 16)} | maker=${maker?.substring(0, 10)} | taskId=${task._id} | processing counterbid`);
 
     // Early exit if marketplace already stopped due to insufficient balance
     if (isMarketplaceStoppedDueToBalance(taskStatus, task._id.toString(), 'opensea')) {
       incrementFilteredCounter('marketplaceStopped');
       debugLog('Counterbid', `[OS] ${task.contract.slug} | SKIP: Marketplace stopped (insufficient balance)`);
-      if (isTestMatch) {
-        debugLog('TestFlow', `[Filtered] orderHash=${orderHash?.substring(0, 16)} | reason=marketplace_stopped_insufficient_balance`);
-      }
       return;
-
     }
 
     const expiry = getExpiry(currentTask.bidDuration)
@@ -15611,6 +15527,11 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const eth_price: number = Number(data?.payload?.payload?.payment_token?.eth_price)
     const usd_price = Number(data?.payload?.payload?.payment_token?.usd_price)
     const etherPrice = usd_price / eth_price
+
+    // Full message dump for deep debugging (only when OPENSEA_DEBUG_SCHEMA env var is set)
+    if (process.env.OPENSEA_DEBUG_SCHEMA === 'true') {
+      debugLog('BidFlow', `[OS] FULL MESSAGE DUMP | orderHash=${orderHash?.substring(0, 16)} | message=${JSON.stringify(data, null, 2).substring(0, 2000)}`);
+    }
 
 
     let incomingBidAmount = 0
@@ -15709,7 +15630,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       }
 
       debugLog('Counterbid', `[OS] ${task.contract.slug} | Dedup: BLOCKED | hash=${orderHash?.slice(0, 10)}...`, { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
-      testMessageRegistry.trackCheckpoint(orderHash, 'TASK_LEVEL_DEDUP', 'FILTER', 'duplicate orderHash for this task', maker, extractedContract, extractedSlug);
       return;  // Already being processed by another handler
     }
 
@@ -15717,6 +15637,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
     // Comprehensive logging for OpenSea counterbid
     const bidType = tokenId ? `Token #${tokenId}` : trait ? `Trait: ${trait.type}:${trait.value}` : 'Collection';
+
+    // Log outbidOptions configuration for this task
+    debugLog('Counterbid', `[OS] ${task.contract.slug} | OutbidOptions | counterbid=${outbidOptions.counterbid} | outbid=${outbidOptions.outbid} | blurMargin=${outbidOptions.blurOutbidMargin} | osMargin=${outbidOptions.openseaOutbidMargin} | meMargin=${outbidOptions.magicedenOutbidMargin} | taskId=${task._id}`);
 
     if (!outbidOptions.counterbid) {
       return;
@@ -15913,7 +15836,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       // Only counterbid if we have an existing order for this token
       const existingTokenOrder = await orderCache.get(task._id.toString(), 'opensea', tokenId.toString());
       if (!existingTokenOrder) {
-        debugLog('Counterbid', `[OS] ${task.contract.slug} [${tokenId}] | SKIP: No existing bid to defend`);
         return;
       }
 
@@ -25279,11 +25201,6 @@ app.get('/health', (req, res) => {
   res.status(200).json(healthStatus);
 });
 
-// Test bid stats endpoint
-app.get('/bid-stats', (_, res) => {
-  res.json(testBidCounter.getStats());
-});
-
 // Redis connections health endpoint
 app.get('/api/health/redis', async (req, res) => {
   try {
@@ -25327,6 +25244,69 @@ app.get('/api/health/redis', async (req, res) => {
     res.status(500).json({
       status: 'error',
       timestamp: new Date().toISOString(),
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Memory snapshot endpoints
+app.get('/api/memory-snapshots/latest', async (req, res) => {
+  try {
+    const latest = await mongoose.model('MemorySnapshot')
+      .findOne()
+      .sort({ timestamp: -1 })
+      .lean();
+
+    res.json({ success: true, data: latest });
+  } catch (error) {
+    errorLog('MemorySnapshotAPI', 'Failed to fetch latest snapshot', error as Error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+app.get('/api/memory-snapshots', async (req, res) => {
+  try {
+    const { limit = 10, offset = 0 } = req.query;
+
+    const snapshots = await mongoose.model('MemorySnapshot')
+      .find()
+      .sort({ timestamp: -1 })
+      .skip(Number(offset))
+      .limit(Number(limit))
+      .lean();
+
+    const total = await mongoose.model('MemorySnapshot').countDocuments();
+
+    res.json({
+      success: true,
+      data: snapshots,
+      pagination: {
+        total,
+        limit: Number(limit),
+        offset: Number(offset),
+        hasMore: Number(offset) + Number(limit) < total
+      }
+    });
+  } catch (error) {
+    errorLog('MemorySnapshotAPI', 'Failed to fetch snapshots', error as Error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+app.post('/api/memory-snapshots/trigger', async (req, res) => {
+  try {
+    const snapshot = await memorySnapshotService.takeSnapshot();
+    res.json({ success: true, data: snapshot });
+  } catch (error) {
+    errorLog('MemorySnapshotAPI', 'Manual snapshot failed', error as Error);
+    res.status(500).json({
+      success: false,
       error: error instanceof Error ? error.message : 'Unknown error'
     });
   }
@@ -25976,12 +25956,6 @@ app.get('/api/dedup-cache-stats', (req, res) => {
       ttl: '5 minutes',
       type: 'task-specific (orderHash-taskId)'
     },
-    seenWsMessages: {
-      size: wsManager?.getSeenWsMessagesSize() || 0,
-      capacity: 50000,
-      ttl: '1 hour',
-      type: 'global (marketplace:orderHash)'
-    },
     processedOwnBids: {
       size: processedOwnBids.size,
       capacity: 50000,
@@ -25989,16 +25963,6 @@ app.get('/api/dedup-cache-stats', (req, res) => {
       type: 'final counter dedup (orderHash only)'
     }
   });
-});
-
-// Test message flow endpoint
-app.get('/api/test-message-flow', (req, res) => {
-  res.json(testMessageRegistry.getStats());
-});
-
-app.post('/api/test-message-flow/reset', (req, res) => {
-  testMessageRegistry.reset();
-  res.json({ success: true, message: 'Test message tracking reset' });
 });
 
 // Failed task retry queue visibility endpoint
@@ -27867,29 +27831,26 @@ export function trackBidRate(marketplace: 'opensea' | 'magiceden' | 'blur', task
 
 /**
  * Increments memory-based counter for our own bids when we detect we're the maker
- * @param skipDedup - When true, suppresses duplicate log messages (used when loading existing orders at task start)
- *                    Note: Deduplication ALWAYS happens regardless of this flag - it only controls logging
+ * Uses unbounded Set for deduplication - cleared on task stop/restart
  */
-export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', orderHash: string, skipDedup: boolean = false) {
+export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', orderHash: string) {
   try {
-    // ALWAYS use addIfNotExists for atomic check-and-add - skipDedup only controls logging, NOT whether to skip duplicates
-    // This fixes the bug where skipDedup=true caused the same orderHash to be counted multiple times
-    if (!processedOwnBids.addIfNotExists(orderHash, Date.now())) {
+    // Normalize orderHash to always have 0x prefix for consistent deduplication
+    // This fixes bug where same orderHash with/without 0x prefix was counted twice
+    const normalizedHash = orderHash?.startsWith('0x') ? orderHash : `0x${orderHash}`;
+
+    // Check if already processed (unbounded Set deduplication)
+    if (!addOwnBidIfNotExists(normalizedHash)) {
       // Already counted in this session - skip silently (duplicates are expected behavior)
       incrementOwnBidsDeduplicated(marketplace);
-      debugLog('BidCounter', `DUPLICATE_SKIPPED | marketplace=${marketplace} | orderHash=${orderHash} | currentCount=${ownBidCounts[marketplace] || 0}`);
+      debugLog('BidFlow', `DUPLICATE_SKIPPED | marketplace=${marketplace} | orderHash=${normalizedHash.substring(0, 16)} | reason=already_counted`);
       return ownBidCounts[marketplace] || 0;
     }
 
     // New bid - increment counter
-    if (!ownBidCounts[marketplace]) {
-      ownBidCounts[marketplace] = 0;
-    }
-    ownBidCounts[marketplace]++;
+    ownBidCounts[marketplace] = (ownBidCounts[marketplace] || 0) + 1;
 
-    debugLog('BidCounter', `OWN_BID_COUNTED | marketplace=${marketplace} | orderHash=${orderHash} | total=${ownBidCounts[marketplace]}`);
-
-    // BoundedCache handles TTL and capacity cleanup automatically - no manual cleanup needed
+    debugLog('BidFlow', `OWN_BID_COUNTED | marketplace=${marketplace} | orderHash=${normalizedHash.substring(0, 16)} | count=${ownBidCounts[marketplace]}`);
 
     return ownBidCounts[marketplace];
   } catch (error) {

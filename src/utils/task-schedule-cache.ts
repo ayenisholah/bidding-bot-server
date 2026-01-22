@@ -53,7 +53,6 @@ class TaskScheduleCache {
       }
 
       const data = JSON.parse(result) as TaskScheduleData;
-      debugLog('TaskScheduleCache', `GET | key=${key} | status=${data.status}`);
       return data;
     } catch (error) {
       errorLog('TaskScheduleCache', `Failed to get schedule | key=${key}`, error);
@@ -95,8 +94,6 @@ class TaskScheduleCache {
       await withRedisRetry(async () => {
         await redis.setex(key, SCHEDULE_TTL_SECONDS, JSON.stringify(scheduleData));
       }, 'TaskScheduleCache.setSchedule');
-
-      debugLog('TaskScheduleCache', `SET | key=${key} | status=${scheduleData.status} | ttl=${SCHEDULE_TTL_SECONDS}s`);
     } catch (error) {
       errorLog('TaskScheduleCache', `Failed to set schedule | key=${key}`, error);
     }
@@ -115,7 +112,6 @@ class TaskScheduleCache {
     try {
       const existing = await this.getSchedule(taskId, marketplace);
       if (!existing) {
-        debugLog('TaskScheduleCache', `UPDATE_SKIP | key=${key} | reason=not_found`);
         return null;
       }
 
@@ -132,7 +128,6 @@ class TaskScheduleCache {
         await redis.setex(key, SCHEDULE_TTL_SECONDS, JSON.stringify(scheduleData));
       }, 'TaskScheduleCache.updateSchedule');
 
-      debugLog('TaskScheduleCache', `UPDATE | key=${key} | status=${scheduleData.status}`);
       return scheduleData;
     } catch (error) {
       errorLog('TaskScheduleCache', `Failed to update schedule | key=${key}`, error);
@@ -151,8 +146,6 @@ class TaskScheduleCache {
       await withRedisRetry(async () => {
         await redis.del(key);
       }, 'TaskScheduleCache.deleteSchedule');
-
-      debugLog('TaskScheduleCache', `DELETE | key=${key}`);
     } catch (error) {
       errorLog('TaskScheduleCache', `Failed to delete schedule | key=${key}`, error);
     }

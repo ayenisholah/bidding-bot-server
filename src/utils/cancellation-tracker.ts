@@ -52,7 +52,6 @@ class CancellationTracker {
     Object.entries(marketplaceTotals).forEach(([marketplace, total]) => {
       const cacheKey = `${taskId}-${marketplace}-total`;
       this.marketplaceTotalsCache.set(cacheKey, total);
-      debugLog('StopTracker', `SET_MP_TOTAL_ENTRY | cacheKey=${cacheKey} | total=${total}`);
     });
 
     infoLog('StopTracker', `SET_MP_TOTALS_DONE | taskId=${taskId} | cacheSize=${this.marketplaceTotalsCache.size}`);
@@ -63,7 +62,6 @@ class CancellationTracker {
    * @param completionCount Number of cancellations completed (default: 1)
    */
   recordCompletion(taskId: string, completionCount: number = 1, marketplace?: string): void {
-    debugLog('StopTracker', `RECORD_COMPLETION | taskId=${taskId} | count=${completionCount} | marketplace=${marketplace || 'global'}`);
 
     // For global cancellations, we need to initialize marketplace-specific tracking
     if (this.hasTaskLevelTracking(taskId) && marketplace) {
@@ -98,12 +96,9 @@ class CancellationTracker {
       tracking.completedCancellations = Math.min(tracking.completedCancellations + completionCount, tracking.totalBids);
       const after = tracking.completedCancellations;
 
-      debugLog('StopTracker', `RECORD_COMPLETION_DONE | key=${key} | before=${before} | count=${completionCount} | after=${after} | total=${tracking.totalBids} | pct=${((after / tracking.totalBids) * 100).toFixed(2)}%`);
     } else {
       // Late completion arrival - tracking was already cleared (task restarted or cancellation completed)
-      // This is expected behavior, not a warning - silently ignore to reduce log noise
-      // The 8,926 RECORD_NO_TRACKING warnings in logs are from this benign race condition
-      debugLog('StopTracker', `RECORD_NO_TRACKING | taskId=${taskId} | marketplace=${marketplace || 'global'} | key=${key} | reason=tracking_already_cleared_expected_late_arrival`);
+      // This is expected behavior - silently ignore
     }
 
     // Fix 4: ALSO update task-level tracking when marketplace-specific completion is recorded
@@ -115,7 +110,6 @@ class CancellationTracker {
         const taskBefore = taskTracking.completedCancellations;
         taskTracking.completedCancellations = Math.min(taskTracking.completedCancellations + completionCount, taskTracking.totalBids);
         const taskAfter = taskTracking.completedCancellations;
-        debugLog('StopTracker', `RECORD_COMPLETION_TASK_LEVEL | taskId=${taskId} | before=${taskBefore} | count=${completionCount} | after=${taskAfter} | total=${taskTracking.totalBids}`);
       }
     }
   }
@@ -128,23 +122,17 @@ class CancellationTracker {
     const key = this.getKey(taskId, marketplace);
     const tracking = this.trackingMap.get(key);
 
-    debugLog('StopTracker', `GET_PCT | taskId=${taskId} | marketplace=${marketplace || 'global'} | key=${key} | hasTracking=${!!tracking}`);
-
     if (!tracking) {
-      debugLog('StopTracker', `GET_PCT_NO_TRACKING | key=${key} | result=null`);
       return null;
     }
 
     if (tracking.totalBids === 0) {
-      debugLog('StopTracker', `GET_PCT_ZERO_BIDS | key=${key} | result=100`);
       return 100; // No bids to cancel = 100% complete
     }
 
     // Calculate percentage with 2 decimal places
     const percentage = (tracking.completedCancellations / tracking.totalBids) * 100;
     const result = Math.min(100, parseFloat(percentage.toFixed(2)));
-
-    debugLog('StopTracker', `GET_PCT_RESULT | key=${key} | completed=${tracking.completedCancellations} | total=${tracking.totalBids} | result=${result}%`);
 
     return result;
   }
@@ -180,8 +168,6 @@ class CancellationTracker {
     const taskLevelKey = this.getKey(taskId);
     const taskLevelTracking = this.trackingMap.get(taskLevelKey);
 
-    debugLog('StopTracker', `GET_AGG_PCT | taskId=${taskId} | taskLevelKey=${taskLevelKey} | hasTaskLevelTracking=${!!taskLevelTracking}`);
-
     if (taskLevelTracking) {
       // We have task-level tracking, calculate from marketplace completions
       let totalCompleted = 0;
@@ -200,11 +186,8 @@ class CancellationTracker {
         }
       });
 
-      debugLog('StopTracker', `GET_AGG_PCT_BREAKDOWN | taskId=${taskId} | opensea=${mpBreakdown.opensea} | magiceden=${mpBreakdown.magiceden} | blur=${mpBreakdown.blur} | totalCompleted=${totalCompleted} | taskLevelTotal=${taskLevelTracking.totalBids}`);
-
       // Calculate percentage based on task-level total
       if (taskLevelTracking.totalBids === 0) {
-        debugLog('StopTracker', `GET_AGG_PCT_ZERO_BIDS | taskId=${taskId} | result=100`);
         return 100;
       }
 
@@ -217,7 +200,6 @@ class CancellationTracker {
     }
 
     // No task-level tracking, return null
-    debugLog('StopTracker', `GET_AGG_PCT_NO_TRACKING | taskId=${taskId} | result=null`);
     return null;
   }
 

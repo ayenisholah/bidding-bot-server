@@ -858,8 +858,6 @@ async function sendSignedOrderData(
     addActiveRequest(taskId, controller);
     const bidStartTime = Date.now();
 
-    debugLog('InFlightBid', `ENTERING_LIMITER | taskId=${taskId} | marketplace=magiceden | collection=${slug} | timestamp=${bidStartTime}`, { taskId, marketplace: 'magiceden' });
-
     try {
 
       const startTime = Date.now();
@@ -872,8 +870,6 @@ async function sendSignedOrderData(
           debugLog('InFlightBid', `BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=magiceden | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'magiceden' });
           throw new Error('Task stopped while waiting in limiter queue');
         }
-
-        debugLog('InFlightBid', `EXECUTING_REQUEST | taskId=${taskId} | marketplace=magiceden | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'magiceden' });
 
         return axiosInstance.post(
           url,
@@ -944,11 +940,6 @@ async function sendSignedOrderData(
         }, 100); // Batch every 100ms
       }
       trackBidRate("magiceden", taskId)
-      // Log successful bid
-      const sourceTag = source === 'counterbid' ? '-CB' : '';
-      const bidType = tokenId ? 'Token' : (trait ? 'Trait' : 'Coll');
-      const offerPriceEth = Number(offerPrice) / Math.pow(10, decimal);
-      debugLog('BidFlow', `[ME-${bidType}${sourceTag}] ${slug}${tokenId ? '#' + tokenId : ''} | SUCCESS | identifier=${identifier} | price=${offerPriceEth} ${currencySymbol}`, { taskId, marketplace: 'magiceden', identifier: identifier.toString() });
       console.log(MAGENTA, successMessage, RESET);
 
       if (!task) return
@@ -2229,7 +2220,6 @@ function addActiveRequest(taskId: string, controller: AbortController) {
     activeRequests.set(taskId, []);
   }
   activeRequests.get(taskId)?.push(controller);
-  debugLog('HttpAbort', `REGISTER | marketplace=magiceden | taskId=${taskId} | activeCount=${activeRequests.get(taskId)?.length || 0}`);
 }
 
 function removeActiveRequest(taskId: string, controller: AbortController): void {
@@ -2239,7 +2229,6 @@ function removeActiveRequest(taskId: string, controller: AbortController): void 
     if (index > -1) controllers.splice(index, 1);
     if (controllers.length === 0) activeRequests.delete(taskId);
   }
-  debugLog('HttpAbort', `DEREGISTER | marketplace=magiceden | taskId=${taskId} | remainingCount=${activeRequests.get(taskId)?.length || 0}`);
 }
 
 interface TokenDataList {

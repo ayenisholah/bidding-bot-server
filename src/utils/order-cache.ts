@@ -91,6 +91,7 @@ class OrderCache {
       // Add to task orders set (no TTL - managed manually)
       pipeline.sadd(this.getTaskOrdersKey(order.taskId), key);
 
+      
       // Add to task/marketplace orders set
       pipeline.sadd(this.getTaskOrdersKey(order.taskId, order.marketplace), key);
 

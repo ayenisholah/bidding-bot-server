@@ -35,9 +35,19 @@ const getLogFilePath = () => {
   return path.join(LOG_DIR, `process-lifecycle-${date}.log`);
 };
 
-// Memory usage tracking interval (5 minutes)
+// Memory usage tracking interval (30 seconds for detailed crash debugging)
 let memoryMonitorInterval: NodeJS.Timeout | null = null;
-const MEMORY_MONITOR_INTERVAL = 5 * 60 * 1000;
+const MEMORY_MONITOR_INTERVAL = 30 * 1000;  // Changed from 5 minutes to 30 seconds
+
+// Track previous memory snapshot for delta calculation
+let lastMemorySnapshot: {
+  heapUsed: number;
+  heapTotal: number;
+  rss: number;
+  external: number;
+  arrayBuffers: number;
+  timestamp: number;
+} | null = null;
 
 // OOM Prevention thresholds (2026-01-15)
 // RSS can grow without heap growth (external buffers, native code)
@@ -88,6 +98,137 @@ function getMemoryUsage(): Record<string, number> {
     heapTotal: Math.round(usage.heapTotal / 1024 / 1024),
     rss: Math.round(usage.rss / 1024 / 1024),
     external: Math.round(usage.external / 1024 / 1024),
+    arrayBuffers: Math.round(usage.arrayBuffers / 1024 / 1024),
+  };
+}
+
+/**
+ * Get detailed memory usage with growth rate (delta from last sample)
+ * Used for crash debugging - logs every 30 seconds
+ */
+function getDetailedMemoryUsage(): {
+  current: Record<string, number>;
+  delta: Record<string, number> | null;
+  gcAvailable: boolean;
+} {
+  const usage = process.memoryUsage();
+  const now = Date.now();
+
+  const current = {
+    heapUsed: Math.round(usage.heapUsed / 1024 / 1024),
+    heapTotal: Math.round(usage.heapTotal / 1024 / 1024),
+    rss: Math.round(usage.rss / 1024 / 1024),
+    external: Math.round(usage.external / 1024 / 1024),
+    arrayBuffers: Math.round(usage.arrayBuffers / 1024 / 1024),
+  };
+
+  let delta: Record<string, number> | null = null;
+
+  if (lastMemorySnapshot) {
+    const timeDeltaSec = (now - lastMemorySnapshot.timestamp) / 1000;
+    delta = {
+      heapUsed: current.heapUsed - lastMemorySnapshot.heapUsed,
+      heapTotal: current.heapTotal - lastMemorySnapshot.heapTotal,
+      rss: current.rss - lastMemorySnapshot.rss,
+      external: current.external - lastMemorySnapshot.external,
+      arrayBuffers: current.arrayBuffers - lastMemorySnapshot.arrayBuffers,
+      timeDeltaSec: Math.round(timeDeltaSec),
+    };
+  }
+
+  // Update last snapshot
+  lastMemorySnapshot = {
+    ...current,
+    timestamp: now,
+  };
+
+  return {
+    current,
+    delta,
+    gcAvailable: typeof global.gc === 'function',
+  };
+}
+
+/**
+ * Get memory stats for API consumption (does NOT update lastMemorySnapshot)
+ * Returns current memory usage, delta from last logged sample, and thresholds
+ */
+export function getMemoryStats(): {
+  current: {
+    heapUsed: number;
+    heapTotal: number;
+    rss: number;
+    external: number;
+    arrayBuffers: number;
+  };
+  delta: {
+    heapUsed: number;
+    heapTotal: number;
+    rss: number;
+    external: number;
+    arrayBuffers: number;
+    timeDeltaSec: number;
+  } | null;
+  thresholds: {
+    warningMB: number;
+    criticalMB: number;
+  };
+  status: 'normal' | 'warning' | 'critical';
+  gcAvailable: boolean;
+  uptime: number;
+  pid: number;
+} {
+  const usage = process.memoryUsage();
+  const now = Date.now();
+
+  const current = {
+    heapUsed: Math.round(usage.heapUsed / 1024 / 1024),
+    heapTotal: Math.round(usage.heapTotal / 1024 / 1024),
+    rss: Math.round(usage.rss / 1024 / 1024),
+    external: Math.round(usage.external / 1024 / 1024),
+    arrayBuffers: Math.round(usage.arrayBuffers / 1024 / 1024),
+  };
+
+  let delta: {
+    heapUsed: number;
+    heapTotal: number;
+    rss: number;
+    external: number;
+    arrayBuffers: number;
+    timeDeltaSec: number;
+  } | null = null;
+
+  if (lastMemorySnapshot) {
+    const timeDeltaSec = (now - lastMemorySnapshot.timestamp) / 1000;
+    delta = {
+      heapUsed: current.heapUsed - lastMemorySnapshot.heapUsed,
+      heapTotal: current.heapTotal - lastMemorySnapshot.heapTotal,
+      rss: current.rss - lastMemorySnapshot.rss,
+      external: current.external - lastMemorySnapshot.external,
+      arrayBuffers: current.arrayBuffers - lastMemorySnapshot.arrayBuffers,
+      timeDeltaSec: Math.round(timeDeltaSec),
+    };
+  }
+
+  // Determine status based on RSS thresholds
+  let status: 'normal' | 'warning' | 'critical' = 'normal';
+  if (current.rss > MEMORY_CRITICAL_MB) {
+    status = 'critical';
+  } else if (current.rss > MEMORY_WARNING_MB) {
+    status = 'warning';
+  }
+
+  return {
+    current,
+    delta,
+    thresholds: {
+      warningMB: MEMORY_WARNING_MB,
+      criticalMB: MEMORY_CRITICAL_MB,
+    },
+    status,
+    gcAvailable: typeof global.gc === 'function',
+    uptime: Math.round(process.uptime()),
+    pid: process.pid,
   };
 }
 
@@ -136,13 +277,16 @@ export function logProcessExit(code: number, reason: string): void {
 }
 
 /**
- * Log memory usage (called periodically)
+ * Log memory usage (called periodically every 30 seconds)
+ * Includes delta from last sample to track memory growth rate
  */
 export function logMemoryUsage(): void {
-  const memory = getMemoryUsage();
+  const { current, delta, gcAvailable } = getDetailedMemoryUsage();
 
-  writeLogSync('DEBUG', '📊 MEMORY USAGE', {
-    ...memory,
+  writeLogSync('DEBUG', '📊 MEMORY_SNAPSHOT', {
+    ...current,
+    delta: delta || 'first_sample',
+    gcAvailable,
     uptime: Math.round(process.uptime()),
     pid: process.pid,
   });
@@ -159,17 +303,19 @@ export function logSignal(signal: string): void {
 }
 
 /**
- * Log crash/error
+ * Log crash/error with detailed memory stats including growth rate
  */
 export function logCrash(error: Error, type: 'uncaughtException' | 'unhandledRejection'): void {
-  const memory = getMemoryUsage();
+  const { current, delta, gcAvailable } = getDetailedMemoryUsage();
 
   writeLogSync('ERROR', `💥 ${type.toUpperCase()}`, {
     error: error.message,
     stack: error.stack,
     pid: process.pid,
     uptime: Math.round(process.uptime()),
-    memory,
+    memory: current,
+    memoryDelta: delta || 'first_sample',
+    gcAvailable,
   });
 }
 
