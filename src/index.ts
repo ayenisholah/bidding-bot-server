@@ -108,12 +108,16 @@ import {
   ownBidCounts,
   processedOwnBids,
   addOwnBidIfNotExists,
+  getProcessedOwnBidsStats,
   currentTokenIds,
   currentTraits,
   taskStatus,
   bestOffers,
   floorPrices,
   balances,
+  getWalletBalance,
+  incrementWalletBalance,
+  getBalancesStats,
   collectionFloorCache,
   FLOOR_STALE_THRESHOLD,
   warningBids,
@@ -3306,6 +3310,56 @@ async function startServer() {
     }, FIFTEEN_MINUTES);
 
     debugLog('STARTUP', 'Memory monitoring initialized (15-minute interval)');
+
+    // Initialize periodic cleanup for stale failed task entries (every hour)
+    setInterval(() => {
+      const oneHourAgo = Date.now() - 3600000;
+      let removedCount = 0;
+
+      // Clean taskPreprocessing (stale > 1 hour)
+      for (const [taskId, data] of taskPreprocessing.entries()) {
+        if ((data as any).timestamp && (data as any).timestamp < oneHourAgo) {
+          taskPreprocessing.delete(taskId);
+          removedCount++;
+        }
+      }
+
+      // Clean failed queues (stale > 1 hour or task no longer exists)
+      for (const taskId of failedTaskStartQueue.keys()) {
+        if (!taskStatus[taskId]) {
+          failedTaskStartQueue.delete(taskId);
+          failedTaskStopQueue.delete(taskId);
+          queueingProgress.delete(taskId);
+          removedCount++;
+        }
+      }
+
+      if (removedCount > 0) {
+        debugLog('MemoryCleanup', `Cleaned stale failed task entries | removed=${removedCount}`);
+      }
+    }, 3600000); // Every hour
+
+    debugLog('STARTUP', 'Failed task cleanup initialized (hourly interval)');
+
+    // Initialize periodic cleanup for collectionFloorCache (every 5 minutes)
+    setInterval(() => {
+      const now = Date.now();
+      let removedCount = 0;
+
+      for (const [key, state] of collectionFloorCache.entries()) {
+        // Remove entries older than FLOOR_STALE_THRESHOLD + 5 seconds
+        if (now - state.lastFetched > FLOOR_STALE_THRESHOLD + 5000) {
+          collectionFloorCache.delete(key);
+          removedCount++;
+        }
+      }
+
+      if (removedCount > 0) {
+        debugLog('MemoryCleanup', `collectionFloorCache cleanup | removed=${removedCount} stale entries`);
+      }
+    }, 5 * 60 * 1000); // Every 5 minutes
+
+    debugLog('STARTUP', 'collectionFloorCache cleanup initialized (5-minute interval)');
 
     // Start all tasks that have running: true in database
     // This handles server restarts where tasks were previously running
@@ -9835,11 +9889,11 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
       const mp = order.marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
       counts[mp]++;
 
-      // Pre-populate dedup Set WITHOUT incrementing counter
+      // Pre-populate dedup cache WITHOUT incrementing counter
       // Only WebSocket confirmations should increment ownBidCounts
       if (order.orderHash) {
         const normalizedHash = order.orderHash.startsWith('0x') ? order.orderHash : `0x${order.orderHash}`;
-        processedOwnBids.add(normalizedHash);
+        processedOwnBids.set(normalizedHash, true);
         debugLog('TaskInit', `Pre-populated dedup cache | marketplace=${mp} | orderHash=${normalizedHash.substring(0, 16)} | taskId=${task._id}`);
       }
     }
@@ -11078,6 +11132,13 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
           // Clear processedOwnBids cache - prevents memory leak and ensures fresh start on task restart
           processedOwnBids.clear();
           debugLog('StopTask', `Cleared processedOwnBids cache | taskId=${taskId} | size=${processedOwnBids.size}`, { taskId });
+
+          // Clear failed task tracking maps (prevents unbounded accumulation)
+          taskPreprocessing.delete(taskId);
+          queueingProgress.delete(taskId);
+          failedTaskStartQueue.delete(taskId);
+          failedTaskStopQueue.delete(taskId);
+          debugLog('StopTask', `Cleared failed task tracking maps | taskId=${taskId}`, { taskId });
 
           // Log AFTER snapshot
           const orderCountAfter = await orderCache.countByTask(taskId);
@@ -14038,14 +14099,6 @@ async function handleMarketplaceMessage(message: any) {
 }
 
 
-// Helper function to get balance for a specific wallet, contract, and marketplace
-function getWalletContractBalance(walletAddress: string, contractAddress: string, marketplace: 'opensea' | 'magiceden' | 'blur'): number {
-  const walletKey = walletAddress.toLowerCase();
-  const contractKey = contractAddress.toLowerCase();
-
-  return balances[walletKey]?.[contractKey]?.[marketplace] || 0;
-}
-
 // Check if a token belongs to a rarity category (LEGENDARY/EPIC/RARE)
 async function isTokenInRarityCategory(
   collectionSlug: string,
@@ -14184,26 +14237,8 @@ async function updateBalancesForItemSold(message: any) {
     // Trigger auto-listing for the purchased item
     await triggerAutoListingForPurchase(wallet, contractAddress, tokenId, price, marketplace);
 
-    const walletAddressKey = wallet.address.toLowerCase();
-
-
-    // Initialize wallet balance structure if not exists
-    if (!balances[walletAddressKey]) {
-      balances[walletAddressKey] = {};
-    }
-
-    // Initialize contract balance structure if not exists
-    if (!balances[walletAddressKey][contractAddress]) {
-      balances[walletAddressKey][contractAddress] = {
-        opensea: 0,
-        magiceden: 0,
-        blur: 0
-      };
-    }
-
     // Increment the balance for the specific marketplace
-    balances[walletAddressKey][contractAddress][marketplace] =
-      (balances[walletAddressKey][contractAddress][marketplace] || 0) + 1;
+    incrementWalletBalance(wallet.address, contractAddress, marketplace);
 
     // Find all tasks for this wallet and contract, then check which ones match the purchased token
     try {
@@ -14228,9 +14263,9 @@ async function updateBalancesForItemSold(message: any) {
       }
 
       if (matchedTaskCount > 0) {
-        debugLog('Balance', `ITEM_SOLD | Matched ${matchedTaskCount}/${tasks.length} task(s) | wallet=${walletAddressKey.slice(0, 10)}... | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId}`);
+        debugLog('Balance', `ITEM_SOLD | Matched ${matchedTaskCount}/${tasks.length} task(s) | wallet=${wallet.address.slice(0, 10)}... | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId}`);
       } else if (tasks.length > 0) {
-        debugLog('Balance', `ITEM_SOLD | No matching tasks for token ${tokenId} | checked ${tasks.length} task(s) | wallet=${walletAddressKey.slice(0, 10)}...`);
+        debugLog('Balance', `ITEM_SOLD | No matching tasks for token ${tokenId} | checked ${tasks.length} task(s) | wallet=${wallet.address.slice(0, 10)}...`);
       }
     } catch (dbError) {
       errorLog('Balance', 'Error persisting actualPurchase to database', dbError instanceof Error ? dbError : new Error(String(dbError)));
@@ -24033,12 +24068,13 @@ app.post('/api/task/:taskId/reset-purchases', async (req, res) => {
     // Clear in-memory balance cache for this task's wallet/contract
     const walletAddress = result.wallet?.toLowerCase();
     const contractAddress = result.contract?.contractAddress?.toLowerCase();
-    if (walletAddress && contractAddress && balances[walletAddress]?.[contractAddress]) {
-      balances[walletAddress][contractAddress] = {
+    if (walletAddress && contractAddress) {
+      const balanceKey = `${walletAddress}:${contractAddress}`;
+      balances.set(balanceKey, {
         opensea: 0,
         magiceden: 0,
         blur: 0
-      };
+      });
     }
 
     debugLog('API', `Reset actualPurchase for task ${taskId} | slug=${result.contract.slug}`);

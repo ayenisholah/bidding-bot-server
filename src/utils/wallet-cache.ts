@@ -19,6 +19,7 @@ class WalletCache {
   private decryptedKeys: Map<string, { key: string; timestamp: number }> = new Map();
   private readonly CACHE_TTL = 30 * 60 * 1000; // 30 minutes
   private readonly KEY_TTL = 5 * 60 * 1000; // 5 minutes for decrypted keys
+  private readonly QUERY_TIMEOUT = 30000; // 30 seconds
   private password: string | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;
 
@@ -31,6 +32,16 @@ class WalletCache {
   constructor() {
     // Start cleanup interval
     this.cleanupInterval = setInterval(() => this.cleanup(), 60 * 1000); // Run every minute
+  }
+
+  /**
+   * Wrap MongoDB query with timeout to prevent hung requests
+   */
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(`MongoDB timeout: ${operation}`)), timeoutMs);
+    });
+    return Promise.race([promise, timeoutPromise]);
   }
 
   async initialize(password: string) {
@@ -79,7 +90,11 @@ class WalletCache {
     // Create new request and track it to prevent thundering herd
     const request = (async (): Promise<IWallet | null> => {
       try {
-        const wallet = await Wallet.findOne({ address: normalizedAddress }).lean();
+        const wallet = await this.withTimeout(
+          Wallet.findOne({ address: normalizedAddress }).lean(),
+          this.QUERY_TIMEOUT,
+          `getWalletByAddress(${normalizedAddress})`
+        );
         if (wallet) {
           this.cache.set(normalizedAddress, {
             _id: wallet._id,
@@ -152,7 +167,11 @@ class WalletCache {
     // Create new request and track it to prevent thundering herd
     const request = (async (): Promise<IWallet[]> => {
       try {
-        const wallets = await Wallet.find({ tasks: taskId }).lean();
+        const wallets = await this.withTimeout(
+          Wallet.find({ tasks: taskId }).lean(),
+          this.QUERY_TIMEOUT,
+          `findWalletsByTaskId(${taskId})`
+        );
         // Update cache
         for (const wallet of wallets) {
           const address = wallet.address.toLowerCase();
@@ -211,7 +230,11 @@ class WalletCache {
     // Create new request and track it to prevent thundering herd
     const request = (async (): Promise<IWallet | null> => {
       try {
-        const wallet = await Wallet.findById(walletId).lean();
+        const wallet = await this.withTimeout(
+          Wallet.findById(walletId).lean(),
+          this.QUERY_TIMEOUT,
+          `getWalletById(${walletId})`
+        );
         if (wallet) {
           const address = wallet.address.toLowerCase();
           this.cache.set(address, {

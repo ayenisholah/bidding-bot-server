@@ -49,10 +49,10 @@ let lastMemorySnapshot: {
   timestamp: number;
 } | null = null;
 
-// OOM Prevention thresholds (2026-01-15)
+// OOM Prevention thresholds (2026-01-23 - Optimized for 3.5GB container limit)
 // RSS can grow without heap growth (external buffers, native code)
-const MEMORY_WARNING_MB = 2000;  // 2GB warning threshold
-const MEMORY_CRITICAL_MB = 3000; // 3GB critical - trigger GC
+const MEMORY_WARNING_MB = 2200;  // 2.2GB warning threshold (63% of 3.5GB limit)
+const MEMORY_CRITICAL_MB = 2700; // 2.7GB critical - trigger GC (77% of 3.5GB limit)
 const MEMORY_GUARD_INTERVAL = 30 * 1000; // Check every 30 seconds
 let memoryGuardInterval: NodeJS.Timeout | null = null;
 

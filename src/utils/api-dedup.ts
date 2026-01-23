@@ -21,6 +21,9 @@ let stats = {
   activeRequests: 0,
 };
 
+// Timeout for requests (2 minutes)
+const REQUEST_TIMEOUT = 120000; // 2 minutes
+
 /**
  * Execute an API call with automatic deduplication.
  *
@@ -46,9 +49,11 @@ export async function apiDedup<T>(
     debug?: boolean;
     /** Category for debug logs (default: 'API') */
     category?: string;
+    /** Timeout in milliseconds (default: 120000 / 2 minutes) */
+    timeout?: number;
   }
 ): Promise<T> {
-  const { debug = false, category = 'API' } = options || {};
+  const { debug = false, category = 'API', timeout = REQUEST_TIMEOUT } = options || {};
 
   stats.totalRequests++;
 
@@ -57,7 +62,7 @@ export async function apiDedup<T>(
   if (pending) {
     stats.dedupedRequests++;
     if (debug) {
-      debugLog(category, `[Dedup] SHARED | key=${key} | active=${pendingRequests.size} | saved=${stats.dedupedRequests}/${stats.totalRequests}`);
+      debugLog(category, `[Dedup] HIT | key=${key} | active=${pendingRequests.size} | saved=${stats.dedupedRequests}/${stats.totalRequests}`);
     }
     return pending;
   }
@@ -68,25 +73,29 @@ export async function apiDedup<T>(
     debugLog(category, `[Dedup] NEW | key=${key} | active=${pendingRequests.size + 1}`);
   }
 
-  const startTime = Date.now();
+  // Create timeout promise
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error(`Request timeout after ${timeout}ms`)), timeout);
+  });
 
-  // Create the request promise and track it
-  const request = fetchFn()
+  // Race between request and timeout
+  const request = Promise.race([fetchFn(), timeoutPromise])
     .then(result => {
-      const elapsed = Date.now() - startTime;
       pendingRequests.delete(key);
       stats.activeRequests--;
       if (debug) {
-        debugLog(category, `[Dedup] DONE | key=${key} | elapsed=${elapsed}ms | active=${pendingRequests.size}`);
+        debugLog(category, `[Dedup] RESOLVED | key=${key}`);
       }
       return result;
     })
     .catch(error => {
-      const elapsed = Date.now() - startTime;
       pendingRequests.delete(key);
       stats.activeRequests--;
-      if (debug) {
-        warnLog(category, `[Dedup] ERROR | key=${key} | elapsed=${elapsed}ms | error=${error?.message || 'unknown'}`);
+
+      if (error?.message?.includes('timeout')) {
+        warnLog(category, `[Dedup] TIMEOUT | key=${key} | Cleaned up stalled request`);
+      } else if (debug) {
+        warnLog(category, `[Dedup] ERROR | key=${key} | error=${error?.message || 'unknown'}`);
       }
       throw error;
     });

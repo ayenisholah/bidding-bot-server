@@ -26,6 +26,8 @@ class ApprovalCache {
   private readonly CACHE_TTL = 24 * 60 * 60 * 1000; // 1 day
   private readonly REDIS_PREFIX = '{approval}';
   private readonly REDIS_TTL = 86400; // 1 day in seconds
+  private readonly MAX_CACHE_SIZE = 50000; // 50K wallet-token-marketplace combos (~7.5MB)
+  private cleanupInterval: NodeJS.Timeout | null = null;
 
   /**
    * Get cache key for wallet/marketplace/token combination
@@ -155,6 +157,21 @@ class ApprovalCache {
   ): Promise<void> {
     const key = this.getCacheKey(walletAddress, marketplaceAddress, tokenAddress);
 
+    // Evict oldest if at capacity
+    if (this.cache.size >= this.MAX_CACHE_SIZE && !this.cache.has(key)) {
+      let oldestKey: string | null = null;
+      let oldestTime = Date.now();
+
+      for (const [k, v] of this.cache.entries()) {
+        if (v.timestamp < oldestTime) {
+          oldestTime = v.timestamp;
+          oldestKey = k;
+        }
+      }
+
+      if (oldestKey) this.cache.delete(oldestKey);
+    }
+
     // Update memory cache
     this.cache.set(key, entry);
 
@@ -210,14 +227,72 @@ class ApprovalCache {
   /**
    * Get cache statistics
    */
-  getStats(): { memorySize: number; hits: number; misses: number } {
+  getStats(): { memorySize: number; hits: number; misses: number; maxSize: number; ttl: number; estimatedMemoryBytes: number } {
     return {
       memorySize: this.cache.size,
+      maxSize: this.MAX_CACHE_SIZE,
+      ttl: this.CACHE_TTL,
       hits: 0, // Would need to track this
-      misses: 0 // Would need to track this
+      misses: 0, // Would need to track this
+      estimatedMemoryBytes: this.cache.size * 150
     };
+  }
+
+  /**
+   * Start periodic cleanup (called automatically on module load)
+   */
+  startCleanup(): void {
+    if (this.cleanupInterval) return;
+
+    this.cleanupInterval = setInterval(() => {
+      this.cleanup();
+    }, 5 * 60 * 1000); // Every 5 minutes
+  }
+
+  /**
+   * Periodic cleanup: Remove expired entries and enforce LRU eviction
+   */
+  private cleanup(): void {
+    const now = Date.now();
+    let removedExpired = 0;
+    let removedLRU = 0;
+
+    // Remove expired entries (24h TTL)
+    for (const [key, entry] of this.cache.entries()) {
+      if (now - entry.timestamp > this.CACHE_TTL) {
+        this.cache.delete(key);
+        removedExpired++;
+      }
+    }
+
+    // LRU eviction if over limit
+    if (this.cache.size > this.MAX_CACHE_SIZE) {
+      const entries = Array.from(this.cache.entries())
+        .sort((a, b) => a[1].timestamp - b[1].timestamp); // Oldest first
+
+      const toRemove = this.cache.size - this.MAX_CACHE_SIZE;
+      for (let i = 0; i < toRemove; i++) {
+        this.cache.delete(entries[i][0]);
+        removedLRU++;
+      }
+    }
+
+    if (removedExpired + removedLRU > 0) {
+      debugLog('Cache', `ApprovalCache cleanup | expired=${removedExpired} | lru=${removedLRU} | remaining=${this.cache.size}`);
+    }
+  }
+
+  /**
+   * Destroy cleanup interval (for graceful shutdown)
+   */
+  destroy(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
   }
 }
 
 // Export singleton instance
 export const approvalCache = new ApprovalCache();
+approvalCache.startCleanup(); // Auto-start cleanup on module load

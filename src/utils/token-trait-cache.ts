@@ -1,9 +1,9 @@
-import { debugLog, warnLog, errorLog } from './debug-file-logger';
+import { debugLog, errorLog } from './debug-file-logger';
 import { BoundedCache } from './bounded-cache';
 
 // Cache configuration
 const CACHE_SIZE = 50000; // Maximum tokens in cache (was 1000 memory + 100K MongoDB)
-const CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+const CACHE_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds (traits are immutable blockchain data)
 
 interface TokenTrait {
   trait_type: string;

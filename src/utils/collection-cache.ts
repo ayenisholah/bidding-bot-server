@@ -29,8 +29,8 @@ class CollectionCache {
     // 1000 items, 5 minute TTL for floor prices (they change frequently)
     this.floorCache = new BoundedCache<string, FloorPriceData>(1000, 5 * 60 * 1000, 'collectionFloorCache');
 
-    // 500 items, 30 minute TTL for collection details (they change less frequently)
-    this.detailsCache = new BoundedCache<string, CollectionData>(500, 30 * 60 * 1000, 'collectionDetailsCache');
+    // 500 items, 2 hour TTL for collection details (metadata rarely changes)
+    this.detailsCache = new BoundedCache<string, CollectionData>(500, 2 * 60 * 60 * 1000, 'collectionDetailsCache');
   }
 
   // Get floor price for a collection on a specific marketplace
@@ -139,8 +139,8 @@ class CollectionCache {
     try {
       const redis = getRedisConnection();
       if (redis && redisClient.isReady()) {
-        // Set with 30 minute TTL
-        await redis.setex(redisKey, 30 * 60, JSON.stringify(data));
+        // Set with 2 hour TTL (matches memory cache)
+        await redis.setex(redisKey, 2 * 60 * 60, JSON.stringify(data));
       }
     } catch (error) {
       // Log error but don't fail the operation
@@ -197,8 +197,8 @@ class CollectionCache {
     try {
       const redis = getRedisConnection();
       if (redis && redisClient.isReady()) {
-        // Set with 30 minute TTL
-        await redis.setex(redisKey, 30 * 60, JSON.stringify(data));
+        // Set with 2 hour TTL (matches memory cache)
+        await redis.setex(redisKey, 2 * 60 * 60, JSON.stringify(data));
       }
     } catch (error) {
       // Log error but don't fail the operation
