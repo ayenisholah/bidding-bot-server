@@ -32,6 +32,7 @@ export interface BroadcastStats {
 export class BroadcastManager {
   private clients = new Map<WebSocket, ClientMetadata>();
   private deltaTracker = new BroadcastDeltaTracker();
+  private warnedTasks = new Set<string>(); // Track tasks warned about missing subscribers
 
   constructor() {
     // Constructor kept for API compatibility
@@ -87,6 +88,24 @@ export class BroadcastManager {
   }
 
   /**
+   * Subscribe all connected clients to a task
+   * Used when a new task is started after clients have connected
+   *
+   * @param taskId - Task ID to subscribe clients to
+   * @returns Number of clients subscribed
+   */
+  subscribeAllClients(taskId: string): number {
+    let count = 0;
+    for (const [ws, metadata] of this.clients.entries()) {
+      if (this.subscribe(ws, taskId)) {
+        count++;
+      }
+    }
+    debugLog('BroadcastManager', `AUTO_SUBSCRIBE_ALL | taskId=${taskId} | count=${count}`);
+    return count;
+  }
+
+  /**
    * Unsubscribe client from task updates
    */
   unsubscribe(ws: WebSocket, taskId: string): boolean {
@@ -131,9 +150,22 @@ export class BroadcastManager {
     debugLog('BroadcastManager', `Subscriber check | taskId=${taskId} | count=${subscriberCount}`);
 
     if (subscriberCount === 0) {
-      // Make this ERROR level instead of debug
-      console.error(`[BroadcastManager] ⚠️  NO SUBSCRIBERS FOR TASK | taskId=${taskId} | This prevents taskUpdate broadcasts!`);
+      // Only warn if clients exist but aren't subscribed to this specific task
+      // If no clients are connected at all, this is expected (e.g., during server startup)
+      if (this.clients.size > 0 && !this.warnedTasks.has(taskId)) {
+        console.error(
+          `[BroadcastManager] ⚠️  NO SUBSCRIBERS FOR TASK | taskId=${taskId} | ` +
+          `totalClients=${this.clients.size} | This indicates a subscription bug!`
+        );
+        this.warnedTasks.add(taskId);
+      }
       return;
+    }
+
+    // Clear warning flag when task has subscribers again
+    if (this.warnedTasks.has(taskId) && subscriberCount > 0) {
+      this.warnedTasks.delete(taskId);
+      console.log(`[BroadcastManager] ✅ Subscribers restored for task | taskId=${taskId} | count=${subscriberCount}`);
     }
 
     // Serialize message ONCE (message reuse optimization)

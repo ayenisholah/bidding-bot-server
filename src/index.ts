@@ -141,8 +141,8 @@ import {
 } from "./state/global-state";
 
 // WebSocket URL - defaults to local ws-proxy for development
-const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io/";
-// const MARKETPLACE_WS_URL = "ws://localhost:8080/";
+// const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io/";
+const MARKETPLACE_WS_URL = "ws://localhost:8080/";
 
 
 // Initialize process lifecycle logging immediately on startup
@@ -6817,6 +6817,15 @@ async function publishTaskMetrics() {
   // Per-task updates (with delta detection in BroadcastManager)
   const tasks = Object.keys(bidStats);
 
+  // DIAGNOSTIC: Check for orphaned tasks (in taskStatus but not in bidStats)
+  const orphanedTasks = Object.keys(taskStatus).filter(taskId => !bidStats[taskId]);
+  if (orphanedTasks.length > 0) {
+    warnLog('TaskMetrics',
+      `ORPHANED_TASKS | count=${orphanedTasks.length} | taskIds=[${orphanedTasks.join(',')}] | ` +
+      `reason=taskStatus exists but bidStats missing - tasks won't show metrics`,
+      { orphanedTasks });
+  }
+
   for (const taskId of tasks) {
     const taskData = {
       bidCounts: bidStats[taskId],
@@ -9850,6 +9859,18 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
     warnLog('TaskInit',
       `ORDER_CACHE_INIT | taskId=${taskId} | status=failed | ` +
       `error=${err instanceof Error ? err.message : String(err)}`, { taskId });
+
+    // CRITICAL FIX: Initialize bidStats even if cache fails
+    // Without this, publishTaskMetrics() won't include this task (line 6818)
+    // Task will be orphaned: taskStatus exists but no metrics tracking
+    bidStats[task._id] = {
+      opensea: 0,
+      magiceden: 0,
+      blur: 0
+    };
+    infoLog('TaskInit',
+      `BIDSTATS_FALLBACK_INIT | taskId=${taskId} | initialized with zeros after cache failure`,
+      { taskId });
   }
 
   // Pre-fetch floor prices for selected marketplaces to warm the cache
@@ -10163,6 +10184,14 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
       // Add task to indexes for fast lookup
       addTaskToIndexes(updatedTask);
       debugLog('TaskInit', `INDEXES_UPDATED | taskId=${taskId} | slug=${task.contract.slug} | contract=${task.contract.contractAddress}`, { taskId });
+
+      // Auto-subscribe all connected clients to newly started task
+      const subscribedCount = broadcastManager.subscribeAllClients(taskId);
+      infoLog(
+        'TaskInit',
+        `AUTO_SUBSCRIBE_NEW_TASK | taskId=${taskId} | subscribedClients=${subscribedCount}`,
+        { taskId }
+      );
 
       // Subscribe to WebSocket collection (WebSocket should already be connected at startup)
       try {
@@ -24851,6 +24880,44 @@ app.get('/api/blur-health', async (req, res) => {
     res.status(500).json({
       status: 'error',
       error: error.message || 'Failed to check Blur health',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Task metrics health check endpoint - diagnostic tool for debugging task metrics issues
+app.get('/api/task-metrics-health', (req, res) => {
+  try {
+    const health = {
+      timestamp: new Date().toISOString(),
+      connectedClients: clients.size,
+      publishingEnabled: clients.size > 0,
+      tasks: {
+        inBidStats: Object.keys(bidStats),
+        inTaskStatus: Object.keys(taskStatus),
+        inActiveTasks: Array.from(activeTasks.keys()).filter(taskId => {
+          const task = activeTasks.get(taskId);
+          return task?.running === true;
+        }),
+        orphaned: Object.keys(taskStatus).filter(taskId => !bidStats[taskId])
+      },
+      bidStatsSnapshot: bidStats,
+      taskStatusSnapshot: Object.keys(taskStatus).reduce((acc, taskId) => {
+        acc[taskId] = {
+          selectedMarketplaces: taskStatus[taskId]?.selectedMarketplaces || [],
+          lastUpdate: taskStatus[taskId]?.lastUpdate || 0,
+          marketplaces: Object.keys(taskStatus[taskId]?.marketplaces || {})
+        };
+        return acc;
+      }, {} as any)
+    };
+
+    res.json(health);
+  } catch (error: any) {
+    errorLog('API', 'Failed to get task metrics health', error);
+    res.status(500).json({
+      status: 'error',
+      error: error.message || 'Failed to get task metrics health',
       timestamp: new Date().toISOString()
     });
   }
