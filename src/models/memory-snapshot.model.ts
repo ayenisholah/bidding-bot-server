@@ -36,6 +36,35 @@ interface MongoCollectionStats {
   totalIndexSize: number;
 }
 
+interface MemoryCleanupStats {
+  initialized: boolean;
+  activeCleanupIntervals: number;
+  currentSizes: {
+    queueingProgress: number;
+    failedTaskStartQueue: number;
+    failedTaskStopQueue: number;
+    taskLocks: number;
+    loopSchedulingLocks: number;
+  };
+}
+
+interface LRUCachesStats {
+  processedMessages: number;
+}
+
+interface UnboundedDataStructuresStats {
+  traitsToRemove: number;
+  removedTokens: number;
+  tasksBeingRestarted: number;
+  tasksBeingCancelled: number;
+  tasksInCompletionProcess: number;
+  failedStartQueue: number;
+  failedStopQueue: number;
+  queueingProgress: number;
+  taskLocks: number;
+  loopSchedulingLocks: number;
+}
+
 export interface IMemorySnapshot extends Document {
   timestamp: Date;
 
@@ -85,6 +114,15 @@ export interface IMemorySnapshot extends Document {
   // MongoDB collections
   mongoCollections: MongoCollectionStats[];
 
+  // Memory cleanup service stats
+  memoryCleanup: MemoryCleanupStats;
+
+  // LRU caches (processedMessages with automatic TTL)
+  lruCaches: LRUCachesStats;
+
+  // Unbounded data structures monitoring
+  unboundedDataStructures: UnboundedDataStructuresStats;
+
   // Metadata
   metadata: {
     snapshotDurationMs: number;
@@ -115,6 +153,35 @@ const MongoCollectionStatsSchema = new Schema({
   avgDocumentSize: { type: Number, required: true },
   indexSizes: { type: Schema.Types.Mixed },
   totalIndexSize: { type: Number, required: true }
+}, { _id: false });
+
+const MemoryCleanupStatsSchema = new Schema({
+  initialized: { type: Boolean, required: true },
+  activeCleanupIntervals: { type: Number, required: true },
+  currentSizes: {
+    queueingProgress: { type: Number, required: true },
+    failedTaskStartQueue: { type: Number, required: true },
+    failedTaskStopQueue: { type: Number, required: true },
+    taskLocks: { type: Number, required: true },
+    loopSchedulingLocks: { type: Number, required: true }
+  }
+}, { _id: false });
+
+const LRUCachesStatsSchema = new Schema({
+  processedMessages: { type: Number, required: true }
+}, { _id: false });
+
+const UnboundedDataStructuresStatsSchema = new Schema({
+  traitsToRemove: { type: Number, required: true },
+  removedTokens: { type: Number, required: true },
+  tasksBeingRestarted: { type: Number, required: true },
+  tasksBeingCancelled: { type: Number, required: true },
+  tasksInCompletionProcess: { type: Number, required: true },
+  failedStartQueue: { type: Number, required: true },
+  failedStopQueue: { type: Number, required: true },
+  queueingProgress: { type: Number, required: true },
+  taskLocks: { type: Number, required: true },
+  loopSchedulingLocks: { type: Number, required: true }
 }, { _id: false });
 
 const MemorySnapshotSchema = new Schema<IMemorySnapshot>(
@@ -212,6 +279,10 @@ const MemorySnapshotSchema = new Schema<IMemorySnapshot>(
     },
 
     mongoCollections: [MongoCollectionStatsSchema],
+
+    memoryCleanup: { type: MemoryCleanupStatsSchema, required: true },
+    lruCaches: { type: LRUCachesStatsSchema, required: true },
+    unboundedDataStructures: { type: UnboundedDataStructuresStatsSchema, required: true },
 
     metadata: {
       snapshotDurationMs: { type: Number, required: true },

@@ -33,15 +33,34 @@ interface CacheStats {
   estimatedMemoryBytes?: number;
 }
 
+interface MemorySnapshotDependencies {
+  memoryCleanupService: any;
+  processedMessages: any; // LRUCache
+  traitsToRemove: Record<string, string[]>;
+  removedTokens: Record<string, any>;
+  tasksBeingRestarted: Set<string>;
+  tasksBeingCancelled: Set<string>;
+  tasksInCompletionProcess: Set<string>;
+  failedTaskStartQueue: Map<string, any>;
+  failedTaskStopQueue: Map<string, any>;
+  queueingProgress: Map<string, any>;
+  taskLocks: Map<string, any>;
+  loopSchedulingLocks: Map<string, any>;
+}
+
 class MemorySnapshotService {
   private redis: Redis | null = null;
   private mainQueue: Queue | null = null;
   private blurQueue: Queue | null = null;
+  private deps: MemorySnapshotDependencies | null = null;
 
-  public initialize(redis: Redis, mainQueue: Queue, blurQueue: Queue): void {
+  public initialize(redis: Redis, mainQueue: Queue, blurQueue: Queue, deps?: MemorySnapshotDependencies): void {
     this.redis = redis;
     this.mainQueue = mainQueue;
     this.blurQueue = blurQueue;
+    if (deps) {
+      this.deps = deps;
+    }
     infoLog('MemorySnapshotService', 'Initialized with Redis and BullMQ queues');
   }
 
@@ -63,7 +82,10 @@ class MemorySnapshotService {
         inMemoryCaches,
         globalState,
         queues,
-        mongoCollections
+        mongoCollections,
+        memoryCleanup,
+        lruCaches,
+        unboundedDataStructures
       ] = await Promise.all([
         Promise.resolve(this.collectProcessMemory()),
         this.collectRedisMemory().catch((err: Error) => {
@@ -90,6 +112,21 @@ class MemorySnapshotService {
           errorCount++;
           errors.push(`MongoDB: ${err.message}`);
           return [];
+        }),
+        Promise.resolve(this.collectMemoryCleanupStats()).catch((err: Error) => {
+          errorCount++;
+          errors.push(`MemoryCleanup: ${err.message}`);
+          return this.getEmptyMemoryCleanupStats();
+        }),
+        Promise.resolve(this.collectLRUCachesStats()).catch((err: Error) => {
+          errorCount++;
+          errors.push(`LRUCaches: ${err.message}`);
+          return { processedMessages: 0 };
+        }),
+        Promise.resolve(this.collectUnboundedDataStructuresStats()).catch((err: Error) => {
+          errorCount++;
+          errors.push(`UnboundedDataStructures: ${err.message}`);
+          return this.getEmptyUnboundedDataStructuresStats();
         })
       ]);
 
@@ -103,6 +140,9 @@ class MemorySnapshotService {
         globalState,
         queues,
         mongoCollections,
+        memoryCleanup,
+        lruCaches,
+        unboundedDataStructures,
         metadata: {
           snapshotDurationMs,
           errorCount,
@@ -441,6 +481,47 @@ class MemorySnapshotService {
   }
 
   /**
+   * Collect memory cleanup service statistics
+   */
+  private collectMemoryCleanupStats() {
+    if (!this.deps?.memoryCleanupService) {
+      return this.getEmptyMemoryCleanupStats();
+    }
+    return this.deps.memoryCleanupService.getStats();
+  }
+
+  /**
+   * Collect LRU caches statistics (processedMessages)
+   */
+  private collectLRUCachesStats() {
+    return {
+      processedMessages: this.deps?.processedMessages?.size || 0
+    };
+  }
+
+  /**
+   * Collect unbounded data structures statistics
+   */
+  private collectUnboundedDataStructuresStats() {
+    if (!this.deps) {
+      return this.getEmptyUnboundedDataStructuresStats();
+    }
+
+    return {
+      traitsToRemove: Object.keys(this.deps.traitsToRemove || {}).length,
+      removedTokens: Object.keys(this.deps.removedTokens || {}).length,
+      tasksBeingRestarted: this.deps.tasksBeingRestarted?.size || 0,
+      tasksBeingCancelled: this.deps.tasksBeingCancelled?.size || 0,
+      tasksInCompletionProcess: this.deps.tasksInCompletionProcess?.size || 0,
+      failedStartQueue: this.deps.failedTaskStartQueue?.size || 0,
+      failedStopQueue: this.deps.failedTaskStopQueue?.size || 0,
+      queueingProgress: this.deps.queueingProgress?.size || 0,
+      taskLocks: this.deps.taskLocks?.size || 0,
+      loopSchedulingLocks: this.deps.loopSchedulingLocks?.size || 0
+    };
+  }
+
+  /**
    * Clean up old snapshots (older than 30 days)
    */
   public async cleanupOldSnapshots(): Promise<number> {
@@ -503,6 +584,35 @@ class MemorySnapshotService {
     return {
       main: { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 },
       blur: { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 }
+    };
+  }
+
+  private getEmptyMemoryCleanupStats() {
+    return {
+      initialized: false,
+      activeCleanupIntervals: 0,
+      currentSizes: {
+        queueingProgress: 0,
+        failedTaskStartQueue: 0,
+        failedTaskStopQueue: 0,
+        taskLocks: 0,
+        loopSchedulingLocks: 0
+      }
+    };
+  }
+
+  private getEmptyUnboundedDataStructuresStats() {
+    return {
+      traitsToRemove: 0,
+      removedTokens: 0,
+      tasksBeingRestarted: 0,
+      tasksBeingCancelled: 0,
+      tasksInCompletionProcess: 0,
+      failedStartQueue: 0,
+      failedStopQueue: 0,
+      queueingProgress: 0,
+      taskLocks: 0,
+      loopSchedulingLocks: 0
     };
   }
 }

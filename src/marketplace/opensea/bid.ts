@@ -180,8 +180,9 @@ export async function cancelOpenseaRequest(taskId: string): Promise<number> {
 
 // ============================================================================
 // Caching infrastructure for multi-contract collection resolution
-const multiContractSlugCache = new Map<string, boolean>();
-const contractMapCache = new Map<string, Record<string, string>>();
+// Migrated to BoundedCache to prevent unbounded memory growth
+const multiContractSlugCache = new BoundedCache<string, boolean>(500, 30 * 60 * 1000, 'openseaMultiContractSlugCache'); // 500 entries, 30 min TTL
+const contractMapCache = new BoundedCache<string, Record<string, string>>(100, 60 * 60 * 1000, 'openseaContractMapCache'); // 100 entries, 1 hour TTL
 const contractMapPromises = new Map<string, Promise<Record<string, string>>>();
 
 const domain = {

@@ -29,7 +29,7 @@ import http from 'http';
 import os from 'os';
 import { axiosInstance, initialize, limiter, removeTaskFromBlacklist, isTaskBlacklisted, getLimiterQueueDetails, cancelTaskJobs, abortPendingLimiterJobs } from "./init";
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrderWithoutTracking, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor, resolveContractAddress } from "./marketplace/opensea";
-import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor, getAccessToken, getAuthMetrics, getTimeoutMetrics } from "./marketplace/blur/bid";
+import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor, getAccessToken, getAuthMetrics, getTimeoutMetrics, transferRestrictedCollections, authMetrics, timeoutMetrics } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
 import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, fetchOpenseaTraits, fetchRarityTokens, getBlurFloor, getCollectionDetails, getOpenseaFloor, tokenHasTrait } from "./functions";
 import mongoose from 'mongoose';
@@ -84,6 +84,8 @@ import { MarketplaceBidRateTracker } from "./utils/metrics-rate-tracker";
 import { BroadcastManager } from "./utils/broadcast-manager";
 import { reconcileBidStatsWithCache } from "./utils/metrics-reconciliation";
 import { memorySnapshotService } from "./services/memory-snapshot.service";
+import { taskStatePersistenceService } from "./services/task-state-persistence.service";
+import { memoryCleanupService } from "./services/memory-cleanup.service";
 
 // Global type declarations
 declare global {
@@ -144,9 +146,8 @@ import {
   type MarketplaceStatus
 } from "./state/global-state";
 
-// WebSocket URL - defaults to local ws-proxy for development
-const MARKETPLACE_WS_URL = "wss://nfttools-ws-proxy.nfttools.io/";
-// const MARKETPLACE_WS_URL = "ws://localhost:8080/";
+// WebSocket URL - read from environment variable with fallback to production default
+const MARKETPLACE_WS_URL = process.env.MARKETPLACE_WS_URL || "wss://nfttools-ws-proxy.nfttools.io";
 
 
 // Initialize process lifecycle logging immediately on startup
@@ -183,8 +184,14 @@ interface TaskStatusChange {
 const taskStatusHistory: { [taskId: string]: TaskStatusChange[] } = {};
 
 // Message idempotency tracking
-const processedMessages = new Map<string, number>();
-const MESSAGE_TTL = 5 * 60 * 1000; // 5 minutes
+import { LRUCache } from 'lru-cache';
+
+// WebSocket message deduplication cache with automatic TTL
+const processedMessages = new LRUCache<string, number>({
+  max: 10000,        // Max 10k messages
+  ttl: 60 * 1000,    // 1 minute TTL (shorter than original 5min for better memory usage)
+  updateAgeOnGet: false,  // Don't reset TTL on access (we just need deduplication window)
+});
 
 // NOTE: isDuplicateOrderHash function is now imported from ./utils/deduplication
 
@@ -2546,8 +2553,50 @@ async function startServer() {
 
     // Initialize memory snapshot service
     const redis = getRedisConnection();
-    memorySnapshotService.initialize(redis, queue, blurQueue);
+    memorySnapshotService.initialize(redis, queue, blurQueue, {
+      memoryCleanupService,
+      processedMessages,
+      traitsToRemove,
+      removedTokens,
+      tasksBeingRestarted,
+      tasksBeingCancelled,
+      tasksInCompletionProcess,
+      failedTaskStartQueue,
+      failedTaskStopQueue,
+      queueingProgress,
+      taskLocks,
+      loopSchedulingLocks
+    });
     console.log('[STARTUP] Memory snapshot service initialized');
+
+    // Initialize task state persistence service
+    taskStatePersistenceService.initialize({
+      getRedisConnection,
+      taskStatus,
+      loopCounterStats,
+      lastScheduleTimes,
+      activeTasks,
+      taskTimeouts,
+      taskCountdownTimers,
+      tasksInCompletionProcess,
+      parentJobs,
+      getParentJobId,
+      startTask
+    });
+    console.log('[STARTUP] Task state persistence service initialized');
+
+    // Initialize memory cleanup service (processedMessages now uses lru-cache)
+    memoryCleanupService.initialize({
+      queueingProgress,
+      failedTaskStartQueue,
+      failedTaskStopQueue,
+      taskLocks,
+      loopSchedulingLocks,
+      blurTransferRestrictedCollections: transferRestrictedCollections,
+      blurAuthMetrics: authMetrics,
+      blurTimeoutMetrics: timeoutMetrics
+    });
+    console.log('[STARTUP] Memory cleanup service initialized');
 
     // Initialize queue event handlers
     initializeQueueEventHandlers();
@@ -3606,6 +3655,9 @@ process.on('SIGINT', async () => {
   // Stop connectivity monitoring
   stopConnectivityMonitoring();
 
+  // Stop memory cleanup service
+  memoryCleanupService.stopCleanup();
+
   // Shutdown listing scheduler
   await shutdownListingScheduler();
 
@@ -3695,6 +3747,9 @@ process.on('SIGTERM', async () => {
 
   // Stop connectivity monitoring
   stopConnectivityMonitoring();
+
+  // Stop memory cleanup service
+  memoryCleanupService.stopCleanup();
 
   // Shutdown listing scheduler
   await shutdownListingScheduler();
@@ -4902,12 +4957,14 @@ async function handleTaskCleanup(taskId: string) {
   if (traitsToRemove[taskId]?.length > 0) {
     const traitJobs = await cancelRemovedTraitBids(traitsToRemove[taskId], task._id, task.walletId, currencySymbol);
     totalCancellationJobs += traitJobs;
+    delete traitsToRemove[taskId]; // ✅ Clear after queueing to prevent unbounded growth
   }
 
   // Cancel removed token bids
   if (removedTokens[taskId]?.opensea?.length > 0 || removedTokens[taskId]?.magiceden?.length > 0) {
     const tokenJobs = await cancelRemovedTokenBids(removedTokens[taskId], task._id, task.walletId, currencySymbol);
     totalCancellationJobs += tokenJobs;
+    delete removedTokens[taskId]; // ✅ Clear after queueing to prevent unbounded growth
   }
 
   return totalCancellationJobs;
@@ -5795,243 +5852,31 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
 // ============================================================
 // TASK STATE PERSISTENCE FUNCTIONS (for crash recovery)
 // ============================================================
+// All task state persistence functions moved to TaskStatePersistenceService
 
-/**
- * Persist task state to Redis for crash recovery.
- * Called after setTaskStatus() to ensure state survives server restarts.
- */
+// Wrapper function - delegates to service
 async function persistTaskState(taskId: string): Promise<void> {
-  try {
-    const redis = getRedisConnection();
-    const status = taskStatus[taskId];
-    const loopCount = loopCounterStats[taskId];
-    const lastSchedule = lastScheduleTimes.get(taskId);
-    let persisted = 0;
-
-    // Persist taskStatus
-    if (status) {
-      await redis.set(
-        `${REDIS_KEY_TASK_STATUS}${taskId}`,
-        JSON.stringify(status),
-        'EX', REDIS_STATE_TTL
-      );
-      persisted++;
-    }
-
-    // Persist loopCounterStats
-    if (loopCount) {
-      await redis.set(
-        `${REDIS_KEY_LOOP_COUNT}${taskId}`,
-        JSON.stringify(loopCount),
-        'EX', REDIS_STATE_TTL
-      );
-      persisted++;
-    }
-
-    // Persist lastScheduleTimes
-    if (lastSchedule) {
-      await redis.set(
-        `${REDIS_KEY_LAST_SCHEDULE}${taskId}`,
-        lastSchedule.toString(),
-        'EX', REDIS_STATE_TTL
-      );
-      persisted++;
-    }
-
-    // Persist nextLoopTime for each marketplace
-    if (status?.marketplaces) {
-      for (const [mp, mpStatus] of Object.entries(status.marketplaces)) {
-        if (mpStatus?.nextLoopTime) {
-          await redis.set(
-            `${REDIS_KEY_NEXT_LOOP}${taskId}:${mp}`,
-            mpStatus.nextLoopTime.getTime().toString(),
-            'EX', REDIS_STATE_TTL
-          );
-          persisted++;
-        }
-      }
-    }
-  } catch (err) {
-    errorLog('RedisState', `PERSIST_FAILED | taskId=${taskId}`, err, { taskId });
-  }
+  return taskStatePersistenceService.persistTaskState(taskId);
 }
 
-/**
- * Capture complete task state at critical moments for debugging stuck tasks.
- * This creates a diagnostic snapshot showing ALL state related to a task.
- */
+// Wrapper function - delegates to service
 function logTaskDiagnostic(taskId: string, marketplace: string | undefined, trigger: string): void {
-  const timerKey = marketplace ? `${taskId}-${marketplace}` : taskId;
-  const mpKey = marketplace?.toLowerCase() as 'opensea' | 'magiceden' | 'blur' | undefined;
-  const parentJobId = marketplace ? getParentJobId(taskId, marketplace) : null;
-  const parentJob = parentJobId ? parentJobs.get(parentJobId) : null;
-
-  const diagnostic = {
-    trigger,
-    taskId,
-    marketplace: mpKey, // Use properly typed marketplace
-    // Task state
-    isActive: activeTasks.has(taskId),
-    taskRunning: activeTasks.get(taskId)?.running,
-    // Timer state
-    hasTimeout: taskTimeouts.has(timerKey),
-    hasCountdown: taskCountdownTimers.has(timerKey),
-    // Status state
-    status: mpKey ? taskStatus[taskId]?.marketplaces?.[mpKey]?.status : 'N/A',
-    waitingTime: mpKey ? taskStatus[taskId]?.marketplaces?.[mpKey]?.waitingTime : 'N/A',
-    runningPercentage: mpKey ? taskStatus[taskId]?.marketplaces?.[mpKey]?.runningPercentage : 'N/A',
-    // Parent job state
-    parentJobId,
-    parentJobExists: !!parentJob,
-    parentJobTotal: parentJob?.totalJobs,
-    parentJobCompleted: parentJob?.completedJobs,
-    parentJobAllQueued: parentJob?.allJobsQueued,
-    // Locks
-    inCompletionProcess: tasksInCompletionProcess.has(timerKey),
-    loopCount: loopCounterStats[taskId]?.[marketplace || ''] || 0
-  };
-
-  debugLog('TaskFlow',
-    `DIAGNOSTIC | ${trigger} | taskId=${taskId} | mp=${marketplace || 'all'}`,
-    diagnostic
-  );
+  return taskStatePersistenceService.logTaskDiagnostic(taskId, marketplace, trigger);
 }
 
-/**
- * Persist task start timestamp to Redis.
- * Called when a task first starts.
- */
+// Wrapper function - delegates to service
 async function persistTaskStartTime(taskId: string): Promise<void> {
-  try {
-    const redis = getRedisConnection();
-    await redis.set(
-      `${REDIS_KEY_TASK_STARTED}${taskId}`,
-      Date.now().toString(),
-      'EX', REDIS_STATE_TTL
-    );
-  } catch (err) {
-    errorLog('Redis', `Failed to persist task start time for ${taskId}: ${err instanceof Error ? err.message : err}`);
-  }
+  return taskStatePersistenceService.persistTaskStartTime(taskId);
 }
 
-/**
- * Restore task state from Redis on startup.
- * Called in fetchCurrentTasks() for tasks with running=true.
- */
+// Wrapper function - delegates to service
 async function restoreTaskState(taskId: string): Promise<boolean> {
-  try {
-    const redis = getRedisConnection();
-
-    // Restore taskStatus
-    const statusJson = await redis.get(`${REDIS_KEY_TASK_STATUS}${taskId}`);
-    if (statusJson) {
-      const status = JSON.parse(statusJson);
-      // Convert nextLoopTime strings back to Date objects
-      if (status.marketplaces) {
-        for (const mp of Object.keys(status.marketplaces)) {
-          if (status.marketplaces[mp]?.nextLoopTime) {
-            status.marketplaces[mp].nextLoopTime = new Date(status.marketplaces[mp].nextLoopTime);
-          }
-        }
-      }
-      taskStatus[taskId] = status;
-      debugLog('Recovery', `Restored taskStatus from Redis | taskId=${taskId}`);
-    }
-
-    // Restore loopCounterStats
-    const loopCountJson = await redis.get(`${REDIS_KEY_LOOP_COUNT}${taskId}`);
-    if (loopCountJson) {
-      loopCounterStats[taskId] = JSON.parse(loopCountJson);
-      debugLog('Recovery', `Restored loopCounterStats from Redis | taskId=${taskId} | counts=${JSON.stringify(loopCounterStats[taskId])}`);
-    }
-
-    // Restore lastScheduleTimes
-    const lastSchedule = await redis.get(`${REDIS_KEY_LAST_SCHEDULE}${taskId}`);
-    if (lastSchedule) {
-      lastScheduleTimes.set(taskId, parseInt(lastSchedule, 10));
-      debugLog('Recovery', `Restored lastScheduleTime from Redis | taskId=${taskId}`);
-    }
-
-    return !!statusJson; // Return true if we found persisted state
-  } catch (err) {
-    errorLog('Redis', `Failed to restore task state for ${taskId}: ${err instanceof Error ? err.message : err}`);
-    return false;
-  }
+  return taskStatePersistenceService.restoreTaskState(taskId);
 }
 
-/**
- * Recreate timers from Redis after server restart.
- * Checks if timers should have fired during downtime and starts task immediately if so.
- */
+// Wrapper function - delegates to service
 async function recreateTimersFromRedis(taskId: string, task: ITask): Promise<void> {
-  try {
-    const redis = getRedisConnection();
-    const now = Date.now();
-
-    for (const mp of task.selectedMarketplaces) {
-      const mpLower = mp.toLowerCase();
-      const nextLoopTimeStr = await redis.get(`${REDIS_KEY_NEXT_LOOP}${taskId}:${mpLower}`);
-
-      if (nextLoopTimeStr) {
-        const nextLoopTime = parseInt(nextLoopTimeStr, 10);
-        const delay = Math.max(0, nextLoopTime - now);
-
-        if (delay > 0) {
-          // Timer hasn't fired yet - recreate it
-          debugLog('Recovery', `Recreating timer for ${taskId}:${mpLower} | delay=${Math.floor(delay / 1000)}s`);
-
-          // Set status to SCHEDULED with correct waitingTime
-          const mpKey = mpLower as 'opensea' | 'magiceden' | 'blur';
-          if (taskStatus[taskId]?.marketplaces?.[mpKey]) {
-            taskStatus[taskId].marketplaces[mpKey]!.status = 'SCHEDULED';
-            taskStatus[taskId].marketplaces[mpKey]!.waitingTime = Math.floor(delay / 1000);
-            taskStatus[taskId].marketplaces[mpKey]!.nextLoopTime = new Date(nextLoopTime);
-          }
-
-          // Create the timer with remaining delay
-          const timerKey = `${taskId}-${mpLower}`;
-          const timeoutId = setTimeout(async () => {
-            debugLog('Recovery', `Recovered timer EXPIRED | taskId=${taskId} | mp=${mpLower}`);
-            const currentTask = activeTasks.get(taskId);
-            if (currentTask?.running) {
-              await startTask(currentTask, true, mpLower);
-            }
-          }, delay);
-
-          taskTimeouts.set(timerKey, timeoutId);
-
-          // Also set up countdown timer
-          const countdownTimer = setInterval(() => {
-            const mpStatusRef = taskStatus[taskId]?.marketplaces?.[mpKey];
-            if (!mpStatusRef) {
-              clearInterval(countdownTimer);
-              taskCountdownTimers.delete(timerKey);
-              return;
-            }
-            if (mpStatusRef.nextLoopTime) {
-              const remainingSeconds = Math.max(0, Math.floor((mpStatusRef.nextLoopTime.getTime() - Date.now()) / 1000));
-              mpStatusRef.waitingTime = remainingSeconds;
-              if (remainingSeconds <= 0) {
-                clearInterval(countdownTimer);
-                taskCountdownTimers.delete(timerKey);
-              }
-            }
-          }, 1000);
-          taskCountdownTimers.set(timerKey, countdownTimer);
-
-        } else {
-          // Timer should have already fired during downtime - start task immediately
-          debugLog('Recovery', `Timer expired during downtime for ${taskId}:${mpLower} | starting immediately`);
-          await startTask(task, true, mpLower);
-        }
-
-        // Clean up the Redis key after processing
-        await redis.del(`${REDIS_KEY_NEXT_LOOP}${taskId}:${mpLower}`);
-      }
-    }
-  } catch (err) {
-    errorLog('Redis', `Failed to recreate timers for ${taskId}: ${err instanceof Error ? err.message : err}`);
-  }
+  return taskStatePersistenceService.recreateTimersFromRedis(taskId, task);
 }
 
 // NOTE: Recovery functions removed - recovery logic was causing issues
@@ -7028,30 +6873,14 @@ wss.on('connection', async (ws) => {
 
   // Helper functions for message idempotency
   function isDuplicateMessage(messageId: string): boolean {
-    const timestamp = processedMessages.get(messageId);
-    if (!timestamp) return false;
-
-    // Check if message is still within TTL
-    if (Date.now() - timestamp > MESSAGE_TTL) {
-      processedMessages.delete(messageId);
-      return false;
-    }
-
-    return true;
+    // LRUCache.has() returns false for expired items automatically
+    return processedMessages.has(messageId);
   }
 
   function markMessageProcessed(messageId: string): void {
+    // LRUCache automatically handles TTL and max size
     processedMessages.set(messageId, Date.now());
-
-    // Cleanup old entries
-    if (processedMessages.size > 10000) {
-      const cutoff = Date.now() - MESSAGE_TTL;
-      for (const [id, timestamp] of processedMessages.entries()) {
-        if (timestamp < cutoff) {
-          processedMessages.delete(id);
-        }
-      }
-    }
+    // No manual cleanup needed!
   }
 
   ws.onmessage = async (event: WebSocket.MessageEvent) => {
@@ -12317,6 +12146,9 @@ async function
     // Cleanup broadcast buffers and delta tracking for this task
     broadcastManager.cleanupTask(taskId);
     debugLog('StopTask', `BROADCAST_CLEANUP | taskId=${taskId}`, { taskId });
+
+    // ✅ Clear cancellation flag to prevent unbounded growth
+    tasksBeingCancelled.delete(taskId);
   }
 }
 
@@ -23827,6 +23659,22 @@ app.get("/metrics", async (req, res) => {
         max: rps.maxRPS,
         utilization: rps.maxRPS > 0 ? (rps.currentRPS / rps.maxRPS * 100).toFixed(2) + '%' : '0%',
         blur: blurRateLimiter.getStatus()
+      },
+      memoryCleanup: memoryCleanupService.getStats(),
+      lruCaches: {
+        processedMessages: processedMessages.size // LRUCache with 1min TTL, max 10k
+      },
+      unboundedDataStructures: {
+        traitsToRemove: Object.keys(traitsToRemove).length,
+        removedTokens: Object.keys(removedTokens).length,
+        tasksBeingRestarted: tasksBeingRestarted.size,
+        tasksBeingCancelled: tasksBeingCancelled.size,
+        tasksInCompletionProcess: tasksInCompletionProcess.size, // Monitor for hanging checks
+        failedStartQueue: failedTaskStartQueue.size,
+        failedStopQueue: failedTaskStopQueue.size,
+        queueingProgress: queueingProgress.size,
+        taskLocks: taskLocks.size,
+        loopSchedulingLocks: loopSchedulingLocks.size
       }
     };
 

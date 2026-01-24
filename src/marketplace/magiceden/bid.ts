@@ -97,12 +97,16 @@ const BASIS_CONSTANTS: Record<number, number> = {
 };
 
 // Wallet cache to avoid recreating wallet instances
-const walletCache = new Map<string, Wallet>();
+// Migrated to BoundedCache to match OpenSea pattern and prevent unbounded growth
+const walletCache = new BoundedCache<string, Wallet>(50, 60 * 1000, 'magicedenWalletCache'); // 50 wallets, 60s TTL (match OpenSea)
+
 function getWallet(privateKey: string): Wallet {
-  if (!walletCache.has(privateKey)) {
-    walletCache.set(privateKey, new Wallet(privateKey, provider));
+  let wallet = walletCache.get(privateKey);
+  if (!wallet) {
+    wallet = new Wallet(privateKey, provider);
+    walletCache.set(privateKey, wallet);
   }
-  return walletCache.get(privateKey)!;
+  return wallet;
 }
 
 // Cached domain and types for signing
@@ -149,6 +153,7 @@ const typesCache = {
 const pendingRequests = new Map<string, Promise<any>>();
 
 // Batch queue for database operations
+const MAX_BATCH_QUEUE_SIZE = 1000; // Limit queue size to prevent unbounded growth
 const orderBatchQueue: Array<{
   slug: string;
   orderHash: string;
@@ -897,7 +902,37 @@ async function sendSignedOrderData(
       const task = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase() && task.selectedMarketplaces.includes("MagicEden"))
       if (!task) return
 
-      // Batch database operations
+      // Batch database operations with size limit
+      // If queue is full, force flush before adding new entry
+      if (orderBatchQueue.length >= MAX_BATCH_QUEUE_SIZE) {
+        warnLog('MagicEden', `Batch queue full (${MAX_BATCH_QUEUE_SIZE}), forcing immediate flush`);
+        // Process current batch immediately
+        const batch = [...orderBatchQueue];
+        orderBatchQueue.length = 0;
+        if (batchProcessor) {
+          clearTimeout(batchProcessor);
+          batchProcessor = null;
+        }
+
+        try {
+          const createdAt = Date.now();
+          const cachedOrders = batch.map(order => ({
+            _id: orderCache.generateOrderId(),
+            orderHash: order.orderHash,
+            expiresAt: order.expiresAt instanceof Date ? order.expiresAt.getTime() : order.expiresAt,
+            offerPrice: order.offerPrice,
+            createdAt: createdAt,
+            identifier: order.identifier,
+            marketplace: order.marketplace,
+            slug: order.slug,
+            taskId: order.taskId
+          }));
+          await orderCache.setMany(cachedOrders);
+        } catch (error) {
+          errorLog('Database', `[MagicEden] Failed to flush batch queue | count=${batch.length}`, error);
+        }
+      }
+
       orderBatchQueue.push({
         slug: slug,
         orderHash: payload,

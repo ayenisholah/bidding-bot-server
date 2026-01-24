@@ -46,11 +46,13 @@ const AUTH_RETRY_DELAY = 60000; // 60 seconds between retry attempts
 const MAX_AUTH_RETRIES = 3;
 
 // Cache for transfer-restricted collections (TTL: 24 hours)
-const transferRestrictedCollections = new Map<string, number>();
+// Exported for MemoryCleanupService to perform periodic cleanup
+export const transferRestrictedCollections = new Map<string, number>();
 const RESTRICTION_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 // Authentication metrics
-const authMetrics = {
+// Exported for MemoryCleanupService to perform periodic cleanup
+export const authMetrics = {
   attempts: 0,
   successes: 0,
   failures: 0,
@@ -59,7 +61,8 @@ const authMetrics = {
 };
 
 // 408 Error metrics for monitoring
-const timeoutMetrics = {
+// Exported for MemoryCleanupService to perform periodic cleanup
+export const timeoutMetrics = {
   total408Errors: 0,
   auth408Errors: 0,
   format408Errors: 0,
