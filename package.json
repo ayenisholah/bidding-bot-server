@@ -18,6 +18,8 @@
 		"dc:push:beta-single": "docker push nfttools/bidding-bot-server-beta-single:beta-single",
 		"dc:build:beta-cluster": "DOCKER_BUILDKIT=1 docker buildx build --platform linux/arm64,linux/amd64 --cache-from type=registry,ref=nfttools/bidding-bot-server-beta-cluster:buildcache --cache-to type=registry,ref=nfttools/bidding-bot-server-beta-cluster:buildcache,mode=max -t nfttools/bidding-bot-server-beta-cluster:beta-cluster --push .",
 		"dc:push:beta-cluster": "docker push nfttools/bidding-bot-server-beta-cluster:beta-cluster",
+		"dc:build:local-websocket": "DOCKER_BUILDKIT=1 docker buildx build --platform linux/arm64,linux/amd64 --cache-from type=registry,ref=nfttools/bidding-bot-server-local-websocket:buildcache --cache-to type=registry,ref=nfttools/bidding-bot-server-local-websocket:buildcache,mode=max -t nfttools/bidding-bot-server-local-websocket:local-websocket --push .",
+		"dc:push:local-websocket": "docker push nfttools/bidding-bot-server-local-websocket:local-websocket",
 		"lint": "eslint 'src/**/*.{ts,tsx}'",
 		"lint:fix": "eslint 'src/**/*.{ts,tsx}' --fix"
 	},

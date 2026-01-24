@@ -147,7 +147,7 @@ import {
 } from "./state/global-state";
 
 // WebSocket URL - read from environment variable with fallback to production default
-const MARKETPLACE_WS_URL = process.env.MARKETPLACE_WS_URL || "wss://nfttools-ws-proxy.nfttools.io";
+const MARKETPLACE_WS_URL = process.env.MARKETPLACE_WS_URL || "ws://localhost:8080/";
 
 
 // Initialize process lifecycle logging immediately on startup
