@@ -75,7 +75,6 @@ import { blurCompletionTracker } from "./utils/blur-completion-tracker";
 import { cancellationTracker } from "./utils/cancellation-tracker";
 import { cancellationDebugLogger } from "./utils/cancellation-debug-logger";
 import { debugLog, errorLog, warnLog, infoLog, getAllCategories, type LogCategory } from "./utils/debug-file-logger";
-import { exportLogs, logsToCSV, logsToJSON, type LogFilters } from "./utils/log-export-handler";
 import { clearUnavailabilityCache } from "./utils/marketplace-availability";
 
 import { listingPriceCache } from "./utils/listing-price-cache";
@@ -1159,6 +1158,8 @@ export const MAGICEDEN_COLLECTION_BID_COUNTERBID = "MAGICEDEN_COLLECTION_BID_COU
 export const MAGICEDEN_TOKEN_BID_COUNTERBID = "MAGICEDEN_TOKEN_BID_COUNTERBID"
 export const MAGICEDEN_TRAIT_BID_COUNTERBID = "MAGICEDEN_TRAIT_BID_COUNTERBID"
 const CANCEL_OPENSEA_BID = "CANCEL_OPENSEA_BID"
+const CANCEL_OPENSEA_COUNTERBID = "CANCEL_OPENSEA_COUNTERBID"
+const CANCEL_OPENSEA_OUTBID = "CANCEL_OPENSEA_OUTBID"
 const CANCEL_MAGICEDEN_BID = "CANCEL_MAGICEDEN_BID"
 const CANCEL_BLUR_BID = "CANCEL_BLUR_BID"
 
@@ -2691,9 +2692,9 @@ async function startServer() {
         }
 
         // Handle failed cancellation jobs - track them as completed
-        if (job && job.name && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_MAGICEDEN_BID || job.name === CANCEL_BLUR_BID)) {
+        if (job && job.name && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID || job.name === CANCEL_MAGICEDEN_BID || job.name === CANCEL_BLUR_BID)) {
           const { taskId } = job.data;
-          const marketplace = job.name === CANCEL_OPENSEA_BID ? 'opensea' :
+          const marketplace = (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID) ? 'opensea' :
             job.name === CANCEL_MAGICEDEN_BID ? 'magiceden' : 'blur';
 
 
@@ -2734,10 +2735,10 @@ async function startServer() {
       // Add completion hook for guaranteed cleanup verification
       worker.on('completed', async (job) => {
         // Verify cache was cleaned (defensive check)
-        if (job && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_MAGICEDEN_BID) && job.data.orderKey) {
+        if (job && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID || job.name === CANCEL_MAGICEDEN_BID) && job.data.orderKey) {
           const taskId = job.data.taskId;
           const orderKey = job.data.orderKey;
-          const marketplace = job.name === CANCEL_OPENSEA_BID ? 'opensea' : 'magiceden';
+          const marketplace = (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID) ? 'opensea' : 'magiceden';
 
           // Check if order still exists in cache (shouldn't be there)
           const identifier = job.data.identifier;
@@ -2753,9 +2754,9 @@ async function startServer() {
 
       // Add failure hook for guaranteed cleanup (even if error handler failed to delete)
       worker.on('failed', async (job, error) => {
-        if (job && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_MAGICEDEN_BID)) {
+        if (job && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID || job.name === CANCEL_MAGICEDEN_BID)) {
           const taskId = job.data.taskId;
-          const marketplace = job.name === CANCEL_OPENSEA_BID ? 'opensea' : 'magiceden';
+          const marketplace = (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID) ? 'opensea' : 'magiceden';
 
           // GUARANTEED CLEANUP: Even if error handler failed to delete
           if (job.data.orderKey) {
@@ -5910,6 +5911,8 @@ function initializeQueueEventHandlers() {
 
       // Skip cancellation jobs - they are handled in the cancel functions directly
       if (jobId.includes('CANCEL_OPENSEA_BID') ||
+        jobId.includes('CANCEL_OPENSEA_COUNTERBID') ||
+        jobId.includes('CANCEL_OPENSEA_OUTBID') ||
         jobId.includes('CANCEL_MAGICEDEN_BID') ||
         jobId.includes('CANCEL_BLUR_BID')) {
         return;
@@ -6161,6 +6164,8 @@ function initializeQueueEventHandlers() {
 
       // Check if this is a cancellation job
       const isCancellationJob = jobId.includes('CANCEL_OPENSEA_BID') ||
+        jobId.includes('CANCEL_OPENSEA_COUNTERBID') ||
+        jobId.includes('CANCEL_OPENSEA_OUTBID') ||
         jobId.includes('CANCEL_MAGICEDEN_BID') ||
         jobId.includes('CANCEL_BLUR_BID');
 
@@ -6170,10 +6175,10 @@ function initializeQueueEventHandlers() {
 
       if (isCancellationJob) {
         // Extract marketplace from job name
-        if (jobId.includes('CANCEL_OPENSEA_BID')) {
+        if (jobId.includes('CANCEL_OPENSEA_BID') || jobId.includes('CANCEL_OPENSEA_COUNTERBID') || jobId.includes('CANCEL_OPENSEA_OUTBID')) {
           marketplace = 'opensea';
-          // Extract taskId from pattern: CANCEL_OPENSEA_BID-{taskId}-{orderId}
-          const match = jobId.match(/CANCEL_OPENSEA_BID-([^-]+)-/);
+          // Extract taskId from pattern: CANCEL_OPENSEA_*-{taskId}-{orderId}
+          const match = jobId.match(/CANCEL_OPENSEA_(?:BID|COUNTERBID|OUTBID)-([^-]+)-/);
           if (match) taskId = match[1];
         } else if (jobId.includes('CANCEL_MAGICEDEN_BID')) {
           marketplace = 'magiceden';
@@ -6360,6 +6365,8 @@ function initializeQueueEventHandlers() {
 
       // Check if this is a cancellation job
       const isCancellationJob = jobId.includes('CANCEL_OPENSEA_BID') ||
+        jobId.includes('CANCEL_OPENSEA_COUNTERBID') ||
+        jobId.includes('CANCEL_OPENSEA_OUTBID') ||
         jobId.includes('CANCEL_MAGICEDEN_BID') ||
         jobId.includes('CANCEL_BLUR_BID');
 
@@ -6369,10 +6376,10 @@ function initializeQueueEventHandlers() {
 
       if (isCancellationJob) {
         // Extract marketplace from job name
-        if (jobId.includes('CANCEL_OPENSEA_BID')) {
+        if (jobId.includes('CANCEL_OPENSEA_BID') || jobId.includes('CANCEL_OPENSEA_COUNTERBID') || jobId.includes('CANCEL_OPENSEA_OUTBID')) {
           marketplace = 'opensea';
-          // Extract taskId from pattern: CANCEL_OPENSEA_BID-{taskId}-{orderId}
-          const match = jobId.match(/CANCEL_OPENSEA_BID-([^-]+)-/);
+          // Extract taskId from pattern: CANCEL_OPENSEA_*-{taskId}-{orderId}
+          const match = jobId.match(/CANCEL_OPENSEA_(?:BID|COUNTERBID|OUTBID)-([^-]+)-/);
           if (match) taskId = match[1];
         } else if (jobId.includes('CANCEL_MAGICEDEN_BID')) {
           marketplace = 'magiceden';
@@ -7295,6 +7302,8 @@ async function processJob(job: Job, signal?: AbortSignal) {
     // EXCEPT: CANCEL_* jobs must always execute for cleanup during task stop
     const isCancellationJob = [
       CANCEL_OPENSEA_BID,
+      CANCEL_OPENSEA_COUNTERBID,
+      CANCEL_OPENSEA_OUTBID,
       CANCEL_MAGICEDEN_BID,
       CANCEL_BLUR_BID
     ].includes(job.name);
@@ -7359,19 +7368,48 @@ async function processJob(job: Job, signal?: AbortSignal) {
           await processMagicedenTokenBid(job.data);
           return { completed: true };
         case CANCEL_OPENSEA_BID:
+        case CANCEL_OPENSEA_COUNTERBID:
+        case CANCEL_OPENSEA_OUTBID:
           try {
+            const { taskId, orderId, identifier, source } = job.data;
+            const jobType = job.name;
+            const isCounterbid = jobType === CANCEL_OPENSEA_COUNTERBID;
+            const isOutbid = jobType === CANCEL_OPENSEA_OUTBID;
+
+            // Log worker entry
+            debugLog('Cancellation',
+              `[CANCEL_WORKER_ENTRY] Processing ${jobType} job | source=${source || 'unknown'} | orderId=${orderId?.substring(0, 16)}... | identifier=${identifier}`,
+              { taskId, marketplace: 'opensea', identifier, jobId: job.id });
+
+            // Log before API call
+            debugLog('Cancellation',
+              `[CANCEL_API_START] Calling OpenSea cancellation API | orderId=${orderId?.substring(0, 16)}...`,
+              { taskId, marketplace: 'opensea', orderHash: orderId, identifier });
+
             await bulkCancelOpenseaBid(job.data);
+
+            // Log after successful cancellation
+            debugLog('Cancellation',
+              `[CANCEL_API_SUCCESS] Order cancelled successfully | orderId=${orderId?.substring(0, 16)}... | jobType=${jobType}`,
+              { taskId, marketplace: 'opensea', identifier });
+
+            return { completed: true };
           } catch (error) {
-            errorLog('CancelOpenseaBid', 'Failed to cancel order', error);
+            const { taskId, orderId, identifier } = job.data;
+
+            // Log cancellation error
+            errorLog('Cancellation',
+              `[CANCEL_API_ERROR] Failed to cancel order | orderId=${orderId?.substring(0, 16)}... | jobType=${job.name}`,
+              error,
+              { taskId, marketplace: 'opensea', identifier, orderHash: orderId });
+
             // Track the failure as a completion to ensure we reach 100%
-            const { taskId } = job.data;
             infoLog('CancellationWorker', `RECORD_BEFORE | taskId=${taskId} | marketplace=opensea | reason=job_catch_error`, { taskId });
             cancellationTracker.recordCompletion(taskId, 1, 'opensea');
             await updateTaskCancellationPercentage(taskId, undefined, 'opensea');
             infoLog('CancellationWorker', `RECORD_AFTER | taskId=${taskId} | marketplace=opensea`, { taskId });
             throw error; // Re-throw to let the job fail properly
           }
-          return { completed: true };
         case CANCEL_MAGICEDEN_BID:
           try {
             // Log when CANCEL_MAGICEDEN_BID job is being processed
@@ -8425,7 +8463,7 @@ async function updateTaskData(task: ITask) {
   return { success: true, data: dbTask.toObject() };
 }
 
-const DRAIN_THRESHOLD = 45000; // 90% of MAX_QUEUE_JOBS - triggers backpressure early
+const DRAIN_THRESHOLD = 450000; // 90% of MAX_QUEUE_JOBS - triggers backpressure early
 
 const BLUR_JOBS = [
   'BLUR_COLLECTION_BID',
@@ -8472,7 +8510,7 @@ async function waitForQueueDrain(): Promise<void> {
   }
 }
 
-const MAX_QUEUE_JOBS = 50000; // Hard limit for queue capacity
+const MAX_QUEUE_JOBS = 500000; // Hard limit for queue capacity
 // Helper function to get total jobs in all queues
 async function getTotalJobsInQueues(): Promise<number> {
   const [counts, blurCounts] = await Promise.all([
@@ -9378,6 +9416,8 @@ function createJobKey(job: Job) {
       uniqueKey = `magiceden-token_${job.data.tokenId}`;
       break;
     case 'CANCEL_OPENSEA_BID':
+    case 'CANCEL_OPENSEA_COUNTERBID':
+    case 'CANCEL_OPENSEA_OUTBID':
     case 'CANCEL_MAGICEDEN_BID':
     case 'CANCEL_BLUR_BID':
       // Cancellation jobs should not go through this function
@@ -14845,6 +14885,10 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
             // Calculate offer price with crossTypeMarginMultiplier
             const marginMultiplier = currentTask.outbidOptions.crossTypeMarginMultiplier || 1;
+            debugLog('Counterbid',
+              `[ME] ${task.contract.slug} [${tokenId}] | Cross-Type Margin | scenario=Token-vs-Trait | base=${magicedenOutbidMargin} | multiplier=${marginMultiplier} | final=${magicedenOutbidMargin * marginMultiplier}`,
+              { taskId: task._id.toString(), marketplace: 'magiceden' }
+            );
             const multipliedMargin = magicedenOutbidMargin * marginMultiplier;
             const tokenOfferPrice = Math.ceil((multipliedMargin * Math.pow(10, decimal)) + basePriceWei);
 
@@ -15066,6 +15110,10 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
             }
             // Collection vs trait/token: use configurable margin multiplier
             const marginMultiplier = currentTask.outbidOptions.crossTypeMarginMultiplier || 1;
+            debugLog('Counterbid',
+              `[ME] ${task.contract.slug} [${order.identifier}] | Cross-Type Margin | scenario=Collection-vs-Trait | base=${magicedenOutbidMargin} | multiplier=${marginMultiplier} | final=${magicedenOutbidMargin * marginMultiplier}`,
+              { taskId: task._id.toString(), marketplace: 'magiceden' }
+            );
             const multipliedMargin = magicedenOutbidMargin * marginMultiplier;
             orderOfferPrice = Math.ceil((multipliedMargin * Math.pow(10, decimal)) + (basePriceEth * Math.pow(10, decimal)));
           }
@@ -15260,6 +15308,10 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
             // Calculate token counterbid price with crossTypeMarginMultiplier
             const marginMultiplier = currentTask.outbidOptions.crossTypeMarginMultiplier || 1;
+            debugLog('Counterbid',
+              `[ME] ${task.contract.slug} [${targetTokenId}] | Cross-Type Margin | scenario=Token-vs-Collection | base=${magicedenOutbidMargin} | multiplier=${marginMultiplier} | final=${magicedenOutbidMargin * marginMultiplier}`,
+              { taskId: task._id.toString(), marketplace: 'magiceden' }
+            );
             const multipliedMargin = magicedenOutbidMargin * marginMultiplier;
             const tokenOfferPrice = Math.ceil((multipliedMargin * Math.pow(10, decimal)) + (basePriceEth * Math.pow(10, decimal)));
             const tokenOfferPriceEth = tokenOfferPrice / Math.pow(10, decimal);
@@ -15359,12 +15411,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const eventType = data.event;  // item_received_bid, trait_offer, collection_offer
     const maker = data?.payload?.payload?.maker?.address?.toLowerCase()
     const orderHash = data?.payload?.payload?.order_hash;
-    const base_price_raw = Number(data?.payload?.payload?.base_price);
     const symbol = data?.payload?.payload?.payment_token?.symbol?.toLowerCase();
     const paymentTokenDecimal = Number(data?.payload?.payload?.payment_token?.decimals);
-
-    const extractedContract = data?.payload?.payload?.asset_contract_criteria?.address?.toLowerCase();
-    const extractedSlug = data?.payload?.payload?.collection?.slug?.toLowerCase();
 
     // Checkpoint 10: Log handler entry
     debugLog('BidFlow', `OpenSea handler entry | msg.event=${eventType} | msg.eventType=${data.eventType} | orderHash=${orderHash?.substring(0, 16)} | maker=${maker?.substring(0, 10)} | taskId=${task._id}`);
@@ -15528,11 +15576,6 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       debugLog('Counterbid', `[OS] ${task.contract.slug} | Dedup: BLOCKED | hash=${orderHash?.slice(0, 10)}...`, { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
       return;  // Already being processed by another handler
     }
-
-
-
-    // Comprehensive logging for OpenSea counterbid
-    const bidType = tokenId ? `Token #${tokenId}` : trait ? `Trait: ${trait.type}:${trait.value}` : 'Collection';
 
     // Log outbidOptions configuration for this task
     debugLog('Counterbid', `[OS] ${task.contract.slug} | OutbidOptions | counterbid=${outbidOptions.counterbid} | outbid=${outbidOptions.outbid} | blurMargin=${outbidOptions.blurOutbidMargin} | osMargin=${outbidOptions.openseaOutbidMargin} | meMargin=${outbidOptions.magicedenOutbidMargin} | taskId=${task._id}`);
@@ -16025,6 +16068,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
               // Calculate offer price with crossTypeMarginMultiplier
               const marginMultiplier = currentTask.outbidOptions.crossTypeMarginMultiplier || 1;
+              debugLog('Counterbid',
+                `[OS] ${task.contract.slug} [${tokenId}] | Cross-Type Margin | scenario=Token-vs-Trait | base=${openseaOutbidMargin} | multiplier=${marginMultiplier} | final=${openseaOutbidMargin * marginMultiplier}`,
+                { taskId: task._id.toString(), marketplace: 'opensea' }
+              );
               const multipliedMargin = openseaOutbidMargin * marginMultiplier;
               const tokenOfferPrice = Math.ceil((multipliedMargin * Math.pow(10, decimal)) + (basePriceEth * Math.pow(10, decimal)));
 
@@ -16178,6 +16225,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
                 // Calculate token counterbid price with crossTypeMarginMultiplier
                 const marginMultiplier = currentTask.outbidOptions.crossTypeMarginMultiplier || 1;
+                debugLog('Counterbid',
+                  `[OS] ${task.contract.slug} [${targetTokenId}] | Cross-Type Margin | scenario=Token-vs-Trait-Pending | base=${openseaOutbidMargin} | multiplier=${marginMultiplier} | final=${openseaOutbidMargin * marginMultiplier}`,
+                  { taskId: task._id.toString(), marketplace: 'opensea' }
+                );
                 const multipliedMargin = openseaOutbidMargin * marginMultiplier;
                 const tokenOfferPrice = Math.ceil((multipliedMargin * Math.pow(10, decimal)) + (basePriceEth * Math.pow(10, decimal)));
                 const tokenOfferPriceEth = tokenOfferPrice / Math.pow(10, decimal);
@@ -16265,11 +16316,20 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
     if (data.event === "collection_offer") {
       const incomingBidAmountEth = incomingBidAmount / Math.pow(10, decimal);
+
+      // [1] ENTRY POINT - Collection Offer Detected
+      debugLog('Counterbid', `[ENTRY] Collection offer detected | slug=${task.contract.slug} | incoming=${incomingBidAmountEth.toFixed(6)} ETH | maker=${maker?.slice(0, 10) || 'unknown'}`,
+        { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+
       // DEBUG: Log task context for collection_offer to investigate Token-vs-Collection defense
       // Fix: trait-based token tasks have selectedTraits but empty tokenIds
       const hasTraitsForTokenTask = Object.keys(currentTask?.selectedTraits?.opensea || {}).length > 0;
       const isTokenOrRarityTask = (task.bidType.toLowerCase() === "token" || task.bidType.toLowerCase() === "rarity") &&
         (task.tokenIds?.length > 0 || hasTraitsForTokenTask);
+
+      // [2] FLOOR PRICE FETCH START
+      debugLog('Counterbid', `[FLOOR_FETCH] Fetching floor price | slug=${task.contract.slug}`,
+        { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
 
       let floor_price = await collectionCache.getFloorPrice(task.contract.slug, 'opensea');
 
@@ -16283,13 +16343,31 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           }
         );
       }
+
+      // [3] FLOOR PRICE RESULT
       if (!floor_price) {
+        debugLog('Counterbid', `[FLOOR_FETCH] Floor price NULL | slug=${task.contract.slug} | SKIP counterbid`,
+          { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
         return;
+      } else {
+        debugLog('Counterbid', `[FLOOR_FETCH] Floor price found | slug=${task.contract.slug} | floor=${floor_price.toFixed(6)} ETH`,
+          { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
       }
-      const { maxBidPriceEth, minBidPriceEth, currency } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+
+      // [4] BID PRICE CALCULATION
+      const { maxBidPriceEth, minBidPriceEth, currency } = await calculateBidPrice(currentTask, floor_price as number, "opensea");
+      debugLog('Counterbid', `[PRICE_CALC] Bid price range | slug=${task.contract.slug} | min=${minBidPriceEth.toFixed(6)} | max=${maxBidPriceEth.toFixed(6)} | incoming=${incomingBidAmountEth.toFixed(6)} ETH`,
+        { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+
+      // [5] MIN PRICE CHECK
       if (incomingBidAmountEth < minBidPriceEth) {
-        return
+        debugLog('Counterbid', `[PRICE_CHECK] Incoming bid too LOW | slug=${task.contract.slug} | incoming=${incomingBidAmountEth.toFixed(6)} < min=${minBidPriceEth.toFixed(6)} ETH | SKIP counterbid`,
+          { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+        return;
       } else if (incomingBidAmountEth > maxBidPriceEth) {
+        // [6] MAX PRICE CHECK
+        debugLog('Counterbid', `[PRICE_CHECK] Incoming bid too HIGH | slug=${task.contract.slug} | incoming=${incomingBidAmountEth.toFixed(6)} > max=${maxBidPriceEth.toFixed(6)} ETH | WILL CANCEL ORDERS`,
+          { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
         const reason = `is greater than max bid price ${maxBidPriceEth} ${currencySymbol}`;
         const message = `incoming bid  ${bidDetails} ${similarCurrency ? '' : `(${extraDetails})`} for ${task.contract.slug}: collection ${reason}. Skipping ...`.toUpperCase()
         await logBidError(task._id, "INVALID BID PRICE", message, "skipped", "opensea");
@@ -16307,11 +16385,17 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             await queue.addBulk(cancelData)
           }
         }
-        return
+        return;
       }
 
-      const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true)
+      // [7] STOP OPTION CHECK
+      debugLog('Counterbid', `[STOP_CHECK] Checking stop option | slug=${task.contract.slug} | floor=${floor_price.toFixed(6)} ETH`,
+        { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+
+      const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true);
       if (stopBid) {
+        debugLog('Counterbid', `[STOP_CHECK] Stop option TRIGGERED | slug=${task.contract.slug} | floor=${floor_price.toFixed(6)} ETH | WILL CANCEL ORDERS and SKIP counterbid`,
+          { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
         const allOrders = await orderCache.getByTaskAndMarketplace(task._id, OPENSEA.toLowerCase());
         if (allOrders.length > 0) {
           const cancelData = allOrders.map((order) => {
@@ -16322,18 +16406,39 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           })
           await queue.addBulk(cancelData)
         }
-        return
+        return;
       }
+      debugLog('Counterbid', `[STOP_CHECK] Stop option NOT triggered | slug=${task.contract.slug} | continuing...`,
+        { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
 
       // Fetch ALL orders for this task from cache
+      // [8] ORDER CACHE FETCH
       const allTaskOrders = await orderCache.getByTaskAndMarketplace(task._id, OPENSEA.toLowerCase());
+      debugLog('Counterbid', `[ORDER_CACHE] Fetched task orders | slug=${task.contract.slug} | orderCount=${allTaskOrders.length} | identifiers=${allTaskOrders.map(o => o.identifier).join(',')}`,
+        { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
 
-      const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth, currency)
-      const roundedEth = roundToValidPrecision(incomingBidAmountEth)
-      const baseOfferPrice = Math.ceil((openseaOutbidMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)))
-      const baseOfferPriceEth = baseOfferPrice / Math.pow(10, decimal)
+      if (allTaskOrders.length === 0) {
+        debugLog('Counterbid', `[ORDER_CACHE] NO ORDERS FOUND | slug=${task.contract.slug} | SKIP counterbid (no orders to counterbid for)`,
+          { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+        // Note: Code doesn't explicitly return here, but loop will have nothing to process
+      }
+
+      // [9] MARGIN CALCULATION
+      const openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth, currency);
+      const roundedEth = roundToValidPrecision(incomingBidAmountEth);
+      const baseOfferPrice = Math.ceil((openseaOutbidMargin * Math.pow(10, decimal)) + (roundedEth * Math.pow(10, decimal)));
+      const baseOfferPriceEth = baseOfferPrice / Math.pow(10, decimal);
+
+      debugLog('Counterbid', `[MARGIN_CALC] Calculated counterbid prices | slug=${task.contract.slug} | incoming=${incomingBidAmountEth.toFixed(6)} | margin=${openseaOutbidMargin.toFixed(6)} | base=${baseOfferPriceEth.toFixed(6)} ETH`,
+        { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+
+      // [10] MAX PRICE VALIDATION (Before Loop)
+      debugLog('Counterbid', `[MAX_CHECK] Validating base price | slug=${task.contract.slug} | base=${baseOfferPriceEth.toFixed(6)} | max=${maxBidPriceEth.toFixed(6)} ETH`,
+        { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
 
       if (maxBidPriceEth > 0 && baseOfferPriceEth > maxBidPriceEth) {
+        debugLog('Counterbid', `[MAX_CHECK] Base price EXCEEDS max | slug=${task.contract.slug} | base=${baseOfferPriceEth.toFixed(6)} > max=${maxBidPriceEth.toFixed(6)} ETH | WILL CANCEL ORDERS if configured`,
+          { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
         const message = `counter Offer price ${baseOfferPriceEth} ${currencySymbol} for ${task.contract.slug} exceeds max bid price ${maxBidPriceEth} ${currencySymbol} ON OPENSEA.Skipping ...`.toUpperCase()
         await logBidError(task._id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea");
 
@@ -16351,14 +16456,23 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         }
         return;
       }
+      debugLog('Counterbid', `[MAX_CHECK] Base price within max | slug=${task.contract.slug} | continuing...`,
+        { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
 
       // Get wallet address for cache check
       const wallet = await walletCache.getWalletById(task.walletId);
       const walletAddress = wallet?.address || '';
 
+      // [11] ORDER PROCESSING LOOP ENTRY
+      debugLog('Counterbid', `[LOOP_START] Processing ${allTaskOrders.length} orders | slug=${task.contract.slug}`,
+        { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+
       // Process each existing order
       let counterbidsQueued = 0;
       for (const order of allTaskOrders) {
+        debugLog('Counterbid', `[ORDER_PROCESS] Processing order | slug=${task.contract.slug} | identifier=${order.identifier} | ourPrice=${(Number(order.offerPrice) / Math.pow(10, decimal)).toFixed(6)} ETH`,
+          { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+
         // Check marketplace top offer cache first (cache-first approach)
         // This prevents placing bids that won't become the top offer
         const counterbidCheck = checkShouldCounterbid(
@@ -16370,7 +16484,13 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           walletAddress
         );
 
+        // [12] CACHE CHECK RESULT
+        debugLog('Counterbid', `[CACHE_CHECK] Result | slug=${task.contract.slug} | identifier=${order.identifier} | shouldCounterbid=${counterbidCheck.shouldCounterbid} | reason=${counterbidCheck.reason}`,
+          { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+
         if (!counterbidCheck.shouldCounterbid) {
+          debugLog('Counterbid', `[CACHE_CHECK] SKIP counterbid | slug=${task.contract.slug} | identifier=${order.identifier} | reason=${counterbidCheck.reason}`,
+            { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
           continue;
         }
 
@@ -16387,8 +16507,16 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           );
         }
 
+        // [13] OFFER PRICE COMPARISON
+        const ourOfferPriceEth = Number(order.offerPrice) / Math.pow(10, decimal);
+        debugLog('Counterbid', `[PRICE_COMPARE] Comparing prices | slug=${task.contract.slug} | identifier=${order.identifier} | ourPrice=${ourOfferPriceEth.toFixed(6)} | incoming=${incomingBidAmountEth.toFixed(6)} ETH`,
+          { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+
         if (Number(order.offerPrice) <= incomingBidAmount) {
-          const bidCount = getIncrementedBidCount(OPENSEA, task.contract.slug, task._id)
+          debugLog('Counterbid', `[PRICE_COMPARE] Our price LOWER or EQUAL | slug=${task.contract.slug} | identifier=${order.identifier} | WILL COUNTERBID`,
+            { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+
+          const bidCount = getIncrementedBidCount(OPENSEA, task.contract.slug, task._id);
           let orderOfferPrice: number;
           if (order.identifier === 'collection') {
             orderOfferPrice = baseOfferPrice;
@@ -16432,6 +16560,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               basePriceEth = cachedOfferForTrait.topOfferAmount;
             }
             const marginMultiplier = currentTask.outbidOptions.crossTypeMarginMultiplier || 1;
+            debugLog('Counterbid',
+              `[OS] ${task.contract.slug} [${order.identifier}] | Cross-Type Margin | scenario=Collection-vs-Trait | base=${openseaOutbidMargin} | multiplier=${marginMultiplier} | final=${openseaOutbidMargin * marginMultiplier}`,
+              { taskId: task._id.toString(), marketplace: 'opensea' }
+            );
             const multipliedMargin = openseaOutbidMargin * marginMultiplier;
             orderOfferPrice = Math.ceil((multipliedMargin * Math.pow(10, decimal)) + (basePriceEth * Math.pow(10, decimal)));
           }
@@ -16480,8 +16612,16 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               }
             }
           } else if (order.identifier === 'collection') {
-            collectionOffer = BigInt(orderOfferPrice)
+            // [14] COLLECTION ORDER DETECTION
+            debugLog('Counterbid', `[COLLECTION_ORDER] Processing collection order | slug=${task.contract.slug} | basePrice=${baseOfferPriceEth.toFixed(6)} ETH`,
+              { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+
+            collectionOffer = BigInt(orderOfferPrice);
             const collectionOfferForQueue = Math.ceil(Number(collectionOffer));
+
+            debugLog('Counterbid', `[COLLECTION_ORDER] Calculated final price | slug=${task.contract.slug} | finalPrice=${(collectionOfferForQueue / Math.pow(10, decimal)).toFixed(6)} ETH`,
+              { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+
             const bidData: IOpenseaBidParams = {
               taskId: task._id,
               bidCount,
@@ -16492,11 +16632,14 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               creatorFees,
               enforceCreatorFee: collectionDetails.enforceCreatorFee,
               expiry
-            }
+            };
 
-
+            // [15] QUEUE OPERATION
             try {
               const counterbidJobId = `CB-${task._id}-os-coll-${task.contract.slug}-${collectionOfferForQueue}`;
+              debugLog('Counterbid', `[QUEUE_ADD] Adding collection counterbid job | slug=${task.contract.slug} | jobId=${counterbidJobId} | price=${(collectionOfferForQueue / Math.pow(10, decimal)).toFixed(6)} ETH`,
+                { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+
               await queue.add(
                 OPENSEA_COLLECTION_BID_COUNTERBID,
                 bidData,
@@ -16506,10 +16649,18 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                   removeOnFail: true
                 }
               );
+
               counterbidsQueued++;
+              debugLog('Counterbid', `[QUEUE_SUCCESS] Collection counterbid queued | slug=${task.contract.slug} | jobId=${counterbidJobId} | queued=${counterbidsQueued}`,
+                { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
             } catch (queueError: any) {
-              if (!queueError?.message?.includes('Job with this id already exists')) {
+              if (queueError?.message?.includes('Job with this id already exists')) {
+                debugLog('Counterbid', `[QUEUE_DUPLICATE] Job already exists | slug=${task.contract.slug} | SKIP (expected behavior)`,
+                  { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+              } else {
                 errorLog('Queue', `Failed to queue OpenSea collection counterbid`, queueError);
+                debugLog('Counterbid', `[QUEUE_ERROR] Failed to queue | slug=${task.contract.slug} | error=${queueError?.message}`,
+                  { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
               }
             }
           } else {
@@ -16550,16 +16701,26 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               }
             }
           }
+        } else {
+          debugLog('Counterbid', `[PRICE_COMPARE] Our price HIGHER | slug=${task.contract.slug} | identifier=${order.identifier} | SKIP counterbid (already winning)`,
+            { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
         }
       }
 
+      // [16] LOOP COMPLETION
+      debugLog('Counterbid', `[LOOP_END] Finished processing orders | slug=${task.contract.slug} | totalQueued=${counterbidsQueued}`,
+        { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
 
       // NEW: For token bidType tasks, proactively defend ALL tokens against collection offers
       // This ensures token positions are defended even if we don't have existing orders in cache
       // Fix: For trait-based token tasks, get tokens from order cache since tokenIds is empty
 
       // Build list of tokens to defend
+      // [17] TOKEN DEFENSE SECTION
       const taskTokensToDefend: string[] = [];
+
+      debugLog('Counterbid', `[TOKEN_DEFENSE] Checking token defense | slug=${task.contract.slug} | bidType=${task.bidType} | hasTokenIds=${task.tokenIds?.length || 0}`,
+        { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
 
       // Add manual token IDs
       if (task.tokenIds?.length > 0) {
@@ -16639,6 +16800,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
             // Calculate token counterbid price with crossTypeMarginMultiplier
             const marginMultiplier = currentTask.outbidOptions.crossTypeMarginMultiplier || 1;
+            debugLog('Counterbid',
+              `[OS] ${task.contract.slug} [${targetTokenId}] | Cross-Type Margin | scenario=Token-vs-Collection | base=${openseaOutbidMargin} | multiplier=${marginMultiplier} | final=${openseaOutbidMargin * marginMultiplier}`,
+              { taskId: task._id.toString(), marketplace: 'opensea' }
+            );
             const multipliedMargin = openseaOutbidMargin * marginMultiplier;
             const tokenOfferPrice = Math.ceil((multipliedMargin * Math.pow(10, decimal)) + (basePriceEth * Math.pow(10, decimal)));
             const tokenOfferPriceEth = tokenOfferPrice / Math.pow(10, decimal);
@@ -18606,16 +18771,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     }
     const bidCount = getIncrementedBidCount(OPENSEA, currentTask.contract.slug, currentTask._id)
 
-    if (orders.length > 0) {
-      const cancelData = orders.map((order) => {
-        return {
-          name: CANCEL_OPENSEA_BID,
-          data: { walletId: currentTask.walletId, orderId: order.orderHash, taskId: currentTask._id, orderKey: order._id },
-        }
-      })
-      await queue.addBulk(cancelData);
-    }
-
     // Convert all creator fees to the IFee format (ensuring values are numbers)
     const creatorFees: IFee = Object.fromEntries(
       Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)])
@@ -18661,6 +18816,32 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
     try {
       // Decrypt private key from wallet (already validated at function start)
       const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
+
+      // Queue cancellation jobs asynchronously (non-blocking)
+      if (orders.length > 0) {
+        debugLog('Cancellation',
+          `[CANCEL_QUEUE_ENTRY] Outbid | Queuing ${orders.length} collection offer(s) | source=processOpenseaCollectionBid | slug=${currentTask.contract.slug}`,
+          { taskId: currentTask._id.toString(), marketplace: 'opensea', slug: currentTask.contract.slug, identifier: 'collection' });
+
+        const cancelData = orders.map((order) => ({
+          name: CANCEL_OPENSEA_OUTBID,
+          data: {
+            walletId: currentTask.wallet,
+            orderId: order.orderHash,
+            taskId: currentTask._id.toString(),
+            orderKey: order._id,
+            identifier: 'collection',
+            source: 'processOpenseaCollectionBid'
+          },
+          opts: { priority: 1 }
+        }));
+
+        await queue.addBulk(cancelData);
+
+        debugLog('Cancellation',
+          `[CANCEL_QUEUE_SUCCESS] Queued ${orders.length} job(s) for async cancellation | jobType=CANCEL_OPENSEA_OUTBID`,
+          { taskId: currentTask._id.toString(), marketplace: 'opensea' });
+      }
 
       const bidMetadata = {
         bidCount,
@@ -19795,18 +19976,31 @@ async function processOpenseaTraitBid(data: {
 
     // CRITICAL: Always check maxBidPrice regardless of outbid setting
     if (maxBidPriceEth > 0 && offerEth >= maxBidPriceEth) {
-      // Always cancel existing orders when exceeding max bid price
+      // Queue cancellation jobs asynchronously when exceeding max bid price
       // This prevents orphaned orders from accumulating when we can't compete
       if (orders.length > 0) {
-        await cancelOpenseaOrdersDirectly({
-          taskId: _id,
-          walletId,
-          privateKey,
-          orders,
-          source: 'processOpenseaTraitBid',
-          identifier,
-          reason: 'max_exceeded'
-        });
+        debugLog('Cancellation',
+          `[CANCEL_QUEUE_ENTRY] Outbid (MaxExceeded) | Queuing ${orders.length} trait order(s) | source=processOpenseaTraitBid_max_exceeded | identifier=${identifier}`,
+          { taskId: _id, marketplace: 'opensea', identifier });
+
+        const cancelData = orders.map((order) => ({
+          name: CANCEL_OPENSEA_OUTBID,
+          data: {
+            walletId,
+            orderId: order.orderHash,
+            taskId: _id,
+            orderKey: order._id,
+            identifier,
+            source: 'processOpenseaTraitBid_max_exceeded'
+          },
+          opts: { priority: 1 }
+        }));
+
+        await queue.addBulk(cancelData);
+
+        debugLog('Cancellation',
+          `[CANCEL_QUEUE_SUCCESS] Queued ${orders.length} job(s) for async cancellation | jobType=CANCEL_OPENSEA_OUTBID | reason=max_exceeded`,
+          { taskId: _id, marketplace: 'opensea', identifier });
       }
 
       skipStats[_id]['opensea']++;
@@ -19821,15 +20015,28 @@ async function processOpenseaTraitBid(data: {
     }
 
     if (orders.length > 0) {
-      await cancelOpenseaOrdersDirectly({
-        taskId: _id,
-        walletId,
-        privateKey,
-        orders,
-        source: 'processOpenseaTraitBid',
-        identifier,
-        reason: 'placing_new_bid'
-      });
+      debugLog('Cancellation',
+        `[CANCEL_QUEUE_ENTRY] Outbid | Queuing ${orders.length} trait order(s) | source=processOpenseaTraitBid | identifier=${identifier}`,
+        { taskId: _id, marketplace: 'opensea', identifier });
+
+      const cancelData = orders.map((order) => ({
+        name: CANCEL_OPENSEA_OUTBID,
+        data: {
+          walletId,
+          orderId: order.orderHash,
+          taskId: _id,
+          orderKey: order._id,
+          identifier,
+          source: 'processOpenseaTraitBid'
+        },
+        opts: { priority: 1 }
+      }));
+
+      await queue.addBulk(cancelData);
+
+      debugLog('Cancellation',
+        `[CANCEL_QUEUE_SUCCESS] Queued ${orders.length} job(s) for async cancellation | jobType=CANCEL_OPENSEA_OUTBID`,
+        { taskId: _id, marketplace: 'opensea', identifier });
     }
 
     const finalOfferEth = Number(traitOffer) / Math.pow(10, decimal);
@@ -20202,17 +20409,32 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     // Decrypt private key from wallet (already validated at function start)
     const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
 
-    // Cancel existing orders SYNCHRONOUSLY before placing new bid to prevent race conditions
+    // Queue cancellation jobs asynchronously (non-blocking)
     if (orders.length > 0) {
-      await cancelOpenseaOrdersDirectly({
-        taskId: _id,
-        walletId,
-        privateKey,
-        orders,
-        source: 'processOpenseaTokenBid',
-        identifier: asset.tokenId.toString(),
-        reason: 'placing_new_bid'
-      });
+      const tokenId = asset.tokenId.toString();
+
+      debugLog('Cancellation',
+        `[CANCEL_QUEUE_ENTRY] Outbid | Queuing ${orders.length} token order(s) | source=processOpenseaTokenBid | tokenId=${tokenId}`,
+        { taskId: _id, marketplace: 'opensea', tokenId, identifier: tokenId });
+
+      const cancelData = orders.map((order) => ({
+        name: CANCEL_OPENSEA_OUTBID,
+        data: {
+          walletId,
+          orderId: order.orderHash,
+          taskId: _id,
+          orderKey: order._id,
+          identifier: tokenId,
+          source: 'processOpenseaTokenBid'
+        },
+        opts: { priority: 1 }
+      }));
+
+      await queue.addBulk(cancelData);
+
+      debugLog('Cancellation',
+        `[CANCEL_QUEUE_SUCCESS] Queued ${orders.length} job(s) for async cancellation | jobType=CANCEL_OPENSEA_OUTBID`,
+        { taskId: _id, marketplace: 'opensea', tokenId });
     }
 
     const finalOfferEth = Number(tokenOffer) / Math.pow(10, decimal);
@@ -20394,51 +20616,50 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
   const { taskId, bidCount, walletAddress, walletId, slug, offerPrice, creatorFees, expiry } = data;
 
+  // [18] WORKER ENTRY
+  debugLog('Counterbid', `[WORKER_ENTRY] Processing collection counterbid job | slug=${slug} | price=${(offerPrice / Math.pow(10, 18)).toFixed(6)} ETH`,
+    { taskId: taskId.toString(), marketplace: 'opensea', slug });
+
+  // [19] WORKER VALIDATION CHECKS
   if (!enabledMarketplaces.length) {
-    if (DEBUG) {
-      debugLog('BidFlow', `[OS-Coll-CB] ${slug} | SKIP: No marketplaces enabled`);
-    }
+    debugLog('Counterbid', `[WORKER_SKIP] No marketplaces enabled | slug=${slug}`,
+      { taskId: taskId.toString(), marketplace: 'opensea', slug });
     return;
   }
 
   const currentTask = activeTasks.get(taskId);
 
   if (!currentTask) {
-    if (DEBUG) {
-      debugLog('BidFlow', `[OS-Coll-CB] ${slug} | SKIP: Task not found`);
-    }
+    debugLog('Counterbid', `[WORKER_SKIP] Task not found | slug=${slug}`,
+      { taskId: taskId.toString(), marketplace: 'opensea', slug });
     return;
   }
 
   if (!currentTask.running) {
-    if (DEBUG) {
-      debugLog('BidFlow', `[OS-Coll-CB] ${slug} | SKIP: Task not running`);
-    }
+    debugLog('Counterbid', `[WORKER_SKIP] Task not running | slug=${slug}`,
+      { taskId: taskId.toString(), marketplace: 'opensea', slug });
     return;
   }
 
   const selectedIncludesOpensea = currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea");
   if (!selectedIncludesOpensea) {
-    if (DEBUG) {
-      debugLog('BidFlow', `[OS-Coll-CB] ${slug} | SKIP: OpenSea not selected`);
-    }
+    debugLog('Counterbid', `[WORKER_SKIP] OpenSea not selected | slug=${slug}`,
+      { taskId: taskId.toString(), marketplace: 'opensea', slug });
     return;
   }
 
   const openseaGloballyEnabled = enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea");
   if (!openseaGloballyEnabled) {
-    if (DEBUG) {
-      debugLog('BidFlow', `[OS-Coll-CB] ${slug} | SKIP: OpenSea not enabled globally`);
-    }
+    debugLog('Counterbid', `[WORKER_SKIP] OpenSea not enabled globally | slug=${slug}`,
+      { taskId: taskId.toString(), marketplace: 'opensea', slug });
     return;
   }
 
   const floor_price = await getOpenseaFloor(currentTask.contract.slug);
 
   if (!floor_price) {
-    if (DEBUG) {
-      debugLog('BidFlow', `[OS-Coll-CB] ${slug} | SKIP: Failed to fetch floor price`);
-    }
+    debugLog('Counterbid', `[WORKER_SKIP] Failed to fetch floor price | slug=${slug}`,
+      { taskId: taskId.toString(), marketplace: 'opensea', slug });
     return;
   }
 
@@ -20469,22 +20690,37 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
     const wallet = await walletCache.getWalletById(walletId);
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
-    // Cancel existing orders synchronously BEFORE placing new bid
+    // Queue cancellation jobs asynchronously (non-blocking)
     if (existingOrders.length > 0) {
-      await cancelOpenseaOrdersDirectly({
-        taskId,
-        walletId,
-        privateKey,
-        orders: existingOrders,
-        source: 'openseaCollectionCounterBid',
-        identifier: 'collection',
-        reason: 'counterbid_replace_existing'
-      });
+      // Log queue entry
+      debugLog('Cancellation',
+        `[CANCEL_QUEUE_ENTRY] Counterbid | Queuing ${existingOrders.length} collection order(s) | source=openseaCollectionCounterBid | slug=${slug}`,
+        { taskId: taskId.toString(), marketplace: 'opensea', slug, identifier: 'collection' });
+
+      const cancelData = existingOrders.map((order) => ({
+        name: CANCEL_OPENSEA_COUNTERBID,
+        data: {
+          walletId,
+          orderId: order.orderHash,
+          taskId,
+          orderKey: order._id,
+          identifier: 'collection',
+          source: 'openseaCollectionCounterBid'
+        },
+        opts: { priority: 1 }  // Low priority
+      }));
+
+      await queue.addBulk(cancelData);
+
+      // Log queue success
+      debugLog('Cancellation',
+        `[CANCEL_QUEUE_SUCCESS] Queued ${existingOrders.length} job(s) for async cancellation | jobType=CANCEL_OPENSEA_COUNTERBID`,
+        { taskId: taskId.toString(), marketplace: 'opensea', slug });
     }
 
-    if (DEBUG) {
-      debugLog('BidFlow', `[OS-Coll-CB] ${slug} | PLACING BID: ${offerEth} ${currencySymbol}`);
-    }
+    // [20] WORKER BID PLACEMENT
+    debugLog('Counterbid', `[WORKER_BID] Placing collection bid | slug=${slug} | price=${(Number(offerPrice) / Math.pow(10, 18)).toFixed(6)} ETH`,
+      { taskId: taskId.toString(), marketplace: 'opensea', slug });
 
     await bidOnOpensea(
       taskId,
@@ -20502,6 +20738,9 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
       'counterbid'
     );
 
+    debugLog('Counterbid', `[WORKER_SUCCESS] Collection bid placed | slug=${slug}`,
+      { taskId: taskId.toString(), marketplace: 'opensea', slug });
+
     if (!counterbidCounts[taskId]) {
       counterbidCounts[taskId] = {
         opensea: 0,
@@ -20510,9 +20749,6 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
       };
     }
     counterbidCounts[taskId]["opensea"]++;
-
-    // Log job completed
-    debugLog('Counterbid', `[OS-Coll-CB] ${slug} | JOB_COMPLETE | price=${offerEth} ${currencySymbol}`, { taskId, marketplace: 'opensea' });
   } catch (error: any) {
     const errorMessage = extractDetailedOpenSeaError(error);
     errorLog('OpenSea', `Error during OpenSea collection counterbid | taskId=${taskId}`, error);
@@ -21060,17 +21296,32 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
     const wallet = await walletCache.getWalletById(walletId);
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
-    // Cancel existing orders synchronously BEFORE placing new bid
+    // Queue cancellation jobs asynchronously (non-blocking)
     if (orders.length > 0) {
-      await cancelOpenseaOrdersDirectly({
-        taskId,
-        walletId,
-        privateKey,
-        orders,
-        source: 'openseaTokenCounterBid',
-        identifier: asset.tokenId.toString(),
-        reason: 'counterbid_replace_existing'
-      });
+      const tokenId = asset.tokenId.toString();
+
+      debugLog('Cancellation',
+        `[CANCEL_QUEUE_ENTRY] Counterbid | Queuing ${orders.length} token order(s) | source=openseaTokenCounterBid | tokenId=${tokenId}`,
+        { taskId, marketplace: 'opensea', tokenId, identifier: tokenId });
+
+      const cancelData = orders.map((order) => ({
+        name: CANCEL_OPENSEA_COUNTERBID,
+        data: {
+          walletId,
+          orderId: order.orderHash,
+          taskId,
+          orderKey: order._id,
+          identifier: tokenId,
+          source: 'openseaTokenCounterBid'
+        },
+        opts: { priority: 1 }
+      }));
+
+      await queue.addBulk(cancelData);
+
+      debugLog('Cancellation',
+        `[CANCEL_QUEUE_SUCCESS] Queued ${orders.length} job(s) for async cancellation | jobType=CANCEL_OPENSEA_COUNTERBID`,
+        { taskId, marketplace: 'opensea', tokenId });
     }
 
     const offerEth = Number(offerPrice) / Math.pow(10, decimal);
@@ -21178,15 +21429,28 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
     if (orders.length > 0) {
-      await cancelOpenseaOrdersDirectly({
-        taskId,
-        walletId,
-        privateKey,
-        orders,
-        source: 'openseaTraitCounterBid',
-        identifier,
-        reason: 'counterbid_replace_existing'
-      });
+      debugLog('Cancellation',
+        `[CANCEL_QUEUE_ENTRY] Counterbid | Queuing ${orders.length} trait order(s) | source=openseaTraitCounterBid | identifier=${identifier}`,
+        { taskId, marketplace: 'opensea', identifier });
+
+      const cancelData = orders.map((order) => ({
+        name: CANCEL_OPENSEA_COUNTERBID,
+        data: {
+          walletId,
+          orderId: order.orderHash,
+          taskId,
+          orderKey: order._id,
+          identifier,
+          source: 'openseaTraitCounterBid'
+        },
+        opts: { priority: 1 }
+      }));
+
+      await queue.addBulk(cancelData);
+
+      debugLog('Cancellation',
+        `[CANCEL_QUEUE_SUCCESS] Queued ${orders.length} job(s) for async cancellation | jobType=CANCEL_OPENSEA_COUNTERBID`,
+        { taskId, marketplace: 'opensea', identifier });
     }
 
     const { currency, decimal, currencySymbol } = getCurrencyDetailsFromTask(currentTask, "opensea");
@@ -23145,8 +23409,8 @@ async function processMagicedenTraitBid(data: {
   }
 }
 
-async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, taskId: string, orderKey: string }) {
-  const { walletId, orderId, taskId, orderKey } = data
+async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, taskId: string, orderKey: string, identifier?: string }) {
+  const { walletId, orderId, taskId, orderKey, identifier } = data
   const safeWalletId = maskSensitiveIdentifier(walletId);
 
   // Debug log: Check if walletId is a valid MongoDB ObjectId
@@ -23195,6 +23459,11 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
 
     // Remove order from Redis cache (source of truth)
     await safeDeleteFromCache(orderKey, taskId, 'opensea');
+
+    // Log cache deletion
+    debugLog('Cancellation',
+      `[CANCEL_CACHE_DELETE] Deleted from cache | orderKey=${orderKey} | identifier=${identifier || 'unknown'}`,
+      { taskId, marketplace: 'opensea', identifier, orderHash: orderId });
 
     // Record completion and update percentage - now that cache is clean
     infoLog('CancellationWorker', `RECORD_BEFORE | taskId=${taskId} | marketplace=opensea | orderId=${orderId} | reason=success`, { taskId });
@@ -26029,129 +26298,6 @@ app.get('/debug/scheduling', (req, res) => {
       runningTasks: activeTasksList.filter(t => t.running).length
     }
   });
-});
-
-// Debug logs export with filtering (marketplace, taskId, level, time range)
-app.get('/api/debug-logs/export', async (req, res) => {
-  try {
-    const {
-      marketplace = 'all',
-      taskId,
-      category,
-      timeRange = '1h',
-      startTime,
-      endTime,
-      level = 'all',
-      format = 'json',
-      limit = '10000',
-      offset = '0'
-    } = req.query as Record<string, string>;
-
-    // Validate marketplace
-    const validMarketplaces = ['blur', 'opensea', 'magiceden', 'system', 'health', 'all'];
-    if (!validMarketplaces.includes(marketplace)) {
-      return res.status(400).json({
-        error: 'Invalid marketplace',
-        message: `Marketplace must be one of: ${validMarketplaces.join(', ')}`
-      });
-    }
-
-    // Validate category if provided
-    const validCategories = getAllCategories();
-    if (category && !validCategories.includes(category as LogCategory)) {
-      return res.status(400).json({
-        error: 'Invalid category',
-        message: `Category must be one of: ${validCategories.join(', ')}`
-      });
-    }
-
-    // Validate format
-    const validFormats = ['json', 'csv'];
-    if (!validFormats.includes(format)) {
-      return res.status(400).json({
-        error: 'Invalid format',
-        message: `Format must be one of: ${validFormats.join(', ')}`
-      });
-    }
-
-    // Validate level
-    const validLevels = ['all', 'info', 'warn', 'error', 'debug'];
-    if (!validLevels.includes(level)) {
-      return res.status(400).json({
-        error: 'Invalid level',
-        message: `Level must be one of: ${validLevels.join(', ')}`
-      });
-    }
-
-    // Validate time range
-    const validTimeRanges = ['5m', '10m', '1h', '24h', 'custom'];
-    if (!validTimeRanges.includes(timeRange)) {
-      return res.status(400).json({
-        error: 'Invalid time range',
-        message: `Time range must be one of: ${validTimeRanges.join(', ')}`
-      });
-    }
-
-    // Validate dates for custom time range
-    if (timeRange === 'custom') {
-      if (startTime) {
-        const parsedStartTime = new Date(startTime);
-        if (isNaN(parsedStartTime.getTime())) {
-          return res.status(400).json({
-            error: 'Invalid start time',
-            message: 'Start time must be a valid ISO date string'
-          });
-        }
-      }
-      if (endTime) {
-        const parsedEndTime = new Date(endTime);
-        if (isNaN(parsedEndTime.getTime())) {
-          return res.status(400).json({
-            error: 'Invalid end time',
-            message: 'End time must be a valid ISO date string'
-          });
-        }
-      }
-    }
-
-    // Build filters
-    const filters: LogFilters = {
-      marketplace: marketplace as LogFilters['marketplace'],
-      taskId: taskId || undefined,
-      category: category as LogCategory | undefined,
-      level: level as LogFilters['level'],
-      timeRange: timeRange as LogFilters['timeRange'],
-      startTime: startTime || undefined,
-      endTime: endTime || undefined,
-      limit: Math.min(parseInt(limit, 10) || 10000, 50000),
-      offset: parseInt(offset, 10) || 0
-    };
-
-    // Export logs
-    const result = await exportLogs(filters);
-
-    // Return appropriate format
-    if (format === 'csv') {
-      const csv = logsToCSV(result.logs);
-      const filename = `logs-${marketplace}-${new Date().toISOString().split('T')[0]}.csv`;
-      res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      return res.send(csv);
-    }
-
-    // JSON format
-    const filename = `logs-${marketplace}-${new Date().toISOString().split('T')[0]}.json`;
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    return res.send(logsToJSON(result));
-  } catch (error) {
-    errorLog('API', 'Error exporting debug logs', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({
-      error: 'Failed to export logs',
-      message: errorMessage
-    });
-  }
 });
 
 // Helper function to format bytes
