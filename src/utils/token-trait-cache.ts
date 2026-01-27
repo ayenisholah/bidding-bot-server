@@ -74,8 +74,6 @@ class TokenTraitCache {
         },
         { upsert: true, new: true }
       );
-
-      debugLog('Cache', `Cached token traits | contract=${data.contractAddress.slice(0, 10)}... | tokenId=${data.tokenId} | traits=${data.traits.length}`);
     } catch (error) {
       errorLog('Cache', `Failed to cache token traits | contract=${data.contractAddress} | tokenId=${data.tokenId}`, error);
     }
@@ -91,7 +89,6 @@ class TokenTraitCache {
       // Try L1 (hot cache)
       const hot = this.hotCache.get(key);
       if (hot) {
-        debugLog('Cache', `L1 hit | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId}`);
         return hot;
       }
 
@@ -112,12 +109,10 @@ class TokenTraitCache {
 
         // Promote to L1 (hot cache)
         this.hotCache.set(key, data);
-        debugLog('Cache', `L2 hit (promoted to L1) | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId}`);
         return data;
       }
 
-      // Cache miss (neither L1 nor L2)
-      debugLog('Cache', `L1+L2 miss | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId}`);
+      // Cache miss (neither L1 nor L2) - silent, not an error
       return null;
     } catch (error) {
       errorLog('Cache', `Failed to get token traits from cache | contract=${contractAddress} | tokenId=${tokenId}`, error);

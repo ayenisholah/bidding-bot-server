@@ -49,7 +49,7 @@ export class BroadcastManager {
     };
 
     this.clients.set(ws, metadata);
-    debugLog('BroadcastManager', `Client added | total=${this.clients.size}`);
+
   }
 
   /**
@@ -58,12 +58,7 @@ export class BroadcastManager {
   removeClient(ws: WebSocket): void {
     const metadata = this.clients.get(ws);
     if (metadata) {
-      // Unsubscribe from all tasks
-      for (const taskId of metadata.subscriptions) {
-        debugLog('BroadcastManager', `Client unsubscribed on disconnect | taskId=${taskId}`);
-      }
       this.clients.delete(ws);
-      debugLog('BroadcastManager', `Client removed | total=${this.clients.size}`);
     }
   }
 
@@ -73,17 +68,9 @@ export class BroadcastManager {
   subscribe(ws: WebSocket, taskId: string): boolean {
     const metadata = this.clients.get(ws);
     if (!metadata) {
-      debugLog('BroadcastManager', `Subscribe failed: client not found | taskId=${taskId}`);
       return false;
     }
-
-    const wasSubscribed = metadata.subscriptions.has(taskId);
-    metadata.subscriptions.add(taskId);
-
-    if (!wasSubscribed) {
-      debugLog('BroadcastManager', `Client subscribed | taskId=${taskId} | subscriptions=${metadata.subscriptions.size}`);
-    }
-
+    metadata.subscriptions.add(taskId)
     return true;
   }
 
@@ -96,12 +83,11 @@ export class BroadcastManager {
    */
   subscribeAllClients(taskId: string): number {
     let count = 0;
-    for (const [ws, metadata] of this.clients.entries()) {
+    for (const [ws] of this.clients.entries()) {
       if (this.subscribe(ws, taskId)) {
         count++;
       }
     }
-    debugLog('BroadcastManager', `AUTO_SUBSCRIBE_ALL | taskId=${taskId} | count=${count}`);
     return count;
   }
 
@@ -111,12 +97,10 @@ export class BroadcastManager {
   unsubscribe(ws: WebSocket, taskId: string): boolean {
     const metadata = this.clients.get(ws);
     if (!metadata) {
-      debugLog('BroadcastManager', `Unsubscribe failed: client not found | taskId=${taskId}`);
       return false;
     }
 
     const removed = metadata.subscriptions.delete(taskId);
-    debugLog('BroadcastManager', `Client unsubscribed | taskId=${taskId} | success=${removed}`);
     return removed;
   }
 
@@ -125,16 +109,14 @@ export class BroadcastManager {
    */
   broadcastTaskUpdate(taskId: string, data: any): void {
     // Check if data changed (skip unchanged broadcasts)
-    const { changed, hash } = this.deltaTracker.hasChanged(taskId, data);
+    const { changed } = this.deltaTracker.hasChanged(taskId, data);
 
     // TEMPORARY FIX: Disable delta detection to ensure messages are always sent
     const forceUpdate = true;
 
     // Always log delta status
-    debugLog('BroadcastManager', `Delta check | taskId=${taskId} | changed=${changed} | forced=${forceUpdate}`);
 
     if (!changed && !forceUpdate) {
-      debugLog('BroadcastManager', `Task data unchanged, skipping broadcast | taskId=${taskId}`);
       return;
     }
 
@@ -153,10 +135,7 @@ export class BroadcastManager {
       // Only warn if clients exist but aren't subscribed to this specific task
       // If no clients are connected at all, this is expected (e.g., during server startup)
       if (this.clients.size > 0 && !this.warnedTasks.has(taskId)) {
-        console.error(
-          `[BroadcastManager] ⚠️  NO SUBSCRIBERS FOR TASK | taskId=${taskId} | ` +
-          `totalClients=${this.clients.size} | This indicates a subscription bug!`
-        );
+
         this.warnedTasks.add(taskId);
       }
       return;
@@ -165,7 +144,6 @@ export class BroadcastManager {
     // Clear warning flag when task has subscribers again
     if (this.warnedTasks.has(taskId) && subscriberCount > 0) {
       this.warnedTasks.delete(taskId);
-      console.log(`[BroadcastManager] ✅ Subscribers restored for task | taskId=${taskId} | count=${subscriberCount}`);
     }
 
     // Serialize message ONCE (message reuse optimization)
@@ -177,19 +155,15 @@ export class BroadcastManager {
     });
 
     // Send to all subscribed clients (reuse serialized message)
-    let successCount = 0;
     for (const [ws, metadata] of this.clients.entries()) {
       if (metadata.subscriptions.has(taskId) && ws.readyState === WebSocket.OPEN) {
         try {
           ws.send(message);
-          successCount++;
         } catch (error) {
           debugLog('BroadcastManager', `Send failed | taskId=${taskId} | error=${error}`);
         }
       }
     }
-
-    debugLog('BroadcastManager', `Task update broadcast | taskId=${taskId} | subscribers=${subscriberCount} | sent=${successCount} | hash=${hash.substring(0, 8)}`);
   }
 
   /**
@@ -202,19 +176,15 @@ export class BroadcastManager {
       timestamp: Date.now()
     });
 
-    let successCount = 0;
-    for (const [ws, metadata] of this.clients.entries()) {
+    for (const [ws] of this.clients.entries()) {
       if (ws.readyState === WebSocket.OPEN) {
         try {
           ws.send(message);
-          successCount++;
         } catch (error) {
           debugLog('BroadcastManager', `Global send failed | error=${error}`);
         }
       }
     }
-
-    debugLog('BroadcastManager', `Global update broadcast | clients=${this.clients.size} | sent=${successCount}`);
   }
 
   /**
@@ -222,7 +192,7 @@ export class BroadcastManager {
    */
   broadcastRaw(message: string): number {
     let successCount = 0;
-    for (const [ws, metadata] of this.clients.entries()) {
+    for (const [ws] of this.clients.entries()) {
       if (ws.readyState === WebSocket.OPEN) {
         try {
           ws.send(message);
@@ -241,7 +211,6 @@ export class BroadcastManager {
    */
   cleanupTask(taskId: string): void {
     this.deltaTracker.clearTask(taskId);
-    debugLog('BroadcastManager', `Task cleaned up | taskId=${taskId}`);
   }
 
   /**
@@ -275,7 +244,6 @@ export class BroadcastManager {
   destroy(): void {
     this.clients.clear();
     this.deltaTracker.clearAll();
-    debugLog('BroadcastManager', 'BroadcastManager destroyed');
   }
 }
 // trigger reload 1768897074

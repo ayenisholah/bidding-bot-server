@@ -166,7 +166,6 @@ export async function fetchERC20BalanceFresh(walletAddress: string, _tokenAddres
   const lruCached = balanceLRU.get(normalizedAddress);
   if (lruCached !== undefined) {
     trackBalanceHit();
-    debugLog('Performance', `[OS-Balance-Fresh] LRU_HIT | wallet=${walletAddress.slice(0,10)}... | balance=${lruCached}`);
     return lruCached;
   }
 

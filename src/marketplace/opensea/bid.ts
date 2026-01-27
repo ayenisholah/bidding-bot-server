@@ -435,7 +435,6 @@ export async function resolveContractAddress(
   }
 
   cacheStats.contractResolution.misses++;
-  debugLog('Performance', `[OS-ContractResolve] CACHE_MISS | slug=${normalizedSlug} | token=${tokenKey} | resolving...`);
   const resolveStart = Date.now();
 
   // STEP 2: Check Max Pain Override (Priority: Highest)
@@ -464,7 +463,6 @@ export async function resolveContractAddress(
     // STEP 4: If not multi-contract, use fallback
     if (!isMultiContract) {
       contractResolutionLRU.set(cacheKey, fallbackAddress);
-      debugLog('Performance', `[OS-ContractResolve] SINGLE_CONTRACT | slug=${normalizedSlug} | token=${tokenKey} | time=${Date.now() - resolveStart}ms`);
       return fallbackAddress;
     }
 

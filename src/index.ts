@@ -15338,17 +15338,11 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     // ============================================================
     // Fetch collection details + floor price in parallel (saves 300-1000ms)
     // Floor price is cached and reused across all event handlers to prevent duplicate API calls
-    const parallelStart = Date.now();
-    debugLog('Performance', `[OS-Handler] Starting parallel fetch | slug=${task.contract.slug} | taskId=${task._id}`);
-
     // Simplified cache usage - new LRU-based functions handle all caching internally
     const [collectionDetails, cachedFloorPrice] = await Promise.all([
       getCachedCollectionDetails(task.contract.slug, task.contract.contractAddress),
       getCachedFloorPrice(task.contract.slug, 'opensea')
     ]);
-
-    const parallelTime = Date.now() - parallelStart;
-    debugLog('Performance', `[OS-Handler] Parallel fetch complete | totalTime=${parallelTime}ms | slug=${task.contract.slug}`);
 
     // Convert all creator fees to the IFee format (ensuring values are numbers)
     const creatorFees: IFee = Object.fromEntries(

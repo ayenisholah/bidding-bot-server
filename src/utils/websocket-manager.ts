@@ -716,11 +716,6 @@ class WebSocketManager extends EventEmitter {
     try {
       const message = JSON.parse(data.toString());
 
-      debugLog('WebSocket', `CP1_RAW_RECV | length=${data.toString().length} | receiveTime=${receiveTime}`);
-
-      // After parsing
-      debugLog('WebSocket', `CP2_PARSED | marketplace=${message.marketplace} | eventType=${message.eventType} | event=${message.event} | type=${message.type} | orderHash=${message.orderHash?.substring(0,16)}`);
-
       // Handle control messages (pong, server_status, etc.)
       if (this.isControlMessage(message)) {
         this.processControlMessage(message, receiveTime);
@@ -761,8 +756,6 @@ class WebSocketManager extends EventEmitter {
 
       // Log queue health warnings at thresholds
       const queueSize = this.messageQueue.size;
-
-      debugLog('WebSocket', `CP4_QUEUE | queueSize=${queueSize} | pending=${this.messageQueue.pending} | orderHash=${message.orderHash?.substring(0,16)}`);
 
       if (queueSize > 10000 && queueSize % 1000 === 0) {
         warnLog('QueueHealth', `High queue size | size=${queueSize} | pending=${this.messageQueue.pending}`);
@@ -813,8 +806,6 @@ class WebSocketManager extends EventEmitter {
       message.eventType = eventMap[message.event] || message.event.toUpperCase();
     }
 
-    debugLog('WebSocket', `CP3_NORMALIZE | marketplace=${message.marketplace} | eventType=${message.eventType} | event=${message.event} | orderHash=${message.orderHash?.substring(0,16)}`);
-
     return message;
   }
 
@@ -824,8 +815,6 @@ class WebSocketManager extends EventEmitter {
    */
   private async processMessageAsync(parsed: any, receiveTime: number): Promise<void> {
     try {
-      debugLog('WebSocket', `CP5_PROCESS_START | orderHash=${parsed.orderHash?.substring(0,16)} | slug=${parsed.slug} | eventType=${parsed.eventType}`);
-
       this.metrics.totalMessages++;
       this.recordMessage();
 
@@ -949,12 +938,7 @@ class WebSocketManager extends EventEmitter {
       // (2025-12-31 optimization: Removed handler backpressure queue that was causing MINUTES of latency)
       // The old architecture waited for handlers to complete - this is wrong for real-time events.
       // Now we just emit and let handlers run concurrently without blocking the message pipeline.
-
-      debugLog('WebSocket', `CP6_EMIT | orderHash=${message.orderHash?.substring(0,16)} | marketplace=${message.marketplace} | eventType=${message.eventType}`);
-
       this.emit('message', message);
-
-      debugLog('WebSocket', `CP7_COMPLETE | orderHash=${message.orderHash?.substring(0,16)} | processingTime=${Date.now() - receiveTime}ms`);
 
     } catch (error) {
       errorLog('WebSocket', 'Failed to process single message', error);
