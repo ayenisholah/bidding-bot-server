@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { LRUCache } from 'lru-cache';
 import { getRedisConnection, withRedisRetry } from './redis';
 import { errorLog, debugLog, warnLog, infoLog } from './debug-file-logger';
 
@@ -20,6 +21,100 @@ const DEBUG = process.env.DEBUG === 'true';
 const ORDER_KEY_PREFIX = 'order:';
 const ORDER_ID_PREFIX = 'order:id:';
 const TASK_ORDERS_PREFIX = 'task:orders:';
+
+// LRU cache for orders (in-memory, first layer)
+const orderLRU = new LRUCache<string, CachedOrder>({
+  max: 100000,            // Reduced to 100K for performance optimization
+  ttl: 0,                 // Dynamic TTL set per item (no default)
+  allowStale: false,      // Don't return expired orders
+  updateAgeOnGet: false,  // Don't extend TTL on reads
+  updateAgeOnHas: false   // Don't extend TTL on existence checks
+});
+
+// Cache statistics
+interface CacheStats {
+  hits: number;
+  misses: number;
+}
+
+const stats = {
+  lru: { hits: 0, misses: 0 } as CacheStats,
+  redis: { hits: 0, misses: 0 } as CacheStats,
+  replacements: { total: 0, cancelled: 0, failed: 0 },
+  startTime: Date.now()
+};
+
+// Tracking functions
+const trackLruHit = () => stats.lru.hits++;
+const trackLruMiss = () => stats.lru.misses++;
+const trackRedisHit = () => stats.redis.hits++;
+const trackRedisMiss = () => stats.redis.misses++;
+
+/**
+ * Get cache statistics for monitoring
+ */
+export function getOrderCacheStats() {
+  const uptime = Math.floor((Date.now() - stats.startTime) / 1000 / 60);
+  const lruTotal = stats.lru.hits + stats.lru.misses;
+  const redisTotal = stats.redis.hits + stats.redis.misses;
+
+  return {
+    lru: {
+      hits: stats.lru.hits,
+      misses: stats.lru.misses,
+      hitRate: lruTotal > 0 ? `${((stats.lru.hits / lruTotal) * 100).toFixed(1)}%` : 'N/A',
+      size: orderLRU.size,
+      max: orderLRU.max
+    },
+    redis: {
+      hits: stats.redis.hits,
+      misses: stats.redis.misses,
+      hitRate: redisTotal > 0 ? `${((stats.redis.hits / redisTotal) * 100).toFixed(1)}%` : 'N/A'
+    },
+    replacements: {
+      total: stats.replacements.total,
+      cancelled: stats.replacements.cancelled,
+      failed: stats.replacements.failed,
+      successRate: stats.replacements.total > 0
+        ? `${((stats.replacements.cancelled / stats.replacements.total) * 100).toFixed(1)}%`
+        : 'N/A'
+    },
+    uptime: `${uptime}min`
+  };
+}
+
+/**
+ * Reset cache statistics (for testing)
+ */
+export function resetOrderCacheStats() {
+  stats.lru.hits = 0;
+  stats.lru.misses = 0;
+  stats.redis.hits = 0;
+  stats.redis.misses = 0;
+  stats.startTime = Date.now();
+}
+
+// Log stats every 5 minutes (aggregated, not per-access)
+setInterval(() => {
+  const cacheStats = getOrderCacheStats();
+  infoLog('OrderCache',
+    `[5min Summary] ` +
+    `lru: ${cacheStats.lru.hits} hits, ${cacheStats.lru.misses} misses (${cacheStats.lru.hitRate}) | ` +
+    `redis: ${cacheStats.redis.hits} hits, ${cacheStats.redis.misses} misses (${cacheStats.redis.hitRate}) | ` +
+    `size: ${cacheStats.lru.size}/${cacheStats.lru.max} | ` +
+    `uptime: ${cacheStats.uptime}`
+  );
+
+  // Log replacement stats if any occurred
+  if (cacheStats.replacements.total > 0) {
+    infoLog('OrderCache',
+      `[REPLACEMENT_STATS] total=${cacheStats.replacements.total} | ` +
+      `cancelled=${cacheStats.replacements.cancelled} | ` +
+      `failed=${cacheStats.replacements.failed} | ` +
+      `successRate=${cacheStats.replacements.successRate}`
+    );
+  }
+}, 5 * 60 * 1000);
 
 class OrderCache {
   /**
@@ -50,7 +145,15 @@ class OrderCache {
   }
 
   /**
-   * Calculate TTL in seconds from expiresAt timestamp
+   * Generate LRU cache key (simpler than Redis key)
+   * Format: "taskId:marketplace:identifier"
+   */
+  private getLruKey(taskId: string, marketplace: string, identifier: string): string {
+    return `${taskId}:${marketplace.toLowerCase()}:${identifier}`;
+  }
+
+  /**
+   * Calculate TTL in seconds from expiresAt timestamp (for Redis)
    * Returns at least 1 second to ensure valid TTL
    */
   private calculateTTL(expiresAt: number): number {
@@ -58,10 +161,34 @@ class OrderCache {
   }
 
   /**
+   * Calculate LRU TTL in milliseconds from expiresAt timestamp
+   * Returns at least 1 second (1000ms) to ensure valid TTL
+   */
+  private calculateLruTTL(expiresAt: number): number {
+    return Math.max(1000, expiresAt - Date.now());
+  }
+
+  /**
    * Check if an order is expired
    */
   isExpired(order: CachedOrder): boolean {
     return order.expiresAt <= Date.now();
+  }
+
+  /**
+   * Clear all orders from LRU cache
+   * Called during cleanup or testing
+   */
+  public clearLruCache(): void {
+    orderLRU.clear();
+    debugLog('Cache', '[OrderCache] LRU cache cleared');
+  }
+
+  /**
+   * Get LRU cache size for monitoring
+   */
+  public getLruCacheSize(): number {
+    return orderLRU.size;
   }
 
   /**
@@ -73,33 +200,37 @@ class OrderCache {
 
   /**
    * Add or update an order in the cache with TTL
+   * IMPORTANT: When updating an existing order, both LRU and Redis TTLs are renewed
    */
   async set(order: CachedOrder): Promise<void> {
     const redis = getRedisConnection();
     const key = this.getKey(order.taskId, order.marketplace, order.identifier);
-    const ttl = this.calculateTTL(order.expiresAt);
+    const lruKey = this.getLruKey(order.taskId, order.marketplace, order.identifier);
+    const redisTtl = this.calculateTTL(order.expiresAt); // seconds
+    const lruTtl = this.calculateLruTTL(order.expiresAt); // milliseconds
 
+    // STEP 1: Store in LRU cache with dynamic TTL
+    orderLRU.set(lruKey, order, { ttl: lruTtl });
+
+    // STEP 2: Store in Redis (parallel operations)
     await withRedisRetry(async () => {
       const pipeline = redis.pipeline();
 
-      // Store order data with TTL
-      pipeline.setex(key, ttl, JSON.stringify(order));
-
-      // Store ID -> key mapping with same TTL
-      pipeline.setex(this.getIdKey(order._id), ttl, key);
-
-      // Add to task orders set (no TTL - managed manually)
+      pipeline.setex(key, redisTtl, JSON.stringify(order));
+      pipeline.setex(this.getIdKey(order._id), redisTtl, key);
       pipeline.sadd(this.getTaskOrdersKey(order.taskId), key);
-
-      
-      // Add to task/marketplace orders set
       pipeline.sadd(this.getTaskOrdersKey(order.taskId, order.marketplace), key);
 
       await pipeline.exec();
     }, 'OrderCache.set');
 
     if (DEBUG) {
-      debugLog('Cache', `[OrderCache] SET | key=${key} | orderId=${order._id} | ttl=${ttl}s | marketplace=${order.marketplace}`, { taskId: order.taskId, marketplace: order.marketplace as 'blur' | 'opensea' | 'magiceden' });
+      debugLog('Cache',
+        `[OrderCache] SET | key=${key} | orderId=${order._id} | ` +
+        `ttl=${redisTtl}s | lruTtl=${Math.round(lruTtl/1000)}s | ` +
+        `marketplace=${order.marketplace}`,
+        { taskId: order.taskId, marketplace: order.marketplace as 'blur' | 'opensea' | 'magiceden' }
+      );
     }
   }
 
@@ -111,6 +242,14 @@ class OrderCache {
 
     const redis = getRedisConnection();
 
+    // STEP 1: Store all in LRU cache with dynamic TTLs
+    for (const order of orders) {
+      const lruKey = this.getLruKey(order.taskId, order.marketplace, order.identifier);
+      const lruTtl = this.calculateLruTTL(order.expiresAt);
+      orderLRU.set(lruKey, order, { ttl: lruTtl });
+    }
+
+    // STEP 2: Batch store in Redis
     await withRedisRetry(async () => {
       const pipeline = redis.pipeline();
 
@@ -128,39 +267,67 @@ class OrderCache {
     }, 'OrderCache.setMany');
 
     if (DEBUG) {
-      debugLog('Cache', `[OrderCache] SET_MANY | count=${orders.length} | taskId=${orders[0]?.taskId}`, { taskId: orders[0]?.taskId });
+      debugLog('Cache',
+        `[OrderCache] SET_MANY | count=${orders.length} | ` +
+        `taskId=${orders[0]?.taskId} | lru_and_redis_updated`,
+        { taskId: orders[0]?.taskId }
+      );
     }
   }
 
   /**
    * Get a single order from cache (returns undefined if expired or not found)
+   * LAYER 1: Check LRU cache (< 1ms)
+   * LAYER 2: Check Redis (10-20ms) and backfill LRU on hit
    */
   async get(taskId: string, marketplace: string, identifier: string): Promise<CachedOrder | undefined> {
-    const redis = getRedisConnection();
     const key = this.getKey(taskId, marketplace, identifier);
+    const lruKey = this.getLruKey(taskId, marketplace, identifier);
 
+    // STEP 1: Check LRU cache (< 1ms)
+    const lruCached = orderLRU.get(lruKey);
+    if (lruCached !== undefined) {
+      // Double-check not expired (safety check)
+      if (!this.isExpired(lruCached)) {
+        trackLruHit();
+        return lruCached;
+      } else {
+        // Remove expired entry from LRU
+        orderLRU.delete(lruKey);
+      }
+    }
+
+    trackLruMiss();
+
+    // STEP 2: Check Redis (10-20ms)
+    const redis = getRedisConnection();
     const result = await withRedisRetry(async () => {
       return redis.get(key);
     }, 'OrderCache.get');
 
     if (!result) {
+      trackRedisMiss();
       return undefined;
     }
 
     try {
       const order: CachedOrder = JSON.parse(result);
 
-      // Double-check expiration (Redis TTL might have slight variance)
+      // Double-check expiration
       if (this.isExpired(order)) {
-        if (DEBUG) {
-          debugLog('Cache', `[OrderCache] GET | key=${key} | EXPIRED`, { taskId, marketplace: marketplace as 'blur' | 'opensea' | 'magiceden' });
-        }
+        trackRedisMiss();
         return undefined;
       }
 
+      // Backfill LRU cache with dynamic TTL
+      const lruTtl = this.calculateLruTTL(order.expiresAt);
+      orderLRU.set(lruKey, order, { ttl: lruTtl });
+
+      trackRedisHit();
+
       return order;
     } catch (error) {
-      errorLog('Cache', `[OrderCache] GET | Parse error for key=${key}`, error);
+      errorLog('Cache', `[OrderCache] Parse error for key=${key}`, error);
       return undefined;
     }
   }
@@ -171,8 +338,12 @@ class OrderCache {
   async delete(taskId: string, marketplace: string, identifier: string): Promise<boolean> {
     const redis = getRedisConnection();
     const key = this.getKey(taskId, marketplace, identifier);
+    const lruKey = this.getLruKey(taskId, marketplace, identifier);
 
-    // First get the order to find its ID
+    // STEP 1: Delete from LRU cache immediately
+    const lruDeleted = orderLRU.delete(lruKey);
+
+    // STEP 2: Get order from Redis to find its ID
     const orderJson = await withRedisRetry(async () => {
       return redis.get(key);
     }, 'OrderCache.delete.get');
@@ -189,6 +360,7 @@ class OrderCache {
       warnLog('OrderCache', `JSON parse failed in delete | key=${key} | error=${error instanceof Error ? error.message : String(error)}`);
     }
 
+    // STEP 3: Delete from Redis
     const deleted = await withRedisRetry(async () => {
       const pipeline = redis.pipeline();
 
@@ -200,12 +372,15 @@ class OrderCache {
       pipeline.srem(this.getTaskOrdersKey(taskId, marketplace), key);
 
       const results = await pipeline.exec();
-      // First result is the del command for the main key
       return results && results[0] && results[0][1] === 1;
     }, 'OrderCache.delete');
 
     if (DEBUG) {
-      debugLog('Cache', `[OrderCache] DELETE | key=${key} | deleted=${deleted}`, { taskId, marketplace: marketplace as 'blur' | 'opensea' | 'magiceden' });
+      debugLog('Cache',
+        `[OrderCache] DELETE | key=${key} | deleted=${deleted} | ` +
+        `lru_deleted=${lruDeleted}`,
+        { taskId, marketplace: marketplace as 'blur' | 'opensea' | 'magiceden' }
+      );
     }
 
     return deleted || false;
@@ -213,6 +388,7 @@ class OrderCache {
 
   /**
    * Delete order by its _id (used in cancellation callbacks)
+   * Delegates to delete() which handles both LRU and Redis layers
    */
   async deleteById(orderId: string): Promise<boolean> {
     const redis = getRedisConnection();
@@ -241,6 +417,7 @@ class OrderCache {
 
     try {
       const order: CachedOrder = JSON.parse(orderJson);
+      // delete() handles both LRU and Redis deletion
       return this.delete(order.taskId, order.marketplace, order.identifier);
     } catch (error) {
       errorLog('Cache', `[OrderCache] DELETE_BY_ID | Parse error for orderId=${orderId}`, error);
@@ -255,7 +432,7 @@ class OrderCache {
     const redis = getRedisConnection();
     const taskOrdersKey = this.getTaskOrdersKey(taskId);
 
-    // Get all order keys for this task
+    // STEP 1: Get all order keys for this task
     const keys = await withRedisRetry(async () => {
       return redis.smembers(taskOrdersKey);
     }, 'OrderCache.deleteByTask.getKeys');
@@ -264,7 +441,22 @@ class OrderCache {
       return;
     }
 
-    // Collect all order IDs to delete their index entries
+    // STEP 2: Parse keys to get LRU keys and delete from LRU
+    let lruDeletedCount = 0;
+    for (const key of keys) {
+      // Parse key format: "order:{taskId}:{marketplace}:{identifier}"
+      const parts = key.split(':');
+      if (parts.length >= 4) {
+        const marketplace = parts[2];
+        const identifier = parts.slice(3).join(':'); // Handle identifiers with colons
+        const lruKey = this.getLruKey(taskId, marketplace, identifier);
+        if (orderLRU.delete(lruKey)) {
+          lruDeletedCount++;
+        }
+      }
+    }
+
+    // STEP 3: Collect all order IDs to delete their index entries
     const orderIds: string[] = [];
     const orderJsons = await withRedisRetry(async () => {
       return redis.mget(...keys);
@@ -283,22 +475,19 @@ class OrderCache {
       }
     }
 
+    // STEP 4: Delete from Redis
     await withRedisRetry(async () => {
       const pipeline = redis.pipeline();
 
-      // Delete all order keys
       if (keys.length > 0) {
         pipeline.del(...keys);
       }
 
-      // Delete all ID index entries
       if (orderIds.length > 0) {
         pipeline.del(...orderIds.map(id => this.getIdKey(id)));
       }
 
-      // Delete task orders sets (both main and marketplace-specific)
       pipeline.del(taskOrdersKey);
-      // Delete marketplace-specific sets
       for (const mp of ['opensea', 'magiceden', 'blur']) {
         pipeline.del(this.getTaskOrdersKey(taskId, mp));
       }
@@ -307,7 +496,11 @@ class OrderCache {
     }, 'OrderCache.deleteByTask.delete');
 
     if (DEBUG) {
-      debugLog('Cache', `[OrderCache] DELETE_BY_TASK | taskId=${taskId} | deleted=${keys.length}`, { taskId });
+      debugLog('Cache',
+        `[OrderCache] DELETE_BY_TASK | taskId=${taskId} | ` +
+        `deleted=${keys.length} | lru_deleted=${lruDeletedCount}`,
+        { taskId }
+      );
     }
   }
 
@@ -318,7 +511,7 @@ class OrderCache {
     const redis = getRedisConnection();
     const taskMpOrdersKey = this.getTaskOrdersKey(taskId, marketplace);
 
-    // Get all order keys for this task/marketplace
+    // STEP 1: Get all order keys for this task/marketplace
     const keys = await withRedisRetry(async () => {
       return redis.smembers(taskMpOrdersKey);
     }, 'OrderCache.deleteByTaskAndMarketplace.getKeys');
@@ -327,7 +520,21 @@ class OrderCache {
       return;
     }
 
-    // Collect all order IDs to delete their index entries
+    // STEP 2: Parse keys to get LRU keys and delete from LRU
+    let lruDeletedCount = 0;
+    for (const key of keys) {
+      // Parse key format: "order:{taskId}:{marketplace}:{identifier}"
+      const parts = key.split(':');
+      if (parts.length >= 4) {
+        const identifier = parts.slice(3).join(':'); // Handle identifiers with colons
+        const lruKey = this.getLruKey(taskId, marketplace, identifier);
+        if (orderLRU.delete(lruKey)) {
+          lruDeletedCount++;
+        }
+      }
+    }
+
+    // STEP 3: Collect all order IDs to delete their index entries
     const orderIds: string[] = [];
     const orderJsons = await withRedisRetry(async () => {
       return redis.mget(...keys);
@@ -346,32 +553,33 @@ class OrderCache {
       }
     }
 
+    // STEP 4: Delete from Redis
     await withRedisRetry(async () => {
       const pipeline = redis.pipeline();
 
-      // Delete all order keys
       if (keys.length > 0) {
         pipeline.del(...keys);
       }
 
-      // Delete all ID index entries
       if (orderIds.length > 0) {
         pipeline.del(...orderIds.map(id => this.getIdKey(id)));
       }
 
-      // Remove from task orders set
       for (const key of keys) {
         pipeline.srem(this.getTaskOrdersKey(taskId), key);
       }
 
-      // Delete marketplace-specific set
       pipeline.del(taskMpOrdersKey);
 
       await pipeline.exec();
     }, 'OrderCache.deleteByTaskAndMarketplace.delete');
 
     if (DEBUG) {
-      debugLog('Cache', `[OrderCache] DELETE_BY_TASK_MARKETPLACE | taskId=${taskId} | marketplace=${marketplace} | deleted=${keys.length}`, { taskId, marketplace: marketplace as 'blur' | 'opensea' | 'magiceden' });
+      debugLog('Cache',
+        `[OrderCache] DELETE_BY_TASK_MARKETPLACE | taskId=${taskId} | ` +
+        `marketplace=${marketplace} | deleted=${keys.length} | lru_deleted=${lruDeletedCount}`,
+        { taskId, marketplace: marketplace as 'blur' | 'opensea' | 'magiceden' }
+      );
     }
   }
 
@@ -510,14 +718,6 @@ class OrderCache {
   }
 
   /**
-   * Count total active (non-expired) orders for a task
-   */
-  async countByTask(taskId: string): Promise<number> {
-    const orders = await this.getActiveByTask(taskId);
-    return orders.length;
-  }
-
-  /**
    * Count all active orders grouped by marketplace (for bidStats)
    */
   async countGroupedByMarketplace(taskId: string): Promise<{ [marketplace: string]: number }> {
@@ -606,6 +806,30 @@ class OrderCache {
   }
 
   /**
+   * Count orders for a task with optional marketplace filter
+   * More efficient than getByTaskPaginated when only the count is needed
+   */
+  async countByTask(
+    taskId: string,
+    options: {
+      marketplace?: string | string[];
+    } = {}
+  ): Promise<number> {
+    // Get all active orders for the task
+    let orders = await this.getActiveByTask(taskId);
+
+    // Apply marketplace filter if specified
+    if (options.marketplace) {
+      const marketplaces = Array.isArray(options.marketplace)
+        ? options.marketplace.map(m => m.toLowerCase())
+        : [options.marketplace.toLowerCase()];
+      orders = orders.filter(order => marketplaces.includes(order.marketplace.toLowerCase()));
+    }
+
+    return orders.length;
+  }
+
+  /**
    * Get paginated orders for a task with optional marketplace filter
    * Returns orders sorted by createdAt descending
    */
@@ -673,20 +897,23 @@ class OrderCache {
 
   /**
    * Clear all orders (for testing or server shutdown)
-   * WARNING: This clears ALL order data in Redis matching our prefixes
+   * WARNING: This clears ALL order data from both LRU and Redis
    */
   async clear(): Promise<void> {
+    // STEP 1: Clear LRU cache immediately
+    orderLRU.clear();
+    debugLog('Cache', '[OrderCache] LRU cache cleared');
+
+    // STEP 2: Clear Redis
     const redis = getRedisConnection();
 
     await withRedisRetry(async () => {
-      // Find all our keys
       const orderKeys = await redis.keys(`${ORDER_KEY_PREFIX}*`);
       const taskOrderKeys = await redis.keys(`${TASK_ORDERS_PREFIX}*`);
 
       const allKeys = [...orderKeys, ...taskOrderKeys];
 
       if (allKeys.length > 0) {
-        // Delete in batches of 1000 to avoid blocking Redis
         const batchSize = 1000;
         for (let i = 0; i < allKeys.length; i += batchSize) {
           const batch = allKeys.slice(i, i + batchSize);
@@ -696,9 +923,89 @@ class OrderCache {
     }, 'OrderCache.clear');
 
     if (DEBUG) {
-      debugLog('Cache', `[OrderCache] CLEAR | cache cleared`);
+      debugLog('Cache', '[OrderCache] CLEAR | lru_and_redis_cleared');
     }
   }
 }
 
 export const orderCache = new OrderCache();
+
+/**
+ * Queue cancellation job for a replaced/old order hash.
+ * Fire-and-forget pattern - does not block caller.
+ *
+ * @param params - Cancellation job parameters
+ * @returns Promise that resolves when job queued (or rejects on queue error)
+ */
+export async function queueReplacedOrderCancellation(params: {
+  taskId: string;
+  marketplace: 'opensea' | 'magiceden' | 'blur';
+  orderHash: string;
+  identifier: string;
+  reason: string;
+}): Promise<void> {
+  const { taskId, marketplace, orderHash, identifier, reason } = params;
+
+  stats.replacements.total++; // Track attempt
+
+  debugLog('OrderCache',
+    `[QUEUE_REPLACEMENT_CANCEL] Queueing cancellation for replaced order | ` +
+    `taskId=${taskId} | marketplace=${marketplace} | identifier=${identifier} | ` +
+    `oldHash=${orderHash.slice(0, 16)}... | reason=${reason}`
+  );
+
+  try {
+    // Queue appropriate cancellation job based on marketplace
+    // Import queue reference dynamically to avoid circular dependency
+    const { queue, CANCEL_OPENSEA_BID, CANCEL_BLUR_BID, CANCEL_MAGICEDEN_BID } = await import('../index');
+
+    if (marketplace === 'opensea') {
+      await queue.add(
+        CANCEL_OPENSEA_BID,
+        {
+          orderHash,
+          protocolAddress: '0x0000000000000068f116a894984e2db1123eb395', // Seaport 1.6
+          taskId,
+          reason: 'order_replaced'
+        },
+        {
+          jobId: `cancel-replaced-${orderHash}`,
+          priority: 1, // Medium priority (after counterbids, before scheduled)
+          removeOnComplete: true,
+          removeOnFail: false
+        }
+      );
+    } else if (marketplace === 'blur') {
+      await queue.add(
+        CANCEL_BLUR_BID,
+        JSON.parse(orderHash), // Blur stores cancelPayload as JSON string
+        {
+          jobId: `cancel-replaced-${orderHash}`,
+          priority: 1,
+          removeOnComplete: true,
+          removeOnFail: false
+        }
+      );
+    } else if (marketplace === 'magiceden') {
+      await queue.add(
+        CANCEL_MAGICEDEN_BID,
+        {
+          orderIds: [orderHash],
+          taskId
+        },
+        {
+          jobId: `cancel-replaced-${orderHash}`,
+          priority: 1,
+          removeOnComplete: true,
+          removeOnFail: false
+        }
+      );
+    }
+
+    stats.replacements.cancelled++; // Track success
+  } catch (err) {
+    stats.replacements.failed++; // Track failure
+    errorLog('OrderCache', `Failed to queue cancellation for replaced order | taskId=${taskId} | marketplace=${marketplace} | identifier=${identifier}`, err);
+    throw err;
+  }
+}
