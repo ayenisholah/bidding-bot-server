@@ -3,7 +3,7 @@ import { approveNFT } from "../../functions/approve";
 import { IFee } from "../../types/listing.types";
 import { axiosInstance, limiter } from "../../init";
 import { config } from "dotenv";
-import { getCollectionDetails } from "../../functions/collection";
+import { getCachedCollectionDetails } from "../../utils/collection-cache";
 
 // const BLUE = '\x1b[34m';
 // const RESET = '\x1b[0m';
@@ -162,7 +162,7 @@ export const listOnOpensea = async (
   
   try {
     // console.log(`${BLUE}[OPENSEA] Fetching collection details for ${contractSlug}...${RESET}`);
-    const collectionData = await getCollectionDetails(contractSlug, nftAddress);
+    const collectionData = await getCachedCollectionDetails(contractSlug, nftAddress);
     creatorFees = collectionData?.creator_fees as IFee;
     enforceCreatorFee = collectionData?.enforceCreatorFee as boolean;
     // console.log(`${BLUE}[OPENSEA] Collection details fetched - Enforce creator fee: ${enforceCreatorFee}${RESET}`);

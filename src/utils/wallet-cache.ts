@@ -1,7 +1,8 @@
 import { IWallet } from '../models/wallet.model';
-import { decryptPrivateKey, getPassword } from './crypto';
-import { errorLog } from './debug-file-logger';
+import { decryptPrivateKey, getPassword, clearDecryptedKey } from './crypto';
+import { errorLog, debugLog } from './debug-file-logger';
 import Wallet from '../models/wallet.model';
+import { LRUCache } from 'lru-cache';
 
 interface CachedWallet {
   _id: any;
@@ -11,17 +12,13 @@ interface CachedWallet {
   user: string;
   tasks?: string[];
   decryptedPrivateKey?: string;
-  lastUsed: number;
 }
 
 class WalletCache {
-  private cache: Map<string, CachedWallet> = new Map();
-  private decryptedKeys: Map<string, { key: string; timestamp: number }> = new Map();
-  private readonly CACHE_TTL = 30 * 60 * 1000; // 30 minutes
-  private readonly KEY_TTL = 5 * 60 * 1000; // 5 minutes for decrypted keys
+  // LRU cache with no TTL - only size-based eviction (max 100 entries)
+  private cache: LRUCache<string, CachedWallet>;
   private readonly QUERY_TIMEOUT = 30000; // 30 seconds
   private password: string | null = null;
-  private cleanupInterval: NodeJS.Timeout | null = null;
 
   // In-flight request tracking to prevent thundering herd problem
   // When multiple parallel requests come for the same wallet, only one MongoDB query is made
@@ -30,8 +27,17 @@ class WalletCache {
   private inFlightByTaskId: Map<string, Promise<IWallet[]>> = new Map();
 
   constructor() {
-    // Start cleanup interval
-    this.cleanupInterval = setInterval(() => this.cleanup(), 60 * 1000); // Run every minute
+    // Initialize wallet metadata cache (NO TTL, size-based eviction only)
+    this.cache = new LRUCache<string, CachedWallet>({
+      max: 100,  // Max 100 wallets
+      updateAgeOnGet: false,  // Don't track access time (not needed without TTL)
+      allowStale: false,
+      dispose: (value, key) => {
+        debugLog('WalletCache', `LRU_EVICT_WALLET | address=${key} | reason=cache full | cacheSize=${this.cache.size}/100`);
+      }
+    });
+
+    debugLog('WalletCache', 'LRU cache initialized | walletMax=100 | TTL=NONE | eviction=LRU_only');
   }
 
   /**
@@ -46,12 +52,15 @@ class WalletCache {
 
   async initialize(password: string) {
     this.password = password;
+    debugLog('WalletCache', 'Initializing wallet cache with password');
     await this.loadAllWallets();
+    debugLog('WalletCache', `Wallet cache initialized | wallets=${this.cache.size} | max=100`);
   }
 
   private async loadAllWallets() {
     try {
       const wallets = await Wallet.find({}).lean();
+      debugLog('WalletCache', `Loading ${wallets.length} wallets from database`);
 
       for (const wallet of wallets) {
         const address = wallet.address.toLowerCase();
@@ -61,11 +70,11 @@ class WalletCache {
           encryptedPrivateKey: wallet.encryptedPrivateKey,
           name: wallet.name,
           user: String(wallet.user),
-          tasks: (wallet as any).tasks,
-          lastUsed: Date.now()
+          tasks: (wallet as any).tasks
         });
       }
 
+      debugLog('WalletCache', `Loaded ${this.cache.size} wallets into LRU cache (NO TTL, max=100)`);
     } catch (error) {
       errorLog('[Database]', 'Failed to initialize wallet cache', error as Error);
     }
@@ -77,13 +86,16 @@ class WalletCache {
     // Check cache first
     const cached = this.cache.get(normalizedAddress);
     if (cached) {
-      cached.lastUsed = Date.now();
+      debugLog('WalletCache', `CACHE_HIT | wallet=${normalizedAddress} | cacheSize=${this.cache.size}/100`);
       return cached as unknown as IWallet;
     }
+
+    debugLog('WalletCache', `CACHE_MISS | wallet=${normalizedAddress} | fetching from DB`);
 
     // Check if there's already an in-flight request for this address
     const inFlight = this.inFlightByAddress.get(normalizedAddress);
     if (inFlight) {
+      debugLog('WalletCache', `IN_FLIGHT | wallet=${normalizedAddress} | waiting for existing request`);
       return inFlight;
     }
 
@@ -102,11 +114,12 @@ class WalletCache {
             encryptedPrivateKey: wallet.encryptedPrivateKey,
             name: wallet.name,
             user: String(wallet.user),
-            tasks: (wallet as any).tasks,
-            lastUsed: Date.now()
+            tasks: (wallet as any).tasks
           });
+          debugLog('WalletCache', `DB_FETCH_SUCCESS | wallet=${normalizedAddress} | cached | cacheSize=${this.cache.size}/100`);
           return wallet;
         }
+        debugLog('WalletCache', `DB_FETCH_NOT_FOUND | wallet=${normalizedAddress}`);
         return null;
       } catch (error) {
         errorLog('[Database]', `Failed to fetch wallet from database - address=${address}`, error as Error);
@@ -122,31 +135,12 @@ class WalletCache {
   }
 
   async getDecryptedPrivateKey(wallet: IWallet): Promise<string | null> {
-    const address = wallet.address.toLowerCase();
-    
-    // Check decrypted key cache
-    const cached = this.decryptedKeys.get(address);
-    if (cached && Date.now() - cached.timestamp < this.KEY_TTL) {
-      return cached.key;
-    }
-
-    // Decrypt the key
+    // Use crypto.ts decryptPrivateKey() directly (it has its own LRU cache)
     try {
-      if (!this.password) {
-        this.password = getPassword() || null;
-      }
-      
       const decryptedKey = decryptPrivateKey(wallet.encryptedPrivateKey);
-      
-      // Cache the decrypted key
-      this.decryptedKeys.set(address, {
-        key: decryptedKey,
-        timestamp: Date.now()
-      });
-
       return decryptedKey;
     } catch (error) {
-      errorLog('[Database]', `Failed to decrypt private key for wallet - address=${address}`, error as Error);
+      errorLog('[Database]', `Failed to decrypt private key for wallet - address=${wallet.address}`, error as Error);
       return null;
     }
   }
@@ -181,8 +175,7 @@ class WalletCache {
             encryptedPrivateKey: wallet.encryptedPrivateKey,
             name: wallet.name,
             user: String(wallet.user),
-            tasks: (wallet as any).tasks,
-            lastUsed: Date.now()
+            tasks: (wallet as any).tasks
           });
         }
         return wallets;
@@ -216,14 +209,17 @@ class WalletCache {
     // First check if we have it in cache by scanning
     for (const cached of this.cache.values()) {
       if (cached._id.toString() === walletId) {
-        cached.lastUsed = Date.now();
+        debugLog('WalletCache', `CACHE_HIT_BY_ID | walletId=${walletId} | cacheSize=${this.cache.size}/100`);
         return cached as unknown as IWallet;
       }
     }
 
+    debugLog('WalletCache', `CACHE_MISS_BY_ID | walletId=${walletId} | fetching from DB`);
+
     // Check if there's already an in-flight request for this wallet ID
     const inFlight = this.inFlightById.get(walletId);
     if (inFlight) {
+      debugLog('WalletCache', `IN_FLIGHT_BY_ID | walletId=${walletId} | waiting for existing request`);
       return inFlight;
     }
 
@@ -243,11 +239,12 @@ class WalletCache {
             encryptedPrivateKey: wallet.encryptedPrivateKey,
             name: wallet.name,
             user: String(wallet.user),
-            tasks: (wallet as any).tasks,
-            lastUsed: Date.now()
+            tasks: (wallet as any).tasks
           });
+          debugLog('WalletCache', `DB_FETCH_SUCCESS_BY_ID | walletId=${walletId} | address=${address} | cached | cacheSize=${this.cache.size}/100`);
           return wallet;
         }
+        debugLog('WalletCache', `DB_FETCH_NOT_FOUND_BY_ID | walletId=${walletId}`);
         return null;
       } catch (error) {
         errorLog('[Database]', `Failed to fetch wallet by ID from database - walletId=${walletId}`, error as Error);
@@ -264,40 +261,29 @@ class WalletCache {
 
   invalidateWallet(address: string) {
     const normalizedAddress = address.toLowerCase();
+
+    // Get cached wallet to access encryptedPrivateKey before deletion
+    const cached = this.cache.get(normalizedAddress);
+    if (cached) {
+      // Clear decrypted key from crypto.ts cache
+      clearDecryptedKey(cached.encryptedPrivateKey);
+    }
+
+    // Clear wallet metadata from this cache
     this.cache.delete(normalizedAddress);
-    this.decryptedKeys.delete(normalizedAddress);
+    debugLog('WalletCache', `INVALIDATE_WALLET | address=${normalizedAddress} | cacheSize=${this.cache.size}/100`);
   }
 
   invalidateAll() {
+    const walletCount = this.cache.size;
     this.cache.clear();
-    this.decryptedKeys.clear();
-  }
-
-  private cleanup() {
-    const now = Date.now();
-    
-    // Clean up old cached wallets
-    for (const [address, wallet] of this.cache.entries()) {
-      if (now - wallet.lastUsed > this.CACHE_TTL) {
-        this.cache.delete(address);
-      }
-    }
-    
-    // Clean up old decrypted keys
-    for (const [address, data] of this.decryptedKeys.entries()) {
-      if (now - data.timestamp > this.KEY_TTL) {
-        this.decryptedKeys.delete(address);
-      }
-    }
+    debugLog('WalletCache', `INVALIDATE_ALL | cleared=${walletCount} wallets | cacheSize=0/100`);
   }
 
   destroy() {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
-      this.cleanupInterval = null;
-    }
+    const walletCount = this.cache.size;
     this.cache.clear();
-    this.decryptedKeys.clear();
+    debugLog('WalletCache', `DESTROY | cleared=${walletCount} wallets | cache destroyed`);
   }
 }
 

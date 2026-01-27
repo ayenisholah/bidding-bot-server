@@ -452,11 +452,10 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'StopTiming': 'stoptask',       // Performance timing measurements
   'StopRace': 'stoptask',         // Potential race condition detection
 
-  // Health (4)
+  // Health (3)
   'Health': 'health',
   'HealthCheck': 'health',
   'ConnectivityMonitor': 'health',
-  'EventLoop': 'health',  // Event loop lag monitoring - detects blocked event loop
 
   // Memory (1)
   'MemoryMonitor': 'memory',  // Memory monitoring logs for crash debugging

@@ -6,7 +6,7 @@ import { debugLog, errorLog, infoLog } from '../utils/debug-file-logger';
 
 // Import caches
 import { tokenTraitCache } from '../utils/token-trait-cache';
-import { collectionCache } from '../utils/collection-cache';
+import { getCacheStats as getCollectionCacheStats } from '../utils/collection-cache';
 import { tradingDisabledCache } from '../utils/trading-disabled-cache';
 import { listingPriceCache } from '../utils/listing-price-cache';
 import { jobFallbackStore } from '../utils/redis-job-fallback';
@@ -19,7 +19,6 @@ import {
   errorStats,
   counterbidCounts,
   processedOwnBids,
-  balances,
   taskStatus,
   bestOffers,
   floorPrices
@@ -288,20 +287,20 @@ class MemorySnapshotService {
       });
 
       // CollectionCache (has two internal caches)
-      const collectionStats = collectionCache.getStats();
+      const collectionStats = getCollectionCacheStats();
       caches.push({
         name: 'CollectionCache (Floor)',
-        size: collectionStats.floorCache.size,
-        maxSize: collectionStats.floorCache.maxSize,
+        size: collectionStats.floorPrice.size,
+        maxSize: collectionStats.floorPrice.max,
         ttl: 5 * 60 * 1000, // 5 minutes
-        estimatedMemoryBytes: collectionStats.floorCache.size * 100
+        estimatedMemoryBytes: collectionStats.floorPrice.size * 100
       });
       caches.push({
         name: 'CollectionCache (Details)',
-        size: collectionStats.detailsCache.size,
-        maxSize: collectionStats.detailsCache.maxSize,
+        size: collectionStats.collectionDetails.size,
+        maxSize: collectionStats.collectionDetails.max,
         ttl: 30 * 60 * 1000, // 30 minutes
-        estimatedMemoryBytes: collectionStats.detailsCache.size * 500
+        estimatedMemoryBytes: collectionStats.collectionDetails.size * 500
       });
 
       // TradingDisabledCache
@@ -378,11 +377,6 @@ class MemorySnapshotService {
         },
         processedOwnBids: {
           setSize: processedOwnBids.size
-        },
-        balances: {
-          walletCount: Object.keys(balances).length,
-          totalEntries: Object.values(balances).reduce((sum, wallet) =>
-            sum + Object.keys(wallet).length, 0)
         },
         taskStatus: {
           taskCount: Object.keys(taskStatus).length
@@ -573,7 +567,6 @@ class MemorySnapshotService {
       errorStats: { taskCount: 0, totalEntries: 0 },
       counterbidCounts: { taskCount: 0, totalEntries: 0 },
       processedOwnBids: { setSize: 0 },
-      balances: { walletCount: 0, totalEntries: 0 },
       taskStatus: { taskCount: 0 },
       bestOffers: { taskCount: 0, totalEntries: 0 },
       floorPrices: { taskCount: 0, totalEntries: 0 }

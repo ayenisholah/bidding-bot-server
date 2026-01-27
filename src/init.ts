@@ -10,6 +10,7 @@ config()
 
 // Debug logging controlled by single environment variable
 const DEBUG = process.env.DEBUG === 'true';
+export const DEBUG_VERBOSE = process.env.DEBUG_VERBOSE === 'true';
 
 let limiter: Bottleneck;
 let axiosInstance: AxiosInstance;
@@ -103,7 +104,7 @@ const retryConfig: IAxiosRetryConfig = {
 };
 
 async function initialize(rateLimit: number) {
-  axiosInstance = axios.create({ timeout: 60000 });
+  axiosInstance = axios.create({ timeout: 10000 });
 
   limiter = new Bottleneck({
     minTime: 1000 / rateLimit, // Minimum time between job starts
@@ -298,16 +299,16 @@ export async function scheduleWithAbort<T>(
       // Execute the actual function, passing the signal for HTTP abort capability
       return fn(controller.signal);
     })
-    .then((result) => {
-      debugLog('LimiterPending', `COMPLETE | taskId=${taskId} | jobId=${actualJobId} | result=success`);
-      resolve(result);
-    })
-    .catch((err) => {
-      // Clean up in case of error (may already be deleted if aborted)
-      pendingLimiterJobs.get(taskId)?.delete(pendingJob);
-      debugLog('LimiterPending', `FAILED | taskId=${taskId} | jobId=${actualJobId} | error=${err.message}`);
-      reject(err);
-    });
+      .then((result) => {
+        debugLog('LimiterPending', `COMPLETE | taskId=${taskId} | jobId=${actualJobId} | result=success`);
+        resolve(result);
+      })
+      .catch((err) => {
+        // Clean up in case of error (may already be deleted if aborted)
+        pendingLimiterJobs.get(taskId)?.delete(pendingJob);
+        debugLog('LimiterPending', `FAILED | taskId=${taskId} | jobId=${actualJobId} | error=${err.message}`);
+        reject(err);
+      });
   });
 }
 

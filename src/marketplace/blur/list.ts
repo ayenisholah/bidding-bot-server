@@ -9,7 +9,7 @@ import Listing from "../../models/listing.model";
 import { convertDurationForBlur } from "../../utils/duration";
 import { roundToNineDecimals } from "../../utils/decimal-precision";
 import { getAccessToken } from "./bid";
-import { getCollectionDetails } from "../../functions/collection";
+import { getCachedCollectionDetails } from "../../utils/collection-cache";
 import { IFee } from "../../types/listing.types";
 
 config()
@@ -79,7 +79,7 @@ export async function listOnBlur(
     // console.log(`${GOLD}[BLUR] Fetching collection details for ${contractSlug}...${RESET}`);
     let feeRate = 0;
     try {
-      const collectionData = await getCollectionDetails(contractSlug, nftAddress);
+      const collectionData = await getCachedCollectionDetails(contractSlug, nftAddress);
       const creatorFees = collectionData?.creator_fees as IFee;
       const enforceCreatorFee = collectionData?.enforceCreatorFee as boolean;
       const totalCreatorFee = enforceCreatorFee && creatorFees ? Object.values(creatorFees).reduce((sum, fee) => sum + fee, 0) : 0;

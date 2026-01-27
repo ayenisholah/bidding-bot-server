@@ -1,3 +1,4 @@
+import { LRUCache } from 'lru-cache';
 import { BoundedCache } from '../utils/bounded-cache';
 import { debugLog } from '../utils/debug-file-logger';
 
@@ -50,6 +51,21 @@ class CounterbidTrackingService {
 
   // Index for efficient cleanup by taskId
   private topOfferTaskIndex = new Map<string, Set<string>>();
+
+  // Execution latency samples for performance monitoring
+  // Key: unique sample ID, Value: { marketplace, latency, success, timestamp }
+  private executionLatencySamples = new LRUCache<string, {
+    marketplace: string;
+    latency: number;
+    success: boolean;
+    timestamp: number;
+  }>({
+    max: 1000,     // Last 1000 samples
+    ttl: 3600000   // 1 hour TTL
+  });
+
+  // Sample counter for unique IDs
+  private executionSampleCounter = 0;
 
   // =============================================================================
   // PENDING COUNTERBID MANAGEMENT
@@ -312,6 +328,83 @@ class CounterbidTrackingService {
       topOffers: this.marketplaceTopOfferCache.size,
       trackedTasks: this.topOfferTaskIndex.size
     };
+  }
+
+  // =============================================================================
+  // EXECUTION LATENCY TRACKING (PLACEHOLDER - KEPT FOR COMPATIBILITY)
+  // =============================================================================
+
+  /**
+   * Record execution completion for latency tracking
+   */
+  public recordExecutionComplete(
+    marketplace: string,
+    taskId: string,
+    enqueuedAt: number,
+    completedAt: number,
+    success: boolean,
+    tokenId?: string,
+    traceId?: string
+  ): void {
+    const latency = completedAt - enqueuedAt;
+    const sampleId = `exec-${this.executionSampleCounter++}`;
+
+    this.executionLatencySamples.set(sampleId, {
+      marketplace: marketplace.toLowerCase(),
+      latency,
+      success,
+      timestamp: completedAt
+    });
+
+    if (DEBUG) {
+      debugLog('ExecutionLatency',
+        `RECORDED ${marketplace} | latency=${latency}ms | success=${success} | task=${taskId} | token=${tokenId || 'N/A'}`
+      );
+    }
+  }
+
+  /**
+   * Get execution latency statistics for a marketplace (or all marketplaces)
+   */
+  public getExecutionLatencyStats(marketplace?: string): {
+    p50: number; p95: number; p99: number; avg: number; max: number;
+    sampleCount: number; successRate: number;
+  } {
+    // Collect samples for the specified marketplace (or all if not specified)
+    const samples: number[] = [];
+    let successCount = 0;
+    let totalCount = 0;
+
+    for (const sample of this.executionLatencySamples.values()) {
+      // Filter by marketplace if specified
+      if (marketplace && sample.marketplace !== marketplace.toLowerCase()) {
+        continue;
+      }
+
+      samples.push(sample.latency);
+      totalCount++;
+      if (sample.success) {
+        successCount++;
+      }
+    }
+
+    // Return zeros if no samples
+    if (samples.length === 0) {
+      return { p50: 0, p95: 0, p99: 0, avg: 0, max: 0, sampleCount: 0, successRate: 0 };
+    }
+
+    // Sort samples for percentile calculation
+    samples.sort((a, b) => a - b);
+
+    // Calculate statistics
+    const p50 = samples[Math.floor(samples.length * 0.5)] || 0;
+    const p95 = samples[Math.floor(samples.length * 0.95)] || 0;
+    const p99 = samples[Math.floor(samples.length * 0.99)] || 0;
+    const max = samples[samples.length - 1] || 0;
+    const avg = Math.round(samples.reduce((sum, val) => sum + val, 0) / samples.length);
+    const successRate = totalCount > 0 ? Math.round((successCount / totalCount) * 100) : 0;
+
+    return { p50, p95, p99, avg, max, sampleCount: samples.length, successRate };
   }
 }
 

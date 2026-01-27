@@ -2,16 +2,12 @@ import crypto from 'crypto';
 import { config } from "dotenv"
 import { getRedisConnection } from '../utils/redis'
 import { debugLog, errorLog, warnLog } from './debug-file-logger'
+import { LRUCache } from 'lru-cache';
 
 config()
 
 const ALGORITHM = 'aes-256-gcm';
 const DETERMINISTIC_ALGORITHM = "aes-256-ecb";
-
-// Cache for decrypted private keys
-const decryptedKeyCache = new Map<string, { key: string; timestamp: number }>();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache TTL
-const MAX_CACHE_SIZE = 100; // Maximum number of cached keys
 
 // Password persistence configuration (development only)
 const PASSWORD_REDIS_KEY = 'nft-bot:server:password'; // Single Redis node key
@@ -23,6 +19,26 @@ let PASSWORD: string | undefined = undefined
 // Rate limiter for no password error logging
 let lastNoPasswordLogTime = 0;
 const NO_PASSWORD_LOG_INTERVAL = 60000; // Log once per minute max
+
+// =============================================================================
+// DECRYPTED PRIVATE KEY CACHE (LRU, No TTL)
+// =============================================================================
+
+// Cache decrypted private keys (no TTL, persists until server restart)
+// Max 1000 wallets as per user limit (LRU eviction on capacity)
+const decryptedKeyCache = new LRUCache<string, string>({
+  max: 1000,              // Max 1000 unique wallets
+  ttl: 0,                 // No TTL (infinite until server restart)
+  allowStale: false,
+  updateAgeOnGet: true    // LRU behavior - keep hot keys fresh
+});
+
+// Stats tracking
+let cacheStats = {
+  hits: 0,
+  misses: 0,
+  sets: 0
+};
 
 // =============================================================================
 // REDIS-BASED PASSWORD STORAGE (Development)
@@ -86,8 +102,12 @@ export async function recoverPasswordFromRedis(): Promise<boolean> {
 
 export async function setPassword(password: string): Promise<void> {
   PASSWORD = password;
-  // Clear the cache when password changes
-  decryptedKeyCache.clear();
+
+  // Clear decrypted key cache when password changes
+  clearAllDecryptedKeys();
+
+  // Clear wallet cache when password changes (handled by wallet-cache.ts)
+  // Note: Caller should call walletCache.invalidateAll() after this
 
   // Development only: persist to Redis for convenience
   if (process.env.NODE_ENV !== 'production') {
@@ -130,7 +150,12 @@ export async function renewPasswordTTL(): Promise<void> {
 // Clear password from all storage
 export async function clearPassword(): Promise<void> {
   PASSWORD = undefined;
-  decryptedKeyCache.clear();
+
+  // Clear decrypted key cache when password is cleared
+  clearAllDecryptedKeys();
+
+  // Clear wallet cache when password is cleared (handled by wallet-cache.ts)
+  // Note: Caller should call walletCache.invalidateAll() after this
 
   // Development only: clear from Redis
   if (process.env.NODE_ENV !== 'production') {
@@ -221,7 +246,14 @@ export function encryptPrivateKey(privateKey: string): string {
 }
 
 export function decryptPrivateKey(encryptedData: string): string {
-  // console.log('🔐 [decryptPrivateKey] Starting decryption...');
+  // Check cache first (INSTANT if hit)
+  const cached = decryptedKeyCache.get(encryptedData);
+  if (cached) {
+    cacheStats.hits++;
+    return cached;
+  }
+
+  cacheStats.misses++;
 
   // Validate input data
   if (encryptedData === null || encryptedData === undefined) {
@@ -239,43 +271,16 @@ export function decryptPrivateKey(encryptedData: string): string {
     throw new Error('Encrypted data is empty');
   }
 
-  // console.log(`🔐 [decryptPrivateKey] Input validation passed, data length: ${encryptedData.length}`);
-
-  // Check if password is available
-  // const hasPassword = !!getPassword();
-  // console.log(`🔐 [decryptPrivateKey] Password available: ${hasPassword}`);
-
-  // Check cache first
-  const cached = decryptedKeyCache.get(encryptedData);
-  if (cached) {
-    const age = Date.now() - cached.timestamp;
-    // console.log(`🔐 [decryptPrivateKey] Cache hit - age: ${age}ms, TTL: ${CACHE_TTL}ms`);
-    if (age < CACHE_TTL) {
-      // Cache hit - return cached value
-      // console.log('🔐 [decryptPrivateKey] Returning cached key');
-      return cached.key;
-    } else {
-      // Cache expired - remove it
-      // console.log('🔐 [decryptPrivateKey] Cache expired, removing...');
-      decryptedKeyCache.delete(encryptedData);
-    }
-  } else {
-    // console.log('🔐 [decryptPrivateKey] Cache miss');
-  }
-
-  // Cache miss or expired - perform decryption
-  // console.log('🔐 [decryptPrivateKey] Getting encryption key...');
+  // Get encryption key
   let key: Buffer;
   try {
     key = getEncryptionKey();
-    // console.log('🔐 [decryptPrivateKey] Encryption key obtained successfully');
   } catch (error) {
     errorLog('Crypto', 'decryptPrivateKey: Failed to get encryption key', error);
     throw error;
   }
 
   const parts = encryptedData.split(':');
-  // console.log(`🔐 [decryptPrivateKey] Encrypted data parts: ${parts.length}`);
 
   if (parts.length !== 3) {
     errorLog('Crypto', `decryptPrivateKey: Invalid format | expected=3 parts | got=${parts.length}`);
@@ -283,7 +288,6 @@ export function decryptPrivateKey(encryptedData: string): string {
   }
 
   const [ivHex, authTagHex, encrypted] = parts;
-  // console.log(`🔐 [decryptPrivateKey] IV length: ${ivHex.length}, AuthTag length: ${authTagHex.length}, Encrypted length: ${encrypted.length}`);
 
   try {
     const iv = Buffer.from(ivHex, 'hex');
@@ -295,11 +299,9 @@ export function decryptPrivateKey(encryptedData: string): string {
     let decrypted = decipher.update(encrypted, 'hex', 'utf8');
     decrypted += decipher.final('utf8');
 
-    // console.log('🔐 [decryptPrivateKey] Decryption successful');
-
-    // Cache the result
-    cacheDecryptedKey(encryptedData, decrypted);
-    // console.log(`🔐 [decryptPrivateKey] Result cached. Cache size: ${decryptedKeyCache.size}/${MAX_CACHE_SIZE}`);
+    // Cache the decrypted key (infinite TTL)
+    decryptedKeyCache.set(encryptedData, decrypted);
+    cacheStats.sets++;
 
     return decrypted;
   } catch (error) {
@@ -342,52 +344,53 @@ export async function reEncryptWallet(
   }
 }
 
-// Clear the decrypted key cache (useful when changing passwords)
-export function clearDecryptedKeyCache(): void {
-  // const previousSize = decryptedKeyCache.size;
-  decryptedKeyCache.clear();
-  // console.log(`🔐 [clearDecryptedKeyCache] Cleared ${previousSize} cached keys`);
-}
-
-// Helper function to manage cache size and add new entries
-function cacheDecryptedKey(encryptedData: string, decryptedKey: string): void {
-  // Check cache size and remove oldest entries if needed
-  if (decryptedKeyCache.size >= MAX_CACHE_SIZE) {
-    // Find and remove the oldest entry
-    let oldestKey: string | null = null;
-    let oldestTime = Date.now();
-
-    for (const [key, value] of decryptedKeyCache.entries()) {
-      if (value.timestamp < oldestTime) {
-        oldestTime = value.timestamp;
-        oldestKey = key;
-      }
-    }
-
-    if (oldestKey) {
-      decryptedKeyCache.delete(oldestKey);
-    }
+/**
+ * Clear decrypted key from cache (call when wallet is deleted/updated)
+ */
+export function clearDecryptedKey(encryptedPrivateKeyHex: string): void {
+  const deleted = decryptedKeyCache.delete(encryptedPrivateKeyHex);
+  if (deleted) {
+    debugLog('Crypto', `[KEY_CACHE] Evicted key from cache | keyPrefix=${encryptedPrivateKeyHex.slice(0, 16)}...`);
   }
-
-  // Add to cache
-  decryptedKeyCache.set(encryptedData, {
-    key: decryptedKey,
-    timestamp: Date.now()
-  });
 }
 
-// Function to clear the decryption cache (useful for security or memory management)
-export function clearDecryptionCache(): void {
+/**
+ * Clear all decrypted keys from cache (call on password change)
+ */
+export function clearAllDecryptedKeys(): void {
+  const size = decryptedKeyCache.size;
   decryptedKeyCache.clear();
+  cacheStats = { hits: 0, misses: 0, sets: 0 };
+  debugLog('Crypto', `[KEY_CACHE] Cleared all cached keys | count=${size}`);
 }
 
-// Function to get cache statistics
-export function getDecryptionCacheStats(): { size: number; maxSize: number; ttl: number } {
+/**
+ * Get cache statistics for monitoring
+ */
+export function getDecryptedKeyCacheStats() {
+  const total = cacheStats.hits + cacheStats.misses;
   return {
     size: decryptedKeyCache.size,
-    maxSize: MAX_CACHE_SIZE,
-    ttl: CACHE_TTL
+    max: 1000,
+    hits: cacheStats.hits,
+    misses: cacheStats.misses,
+    sets: cacheStats.sets,
+    hitRate: total > 0 ? ((cacheStats.hits / total) * 100).toFixed(1) + '%' : '0%',
+    ttl: 'infinite (until server restart)'
   };
+}
+
+// Legacy function names for backward compatibility
+export function clearDecryptedKeyCache(): void {
+  clearAllDecryptedKeys();
+}
+
+export function clearDecryptionCache(): void {
+  clearAllDecryptedKeys();
+}
+
+export function getDecryptionCacheStats() {
+  return getDecryptedKeyCacheStats();
 }
 
 // Password encryption using GCM mode (secure, non-deterministic)
@@ -462,3 +465,17 @@ export function decryptPassword(encryptedPassword: string): string {
     throw new Error("Failed to decrypt password");
   }
 }
+
+// =============================================================================
+// CACHE STATS LOGGING
+// =============================================================================
+
+// Log cache stats every 5 minutes
+setInterval(() => {
+  const stats = getDecryptedKeyCacheStats();
+  debugLog('Performance',
+    `[KEY_CACHE] Stats | size=${stats.size}/${stats.max} | ` +
+    `hitRate=${stats.hitRate} (${stats.hits}/${stats.hits + stats.misses}) | ` +
+    `sets=${stats.sets}`
+  );
+}, 5 * 60 * 1000);

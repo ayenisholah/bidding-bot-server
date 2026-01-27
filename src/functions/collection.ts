@@ -14,6 +14,14 @@ import { setOpenseaMarketplaceFee } from "../utils/marketplace-fee-cache";
 import { errorLog, warnLog, debugLog } from "../utils/debug-file-logger";
 import { apiDedup } from "../utils/api-dedup";
 import { isCollectionUnavailable, markCollectionUnavailable } from "../utils/marketplace-availability";
+import {
+  collectionDetailsLRU,
+  trackCollectionDetailsHit,
+  trackCollectionDetailsMiss,
+  floorPriceLRU,
+  trackFloorHit,
+  trackFloorMiss
+} from "../marketplace/opensea/cache";
 
 const collectionCache: { [key: string]: ICollectionDetails } = {};
 const MAX_CACHE_ITEMS = 1000;
@@ -83,12 +91,26 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation:
 }
 
 export async function getCollectionDetails(slug: string, contractAddress?: string, priority?: number) {
+  const normalizedSlug = slug.toLowerCase();
+
+  // STEP 1: Check LRU (< 1ms)
+  const lruCached = collectionDetailsLRU.get(normalizedSlug);
+  if (lruCached) {
+    trackCollectionDetailsHit();
+    debugLog('Performance', `[OS-CollDetails] LRU_HIT (<1ms) | slug=${slug}`);
+    ensureOpenseaMarketplaceFee(lruCached);
+    return lruCached;
+  }
+
+  // STEP 2: Check old in-memory cache
   if (collectionCache[slug]) {
+    collectionDetailsLRU.set(normalizedSlug, collectionCache[slug]); // Backfill LRU
+    trackCollectionDetailsHit();
     ensureOpenseaMarketplaceFee(collectionCache[slug]);
     return collectionCache[slug];
   }
 
-  // Check Redis cache
+  // STEP 3: Check Redis cache (10-20ms)
   const cacheKey = `opensea:collection:${slug}`;
   const redis = getRedis();
 
@@ -97,8 +119,11 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
       const cached = await redis.get(cacheKey);
       if (cached) {
         const details = JSON.parse(cached);
-        collectionCache[slug] = details; // Update memory cache
-        ensureOpenseaMarketplaceFee(collectionCache[slug]);
+        collectionDetailsLRU.set(normalizedSlug, details); // Backfill LRU
+        collectionCache[slug] = details; // Update old memory cache
+        trackCollectionDetailsHit();
+        debugLog('Performance', `[OS-CollDetails] REDIS_HIT (10-20ms) | slug=${slug}`);
+        ensureOpenseaMarketplaceFee(details);
         return details;
       }
     } catch {
@@ -106,13 +131,40 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
     }
   }
 
+  // STEP 4: Fetch from API (100-500ms)
+  trackCollectionDetailsMiss();
+  debugLog('Performance', `[OS-CollDetails] CACHE_MISS | slug=${slug} | fetching...`);
+  const fetchStart = Date.now();
+
   const lockKey = `{${slug}}:collection`;
 
   try {
     const result = await withTimeout(
       lockManager.withLock(lockKey, async () => {
+        // Double-check LRU after lock
+        const lruCachedAfterLock = collectionDetailsLRU.get(normalizedSlug);
+        if (lruCachedAfterLock) {
+          return lruCachedAfterLock;
+        }
+
+        // Double-check old memory cache after lock
         if (collectionCache[slug]) {
           return collectionCache[slug];
+        }
+
+        // Double-check Redis after lock
+        if (redis && redisClient.isReady()) {
+          try {
+            const cached = await redis.get(cacheKey);
+            if (cached) {
+              const details = JSON.parse(cached);
+              collectionDetailsLRU.set(normalizedSlug, details);
+              collectionCache[slug] = details;
+              return details;
+            }
+          } catch {
+            // Ignore error, proceed to API fetch
+          }
         }
 
         const { data: collection } = await withTimeout(
@@ -173,16 +225,23 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
         };
 
         ensureOpenseaMarketplaceFee(result);
+
+        // Store in both LRU and old memory cache
+        collectionDetailsLRU.set(normalizedSlug, result);
         collectionCache[slug] = result;
 
-        // Cache in Redis with 1-hour TTL
+        // Cache in Redis with 24-hour TTL (matching LRU TTL)
         if (redis && redisClient.isReady()) {
           try {
-            await redis.setex(cacheKey, 3600, JSON.stringify(result));
+            await redis.setex(cacheKey, 24 * 60 * 60, JSON.stringify(result));
           } catch {
             warnLog('Cache', `[collection.ts] Error caching collection details to Redis | slug=${slug}`);
           }
         }
+
+        const fetchTime = Date.now() - fetchStart;
+        debugLog('Performance', `[OS-CollDetails] API_FETCH | slug=${slug} | fetchTime=${fetchTime}ms`);
+
         return result;
       }),
       60000, // 60 second timeout for entire operation
@@ -300,26 +359,52 @@ export async function getOpenseaFloor(collectionSlug: string) {
     return 0; // Skip API call, already cached as unavailable
   }
 
-  const CACHE_TTL = 60; // 1 minute cache (updated from 30 seconds)
+  const CACHE_TTL = 300; // 5 minutes cache
   const cacheKey = `opensea:floor:${collectionSlug}`;
   const lockKey = `floor:{opensea}:${collectionSlug}`;
+  const normalizedSlug = collectionSlug.toLowerCase();
 
-  // Try to get from cache first
+  // STEP 1: Check LRU (< 1ms)
+  const lruCached = floorPriceLRU.get(normalizedSlug);
+  if (lruCached !== undefined) {
+    trackFloorHit();
+    debugLog('Performance', `[OS-Floor] LRU_HIT (<1ms) | slug=${collectionSlug} | floor=${lruCached}`);
+    return lruCached;
+  }
+
+  // STEP 2: Check Redis (10-20ms)
   try {
     const cachedFloor = getRedis() ? await getRedis().get(cacheKey) : null;
     if (cachedFloor) {
-      return JSON.parse(cachedFloor);
+      const floor = JSON.parse(cachedFloor);
+      floorPriceLRU.set(normalizedSlug, floor); // Backfill LRU
+      trackFloorHit();
+      debugLog('Performance', `[OS-Floor] REDIS_HIT (10-20ms) | slug=${collectionSlug} | floor=${floor}`);
+      return floor;
     }
   } catch {
     warnLog('Cache', `[collection.ts] Error reading OpenSea floor price from cache | slug=${collectionSlug} | key=${cacheKey}`);
   }
 
+  // STEP 3: Fetch from API (800-2500ms)
+  trackFloorMiss();
+  debugLog('Performance', `[OS-Floor] CACHE_MISS | slug=${collectionSlug} | fetching...`);
+  const fetchStart = Date.now();
+
   // If not in cache, try to acquire lock and fetch
   const result = await lockManager.withLock(lockKey, async () => {
-    // Double check cache after acquiring lock
+    // Double-check LRU after lock
+    const lruCachedAfterLock = floorPriceLRU.get(normalizedSlug);
+    if (lruCachedAfterLock !== undefined) {
+      return lruCachedAfterLock;
+    }
+
+    // Double-check Redis after acquiring lock
     const cachedFloor = getRedis() ? await getRedis().get(cacheKey) : null;
     if (cachedFloor) {
-      return JSON.parse(cachedFloor);
+      const floor = JSON.parse(cachedFloor);
+      floorPriceLRU.set(normalizedSlug, floor); // Backfill LRU
+      return floor;
     }
 
     // Retry configuration for floor price fetching
@@ -364,10 +449,16 @@ export async function getOpenseaFloor(collectionSlug: string) {
           continue;
         }
 
-        // Only cache positive floor prices - don't cache 0 values
-        if (floor_price > 0 && getRedis()) {
-          await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+        // Cache in both LRU and Redis (only positive floor prices)
+        if (floor_price > 0) {
+          floorPriceLRU.set(normalizedSlug, floor_price);
+          if (getRedis()) {
+            await getRedis().set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
+          }
         }
+
+        const fetchTime = Date.now() - fetchStart;
+        debugLog('Performance', `[OS-Floor] API_FETCH | slug=${collectionSlug} | floor=${floor_price} | attempt=${attempt} | fetchTime=${fetchTime}ms`);
 
         return floor_price;
 
@@ -467,7 +558,7 @@ function recordBlurAPIFailure(collectionSlug: string, errorStatus: number) {
 }
 
 export async function getBlurFloor(collectionSlug: string): Promise<number> {
-  const CACHE_TTL = 60; // 1 minute cache (updated from 30 seconds)
+  const CACHE_TTL = 300; // 5 minutes cache
   const cacheKey = `blur:floor:{${collectionSlug}}`;
   const lockKey = `floor:{blur}:${collectionSlug}`;
 

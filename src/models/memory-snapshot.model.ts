@@ -21,7 +21,6 @@ interface GlobalStateStats {
   errorStats: { taskCount: number; totalEntries: number };
   counterbidCounts: { taskCount: number; totalEntries: number };
   processedOwnBids: { setSize: number };
-  balances: { walletCount: number; totalEntries: number };
   taskStatus: { taskCount: number };
   bestOffers: { taskCount: number; totalEntries: number };
   floorPrices: { taskCount: number; totalEntries: number };
@@ -243,10 +242,6 @@ const MemorySnapshotSchema = new Schema<IMemorySnapshot>(
       },
       processedOwnBids: {
         setSize: { type: Number, required: true }
-      },
-      balances: {
-        walletCount: { type: Number, required: true },
-        totalEntries: { type: Number, required: true }
       },
       taskStatus: {
         taskCount: { type: Number, required: true }

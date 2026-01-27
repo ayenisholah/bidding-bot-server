@@ -6,7 +6,7 @@
 import { Queue } from "bullmq";
 import { taskRuntimeCache } from "../utils/task-runtime-cache";
 import { debugLog, warnLog, errorLog } from "../utils/debug-file-logger";
-import { BoundedCache } from "../utils/bounded-cache";
+import { LRUCache } from 'lru-cache';
 
 // ============================================
 // TYPE DEFINITIONS
@@ -116,13 +116,15 @@ export const bidStats: BidCounts = {};
 export const ownBidCounts: { [marketplace: string]: number } = {};
 
 // Track processed own bid hashes with 60-second TTL (matches OS2 reconnection window + Triple HA dedup)
+// Uses LRUCache with automatic TTL expiration and O(1) eviction (more efficient than BoundedCache)
 // Duplicates arrive within 0-60 seconds (Triple HA + OS2 reconnection)
-// 60s TTL prevents unbounded growth while covering 99.99% of duplicate window
-export const processedOwnBids = new BoundedCache<string, boolean>(
-  50000,        // Max 50K entries (matches docs)
-  60 * 1000,    // 60-second TTL (matches global dedup in ws-proxy)
-  'processedOwnBids'
-);
+// Kept at 100K max per user request (high safety buffer for burst scenarios)
+export const processedOwnBids = new LRUCache<string, boolean>({
+  max: 100000,             // Kept at 100K for extra safety during burst traffic
+  ttl: 60 * 1000,          // 60-second TTL
+  updateAgeOnGet: false,   // Don't reset TTL on reads (matches BoundedCache behavior)
+  allowStale: false,       // Never return expired entries
+});
 
 // Helper function to maintain addIfNotExists API compatibility
 export function addOwnBidIfNotExists(orderHash: string): boolean {
@@ -138,9 +140,9 @@ export function addOwnBidIfNotExists(orderHash: string): boolean {
 export function getProcessedOwnBidsStats() {
   return {
     size: processedOwnBids.size,
-    capacity: 50000,
+    capacity: 100_000,
     ttl: '60 seconds',
-    type: 'TTL-based dedup (aggressive)',
+    type: 'LRUCache (TTL-based dedup)',
     estimatedMemoryBytes: processedOwnBids.size * 80
   };
 }
@@ -151,46 +153,17 @@ export const taskStatus: TaskStatus = {};
 export const bestOffers: BidCounts = {};
 export const floorPrices: BidCounts = {};
 
-// Track balances with 24-hour TTL (prevents indefinite accumulation)
-// NOTE: This is for MEMORY MONITORING ONLY - not used in bidding logic
-// Source of truth for purchase counts: MongoDB stopOptions.actualPurchase
-// Used by: Memory snapshots, Memory Monitor UI, debugging
-export const balances = new BoundedCache<string, { opensea: number; magiceden: number; blur: number }>(
-  100000,         // Max 100K wallet-contract pairs
-  24 * 60 * 60 * 1000,  // 24-hour TTL
-  'balances'
-);
-
-// Helper to get balance key
-function getBalanceKey(walletAddress: string, contractAddress: string): string {
-  return `${walletAddress.toLowerCase()}:${contractAddress.toLowerCase()}`;
-}
-
-// Export helper functions for balance management
-export function getWalletBalance(walletAddress: string, contractAddress: string, marketplace: 'opensea' | 'magiceden' | 'blur'): number {
-  const key = getBalanceKey(walletAddress, contractAddress);
-  const entry = balances.get(key);
-  return entry?.[marketplace] || 0;
-}
-
-export function incrementWalletBalance(walletAddress: string, contractAddress: string, marketplace: 'opensea' | 'magiceden' | 'blur'): void {
-  const key = getBalanceKey(walletAddress, contractAddress);
-  const current = balances.get(key) || { opensea: 0, magiceden: 0, blur: 0 };
-  current[marketplace]++;
-  balances.set(key, current);
-}
-
-export function getBalancesStats() {
-  return {
-    size: balances.size,
-    capacity: 100000,
-    ttl: '24 hours',
-    estimatedMemoryBytes: balances.size * 150
-  };
-}
-
 // Track per-collection floor price state with refresh tracking for non-blocking /api/floor
-export const collectionFloorCache = new Map<string, CollectionFloorState>();
+// EMERGENCY FIX: Converted from unbounded Map to LRU cache to prevent memory leak
+// Max 1000 collections (typical usage <100, 1K = 10x safety buffer)
+// 5-minute TTL (matches original cleanup interval)
+// Memory impact: 1K entries × 200 bytes = ~200KB max (vs 1GB+ previously)
+export const collectionFloorCache = new LRUCache<string, CollectionFloorState>({
+  max: 1000,               // Max 1K collections (vs unbounded)
+  ttl: 5 * 60 * 1000,      // 5 minute TTL (matches original cleanup interval)
+  updateAgeOnGet: true,    // LRU behavior - keep hot collections fresh
+  allowStale: false
+});
 export const FLOOR_STALE_THRESHOLD = 30000; // 30 seconds
 export const warningBids: WarningBids = {};
 export const warningMessage: WarningMessage = {};
@@ -254,22 +227,6 @@ export function incrementOwnBidsDeduplicated(marketplace: string): void {
 // RESILIENT HELPER FUNCTIONS
 // ============================================
 // Helper functions with built-in retry logic for transient failures
-
-/**
- * Initialize order cache with background retry
- * Non-blocking: task starts immediately, cache populates in background
- */
-export async function initializeOrderCacheWithRetry(
-  taskId: string,
-  incrementOwnBidCounter: (marketplace: 'opensea' | 'magiceden' | 'blur', orderHash: string, skipDedup?: boolean) => void,
-  maxRetries = 3
-): Promise<void> {
-  // NOTE: Counters track only new bids during current task execution (not cached orders)
-  // This prevents initialization mismatch between bidStats and ownBidCounts
-  // Both counters start at 0 for fresh task runs
-  // No initialization needed - function intentionally empty
-  return;
-}
 
 /**
  * Add jobs to BullMQ queue with retry logic for transient Redis failures

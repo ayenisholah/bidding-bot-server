@@ -7,7 +7,7 @@ import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
 import { config } from "dotenv";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, trackBidRate, updateTaskCancellationPercentage } from "../..";
 import { DistributedLockManager } from '../../utils/lock';
-import { orderCache } from '../../utils/order-cache';
+import { orderCache, queueReplacedOrderCancellation } from '../../utils/order-cache';
 import { withRetry } from '../../utils/db-retry';
 import redisClient from '../../utils/redis';
 import axios from "axios";
@@ -21,6 +21,7 @@ import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
 import { BoundedCache } from "../../utils/bounded-cache";
 import { apiDedup } from "../../utils/api-dedup";
 import { isCollectionUnavailable, markCollectionUnavailable } from "../../utils/marketplace-availability";
+import { safeTokenIdToString } from '../../utils/tokenId';
 
 // Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
 // This prevents log flooding when multiple parallel jobs hit the same balance check
@@ -182,7 +183,16 @@ export async function cleanupMagicEden() {
     orderBatchQueue.length = 0;
 
     try {
-      // Transform batch items to CachedOrder format and store directly in Redis
+      // STEP 1: Retrieve ALL old orders BEFORE batch overwrite
+      const oldOrdersMap = new Map<string, string>(); // identifier -> oldOrderHash
+      for (const order of batch) {
+        const oldOrder = await orderCache.get(order.taskId, 'magiceden', order.identifier);
+        if (oldOrder?.orderHash) {
+          oldOrdersMap.set(order.identifier, oldOrder.orderHash);
+        }
+      }
+
+      // STEP 2: Place all new bids immediately (batch)
       const createdAt = Date.now();
       const cachedOrders = batch.map(order => ({
         _id: orderCache.generateOrderId(),
@@ -195,8 +205,23 @@ export async function cleanupMagicEden() {
         slug: order.slug,
         taskId: order.taskId
       }));
-      // Store all orders in Redis cache (no MongoDB write - Redis is primary storage)
       await orderCache.setMany(cachedOrders);
+
+      // STEP 3: Cancel ALL replaced old bids async (fire-and-forget)
+      for (const order of batch) {
+        const oldOrderHash = oldOrdersMap.get(order.identifier);
+        if (oldOrderHash && oldOrderHash !== order.orderHash) {
+          queueReplacedOrderCancellation({
+            taskId: order.taskId,
+            marketplace: 'magiceden',
+            orderHash: oldOrderHash,
+            identifier: order.identifier,
+            reason: 'magiceden_batch_replaced'
+          }).catch(err => {
+            errorLog('MagicEden', `Failed to queue cancellation for replaced batch order | taskId=${order.taskId} | identifier=${order.identifier}`, err);
+          });
+        }
+      }
     } catch (error) {
       errorLog('Database', `[MagicEden] Failed to create orders in cache during cleanup | count=${batch.length}`, error);
     }
@@ -376,7 +401,7 @@ async function createBidData(
   const orderKind = trait || tokenId ? "seaport-v1.6" : "payment-processor-v2";
   // Build options based on bid type
   const options = tokenId ? {
-    [tokenId.toString()]: {
+    [safeTokenIdToString(tokenId)]: {
       useOffChainCancellation: true
     }
   } : {};
@@ -538,7 +563,7 @@ function generateMagicEdenOrder(
                       {
                         "itemType": 2,
                         "token": collection,
-                        "identifierOrCriteria": tokenId.toString(),
+                        "identifierOrCriteria": safeTokenIdToString(tokenId),
                         "startAmount": "1",
                         "endAmount": "1",
                         "recipient": maker
@@ -586,7 +611,7 @@ function generateMagicEdenOrder(
                           {
                             "itemType": 2,
                             "token": collection,
-                            "identifierOrCriteria": tokenId.toString(),
+                            "identifierOrCriteria": safeTokenIdToString(tokenId),
                             "startAmount": "1",
                             "endAmount": "1",
                             "recipient": maker
@@ -895,7 +920,7 @@ async function sendSignedOrderData(
           `🎉 TRAIT OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: ${slug.toUpperCase()} TRAIT: ${JSON.stringify(trait)} ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} 🎉`
           : `🎉 OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: ${slug.toUpperCase()} ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} 🎉`
 
-      const identifier = trait ? `${trait.attributeKey}:${trait.attributeValue}` : tokenId ? tokenId : 'collection';
+      const identifier = trait ? `${trait.attributeKey}:${trait.attributeValue}` : tokenId ? safeTokenIdToString(tokenId) : 'collection';
 
       const payload = JSON.stringify(offerResponse);
 
@@ -915,6 +940,16 @@ async function sendSignedOrderData(
         }
 
         try {
+          // STEP 1: Retrieve ALL old orders BEFORE batch overwrite
+          const oldOrdersMap = new Map<string, string>(); // identifier -> oldOrderHash
+          for (const order of batch) {
+            const oldOrder = await orderCache.get(order.taskId, 'magiceden', order.identifier);
+            if (oldOrder?.orderHash) {
+              oldOrdersMap.set(order.identifier, oldOrder.orderHash);
+            }
+          }
+
+          // STEP 2: Place all new bids immediately (batch)
           const createdAt = Date.now();
           const cachedOrders = batch.map(order => ({
             _id: orderCache.generateOrderId(),
@@ -928,6 +963,22 @@ async function sendSignedOrderData(
             taskId: order.taskId
           }));
           await orderCache.setMany(cachedOrders);
+
+          // STEP 3: Cancel ALL replaced old bids async (fire-and-forget)
+          for (const order of batch) {
+            const oldOrderHash = oldOrdersMap.get(order.identifier);
+            if (oldOrderHash && oldOrderHash !== order.orderHash) {
+              queueReplacedOrderCancellation({
+                taskId: order.taskId,
+                marketplace: 'magiceden',
+                orderHash: oldOrderHash,
+                identifier: order.identifier,
+                reason: 'magiceden_batch_replaced'
+              }).catch(err => {
+                errorLog('MagicEden', `Failed to queue cancellation for replaced batch order | taskId=${order.taskId} | identifier=${order.identifier}`, err);
+              });
+            }
+          }
         } catch (error) {
           errorLog('Database', `[MagicEden] Failed to flush batch queue | count=${batch.length}`, error);
         }
@@ -952,7 +1003,16 @@ async function sendSignedOrderData(
 
           if (batch.length > 0) {
             try {
-              // Transform batch items to CachedOrder format and store directly in Redis
+              // STEP 1: Retrieve ALL old orders BEFORE batch overwrite
+              const oldOrdersMap = new Map<string, string>(); // identifier -> oldOrderHash
+              for (const order of batch) {
+                const oldOrder = await orderCache.get(order.taskId, 'magiceden', order.identifier);
+                if (oldOrder?.orderHash) {
+                  oldOrdersMap.set(order.identifier, oldOrder.orderHash);
+                }
+              }
+
+              // STEP 2: Place all new bids immediately (batch)
               const createdAt = Date.now();
               const cachedOrders = batch.map(order => ({
                 _id: orderCache.generateOrderId(),
@@ -965,8 +1025,23 @@ async function sendSignedOrderData(
                 slug: order.slug,
                 taskId: order.taskId
               }));
-              // Store all orders in Redis cache (no MongoDB write - Redis is primary storage)
               await orderCache.setMany(cachedOrders);
+
+              // STEP 3: Cancel ALL replaced old bids async (fire-and-forget)
+              for (const order of batch) {
+                const oldOrderHash = oldOrdersMap.get(order.identifier);
+                if (oldOrderHash && oldOrderHash !== order.orderHash) {
+                  queueReplacedOrderCancellation({
+                    taskId: order.taskId,
+                    marketplace: 'magiceden',
+                    orderHash: oldOrderHash,
+                    identifier: order.identifier,
+                    reason: 'magiceden_batch_replaced'
+                  }).catch(err => {
+                    errorLog('MagicEden', `Failed to queue cancellation for replaced batch order | taskId=${order.taskId} | identifier=${order.identifier}`, err);
+                  });
+                }
+              }
             } catch (error) {
               // Log error but don't fail the bid
               errorLog('Database', `[MagicEden] Failed to batch create orders in cache | count=${batch.length}`, error);

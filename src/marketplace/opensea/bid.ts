@@ -4,13 +4,14 @@ import crypto from 'crypto';
 import { ethers, Wallet } from "ethers";
 import { BASE_URL, SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
-import { activeTasks, API_KEY, decrementBidCount, pQueue, trackBidRate, incrementOwnBidCounter, updateTaskCancellationPercentage, updateTopOfferAfterOurBid } from "../..";
-import { getCollectionDetails, getCollectionTokenContractMap } from "../../functions/collection";
+import { activeTasks, API_KEY, decrementBidCount, pQueue, trackBidRate, incrementOwnBidCounter, updateTaskCancellationPercentage } from "../..";
+import { counterbidTrackingService } from "../../services/counterbid-tracking.service";
+import { getCollectionTokenContractMap } from "../../functions/collection";
+import { getCachedCollectionDetails } from "../../utils/collection-cache";
 import { config } from "dotenv";
 import axios from "axios";
 import { v4 as uuidv4 } from 'uuid';
-import { orderCache } from '../../utils/order-cache';
-import { withRetry } from '../../utils/db-retry'
+import { orderCache, queueReplacedOrderCancellation } from '../../utils/order-cache';
 import { USDC, WETH } from "../../utils/currencies";
 import { CollectionItemsListQuery } from "../../queries";
 import { CollectionItemsQueryVariables, CollectionItemsResponse } from "../../functions";
@@ -23,10 +24,107 @@ import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
 import { apiDedup } from "../../utils/api-dedup";
 import { MAX_PAIN_OVERRIDE_ADDRESS, MAX_PAIN_SLUG, MAX_PAIN_TOKEN_OVERRIDES } from "../../maxPainOverrides";
 import { BoundedCache } from "../../utils/bounded-cache";
+import { LRUCache } from 'lru-cache';
+import { safeTokenIdToString } from '../../utils/tokenId';
 
 // Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
 // This prevents log flooding when multiple parallel jobs hit the same balance check
 const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000, 'openseaInsufficientBalanceLogCache');
+
+// LRU-only caches for performance-critical hot paths (< 1ms access vs 10-20ms Redis)
+// These caches use memory-only storage for fastest possible access during counterbidding
+
+// Trait floor cache (LRU ONLY - no Redis for speed)
+// Right-sized to 10K max for 60-second hot counterbid window (10x safety buffer)
+const traitFloorLRU = new LRUCache<string, number>({
+  max: 10000,            // Hot cache for active counterbidding traits
+  ttl: 60 * 1000,         // 60 second TTL
+  allowStale: true,       // Return stale on fetch failure
+  updateAgeOnGet: false,
+  updateAgeOnHas: false
+});
+
+
+// Contract resolution cache (LRU ONLY - no Redis for speed)
+// Right-sized to 5K max (200 tasks × 50 tokens × 2x safety buffer → 5K)
+const contractResolutionLRU = new LRUCache<string, string>({
+  max: 5000,            // Typical token IDs across active tasks
+  ttl: 2 * 60 * 60 * 1000, // 2 hours (contract mappings rarely change)
+  allowStale: true,
+  updateAgeOnGet: false
+});
+
+// Multi-contract slug cache
+// Right-sized to 500 max (<100 collections, 5x safety buffer)
+const multiContractSlugLRU = new LRUCache<string, boolean>({
+  max: 500,
+  ttl: 5 * 60 * 1000,     // 5 minutes
+  allowStale: true,
+  updateAgeOnGet: false
+});
+
+// Contract map cache (full token→contract mapping for collections)
+// Right-sized to 500 max (one entry per collection, <100 collections, 5x safety buffer)
+const contractMapLRU = new LRUCache<string, Record<string, string>>({
+  max: 500,
+  ttl: 2 * 60 * 60 * 1000,
+  allowStale: true,
+  updateAgeOnGet: false
+});
+
+// Cache statistics tracking
+let cacheStats = {
+  traitFloor: { hits: 0, misses: 0 },
+  contractResolution: { hits: 0, misses: 0 },
+  lastReset: Date.now()
+};
+
+// Function to get cache statistics
+export function getCacheStats() {
+  const uptime = Date.now() - cacheStats.lastReset;
+  const totalTraitFloor = cacheStats.traitFloor.hits + cacheStats.traitFloor.misses;
+  const totalContractResolution = cacheStats.contractResolution.hits + cacheStats.contractResolution.misses;
+
+  return {
+    uptime: Math.floor(uptime / 1000), // seconds
+    traitFloor: {
+      ...cacheStats.traitFloor,
+      hitRate: totalTraitFloor > 0 ? ((cacheStats.traitFloor.hits / totalTraitFloor) * 100).toFixed(1) + '%' : 'N/A',
+      cacheSize: traitFloorLRU.size,
+      cacheMax: traitFloorLRU.max
+    },
+    contractResolution: {
+      ...cacheStats.contractResolution,
+      hitRate: totalContractResolution > 0 ? ((cacheStats.contractResolution.hits / totalContractResolution) * 100).toFixed(1) + '%' : 'N/A',
+      cacheSize: contractResolutionLRU.size,
+      cacheMax: contractResolutionLRU.max
+    },
+    multiContractSlug: {
+      cacheSize: multiContractSlugLRU.size,
+      cacheMax: multiContractSlugLRU.max
+    },
+    contractMap: {
+      cacheSize: contractMapLRU.size,
+      cacheMax: contractMapLRU.max
+    }
+  };
+}
+
+// Function to reset cache statistics
+export function resetCacheStats() {
+  cacheStats = {
+    traitFloor: { hits: 0, misses: 0 },
+    contractResolution: { hits: 0, misses: 0 },
+    lastReset: Date.now()
+  };
+  debugLog('Performance', '[OS-Cache] Cache statistics reset');
+}
+
+// Log cache stats every 5 minutes
+setInterval(() => {
+  const stats = getCacheStats();
+  debugLog('Performance', `[OS-Cache] Stats | uptime=${stats.uptime}s | traitFloor: ${stats.traitFloor.hitRate} (${stats.traitFloor.hits}/${stats.traitFloor.hits + stats.traitFloor.misses}) | contractResolve: ${stats.contractResolution.hitRate} (${stats.contractResolution.hits}/${stats.contractResolution.hits + stats.contractResolution.misses})`);
+}, 5 * 60 * 1000);
 
 // Performance timing utilitie
 // Use the shared debug-logs directory (handled by debug-file-logger.ts)
@@ -123,6 +221,19 @@ function getWallet(privateKey: string): Wallet {
   return wallet;
 }
 
+// Seaport counter getter - always fetches fresh from blockchain for guaranteed correctness
+async function getSeaportCounter(walletAddress: string): Promise<bigint> {
+  const walletPrefix = walletAddress.slice(0, 10);
+  const fetchStart = Date.now();
+
+  const counter = await SEAPORT_CONTRACT.getCounter(walletAddress);
+  const fetchTime = Date.now() - fetchStart;
+
+  debugLog('Performance', `[OS-SeaportCounter] FETCH | wallet=${walletPrefix}... | counter=${counter} | fetchTime=${fetchTime}ms`);
+
+  return counter;
+}
+
 // ============================================================================
 // HTTP Request Abort Infrastructure
 // Track active requests for abort capability during task stop
@@ -180,9 +291,8 @@ export async function cancelOpenseaRequest(taskId: string): Promise<number> {
 
 // ============================================================================
 // Caching infrastructure for multi-contract collection resolution
-// Migrated to BoundedCache to prevent unbounded memory growth
-const multiContractSlugCache = new BoundedCache<string, boolean>(500, 30 * 60 * 1000, 'openseaMultiContractSlugCache'); // 500 entries, 30 min TTL
-const contractMapCache = new BoundedCache<string, Record<string, string>>(100, 60 * 60 * 1000, 'openseaContractMapCache'); // 100 entries, 1 hour TTL
+// multiContractSlugCache: In-memory BoundedCache (rarely changes, 500 collections max)
+// contractMapCache: Redis-backed (expensive GraphQL queries, shared across instances)
 const contractMapPromises = new Map<string, Promise<Record<string, string>>>();
 
 const domain = {
@@ -313,60 +423,94 @@ export async function resolveContractAddress(
   }
 
   const normalizedSlug = collectionSlug.toLowerCase();
-  const tokenKey = tokenId.toString();
+  const tokenKey = safeTokenIdToString(tokenId);
+  const cacheKey = `${normalizedSlug}:${tokenKey}`;
 
-  // STEP 1: Check Max Pain Override (Priority: Highest)
-  // This check happens FIRST for optimal performance
+  // STEP 1: Try LRU cache (< 1ms)
+  const cached = contractResolutionLRU.get(cacheKey);
+  if (cached !== undefined) {
+    cacheStats.contractResolution.hits++;
+    debugLog('Performance', `[OS-ContractResolve] CACHE_HIT (<1ms) | slug=${normalizedSlug} | token=${tokenKey} | address=${cached.slice(0, 10)}...`);
+    return cached;
+  }
+
+  cacheStats.contractResolution.misses++;
+  debugLog('Performance', `[OS-ContractResolve] CACHE_MISS | slug=${normalizedSlug} | token=${tokenKey} | resolving...`);
+  const resolveStart = Date.now();
+
+  // STEP 2: Check Max Pain Override (Priority: Highest)
   if (normalizedSlug === MAX_PAIN_SLUG && MAX_PAIN_TOKEN_OVERRIDES.has(tokenKey)) {
-    return MAX_PAIN_OVERRIDE_ADDRESS;
+    const address = MAX_PAIN_OVERRIDE_ADDRESS;
+    contractResolutionLRU.set(cacheKey, address);
+    debugLog('Performance', `[OS-ContractResolve] MAX_PAIN_OVERRIDE | slug=${normalizedSlug} | token=${tokenKey} | time=${Date.now() - resolveStart}ms`);
+    return address;
   }
 
   try {
-    // STEP 2: Check if collection has multiple contracts
-    if (!multiContractSlugCache.has(normalizedSlug)) {
-      const details = await getCollectionDetails(normalizedSlug);
+    // STEP 3: Check if multi-contract collection (LRU cached)
+    let isMultiContract = multiContractSlugLRU.get(normalizedSlug);
+    if (isMultiContract === undefined) {
+      const details = await getCachedCollectionDetails(normalizedSlug); // Uses LRU cache
       const contractAddresses = Array.isArray(details?.contracts)
         ? details.contracts
             .map((contract: { address?: string | null }) => contract?.address?.toLowerCase())
             .filter((address: string | null | undefined): address is string => Boolean(address))
         : [];
-
-      multiContractSlugCache.set(normalizedSlug, new Set(contractAddresses).size > 1);
+      isMultiContract = new Set(contractAddresses).size > 1;
+      multiContractSlugLRU.set(normalizedSlug, isMultiContract);
+      debugLog('Performance', `[OS-ContractResolve] multiContract=${isMultiContract} | slug=${normalizedSlug}`);
     }
 
-    // STEP 3: If not a multi-contract collection, use fallback
-    if (!multiContractSlugCache.get(normalizedSlug)) {
+    // STEP 4: If not multi-contract, use fallback
+    if (!isMultiContract) {
+      contractResolutionLRU.set(cacheKey, fallbackAddress);
+      debugLog('Performance', `[OS-ContractResolve] SINGLE_CONTRACT | slug=${normalizedSlug} | token=${tokenKey} | time=${Date.now() - resolveStart}ms`);
       return fallbackAddress;
     }
 
-    // STEP 4: Fetch token-to-contract mapping for multi-contract collections
-    if (!contractMapCache.has(normalizedSlug)) {
+    // STEP 5: Get contract map (LRU cached, NO Redis for hot path)
+    let contractMap = contractMapLRU.get(normalizedSlug);
+    if (!contractMap) {
+      debugLog('Performance', `[OS-ContractResolve] Fetching contract map | slug=${normalizedSlug}`);
+      // Use existing dedup promise logic but skip Redis
       let pendingPromise = contractMapPromises.get(normalizedSlug);
 
       if (!pendingPromise) {
         pendingPromise = getCollectionTokenContractMap(normalizedSlug)
           .then((map) => {
-            contractMapCache.set(normalizedSlug, map);
+            contractMapLRU.set(normalizedSlug, map); // Store in LRU only
             contractMapPromises.delete(normalizedSlug);
+            debugLog('Performance', `[OS-ContractResolve] Contract map cached | slug=${normalizedSlug} | tokens=${Object.keys(map).length}`);
             return map;
           })
           .catch((error) => {
             contractMapPromises.delete(normalizedSlug);
+            errorLog('Performance', `[OS-ContractResolve] Failed to fetch contract map | slug=${normalizedSlug}`, error);
             throw error;
           });
 
         contractMapPromises.set(normalizedSlug, pendingPromise);
       }
 
-      await pendingPromise;
+      contractMap = await pendingPromise;
     }
 
-    // STEP 5: Return mapped contract or fallback
-    const contractMap = contractMapCache.get(normalizedSlug) || {};
-    return contractMap[tokenKey] ?? fallbackAddress;
+    // STEP 6: Return mapped contract or fallback
+    const resolvedAddress = contractMap?.[tokenKey] ?? fallbackAddress;
+    contractResolutionLRU.set(cacheKey, resolvedAddress);
+    const resolveTime = Date.now() - resolveStart;
+    debugLog('Performance', `[OS-ContractResolve] RESOLVED | slug=${normalizedSlug} | token=${tokenKey} | address=${resolvedAddress.slice(0, 10)}... | time=${resolveTime}ms`);
+    return resolvedAddress;
 
-  } catch {
-    // Silent failure - always return a valid address
+  } catch (error) {
+    // Log error for debugging
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    errorLog('Performance', `[OS-ContractResolve] Contract resolution failed | slug=${normalizedSlug} | token=${tokenKey} | error=${errorMessage}`);
+
+    // Fallback to default address
+    contractResolutionLRU.set(cacheKey, fallbackAddress);
+    const resolveTime = Date.now() - resolveStart;
+    debugLog('Performance', `[OS-ContractResolve] FALLBACK (error) | slug=${normalizedSlug} | token=${tokenKey} | time=${resolveTime}ms`);
     return fallbackAddress;
   }
 }
@@ -441,7 +585,7 @@ export async function bidOnOpensea(
   currency = WETH,
   contractAddress: string,
   opensea_traits?: string,
-  asset?: { contractAddress: string, tokenId: number },
+  asset?: { contractAddress: string, tokenId: string | number },
   source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
   // OpenSea requires minimum 10 minutes (600 seconds) expiration
@@ -497,32 +641,41 @@ export async function bidOnOpensea(
       // Get wallet from cache
       const wallet = getWallet(private_key);
 
+      // Skip balance check for counterbids (800-1500ms savings)
+      // Only check balance for scheduled bids since they run less frequently
+      if (source === 'scheduled') {
+        const balanceCheckStart = Date.now();
+        const wethBalance = await fetchERC20Balance(wallet_address, currency);
+        const balanceCheckTime = Date.now() - balanceCheckStart;
 
-      // Fetch balance first
-      const wethBalance = await fetchERC20Balance(wallet_address, currency);
+        debugLog('Performance', `[OS-Balance] source=scheduled | time=${balanceCheckTime}ms | balance=${wethBalance} ${currencySymbol} | taskId=${taskId}`);
 
-      // Balance validation after parallel fetch
-      if (offerPriceEthFinal > wethBalance) {
-        const error = new InsufficientBalanceError(
-          'opensea',
-          currencySymbol,
-          offerPriceEthFinal,
-          wethBalance,
-          wallet_address,
-          slug
-        );
-        // Only log once per wallet/collection combo within 5 seconds to prevent log flooding
-        const dedupeKey = `opensea-${wallet_address}-${slug}`;
-        if (insufficientBalanceLogCache.addIfNotExists(dedupeKey, Date.now())) {
-          errorLog('API', `[OpenSea] Insufficient balance for bid | taskId=${taskId} | wallet=${wallet_address.slice(0, 10)}... | collection=${slug} | bidAmount=${offerPriceEthFinal} ${currencySymbol} | available=${wethBalance}`, error);
+        if (offerPriceEthFinal > wethBalance) {
+          const error = new InsufficientBalanceError(
+            'opensea',
+            currencySymbol,
+            offerPriceEthFinal,
+            wethBalance,
+            wallet_address,
+            slug
+          );
+          // Only log once per wallet/collection combo within 5 seconds to prevent log flooding
+          const dedupeKey = `opensea-${wallet_address}-${slug}`;
+          if (insufficientBalanceLogCache.addIfNotExists(dedupeKey, Date.now())) {
+            errorLog('API', `[OpenSea] Insufficient balance for bid | taskId=${taskId} | wallet=${wallet_address.slice(0, 10)}... | collection=${slug} | bidAmount=${offerPriceEthFinal} ${currencySymbol} | available=${wethBalance}`, error);
+          }
+          throw error;
         }
-        throw error;
+      } else {
+        // Counterbids skip balance check - rely on insufficient balance errors from OpenSea API
+        // This saves 800-1500ms per counterbid with minimal risk
+        debugLog('Performance', `[OS-Balance] source=counterbid | SKIPPED (800-1500ms savings) | taskId=${taskId}`);
       }
 
       if (asset) {
         const offer = await buildItemOffer(task._id, {
           assetContractAddress: asset.contractAddress,
-          tokenId: asset.tokenId.toString(),
+          tokenId: safeTokenIdToString(asset.tokenId),
           walletAddress: wallet_address,
           quantity: 1,
           expirationSeconds: BigInt(expiry),
@@ -590,20 +743,38 @@ export async function bidOnOpensea(
         const sanitizedExpiry = expiry > 900 ? expiry : 900
         if (offerPrice && itemOrderHash && sanitizedExpiry && slug && taskId && asset.tokenId) {
           const expiresAt = Date.now() + sanitizedExpiry * 1000;
-          // Store order in Redis cache (source of truth) with TTL
+
+          // STEP 1: Retrieve old order BEFORE overwrite
+          const oldOrder = await orderCache.get(taskId, 'opensea', safeTokenIdToString(asset.tokenId));
+          const oldOrderHash = oldOrder?.orderHash;
+
+          // STEP 2: Place new bid immediately
           await orderCache.set({
             _id: uuidv4(),
             orderHash: itemOrderHash,
             expiresAt: expiresAt,
             offerPrice: offerPrice.toString(),
             createdAt: Date.now(),
-            identifier: asset.tokenId.toString(),
+            identifier: safeTokenIdToString(asset.tokenId),
             marketplace: 'opensea',
             slug: slug,
             taskId: taskId
           });
           // Track bid rate ONLY for successfully placed bids
           trackBidRate('opensea', taskId);
+
+          // STEP 3: Cancel old bid async (if exists and different)
+          if (oldOrderHash && oldOrderHash !== itemOrderHash) {
+            queueReplacedOrderCancellation({
+              taskId,
+              marketplace: 'opensea',
+              orderHash: oldOrderHash,
+              identifier: safeTokenIdToString(asset.tokenId),
+              reason: 'token_bid_replaced'
+            }).catch(err => {
+              errorLog('OpenSea', `Failed to queue cancellation for replaced token bid | taskId=${taskId} | tokenId=${asset.tokenId}`, err);
+            });
+          }
         }
       }
 
@@ -666,7 +837,7 @@ export async function bidOnOpensea(
         // Parallel operations for collection offers
         const [data, counter] = await Promise.all([
           buildOffer(taskId, buildPayload),
-          SEAPORT_CONTRACT.getCounter(wallet_address)
+          getSeaportCounter(wallet_address)
         ]);
 
         if (!data || !data.partialParameters) {
@@ -732,7 +903,7 @@ export async function bidOnOpensea(
           return
         }
 
-        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry, source)
+        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
       }
 
       else {
@@ -789,7 +960,7 @@ export async function bidOnOpensea(
         // Use buildOffer API to get correct itemType for both ERC-721 and ERC-1155 collections
         const [data, counter] = await Promise.all([
           buildOffer(taskId, buildPayload),
-          SEAPORT_CONTRACT.getCounter(wallet_address)
+          getSeaportCounter(wallet_address)
         ]);
 
 
@@ -854,7 +1025,7 @@ export async function bidOnOpensea(
         if (isTaskBlacklisted(taskId, 'opensea') || !task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
           return
         }
-        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry, source)
+        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
       }
 
     } catch (error) {
@@ -871,7 +1042,7 @@ export async function bidOnOpensea(
  * Posts an offer to OpenSea.
  * @param payload - The payload of the offer.
  */
-async function submitOfferToOpensea(decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900, source: 'scheduled' | 'counterbid' = 'scheduled') {
+async function submitOfferToOpensea(decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900) {
   const [taskId] = bidCount.split(":")
   const bidStartTime = Date.now();
 
@@ -939,7 +1110,12 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
   if (offerPrice && order_hash && sanitizedExpiry && slug && taskId && identifier) {
     const expiresAt = Date.now() + sanitizedExpiry * 1000;
     const createdAt = Date.now();
-    // Store order in Redis cache (no MongoDB write - Redis is primary storage)
+
+    // STEP 1: Retrieve old order BEFORE overwrite
+    const oldOrder = await orderCache.get(taskId, 'opensea', identifier);
+    const oldOrderHash = oldOrder?.orderHash;
+
+    // STEP 2: Place new bid immediately
     await orderCache.set({
       _id: orderCache.generateOrderId(),
       orderHash: order_hash,
@@ -953,6 +1129,19 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
     });
     // Track bid rate ONLY for successfully placed bids
     trackBidRate('opensea', taskId);
+
+    // STEP 3: Cancel old bid async (if exists and different)
+    if (oldOrderHash && oldOrderHash !== order_hash) {
+      queueReplacedOrderCancellation({
+        taskId,
+        marketplace: 'opensea',
+        orderHash: oldOrderHash,
+        identifier,
+        reason: 'trait_bid_replaced'
+      }).catch(err => {
+        errorLog('OpenSea', `Failed to queue cancellation for replaced trait bid | taskId=${taskId} | trait=${identifier}`, err);
+      });
+    }
   }
 }
 
@@ -1224,21 +1413,23 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
   const controller = new AbortController();
   addActiveRequest(taskId, controller);
 
-  // Fix contract addresses in consideration items
+  // Fix contract addresses in consideration items (parallelized for performance)
   if (collectionSlug && parameters?.consideration) {
-    for (const item of parameters.consideration) {
-      // itemType 2 = ERC721 token
-      if (Number(item.itemType) === 2 && item?.token) {
-        const targetTokenId = item.identifierOrCriteria;
+    await Promise.all(
+      parameters.consideration.map(async (item: any) => {
+        // itemType 2 = ERC721 token
+        if (Number(item.itemType) === 2 && item?.token) {
+          const targetTokenId = item.identifierOrCriteria;
 
-        // Apply override logic
-        item.token = await resolveContractAddress(
-          collectionSlug,
-          targetTokenId,
-          item.token
-        );
-      }
-    }
+          // Apply override logic
+          item.token = await resolveContractAddress(
+            collectionSlug,
+            targetTokenId,
+            item.token
+          );
+        }
+      })
+    );
   }
 
   const payload = {
@@ -1319,6 +1510,19 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
             const offerPriceEth = Number(existingOffer.currentPrice) / Math.pow(10, decimal);
             const offerPriceWei = existingOffer.currentPrice;
 
+            // Check if we already have this order in cache
+            const cachedOrder = await orderCache.get(taskId, 'opensea', existingOffer.tokenId);
+
+            if (cachedOrder && cachedOrder.orderHash !== existingOffer.orderHash) {
+              // Cache had DIFFERENT orderHash - likely stale after server restart
+              warnLog('OpenSea',
+                `[ORDER_SYNC] Cache out of sync with OpenSea - updating | ` +
+                `taskId=${taskId} | tokenId=${existingOffer.tokenId} | ` +
+                `cachedHash=${cachedOrder.orderHash.slice(0, 16)}... | ` +
+                `apiHash=${existingOffer.orderHash.slice(0, 16)}...`
+              );
+            }
+
             // REDIS CACHE SAVE log
             const orderId = orderCache.generateOrderId();
             debugLog('API', `[OpenSea] ORDER_ALREADY_EXISTS saving to Redis cache | taskId=${taskId} | orderId=${orderId} | orderHash=${existingOffer.orderHash.slice(0, 16)}... | token=${existingOffer.tokenId} | price=${offerPriceEth} ETH`, {
@@ -1328,7 +1532,7 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
               orderHash: existingOffer.orderHash
             });
 
-            // Store order in Redis cache (no MongoDB write - Redis is primary storage)
+            // Sync cache with OpenSea's truth (NO cancellation - this is recovery)
             const expiresAtTimestamp = expiresAt.getTime();
             const createdAt = Date.now();
             await orderCache.set({
@@ -1352,7 +1556,7 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
 
             // Update marketplaceTopOfferCache - mark us as top bidder
             // This ensures counterbid handlers know we have an active offer
-            updateTopOfferAfterOurBid(
+            counterbidTrackingService.updateTopOfferAfterOurBid(
               taskId,
               'opensea',
               existingOffer.tokenId,
@@ -2173,9 +2377,25 @@ export async function openseaTraitFloor(slug: string, trait: {
   traitType: string;
   values: string[];
 }) {
-  const cacheKey = CACHE_KEYS.traitFloor(slug, trait.traitType, trait.values);
+  // Use LRU-only cache for fastest access (< 1ms vs 10-20ms Redis)
+  const lruKey = `${slug}:${trait.traitType}:${trait.values.join(',')}`;
+  const identifier = `${trait.traitType}:${trait.values.join(',')}`;
 
-  return getCachedOrFetch(
+  // Try LRU cache (< 1ms)
+  const cached = traitFloorLRU.get(lruKey);
+  if (cached !== undefined) {
+    cacheStats.traitFloor.hits++;
+    debugLog('Performance', `[OS-TraitFloor] CACHE_HIT (<1ms) | slug=${slug} | trait=${identifier} | floor=${cached}`);
+    return cached;
+  }
+
+  // Fetch from API (500-2000ms) using existing dedup logic
+  cacheStats.traitFloor.misses++;
+  debugLog('Performance', `[OS-TraitFloor] CACHE_MISS | slug=${slug} | trait=${identifier} | fetching...`);
+  const cacheKey = CACHE_KEYS.traitFloor(slug, trait.traitType, trait.values);
+  const fetchStart = Date.now();
+
+  const floor = await getCachedOrFetch(
     cacheKey,
     CACHE_TTL.TRAIT_FLOOR,
     async () => {
@@ -2209,6 +2429,18 @@ export async function openseaTraitFloor(slug: string, trait: {
     },
     true // parseNumber flag to handle the numeric floor value
   );
+
+  const fetchTime = Date.now() - fetchStart;
+
+  // Store in LRU cache only (no Redis)
+  if (floor !== null && floor !== undefined) {
+    traitFloorLRU.set(lruKey, floor);
+    debugLog('Performance', `[OS-TraitFloor] FETCHED | slug=${slug} | trait=${identifier} | floor=${floor} | time=${fetchTime}ms`);
+  } else {
+    debugLog('Performance', `[OS-TraitFloor] FETCH_FAILED | slug=${slug} | trait=${identifier} | time=${fetchTime}ms`);
+  }
+
+  return floor;
 }
 
 export async function fetchOpenseaListings(taskId: string, collectionSlug: string, limit?: number, priority?: number) {

@@ -4,7 +4,7 @@ import {
   checkBullMQConnectionsHealth,
   closeAllBullMQConnections
 } from '../utils/redis';
-import { errorLog, warnLog, infoLog, debugLog } from '../utils/debug-file-logger';
+import { errorLog, warnLog, debugLog } from '../utils/debug-file-logger';
 import { orderCache } from '../utils/order-cache';
 import { cancellationTracker } from '../utils/cancellation-tracker';
 
@@ -303,9 +303,7 @@ class QueueService {
           job.name === this.CANCEL_MAGICEDEN_BID ? 'magiceden' : 'blur';
 
         // Record the failed cancellation as a completion to ensure we reach 100%
-        infoLog('CancellationWorker', `RECORD_BEFORE | taskId=${taskId} | marketplace=${marketplace} | reason=worker_failed`, { taskId });
         cancellationTracker.recordCompletion(taskId, 1, marketplace);
-        infoLog('CancellationWorker', `RECORD_AFTER | taskId=${taskId} | marketplace=${marketplace}`, { taskId });
         if (this.updateTaskCancellationPercentage) {
           this.updateTaskCancellationPercentage(taskId, undefined, marketplace).catch(err => {
             const failedTaskId = this.getTaskIdForLog!(job);
@@ -481,9 +479,7 @@ class QueueService {
         const { taskId } = job.data;
 
         // Record the failed cancellation as a completion to ensure we reach 100%
-        infoLog('CancellationWorker', `RECORD_BEFORE | taskId=${taskId} | marketplace=blur | reason=blur_worker_failed`, { taskId });
         cancellationTracker.recordCompletion(taskId, 1, 'blur');
-        infoLog('CancellationWorker', `RECORD_AFTER | taskId=${taskId} | marketplace=blur`, { taskId });
         if (this.updateTaskCancellationPercentage) {
           this.updateTaskCancellationPercentage(taskId, undefined, 'blur').catch((err) => {
             const blurCancelTaskId = this.getTaskIdForLog!(job);

@@ -1,6 +1,7 @@
 import { IListing } from "../types/listing.types";
 import Listing from "../models/listing.model";
-import { getAllFloorPrices, getOpenseaFloor } from "./collection";
+import { getAllFloorPrices } from "./collection";
+import { getCachedFloorPrice } from "../utils/collection-cache";
 import { PROCESS_LISTING_UPDATE, queue } from "../index";
 import { roundToNineDecimals } from "../utils/decimal-precision";
 import { errorLog, warnLog } from "../utils/debug-file-logger";
@@ -314,7 +315,7 @@ async function shouldAdjustPrice(
           && listing.selectedTrait?.trait_type && listing.selectedTrait?.value !== undefined) {
         floorPrice = await getOpenseaTraitFloor(listing.contract.slug, listing.selectedTrait.trait_type, listing.selectedTrait.value);
       } else {
-        floorPrice = await getOpenseaFloor(listing.contract.slug);
+        floorPrice = await getCachedFloorPrice(listing.contract.slug);
       }
       
       if (newPrice < floorPrice) {
