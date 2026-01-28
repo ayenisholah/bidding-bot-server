@@ -117,9 +117,9 @@ export const ownBidCounts: { [marketplace: string]: number } = {};
 // Track processed own bid hashes with 60-second TTL (matches OS2 reconnection window + Triple HA dedup)
 // Uses LRUCache with automatic TTL expiration and O(1) eviction
 // Duplicates arrive within 0-60 seconds (Triple HA + OS2 reconnection)
-// Kept at 100K max per user request (high safety buffer for burst scenarios)
+// Expanded to 1M max for higher traffic capacity and burst handling
 export const processedOwnBids = new LRUCache<string, boolean>({
-  max: 100000,             // Kept at 100K for extra safety during burst traffic
+  max: 1000000,            // 1M entries for production-scale traffic bursts
   ttl: 60 * 1000,          // 60-second TTL
   updateAgeOnGet: false,   // Don't reset TTL on reads
   allowStale: false,       // Never return expired entries
@@ -139,7 +139,7 @@ export function addOwnBidIfNotExists(orderHash: string): boolean {
 export function getProcessedOwnBidsStats() {
   return {
     size: processedOwnBids.size,
-    capacity: 100_000,
+    capacity: 1_000_000,
     ttl: '60 seconds',
     type: 'LRUCache (TTL-based dedup)',
     estimatedMemoryBytes: processedOwnBids.size * 80

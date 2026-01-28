@@ -47,8 +47,69 @@ interface MemoryCleanupStats {
   };
 }
 
+interface LRUCacheEntry {
+  size: number;
+  maxSize: number;
+  ttl?: number;
+  estimatedMemoryBytes: number;
+}
+
 interface LRUCachesStats {
-  processedMessages: number;
+  // Large caches (8)
+  orderLRU: LRUCacheEntry;
+  rarityCache: LRUCacheEntry;
+  tokenTraitCache: LRUCacheEntry;
+  logsCache: LRUCacheEntry;
+  processedMessages: LRUCacheEntry;
+  processedOwnBids: LRUCacheEntry;
+  approvalCache: LRUCacheEntry;
+  traitFloorLRU: LRUCacheEntry;
+
+  // OpenSea caches (6)
+  openseaCaches: {
+    collectionDetailsLRU: { size: number; maxSize: number; ttl: number };
+    floorPriceLRU: { size: number; maxSize: number; ttl: number };
+    contractResolutionLRU: { size: number; maxSize: number; ttl: number };
+    multiContractSlugLRU: { size: number; maxSize: number; ttl: number };
+    contractMapLRU: { size: number; maxSize: number; ttl: number };
+    balanceLRU: { size: number; maxSize: number; ttl: number };
+    totalEstimatedMemoryBytes: number;
+  };
+
+  // Collection caches (2)
+  collectionCaches: {
+    collectionDetailsCache: { size: number; maxSize: number; ttl: number };
+    floorPriceCache: { size: number; maxSize: number; ttl: number };
+    totalEstimatedMemoryBytes: number;
+  };
+
+  // Trading & Listing (3)
+  tradingListingCaches: {
+    tradingDisabledCache: { size: number; maxSize: number; ttl: number };
+    listingPriceCache: { size: number; maxSize: number; ttl: number };
+    collectionFloorCache: { size: number; maxSize: number; ttl: number };
+    totalEstimatedMemoryBytes: number;
+  };
+
+  // Dedup caches (6)
+  dedupCaches: {
+    insufficientBalanceLogCache: { totalSize: number; instanceCount: number };
+    loggedBalanceErrors: { size: number; maxSize: number; ttl: number };
+    totalEstimatedMemoryBytes: number;
+  };
+
+  // Small utility caches (10+)
+  smallUtilityCaches: {
+    walletCache: { size: number; maxSize: number };
+    decryptedKeyCache: { size: number; maxSize: number };
+    marketplaceApprovalCache: { size: number; maxSize: number };
+    totalEstimatedMemoryBytes: number;
+  };
+
+  // Summary
+  totalCaches: number;
+  totalSizeAllCaches: number;
+  totalEstimatedMemoryBytes: number;
 }
 
 interface UnboundedDataStructuresStats {
@@ -80,15 +141,13 @@ export interface IMemorySnapshot extends Document {
   // Redis memory by category
   redisMemory: {
     categories: {
-      orderCache: RedisKeyCategory;
-      orderIdIndex: RedisKeyCategory;
-      taskOrdersSets: RedisKeyCategory;
-      taskSchedule: RedisKeyCategory;
-      taskRuntime: RedisKeyCategory;
-      rarityCache: RedisKeyCategory;
-      approvalCache: RedisKeyCategory;
       bullMQMain: RedisKeyCategory;
       bullMQBlur: RedisKeyCategory;
+      loopLocks: RedisKeyCategory;
+      openseaCollection: RedisKeyCategory;
+      openseaTraits: RedisKeyCategory;
+      websocketMetrics: RedisKeyCategory;
+      devPassword: RedisKeyCategory;
       other: RedisKeyCategory;
     };
     totals: {
@@ -166,8 +225,69 @@ const MemoryCleanupStatsSchema = new Schema({
   }
 }, { _id: false });
 
+const LRUCacheEntrySchema = new Schema({
+  size: { type: Number, required: true },
+  maxSize: { type: Number, required: true },
+  ttl: { type: Number },
+  estimatedMemoryBytes: { type: Number, required: true }
+}, { _id: false });
+
 const LRUCachesStatsSchema = new Schema({
-  processedMessages: { type: Number, required: true }
+  // Large caches
+  orderLRU: { type: LRUCacheEntrySchema, required: true },
+  rarityCache: { type: LRUCacheEntrySchema, required: true },
+  tokenTraitCache: { type: LRUCacheEntrySchema, required: true },
+  logsCache: { type: LRUCacheEntrySchema, required: true },
+  processedMessages: { type: LRUCacheEntrySchema, required: true },
+  processedOwnBids: { type: LRUCacheEntrySchema, required: true },
+  approvalCache: { type: LRUCacheEntrySchema, required: true },
+  traitFloorLRU: { type: LRUCacheEntrySchema, required: true },
+
+  // OpenSea caches
+  openseaCaches: {
+    collectionDetailsLRU: { size: Number, maxSize: Number, ttl: Number },
+    floorPriceLRU: { size: Number, maxSize: Number, ttl: Number },
+    contractResolutionLRU: { size: Number, maxSize: Number, ttl: Number },
+    multiContractSlugLRU: { size: Number, maxSize: Number, ttl: Number },
+    contractMapLRU: { size: Number, maxSize: Number, ttl: Number },
+    balanceLRU: { size: Number, maxSize: Number, ttl: Number },
+    totalEstimatedMemoryBytes: Number
+  },
+
+  // Collection caches
+  collectionCaches: {
+    collectionDetailsCache: { size: Number, maxSize: Number, ttl: Number },
+    floorPriceCache: { size: Number, maxSize: Number, ttl: Number },
+    totalEstimatedMemoryBytes: Number
+  },
+
+  // Trading & Listing
+  tradingListingCaches: {
+    tradingDisabledCache: { size: Number, maxSize: Number, ttl: Number },
+    listingPriceCache: { size: Number, maxSize: Number, ttl: Number },
+    collectionFloorCache: { size: Number, maxSize: Number, ttl: Number },
+    totalEstimatedMemoryBytes: Number
+  },
+
+  // Dedup caches
+  dedupCaches: {
+    insufficientBalanceLogCache: { totalSize: Number, instanceCount: Number },
+    loggedBalanceErrors: { size: Number, maxSize: Number, ttl: Number },
+    totalEstimatedMemoryBytes: Number
+  },
+
+  // Small utility caches
+  smallUtilityCaches: {
+    walletCache: { size: Number, maxSize: Number },
+    decryptedKeyCache: { size: Number, maxSize: Number },
+    marketplaceApprovalCache: { size: Number, maxSize: Number },
+    totalEstimatedMemoryBytes: Number
+  },
+
+  // Summary
+  totalCaches: { type: Number, required: true },
+  totalSizeAllCaches: { type: Number, required: true },
+  totalEstimatedMemoryBytes: { type: Number, required: true }
 }, { _id: false });
 
 const UnboundedDataStructuresStatsSchema = new Schema({
@@ -203,15 +323,13 @@ const MemorySnapshotSchema = new Schema<IMemorySnapshot>(
 
     redisMemory: {
       categories: {
-        orderCache: { type: RedisKeyCategorySchema, required: true },
-        orderIdIndex: { type: RedisKeyCategorySchema, required: true },
-        taskOrdersSets: { type: RedisKeyCategorySchema, required: true },
-        taskSchedule: { type: RedisKeyCategorySchema, required: true },
-        taskRuntime: { type: RedisKeyCategorySchema, required: true },
-        rarityCache: { type: RedisKeyCategorySchema, required: true },
-        approvalCache: { type: RedisKeyCategorySchema, required: true },
         bullMQMain: { type: RedisKeyCategorySchema, required: true },
         bullMQBlur: { type: RedisKeyCategorySchema, required: true },
+        loopLocks: { type: RedisKeyCategorySchema, required: true },
+        openseaCollection: { type: RedisKeyCategorySchema, required: true },
+        openseaTraits: { type: RedisKeyCategorySchema, required: true },
+        websocketMetrics: { type: RedisKeyCategorySchema, required: true },
+        devPassword: { type: RedisKeyCategorySchema, required: true },
         other: { type: RedisKeyCategorySchema, required: true }
       },
       totals: {

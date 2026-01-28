@@ -416,13 +416,33 @@ class OrderCache {
   countGroupedByMarketplace(taskId: string): Record<string, number> {
     const counts: Record<string, number> = {};
 
-    for (const [, orders] of orderLRU.entries()) {
-      for (const order of orders) {
+    // Iterate through all LRU entries and clean up expired orders (lazy cleanup)
+    for (const [lruKey, orders] of orderLRU.entries()) {
+      // Filter expired orders for this key
+      const activeOrders = orders.filter(order => {
+        // Only process orders for this task
         if (order.taskId === taskId) {
           if (!this.isExpired(order)) {
+            // Count non-expired order
             const marketplace = order.marketplace.toLowerCase();
             counts[marketplace] = (counts[marketplace] || 0) + 1;
+            return true;  // Keep in array
           }
+          // Expired order for this task - don't count, remove from array
+          return false;
+        }
+        // Order belongs to different task - keep in array
+        return true;
+      });
+
+      // Update cache if we removed any orders
+      if (activeOrders.length !== orders.length) {
+        if (activeOrders.length === 0) {
+          orderLRU.delete(lruKey);  // All orders expired - delete key
+          debugLog('OrderCache', `DELETE_EXPIRED | key=${lruKey} | expired=${orders.length}`);
+        } else {
+          orderLRU.set(lruKey, activeOrders);  // Update with filtered array
+          debugLog('OrderCache', `CLEANUP_EXPIRED | key=${lruKey} | removed=${orders.length - activeOrders.length} | remaining=${activeOrders.length}`);
         }
       }
     }

@@ -9,7 +9,7 @@ import { debugLog, infoLog } from './debug-file-logger';
  */
 
 const RARITY_TTL = 1 * 24 * 60 * 60 * 1000; // 1 day in ms
-const MAX_CACHE_SIZE = 5000; // 5K entries (~5-10MB)
+const MAX_CACHE_SIZE = 100000; // 100K entries (support larger rarity datasets)
 
 export interface RarityData {
   tokenIds: string[];

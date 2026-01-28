@@ -183,9 +183,9 @@ const taskStatusHistory: { [taskId: string]: TaskStatusChange[] } = {};
 // Message idempotency tracking
 
 // WebSocket message deduplication cache with automatic TTL
-// Kept at 100K max per user request (high safety buffer for burst scenarios)
+// Expanded to 1M max for higher traffic capacity and burst handling
 const processedMessages = new LRUCache<string, number>({
-  max: 100000,       // Kept at 100K for extra safety during burst traffic
+  max: 1000000,      // 1M entries for production-scale traffic bursts
   ttl: 60 * 1000,    // 1 minute TTL (shorter than original 5min for better memory usage)
   updateAgeOnGet: false,  // Don't reset TTL on access (we just need deduplication window)
 });
@@ -196,17 +196,8 @@ const BLUR_BIDDING_QUEUE = 'BLUR_BIDDING_QUEUE';
 const CLEAR_COOLDOWN = 5 * 60 * 1000; // 5 minutes cooldown between queue clears
 
 
-// Note: Redis keys below are no longer used - migrated to LRU caches
-// Kept as constants for backward compatibility and potential future use
-const REDIS_KEY_PREVIOUS_RUNNING_TASKS = 'nft-bot:previous-running-tasks';
-const REDIS_KEY_PREVIOUS_RUNNING_LISTINGS = 'nft-bot:previous-running-listings';
-const REDIS_KEY_SHUTDOWN_TIMESTAMP = 'nft-bot:shutdown-timestamp';
-const REDIS_KEY_SHUTDOWN_REASON = 'nft-bot:shutdown-reason';
-const REDIS_KEY_TASK_STATUS = 'nft-bot:task-status:';        // + taskId
-const REDIS_KEY_LOOP_COUNT = 'nft-bot:loop-count:';          // + taskId
-const REDIS_KEY_TASK_STARTED = 'nft-bot:task-started:';      // + taskId
+
 const REDIS_KEY_NEXT_LOOP = 'nft-bot:next-loop:';            // + taskId:marketplace
-const REDIS_KEY_LAST_SCHEDULE = 'nft-bot:last-schedule:';    // + taskId
 const REDIS_STATE_TTL = 86400; // 24 hours TTL for task state
 
 
@@ -416,6 +407,10 @@ interface CancellationOperation {
 }
 
 const activeCancellationOperations = new Map<string, CancellationOperation>();
+
+// Track orders that successfully cancelled on-chain (API confirmed)
+// Key: taskId, Value: Set of orderHashes that confirmed cancellation
+const successfullyCancelledOrders = new Map<string, Set<string>>();
 
 // Track active Blur jobs per wallet to prevent concurrent processing
 // Blur job completion tracking is now handled by blurCompletionTracker
@@ -10219,9 +10214,48 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
         // Retry validation
         return await validateAndTransitionToStopped(taskId, marketplace, marketplaceName, retryCount + 1);
       } else {
-        // Max retries reached but still have orders - attempt to cancel them
+        // Max retries reached but still have orders - check for orphaned cache entries first
 
-        // Attempt to cancel remaining orders
+        // Enhanced validation: Check if orders in cache were successfully cancelled on-chain
+        const cachedOrders = await orderCache.getByTaskAndMarketplace(taskId, marketplace.toLowerCase());
+        const successfulCancellations = successfullyCancelledOrders.get(taskId) || new Set();
+
+        // Identify orders that were successfully cancelled but still in cache (orphans)
+        const orphanedInCache = cachedOrders.filter(order => {
+          const orderId = order.orderHash;
+          return successfulCancellations.has(orderId);
+        });
+
+        if (orphanedInCache.length > 0) {
+          warnLog('StopTask', `ORPHANED_ORDERS_IN_CACHE | taskId=${taskId} | marketplace=${marketplaceName} | count=${orphanedInCache.length}`, { taskId });
+          // Force delete only the confirmed-cancelled orders
+          for (const order of orphanedInCache) {
+            await safeDeleteFromCache(order._id, taskId, marketplace.toLowerCase());
+          }
+        }
+
+        // Re-count after orphan cleanup
+        const validCountsAfterCleanup = await orderCache.countValidByTaskAndMarketplace(taskId);
+        const activeOrderCountAfterCleanup = validCountsAfterCleanup[marketplace.toLowerCase()] || 0;
+
+        if (activeOrderCountAfterCleanup === 0) {
+          // All orphans cleaned - transition to STOPPED
+          infoLog('StopTask', `ORPHAN_CLEANUP_SUCCESS | taskId=${taskId} | marketplace=${marketplaceName} | cleanedCount=${orphanedInCache.length}`, { taskId });
+          setTaskStatus(taskId, 'STOPPED', `${marketplaceName} cancellation complete (orphan cleanup)`, marketplace);
+
+          // Check if all marketplaces complete
+          const allComplete = ['opensea', 'magiceden', 'blur'].every(mp => {
+            const status = taskStatus[taskId]?.marketplaces[mp as keyof typeof taskStatus[string]['marketplaces']];
+            return !status || status.status === 'STOPPED' || mp === marketplaceName;
+          });
+          if (allComplete) {
+            cancellationTracker.clearTracking(taskId);
+            successfullyCancelledOrders.delete(taskId);
+          }
+          return;
+        }
+
+        // Still have non-orphaned orders - attempt to cancel them
         const remainingAfterAttempt = await attemptRemainingCancellations(taskId, marketplace);
 
         if (remainingAfterAttempt === 0) {
@@ -10236,51 +10270,23 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
           if (allComplete) {
             infoLog('CancellationTracking', `CLEANUP_ON_COMPLETE | taskId=${taskId} | reason=marketplace_cleanup_all_complete`, { taskId });
             cancellationTracker.clearTracking(taskId);
+            // Clear success tracking for this task
+            successfullyCancelledOrders.delete(taskId);
           }
           return;
         } else if (remainingAfterAttempt > 0) {
           // Still have orders after cancellation attempt
-          const mpKey = marketplaceName as 'opensea' | 'magiceden' | 'blur';
-          const currentPct = taskStatus[taskId]?.marketplaces[mpKey]?.cancellationPercentage || 0;
+          // Trust the job completion handlers to clean cache - no premature force cleanup
+          warnLog('StopTask', `ORDERS_REMAINING_AFTER_ATTEMPT | taskId=${taskId} | marketplace=${marketplaceName} | remaining=${remainingAfterAttempt}`, { taskId });
 
-          // FORCE CLEANUP: If 95%+ complete, assume remaining orders are orphaned cache entries
-          if (currentPct >= 95) {
-            warnLog('StopTask', `FORCE_CACHE_CLEANUP | taskId=${taskId} | marketplace=${marketplaceName} | pct=${currentPct} | orphanedOrders=${remainingAfterAttempt}`, { taskId });
-
-            // Delete ALL orders from cache for this task/marketplace
-            await orderCache.deleteByTaskAndMarketplace(taskId, marketplaceName);
-
-            // Verify cache is clean
-            const remainingAfterCleanup = await orderCache.countByTaskAndMarketplace(taskId, marketplaceName);
-
-            if (remainingAfterCleanup === 0) {
-              // Cache cleaned - safe to transition
-              infoLog('StopTaskFlow', `CACHE_FORCE_CLEANUP | taskId=${taskId} | marketplace=${marketplaceName} | before=${remainingAfterAttempt} | after=${remainingAfterCleanup}`, { taskId });
-              setTaskStatus(taskId, 'STOPPED', `${marketplaceName} cancellation complete (forced cleanup at ${currentPct}%)`, marketplace);
-
-              // Check if all marketplaces complete
-              const allComplete = ['opensea', 'magiceden', 'blur'].every(mp => {
-                const status = taskStatus[taskId]?.marketplaces[mp as keyof typeof taskStatus[string]['marketplaces']];
-                return !status || status.status === 'STOPPED' || mp === marketplaceName;
-              });
-              if (allComplete) {
-                cancellationTracker.clearTracking(taskId);
-              }
-              return;
-            } else {
-              // Cache cleanup failed - log error but continue
-              errorLog('StopTask', `CACHE_CLEANUP_FAILED | taskId=${taskId} | marketplace=${marketplaceName} | stillRemaining=${remainingAfterCleanup}`, undefined, { taskId });
-            }
-          }
-
-          // Below 95% - reset percentage and keep trying
           // Reset the cancellation percentage to reflect actual state
+          const mpKey = marketplaceName as 'opensea' | 'magiceden' | 'blur';
           if (trackingStatus && trackingStatus.totalBids > 0) {
             const actualCompleted = Math.max(0, trackingStatus.totalBids - remainingAfterAttempt);
             const actualPercentage = (actualCompleted / trackingStatus.totalBids) * 100;
 
-            if (taskStatus[taskId]?.marketplaces[marketplaceName as keyof typeof taskStatus[string]['marketplaces']]) {
-              taskStatus[taskId].marketplaces[marketplaceName as keyof typeof taskStatus[string]['marketplaces']]!.cancellationPercentage = Math.floor(actualPercentage);
+            if (taskStatus[taskId]?.marketplaces[mpKey]) {
+              taskStatus[taskId].marketplaces[mpKey]!.cancellationPercentage = Math.floor(actualPercentage);
             }
           }
         }
@@ -10346,6 +10352,7 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
         // All marketplace cancellation jobs complete - safe to cleanup tracking data
         infoLog('CancellationTracking', `CLEANUP_ON_COMPLETE | taskId=${taskId} | reason=all_marketplaces_complete`, { taskId });
         cancellationTracker.clearTracking(taskId);
+        successfullyCancelledOrders.delete(taskId);
 
         debugLog('StopTask', `ALL MARKETPLACES COMPLETE | taskId=${taskId} | cleaning up bidStats and orderCache`, { taskId });
       }
@@ -10539,6 +10546,7 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
           // All cancellation jobs complete - safe to cleanup tracking data
           infoLog('CancellationTracking', `CLEANUP_ON_COMPLETE | taskId=${taskId} | percentage=${percentage} | reason=global_cancellation_100_percent_no_active_orders`, { taskId });
           cancellationTracker.clearTracking(taskId);
+          successfullyCancelledOrders.delete(taskId);
         } else {
           // Still have active orders at 100% - attempt to cancel them
 
@@ -10560,6 +10568,7 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
             // All cancellation jobs complete - safe to cleanup tracking data
             infoLog('CancellationTracking', `CLEANUP_ON_COMPLETE | taskId=${taskId} | percentage=${percentage} | reason=global_cancellation_100_percent_after_cleanup`, { taskId });
             cancellationTracker.clearTracking(taskId);
+            successfullyCancelledOrders.delete(taskId);
           } else {
             // Adjust percentages based on actual remaining orders
             const trackingStatus = cancellationTracker.getStatus(taskId);
@@ -11091,7 +11100,7 @@ async function
     infoLog('StopTaskFlow', `CACHE_SNAPSHOT_START | taskId=${taskId} | marketplace=${marketplace || 'all'} | cachedOrders=${cacheCountBefore}`, { taskId });
 
     // Start timeout monitor for stuck cancellations
-    const STALL_TIMEOUT = 3 * 60 * 1000; // 3 minutes
+    const STALL_TIMEOUT = 10 * 60 * 1000; // 10 minutes - allows time for large collections (1000+ orders)
     const cancellationStartTime = Date.now();
 
     const timeoutCheck = setInterval(async () => {
@@ -11119,7 +11128,7 @@ async function
       const elapsed = Date.now() - cancellationStartTime;
 
       if (elapsed > STALL_TIMEOUT) {
-        // TIMEOUT: Force cache cleanup after 3 minutes
+        // TIMEOUT: Force cache cleanup after 10 minutes (allows time for large collections)
         warnLog('StopTaskFlow', `CANCELLATION_TIMEOUT | taskId=${taskId} | marketplace=${marketplaceName} | pct=${currentPct} | elapsed=${elapsed}ms`, { taskId });
 
         // Check remaining orders
@@ -12683,6 +12692,8 @@ async function cancelMagicedenBids(orders: any[], walletId: string, taskId: stri
     const batchOrders = ordersToCancel.slice(i, i + 500);
     const extractedOrderIds = await extractMagicedenOrderHash(batchOrders)
     const orderKeys = batchOrders.map((order: any) => order._id)
+    const identifiers = batchOrders.map((order: any) => order.identifier)  // For defensive verification
+    const slugs = batchOrders.map((order: any) => order.slug)              // For logging context
     const batchId = `batch-${i / 500}-${Date.now()}`; // Unique batch identifier
 
 
@@ -12692,6 +12703,8 @@ async function cancelMagicedenBids(orders: any[], walletId: string, taskId: stri
       orderIds: extractedOrderIds,
       walletId,
       orderKeys,
+      identifiers,  // For defensive verification in completion handler
+      slugs,        // For logging context
       taskId,
       batchSize: batchOrders.length // Add batch size to job data
     }, jobOptions);
@@ -12716,7 +12729,14 @@ async function cancelBlurBids(orders: any[], walletId: string, taskId: string) {
     const jobOptions = getCancellationJobOptions(taskId, order._id, CANCEL_BLUR_BID);
     return {
       name: CANCEL_BLUR_BID,
-      data: { walletId, payload, taskId, orderKey: order._id },
+      data: {
+        walletId,
+        payload,
+        taskId,
+        orderKey: order._id,
+        identifier: order.identifier,  // For defensive verification in completion handler
+        slug: order.slug                // For logging context
+      },
       opts: jobOptions
     }
   }) as Job[]
@@ -12739,7 +12759,14 @@ async function cancelOpenseaBids(orders: any[], walletId: string, taskId: string
   const cancelData = orders.map((order, index) => {
     return {
       name: CANCEL_OPENSEA_BID,
-      data: { walletId, orderId: order.orderHash, taskId, orderKey: order._id },
+      data: {
+        walletId,
+        orderId: order.orderHash,
+        taskId,
+        orderKey: order._id,
+        identifier: order.identifier,  // For defensive verification in completion handler
+        slug: order.slug                // For logging context
+      },
       opts: getCancellationJobOptions(taskId, order._id, CANCEL_OPENSEA_BID)
     }
   }) as Job[]
@@ -18144,6 +18171,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
             taskId: currentTask._id.toString(),
             orderKey: order._id,
             identifier: 'collection',
+            slug: order.slug,
             source: 'processOpenseaCollectionBid'
           },
           opts: getCancellationJobOptions(currentTask._id.toString(), order._id, CANCEL_OPENSEA_OUTBID)
@@ -19304,6 +19332,7 @@ async function processOpenseaTraitBid(data: {
             taskId: _id,
             orderKey: order._id,
             identifier,
+            slug: order.slug,
             source: 'processOpenseaTraitBid_max_exceeded'
           },
           opts: getCancellationJobOptions(_id, order._id, CANCEL_OPENSEA_OUTBID)
@@ -19340,6 +19369,7 @@ async function processOpenseaTraitBid(data: {
           taskId: _id,
           orderKey: order._id,
           identifier,
+          slug: order.slug,
           source: 'processOpenseaTraitBid'
         },
         opts: getCancellationJobOptions(_id, order._id, CANCEL_OPENSEA_OUTBID)
@@ -19725,6 +19755,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
           taskId: _id,
           orderKey: order._id,
           identifier: tokenId,
+          slug: order.slug,
           source: 'processOpenseaTokenBid'
         },
         opts: getCancellationJobOptions(_id, order._id, CANCEL_OPENSEA_OUTBID)
@@ -20010,6 +20041,7 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
           taskId,
           orderKey: order._id,
           identifier: 'collection',
+          slug: order.slug,
           source: 'openseaCollectionCounterBid'
         },
         opts: getCancellationJobOptions(taskId, order._id, CANCEL_OPENSEA_COUNTERBID)
@@ -20632,6 +20664,7 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
           taskId,
           orderKey: order._id,
           identifier: tokenId,
+          slug: order.slug,
           source: 'openseaTokenCounterBid'
         },
         opts: getCancellationJobOptions(taskId, order._id, CANCEL_OPENSEA_COUNTERBID)
@@ -20759,6 +20792,7 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
           taskId,
           orderKey: order._id,
           identifier,
+          slug: order.slug,
           source: 'openseaTraitCounterBid'
         },
         opts: getCancellationJobOptions(taskId, order._id, CANCEL_OPENSEA_COUNTERBID)
@@ -22783,7 +22817,13 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
     // First, cancel the order with OpenSea API (but don't update tracking yet)
     await cancelOrderWithoutTracking(orderId, OPENSEA_PROTOCOL_ADDRESS, privateKey, taskId);
 
-    // Remove order from Redis cache (source of truth)
+    // Track successful cancellation for verification
+    if (!successfullyCancelledOrders.has(taskId)) {
+      successfullyCancelledOrders.set(taskId, new Set());
+    }
+    successfullyCancelledOrders.get(taskId)!.add(orderId);
+
+    // Remove order from cache ONLY after confirmed API success
     await safeDeleteFromCache(orderKey, taskId, 'opensea');
 
     // Record completion and update percentage - now that cache is clean
@@ -22869,7 +22909,13 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
       // Cancel the orders with MagicEden API
       await cancelMagicEdenBid(orderIds, privateKey, taskId);
 
-      // Remove orders from Redis cache (source of truth)
+      // Track successful cancellation for verification
+      if (!successfullyCancelledOrders.has(taskId)) {
+        successfullyCancelledOrders.set(taskId, new Set());
+      }
+      orderIds.forEach(orderId => successfullyCancelledOrders.get(taskId)!.add(orderId));
+
+      // Remove orders from cache ONLY after confirmed API success
       for (const orderKey of orderKeys) {
         await safeDeleteFromCache(orderKey, taskId, 'magiceden');
       }
@@ -23008,7 +23054,14 @@ async function bulkCancelBlurBid(data: BlurCancelPayload) {
     // Cancel the order with Blur API
     await cancelBlurBid({ payload, privateKey, taskId });
 
-    // Remove order from Redis cache (source of truth)
+    // Track successful cancellation for verification
+    const orderId = JSON.stringify(payload); // Blur uses payload as order identifier
+    if (!successfullyCancelledOrders.has(taskId)) {
+      successfullyCancelledOrders.set(taskId, new Set());
+    }
+    successfullyCancelledOrders.get(taskId)!.add(orderId);
+
+    // Remove order from cache ONLY after confirmed API success
     await safeDeleteFromCache(orderKey, taskId, 'blur');
 
 
@@ -23250,7 +23303,7 @@ app.get("/metrics", async (req, res) => {
       },
       memoryCleanup: memoryCleanupService.getStats(),
       lruCaches: {
-        processedMessages: processedMessages.size // LRUCache with 1min TTL, max 10k
+        processedMessages: processedMessages.size // LRUCache with 1min TTL, max 1M
       },
       unboundedDataStructures: {
         traitsToRemove: Object.keys(traitsToRemove).length,
@@ -23659,6 +23712,7 @@ app.post('/api/collection', async (req, res) => {
     const slug = req.body.slug as string;
 
     if (!slug) {
+      console.error('[API] /api/collection: Missing slug in request');
       return res.status(400).json({
         status: "error",
         message: "Collection slug is required"
@@ -23667,22 +23721,35 @@ app.post('/api/collection', async (req, res) => {
 
     const { collectionResult, magicEdenResult } = await fetchCollectionData(slug);
 
-    const collection: CollectionData = collectionResult.data;
-    const magicEdenData: MagicEdenCollectionsResponse = magicEdenResult.data;
-
-    const collectionAddress =
-      magicEdenData?.collections[0]?.chainData?.contract;
+    // Extract data safely based on success flags
+    const collection: CollectionData | null = collectionResult.success ? collectionResult.data?.data ?? null : null;
+    const magicEdenData: MagicEdenCollectionsResponse | null = magicEdenResult.success ? magicEdenResult.data?.data ?? null : null;
 
     // Handle case where both API calls fail
     if (!collection && !magicEdenData) {
-      return res.status(404).json({ error: "Unable to fetch collection data" });
+      console.error(`[API] /api/collection: Both APIs failed for: ${slug}`, {
+        openseaError: collectionResult.error instanceof Error ? collectionResult.error.message : String(collectionResult.error),
+        magicEdenError: magicEdenResult.error instanceof Error ? magicEdenResult.error.message : String(magicEdenResult.error)
+      });
+
+      return res.status(404).json({
+        error: "Unable to fetch collection data",
+        details: {
+          opensea: collectionResult.error instanceof Error ? collectionResult.error.message : "Unknown error",
+          magiceden: magicEdenResult.error instanceof Error ? magicEdenResult.error.message : "Unknown error"
+        }
+      });
     }
+
+    const collectionAddress =
+      magicEdenData?.collections?.[0]?.chainData?.contract;
 
     const slugValid =
       (collection?.collection_offers_enabled ?? false) ||
       typeof collectionAddress === "string";
+
     const contractAddress =
-      collection?.contracts[0]?.address || collectionAddress;
+      collection?.contracts?.[0]?.address || collectionAddress;
 
     const data = {
       ...collection,
@@ -23693,9 +23760,17 @@ app.post('/api/collection', async (req, res) => {
     if (slugValid) {
       return res.status(200).json(data);
     } else {
+      console.warn(`[API] /api/collection: Collection offers not enabled for: ${slug}`);
       return res.status(400).json({ error: "Collection offers not enabled" });
     }
   } catch (error: any) {
+    console.error('[API] /api/collection: Unexpected error', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      errorType: error?.constructor?.name,
+      fullError: JSON.stringify(error, Object.getOwnPropertyNames(error))
+    });
+
     errorLog('API', 'Failed to fetch collection details', error instanceof Error ? error : new Error(String(error)))
 
     return res.status(500).json({
@@ -26227,35 +26302,53 @@ const fetchCollectionData = async (slug: string) => {
   const apiUrl: string = `${BASE_URL}/opensea/api/v2/collections/${slug?.toLowerCase()}`;
 
   const tasks = [
-    () =>
-      apiDedup(
-        `opensea-collection-${slug.toLowerCase()}`,
-        () => limiter.schedule({ priority: 0 }, () => axiosInstance.get<CollectionData>(apiUrl, {
-          headers: { "x-api-key": API_KEY },
-        })),
-        { category: 'Collection' }
-      ),
-
-    () =>
-      apiDedup(
-        `magiceden-collection-${slug.toLowerCase()}`,
-        () => limiter.schedule({ priority: 0 }, () => axiosInstance.post(
-          `${BASE_URL}/magiceden/v4/collections`,
-          {
-            chain: "ethereum",
-            collectionSlugs: [slug],
-          },
-          {
+    async () => {
+      try {
+        const result = await apiDedup(
+          `opensea-collection-${slug.toLowerCase()}`,
+          () => limiter.schedule({ priority: 0 }, () => axiosInstance.get<CollectionData>(apiUrl, {
             headers: { "x-api-key": API_KEY },
-          }
-        )),
-        { category: 'Collection' }
-      ),
+          })),
+          { category: 'Collection' }
+        );
+        return { success: true, data: result, error: null };
+      } catch (error) {
+        console.error(`[COLLECTION] OpenSea API failed for: ${slug}`, {
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined
+        });
+        return { success: false, data: null, error };
+      }
+    },
+
+    async () => {
+      try {
+        const result = await apiDedup(
+          `magiceden-collection-${slug.toLowerCase()}`,
+          () => limiter.schedule({ priority: 0 }, () => axiosInstance.post(
+            `${BASE_URL}/magiceden/v4/collections`,
+            {
+              chain: "ethereum",
+              collectionSlugs: [slug],
+            },
+            {
+              headers: { "x-api-key": API_KEY },
+            }
+          )),
+          { category: 'Collection' }
+        );
+        return { success: true, data: result, error: null };
+      } catch (error) {
+        console.error(`[COLLECTION] MagicEden API failed for: ${slug}`, {
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined
+        });
+        return { success: false, data: null, error };
+      }
+    },
   ];
 
-  const [collectionResult, magicEdenResult] = await pQueue.addAll(tasks, {
-    throwOnTimeout: true,
-  });
+  const [collectionResult, magicEdenResult] = await pQueue.addAll(tasks);
 
   return { collectionResult, magicEdenResult };
 };

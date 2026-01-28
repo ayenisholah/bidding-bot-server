@@ -10,7 +10,7 @@ import { warnLog, debugLog } from "./debug-file-logger";
 // Track logged balance errors to prevent flooding (1k items, 30 min TTL)
 const loggedBalanceErrors = new LRUCache<string, boolean>({
   max: 1000,
-  ttl: 30 * 60 * 1000 // 30 minutes
+  ttl: 60 * 1000 // 60 seconds (align with insufficientBalanceLogCache)
 });
 
 /**

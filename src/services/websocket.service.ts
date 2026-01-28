@@ -1,13 +1,17 @@
 import WebSocket, { Server as WebSocketServer } from 'ws';
+import { LRUCache } from 'lru-cache';
 import { ITask } from '../models/task.model';
 import { BroadcastManager } from '../utils/broadcast-manager';
 import { debugLog, errorLog } from '../utils/debug-file-logger';
 
-// Constants
-const MESSAGE_TTL = 60 * 1000; // 1 minutes
-
-// Message idempotency tracking
-const processedMessages = new Map<string, number>();
+// Message deduplication with automatic TTL expiration
+// Matches configuration in index.ts for consistency
+const processedMessages = new LRUCache<string, number>({
+  max: 1000000,         // 1M entries for production-scale traffic bursts
+  ttl: 60 * 1000,       // 60 seconds
+  updateAgeOnGet: false,
+  allowStale: false
+});
 
 // Handler function types
 interface WebSocketHandlers {
@@ -161,7 +165,7 @@ class WebSocketService {
       }
 
       // Check for duplicate (idempotency)
-      if (messageId && this.isDuplicateMessage(messageId)) {
+      if (messageId && processedMessages.has(messageId)) {
         // Send acknowledgment for duplicate
         ws.send(JSON.stringify({
           type: 'ack',
@@ -175,7 +179,7 @@ class WebSocketService {
 
       // Store message ID to prevent duplicates
       if (messageId) {
-        this.markMessageProcessed(messageId);
+        processedMessages.set(messageId, Date.now());
       }
 
       // Route message to appropriate handler
@@ -298,38 +302,6 @@ class WebSocketService {
     this.broadcastManager.removeClient(ws);
   }
 
-  /**
-   * Check if a message has already been processed (for idempotency)
-   */
-  private isDuplicateMessage(messageId: string): boolean {
-    const timestamp = processedMessages.get(messageId);
-    if (!timestamp) return false;
-
-    // Check if message is still within TTL
-    if (Date.now() - timestamp > MESSAGE_TTL) {
-      processedMessages.delete(messageId);
-      return false;
-    }
-
-    return true;
-  }
-
-  /**
-   * Mark a message as processed
-   */
-  private markMessageProcessed(messageId: string): void {
-    processedMessages.set(messageId, Date.now());
-
-    // Cleanup old entries
-    if (processedMessages.size > 10000) {
-      const cutoff = Date.now() - MESSAGE_TTL;
-      for (const [id, timestamp] of processedMessages.entries()) {
-        if (timestamp < cutoff) {
-          processedMessages.delete(id);
-        }
-      }
-    }
-  }
 
   /**
    * Get statistics about the service

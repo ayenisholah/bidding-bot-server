@@ -48,6 +48,8 @@ class QueueService {
 
   // Job type constants
   private CANCEL_OPENSEA_BID = "CANCEL_OPENSEA_BID";
+  private CANCEL_OPENSEA_COUNTERBID = "CANCEL_OPENSEA_COUNTERBID";
+  private CANCEL_OPENSEA_OUTBID = "CANCEL_OPENSEA_OUTBID";
   private CANCEL_MAGICEDEN_BID = "CANCEL_MAGICEDEN_BID";
   private CANCEL_BLUR_BID = "CANCEL_BLUR_BID";
 
@@ -343,18 +345,47 @@ class QueueService {
     // Add completion hook for guaranteed cleanup verification
     worker.on('completed', async (job) => {
       // Verify cache was cleaned (defensive check)
-      if (job && (job.name === this.CANCEL_OPENSEA_BID || job.name === this.CANCEL_MAGICEDEN_BID) && job.data.orderKey) {
+      if (job && (job.name === this.CANCEL_OPENSEA_BID ||
+                  job.name === this.CANCEL_OPENSEA_COUNTERBID ||
+                  job.name === this.CANCEL_OPENSEA_OUTBID ||
+                  job.name === this.CANCEL_MAGICEDEN_BID ||
+                  job.name === this.CANCEL_BLUR_BID)) {
         const taskId = job.data.taskId;
-        const orderKey = job.data.orderKey;
-        const marketplace = job.name === this.CANCEL_OPENSEA_BID ? 'opensea' : 'magiceden';
+        const marketplace = job.name === this.CANCEL_OPENSEA_BID ||
+                           job.name === this.CANCEL_OPENSEA_COUNTERBID ||
+                           job.name === this.CANCEL_OPENSEA_OUTBID ? 'opensea' :
+                           job.name === this.CANCEL_BLUR_BID ? 'blur' : 'magiceden';
 
-        // Check if order still exists in cache (shouldn't be there)
-        const identifier = job.data.identifier;
-        if (identifier) {
-          const stillExists = await orderCache.get(taskId, marketplace, identifier);
-          if (stillExists && this.safeDeleteFromCache) {
-            warnLog('WorkerCleanup', `ORDER_STILL_IN_CACHE_AFTER_COMPLETION | taskId=${taskId} | orderKey=${orderKey}`, { taskId });
-            await this.safeDeleteFromCache(orderKey, taskId, marketplace);
+        // For single-order jobs (OpenSea, Blur)
+        if (job.data.orderKey) {
+          const orderKey = job.data.orderKey;
+          const identifier = job.data.identifier;
+
+          if (identifier) {
+            const stillExists = await orderCache.get(taskId, marketplace, identifier);
+            if (stillExists && this.safeDeleteFromCache) {
+              warnLog('WorkerCleanup', `ORDER_STILL_IN_CACHE_AFTER_COMPLETION | taskId=${taskId} | orderKey=${orderKey} | marketplace=${marketplace}`, { taskId });
+              await this.safeDeleteFromCache(orderKey, taskId, marketplace);
+            }
+          }
+        }
+
+        // For batch jobs (MagicEden)
+        if (job.data.orderKeys && job.data.identifiers) {
+          const orderKeys = job.data.orderKeys;
+          const identifiers = job.data.identifiers;
+
+          for (let i = 0; i < orderKeys.length; i++) {
+            const orderKey = orderKeys[i];
+            const identifier = identifiers[i];
+
+            if (identifier) {
+              const stillExists = await orderCache.get(taskId, marketplace, identifier);
+              if (stillExists && this.safeDeleteFromCache) {
+                warnLog('WorkerCleanup', `ORDER_STILL_IN_CACHE_AFTER_COMPLETION | taskId=${taskId} | orderKey=${orderKey} | marketplace=${marketplace}`, { taskId });
+                await this.safeDeleteFromCache(orderKey, taskId, marketplace);
+              }
+            }
           }
         }
       }
@@ -362,9 +393,16 @@ class QueueService {
 
     // Add failure hook for guaranteed cleanup (even if error handler failed to delete)
     worker.on('failed', async (job, error) => {
-      if (job && (job.name === this.CANCEL_OPENSEA_BID || job.name === this.CANCEL_MAGICEDEN_BID) && this.safeDeleteFromCache) {
+      if (job && (job.name === this.CANCEL_OPENSEA_BID ||
+                  job.name === this.CANCEL_OPENSEA_COUNTERBID ||
+                  job.name === this.CANCEL_OPENSEA_OUTBID ||
+                  job.name === this.CANCEL_MAGICEDEN_BID ||
+                  job.name === this.CANCEL_BLUR_BID) && this.safeDeleteFromCache) {
         const taskId = job.data.taskId;
-        const marketplace = job.name === this.CANCEL_OPENSEA_BID ? 'opensea' : 'magiceden';
+        const marketplace = job.name === this.CANCEL_OPENSEA_BID ||
+                           job.name === this.CANCEL_OPENSEA_COUNTERBID ||
+                           job.name === this.CANCEL_OPENSEA_OUTBID ? 'opensea' :
+                           job.name === this.CANCEL_BLUR_BID ? 'blur' : 'magiceden';
 
         // GUARANTEED CLEANUP: Even if error handler failed to delete
         if (job.data.orderKey) {

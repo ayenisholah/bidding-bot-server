@@ -1,6 +1,4 @@
 import { LRUCache } from 'lru-cache';
-import { debugLog } from '../../utils/debug-file-logger';
-
 // Collection Details LRU (24 hours TTL - long-lived, rarely changes)
 // Right-sized to 500 max for typical user profiles (<100 collections, 5x safety buffer)
 // Memory impact: ~5MB max (10KB per collection × 500 collections)
@@ -24,7 +22,7 @@ export const floorPriceLRU = new LRUCache<string, number>({
 // Right-sized to 100 max for typical usage (10-20 active wallets during bidding)
 export const balanceLRU = new LRUCache<string, number>({
   max: 100,
-  ttl: 5 * 60 * 1000,  // 5 minutes
+  ttl: 60 * 1000,  // 60 seconds (balance changes more frequently)
   allowStale: false,
   updateAgeOnGet: false
 });

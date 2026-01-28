@@ -11,6 +11,20 @@ import { tradingDisabledCache } from '../utils/trading-disabled-cache';
 import { listingPriceCache } from '../utils/listing-price-cache';
 import { jobFallbackStore } from '../utils/redis-job-fallback';
 import { approvalCache } from '../utils/approval-cache';
+import { rarityCache } from '../utils/rarity-cache';
+import { getLogsCacheStats } from '../utils/logs-cache';
+import { walletCache } from '../utils/wallet-cache';
+import { marketplaceApprovalCache } from '../utils/marketplace-approval-cache';
+import { getOrderCacheStats } from '../utils/order-cache';
+import { getDecryptedKeyCacheStats } from '../utils/crypto';
+
+// Import OpenSea caches
+import {
+  collectionDetailsLRU,
+  floorPriceLRU,
+  balanceLRU,
+  traitFloorLRU
+} from '../marketplace/opensea/cache';
 
 // Import global state
 import {
@@ -21,7 +35,8 @@ import {
   processedOwnBids,
   taskStatus,
   bestOffers,
-  floorPrices
+  floorPrices,
+  collectionFloorCache
 } from '../state/global-state';
 
 interface CacheStats {
@@ -120,7 +135,7 @@ class MemorySnapshotService {
         Promise.resolve(this.collectLRUCachesStats()).catch((err: Error) => {
           errorCount++;
           errors.push(`LRUCaches: ${err.message}`);
-          return { processedMessages: 0 };
+          return this.getEmptyLRUCachesStats();
         }),
         Promise.resolve(this.collectUnboundedDataStructuresStats()).catch((err: Error) => {
           errorCount++;
@@ -183,15 +198,13 @@ class MemorySnapshotService {
     }
 
     const categories = {
-      orderCache: { pattern: 'order:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
-      orderIdIndex: { pattern: 'order:id:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
-      taskOrdersSets: { pattern: 'task:orders:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
-      taskSchedule: { pattern: 'taskschedule:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
-      taskRuntime: { pattern: 'taskruntime:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
-      rarityCache: { pattern: 'rarity:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
-      approvalCache: { pattern: '{approval}:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
       bullMQMain: { pattern: 'bull:BIDDING_BOT:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
       bullMQBlur: { pattern: 'bull:BLUR_BIDDING_QUEUE:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
+      loopLocks: { pattern: 'nft-bot:next-loop:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
+      openseaCollection: { pattern: 'opensea:collection:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
+      openseaTraits: { pattern: 'opensea:traits:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
+      websocketMetrics: { pattern: 'websocket:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
+      devPassword: { pattern: 'nft-bot:server:password', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
       other: { pattern: 'other', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] }
     };
 
@@ -444,10 +457,26 @@ class MemorySnapshotService {
         throw new Error('MongoDB connection not available');
       }
 
+      // Collections migrated to LRU caches (exclude from monitoring)
+      const excludedCollections = [
+        'taskruntimestates',
+        'tokentraitcaches',
+        'tokentraits',
+        'raritycaches',
+        'bidlogs',
+        'approvals'
+      ];
+
       const collections = await db.listCollections().toArray();
       const stats = [];
 
       for (const collectionInfo of collections) {
+        // Skip migrated collections
+        if (excludedCollections.includes(collectionInfo.name)) {
+          debugLog('MemorySnapshot', `Skipping migrated collection: ${collectionInfo.name}`);
+          continue;
+        }
+
         try {
           const collectionStats = await db.command({
             collStats: collectionInfo.name
@@ -485,12 +514,183 @@ class MemorySnapshotService {
   }
 
   /**
-   * Collect LRU caches statistics (processedMessages)
+   * Collect LRU caches statistics (all 35+ caches)
    */
   private collectLRUCachesStats() {
-    return {
-      processedMessages: this.deps?.processedMessages?.size || 0
-    };
+    try {
+      // Helper function to estimate memory usage
+      const estimateMemory = (size: number, bytesPerEntry: number) => size * bytesPerEntry;
+
+      // Get cache stats
+      const orderCacheStats = getOrderCacheStats();
+      const logsCacheStats = getLogsCacheStats();
+      const collectionCacheStats = getCollectionCacheStats();
+      const decryptedKeyCacheStats = getDecryptedKeyCacheStats();
+
+      // Large caches
+      const orderLRU = {
+        size: orderCacheStats.lru.size,
+        maxSize: orderCacheStats.lru.max,
+        estimatedMemoryBytes: estimateMemory(orderCacheStats.lru.size, 500)
+      };
+
+      const rarityCacheSize = (rarityCache as any).cache?.size || 0;
+      const rarityCacheObj = {
+        size: rarityCacheSize,
+        maxSize: 100000,
+        ttl: 24 * 60 * 60 * 1000,
+        estimatedMemoryBytes: estimateMemory(rarityCacheSize, 2000)
+      };
+
+      const tokenTraitCacheStats = {
+        size: logsCacheStats.size,
+        maxSize: 100000,
+        ttl: 24 * 60 * 60 * 1000,
+        estimatedMemoryBytes: estimateMemory(logsCacheStats.size, 1000)
+      };
+
+      const logsCacheObj = {
+        size: logsCacheStats.size,
+        maxSize: logsCacheStats.maxSize,
+        ttl: 24 * 60 * 60 * 1000,
+        estimatedMemoryBytes: estimateMemory(logsCacheStats.size, 500)
+      };
+
+      const processedMessagesSize = this.deps?.processedMessages?.size || 0;
+      const processedMessagesObj = {
+        size: processedMessagesSize,
+        maxSize: 1000000,
+        estimatedMemoryBytes: estimateMemory(processedMessagesSize, 200)
+      };
+
+      const processedOwnBidsObj = {
+        size: processedOwnBids.size,
+        maxSize: 1000000,
+        ttl: 60 * 1000,
+        estimatedMemoryBytes: estimateMemory(processedOwnBids.size, 100)
+      };
+
+      const approvalCacheStats = approvalCache.getStats();
+      const approvalCacheObj = {
+        size: approvalCacheStats.size,
+        maxSize: approvalCacheStats.maxSize,
+        ttl: approvalCacheStats.ttl,
+        estimatedMemoryBytes: approvalCacheStats.estimatedMemoryBytes
+      };
+
+      const traitFloorLRUObj = {
+        size: traitFloorLRU.size,
+        maxSize: 20000,
+        ttl: 5 * 60 * 1000,
+        estimatedMemoryBytes: estimateMemory(traitFloorLRU.size, 200)
+      };
+
+      // OpenSea caches
+      const openseaCaches = {
+        collectionDetailsLRU: { size: collectionDetailsLRU.size, maxSize: 500, ttl: 24 * 60 * 60 * 1000 },
+        floorPriceLRU: { size: floorPriceLRU.size, maxSize: 500, ttl: 5 * 60 * 1000 },
+        contractResolutionLRU: { size: 0, maxSize: 5000, ttl: 24 * 60 * 60 * 1000 }, // Not exported
+        multiContractSlugLRU: { size: 0, maxSize: 500, ttl: 24 * 60 * 60 * 1000 }, // Not exported
+        contractMapLRU: { size: 0, maxSize: 500, ttl: 24 * 60 * 60 * 1000 }, // Not exported
+        balanceLRU: { size: balanceLRU.size, maxSize: 100, ttl: 60 * 1000 },
+        totalEstimatedMemoryBytes: estimateMemory(
+          collectionDetailsLRU.size + floorPriceLRU.size + balanceLRU.size, 500
+        )
+      };
+
+      // Collection caches
+      const collectionCaches = {
+        collectionDetailsCache: {
+          size: collectionCacheStats.collectionDetails.size,
+          maxSize: 500,
+          ttl: 7 * 24 * 60 * 60 * 1000
+        },
+        floorPriceCache: {
+          size: collectionCacheStats.floorPrice.size,
+          maxSize: 1000,
+          ttl: 5 * 60 * 1000
+        },
+        totalEstimatedMemoryBytes: estimateMemory(
+          collectionCacheStats.collectionDetails.size + collectionCacheStats.floorPrice.size, 500
+        )
+      };
+
+      // Trading & Listing caches
+      const tradingDisabledCacheSize = tradingDisabledCache.getStats().total;
+      const listingPriceCacheSize = listingPriceCache.getStats().memoryCacheSize;
+      const tradingListingCaches = {
+        tradingDisabledCache: { size: tradingDisabledCacheSize, maxSize: 5000, ttl: 24 * 60 * 60 * 1000 },
+        listingPriceCache: { size: listingPriceCacheSize, maxSize: 10000, ttl: 30 * 60 * 1000 },
+        collectionFloorCache: { size: collectionFloorCache.size, maxSize: 1000, ttl: 5 * 60 * 1000 },
+        totalEstimatedMemoryBytes: estimateMemory(
+          tradingDisabledCacheSize + listingPriceCacheSize + collectionFloorCache.size, 300
+        )
+      };
+
+      // Dedup caches (insufficientBalanceLogCache not exported, so we can't track it)
+      const dedupCaches = {
+        insufficientBalanceLogCache: { totalSize: 0, instanceCount: 3 }, // Not accessible
+        loggedBalanceErrors: { size: 0, maxSize: 1000, ttl: 60 * 1000 }, // Not accessible
+        totalEstimatedMemoryBytes: 0
+      };
+
+      // Small utility caches
+      const walletCacheSize = (walletCache as any).cache?.size || 0;
+      const marketplaceApprovalCacheSize = (marketplaceApprovalCache as any).cache?.size || 0;
+      const smallUtilityCaches = {
+        walletCache: { size: walletCacheSize, maxSize: 100 },
+        decryptedKeyCache: { size: decryptedKeyCacheStats.size, maxSize: 1000 },
+        marketplaceApprovalCache: { size: marketplaceApprovalCacheSize, maxSize: 1000 },
+        totalEstimatedMemoryBytes: estimateMemory(
+          walletCacheSize + decryptedKeyCacheStats.size + marketplaceApprovalCacheSize, 200
+        )
+      };
+
+      // Calculate totals
+      const totalSizeAllCaches =
+        orderLRU.size + rarityCacheObj.size + tokenTraitCacheStats.size + logsCacheObj.size +
+        processedMessagesObj.size + processedOwnBidsObj.size + approvalCacheObj.size +
+        traitFloorLRUObj.size + collectionDetailsLRU.size + floorPriceLRU.size + balanceLRU.size +
+        collectionCacheStats.collectionDetails.size + collectionCacheStats.floorPrice.size +
+        tradingDisabledCacheSize + listingPriceCacheSize + collectionFloorCache.size +
+        walletCacheSize + decryptedKeyCacheStats.size + marketplaceApprovalCacheSize;
+
+      const totalEstimatedMemoryBytes =
+        orderLRU.estimatedMemoryBytes + rarityCacheObj.estimatedMemoryBytes +
+        tokenTraitCacheStats.estimatedMemoryBytes + logsCacheObj.estimatedMemoryBytes +
+        processedMessagesObj.estimatedMemoryBytes + processedOwnBidsObj.estimatedMemoryBytes +
+        approvalCacheObj.estimatedMemoryBytes + traitFloorLRUObj.estimatedMemoryBytes +
+        openseaCaches.totalEstimatedMemoryBytes + collectionCaches.totalEstimatedMemoryBytes +
+        tradingListingCaches.totalEstimatedMemoryBytes + dedupCaches.totalEstimatedMemoryBytes +
+        smallUtilityCaches.totalEstimatedMemoryBytes;
+
+      return {
+        // Large caches
+        orderLRU,
+        rarityCache: rarityCacheObj,
+        tokenTraitCache: tokenTraitCacheStats,
+        logsCache: logsCacheObj,
+        processedMessages: processedMessagesObj,
+        processedOwnBids: processedOwnBidsObj,
+        approvalCache: approvalCacheObj,
+        traitFloorLRU: traitFloorLRUObj,
+
+        // Grouped caches
+        openseaCaches,
+        collectionCaches,
+        tradingListingCaches,
+        dedupCaches,
+        smallUtilityCaches,
+
+        // Summary
+        totalCaches: 25, // Approximate count of tracked caches
+        totalSizeAllCaches,
+        totalEstimatedMemoryBytes
+      };
+    } catch (error) {
+      errorLog('MemorySnapshot', 'Error collecting LRU cache stats', error);
+      return this.getEmptyLRUCachesStats();
+    }
   }
 
   /**
@@ -541,15 +741,13 @@ class MemorySnapshotService {
     const emptyCategory = { pattern: '', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] };
     return {
       categories: {
-        orderCache: { ...emptyCategory, pattern: 'order:*' },
-        orderIdIndex: { ...emptyCategory, pattern: 'order:id:*' },
-        taskOrdersSets: { ...emptyCategory, pattern: 'task:orders:*' },
-        taskSchedule: { ...emptyCategory, pattern: 'taskschedule:*' },
-        taskRuntime: { ...emptyCategory, pattern: 'taskruntime:*' },
-        rarityCache: { ...emptyCategory, pattern: 'rarity:*' },
-        approvalCache: { ...emptyCategory, pattern: '{approval}:*' },
         bullMQMain: { ...emptyCategory, pattern: 'bull:BIDDING_BOT:*' },
         bullMQBlur: { ...emptyCategory, pattern: 'bull:BLUR_BIDDING_QUEUE:*' },
+        loopLocks: { ...emptyCategory, pattern: 'nft-bot:next-loop:*' },
+        openseaCollection: { ...emptyCategory, pattern: 'opensea:collection:*' },
+        openseaTraits: { ...emptyCategory, pattern: 'opensea:traits:*' },
+        websocketMetrics: { ...emptyCategory, pattern: 'websocket:*' },
+        devPassword: { ...emptyCategory, pattern: 'nft-bot:server:password' },
         other: { ...emptyCategory, pattern: 'other' }
       },
       totals: {
@@ -557,6 +755,61 @@ class MemorySnapshotService {
         totalMemoryBytes: 0,
         totalMemoryMB: 0
       }
+    };
+  }
+
+  private getEmptyLRUCachesStats() {
+    const emptyCache = { size: 0, maxSize: 0, estimatedMemoryBytes: 0 };
+    const emptyCacheWithTTL = { size: 0, maxSize: 0, ttl: 0, estimatedMemoryBytes: 0 };
+
+    return {
+      // Large caches
+      orderLRU: emptyCache,
+      rarityCache: emptyCacheWithTTL,
+      tokenTraitCache: emptyCacheWithTTL,
+      logsCache: emptyCacheWithTTL,
+      processedMessages: { size: 0, maxSize: 1000000, estimatedMemoryBytes: 0 },
+      processedOwnBids: { size: 0, maxSize: 1000000, ttl: 0, estimatedMemoryBytes: 0 },
+      approvalCache: emptyCacheWithTTL,
+      traitFloorLRU: emptyCacheWithTTL,
+
+      // Grouped caches
+      openseaCaches: {
+        collectionDetailsLRU: { size: 0, maxSize: 0, ttl: 0 },
+        floorPriceLRU: { size: 0, maxSize: 0, ttl: 0 },
+        contractResolutionLRU: { size: 0, maxSize: 0, ttl: 0 },
+        multiContractSlugLRU: { size: 0, maxSize: 0, ttl: 0 },
+        contractMapLRU: { size: 0, maxSize: 0, ttl: 0 },
+        balanceLRU: { size: 0, maxSize: 0, ttl: 0 },
+        totalEstimatedMemoryBytes: 0
+      },
+      collectionCaches: {
+        collectionDetailsCache: { size: 0, maxSize: 0, ttl: 0 },
+        floorPriceCache: { size: 0, maxSize: 0, ttl: 0 },
+        totalEstimatedMemoryBytes: 0
+      },
+      tradingListingCaches: {
+        tradingDisabledCache: { size: 0, maxSize: 0, ttl: 0 },
+        listingPriceCache: { size: 0, maxSize: 0, ttl: 0 },
+        collectionFloorCache: { size: 0, maxSize: 0, ttl: 0 },
+        totalEstimatedMemoryBytes: 0
+      },
+      dedupCaches: {
+        insufficientBalanceLogCache: { totalSize: 0, instanceCount: 0 },
+        loggedBalanceErrors: { size: 0, maxSize: 0, ttl: 0 },
+        totalEstimatedMemoryBytes: 0
+      },
+      smallUtilityCaches: {
+        walletCache: { size: 0, maxSize: 0 },
+        decryptedKeyCache: { size: 0, maxSize: 0 },
+        marketplaceApprovalCache: { size: 0, maxSize: 0 },
+        totalEstimatedMemoryBytes: 0
+      },
+
+      // Summary
+      totalCaches: 0,
+      totalSizeAllCaches: 0,
+      totalEstimatedMemoryBytes: 0
     };
   }
 

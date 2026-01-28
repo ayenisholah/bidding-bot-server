@@ -130,7 +130,7 @@ class WebSocketManager extends EventEmitter {
     timestamp: number;
   }>({
     max: 1000,     // Last 1000 samples
-    ttl: 3600000   // 1 hour TTL
+    ttl: 60000     // 60 seconds (recent samples more relevant)
   });
   private forwardingSampleCounter = 0;
   // Circular buffer for message timestamps (5 minute window, max 10000 messages)

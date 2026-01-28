@@ -17,7 +17,7 @@ export interface TradingDisabledInfo {
  */
 class TradingDisabledCache {
   private cache: LRUCache<string, TradingDisabledInfo>;
-  private readonly CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours (optimal for retry window)
+  private readonly CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours (trading restrictions rarely change)
 
   constructor() {
     // Max 5000 tokens with 4 hour TTL
