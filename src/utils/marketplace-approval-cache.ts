@@ -33,7 +33,7 @@ class MarketplaceApprovalCache {
 
   constructor() {
     this.cache = new LRUCache<string, MarketplaceApprovalEntry>({
-      max: 1000, // Max 1000 wallet approvals
+      max: 100, // Max 100 wallet approvals (standardized)
       ttl: 0, // No TTL - persist until server restart
       updateAgeOnGet: false
     });

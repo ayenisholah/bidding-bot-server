@@ -117,12 +117,13 @@ class WebSocketService {
       try {
         this.broadcastManager.subscribe(ws, taskId);
         successCount++;
-        debugLog('WebSocket', `Auto-subscribed client to task | taskId=${taskId}`);
+        // Per-task log removed - was logging 28+ lines per connection (125MB/day)
       } catch (error) {
         failCount++;
         errorLog('WebSocket', `Auto-subscribe failed | taskId=${taskId}`, error as Error);
       }
     }
+    // Summary log preserved - single line shows count
     debugLog('WebSocket', `Client connected | auto-subscribed=${successCount} | failed=${failCount} | total=${activeTaskIds.length}`);
 
     // Send the latest bid rates immediately upon connection

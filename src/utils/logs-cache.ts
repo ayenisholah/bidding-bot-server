@@ -103,9 +103,8 @@ class LogsCache {
     this.cache.set(key, entry, { ttl });
     this.stats.sets++;
 
-    debugLog('LogsCache',
-      `CACHE_SET | ${key} | type=${entry.type} | ttl=${Math.round(ttl / 3600000)}h`
-    );
+    // CACHE_SET log removed - was logging every error cache operation (75MB/day)
+    // Only cache initialization and errors need logging, not every SET
   }
 
   /**

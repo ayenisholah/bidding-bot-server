@@ -25,9 +25,9 @@ const NO_PASSWORD_LOG_INTERVAL = 60000; // Log once per minute max
 // =============================================================================
 
 // Cache decrypted private keys (no TTL, persists until server restart)
-// Max 1000 wallets as per user limit (LRU eviction on capacity)
+// Max 100 wallets (standardized utility cache size, LRU eviction on capacity)
 const decryptedKeyCache = new LRUCache<string, string>({
-  max: 1000,              // Max 1000 unique wallets
+  max: 100,               // Max 100 unique wallets (standardized)
   ttl: 0,                 // No TTL (infinite until server restart)
   allowStale: false,
   updateAgeOnGet: true    // LRU behavior - keep hot keys fresh

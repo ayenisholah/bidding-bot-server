@@ -23,7 +23,13 @@ import {
   collectionDetailsLRU,
   floorPriceLRU,
   balanceLRU,
-  traitFloorLRU
+  traitFloorLRU,
+  blurFloorLRU,
+  magicEdenFloorLRU,
+  collectionItemsLRU,
+  collectionTraitsLRU,
+  traitFloorsDetailLRU,
+  collectionEventsLRU
 } from '../marketplace/opensea/cache';
 
 // Import global state
@@ -200,10 +206,6 @@ class MemorySnapshotService {
     const categories = {
       bullMQMain: { pattern: 'bull:BIDDING_BOT:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
       bullMQBlur: { pattern: 'bull:BLUR_BIDDING_QUEUE:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
-      loopLocks: { pattern: 'nft-bot:next-loop:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
-      openseaCollection: { pattern: 'opensea:collection:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
-      openseaTraits: { pattern: 'opensea:traits:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
-      websocketMetrics: { pattern: 'websocket:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
       devPassword: { pattern: 'nft-bot:server:password', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
       other: { pattern: 'other', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] }
     };
@@ -593,8 +595,18 @@ class MemorySnapshotService {
         multiContractSlugLRU: { size: 0, maxSize: 500, ttl: 24 * 60 * 60 * 1000 }, // Not exported
         contractMapLRU: { size: 0, maxSize: 500, ttl: 24 * 60 * 60 * 1000 }, // Not exported
         balanceLRU: { size: balanceLRU.size, maxSize: 100, ttl: 60 * 1000 },
+        // New marketplace floor caches
+        blurFloorLRU: { size: blurFloorLRU.size, maxSize: 1000, ttl: 5 * 60 * 1000 },
+        magicEdenFloorLRU: { size: magicEdenFloorLRU.size, maxSize: 1000, ttl: 60 * 1000 },
+        // New collection data caches
+        collectionItemsLRU: { size: collectionItemsLRU.size, maxSize: 500, ttl: 60 * 60 * 1000 },
+        collectionTraitsLRU: { size: collectionTraitsLRU.size, maxSize: 1_000_000, ttl: 24 * 60 * 60 * 1000 },
+        traitFloorsDetailLRU: { size: traitFloorsDetailLRU.size, maxSize: 5000, ttl: 60 * 1000 },
+        collectionEventsLRU: { size: collectionEventsLRU.size, maxSize: 1000, ttl: 10 * 1000 },
         totalEstimatedMemoryBytes: estimateMemory(
-          collectionDetailsLRU.size + floorPriceLRU.size + balanceLRU.size, 500
+          collectionDetailsLRU.size + floorPriceLRU.size + balanceLRU.size +
+          blurFloorLRU.size + magicEdenFloorLRU.size + collectionItemsLRU.size +
+          collectionTraitsLRU.size + traitFloorsDetailLRU.size + collectionEventsLRU.size, 500
         )
       };
 
@@ -639,8 +651,8 @@ class MemorySnapshotService {
       const marketplaceApprovalCacheSize = (marketplaceApprovalCache as any).cache?.size || 0;
       const smallUtilityCaches = {
         walletCache: { size: walletCacheSize, maxSize: 100 },
-        decryptedKeyCache: { size: decryptedKeyCacheStats.size, maxSize: 1000 },
-        marketplaceApprovalCache: { size: marketplaceApprovalCacheSize, maxSize: 1000 },
+        decryptedKeyCache: { size: decryptedKeyCacheStats.size, maxSize: 100 },
+        marketplaceApprovalCache: { size: marketplaceApprovalCacheSize, maxSize: 100 },
         totalEstimatedMemoryBytes: estimateMemory(
           walletCacheSize + decryptedKeyCacheStats.size + marketplaceApprovalCacheSize, 200
         )
@@ -743,10 +755,6 @@ class MemorySnapshotService {
       categories: {
         bullMQMain: { ...emptyCategory, pattern: 'bull:BIDDING_BOT:*' },
         bullMQBlur: { ...emptyCategory, pattern: 'bull:BLUR_BIDDING_QUEUE:*' },
-        loopLocks: { ...emptyCategory, pattern: 'nft-bot:next-loop:*' },
-        openseaCollection: { ...emptyCategory, pattern: 'opensea:collection:*' },
-        openseaTraits: { ...emptyCategory, pattern: 'opensea:traits:*' },
-        websocketMetrics: { ...emptyCategory, pattern: 'websocket:*' },
         devPassword: { ...emptyCategory, pattern: 'nft-bot:server:password' },
         other: { ...emptyCategory, pattern: 'other' }
       },

@@ -36,6 +36,68 @@ export const traitFloorLRU = new LRUCache<string, number>({
   updateAgeOnGet: false
 });
 
+// ============================================
+// NEW: Redis to LRU Migration Caches
+// ============================================
+
+// Blur Floor Price LRU (5 min TTL - matches Redis)
+export const blurFloorLRU = new LRUCache<string, number>({
+  max: 1000,
+  ttl: 5 * 60 * 1000, // 5 minutes
+  allowStale: true,
+  updateAgeOnGet: false,
+  updateAgeOnHas: false
+});
+
+// MagicEden Floor Price LRU (1 min TTL - matches Redis)
+export const magicEdenFloorLRU = new LRUCache<string, number>({
+  max: 1000,
+  ttl: 60 * 1000, // 1 minute
+  allowStale: true,
+  updateAgeOnGet: false,
+  updateAgeOnHas: false
+});
+
+// Collection Items LRU (1 hour TTL - matches Redis)
+// Stores token IDs lists for collections
+export const collectionItemsLRU = new LRUCache<string, string[]>({
+  max: 500,
+  ttl: 60 * 60 * 1000, // 1 hour
+  allowStale: true,
+  updateAgeOnGet: false,
+  updateAgeOnHas: false
+});
+
+// Collection Traits Metadata LRU (24 hour TTL - user requirement)
+// USER REQUIREMENT: max 1M entries, 24h TTL
+export const collectionTraitsLRU = new LRUCache<string, any>({
+  max: 1_000_000, // 1 million entries (user requirement)
+  ttl: 24 * 60 * 60 * 1000, // 24 hours (user requirement)
+  allowStale: true,
+  updateAgeOnGet: false,
+  updateAgeOnHas: false
+});
+
+// Trait Floors Detail LRU (1 min TTL - matches Redis)
+// Stores detailed trait floor prices by trait combinations
+export const traitFloorsDetailLRU = new LRUCache<string, any>({
+  max: 5000,
+  ttl: 60 * 1000, // 1 minute
+  allowStale: true,
+  updateAgeOnGet: false,
+  updateAgeOnHas: false
+});
+
+// Collection Events LRU (10 sec TTL - matches Redis)
+// Stores collection events (sales, listings, offers)
+export const collectionEventsLRU = new LRUCache<string, any>({
+  max: 1000,
+  ttl: 10 * 1000, // 10 seconds
+  allowStale: true,
+  updateAgeOnGet: false,
+  updateAgeOnHas: false
+});
+
 // Cache statistics
 interface CacheStats {
   hits: number;

@@ -186,18 +186,21 @@ class WebSocketManager extends EventEmitter {
       ...config
     };
 
-    // Initialize p-queue for message processing with concurrency and timeout
-    // Hardcoded to 10 concurrent handlers (reduced from 20 for CPU relief)
-    // Rationale: 20 concurrent handlers were still causing CPU saturation during event spikes
-    // 10 concurrent handlers = 33 msg/sec capacity @ 300ms avg (vs 1-2 msg/sec typical, 5-20 msg/sec spikes)
-    // This provides 1.6x headroom vs peak load while reducing CPU saturation by ~50%
-    // EMERGENCY FIX: Added manual queue size checks (backpressure) to prevent unbounded growth and OOM crashes
+    // Initialize p-queue for message processing with concurrency from RATE_LIMIT
+    // Uses RATE_LIMIT environment variable (default: 10 if not set)
+    // With RATE_LIMIT=64: 64 concurrent handlers = 211 msg/sec capacity @ 300ms avg
+    // Backpressure: Manual queue size checks prevent unbounded growth and OOM crashes
     // p-queue v6 doesn't support queueSize option, so we check queue.size before adding messages
+    const concurrency = Number(process.env.RATE_LIMIT) || 10;
     this.messageQueue = new PQueue({
-      concurrency: 10,      // Reduced from 20 → 10 for CPU relief (50% reduction)
+      concurrency,          // Use RATE_LIMIT from env (default: 10)
       timeout: 30000,       // 30s timeout per message
       throwOnTimeout: false // Graceful failures instead of crashing
     });
+
+    // Log the configured concurrency
+    infoLog('WebSocketManager', `Message queue initialized | concurrency=${concurrency} | ` +
+      `estimatedCapacity=${Math.floor(concurrency * 3.3)}msg/sec`);
 
     // Load persistent listing subscriptions on initialization
     this.loadPersistentSubscriptions();
@@ -744,7 +747,8 @@ class WebSocketManager extends EventEmitter {
    * Process control messages (pong, server_status, etc.)
    */
   private processControlMessage(message: any, receiveTime: number): void {
-    debugLog('WebSocket', `CP_CONTROL | type=${message.type}`);
+    // CP_CONTROL log removed - was logging every heartbeat ping/pong (8MB/day)
+    // Heartbeats should only log on FAILURE, not success
     // Control messages are handled in processMessageAsync
     this.processSingleMessage(message, receiveTime);
   }
@@ -864,7 +868,7 @@ class WebSocketManager extends EventEmitter {
 
         // Tier-based latency logging
         if (latency > 5000) {
-          errorLog('EventLatency', `CRITICAL | latency=${latency}ms | marketplace=${marketplace} | slug=${slug} | orderHash=${parsed.orderHash?.substring(0,16)}`);
+          errorLog('EventLatency', `CRITICAL | latency=${latency}ms | marketplace=${marketplace} | slug=${slug} | orderHash=${parsed.orderHash?.substring(0, 16)}`);
         } else if (latency > 1000) {
           warnLog('EventLatency', `HIGH | latency=${latency}ms | marketplace=${marketplace} | slug=${slug}`);
         } else if (latency > 100) {

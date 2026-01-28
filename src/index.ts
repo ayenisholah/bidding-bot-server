@@ -195,12 +195,6 @@ const QUEUE_NAME = 'BIDDING_BOT';
 const BLUR_BIDDING_QUEUE = 'BLUR_BIDDING_QUEUE';
 const CLEAR_COOLDOWN = 5 * 60 * 1000; // 5 minutes cooldown between queue clears
 
-
-
-const REDIS_KEY_NEXT_LOOP = 'nft-bot:next-loop:';            // + taskId:marketplace
-const REDIS_STATE_TTL = 86400; // 24 hours TTL for task state
-
-
 // Type definitions (duplicates removed - now imported from global-state.ts)
 interface LoopCount {
   [taskId: string]: {
@@ -2965,9 +2959,8 @@ async function startServer() {
     // All database operations must complete before accepting HTTP connections
     // This prevents "MongoNotConnectedError" race conditions on startup
 
-    // Initialize WebSocket connection monitoring (reads from database)
+    // Initialize WebSocket connection monitoring
     try {
-      await loadConnectionMetrics();
       startConnectionMonitoring();
       debugLog('STARTUP', 'WebSocket connection monitoring initialized');
     } catch (error) {
@@ -5463,16 +5456,6 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
       { taskId, marketplace: mpKeyForLog, timerKey, loopInterval, nextLoopTime: nextLoopTime.toISOString() }
     );
 
-    // Persist nextLoopTime to Redis for crash recovery
-    if (marketplace) {
-      const redis = getRedisConnection();
-      redis.set(
-        `${REDIS_KEY_NEXT_LOOP}${taskId}:${marketplace}`,
-        nextLoopTime.getTime().toString(),
-        'EX', REDIS_STATE_TTL
-      ).catch(err => errorLog('Redis', `Failed to persist nextLoopTime for ${taskId}:${marketplace}: ${err instanceof Error ? err.message : err}`));
-    }
-
   } catch (error) {
     // If scheduling fails, clean up resources
     errorLog('LoopScheduler',
@@ -6410,12 +6393,13 @@ wss.on('connection', async (ws) => {
     try {
       broadcastManager.subscribe(ws, taskId);
       successCount++;
-      debugLog('WebSocket', `Auto-subscribed client to task | taskId=${taskId}`);
+      // Per-task log removed - was logging 28+ lines per connection (125MB/day)
     } catch (error) {
       failCount++;
       console.error(`[WebSocket] Auto-subscribe FAILED | taskId=${taskId} | error=${error}`);
     }
   }
+  // Summary log preserved - single line shows count
   debugLog('WebSocket', `Client connected | auto-subscribed=${successCount} | failed=${failCount} | total=${activeTaskIds.length}`);
 
   // Send the latest bid rates immediately upon connection
@@ -8094,7 +8078,8 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
   else if (jobNameLower.includes('magiceden')) mpForLog = 'magiceden';
   else if (jobNameLower.includes('blur')) mpForLog = 'blur';
 
-  infoLog('BulkJobsPerf', `ENTRY | taskId=${taskId} | totalJobs=${jobs.length} | marketplace=${mpForLog} | jobName=${firstJob?.name}`, { taskId, marketplace: mpForLog as 'opensea' | 'magiceden' | 'blur' | undefined });
+  // BulkJobsPerf ENTRY log removed - was logging every bulk job operation (100+ lines per task execution, 250MB/day)
+  // Only log if operation is slow or encounters errors
 
   let processedCount = 0;
   let actuallyQueuedCount = 0;
@@ -8610,12 +8595,12 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
             addBulkMs = Date.now() - addBulkStartTime;
           }
 
-          // Log chunk completion with timing breakdown
+          // Chunk completion timing
           const chunkTotalMs = Date.now() - chunkStartTime;
           const chunkJobsQueued = validJobs?.length || 0;
           const chunkRejectedJobs = rejectedJobs?.length || 0;
           debugLog('ChunkProcess', `COMPLETE | taskId=${taskId} | mp=${marketplace} | chunk=${chunkIndex + 1}/${chunks.length} | input=${currentChunk.length} | valid=${chunkJobsQueued} | rejected=${chunkRejectedJobs} | totalProcessed=${processedCount} | totalQueued=${actuallyQueuedCount} | capacityWaitMs=${capacityWaitMs} | totalMs=${chunkTotalMs}`, { taskId, marketplace: mpForLog as 'opensea' | 'magiceden' | 'blur' | undefined });
-          infoLog('BulkJobsPerf', `CHUNK_COMPLETE | taskId=${taskId} | chunk=${chunkIndex + 1}/${chunks.length} | jobs=${currentChunk.length} | queued=${chunkJobsQueued} | capacityWaitMs=${capacityWaitMs} | validationMs=${validationMs} | addBulkMs=${addBulkMs} | totalMs=${chunkTotalMs} | marketplace=${mpForLog}`, { taskId, marketplace: mpForLog as 'opensea' | 'magiceden' | 'blur' | undefined });
+          // BulkJobsPerf CHUNK_COMPLETE log removed - was logging every chunk (250MB/day total with ENTRY)
 
           // Log queue state AFTER addBulk every 5 chunks to avoid spam
           if ((chunkIndex + 1) % 5 === 0 || chunkIndex === chunks.length - 1) {
@@ -10385,7 +10370,7 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
       }
     });
   } else {
-    debugLog('CancellationTracking', `UPDATE_PCT_NO_TRACKING | taskId=${taskId} | reason=no_tracking_entries_for_task`, { taskId });
+    // UPDATE_PCT_NO_TRACKING log removed - logs when no tracking data exists, which is normal behavior (30MB/day)
   }
 
   if (!taskStatus[taskId]) {
@@ -10430,7 +10415,7 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
       if (aggregatedPercentage !== null) {
         percentage = aggregatedPercentage;
       } else {
-        debugLog('CancellationTracking', `UPDATE_PCT_EXIT_NULL | taskId=${taskId} | reason=aggregatedPercentage_is_null`, { taskId });
+        // UPDATE_PCT_EXIT_NULL log removed - logs when tracking data is null, normal behavior (30MB/day)
         return;
       }
     } else {
@@ -10440,7 +10425,7 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
         percentage = trackerPercentage;
         debugLog('CancellationTracking', `UPDATE_PCT_MARKETPLACE | taskId=${taskId} | marketplace=${marketplace} | pct=${percentage} | source=marketplace_specific`, { taskId });
       } else {
-        debugLog('CancellationTracking', `UPDATE_PCT_EXIT_NULL | taskId=${taskId} | marketplace=${marketplace} | reason=trackerPercentage_is_null`, { taskId });
+        // UPDATE_PCT_EXIT_NULL log removed - logs when tracking data is null, normal behavior (30MB/day)
         return;
       }
     }
@@ -13202,38 +13187,7 @@ function logConnectionStats() {
 
 }
 
-async function saveConnectionMetrics() {
-  try {
-    if (redis) {
-      await redis.set('websocket:metrics', JSON.stringify(connectionMetrics));
-      await redis.set('websocket:history', JSON.stringify(connectionHistory));
-    }
-  } catch (error) {
-    errorLog('WebSocket', 'Error saving connection metrics', error);
-  }
-}
-
-async function loadConnectionMetrics() {
-  try {
-    const metricsData = redis ? await redis.get('websocket:metrics') : null;
-    const historyData = redis ? await redis.get('websocket:history') : null;
-
-    if (metricsData) {
-      const loadedMetrics = JSON.parse(metricsData);
-      // Don't restore connectionStartTime as we want fresh connections
-      connectionMetrics.totalConnections = loadedMetrics.totalConnections || 0;
-      connectionMetrics.totalDisconnections = loadedMetrics.totalDisconnections || 0;
-      connectionMetrics.averageConnectionDuration = loadedMetrics.averageConnectionDuration || 0;
-      connectionMetrics.longestConnection = loadedMetrics.longestConnection || 0;
-      connectionMetrics.shortestConnection = loadedMetrics.shortestConnection === Infinity ? Infinity : loadedMetrics.shortestConnection || Infinity;
-    }
-    if (historyData) {
-      connectionHistory.push(...JSON.parse(historyData));
-    }
-  } catch (error) {
-    errorLog('WebSocket', 'Error loading connection metrics', error);
-  }
-}
+// WebSocket metrics persistence removed - metrics reset on server restart
 
 function startConnectionMonitoring() {
   setInterval(() => {
@@ -13247,7 +13201,6 @@ function startConnectionMonitoring() {
       // Log connection stats every hour
       if (currentDuration % (60 * 60 * 1000) < 10000) { // Within 10 seconds of hour mark
         logConnectionStats();
-        saveConnectionMetrics(); // Save metrics every hour
       }
     }
   }, STANDARD_INTERVAL);
@@ -15049,8 +15002,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     const expiry = getExpiry(currentTask.bidDuration)
     const outbidOptions = currentTask.outbidOptions
 
-    // Log outbidOptions configuration for this task
-    debugLog('Counterbid', `[OS] ${task.contract.slug} | OutbidOptions | counterbid=${outbidOptions.counterbid} | outbid=${outbidOptions.outbid} | blurMargin=${outbidOptions.blurOutbidMargin} | osMargin=${outbidOptions.openseaOutbidMargin} | meMargin=${outbidOptions.magicedenOutbidMargin} | taskId=${task._id}`);
+    // OutbidOptions log removed - was logging identical config for EVERY counterbid event (83MB/day)
+    // These options don't change per event, already logged at task start
 
     // Early exit if counterbid disabled
     if (!outbidOptions.counterbid) {
@@ -23621,7 +23574,8 @@ async function refreshCollectionFloorInBackground(
     if (meBestOffer.status === 'fulfilled') state.bestOffers.magiceden = meBestOffer.value;
 
     state.lastFetched = Date.now();
-    debugLog('FloorCache', `Background refresh complete for ${key}`);
+    // Background refresh success log removed - was logging every 4 minutes per collection (15MB/day)
+    // Only failures are logged
   } catch (error) {
     debugLog('FloorCache', `Background refresh failed for ${key}: ${error}`);
   } finally {

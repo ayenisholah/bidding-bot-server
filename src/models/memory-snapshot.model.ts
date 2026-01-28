@@ -143,10 +143,6 @@ export interface IMemorySnapshot extends Document {
     categories: {
       bullMQMain: RedisKeyCategory;
       bullMQBlur: RedisKeyCategory;
-      loopLocks: RedisKeyCategory;
-      openseaCollection: RedisKeyCategory;
-      openseaTraits: RedisKeyCategory;
-      websocketMetrics: RedisKeyCategory;
       devPassword: RedisKeyCategory;
       other: RedisKeyCategory;
     };
@@ -325,10 +321,6 @@ const MemorySnapshotSchema = new Schema<IMemorySnapshot>(
       categories: {
         bullMQMain: { type: RedisKeyCategorySchema, required: true },
         bullMQBlur: { type: RedisKeyCategorySchema, required: true },
-        loopLocks: { type: RedisKeyCategorySchema, required: true },
-        openseaCollection: { type: RedisKeyCategorySchema, required: true },
-        openseaTraits: { type: RedisKeyCategorySchema, required: true },
-        websocketMetrics: { type: RedisKeyCategorySchema, required: true },
         devPassword: { type: RedisKeyCategorySchema, required: true },
         other: { type: RedisKeyCategorySchema, required: true }
       },

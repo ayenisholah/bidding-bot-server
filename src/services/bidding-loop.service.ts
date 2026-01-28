@@ -1,6 +1,5 @@
 import { ITask } from '../models/task.model';
 import { debugLog, errorLog, infoLog, warnLog } from '../utils/debug-file-logger';
-import { getRedisConnection } from '../utils/redis';
 
 /**
  * BiddingLoopService - Manages bidding loop execution and scheduling
@@ -42,9 +41,7 @@ class BiddingLoopService {
   private cleanupTaskResources: ((taskId: string, preserveWarnings?: boolean, preserveParentJobs?: boolean, preserveOrders?: boolean) => void) | null = null;
   private clearTaskTimers: ((taskId: string, marketplace?: string) => void) | null = null;
 
-  // Redis keys
-  private REDIS_KEY_NEXT_LOOP = 'nft-bot:next-loop:';
-  private REDIS_STATE_TTL = 86400; // 24 hours
+  // Redis keys removed - loops restart from current time on server restart
 
   /**
    * Initialize the bidding loop service with dependencies
@@ -622,16 +619,6 @@ class BiddingLoopService {
         `TIMER_SCHEDULED | taskId=${taskId} | marketplace=${marketplace || 'all'} | timerKey=${timerKey} | loopInterval=${loopInterval}s | nextFireAt=${nextLoopTime.toISOString()}`,
         { taskId, marketplace: mpKeyForLog, timerKey, loopInterval, nextLoopTime: nextLoopTime.toISOString() }
       );
-
-      // Persist nextLoopTime to Redis for crash recovery
-      if (marketplace) {
-        const redis = getRedisConnection();
-        redis.set(
-          `${this.REDIS_KEY_NEXT_LOOP}${taskId}:${marketplace}`,
-          nextLoopTime.getTime().toString(),
-          'EX', this.REDIS_STATE_TTL
-        ).catch(err => errorLog('Redis', `Failed to persist nextLoopTime for ${taskId}:${marketplace}: ${err instanceof Error ? err.message : err}`));
-      }
 
     } catch (error) {
       // If scheduling fails, clean up resources

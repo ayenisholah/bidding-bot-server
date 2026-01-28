@@ -107,9 +107,7 @@ class TokenTraitCache {
       const cached = this.hotCache.get(key);
       if (cached) {
         cacheStats.hits++;
-        debugLog('TokenTraitCache',
-          `CACHE_HIT | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId}`
-        );
+        // CACHE_HIT log removed - was generating 11.3M lines/day (1.2GB)
         return cached;
       }
 
