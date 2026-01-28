@@ -44,15 +44,16 @@ import { TaskStateManager } from "./utils/task-state-manager";
 import { safeGetJob, safeMarkJobAsProcessed } from "./utils/redis-job-fallback";
 import { safeTokenIdToString } from './utils/tokenId';
 
-import BidLogs from "./models/logs.model";
+import { logsCache, BidLogEntry } from './utils/logs-cache';
 import PQueue from "p-queue";
-import { taskScheduleCache } from "./utils/task-schedule-cache";
-import { taskRuntimeCache } from "./utils/task-runtime-cache";
 import { orderCache, CachedOrder } from "./utils/order-cache";
-import Approval from "./models/approval.model";
+import { marketplaceApprovalCache } from "./utils/marketplace-approval-cache";
 import { USDC, WETH } from "./utils/currencies";
 import axios from "axios";
 import { decryptPrivateKey, setPassword, getPassword, decryptPassword, recoverPasswordFromRedis, renewPasswordTTL, reEncryptWallet, clearDecryptedKeyCache, getDecryptedKeyCacheStats, clearDecryptedKey } from "./utils/crypto";
+import { getTokenTraitCacheStats } from './utils/token-trait-cache';
+import { getLogsCacheStats } from './utils/logs-cache';
+import { getMarketplaceApprovalCacheStats } from './utils/marketplace-approval-cache';
 import { logProcessStart, logProcessExit, logSignal, logLifecycleEvent, stopMemoryMonitor, getMemoryStats } from "./utils/process-lifecycle-logger";
 import { fetchWalletNFTs } from "./utils/nft";
 import WebSocketManager from "./utils/websocket-manager";
@@ -65,9 +66,11 @@ import { BullMQErrorFormatter } from "./utils/bullmq-error-formatter";
 import { apiDedup } from "./utils/api-dedup";
 import { tradingDisabledCache } from "./utils/trading-disabled-cache";
 import { IListing } from "./types/listing.types";
-import { BoundedCache } from "./utils/bounded-cache";
+import { LRUCache } from 'lru-cache';
+import { addIfNotExists } from './utils/lru-helpers';
 import { walletCache } from "./utils/wallet-cache";
 import { getCachedCollectionDetails, getCachedFloorPrice, invalidateCollection } from "./utils/collection-cache";
+import { convertBidDurationToHours } from "./utils/duration";
 import { taskCircuitBreaker } from "./utils/task-circuit-breaker";
 import { openseaFloorBreakerRegistry } from "./utils/circuit-breaker";
 import { blurRateLimiter } from "./utils/blur-rate-limiter";
@@ -137,7 +140,6 @@ import {
   incrementNoMarketplaceMatchCounter,
   incrementFilteredCounter,
   incrementOwnBidsDeduplicated,
-  syncAllActiveTaskStates,
   type BidCounts,
   type MarketplaceStatus
 } from "./state/global-state";
@@ -180,7 +182,6 @@ interface TaskStatusChange {
 const taskStatusHistory: { [taskId: string]: TaskStatusChange[] } = {};
 
 // Message idempotency tracking
-import { LRUCache } from 'lru-cache';
 
 // WebSocket message deduplication cache with automatic TTL
 // Kept at 100K max per user request (high safety buffer for burst scenarios)
@@ -195,13 +196,20 @@ const QUEUE_NAME = 'BIDDING_BOT';
 const BLUR_BIDDING_QUEUE = 'BLUR_BIDDING_QUEUE';
 const CLEAR_COOLDOWN = 5 * 60 * 1000; // 5 minutes cooldown between queue clears
 
-// Redis keys for crash detection and task recovery
+// LRU cache for graceful shutdown state (in-memory only, lost on crash)
+// Persists shutdown state within process lifecycle for graceful restart coordination
+const shutdownStateCache = new LRUCache<string, any>({
+  max: 10,
+  ttl: 24 * 60 * 60 * 1000, // 24 hours
+  updateAgeOnGet: false,
+});
+
+// Note: Redis keys below are no longer used - migrated to LRU caches
+// Kept as constants for backward compatibility and potential future use
 const REDIS_KEY_PREVIOUS_RUNNING_TASKS = 'nft-bot:previous-running-tasks';
 const REDIS_KEY_PREVIOUS_RUNNING_LISTINGS = 'nft-bot:previous-running-listings';
 const REDIS_KEY_SHUTDOWN_TIMESTAMP = 'nft-bot:shutdown-timestamp';
 const REDIS_KEY_SHUTDOWN_REASON = 'nft-bot:shutdown-reason';
-
-// Redis keys for task state persistence (crash recovery)
 const REDIS_KEY_TASK_STATUS = 'nft-bot:task-status:';        // + taskId
 const REDIS_KEY_LOOP_COUNT = 'nft-bot:loop-count:';          // + taskId
 const REDIS_KEY_TASK_STARTED = 'nft-bot:task-started:';      // + taskId
@@ -246,7 +254,10 @@ const seenOrderHashes = new LRUCache<string, boolean>({
 
 // Unified error log cache for deduplication - prevents log flooding from repeated errors
 // Key format: "{errorType}-{taskId}-{jobId}" or similar → timestamp
-const errorLogCache = new BoundedCache<string, number>(5000, 5000, 'errorLogCache'); // 5k items, 5 second TTL
+const errorLogCache = new LRUCache<string, boolean>({
+  max: 5000,
+  ttl: 5000 // 5 seconds
+});
 
 // =============================================================================
 // OUR WALLET ADDRESS TRACKING
@@ -260,10 +271,10 @@ const errorLogCache = new BoundedCache<string, number>(5000, 5000, 'errorLogCach
 // counterbidTrackingService imported from ./services/counterbid-tracking.service
 
 // Helper functions for seen items management
-function addSeenItem(cache: BoundedCache<string, number>, key: string): void {
+function addSeenItem(cache: LRUCache<string, number>, key: string): void {
   const now = Date.now();
   cache.set(key, now);
-  // BoundedCache handles cleanup automatically
+  // LRUCache handles cleanup automatically
 }
 
 // Note: Manual .delete() calls after queuing counterbids are intentional
@@ -971,7 +982,7 @@ const MAGICEDEN_MARKETPLACE = "0x9A1D00bEd7CD04BCDA516d721A596eb22Aac6834"
 const MAX_RETRIES: number = 5;
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 const OPENSEA_PROTOCOL_ADDRESS = "0x0000000000000068F116a894984e2DB1123eB395"
-const STANDARD_INTERVAL = 60000; // 60 seconds - standard interval for most timers
+const STANDARD_INTERVAL = 5000; // 5 seconds - standard interval for most timers
 const HEALTH_CHECK_INTERVAL = process.env.NODE_ENV === 'development' ? 5000 : 60000; // 5 seconds in dev, 60 seconds in prod
 // Initialize with default marketplaces - will be updated by WebSocket
 let enabledMarketplaces: string[] = ['opensea', 'magiceden', 'blur']
@@ -1250,9 +1261,6 @@ async function monitorHealth() {
 
       // Show cache details
       const cacheDetails = tradingDisabledCache.getCacheStats();
-      if (cacheDetails.oldestEntry) {
-        const ageMinutes = Math.floor((Date.now() - cacheDetails.oldestEntry) / 1000 / 60);
-      }
     }
 
     // No need to call updateAllBidRates() - tracker handles updates automatically
@@ -2120,13 +2128,12 @@ async function monitorQueueDrain() {
 
 /**
  * Detect if previous shutdown was graceful or a crash
- * Uses Redis flags to determine shutdown state
+ * Uses LRU cache to determine shutdown state (within process lifecycle)
  */
 async function detectPreviousShutdown(): Promise<'graceful' | 'crash' | 'first-start'> {
   try {
-    const redis = getRedisConnection();
-    const shutdownReason = await redis.get(REDIS_KEY_SHUTDOWN_REASON);
-    const shutdownTimestamp = await redis.get(REDIS_KEY_SHUTDOWN_TIMESTAMP);
+    const shutdownReason = shutdownStateCache.get('reason');
+    const shutdownTimestamp = shutdownStateCache.get('timestamp');
 
     if (!shutdownTimestamp) {
       return 'first-start';
@@ -2134,11 +2141,10 @@ async function detectPreviousShutdown(): Promise<'graceful' | 'crash' | 'first-s
 
     // Clear the shutdown reason flag immediately
     // If next startup doesn't see 'graceful', it knows it was a crash
-    await redis.del(REDIS_KEY_SHUTDOWN_REASON);
+    shutdownStateCache.delete('reason');
 
     if (shutdownReason === 'graceful') {
-      const timestamp = parseInt(shutdownTimestamp, 10);
-      const timeSinceShutdown = Date.now() - timestamp;
+      const timeSinceShutdown = Date.now() - shutdownTimestamp;
       debugLog('Startup', `Graceful shutdown detected | timeSince=${Math.round(timeSinceShutdown / 1000)}s`);
       return 'graceful';
     }
@@ -2153,13 +2159,12 @@ async function detectPreviousShutdown(): Promise<'graceful' | 'crash' | 'first-s
 }
 
 /**
- * Save running tasks and listings to Redis before shutdown
+ * Save running tasks and listings to LRU cache before shutdown
  * Called during graceful shutdown (SIGINT/SIGTERM)
+ * Note: Only persists within process lifecycle - graceful restart only works within same process
  */
 async function saveRunningTasksBeforeShutdown(): Promise<void> {
   try {
-    const redis = getRedisConnection();
-
     // Get all currently running tasks
     const runningTasks = await Task.find({ running: true }).select('_id').lean();
     const runningListings = await Listing.find({ running: true }).select('_id').lean();
@@ -2167,11 +2172,11 @@ async function saveRunningTasksBeforeShutdown(): Promise<void> {
     const taskIds = runningTasks.map(t => t._id.toString());
     const listingIds = runningListings.map(l => l._id.toString());
 
-    // Save to Redis (no TTL - we need these after restart)
-    await redis.set(REDIS_KEY_PREVIOUS_RUNNING_TASKS, JSON.stringify(taskIds));
-    await redis.set(REDIS_KEY_PREVIOUS_RUNNING_LISTINGS, JSON.stringify(listingIds));
-    await redis.set(REDIS_KEY_SHUTDOWN_TIMESTAMP, Date.now().toString());
-    await redis.set(REDIS_KEY_SHUTDOWN_REASON, 'graceful');
+    // Save to LRU cache (persists within process lifecycle)
+    shutdownStateCache.set('tasks', taskIds);
+    shutdownStateCache.set('listings', listingIds);
+    shutdownStateCache.set('timestamp', Date.now());
+    shutdownStateCache.set('reason', 'graceful');
 
     logLifecycleEvent('GRACEFUL_SHUTDOWN_TASKS_SAVED', {
       taskCount: taskIds.length,
@@ -2187,21 +2192,21 @@ async function saveRunningTasksBeforeShutdown(): Promise<void> {
 /**
  * Resume previously running tasks after crash recovery
  * Only called when password is available and crash was detected
+ * Note: Only works within same process lifecycle (LRU cache)
  */
 async function resumePreviouslyRunningTasks(): Promise<void> {
   try {
-    const redis = getRedisConnection();
-    const previousTaskIdsJson = await redis.get(REDIS_KEY_PREVIOUS_RUNNING_TASKS);
-    const previousListingIdsJson = await redis.get(REDIS_KEY_PREVIOUS_RUNNING_LISTINGS);
+    const previousTaskIds = shutdownStateCache.get('tasks');
+    const previousListingIds = shutdownStateCache.get('listings');
 
-    if (!previousTaskIdsJson && !previousListingIdsJson) {
+    if (!previousTaskIds && !previousListingIds) {
       debugLog('Startup', 'No previously running tasks/listings to resume');
       return;
     }
 
     // Resume tasks
-    if (previousTaskIdsJson) {
-      const taskIds = JSON.parse(previousTaskIdsJson) as string[];
+    if (previousTaskIds) {
+      const taskIds = previousTaskIds as string[];
       infoLog('Startup', `Resuming ${taskIds.length} previously running tasks after crash recovery`);
 
       for (const taskId of taskIds) {
@@ -2219,12 +2224,12 @@ async function resumePreviouslyRunningTasks(): Promise<void> {
       }
 
       // Clear the saved tasks
-      await redis.del(REDIS_KEY_PREVIOUS_RUNNING_TASKS);
+      shutdownStateCache.delete('tasks');
     }
 
     // Resume listings
-    if (previousListingIdsJson) {
-      const listingIds = JSON.parse(previousListingIdsJson) as string[];
+    if (previousListingIds) {
+      const listingIds = previousListingIds as string[];
       infoLog('Startup', `Resuming ${listingIds.length} previously running listings after crash recovery`);
 
       for (const listingId of listingIds) {
@@ -2242,12 +2247,12 @@ async function resumePreviouslyRunningTasks(): Promise<void> {
       }
 
       // Clear the saved listings
-      await redis.del(REDIS_KEY_PREVIOUS_RUNNING_LISTINGS);
+      shutdownStateCache.delete('listings');
     }
 
     logLifecycleEvent('CRASH_RECOVERY_TASKS_RESUMED', {
-      taskCount: previousTaskIdsJson ? JSON.parse(previousTaskIdsJson).length : 0,
-      listingCount: previousListingIdsJson ? JSON.parse(previousListingIdsJson).length : 0,
+      taskCount: previousTaskIds ? previousTaskIds.length : 0,
+      listingCount: previousListingIds ? previousListingIds.length : 0,
     });
 
   } catch (error) {
@@ -2359,7 +2364,6 @@ async function startServer() {
 
     // Initialize task state persistence service
     taskStatePersistenceService.initialize({
-      getRedisConnection,
       taskStatus,
       loopCounterStats,
       lastScheduleTimes,
@@ -2455,7 +2459,7 @@ async function startServer() {
         const taskId = getTaskIdForLog(job);
         // Deduplicate worker failure logs to prevent log flooding
         const workerErrorKey = `worker-failed-${taskId}-${job?.id}`;
-        if (errorLogCache.addIfNotExists(workerErrorKey, Date.now())) {
+        if (addIfNotExists(errorLogCache, workerErrorKey, true)) {
           errorLog('Worker', `Worker ${i + 1} - Task ${taskId} - Job ${job?.id} failed`, error);
         }
 
@@ -2684,7 +2688,7 @@ async function startServer() {
       const blurFailedTaskId = getTaskIdForLog(job);
       // Deduplicate Blur worker failure logs to prevent log flooding
       const blurErrorKey = `blur-worker-failed-${blurFailedTaskId}-${job?.id}`;
-      if (errorLogCache.addIfNotExists(blurErrorKey, Date.now())) {
+      if (addIfNotExists(errorLogCache, blurErrorKey, true)) {
         errorLog('BlurWorker', `Task ${blurFailedTaskId} - Job ${job?.id} failed`, error);
       }
 
@@ -3139,7 +3143,6 @@ async function startServer() {
 
     // Direct WebSocket broadcast manager initialized
     console.log('✅ Direct WebSocket broadcast manager initialized');
-    debugLog('STARTUP', 'BroadcastManager ready for WebSocket updates');
 
     // ===== START HTTP SERVER =====
     // All database operations complete - safe to accept connections
@@ -3346,21 +3349,13 @@ async function startServer() {
 
     // NOTE: All recovery intervals removed - recovery logic was causing issues
     // Removed: checkStuckTasks, verifyScheduledTaskTimers, cleanupStuckJobs,
-    //          taskScheduleWatchdog, queueingTaskWatchdog
-
-    // Start periodic cleanup of old TaskSchedule documents
-    const SCHEDULE_CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour
-    setInterval(cleanupOldSchedules, SCHEDULE_CLEANUP_INTERVAL);
+    //          taskScheduleWatchdog, queueingTaskWatchdog, cleanupOldSchedules
 
     // Start failed task start/stop retry loops
     const TASK_RETRY_INTERVAL = 5000; // 5 seconds
     setInterval(processFailedTaskRetries, TASK_RETRY_INTERVAL);
     setInterval(processFailedTaskStopRetries, TASK_RETRY_INTERVAL);
     debugLog('TaskRetry', 'Started failed task start/stop retry loops');
-
-    // Start periodic sync of task runtime state to MongoDB
-    const TASK_STATE_SYNC_INTERVAL = 30000; // 30 seconds
-    setInterval(() => syncAllActiveTaskStates(activeTasks), TASK_STATE_SYNC_INTERVAL);
 
     // Cleanup stale floor cache entries every 5 minutes
     const FLOOR_CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
@@ -3519,7 +3514,6 @@ process.on('SIGINT', async () => {
 
   // Cleanup broadcast manager
   broadcastManager.destroy();
-  debugLog('SHUTDOWN', 'BroadcastManager cleaned up');
 
   // Clean up all active tasks (memory leak fix)
   infoLog('Lifecycle', `Cleaning up ${activeTasks.size} active tasks...`);
@@ -3609,7 +3603,6 @@ process.on('SIGTERM', async () => {
 
   // Cleanup broadcast manager
   broadcastManager.destroy();
-  debugLog('SHUTDOWN', 'BroadcastManager cleaned up');
 
   // Clean up all active tasks (memory leak fix)
   infoLog('Lifecycle', `Cleaning up ${activeTasks.size} active tasks...`);
@@ -3960,15 +3953,6 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string, mark
       if (newStatus === 'QUEUEING') {
         taskStateUpdate['taskState.queuedAt'] = new Date();
       }
-
-      // Persist to Redis cache (fire-and-forget for performance)
-      taskRuntimeCache.updateTaskState(taskId, {
-        status: newStatus as 'STARTED' | 'QUEUEING' | 'RUNNING' | 'COMPLETED' | 'SCHEDULED' | 'STOPPED',
-        lastActivityAt: new Date().toISOString(),
-        ...(newStatus === 'QUEUEING' ? { queuedAt: new Date().toISOString() } : {})
-      }).catch(err => {
-        warnLog('TaskState', `Failed to persist task state to Redis | taskId=${taskId}`, err);
-      });
     }
 
     return true;
@@ -4146,19 +4130,6 @@ function cleanupTaskResources(taskId: string, preserveWarnings = false, preserve
   // Clear legacy execution ID (taskId without marketplace suffix)
   timerExecutionIds.delete(taskId);
 
-  // Cancel all pending Redis schedules for this task (fire-and-forget for performance)
-  taskScheduleCache.getTaskSchedules(taskId).then(async (schedules) => {
-    const pendingSchedules = schedules.filter(s => s.status === 'PENDING');
-    if (pendingSchedules.length > 0) {
-      for (const schedule of pendingSchedules) {
-        await taskScheduleCache.updateSchedule(taskId, schedule.marketplace, { status: 'CANCELLED' });
-      }
-      debugLog('Watchdog', `Cancelled ${pendingSchedules.length} pending schedule(s) for task ${taskId}`);
-    }
-  }).catch((err: Error) => {
-    debugLog('Watchdog', `Failed to cancel schedules for task ${taskId}: ${err.message}`);
-  });
-
   // TaskFlow logging: Timers cleared
   debugLog('TaskFlow',
     `CLEANUP_TIMERS | taskId=${taskId} | clearedTimeouts=${clearedTimeouts} | clearedCountdowns=${clearedCountdowns}`,
@@ -4176,14 +4147,6 @@ function cleanupTaskResources(taskId: string, preserveWarnings = false, preserve
   // Clear marketplace adding jobs flag
 
   // Delete task state from Redis cache (fire-and-forget for performance)
-  taskRuntimeCache.deleteState(taskId)
-    .then(() => {
-      debugLog('RuntimeState', `Deleted task runtime state from Redis for ${taskId}`);
-    })
-    .catch((err: Error) => {
-      debugLog('RuntimeState', `Failed to delete task state from Redis for ${taskId}: ${err.message}`);
-    });
-
   // Log final stats before clearing
   if (skipStats[taskId]) {
   }
@@ -5385,18 +5348,6 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
   const executionId = `${timerKey}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   timerExecutionIds.set(timerKey, executionId);
 
-  // Persist schedule to Redis for watchdog recovery (fire-and-forget for performance)
-  // The watchdog will pick up any schedules that don't fire due to memory issues
-  taskScheduleCache.setSchedule(taskId, marketplace || 'all', {
-    scheduledAt: new Date().toISOString(),
-    nextFireTime: nextLoopTime.toISOString(),
-    loopInterval,
-    status: 'PENDING',
-    executionId,
-    attempts: 0
-  }).catch((err: Error) => {
-    warnLog('Watchdog', `Failed to persist schedule to Redis: ${err.message}`, { taskId, marketplace: mpKeyForLog });
-  });
 
   try {
     // Schedule the next iteration with setTimeout
@@ -5572,17 +5523,7 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
               marketplaces.map(mp => executeMarketplaceBidLoop(taskId, mp))
             );
           }
-          // Mark Redis schedule as COMPLETED (fire-and-forget for performance)
-          taskScheduleCache.updateSchedule(taskId, marketplace || 'all', {
-            status: 'COMPLETED',
-            firedAt: new Date().toISOString()
-          }).catch(() => { });
         } else {
-          // Mark Redis schedule as CANCELLED since task is not running
-          taskScheduleCache.updateSchedule(taskId, marketplace || 'all', {
-            status: 'CANCELLED'
-          }).catch(() => { });
-
           warnLog('TimerOp',
             `TIMER_ABORTED | taskId=${taskId} | reason=task_not_running | running=${currentTask?.running}`,
             { taskId, marketplace: mpKeyForLog, reason: 'task_not_running', running: currentTask?.running }
@@ -5599,33 +5540,6 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
           { taskId, marketplace: mpKeyForLog, errorMessage, errorStack }
         );
 
-        // CRITICAL: Reschedule to ensure loop continues even on error
-        // The watchdog will pick this up if the in-memory timer fails
-        const currentTask = activeTasks.get(taskId);
-        if (currentTask?.running) {
-          const RETRY_DELAY_MS = 10000; // 10 seconds retry delay on error
-          const retryTime = new Date(Date.now() + RETRY_DELAY_MS);
-
-          // Create a new PENDING schedule in Redis for watchdog to pick up
-          taskScheduleCache.setSchedule(taskId, marketplace || 'all', {
-            scheduledAt: new Date().toISOString(),
-            nextFireTime: retryTime.toISOString(),
-            loopInterval: RETRY_DELAY_MS / 1000,
-            status: 'PENDING',
-            executionId: `${timerKey}-retry-${Date.now()}`,
-            attempts: 0
-          }).then(() => {
-            warnLog('TimerOp',
-              `TIMER_ERROR_RESCHEDULED | taskId=${taskId} | mp=${marketplace || 'all'} | retryIn=${RETRY_DELAY_MS}ms`,
-              { taskId, marketplace: mpKeyForLog, retryTime: retryTime.toISOString() }
-            );
-          }).catch((scheduleErr: Error) => {
-            errorLog('TimerOp',
-              `TIMER_ERROR_RESCHEDULE_FAILED | taskId=${taskId} | mp=${marketplace || 'all'}`,
-              scheduleErr
-            );
-          });
-        }
       } finally {
         // Always release the lock after execution
         releaseLoopSchedulingLock(lockKey);
@@ -6538,9 +6452,6 @@ async function publishTaskMetrics() {
     });
     lastGlobalHash = globalHash;
     broadcastManager.broadcastRaw(lastGlobalMessage);
-    if (forceUpdate) {
-      debugLog('TaskMetrics', `Forced global update | counter=${broadcastCounter}`);
-    }
   }
 
   // Per-task updates (with delta detection in BroadcastManager)
@@ -6571,7 +6482,6 @@ async function publishTaskMetrics() {
 
     // Delta detection + broadcast (only if changed)
     // Note: BroadcastManager has forceUpdate flag to temporarily disable delta detection
-    debugLog('TaskMetrics', `Publishing task update | taskId=${taskId} | hasData=${!!taskData.bidCounts} | forced=${forceUpdate}`);
     broadcastManager.broadcastTaskUpdate(taskId, taskData);
   }
 }
@@ -9431,9 +9341,6 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
   // Load state from Redis on first start (not restart)
   if (!isRestart && !activeTasks.has(taskId)) {
     debugLog('StartInternal', `REDIS_STATE_LOAD | taskId=${taskId} | isRestart=${isRestart} | inActiveTasks=${activeTasks.has(taskId)}`);
-    taskRuntimeCache.getOrCreate(taskId).catch((err: Error) => {
-      debugLog('RuntimeState', `Failed to preload state for ${taskId}: ${err.message}`);
-    });
   }
 
   // Clear marketplace availability cache to allow fresh checks on task start
@@ -9749,7 +9656,12 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
   }
 
   // Async bid log deletion - fire and forget
-  BidLogs.deleteMany({ taskId: task._id }).catch(() => { });
+  // Convert bidDuration to hours for cache TTL
+  const bidDurationHours = convertBidDurationToHours(task.bidDuration);
+  logsCache.setTaskTTL(taskId, bidDurationHours);
+  logsCache.deleteMany(taskId).catch((err: any) => {
+    warnLog('Task', `Failed to clear old logs for ${taskId}: ${err.message}`);
+  });
   debugLog('TaskInit', `OLD_LOGS_DELETION_STARTED | taskId=${taskId}`, { taskId });
 
   // Ensure wallet approvals for all selected marketplaces
@@ -15858,44 +15770,66 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         }
         let tokenTraitCounterbidsQueued = 0;
 
-        // --- 6.3.2.5: TOKEN-vs-TRAIT Defense - Parallel Trait Checks ---
-        // Check trait matches in parallel (saves 500ms-2s for 10+ tokens)
-        const traitCheckPromises = taskTokensToDefendForTrait.map(async (targetTokenId) => {
+        // --- 6.3.2.5: TOKEN-vs-TRAIT Defense - Sequential with Early Filtering ---
+        // OPTIMIZATION: Filter tokens BEFORE expensive trait checks to reduce API calls
+        // Order: 1) Check order cache (<1ms), 2) Check price (<1ms), 3) Check trait (50-300ms)
+        const tokensToDefend: string[] = [];
+        let skippedNoOrder = 0;
+        let skippedPriceTooLow = 0;
+        let checkedTraits = 0;
+
+        for (const targetTokenId of taskTokensToDefendForTrait) {
           try {
+            // STEP 1: Check order cache (fast - <1ms)
+            const existingTokenOrder = await getActiveOrder(task._id, OPENSEA, targetTokenId.toString());
+            if (!existingTokenOrder) {
+              skippedNoOrder++;
+              continue; // No order, skip trait check
+            }
+
+            // STEP 2: Check price comparison (fast - <1ms)
+            const ourTokenPrice = await orderCache.getOfferPrice(task._id.toString(), 'opensea', targetTokenId.toString()) || 0;
+            const ourTokenPriceEth = ourTokenPrice / decimalDivisor;
+
+            if (incomingBidAmountEth <= ourTokenPriceEth) {
+              skippedPriceTooLow++;
+              continue; // Incoming price doesn't beat our bid, skip trait check
+            }
+
+            // STEP 3: ONLY NOW check trait (expensive - 50-300ms on cache miss)
+            checkedTraits++;
             const hasMatchingTrait = await tokenHasTrait(
               task.contract.contractAddress,
               targetTokenId.toString(),
               trait.type,
               trait.value
             );
-            return { targetTokenId, hasMatchingTrait };
-          } catch (error) {
-            errorLog('OpenSea', `Error checking trait for token ${targetTokenId}`, error);
-            return { targetTokenId, hasMatchingTrait: false };
-          }
-        });
 
-        const traitCheckResults = await Promise.allSettled(traitCheckPromises);
-
-        // Process results and queue counterbids for matching tokens
-        for (const result of traitCheckResults) {
-          if (result.status === 'rejected') continue;
-
-          const { targetTokenId, hasMatchingTrait } = result.value;
-          if (!hasMatchingTrait) continue;
-
-          try {
-            // Only defend tokens where we have an existing bid
-            const existingTokenOrder = await getActiveOrder(task._id, OPENSEA, targetTokenId.toString());
-            if (!existingTokenOrder) {
-              continue; // Skip tokens we don't have bids on
+            if (hasMatchingTrait) {
+              tokensToDefend.push(targetTokenId);
             }
+          } catch (error) {
+            errorLog('OpenSea', `Error checking token ${targetTokenId} for TOKEN-vs-TRAIT defense`, error);
+          }
+        }
 
-            // Token has this trait - check if we need to counterbid
+        debugLog('OpenSeaBid',
+          `[TOKEN-vs-TRAIT FILTER] total=${taskTokensToDefendForTrait.length} | ` +
+          `skippedNoOrder=${skippedNoOrder} | skippedPrice=${skippedPriceTooLow} | ` +
+          `checkedTraits=${checkedTraits} | needDefense=${tokensToDefend.length}`
+        );
+
+        // Queue counterbids for tokens that passed all checks
+        for (const targetTokenId of tokensToDefend) {
+          try {
+            const existingTokenOrder = await getActiveOrder(task._id, OPENSEA, targetTokenId.toString());
+            if (!existingTokenOrder) continue; // Should never happen, already filtered
+
+            // Token has this trait - queue counterbid
             const ourTokenPrice = await orderCache.getOfferPrice(task._id.toString(), 'opensea', targetTokenId.toString()) || 0;
             const ourTokenPriceEth = ourTokenPrice / decimalDivisor;
 
-            // Only counterbid if incoming trait offer beats our token offer
+            // Only counterbid if incoming trait offer beats our token offer (double-check)
             if (incomingBidAmountEth > ourTokenPriceEth) {
               // SIMPLIFIED: Use incoming trait offer as base price
               const basePriceEth = roundedEth; // incoming trait offer
@@ -16282,77 +16216,117 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         }
         let tokenCollectionCounterbidsQueued = 0;
 
+        // --- 6.3.3.6: TOKEN-vs-COLLECTION Defense - Sequential with Early Filtering ---
+        // OPTIMIZATION: Filter tokens BEFORE expensive checks to reduce processing overhead
+        // Order: 1) Check already processed, 2) Check order cache (<1ms), 3) Check price (<1ms)
+        const tokensToDefendFromCollection: string[] = [];
+        let skippedAlreadyProcessed = 0;
+        let skippedNoOrder = 0;
+        let skippedPriceTooLow = 0;
+
         for (const targetTokenId of taskTokensToDefend) {
-          // Check if we already have an order for this token (already processed above)
-          const existingOrder = allTaskOrders.find(o => o.identifier === targetTokenId.toString());
-          if (existingOrder) {
-            // Already processed in the loop above
-            continue;
-          }
-
-          // Only defend tokens where we have an existing bid in orderCache
-          const existingTokenOrder = await orderCache.get(task._id.toString(), 'opensea', targetTokenId.toString());
-          if (!existingTokenOrder) {
-            continue; // Skip tokens we don't have bids on
-          }
-
-          // Check our current token offer price
-          const ourTokenPrice = await orderCache.getOfferPrice(task._id.toString(), 'opensea', targetTokenId.toString()) || 0;
-          const ourTokenPriceEth = ourTokenPrice / Math.pow(10, decimal);
-
-          // Only counterbid if incoming collection offer beats our token offer
-          if (incomingBidAmountEth > ourTokenPriceEth) {
-            // SIMPLIFIED: Use incoming collection offer as base price (no API fetch needed)
-            // We only need to bid above the collection offer to defend our token position
-            const basePriceEth = roundedEth; // incoming collection offer
-
-            // Calculate token counterbid price with crossTypeMarginMultiplier (from Phase 6.2.5)
-            const multipliedMargin = openseaOutbidMargin * marginMultiplier;
-            const tokenOfferPrice = Math.ceil((multipliedMargin * decimalDivisor) + (basePriceEth * decimalDivisor));
-            const tokenOfferPriceEth = tokenOfferPrice / Math.pow(10, decimal);
-
-            // Check max bid price constraint
-            if (maxBidPriceEth > 0 && tokenOfferPriceEth > maxBidPriceEth) {
-              continue;
+          try {
+            // STEP 1: Check if already processed in collection offer loop above (fast - O(n) array search)
+            const existingOrder = allTaskOrders.find(o => o.identifier === targetTokenId.toString());
+            if (existingOrder) {
+              skippedAlreadyProcessed++;
+              continue; // Already processed in the loop above
             }
 
-            const tokenOfferPriceForQueue = Math.ceil(Number(tokenOfferPrice));
+            // STEP 2: Check order cache (fast - <1ms)
+            const existingTokenOrder = await orderCache.get(task._id.toString(), 'opensea', targetTokenId.toString());
+            if (!existingTokenOrder) {
+              skippedNoOrder++;
+              continue; // Skip tokens we don't have bids on
+            }
 
-            // Create token counterbid job (deterministic jobId prevents duplicates)
-            const tokenBidData: IProcessOpenseaTokenBidData = {
-              _id: task._id,
-              address: task.wallet,
-              walletId: task.walletId,
-              slug: task.contract.slug,
-              offerPrice: tokenOfferPriceForQueue,
-              creatorFees,
-              enforceCreatorFee: collectionDetails.enforceCreatorFee,
-              floor_price: floor_price,
-              maxBidPriceEth: maxBidPriceEth,
-              asset: {
-                contractAddress: task.contract.contractAddress,
-                tokenId: parseInt(targetTokenId.toString())
-              },
-              outbidOptions: outbidOptions,
-              oldOrderHash: existingTokenOrder.orderHash  // For speed-first cancellation
-            };
+            // STEP 3: Check price comparison (fast - <1ms)
+            const ourTokenPrice = await orderCache.getOfferPrice(task._id.toString(), 'opensea', targetTokenId.toString()) || 0;
+            const ourTokenPriceEth = ourTokenPrice / Math.pow(10, decimal);
 
-            const counterbidJobId = `CB-${task._id}-os-token-${targetTokenId}-${tokenOfferPriceForQueue}`;
-            // Fire-and-forget: non-blocking queue operation (saves 50-75ms)
-            queue.add(OPENSEA_TOKEN_BID_COUNTERBID, tokenBidData, {
-              jobId: counterbidJobId,
-              removeOnComplete: true,
-              removeOnFail: true
-            }).then(() => {
-              tokenCollectionCounterbidsQueued++;
-              debugLog('Counterbid', `[OS] ${task.contract.slug} [${targetTokenId}] | Token-vs-Collection: QUEUED - defending token against collection offer at ${tokenOfferPriceEth} ETH`, { taskId: task._id.toString(), marketplace: 'opensea' });
-            }).catch((queueError: any) => {
-              if (queueError?.message?.includes('Job with this id already exists')) {
-                debugLog('Counterbid', `[OS] ${task.contract.slug} [${targetTokenId}] | Token-vs-Collection: SKIPPED - duplicate job (deterministic dedup)`, { taskId: task._id.toString(), marketplace: 'opensea' });
-              } else {
-                errorLog('Queue', `Failed to queue token counterbid for collection defense`, queueError);
+            if (incomingBidAmountEth <= ourTokenPriceEth) {
+              skippedPriceTooLow++;
+              continue; // Incoming price doesn't beat our bid
+            }
+
+            // Passed all checks - add to defense list
+            tokensToDefendFromCollection.push(targetTokenId);
+          } catch (error) {
+            errorLog('OpenSea', `Error checking token ${targetTokenId} for TOKEN-vs-COLLECTION defense`, error);
+          }
+        }
+
+        debugLog('OpenSeaBid',
+          `[TOKEN-vs-COLLECTION FILTER] total=${taskTokensToDefend.length} | ` +
+          `skippedProcessed=${skippedAlreadyProcessed} | skippedNoOrder=${skippedNoOrder} | ` +
+          `skippedPrice=${skippedPriceTooLow} | needDefense=${tokensToDefendFromCollection.length}`
+        );
+
+        // Queue counterbids for tokens that passed all checks
+        for (const targetTokenId of tokensToDefendFromCollection) {
+          try {
+            const existingTokenOrder = await orderCache.get(task._id.toString(), 'opensea', targetTokenId.toString());
+            if (!existingTokenOrder) continue; // Should never happen, already filtered
+
+            // Only counterbid if incoming collection offer beats our token offer (double-check)
+            const ourTokenPrice = await orderCache.getOfferPrice(task._id.toString(), 'opensea', targetTokenId.toString()) || 0;
+            const ourTokenPriceEth = ourTokenPrice / Math.pow(10, decimal);
+
+            if (incomingBidAmountEth > ourTokenPriceEth) {
+              // SIMPLIFIED: Use incoming collection offer as base price (no API fetch needed)
+              // We only need to bid above the collection offer to defend our token position
+              const basePriceEth = roundedEth; // incoming collection offer
+
+              // Calculate token counterbid price with crossTypeMarginMultiplier (from Phase 6.2.5)
+              const multipliedMargin = openseaOutbidMargin * marginMultiplier;
+              const tokenOfferPrice = Math.ceil((multipliedMargin * decimalDivisor) + (basePriceEth * decimalDivisor));
+              const tokenOfferPriceEth = tokenOfferPrice / Math.pow(10, decimal);
+
+              // Check max bid price constraint
+              if (maxBidPriceEth > 0 && tokenOfferPriceEth > maxBidPriceEth) {
+                continue;
               }
-            });
+
+              const tokenOfferPriceForQueue = Math.ceil(Number(tokenOfferPrice));
+
+              // Create token counterbid job (deterministic jobId prevents duplicates)
+              const tokenBidData: IProcessOpenseaTokenBidData = {
+                _id: task._id,
+                address: task.wallet,
+                walletId: task.walletId,
+                slug: task.contract.slug,
+                offerPrice: tokenOfferPriceForQueue,
+                creatorFees,
+                enforceCreatorFee: collectionDetails.enforceCreatorFee,
+                floor_price: floor_price,
+                maxBidPriceEth: maxBidPriceEth,
+                asset: {
+                  contractAddress: task.contract.contractAddress,
+                  tokenId: parseInt(targetTokenId.toString())
+                },
+                outbidOptions: outbidOptions,
+                oldOrderHash: existingTokenOrder.orderHash  // For speed-first cancellation
+              };
+
+              const counterbidJobId = `CB-${task._id}-os-token-${targetTokenId}-${tokenOfferPriceForQueue}`;
+              // Fire-and-forget: non-blocking queue operation (saves 50-75ms)
+              queue.add(OPENSEA_TOKEN_BID_COUNTERBID, tokenBidData, {
+                jobId: counterbidJobId,
+                removeOnComplete: true,
+                removeOnFail: true
+              }).then(() => {
+                tokenCollectionCounterbidsQueued++;
+                debugLog('Counterbid', `[OS] ${task.contract.slug} [${targetTokenId}] | Token-vs-Collection: QUEUED - defending token against collection offer at ${tokenOfferPriceEth} ETH`, { taskId: task._id.toString(), marketplace: 'opensea' });
+              }).catch((queueError: any) => {
+                if (queueError?.message?.includes('Job with this id already exists')) {
+                  debugLog('Counterbid', `[OS] ${task.contract.slug} [${targetTokenId}] | Token-vs-Collection: SKIPPED - duplicate job (deterministic dedup)`, { taskId: task._id.toString(), marketplace: 'opensea' });
+                } else {
+                  errorLog('Queue', `Failed to queue token counterbid for collection defense`, queueError);
+                }
+              });
+            }
+          } catch (error) {
+            errorLog('OpenSea', `Error processing token ${targetTokenId} for TOKEN-vs-COLLECTION defense`, error);
           }
         }
 
@@ -25175,7 +25149,10 @@ app.get('/api/health/system', async (req, res) => {
         }
       },
       caches: {
-        decryptedKeyCache: getDecryptedKeyCacheStats()
+        decryptedKeyCache: getDecryptedKeyCacheStats(),
+        tokenTraits: getTokenTraitCacheStats(),
+        logs: getLogsCacheStats(),
+        marketplaceApprovals: getMarketplaceApprovalCacheStats()
       },
       uptime: process.uptime(),
       memory: process.memoryUsage()
@@ -25461,6 +25438,27 @@ app.get('/api/debug/task-status/:taskId', (req, res) => {
     countdownTimerExists,
     timestamp: new Date().toISOString()
   });
+});
+
+// GET /api/task/:taskId/logs - Get logs for task
+app.get('/api/task/:taskId/logs', async (req, res) => {
+  try {
+    const { taskId } = req.params;
+
+    // Validate taskId
+    if (!taskId) {
+      return res.status(400).json({ error: 'taskId required' });
+    }
+
+    // Get logs from cache
+    const logs = await logsCache.find(taskId);
+
+    res.json(logs);
+
+  } catch (error) {
+    errorLog('API', `Failed to fetch logs for task ${req.params.taskId}`, error);
+    res.status(500).json({ error: 'Failed to fetch logs' });
+  }
 });
 
 // Circuit breaker status endpoint
@@ -27173,14 +27171,12 @@ async function approveMarketplace(marketplace: string, privateKey: string, curre
     // Create unique key for tracking approvals
     const approvalKey = `{${address}}:${marketplace.toLowerCase()}:${currency.toLowerCase()}`;
 
-    // Check if approval already exists in database
-    const existingApproval = await Approval.findOne({ address, currency });
+    // Check if approval already exists in cache
+    const marketplaceName = marketplace.toLowerCase() === SEAPORT.toLowerCase() ? 'opensea' : 'magiceden';
+    const hasApproval = await marketplaceApprovalCache.findOne(address, currency, marketplaceName);
 
-    // Return early if marketplace is already approved
-    if (marketplace.toLowerCase() === SEAPORT.toLowerCase() && existingApproval?.openseaApproval) {
-      return true;
-    }
-    if (marketplace.toLowerCase() === MAGICEDEN.toLowerCase() && existingApproval?.magicedenApproval) {
+    if (hasApproval) {
+      debugLog('Approval', `Wallet already approved | address=${address.slice(0, 10)}... | marketplace=${marketplaceName}`);
       return true;
     }
 
@@ -27217,20 +27213,8 @@ async function approveMarketplace(marketplace: string, privateKey: string, curre
           await tx.wait();
         });
 
-        // Update database with new approval
-        const updateData = marketplace.toLowerCase() === SEAPORT.toLowerCase()
-          ? { openseaApproval: true }
-          : { magicedenApproval: true };
-
-        if (!existingApproval) {
-          await Approval.create({
-            address,
-            currency: currency,
-            ...updateData
-          });
-        } else {
-          await Approval.updateOne({ address }, updateData);
-        }
+        // Update cache with new approval
+        await marketplaceApprovalCache.upsert(address, currency, marketplaceName);
 
         return true;
       } catch (error: any) {
@@ -27268,34 +27252,26 @@ export async function logBidError(taskId: string, title: string, message: string
       : message;
 
     // Try to find an existing log with the same taskId, messageHash, and marketplace
-    const existingLog = await BidLogs.findOne({
-      taskId,
-      messageHash,
-      marketplace: marketplace.toLowerCase(),
-    });
+    const existingLog = await logsCache.findOne(taskId, messageHash, marketplace.toLowerCase());
 
     if (existingLog) {
-      // Update timestamp of existing log
-      await BidLogs.updateOne(
-        { _id: existingLog._id },
-        {
-          timestamp: new Date(),
-          message: truncatedMessage // Update message in case it was truncated differently
-        }
-      );
-    } else {
-      // Create new log if no matching record exists
-      const bidLogs = new BidLogs({
-        taskId,
-        title,
-        message: truncatedMessage,
-        messageHash, // Store hash for future comparisons
-        timestamp: new Date(),
-        type: type,
-        marketplace: marketplace
-      });
-      await bidLogs.save();
+      // Update timestamp only
+      await logsCache.updateTimestamp(taskId, messageHash, marketplace.toLowerCase(), new Date());
+      return; // Skip duplicate
     }
+
+    // Create new log entry
+    const logEntry: BidLogEntry = {
+      taskId,
+      title,
+      message: truncatedMessage,
+      messageHash, // Store hash for future comparisons
+      type: type,
+      marketplace: marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur' | 'system',
+      timestamp: new Date()
+    };
+
+    await logsCache.upsert(logEntry);
   } catch (error) {
     errorLog('BidLogging', 'Error logging bid error', error);
   }
@@ -28565,27 +28541,6 @@ const taskCompletionTracking = new Map<string, number>();
 // NOTE: taskScheduleWatchdog() removed - recovery logic was causing issues
 // See docs/RECOVERY-FUNCTIONS.md for historical documentation
 
-/**
- * Cleanup old COMPLETED/CANCELLED TaskSchedule entries from Redis cache
- * Runs every hour, removes entries older than 24 hours
- */
-async function cleanupOldSchedules(): Promise<void> {
-  const RETENTION_HOURS = 24;
-  const maxAgeMs = RETENTION_HOURS * 60 * 60 * 1000;
-
-  try {
-    const deletedCount = await taskScheduleCache.cleanupOldSchedules(maxAgeMs);
-
-    if (deletedCount > 0) {
-      debugLog('Watchdog',
-        `CLEANUP | deleted=${deletedCount} | olderThan=${RETENTION_HOURS}h`,
-        { deletedCount, retentionHours: RETENTION_HOURS }
-      );
-    }
-  } catch (err) {
-    errorLog('Watchdog', 'Schedule cleanup failed', err);
-  }
-}
 
 // NOTE: queueingTaskWatchdog() and hasTaskJobsInQueue() removed - recovery logic was causing issues
 // See docs/RECOVERY-FUNCTIONS.md for historical documentation

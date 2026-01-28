@@ -18,14 +18,18 @@ import { convertBigNumbers } from "../../utils/bigNumberConverter";
 import { InsufficientBalanceError, MinimumPriceError, RateLimitError, InvalidRequestError } from "../errors";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
-import { BoundedCache } from "../../utils/bounded-cache";
+import { LRUCache } from 'lru-cache';
+import { addIfNotExists } from '../../utils/lru-helpers';
 import { apiDedup } from "../../utils/api-dedup";
 import { isCollectionUnavailable, markCollectionUnavailable } from "../../utils/marketplace-availability";
 import { safeTokenIdToString } from '../../utils/tokenId';
 
 // Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
 // This prevents log flooding when multiple parallel jobs hit the same balance check
-const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000, 'magicedenInsufficientBalanceLogCache');
+const insufficientBalanceLogCache = new LRUCache<string, boolean>({
+  max: 1000,
+  ttl: 5000 // 5 seconds
+});
 
 const YELLOW = '\x1b[33m';
 const GREEN = '\x1b[32m';
@@ -98,8 +102,11 @@ const BASIS_CONSTANTS: Record<number, number> = {
 };
 
 // Wallet cache to avoid recreating wallet instances
-// Migrated to BoundedCache to match OpenSea pattern and prevent unbounded growth
-const walletCache = new BoundedCache<string, Wallet>(50, 60 * 1000, 'magicedenWalletCache'); // 50 wallets, 60s TTL (match OpenSea)
+// Migrated to LRUCache to match OpenSea pattern and prevent unbounded growth
+const walletCache = new LRUCache<string, Wallet>({
+  max: 50,
+  ttl: 60 * 1000 // 1 minute (match OpenSea)
+});
 
 function getWallet(privateKey: string): Wallet {
   let wallet = walletCache.get(privateKey);
@@ -312,7 +319,7 @@ export async function bidOnMagiceden(
       );
       // Only log once per wallet/collection combo within 5 seconds to prevent log flooding
       const dedupeKey = `magiceden-${maker}-${slug}`;
-      if (insufficientBalanceLogCache.addIfNotExists(dedupeKey, Date.now())) {
+      if (addIfNotExists(insufficientBalanceLogCache, dedupeKey, true)) {
         errorLog('API', `[MagicEden] Insufficient balance for bid | taskId=${taskId} | wallet=${maker.slice(0, 10)}... | collection=${slug} | bidAmount=${offerPriceEth} ${currencySymbol} | available=${wethBalance}`, error);
       }
       throw error;

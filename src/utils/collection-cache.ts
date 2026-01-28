@@ -6,7 +6,7 @@ import { LRUCache } from 'lru-cache';
 import { getCollectionDetails } from '../functions/collection';
 import { getOpenseaFloor } from '../functions/collection';
 
-// Simple LRU caches - NO Redis, NO custom BoundedCache
+// Simple LRU caches - NO Redis
 const collectionDetailsCache = new LRUCache<string, any>({
   max: 500,                     // Max 500 collections
   ttl: 7 * 24 * 60 * 60 * 1000,     // 7 days TTL

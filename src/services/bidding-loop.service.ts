@@ -1,7 +1,6 @@
 import { ITask } from '../models/task.model';
 import { debugLog, errorLog, infoLog, warnLog } from '../utils/debug-file-logger';
 import { getRedisConnection } from '../utils/redis';
-import { taskScheduleCache } from '../utils/task-schedule-cache';
 
 /**
  * BiddingLoopService - Manages bidding loop execution and scheduling
@@ -408,18 +407,6 @@ class BiddingLoopService {
     const executionId = `${timerKey}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     this.timerExecutionIds.set(timerKey, executionId);
 
-    // Persist schedule to Redis for watchdog recovery (fire-and-forget for performance)
-    // The watchdog will pick up any schedules that don't fire due to memory issues
-    taskScheduleCache.setSchedule(taskId, marketplace || 'all', {
-      scheduledAt: new Date().toISOString(),
-      nextFireTime: nextLoopTime.toISOString(),
-      loopInterval,
-      status: 'PENDING',
-      executionId,
-      attempts: 0
-    }).catch((err: Error) => {
-      warnLog('Watchdog', `Failed to persist schedule to Redis: ${err.message}`, { taskId, marketplace: mpKeyForLog });
-    });
 
     try {
       // Schedule the next iteration with setTimeout
@@ -593,17 +580,7 @@ class BiddingLoopService {
                 marketplaces.map(mp => this.executeMarketplaceBidLoop(taskId, mp))
               );
             }
-            // Mark Redis schedule as COMPLETED (fire-and-forget for performance)
-            taskScheduleCache.updateSchedule(taskId, marketplace || 'all', {
-              status: 'COMPLETED',
-              firedAt: new Date().toISOString()
-            }).catch(() => { /* Ignore cache update errors */ });
           } else {
-            // Mark Redis schedule as CANCELLED since task is not running
-            taskScheduleCache.updateSchedule(taskId, marketplace || 'all', {
-              status: 'CANCELLED'
-            }).catch(() => { /* Ignore cache update errors */ });
-
             warnLog('TimerOp',
               `TIMER_ABORTED | taskId=${taskId} | reason=task_not_running | running=${currentTask?.running}`,
               { taskId, marketplace: mpKeyForLog, reason: 'task_not_running', running: currentTask?.running }
@@ -620,33 +597,6 @@ class BiddingLoopService {
             { taskId, marketplace: mpKeyForLog, errorMessage, errorStack }
           );
 
-          // CRITICAL: Reschedule to ensure loop continues even on error
-          // The watchdog will pick this up if the in-memory timer fails
-          const currentTask = this.activeTasks!.get(taskId);
-          if (currentTask?.running) {
-            const RETRY_DELAY_MS = 10000; // 10 seconds retry delay on error
-            const retryTime = new Date(Date.now() + RETRY_DELAY_MS);
-
-            // Create a new PENDING schedule in Redis for watchdog to pick up
-            taskScheduleCache.setSchedule(taskId, marketplace || 'all', {
-              scheduledAt: new Date().toISOString(),
-              nextFireTime: retryTime.toISOString(),
-              loopInterval: RETRY_DELAY_MS / 1000,
-              status: 'PENDING',
-              executionId: `${timerKey}-retry-${Date.now()}`,
-              attempts: 0
-            }).then(() => {
-              warnLog('TimerOp',
-                `TIMER_ERROR_RESCHEDULED | taskId=${taskId} | mp=${marketplace || 'all'} | retryIn=${RETRY_DELAY_MS}ms`,
-                { taskId, marketplace: mpKeyForLog, retryTime: retryTime.toISOString() }
-              );
-            }).catch((scheduleErr: Error) => {
-              errorLog('TimerOp',
-                `TIMER_ERROR_RESCHEDULE_FAILED | taskId=${taskId} | mp=${marketplace || 'all'}`,
-                scheduleErr
-              );
-            });
-          }
         } finally {
           // Always release the lock after execution
           this.releaseLoopSchedulingLock!(lockKey);

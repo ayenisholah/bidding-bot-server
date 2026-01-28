@@ -1,4 +1,5 @@
-import { BoundedCache } from './bounded-cache';
+import { LRUCache } from 'lru-cache';
+import { getCacheStats } from './lru-helpers';
 
 export interface TradingDisabledInfo {
   contractAddress: string;
@@ -15,12 +16,15 @@ export interface TradingDisabledInfo {
  * (Reduced from 24 hours as OpenSea restrictions typically lift within 2-12 hours)
  */
 class TradingDisabledCache {
-  private cache: BoundedCache<string, TradingDisabledInfo>;
+  private cache: LRUCache<string, TradingDisabledInfo>;
   private readonly CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours (optimal for retry window)
 
   constructor() {
-    // Max 5000 tokens with 24 hour TTL
-    this.cache = new BoundedCache<string, TradingDisabledInfo>(5000, this.CACHE_TTL, 'tradingDisabledCache');
+    // Max 5000 tokens with 4 hour TTL
+    this.cache = new LRUCache<string, TradingDisabledInfo>({
+      max: 5000,
+      ttl: this.CACHE_TTL
+    });
   }
 
   /**
@@ -57,7 +61,7 @@ class TradingDisabledCache {
    */
   getDisabledTokens(): TradingDisabledInfo[] {
     const results: TradingDisabledInfo[] = [];
-    for (const key of this.cache.keys()) {
+    for (const key of Array.from(this.cache.keys())) {
       const value = this.cache.get(key);
       if (value) {
         results.push(value);
@@ -94,7 +98,7 @@ class TradingDisabledCache {
    * Get detailed cache statistics
    */
   getCacheStats() {
-    return this.cache.getStats();
+    return getCacheStats(this.cache);
   }
 }
 

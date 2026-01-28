@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
+import { LRUCache } from 'lru-cache';
 import { ERC20_MIN_ABI } from '../constants';
-import { getRedisConnection } from './redis';
 import { errorLog, warnLog, debugLog } from './debug-file-logger';
 
 // Create primary provider with increased timeout (30 seconds)
@@ -22,12 +22,18 @@ interface ApprovalCacheEntry {
 }
 
 class ApprovalCache {
-  private cache = new Map<string, ApprovalCacheEntry>();
+  private cache: LRUCache<string, ApprovalCacheEntry>;
   private readonly CACHE_TTL = 24 * 60 * 60 * 1000; // 1 day
-  private readonly REDIS_PREFIX = '{approval}';
-  private readonly REDIS_TTL = 86400; // 1 day in seconds
-  private readonly MAX_CACHE_SIZE = 50000; // 50K wallet-token-marketplace combos (~7.5MB)
-  private cleanupInterval: NodeJS.Timeout | null = null;
+  private readonly MAX_CACHE_SIZE = 50000; // 50K wallet-token-marketplace combos (~66KB)
+
+  constructor() {
+    this.cache = new LRUCache<string, ApprovalCacheEntry>({
+      max: this.MAX_CACHE_SIZE,
+      ttl: this.CACHE_TTL,
+      updateAgeOnGet: true,
+      updateAgeOnHas: true,
+    });
+  }
 
   /**
    * Get cache key for wallet/marketplace/token combination
@@ -37,7 +43,7 @@ class ApprovalCache {
   }
 
   /**
-   * Check if approval exists (memory + Redis cache)
+   * Check if approval exists (LRU cache)
    */
   async isApproved(
     walletAddress: string,
@@ -47,26 +53,10 @@ class ApprovalCache {
   ): Promise<boolean> {
     const key = this.getCacheKey(walletAddress, marketplaceAddress, tokenAddress);
 
-    // Check memory cache first
-    const memoryCache = this.cache.get(key);
-    if (memoryCache && Date.now() - memoryCache.timestamp < this.CACHE_TTL) {
-      return BigInt(memoryCache.allowance) >= BigInt(requiredAmount);
-    }
-
-    // Check Redis cache
-    try {
-      const redis = getRedisConnection();
-      const redisKey = this.REDIS_PREFIX + key;
-      const redisData = await redis.get(redisKey);
-      if (redisData) {
-        const entry: ApprovalCacheEntry = JSON.parse(redisData);
-        // Update memory cache from Redis
-        this.cache.set(key, entry);
-        return BigInt(entry.allowance) >= BigInt(requiredAmount);
-      }
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      warnLog('Cache', `ApprovalCache: Redis read error | key=${key} | error=${errMsg}`);
+    // Check LRU cache
+    const cached = this.cache.get(key);
+    if (cached) {
+      return BigInt(cached.allowance) >= BigInt(requiredAmount);
     }
 
     // Cache miss - check on-chain with retry logic
@@ -156,34 +146,7 @@ class ApprovalCache {
     entry: ApprovalCacheEntry
   ): Promise<void> {
     const key = this.getCacheKey(walletAddress, marketplaceAddress, tokenAddress);
-
-    // Evict oldest if at capacity
-    if (this.cache.size >= this.MAX_CACHE_SIZE && !this.cache.has(key)) {
-      let oldestKey: string | null = null;
-      let oldestTime = Date.now();
-
-      for (const [k, v] of this.cache.entries()) {
-        if (v.timestamp < oldestTime) {
-          oldestTime = v.timestamp;
-          oldestKey = k;
-        }
-      }
-
-      if (oldestKey) this.cache.delete(oldestKey);
-    }
-
-    // Update memory cache
     this.cache.set(key, entry);
-
-    // Update Redis cache
-    try {
-      const redis = getRedisConnection();
-      const redisKey = this.REDIS_PREFIX + key;
-      await redis.setex(redisKey, this.REDIS_TTL, JSON.stringify(entry));
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      warnLog('Cache', `ApprovalCache: Failed to update Redis | key=${key} | error=${errMsg}`);
-    }
   }
 
   /**
@@ -191,19 +154,7 @@ class ApprovalCache {
    */
   async invalidate(walletAddress: string, marketplaceAddress: string, tokenAddress: string): Promise<void> {
     const key = this.getCacheKey(walletAddress, marketplaceAddress, tokenAddress);
-
-    // Remove from memory cache
     this.cache.delete(key);
-
-    // Remove from Redis
-    try {
-      const redis = getRedisConnection();
-      const redisKey = this.REDIS_PREFIX + key;
-      await redis.del(redisKey);
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      warnLog('Cache', `ApprovalCache: Failed to invalidate Redis | key=${key} | error=${errMsg}`);
-    }
   }
 
   /**
@@ -211,88 +162,20 @@ class ApprovalCache {
    */
   async clearAll(): Promise<void> {
     this.cache.clear();
-
-    try {
-      const redis = getRedisConnection();
-      const keys = await redis.keys(this.REDIS_PREFIX + '*');
-      if (keys.length > 0) {
-        await redis.del(...keys);
-      }
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      warnLog('Cache', `ApprovalCache: Failed to clear Redis cache | error=${errMsg}`);
-    }
   }
 
   /**
    * Get cache statistics
    */
-  getStats(): { memorySize: number; hits: number; misses: number; maxSize: number; ttl: number; estimatedMemoryBytes: number } {
+  getStats(): { size: number; maxSize: number; ttl: number; estimatedMemoryBytes: number } {
     return {
-      memorySize: this.cache.size,
+      size: this.cache.size,
       maxSize: this.MAX_CACHE_SIZE,
       ttl: this.CACHE_TTL,
-      hits: 0, // Would need to track this
-      misses: 0, // Would need to track this
-      estimatedMemoryBytes: this.cache.size * 150
+      estimatedMemoryBytes: this.cache.size * 66, // ~66 bytes per entry
     };
-  }
-
-  /**
-   * Start periodic cleanup (called automatically on module load)
-   */
-  startCleanup(): void {
-    if (this.cleanupInterval) return;
-
-    this.cleanupInterval = setInterval(() => {
-      this.cleanup();
-    }, 5 * 60 * 1000); // Every 5 minutes
-  }
-
-  /**
-   * Periodic cleanup: Remove expired entries and enforce LRU eviction
-   */
-  private cleanup(): void {
-    const now = Date.now();
-    let removedExpired = 0;
-    let removedLRU = 0;
-
-    // Remove expired entries (24h TTL)
-    for (const [key, entry] of this.cache.entries()) {
-      if (now - entry.timestamp > this.CACHE_TTL) {
-        this.cache.delete(key);
-        removedExpired++;
-      }
-    }
-
-    // LRU eviction if over limit
-    if (this.cache.size > this.MAX_CACHE_SIZE) {
-      const entries = Array.from(this.cache.entries())
-        .sort((a, b) => a[1].timestamp - b[1].timestamp); // Oldest first
-
-      const toRemove = this.cache.size - this.MAX_CACHE_SIZE;
-      for (let i = 0; i < toRemove; i++) {
-        this.cache.delete(entries[i][0]);
-        removedLRU++;
-      }
-    }
-
-    if (removedExpired + removedLRU > 0) {
-      debugLog('Cache', `ApprovalCache cleanup | expired=${removedExpired} | lru=${removedLRU} | remaining=${this.cache.size}`);
-    }
-  }
-
-  /**
-   * Destroy cleanup interval (for graceful shutdown)
-   */
-  destroy(): void {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
-      this.cleanupInterval = null;
-    }
   }
 }
 
 // Export singleton instance
 export const approvalCache = new ApprovalCache();
-approvalCache.startCleanup(); // Auto-start cleanup on module load

@@ -1,5 +1,5 @@
 import { LRUCache } from 'lru-cache';
-import { BoundedCache } from '../utils/bounded-cache';
+import { addIfNotExists } from '../utils/lru-helpers';
 import { debugLog } from '../utils/debug-file-logger';
 
 // Constants
@@ -34,20 +34,18 @@ interface MarketplaceTopOffer {
 class CounterbidTrackingService {
   // Track tokens with pending counterbid jobs
   // Key format: "counterbid-{taskId}-{marketplace}-{tokenId}" → PendingCounterbidEntry
-  private pendingCounterbids = new BoundedCache<string, PendingCounterbidEntry>(
-    10000,
-    60 * 1000, // 60 second TTL
-    'pendingCounterbids'
-  );
+  private pendingCounterbids = new LRUCache<string, PendingCounterbidEntry>({
+    max: 10000,
+    ttl: 60 * 1000 // 60 second TTL
+  });
 
   // Marketplace top offer cache
   // Key format: "{taskId}:{marketplace}:{identifier}"
   // Cache with 10k capacity and 5 min TTL (stale data auto-expires)
-  private marketplaceTopOfferCache = new BoundedCache<string, MarketplaceTopOffer>(
-    10000,
-    5 * 60 * 1000, // 5 min TTL
-    'marketplaceTopOfferCache'
-  );
+  private marketplaceTopOfferCache = new LRUCache<string, MarketplaceTopOffer>({
+    max: 10000,
+    ttl: 5 * 60 * 1000 // 5 min TTL
+  });
 
   // Index for efficient cleanup by taskId
   private topOfferTaskIndex = new Map<string, Set<string>>();
@@ -83,7 +81,7 @@ class CounterbidTrackingService {
     jobId: string
   ): boolean {
     const key = `counterbid-${taskId}-${marketplace}-${tokenId}`;
-    return this.pendingCounterbids.addIfNotExists(key, {
+    return addIfNotExists(this.pendingCounterbids, key, {
       timestamp: Date.now(),
       priceWei,
       jobId
@@ -285,10 +283,10 @@ class CounterbidTrackingService {
   /**
    * Add an item to a seen items cache
    */
-  public addSeenItem(cache: BoundedCache<string, number>, key: string): void {
+  public addSeenItem(cache: LRUCache<string, number>, key: string): void {
     const now = Date.now();
     cache.set(key, now);
-    // BoundedCache handles cleanup automatically
+    // LRUCache handles cleanup automatically
   }
 
   /**
@@ -297,8 +295,8 @@ class CounterbidTrackingService {
    * They allow immediate re-processing of the same order/bid if needed.
    * The TTL system acts as a safety net for any items not manually deleted.
    */
-  public hasSeenItem(cache: BoundedCache<string, number>, key: string): boolean {
-    // BoundedCache.get() handles expiry check automatically
+  public hasSeenItem(cache: LRUCache<string, number>, key: string): boolean {
+    // LRUCache.get() handles expiry check automatically
     return cache.has(key);
   }
 
@@ -306,9 +304,9 @@ class CounterbidTrackingService {
    * Atomic check-and-add for deduplication: returns true if this is a NEW item (not seen before),
    * false if it was already seen. This prevents race conditions in concurrent handlers.
    */
-  public markSeenIfNew(cache: BoundedCache<string, number>, key: string): boolean {
+  public markSeenIfNew(cache: LRUCache<string, number>, key: string): boolean {
     const now = Date.now();
-    return cache.addIfNotExists(key, now);
+    return addIfNotExists(cache, key, now);
   }
 
   // =============================================================================
@@ -344,7 +342,7 @@ class CounterbidTrackingService {
     completedAt: number,
     success: boolean,
     tokenId?: string,
-    traceId?: string
+    _traceId?: string
   ): void {
     const latency = completedAt - enqueuedAt;
     const sampleId = `exec-${this.executionSampleCounter++}`;

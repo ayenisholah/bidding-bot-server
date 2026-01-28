@@ -1,14 +1,15 @@
+import { LRUCache } from 'lru-cache';
 import { debugLog, errorLog } from '../utils/debug-file-logger';
 import type { ITask } from '../models/task.model';
 
 /**
  * Task State Persistence Service
  *
- * Manages task state persistence to Redis for crash recovery.
+ * Manages task state persistence to LRU caches for crash recovery.
  *
  * Responsibilities:
- * - Persisting task state (status, loop counts, schedules) to Redis
- * - Restoring task state from Redis on server restart
+ * - Persisting task state (status, loop counts, schedules) to LRU caches
+ * - Restoring task state from LRU caches on server restart (within process lifecycle)
  * - Recreating timers after server restart
  * - Task diagnostic logging for debugging stuck tasks
  *
@@ -17,21 +18,16 @@ import type { ITask } from '../models/task.model';
  * - Timer recreation with downtime detection
  * - Comprehensive diagnostic snapshots
  * - Graceful error handling
+ *
+ * Trade-off: State only persists within process lifecycle (lost on hard crash)
  */
 
-// Redis key prefixes
-const REDIS_KEY_TASK_STATUS = 'task-status:';
-const REDIS_KEY_LOOP_COUNT = 'loop-count:';
-const REDIS_KEY_LAST_SCHEDULE = 'last-schedule:';
-const REDIS_KEY_NEXT_LOOP = 'next-loop:';
-const REDIS_KEY_TASK_STARTED = 'task-started:';
-const REDIS_STATE_TTL = 86400; // 24 hours
+const STATE_TTL = 24 * 60 * 60 * 1000; // 24 hours in ms
 
 /**
  * Dependencies required by TaskStatePersistenceService
  */
 interface TaskStatePersistenceDependencies {
-  getRedisConnection: () => any;
   taskStatus: Record<string, any>;
   loopCounterStats: Record<string, any>;
   lastScheduleTimes: Map<string, number>;
@@ -47,6 +43,45 @@ interface TaskStatePersistenceDependencies {
 class TaskStatePersistenceService {
   private deps: TaskStatePersistenceDependencies | null = null;
 
+  // LRU caches for different state types
+  private taskStatusCache: LRUCache<string, any>;
+  private loopCountCache: LRUCache<string, any>;
+  private lastScheduleCache: LRUCache<string, number>;
+  private nextLoopCache: LRUCache<string, number>;
+  private taskStartedCache: LRUCache<string, number>;
+
+  constructor() {
+    this.taskStatusCache = new LRUCache<string, any>({
+      max: 500,
+      ttl: STATE_TTL,
+      updateAgeOnGet: true,
+    });
+
+    this.loopCountCache = new LRUCache<string, any>({
+      max: 500,
+      ttl: STATE_TTL,
+      updateAgeOnGet: true,
+    });
+
+    this.lastScheduleCache = new LRUCache<string, number>({
+      max: 500,
+      ttl: STATE_TTL,
+      updateAgeOnGet: true,
+    });
+
+    this.nextLoopCache = new LRUCache<string, number>({
+      max: 1500, // 500 tasks × 3 marketplaces
+      ttl: STATE_TTL,
+      updateAgeOnGet: true,
+    });
+
+    this.taskStartedCache = new LRUCache<string, number>({
+      max: 500,
+      ttl: STATE_TTL,
+      updateAgeOnGet: true,
+    });
+  }
+
   /**
    * Initialize the service with dependencies
    */
@@ -56,8 +91,8 @@ class TaskStatePersistenceService {
   }
 
   /**
-   * Persist task state to Redis for crash recovery.
-   * Called after setTaskStatus() to ensure state survives server restarts.
+   * Persist task state to LRU caches for crash recovery.
+   * Called after setTaskStatus() to ensure state survives within process lifecycle.
    */
   public async persistTaskState(taskId: string): Promise<void> {
     if (!this.deps) {
@@ -66,7 +101,6 @@ class TaskStatePersistenceService {
     }
 
     try {
-      const redis = this.deps.getRedisConnection();
       const status = this.deps.taskStatus[taskId];
       const loopCount = this.deps.loopCounterStats[taskId];
       const lastSchedule = this.deps.lastScheduleTimes.get(taskId);
@@ -74,31 +108,19 @@ class TaskStatePersistenceService {
 
       // Persist taskStatus
       if (status) {
-        await redis.set(
-          `${REDIS_KEY_TASK_STATUS}${taskId}`,
-          JSON.stringify(status),
-          'EX', REDIS_STATE_TTL
-        );
+        this.taskStatusCache.set(taskId, status);
         _persisted++;
       }
 
       // Persist loopCounterStats
       if (loopCount) {
-        await redis.set(
-          `${REDIS_KEY_LOOP_COUNT}${taskId}`,
-          JSON.stringify(loopCount),
-          'EX', REDIS_STATE_TTL
-        );
+        this.loopCountCache.set(taskId, loopCount);
         _persisted++;
       }
 
       // Persist lastScheduleTimes
       if (lastSchedule) {
-        await redis.set(
-          `${REDIS_KEY_LAST_SCHEDULE}${taskId}`,
-          lastSchedule.toString(),
-          'EX', REDIS_STATE_TTL
-        );
+        this.lastScheduleCache.set(taskId, lastSchedule);
         _persisted++;
       }
 
@@ -106,17 +128,13 @@ class TaskStatePersistenceService {
       if (status?.marketplaces) {
         for (const [mp, mpStatus] of Object.entries(status.marketplaces)) {
           if ((mpStatus as any)?.nextLoopTime) {
-            await redis.set(
-              `${REDIS_KEY_NEXT_LOOP}${taskId}:${mp}`,
-              (mpStatus as any).nextLoopTime.getTime().toString(),
-              'EX', REDIS_STATE_TTL
-            );
+            this.nextLoopCache.set(`${taskId}:${mp}`, (mpStatus as any).nextLoopTime.getTime());
             _persisted++;
           }
         }
       }
     } catch (err) {
-      errorLog('RedisState', `PERSIST_FAILED | taskId=${taskId}`, err, { taskId });
+      errorLog('LRUState', `PERSIST_FAILED | taskId=${taskId}`, err, { taskId });
     }
   }
 
@@ -166,7 +184,7 @@ class TaskStatePersistenceService {
   }
 
   /**
-   * Persist task start timestamp to Redis.
+   * Persist task start timestamp to LRU cache.
    * Called when a task first starts.
    */
   public async persistTaskStartTime(taskId: string): Promise<void> {
@@ -175,20 +193,16 @@ class TaskStatePersistenceService {
     }
 
     try {
-      const redis = this.deps.getRedisConnection();
-      await redis.set(
-        `${REDIS_KEY_TASK_STARTED}${taskId}`,
-        Date.now().toString(),
-        'EX', REDIS_STATE_TTL
-      );
+      this.taskStartedCache.set(taskId, Date.now());
     } catch (err) {
-      errorLog('Redis', `Failed to persist task start time for ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
+      errorLog('LRUCache', `Failed to persist task start time for ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
   /**
-   * Restore task state from Redis on startup.
+   * Restore task state from LRU caches on startup.
    * Called in fetchCurrentTasks() for tasks with running=true.
+   * Note: Only works within same process lifecycle.
    */
   public async restoreTaskState(taskId: string): Promise<boolean> {
     if (!this.deps) {
@@ -196,12 +210,9 @@ class TaskStatePersistenceService {
     }
 
     try {
-      const redis = this.deps.getRedisConnection();
-
       // Restore taskStatus
-      const statusJson = await redis.get(`${REDIS_KEY_TASK_STATUS}${taskId}`);
-      if (statusJson) {
-        const status = JSON.parse(statusJson);
+      const status = this.taskStatusCache.get(taskId);
+      if (status) {
         // Convert nextLoopTime strings back to Date objects
         if (status.marketplaces) {
           for (const mp of Object.keys(status.marketplaces)) {
@@ -211,33 +222,34 @@ class TaskStatePersistenceService {
           }
         }
         this.deps.taskStatus[taskId] = status;
-        debugLog('Recovery', `Restored taskStatus from Redis | taskId=${taskId}`);
+        debugLog('Recovery', `Restored taskStatus from LRU | taskId=${taskId}`);
       }
 
       // Restore loopCounterStats
-      const loopCountJson = await redis.get(`${REDIS_KEY_LOOP_COUNT}${taskId}`);
-      if (loopCountJson) {
-        this.deps.loopCounterStats[taskId] = JSON.parse(loopCountJson);
-        debugLog('Recovery', `Restored loopCounterStats from Redis | taskId=${taskId} | counts=${JSON.stringify(this.deps.loopCounterStats[taskId])}`);
+      const loopCount = this.loopCountCache.get(taskId);
+      if (loopCount) {
+        this.deps.loopCounterStats[taskId] = loopCount;
+        debugLog('Recovery', `Restored loopCounterStats from LRU | taskId=${taskId} | counts=${JSON.stringify(loopCount)}`);
       }
 
       // Restore lastScheduleTimes
-      const lastSchedule = await redis.get(`${REDIS_KEY_LAST_SCHEDULE}${taskId}`);
+      const lastSchedule = this.lastScheduleCache.get(taskId);
       if (lastSchedule) {
-        this.deps.lastScheduleTimes.set(taskId, parseInt(lastSchedule, 10));
-        debugLog('Recovery', `Restored lastScheduleTime from Redis | taskId=${taskId}`);
+        this.deps.lastScheduleTimes.set(taskId, lastSchedule);
+        debugLog('Recovery', `Restored lastScheduleTime from LRU | taskId=${taskId}`);
       }
 
-      return !!statusJson; // Return true if we found persisted state
+      return !!status; // Return true if we found persisted state
     } catch (err) {
-      errorLog('Redis', `Failed to restore task state for ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
+      errorLog('LRUCache', `Failed to restore task state for ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
   }
 
   /**
-   * Recreate timers from Redis after server restart.
+   * Recreate timers from LRU cache after server restart.
    * Checks if timers should have fired during downtime and starts task immediately if so.
+   * Note: Only works within same process lifecycle.
    */
   public async recreateTimersFromRedis(taskId: string, task: ITask): Promise<void> {
     if (!this.deps) {
@@ -245,15 +257,13 @@ class TaskStatePersistenceService {
     }
 
     try {
-      const redis = this.deps.getRedisConnection();
       const now = Date.now();
 
       for (const mp of task.selectedMarketplaces) {
         const mpLower = mp.toLowerCase();
-        const nextLoopTimeStr = await redis.get(`${REDIS_KEY_NEXT_LOOP}${taskId}:${mpLower}`);
+        const nextLoopTime = this.nextLoopCache.get(`${taskId}:${mpLower}`);
 
-        if (nextLoopTimeStr) {
-          const nextLoopTime = parseInt(nextLoopTimeStr, 10);
+        if (nextLoopTime) {
           const delay = Math.max(0, nextLoopTime - now);
 
           if (delay > 0) {
@@ -305,12 +315,12 @@ class TaskStatePersistenceService {
             await this.deps.startTask(task, true, mpLower);
           }
 
-          // Clean up the Redis key after processing
-          await redis.del(`${REDIS_KEY_NEXT_LOOP}${taskId}:${mpLower}`);
+          // Clean up the cache key after processing
+          this.nextLoopCache.delete(`${taskId}:${mpLower}`);
         }
       }
     } catch (err) {
-      errorLog('Redis', `Failed to recreate timers for ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
+      errorLog('LRUCache', `Failed to recreate timers for ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -319,7 +329,14 @@ class TaskStatePersistenceService {
    */
   public getStats() {
     return {
-      initialized: this.deps !== null
+      initialized: this.deps !== null,
+      caches: {
+        taskStatus: this.taskStatusCache.size,
+        loopCount: this.loopCountCache.size,
+        lastSchedule: this.lastScheduleCache.size,
+        nextLoop: this.nextLoopCache.size,
+        taskStarted: this.taskStartedCache.size,
+      }
     };
   }
 }

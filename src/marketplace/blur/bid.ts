@@ -16,13 +16,17 @@ import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
 import { apiDedup } from "../../utils/api-dedup";
 import { isCollectionUnavailable, markCollectionUnavailable } from "../../utils/marketplace-availability";
-import { BoundedCache } from "../../utils/bounded-cache";
+import { LRUCache } from 'lru-cache';
+import { addIfNotExists } from '../../utils/lru-helpers';
 
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
 
 // Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
 // This prevents log flooding when multiple parallel jobs hit the same balance check
-const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000, 'blurInsufficientBalanceLogCache');
+const insufficientBalanceLogCache = new LRUCache<string, boolean>({
+  max: 1000,
+  ttl: 5000 // 5 seconds
+});
 
 config()
 const BLUR_API_URL = `${BASE_URL}/blur`;
@@ -98,15 +102,6 @@ function addActiveRequest(taskId: string, controller: AbortController) {
     activeRequests.set(taskId, []);
   }
   activeRequests.get(taskId)?.push(controller);
-}
-
-function removeActiveRequest(taskId: string, controller: AbortController): void {
-  const controllers = activeRequests.get(taskId);
-  if (controllers) {
-    const index = controllers.indexOf(controller);
-    if (index > -1) controllers.splice(index, 1);
-    if (controllers.length === 0) activeRequests.delete(taskId);
-  }
 }
 
 export async function cancelBlurRequest(taskId: string): Promise<number> {
@@ -200,7 +195,7 @@ export async function bidOnBlur(
       );
       // Only log once per wallet/collection combo within 5 seconds to prevent log flooding
       const dedupeKey = `blur-${wallet_address}-${slug}`;
-      if (insufficientBalanceLogCache.addIfNotExists(dedupeKey, Date.now())) {
+      if (addIfNotExists(insufficientBalanceLogCache, dedupeKey, true)) {
         errorLog('Balance', `[Blur] Insufficient BETH balance | wallet=${wallet_address.slice(0, 10)}... | slug=${slug} | bid=${offerPriceEth} | available=${bethBalance}`, error);
       }
       throw error;
@@ -716,7 +711,7 @@ async function submitBidToBlur(
   cancelPayload: any,
   expiry = 900,
   traits?: string,
-  source: 'scheduled' | 'counterbid' = 'scheduled'
+  _source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
   const [parsedTaskId] = bidCount.split(":");
 

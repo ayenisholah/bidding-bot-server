@@ -1,16 +1,15 @@
-import { getRedisConnection, withRedisRetry } from './redis';
-import { errorLog, debugLog, infoLog } from './debug-file-logger';
+import { LRUCache } from 'lru-cache';
+import { debugLog, infoLog } from './debug-file-logger';
 
 /**
- * Redis-based cache for rarity token data
- * Replaces MongoDB RarityCacheModel with pure Redis implementation
+ * LRU-based cache for rarity token data
+ * Replaces MongoDB RarityCacheModel with pure LRU implementation
  *
- * Key structure: rarity:{collectionSlug}:{rarityCategory}
- * TTL: 1 day (86400 seconds)
+ * TTL: 1 day
  */
 
-const RARITY_KEY_PREFIX = 'rarity:';
-const RARITY_TTL_SECONDS = 1 * 24 * 60 * 60; // 1 days
+const RARITY_TTL = 1 * 24 * 60 * 60 * 1000; // 1 day in ms
+const MAX_CACHE_SIZE = 5000; // 5K entries (~5-10MB)
 
 export interface RarityData {
   tokenIds: string[];
@@ -19,11 +18,22 @@ export interface RarityData {
 }
 
 class RarityCache {
+  private cache: LRUCache<string, RarityData>;
+
+  constructor() {
+    this.cache = new LRUCache<string, RarityData>({
+      max: MAX_CACHE_SIZE,
+      ttl: RARITY_TTL,
+      updateAgeOnGet: true,
+      updateAgeOnHas: true,
+    });
+  }
+
   /**
-   * Generate Redis key for rarity data
+   * Generate cache key for rarity data
    */
   private getKey(collectionSlug: string, rarityCategory: string): string {
-    return `${RARITY_KEY_PREFIX}${collectionSlug.toLowerCase()}:${rarityCategory.toLowerCase()}`;
+    return `${collectionSlug.toLowerCase()}:${rarityCategory.toLowerCase()}`;
   }
 
   /**
@@ -31,24 +41,11 @@ class RarityCache {
    */
   async getRarityTokens(collectionSlug: string, rarityCategory: string): Promise<RarityData | null> {
     const key = this.getKey(collectionSlug, rarityCategory);
-
-    try {
-      const redis = getRedisConnection();
-      const result = await withRedisRetry(async () => {
-        return redis.get(key);
-      }, 'RarityCache.getRarityTokens');
-
-      if (!result) {
-        return null;
-      }
-
-      const data = JSON.parse(result) as RarityData;
+    const data = this.cache.get(key);
+    if (data) {
       debugLog('RarityCache', `GET | key=${key} | tokenCount=${data.tokenIds.length}`);
-      return data;
-    } catch (error) {
-      errorLog('RarityCache', `Failed to get rarity tokens | key=${key}`, error);
-      return null;
     }
+    return data || null;
   }
 
   /**
@@ -60,23 +57,14 @@ class RarityCache {
     tokenIds: string[]
   ): Promise<void> {
     const key = this.getKey(collectionSlug, rarityCategory);
+    const data: RarityData = {
+      tokenIds,
+      totalCount: tokenIds.length,
+      lastUpdated: new Date().toISOString(),
+    };
 
-    try {
-      const redis = getRedisConnection();
-      const data: RarityData = {
-        tokenIds,
-        totalCount: tokenIds.length,
-        lastUpdated: new Date().toISOString(),
-      };
-
-      await withRedisRetry(async () => {
-        await redis.setex(key, RARITY_TTL_SECONDS, JSON.stringify(data));
-      }, 'RarityCache.setRarityTokens');
-
-      debugLog('RarityCache', `SET | key=${key} | tokenCount=${tokenIds.length} | ttl=${RARITY_TTL_SECONDS}s`);
-    } catch (error) {
-      errorLog('RarityCache', `Failed to set rarity tokens | key=${key}`, error);
-    }
+    this.cache.set(key, data);
+    debugLog('RarityCache', `SET | key=${key} | tokenCount=${tokenIds.length}`);
   }
 
   /**
@@ -84,51 +72,28 @@ class RarityCache {
    */
   async deleteRarityTokens(collectionSlug: string, rarityCategory: string): Promise<void> {
     const key = this.getKey(collectionSlug, rarityCategory);
-
-    try {
-      const redis = getRedisConnection();
-      await withRedisRetry(async () => {
-        await redis.del(key);
-      }, 'RarityCache.deleteRarityTokens');
-
-      debugLog('RarityCache', `DELETE | key=${key}`);
-    } catch (error) {
-      errorLog('RarityCache', `Failed to delete rarity tokens | key=${key}`, error);
-    }
+    this.cache.delete(key);
+    debugLog('RarityCache', `DELETE | key=${key}`);
   }
 
   /**
    * Delete all rarity data for a collection (all categories)
    */
   async deleteCollection(collectionSlug: string): Promise<number> {
-    const pattern = `${RARITY_KEY_PREFIX}${collectionSlug.toLowerCase()}:*`;
+    const prefix = `${collectionSlug.toLowerCase()}:`;
+    let deletedCount = 0;
 
-    try {
-      const redis = getRedisConnection();
-      let deletedCount = 0;
-
-      await withRedisRetry(async () => {
-        // Use SCAN to find all keys matching the pattern
-        let cursor = '0';
-        const keysToDelete: string[] = [];
-
-        do {
-          const [newCursor, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
-          cursor = newCursor;
-          keysToDelete.push(...keys);
-        } while (cursor !== '0');
-
-        if (keysToDelete.length > 0) {
-          deletedCount = await redis.del(...keysToDelete);
-        }
-      }, 'RarityCache.deleteCollection');
-
-      infoLog('RarityCache', `DELETE_COLLECTION | slug=${collectionSlug} | deletedKeys=${deletedCount}`);
-      return deletedCount;
-    } catch (error) {
-      errorLog('RarityCache', `Failed to delete collection rarity data | slug=${collectionSlug}`, error);
-      return 0;
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(prefix)) {
+        this.cache.delete(key);
+        deletedCount++;
+      }
     }
+
+    if (deletedCount > 0) {
+      infoLog('RarityCache', `DELETE_COLLECTION | slug=${collectionSlug} | deletedKeys=${deletedCount}`);
+    }
+    return deletedCount;
   }
 
   /**
@@ -136,37 +101,22 @@ class RarityCache {
    */
   async exists(collectionSlug: string, rarityCategory: string): Promise<boolean> {
     const key = this.getKey(collectionSlug, rarityCategory);
-
-    try {
-      const redis = getRedisConnection();
-      const result = await withRedisRetry(async () => {
-        return redis.exists(key);
-      }, 'RarityCache.exists');
-
-      return result === 1;
-    } catch (error) {
-      errorLog('RarityCache', `Failed to check existence | key=${key}`, error);
-      return false;
-    }
+    return this.cache.has(key);
   }
 
   /**
-   * Get TTL remaining for a cache entry
+   * Get remaining TTL for a cache entry (approximation)
    */
   async getTTL(collectionSlug: string, rarityCategory: string): Promise<number> {
     const key = this.getKey(collectionSlug, rarityCategory);
+    const data = this.cache.get(key);
 
-    try {
-      const redis = getRedisConnection();
-      const ttl = await withRedisRetry(async () => {
-        return redis.ttl(key);
-      }, 'RarityCache.getTTL');
-
-      return ttl ?? -1;
-    } catch (error) {
-      errorLog('RarityCache', `Failed to get TTL | key=${key}`, error);
+    if (!data) {
       return -1;
     }
+
+    // LRU cache doesn't expose getRemainingTTL, so return full TTL if exists
+    return RARITY_TTL / 1000; // Return in seconds for backward compatibility
   }
 }
 

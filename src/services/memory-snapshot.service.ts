@@ -282,7 +282,7 @@ class MemorySnapshotService {
         name: 'TokenTraitCache',
         size: tokenTraitStats.size,
         maxSize: tokenTraitStats.maxSize,
-        ttl: tokenTraitStats.ttl,
+        ttl: 24 * 60 * 60 * 1000, // 24 hours in ms
         estimatedMemoryBytes: tokenTraitStats.size * 200 // Rough estimate
       });
 
@@ -310,7 +310,7 @@ class MemorySnapshotService {
         name: 'TradingDisabledCache',
         size: tradingDisabledStats.total,
         maxSize: tradingDisabledCacheStats.maxSize,
-        ttl: tradingDisabledCacheStats.ttl,
+        ttl: tradingDisabledCacheStats.ttl || 0,
         estimatedMemoryBytes: tradingDisabledStats.total * 50
       });
 
@@ -320,7 +320,7 @@ class MemorySnapshotService {
         name: 'ListingPriceCache',
         size: listingPriceStats.memoryCacheSize,
         maxSize: listingPriceStats.memoryCacheStats.maxSize,
-        ttl: listingPriceStats.memoryCacheStats.ttl,
+        ttl: listingPriceStats.memoryCacheStats.ttl || 0,
         estimatedMemoryBytes: listingPriceStats.memoryCacheSize * 150
       });
 
@@ -337,10 +337,10 @@ class MemorySnapshotService {
       const approvalStats = approvalCache.getStats();
       caches.push({
         name: 'ApprovalCache',
-        size: approvalStats.memorySize,
-        maxSize: -1, // Unbounded
-        ttl: 24 * 60 * 60 * 1000, // 24 hours
-        estimatedMemoryBytes: approvalStats.memorySize * 100
+        size: approvalStats.size,
+        maxSize: approvalStats.maxSize,
+        ttl: approvalStats.ttl,
+        estimatedMemoryBytes: approvalStats.estimatedMemoryBytes
       });
     } catch (error) {
       errorLog('MemorySnapshot', 'Error collecting cache stats', error);

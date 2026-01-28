@@ -23,13 +23,16 @@ import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
 import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
 import { apiDedup } from "../../utils/api-dedup";
 import { MAX_PAIN_OVERRIDE_ADDRESS, MAX_PAIN_SLUG, MAX_PAIN_TOKEN_OVERRIDES } from "../../maxPainOverrides";
-import { BoundedCache } from "../../utils/bounded-cache";
 import { LRUCache } from 'lru-cache';
+import { addIfNotExists } from '../../utils/lru-helpers';
 import { safeTokenIdToString } from '../../utils/tokenId';
 
 // Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
 // This prevents log flooding when multiple parallel jobs hit the same balance check
-const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000, 'openseaInsufficientBalanceLogCache');
+const insufficientBalanceLogCache = new LRUCache<string, boolean>({
+  max: 1000,
+  ttl: 5000 // 5 seconds
+});
 
 // LRU-only caches for performance-critical hot paths (< 1ms access vs 10-20ms Redis)
 // These caches use memory-only storage for fastest possible access during counterbidding
@@ -196,7 +199,10 @@ function ceilDiv(numerator: bigint, denominator: bigint): bigint {
 // Wallet cache to avoid recreating wallet instances
 // Uses hashed private key as cache key for security (never store plaintext keys as map keys)
 // 60-second TTL to limit exposure window if memory is compromised
-const walletCache = new BoundedCache<string, Wallet>(50, 60 * 1000, 'openseaWalletCache');
+const walletCache = new LRUCache<string, Wallet>({
+  max: 50,
+  ttl: 60 * 1000 // 1 minute
+});
 
 function hashPrivateKey(privateKey: string): string {
   return crypto.createHash('sha256').update(privateKey).digest('hex');
@@ -291,7 +297,7 @@ export async function cancelOpenseaRequest(taskId: string): Promise<number> {
 
 // ============================================================================
 // Caching infrastructure for multi-contract collection resolution
-// multiContractSlugCache: In-memory BoundedCache (rarely changes, 500 collections max)
+// multiContractSlugCache: In-memory LRU (rarely changes, 500 collections max)
 // contractMapCache: Redis-backed (expensive GraphQL queries, shared across instances)
 const contractMapPromises = new Map<string, Promise<Record<string, string>>>();
 
@@ -659,7 +665,7 @@ export async function bidOnOpensea(
           );
           // Only log once per wallet/collection combo within 5 seconds to prevent log flooding
           const dedupeKey = `opensea-${wallet_address}-${slug}`;
-          if (insufficientBalanceLogCache.addIfNotExists(dedupeKey, Date.now())) {
+          if (addIfNotExists(insufficientBalanceLogCache, dedupeKey, true)) {
             errorLog('API', `[OpenSea] Insufficient balance for bid | taskId=${taskId} | wallet=${wallet_address.slice(0, 10)}... | collection=${slug} | bidAmount=${offerPriceEthFinal} ${currencySymbol} | available=${wethBalance}`, error);
           }
           throw error;

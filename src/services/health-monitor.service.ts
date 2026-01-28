@@ -240,13 +240,6 @@ class HealthMonitorService {
         Object.entries(disabledStats.byMarketplace).forEach(([_marketplace, _count]) => {
           // Trading disabled stats logging (if needed)
         });
-
-        // Show cache details
-        const cacheDetails = tradingDisabledCache.getCacheStats();
-        if (cacheDetails.oldestEntry) {
-          const _ageMinutes = Math.floor((Date.now() - cacheDetails.oldestEntry) / 1000 / 60);
-          // Cache age logging (if needed)
-        }
       }
 
       // No need to call updateAllBidRates() - tracker handles updates automatically

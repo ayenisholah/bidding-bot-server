@@ -4,7 +4,6 @@
  */
 
 import { Queue } from "bullmq";
-import { taskRuntimeCache } from "../utils/task-runtime-cache";
 import { debugLog, warnLog, errorLog } from "../utils/debug-file-logger";
 import { LRUCache } from 'lru-cache';
 
@@ -116,13 +115,13 @@ export const bidStats: BidCounts = {};
 export const ownBidCounts: { [marketplace: string]: number } = {};
 
 // Track processed own bid hashes with 60-second TTL (matches OS2 reconnection window + Triple HA dedup)
-// Uses LRUCache with automatic TTL expiration and O(1) eviction (more efficient than BoundedCache)
+// Uses LRUCache with automatic TTL expiration and O(1) eviction
 // Duplicates arrive within 0-60 seconds (Triple HA + OS2 reconnection)
 // Kept at 100K max per user request (high safety buffer for burst scenarios)
 export const processedOwnBids = new LRUCache<string, boolean>({
   max: 100000,             // Kept at 100K for extra safety during burst traffic
   ttl: 60 * 1000,          // 60-second TTL
-  updateAgeOnGet: false,   // Don't reset TTL on reads (matches BoundedCache behavior)
+  updateAgeOnGet: false,   // Don't reset TTL on reads
   allowStale: false,       // Never return expired entries
 });
 
@@ -267,79 +266,13 @@ export async function addBulkWithRetry(
 }
 
 // ============================================
-// TASK STATE REDIS PERSISTENCE
+// TASK STATE REDIS PERSISTENCE (REMOVED)
 // ============================================
-
-export async function syncTaskStateToRedis(taskId: string): Promise<void> {
-  try {
-    await taskRuntimeCache.setState(taskId, {
-      bidStats: bidStats[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
-      skipStats: skipStats[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
-      errorStats: errorStats[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
-      floorPrices: floorPrices[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
-      bestOffers: bestOffers[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
-      warningBids: warningBids[taskId] || { opensea: false, magiceden: false, blur: false },
-    });
-  } catch (err) {
-    debugLog('RuntimeState', `Failed to sync task ${taskId} to Redis: ${err instanceof Error ? err.message : err}`);
-  }
-}
-
-export async function loadTaskStateFromRedis(taskId: string): Promise<void> {
-  try {
-    const data = await taskRuntimeCache.getState(taskId);
-
-    if (data) {
-      if (data.bidStats) bidStats[taskId] = { ...data.bidStats };
-      if (data.skipStats) skipStats[taskId] = { ...data.skipStats };
-      if (data.errorStats) errorStats[taskId] = { ...data.errorStats };
-      if (data.floorPrices) floorPrices[taskId] = { ...data.floorPrices };
-      if (data.bestOffers) bestOffers[taskId] = { ...data.bestOffers };
-      if (data.warningBids) warningBids[taskId] = { ...data.warningBids };
-
-      debugLog('RuntimeState', `Loaded state from Redis for task ${taskId}`);
-    }
-  } catch (err) {
-    debugLog('RuntimeState', `Failed to load task ${taskId} from Redis: ${err instanceof Error ? err.message : err}`);
-  }
-}
-
-export async function deleteTaskStateFromRedis(taskId: string): Promise<void> {
-  try {
-    await taskRuntimeCache.deleteState(taskId);
-  } catch (err) {
-    debugLog('RuntimeState', `Failed to delete task ${taskId} from Redis: ${err instanceof Error ? err.message : err}`);
-  }
-}
-
-export async function syncAllActiveTaskStates(activeTasks: Map<string, any>): Promise<void> {
-  const taskIds = Array.from(activeTasks.keys());
-  if (taskIds.length === 0) return;
-
-  let successCount = 0;
-  const errors: string[] = [];
-
-  await Promise.all(taskIds.map(async (taskId) => {
-    try {
-      await taskRuntimeCache.setState(taskId, {
-        bidStats: bidStats[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
-        skipStats: skipStats[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
-        errorStats: errorStats[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
-        floorPrices: floorPrices[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
-        bestOffers: bestOffers[taskId] || { opensea: 0, magiceden: 0, blur: 0 },
-        warningBids: warningBids[taskId] || { opensea: false, magiceden: false, blur: false },
-      });
-      successCount++;
-    } catch (err) {
-      errors.push(`${taskId}: ${err instanceof Error ? err.message : err}`);
-    }
-  }));
-
-  if (successCount > 0) {
-    debugLog('RuntimeState', `Synced ${successCount} task states to Redis`);
-  }
-  if (errors.length > 0) {
-    warnLog('RuntimeState', `Failed to sync ${errors.length} task states: ${errors.slice(0, 3).join(', ')}${errors.length > 3 ? '...' : ''}`);
-  }
-}
+// The following functions were removed as part of task-runtime-cache.ts deletion:
+// - syncTaskStateToRedis(taskId: string)
+// - loadTaskStateFromRedis(taskId: string)
+// - deleteTaskStateFromRedis(taskId: string)
+// - syncAllActiveTaskStates(activeTasks: Map<string, any>)
+//
+// These functions provided task state persistence which is no longer needed.
 

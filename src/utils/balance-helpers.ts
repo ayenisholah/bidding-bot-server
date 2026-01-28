@@ -3,11 +3,15 @@
  * Functions for detecting, parsing, and handling insufficient balance errors
  */
 
-import { BoundedCache } from "./bounded-cache";
+import { LRUCache } from 'lru-cache';
+import { addIfNotExists } from './lru-helpers';
 import { warnLog, debugLog } from "./debug-file-logger";
 
 // Track logged balance errors to prevent flooding (1k items, 30 min TTL)
-const loggedBalanceErrors = new BoundedCache<string, number>(1000, 30 * 60 * 1000, 'loggedBalanceErrors');
+const loggedBalanceErrors = new LRUCache<string, boolean>({
+  max: 1000,
+  ttl: 30 * 60 * 1000 // 30 minutes
+});
 
 /**
  * OpenSea balance error pattern:
@@ -184,7 +188,7 @@ export async function handleInsufficientBalanceError(
  */
 export function shouldLogBalanceError(taskId: string, marketplace: string): boolean {
   const key = `balance-${taskId}-${marketplace.toLowerCase()}`;
-  return loggedBalanceErrors.addIfNotExists(key, Date.now());
+  return addIfNotExists(loggedBalanceErrors, key, true);
 }
 
 /**

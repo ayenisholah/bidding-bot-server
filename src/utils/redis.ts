@@ -189,6 +189,7 @@ export const createBullMQConnection = async (identifier?: string): Promise<Redis
   if (needsBlockingConfig) {
     // console.log(`[Redis] ${connectionId} is a ${isQueueEvents ? 'queue events' : 'worker'} connection - using blocking command configuration`);
   }
+  
 
   try {
     const { host, port } = getRedisConfig();

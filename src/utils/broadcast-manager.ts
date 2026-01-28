@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { BroadcastDeltaTracker } from './broadcast-delta-tracker';
-import { debugLog } from './debug-file-logger';
+import { errorLog } from './debug-file-logger';
 
 /**
  * Client connection metadata
@@ -128,9 +128,6 @@ export class BroadcastManager {
       }
     }
 
-    // Always log subscriber count
-    debugLog('BroadcastManager', `Subscriber check | taskId=${taskId} | count=${subscriberCount}`);
-
     if (subscriberCount === 0) {
       // Only warn if clients exist but aren't subscribed to this specific task
       // If no clients are connected at all, this is expected (e.g., during server startup)
@@ -160,7 +157,7 @@ export class BroadcastManager {
         try {
           ws.send(message);
         } catch (error) {
-          debugLog('BroadcastManager', `Send failed | taskId=${taskId} | error=${error}`);
+          errorLog('BroadcastManager', 'Failed to send message to client', error);
         }
       }
     }
@@ -181,7 +178,7 @@ export class BroadcastManager {
         try {
           ws.send(message);
         } catch (error) {
-          debugLog('BroadcastManager', `Global send failed | error=${error}`);
+          errorLog('BroadcastManager', 'Failed to send global update to client', error);
         }
       }
     }
@@ -198,7 +195,7 @@ export class BroadcastManager {
           ws.send(message);
           successCount++;
         } catch (error) {
-          debugLog('BroadcastManager', `Raw send failed | error=${error}`);
+          errorLog('BroadcastManager', 'Failed to send raw message to client', error);
         }
       }
     }

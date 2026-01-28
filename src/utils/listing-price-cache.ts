@@ -1,4 +1,5 @@
-import { BoundedCache } from './bounded-cache';
+import { LRUCache } from 'lru-cache';
+import { getCacheStats } from './lru-helpers';
 import redisClient, { getRedisConnection, withRedisRetry } from './redis';
 import { errorLog, warnLog } from './debug-file-logger';
 
@@ -11,12 +12,15 @@ interface ListingPriceData {
 
 class ListingPriceCache {
   // L1: Memory cache for fast access
-  private priceCache: BoundedCache<string, ListingPriceData>;
+  private priceCache: LRUCache<string, ListingPriceData>;
   private readonly ttl: number = 24 * 60 * 60; // 24 hours in seconds
 
   constructor() {
     // Initialize memory cache with 10k max entries and 30 min TTL
-    this.priceCache = new BoundedCache<string, ListingPriceData>(10000, 30 * 60 * 1000, 'listingPriceCache');
+    this.priceCache = new LRUCache<string, ListingPriceData>({
+      max: 10000,
+      ttl: 30 * 60 * 1000 // 30 minutes
+    });
   }
 
   /**
@@ -203,7 +207,7 @@ class ListingPriceCache {
   getStats() {
     return {
       memoryCacheSize: this.priceCache.size,
-      memoryCacheStats: this.priceCache.getStats()
+      memoryCacheStats: getCacheStats(this.priceCache)
     };
   }
 }
