@@ -5,13 +5,12 @@ import { ethers, Wallet } from "ethers";
 import { BASE_URL, SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
 import { activeTasks, API_KEY, decrementBidCount, pQueue, trackBidRate, incrementOwnBidCounter, updateTaskCancellationPercentage } from "../..";
-import { counterbidTrackingService } from "../../services/counterbid-tracking.service";
 import { getCollectionTokenContractMap } from "../../functions/collection";
 import { getCachedCollectionDetails } from "../../utils/collection-cache";
 import { config } from "dotenv";
 import axios from "axios";
 import { v4 as uuidv4 } from 'uuid';
-import { orderCache, queueReplacedOrderCancellation } from '../../utils/order-cache';
+import { orderCache } from '../../utils/order-cache';
 import { USDC, WETH } from "../../utils/currencies";
 import { CollectionItemsListQuery } from "../../queries";
 import { CollectionItemsQueryVariables, CollectionItemsResponse } from "../../functions";
@@ -31,7 +30,7 @@ import { safeTokenIdToString } from '../../utils/tokenId';
 // This prevents log flooding when multiple parallel jobs hit the same balance check
 const insufficientBalanceLogCache = new LRUCache<string, boolean>({
   max: 1000,
-  ttl: 5000 // 5 seconds
+  ttl: 60000 // 60 seconds (longer dedup window for error logs)
 });
 
 // LRU-only caches for performance-critical hot paths (< 1ms access vs 10-20ms Redis)
@@ -41,7 +40,7 @@ const insufficientBalanceLogCache = new LRUCache<string, boolean>({
 // Right-sized to 10K max for 60-second hot counterbid window (10x safety buffer)
 const traitFloorLRU = new LRUCache<string, number>({
   max: 10000,            // Hot cache for active counterbidding traits
-  ttl: 60 * 1000,         // 60 second TTL
+  ttl: 5 * 60 * 1000,    // 5 minutes (reduce API calls during counterbidding)
   allowStale: true,       // Return stale on fetch failure
   updateAgeOnGet: false,
   updateAgeOnHas: false
@@ -52,7 +51,7 @@ const traitFloorLRU = new LRUCache<string, number>({
 // Right-sized to 5K max (200 tasks × 50 tokens × 2x safety buffer → 5K)
 const contractResolutionLRU = new LRUCache<string, string>({
   max: 5000,            // Typical token IDs across active tasks
-  ttl: 2 * 60 * 60 * 1000, // 2 hours (contract mappings rarely change)
+  ttl: 24 * 60 * 60 * 1000, // 24 hours (contract mappings are immutable on blockchain)
   allowStale: true,
   updateAgeOnGet: false
 });
@@ -61,7 +60,7 @@ const contractResolutionLRU = new LRUCache<string, string>({
 // Right-sized to 500 max (<100 collections, 5x safety buffer)
 const multiContractSlugLRU = new LRUCache<string, boolean>({
   max: 500,
-  ttl: 5 * 60 * 1000,     // 5 minutes
+  ttl: 24 * 60 * 60 * 1000, // 24 hours (multi-contract status is immutable)
   allowStale: true,
   updateAgeOnGet: false
 });
@@ -70,7 +69,7 @@ const multiContractSlugLRU = new LRUCache<string, boolean>({
 // Right-sized to 500 max (one entry per collection, <100 collections, 5x safety buffer)
 const contractMapLRU = new LRUCache<string, Record<string, string>>({
   max: 500,
-  ttl: 2 * 60 * 60 * 1000,
+  ttl: 24 * 60 * 60 * 1000, // 24 hours (token mappings are immutable)
   allowStale: true,
   updateAgeOnGet: false
 });
@@ -748,11 +747,8 @@ export async function bidOnOpensea(
         if (offerPrice && itemOrderHash && sanitizedExpiry && slug && taskId && asset.tokenId) {
           const expiresAt = Date.now() + sanitizedExpiry * 1000;
 
-          // STEP 1: Retrieve old order BEFORE overwrite
-          const oldOrder = await orderCache.get(taskId, 'opensea', safeTokenIdToString(asset.tokenId));
-          const oldOrderHash = oldOrder?.orderHash;
-
-          // STEP 2: Place new bid immediately
+          // Place new bid immediately (appends to array, no auto-cancellation)
+          // Multiple orders per identifier are now supported
           await orderCache.set({
             _id: uuidv4(),
             orderHash: itemOrderHash,
@@ -766,19 +762,6 @@ export async function bidOnOpensea(
           });
           // Track bid rate ONLY for successfully placed bids
           trackBidRate('opensea', taskId);
-
-          // STEP 3: Cancel old bid async (if exists and different)
-          if (oldOrderHash && oldOrderHash !== itemOrderHash) {
-            queueReplacedOrderCancellation({
-              taskId,
-              marketplace: 'opensea',
-              orderHash: oldOrderHash,
-              identifier: safeTokenIdToString(asset.tokenId),
-              reason: 'token_bid_replaced'
-            }).catch(err => {
-              errorLog('OpenSea', `Failed to queue cancellation for replaced token bid | taskId=${taskId} | tokenId=${asset.tokenId}`, err);
-            });
-          }
         }
       }
 
@@ -1115,11 +1098,8 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
     const expiresAt = Date.now() + sanitizedExpiry * 1000;
     const createdAt = Date.now();
 
-    // STEP 1: Retrieve old order BEFORE overwrite
-    const oldOrder = await orderCache.get(taskId, 'opensea', identifier);
-    const oldOrderHash = oldOrder?.orderHash;
-
-    // STEP 2: Place new bid immediately
+    // Place new bid immediately (appends to array, no auto-cancellation)
+    // Multiple orders per identifier are now supported
     await orderCache.set({
       _id: orderCache.generateOrderId(),
       orderHash: order_hash,
@@ -1133,19 +1113,6 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
     });
     // Track bid rate ONLY for successfully placed bids
     trackBidRate('opensea', taskId);
-
-    // STEP 3: Cancel old bid async (if exists and different)
-    if (oldOrderHash && oldOrderHash !== order_hash) {
-      queueReplacedOrderCancellation({
-        taskId,
-        marketplace: 'opensea',
-        orderHash: oldOrderHash,
-        identifier,
-        reason: 'trait_bid_replaced'
-      }).catch(err => {
-        errorLog('OpenSea', `Failed to queue cancellation for replaced trait bid | taskId=${taskId} | trait=${identifier}`, err);
-      });
-    }
   }
 }
 
@@ -1512,17 +1479,15 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
             // Convert current_price (Wei string) to ETH string
             const decimal = 18; // WETH decimal
             const offerPriceEth = Number(existingOffer.currentPrice) / Math.pow(10, decimal);
-            const offerPriceWei = existingOffer.currentPrice;
-
             // Check if we already have this order in cache
-            const cachedOrder = await orderCache.get(taskId, 'opensea', existingOffer.tokenId);
+            const cachedOrders = await orderCache.get(taskId, 'opensea', existingOffer.tokenId);
 
-            if (cachedOrder && cachedOrder.orderHash !== existingOffer.orderHash) {
-              // Cache had DIFFERENT orderHash - likely stale after server restart
+            if (cachedOrders && !cachedOrders.some(o => o.orderHash === existingOffer.orderHash)) {
+              // Cache doesn't have this orderHash - likely stale after server restart
               warnLog('OpenSea',
                 `[ORDER_SYNC] Cache out of sync with OpenSea - updating | ` +
                 `taskId=${taskId} | tokenId=${existingOffer.tokenId} | ` +
-                `cachedHash=${cachedOrder.orderHash.slice(0, 16)}... | ` +
+                `cachedHashes=${cachedOrders.map(o => o.orderHash.slice(0, 16)).join(',')}... | ` +
                 `apiHash=${existingOffer.orderHash.slice(0, 16)}...`
               );
             }
@@ -1557,17 +1522,6 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
               marketplace: 'opensea',
               tokenId: existingOffer.tokenId
             });
-
-            // Update marketplaceTopOfferCache - mark us as top bidder
-            // This ensures counterbid handlers know we have an active offer
-            counterbidTrackingService.updateTopOfferAfterOurBid(
-              taskId,
-              'opensea',
-              existingOffer.tokenId,
-              offerPriceEth,
-              offerPriceWei,
-              makerAddress
-            );
 
             // NOTE: Do NOT track bid rate here - this is an existing order, not a new bid
             // trackBidRate('opensea', taskId); // REMOVED: prevents double-counting existing orders

@@ -3,7 +3,7 @@ import { limiter, isTaskBlacklisted, axiosInstance } from "../../init";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, pQueue, RESET, trackBidRate, GOLD, updateTaskCancellationPercentage } from "../..";
 import { config } from "dotenv";
 import { DistributedLockManager } from "../../utils/lock";
-import { orderCache, queueReplacedOrderCancellation } from '../../utils/order-cache';
+import { orderCache } from '../../utils/order-cache';
 import { withRetry } from '../../utils/db-retry';
 import redisClient from '../../utils/redis';
 import { isCancel } from "axios";
@@ -846,11 +846,8 @@ async function submitBidToBlur(
         const expiresAt = Date.now() + expiry * 1000;
         const createdAt = Date.now();
 
-        // STEP 1: Retrieve old order BEFORE overwrite
-        const oldOrder = await orderCache.get(taskId, 'blur', identifier);
-        const oldOrderHash = oldOrder?.orderHash;
-
-        // STEP 2: Place new bid immediately
+        // Place new bid immediately (appends to array, no auto-cancellation)
+        // Multiple orders per identifier are now supported
         await orderCache.set({
           _id: orderCache.generateOrderId(),
           orderHash: JSON.stringify(cancelPayload),
@@ -863,19 +860,6 @@ async function submitBidToBlur(
           taskId: taskId
         });
         trackBidRate("blur", taskId);
-
-        // STEP 3: Cancel old bid async (if exists and different)
-        if (oldOrderHash && oldOrderHash !== JSON.stringify(cancelPayload)) {
-          queueReplacedOrderCancellation({
-            taskId,
-            marketplace: 'blur',
-            orderHash: oldOrderHash,
-            identifier,
-            reason: 'blur_bid_replaced'
-          }).catch(err => {
-            errorLog('Blur', `Failed to queue cancellation for replaced Blur bid | taskId=${taskId} | identifier=${identifier}`, err);
-          });
-        }
 
         // Mark request as successful
         requestSuccessful = true;

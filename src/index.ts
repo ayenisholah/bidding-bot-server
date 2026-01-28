@@ -86,7 +86,6 @@ import Listing from "./models/listing.model";
 import { MarketplaceBidRateTracker } from "./utils/metrics-rate-tracker";
 import { BroadcastManager } from "./utils/broadcast-manager";
 import { memorySnapshotService } from "./services/memory-snapshot.service";
-import { taskStatePersistenceService } from "./services/task-state-persistence.service";
 import { memoryCleanupService } from "./services/memory-cleanup.service";
 import { counterbidTrackingService } from "./services/counterbid-tracking.service";
 import { floorPriceWarmer } from "./services/floor-price-warmer.service";
@@ -196,13 +195,6 @@ const QUEUE_NAME = 'BIDDING_BOT';
 const BLUR_BIDDING_QUEUE = 'BLUR_BIDDING_QUEUE';
 const CLEAR_COOLDOWN = 5 * 60 * 1000; // 5 minutes cooldown between queue clears
 
-// LRU cache for graceful shutdown state (in-memory only, lost on crash)
-// Persists shutdown state within process lifecycle for graceful restart coordination
-const shutdownStateCache = new LRUCache<string, any>({
-  max: 10,
-  ttl: 24 * 60 * 60 * 1000, // 24 hours
-  updateAgeOnGet: false,
-});
 
 // Note: Redis keys below are no longer used - migrated to LRU caches
 // Kept as constants for backward compatibility and potential future use
@@ -1585,17 +1577,8 @@ async function fetchCurrentTasks() {
 
       for (const task of runningTasks) {
         try {
-          // Restore persisted state from Redis
-          const hasPersistedState = await restoreTaskState(task._id);
-
-          if (hasPersistedState) {
-            // If we have persisted state, try to recreate timers
-            await recreateTimersFromRedis(task._id, task);
-            debugLog('Recovery', `Restored state for task ${task._id} (${task.contract?.slug})`);
-          } else {
-            // No persisted state - task will be restarted fresh by runScheduledLoop
-            debugLog('Recovery', `No persisted state for task ${task._id} (${task.contract?.slug}) - will restart fresh`);
-          }
+          // Tasks will be restarted fresh by runScheduledLoop
+          debugLog('Recovery', `Task ${task._id} (${task.contract?.slug}) will restart fresh`);
         } catch (err) {
           errorLog('Recovery', `Failed to restore state for task ${task._id}: ${err instanceof Error ? err.message : err}`);
         }
@@ -2132,22 +2115,8 @@ async function monitorQueueDrain() {
  */
 async function detectPreviousShutdown(): Promise<'graceful' | 'crash' | 'first-start'> {
   try {
-    const shutdownReason = shutdownStateCache.get('reason');
-    const shutdownTimestamp = shutdownStateCache.get('timestamp');
-
-    if (!shutdownTimestamp) {
-      return 'first-start';
-    }
-
-    // Clear the shutdown reason flag immediately
-    // If next startup doesn't see 'graceful', it knows it was a crash
-    shutdownStateCache.delete('reason');
-
-    if (shutdownReason === 'graceful') {
-      const timeSinceShutdown = Date.now() - shutdownTimestamp;
-      debugLog('Startup', `Graceful shutdown detected | timeSince=${Math.round(timeSinceShutdown / 1000)}s`);
-      return 'graceful';
-    }
+    // Graceful shutdown recovery removed - always treat as first start
+    return 'first-start';
 
     // Shutdown timestamp exists but reason is not 'graceful' = crash
     debugLog('Startup', 'Crash detected - previous shutdown was not graceful');
@@ -2172,18 +2141,14 @@ async function saveRunningTasksBeforeShutdown(): Promise<void> {
     const taskIds = runningTasks.map(t => t._id.toString());
     const listingIds = runningListings.map(l => l._id.toString());
 
-    // Save to LRU cache (persists within process lifecycle)
-    shutdownStateCache.set('tasks', taskIds);
-    shutdownStateCache.set('listings', listingIds);
-    shutdownStateCache.set('timestamp', Date.now());
-    shutdownStateCache.set('reason', 'graceful');
+    // Graceful shutdown recovery removed - tasks won't auto-resume after restart
 
     logLifecycleEvent('GRACEFUL_SHUTDOWN_TASKS_SAVED', {
       taskCount: taskIds.length,
       listingCount: listingIds.length,
     });
 
-    infoLog('Startup', `Saved ${taskIds.length} running tasks and ${listingIds.length} running listings for recovery`);
+    infoLog('Startup', `${taskIds.length} running tasks and ${listingIds.length} running listings will not auto-resume after restart`);
   } catch (error) {
     errorLog('Startup', 'Failed to save running tasks before shutdown');
   }
@@ -2196,63 +2161,12 @@ async function saveRunningTasksBeforeShutdown(): Promise<void> {
  */
 async function resumePreviouslyRunningTasks(): Promise<void> {
   try {
-    const previousTaskIds = shutdownStateCache.get('tasks');
-    const previousListingIds = shutdownStateCache.get('listings');
-
-    if (!previousTaskIds && !previousListingIds) {
-      debugLog('Startup', 'No previously running tasks/listings to resume');
-      return;
-    }
-
-    // Resume tasks
-    if (previousTaskIds) {
-      const taskIds = previousTaskIds as string[];
-      infoLog('Startup', `Resuming ${taskIds.length} previously running tasks after crash recovery`);
-
-      for (const taskId of taskIds) {
-        try {
-          const task = await Task.findById(taskId);
-          if (task) {
-            await startTask(task, true, undefined, true); // isRestart=true
-            debugLog('Startup', `Resumed task ${taskId}`);
-          } else {
-            warnLog('Startup', `Task ${taskId} not found - skipping resume`);
-          }
-        } catch (err) {
-          errorLog('Startup', `Failed to resume task ${taskId}`);
-        }
-      }
-
-      // Clear the saved tasks
-      shutdownStateCache.delete('tasks');
-    }
-
-    // Resume listings
-    if (previousListingIds) {
-      const listingIds = previousListingIds as string[];
-      infoLog('Startup', `Resuming ${listingIds.length} previously running listings after crash recovery`);
-
-      for (const listingId of listingIds) {
-        try {
-          // Mark listing as running and re-schedule
-          await Listing.updateOne({ _id: listingId }, { $set: { running: true } });
-          const listing = await Listing.findById(listingId);
-          if (listing) {
-            await scheduleListing(listing);
-            debugLog('Startup', `Resumed listing ${listingId}`);
-          }
-        } catch (err) {
-          errorLog('Startup', `Failed to resume listing ${listingId}`);
-        }
-      }
-
-      // Clear the saved listings
-      shutdownStateCache.delete('listings');
-    }
+    // Graceful shutdown recovery removed - tasks won't auto-resume after restart
+    debugLog('Startup', 'Task auto-resume disabled - use manual restart');
 
     logLifecycleEvent('CRASH_RECOVERY_TASKS_RESUMED', {
-      taskCount: previousTaskIds ? previousTaskIds.length : 0,
-      listingCount: previousListingIds ? previousListingIds.length : 0,
+      taskCount: 0,
+      listingCount: 0,
     });
 
   } catch (error) {
@@ -2362,21 +2276,6 @@ async function startServer() {
     });
     console.log('[STARTUP] Memory snapshot service initialized');
 
-    // Initialize task state persistence service
-    taskStatePersistenceService.initialize({
-      taskStatus,
-      loopCounterStats,
-      lastScheduleTimes,
-      activeTasks,
-      taskTimeouts,
-      taskCountdownTimers,
-      tasksInCompletionProcess,
-      parentJobs,
-      getParentJobId,
-      startTask
-    });
-    console.log('[STARTUP] Task state persistence service initialized');
-
     // Initialize memory cleanup service (processedMessages now uses lru-cache)
     memoryCleanupService.initialize({
       queueingProgress,
@@ -2389,6 +2288,10 @@ async function startServer() {
       blurTimeoutMetrics: timeoutMetrics
     });
     console.log('[STARTUP] Memory cleanup service initialized');
+
+    // Start background floor price warming (4 min interval, Priority 999)
+    floorPriceWarmer.startBackgroundWarming();
+    console.log('[STARTUP] Background floor price warming started');
 
     // Initialize queue event handlers
     initializeQueueEventHandlers();
@@ -2588,7 +2491,7 @@ async function startServer() {
           // Check if order still exists in cache (shouldn't be there)
           const identifier = job.data.identifier;
           if (identifier) {
-            const stillExists = await orderCache.get(taskId, marketplace, identifier);
+            const stillExists = await orderCache.getNewest(taskId, marketplace, identifier);
             if (stillExists) {
               warnLog('WorkerCleanup', `ORDER_STILL_IN_CACHE_AFTER_COMPLETION | taskId=${taskId} | orderKey=${orderKey}`, { taskId });
               await safeDeleteFromCache(orderKey, taskId, marketplace);
@@ -2754,7 +2657,7 @@ async function startServer() {
         // Check if order still exists in cache (shouldn't be there)
         const identifier = job.data.identifier;
         if (identifier) {
-          const stillExists = await orderCache.get(taskId, 'blur', identifier);
+          const stillExists = await orderCache.getNewest(taskId, 'blur', identifier);
           if (stillExists) {
             warnLog('WorkerCleanup', `ORDER_STILL_IN_CACHE_AFTER_COMPLETION | taskId=${taskId} | orderKey=${orderKey}`, { taskId });
             await safeDeleteFromCache(orderKey, taskId, 'blur');
@@ -3474,6 +3377,9 @@ process.on('SIGINT', async () => {
   // Stop connectivity monitoring
   stopConnectivityMonitoring();
 
+  // Stop background floor price warming
+  floorPriceWarmer.stopBackgroundWarming();
+
   // Stop memory cleanup service
   memoryCleanupService.stopCleanup();
 
@@ -3564,6 +3470,9 @@ process.on('SIGTERM', async () => {
 
   // Stop connectivity monitoring
   stopConnectivityMonitoring();
+
+  // Stop background floor price warming
+  floorPriceWarmer.stopBackgroundWarming();
 
   // Stop memory cleanup service
   memoryCleanupService.stopCleanup();
@@ -3932,13 +3841,6 @@ function setTaskStatus(taskId: string, newStatus: string, context?: string, mark
       taskStatusHistory[taskId] = taskStatusHistory[taskId].slice(-MAX_STATUS_HISTORY);
     }
 
-    // Persist state to Redis for important status changes (for crash recovery)
-    // Only persist for statuses that matter for recovery: SCHEDULED, RUNNING, COMPLETED
-    if (['SCHEDULED', 'RUNNING', 'COMPLETED'].includes(newStatus)) {
-      persistTaskState(taskId).catch(err => {
-        warnLog('RedisState', `Failed to persist task state | taskId=${taskId}`, err);
-      });
-    }
 
     // Persist task state to MongoDB for QUEUEING watchdog recovery
     // This allows recovery of tasks stuck in QUEUEING state after server restart
@@ -5590,32 +5492,6 @@ async function scheduleNextLoop(taskId: string, marketplace?: string): Promise<v
 // ============================================================
 // TASK STATE PERSISTENCE FUNCTIONS (for crash recovery)
 // ============================================================
-// All task state persistence functions moved to TaskStatePersistenceService
-
-// Wrapper function - delegates to service
-async function persistTaskState(taskId: string): Promise<void> {
-  return taskStatePersistenceService.persistTaskState(taskId);
-}
-
-// Wrapper function - delegates to service
-function logTaskDiagnostic(taskId: string, marketplace: string | undefined, trigger: string): void {
-  return taskStatePersistenceService.logTaskDiagnostic(taskId, marketplace, trigger);
-}
-
-// Wrapper function - delegates to service
-async function persistTaskStartTime(taskId: string): Promise<void> {
-  return taskStatePersistenceService.persistTaskStartTime(taskId);
-}
-
-// Wrapper function - delegates to service
-async function restoreTaskState(taskId: string): Promise<boolean> {
-  return taskStatePersistenceService.restoreTaskState(taskId);
-}
-
-// Wrapper function - delegates to service
-async function recreateTimersFromRedis(taskId: string, task: ITask): Promise<void> {
-  return taskStatePersistenceService.recreateTimersFromRedis(taskId, task);
-}
 
 // NOTE: Recovery functions removed - recovery logic was causing issues
 // Removed: recoverStuckTaskTimer(), verifyScheduledTaskTimers(), cleanupStuckJobs()
@@ -14156,7 +14032,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         return;
       }
 
-      const cachedOrder = await orderCache.get(task._id, MAGICEDEN.toLowerCase(), tokenId.toString());
+      const cachedOrder = await orderCache.getNewest(task._id, MAGICEDEN.toLowerCase(), tokenId.toString());
       // Filter out expired orders to prevent stale data usage
       const orders = (cachedOrder && cachedOrder.expiresAt > Date.now()) ? [cachedOrder] : [];
 
@@ -14216,7 +14092,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
 
       // Only counterbid if we have an existing order for this token
-      const existingTokenOrder = await orderCache.get(task._id.toString(), 'magiceden', tokenId.toString());
+      const existingTokenOrder = await orderCache.getNewest(task._id.toString(), 'magiceden', tokenId.toString());
       if (!existingTokenOrder) {
         return;
       }
@@ -14355,7 +14231,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
         const traitPriceKeyExists = currentTask?.stopOptions?.traitPrices && currentTask?.stopOptions?.triggerStopOptions && `magiceden:${identifier}` in currentTask?.stopOptions?.traitPrices;
         const traitFloor = traitPriceKeyExists ? await fetchMagicEdenTraitFloor(currentTask.contract.contractAddress, { attributeKey: trait.attributeKey, attributeValue: trait.attributeValue }) : undefined
-        const cachedOrder = await orderCache.get(task._id, MAGICEDEN.toLowerCase(), identifier);
+        const cachedOrder = await orderCache.getNewest(task._id, MAGICEDEN.toLowerCase(), identifier);
         // Filter out expired orders to prevent stale data usage
         const orders = (cachedOrder && cachedOrder.expiresAt > Date.now()) ? [cachedOrder] : [];
 
@@ -14472,7 +14348,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
         // Check if we have existing token offers on any of these tokens
         for (const tokenId of tokensWithTrait) {
-          const cachedTokenOrder = await orderCache.get(task._id, MAGICEDEN.toLowerCase(), tokenId);
+          const cachedTokenOrder = await orderCache.getNewest(task._id, MAGICEDEN.toLowerCase(), tokenId);
 
           if (cachedTokenOrder) {
             // We have an existing offer on this token - queue instant counterbid
@@ -14854,7 +14730,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           }
 
           // Only defend tokens where we have an existing bid in orderCache
-          const existingTokenOrder = await orderCache.get(task._id.toString(), 'magiceden', targetTokenId.toString());
+          const existingTokenOrder = await orderCache.getNewest(task._id.toString(), 'magiceden', targetTokenId.toString());
           if (!existingTokenOrder) {
             continue; // Skip tokens we don't have bids on
           }
@@ -15009,7 +14885,7 @@ async function getActiveOrder(
   marketplace: string,
   identifier: string
 ): Promise<any | null> {
-  const order = await orderCache.get(taskId.toString(), marketplace.toLowerCase(), identifier);
+  const order = await orderCache.getNewest(taskId.toString(), marketplace.toLowerCase(), identifier);
   if (!order || order.expiresAt <= Date.now()) {
     return null;
   }
@@ -15043,11 +14919,14 @@ async function buildTokenDefenseList(
     // Use provided allOrders or fetch fresh
     const orders = allOrders || await orderCache.getByTaskAndMarketplace(task._id, OPENSEA.toLowerCase());
 
+    // Use Set to deduplicate identifiers (multiple orders per identifier now supported)
+    const uniqueTokens = new Set<string>();
     for (const order of orders) {
       if (order.identifier && order.identifier !== 'collection' && !order.identifier.includes(':')) {
-        tokenList.push(order.identifier);
+        uniqueTokens.add(order.identifier);
       }
     }
+    tokenList.push(...Array.from(uniqueTokens));
   }
 
   return tokenList;
@@ -15539,7 +15418,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           return;
         }
 
-        const cachedOrder = await orderCache.get(task._id, OPENSEA.toLowerCase(), identifier);
+        const cachedOrder = await orderCache.getNewest(task._id, OPENSEA.toLowerCase(), identifier);
         // Filter out expired orders to prevent stale data usage
         const orders = (cachedOrder && cachedOrder.expiresAt > Date.now()) ? [cachedOrder] : [];
 
@@ -15647,7 +15526,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
           // Check if we have existing token offers on any of these tokens
           for (const tokenId of tokensWithTrait) {
-            const cachedTokenOrder = await orderCache.get(task._id, OPENSEA.toLowerCase(), tokenId);
+            const cachedTokenOrder = await orderCache.getNewest(task._id, OPENSEA.toLowerCase(), tokenId);
 
             if (cachedTokenOrder) {
               // We have an existing offer on this token - queue instant counterbid
@@ -16234,7 +16113,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             }
 
             // STEP 2: Check order cache (fast - <1ms)
-            const existingTokenOrder = await orderCache.get(task._id.toString(), 'opensea', targetTokenId.toString());
+            const existingTokenOrder = await orderCache.getNewest(task._id.toString(), 'opensea', targetTokenId.toString());
             if (!existingTokenOrder) {
               skippedNoOrder++;
               continue; // Skip tokens we don't have bids on
@@ -16265,7 +16144,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         // Queue counterbids for tokens that passed all checks
         for (const targetTokenId of tokensToDefendFromCollection) {
           try {
-            const existingTokenOrder = await orderCache.get(task._id.toString(), 'opensea', targetTokenId.toString());
+            const existingTokenOrder = await orderCache.getNewest(task._id.toString(), 'opensea', targetTokenId.toString());
             if (!existingTokenOrder) continue; // Should never happen, already filtered
 
             // Only counterbid if incoming collection offer beats our token offer (double-check)
@@ -16438,7 +16317,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
 
         const totalOffer = incomingPrice + blurOutbidMargin
 
-        const cachedOrder = await orderCache.get(task._id, BLUR.toLowerCase(), identifier);
+        const cachedOrder = await orderCache.getNewest(task._id, BLUR.toLowerCase(), identifier);
         // Filter out expired orders to prevent stale data usage
         const orders = (cachedOrder && cachedOrder.expiresAt > Date.now()) ? [cachedOrder] : [];
 
@@ -18042,7 +17921,7 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 
     // Parallel fetch: floor price (orders now from cache)
     const floor_price = await getCachedFloorPrice(currentTask.contract.slug);
-    const cachedOrder = await orderCache.get(currentTask._id, OPENSEA.toLowerCase(), 'collection');
+    const cachedOrder = await orderCache.getNewest(currentTask._id, OPENSEA.toLowerCase(), 'collection');
     const orders = cachedOrder ? [cachedOrder] : [];
 
 
@@ -18869,7 +18748,7 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
 
 
-    const cachedOrder = await orderCache.get(currentTask._id, BLUR.toLowerCase(), "collection");
+    const cachedOrder = await orderCache.getNewest(currentTask._id, BLUR.toLowerCase(), "collection");
     const orders = cachedOrder ? [cachedOrder] : [];
 
     const stopBid = await stopOption(currentTask, 'blur', Number(floor_price), false)
@@ -19253,7 +19132,7 @@ async function processOpenseaTraitBid(data: {
         ? openseaTraitFloor(slug, { traitType: type, values: [value] })
         : Promise.resolve(undefined)
     ]);
-    const cachedOrder = await orderCache.get(_id, OPENSEA.toLowerCase(), identifier);
+    const cachedOrder = await orderCache.getNewest(_id, OPENSEA.toLowerCase(), identifier);
     const orders = cachedOrder ? [cachedOrder] : [];
 
 
@@ -19649,7 +19528,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
     // Fetch floor price. Orders from cache.
     const floor_price = await getCachedFloorPrice(slug);
-    const cachedOrder = await orderCache.get(_id, OPENSEA.toLowerCase(), asset.tokenId.toString());
+    const cachedOrder = await orderCache.getNewest(_id, OPENSEA.toLowerCase(), asset.tokenId.toString());
     const orders = cachedOrder ? [cachedOrder] : [];
 
     if (!floor_price) { throw new Error(`Failed to fetch floor price for ${slug}`); }
@@ -20110,7 +19989,7 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
   }
 
   try {
-    const cachedOrder = await orderCache.get(taskId, "opensea", "collection");
+    const cachedOrder = await orderCache.getNewest(taskId, "opensea", "collection");
     const existingOrders = cachedOrder ? [cachedOrder] : [];
 
     const wallet = await walletCache.getWalletById(walletId);
@@ -20208,7 +20087,7 @@ async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) 
 
   try {
     // Query and cancel existing collection orders
-    const cachedOrder = await orderCache.get(taskId, MAGICEDEN.toLowerCase(), "collection");
+    const cachedOrder = await orderCache.getNewest(taskId, MAGICEDEN.toLowerCase(), "collection");
     const orders = cachedOrder ? [cachedOrder] : [];
 
     const { currencyType, currency, decimal, currencySymbol, maxBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "magiceden")
@@ -20316,7 +20195,7 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
   try {
     // Query existing trait orders
     const identifier = traitKey;
-    const cachedOrder = await orderCache.get(taskId, MAGICEDEN.toLowerCase(), identifier);
+    const cachedOrder = await orderCache.getNewest(taskId, MAGICEDEN.toLowerCase(), identifier);
     const orders = cachedOrder ? [cachedOrder] : [];
 
     const { currencyType, currency } = getCurrencyDetailsFromTask(currentTask, "magiceden");
@@ -20436,7 +20315,7 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
     // Query existing collection orders
     const identifier = "collection";
 
-    const cachedOrder = await orderCache.get(taskId, "blur", identifier);
+    const cachedOrder = await orderCache.getNewest(taskId, "blur", identifier);
     const existingOrders = cachedOrder ? [cachedOrder] : [];
 
     // Fetch wallet and decrypt private key just before use
@@ -20540,7 +20419,7 @@ async function blurTraitCounterBid(data: IBlurBidData) {
     const identifier = `${traitType}:${traitValue}`;
 
     // Query existing orders for this trait
-    const cachedOrder = await orderCache.get(taskId, "blur", identifier);
+    const cachedOrder = await orderCache.getNewest(taskId, "blur", identifier);
     const existingOrders = cachedOrder ? [cachedOrder] : [];
 
     // Fetch wallet and decrypt private key just before use
@@ -20685,7 +20564,7 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
   const bidCount = getIncrementedBidCount(OPENSEA, slug, taskId);
 
   try {
-    const cachedOrder = await orderCache.get(taskId, OPENSEA.toLowerCase(), asset.tokenId.toString());
+    const cachedOrder = await orderCache.getNewest(taskId, OPENSEA.toLowerCase(), asset.tokenId.toString());
     const orders = cachedOrder ? [cachedOrder] : [];
 
     // Check if we need to cancel existing orders
@@ -20861,7 +20740,7 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
   const identifier = `${traitObj.type}:${traitObj.value}`;
 
   try {
-    const cachedOrder = await orderCache.get(taskId, OPENSEA.toLowerCase(), identifier);
+    const cachedOrder = await orderCache.getNewest(taskId, OPENSEA.toLowerCase(), identifier);
     const orders = cachedOrder ? [cachedOrder] : [];
 
     const wallet = await walletCache.getWalletById(walletId);
@@ -20977,7 +20856,7 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
     }
 
     // Check if current offer in database is greater than incoming offer price
-    const cachedOrder = await orderCache.get(taskId, MAGICEDEN.toLowerCase(), tokenId.toString());
+    const cachedOrder = await orderCache.getNewest(taskId, MAGICEDEN.toLowerCase(), tokenId.toString());
     const orders = cachedOrder ? [cachedOrder] : [];
 
     // Check if we need to cancel existing orders
@@ -21148,7 +21027,7 @@ async function processBlurTraitBid(data: {
     const expiry = getExpiry(currentTask.bidDuration)
 
 
-    const cachedOrder = await orderCache.get(_id, BLUR.toLowerCase(), identifier);
+    const cachedOrder = await orderCache.getNewest(_id, BLUR.toLowerCase(), identifier);
     const orders = cachedOrder ? [cachedOrder] : [];
 
 
@@ -21913,7 +21792,7 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
     // Fetch floor price. Orders from cache. (priority 0 for scheduled jobs)
     const floor_price = await fetchMagicEdenCollectionStats(currentTask.contract.contractAddress, 0).then(Number);
-    const cachedOrder = await orderCache.get(currentTask._id, MAGICEDEN.toLowerCase(), 'collection');
+    const cachedOrder = await orderCache.getNewest(currentTask._id, MAGICEDEN.toLowerCase(), 'collection');
     const orders = cachedOrder ? [cachedOrder] : [];
 
     // Early return for floor price
@@ -22244,7 +22123,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
     // Fetch floor price. Orders from cache.
     const floor_price = await fetchMagicEdenCollectionStats(currentTask.contract.contractAddress).then(Number);
-    const cachedOrder = await orderCache.get(taskId, MAGICEDEN.toLowerCase(), tokenId.toString());
+    const cachedOrder = await orderCache.getNewest(taskId, MAGICEDEN.toLowerCase(), tokenId.toString());
     const orders = cachedOrder ? [cachedOrder] : [];
 
     if (!floor_price) {
@@ -22595,7 +22474,7 @@ async function processMagicedenTraitBid(data: {
         ? fetchMagicEdenTraitFloor(contractAddress, { attributeKey: trait.attributeKey, attributeValue: trait.attributeValue })
         : Promise.resolve(undefined)
     ]);
-    const cachedOrder = await orderCache.get(_id, MAGICEDEN.toLowerCase(), identifier);
+    const cachedOrder = await orderCache.getNewest(_id, MAGICEDEN.toLowerCase(), identifier);
     const orders = cachedOrder ? [cachedOrder] : [];
 
     if (!floor_price) { throw new Error(`Failed to fetch floor price for ${slug}`); }

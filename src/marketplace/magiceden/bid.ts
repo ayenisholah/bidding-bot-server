@@ -190,16 +190,8 @@ export async function cleanupMagicEden() {
     orderBatchQueue.length = 0;
 
     try {
-      // STEP 1: Retrieve ALL old orders BEFORE batch overwrite
-      const oldOrdersMap = new Map<string, string>(); // identifier -> oldOrderHash
-      for (const order of batch) {
-        const oldOrder = await orderCache.get(order.taskId, 'magiceden', order.identifier);
-        if (oldOrder?.orderHash) {
-          oldOrdersMap.set(order.identifier, oldOrder.orderHash);
-        }
-      }
-
-      // STEP 2: Place all new bids immediately (batch)
+      // Place all new bids immediately (batch, appends to arrays, no auto-cancellation)
+      // Multiple orders per identifier are now supported
       const createdAt = Date.now();
       const cachedOrders = batch.map(order => ({
         _id: orderCache.generateOrderId(),
@@ -213,22 +205,6 @@ export async function cleanupMagicEden() {
         taskId: order.taskId
       }));
       await orderCache.setMany(cachedOrders);
-
-      // STEP 3: Cancel ALL replaced old bids async (fire-and-forget)
-      for (const order of batch) {
-        const oldOrderHash = oldOrdersMap.get(order.identifier);
-        if (oldOrderHash && oldOrderHash !== order.orderHash) {
-          queueReplacedOrderCancellation({
-            taskId: order.taskId,
-            marketplace: 'magiceden',
-            orderHash: oldOrderHash,
-            identifier: order.identifier,
-            reason: 'magiceden_batch_replaced'
-          }).catch(err => {
-            errorLog('MagicEden', `Failed to queue cancellation for replaced batch order | taskId=${order.taskId} | identifier=${order.identifier}`, err);
-          });
-        }
-      }
     } catch (error) {
       errorLog('Database', `[MagicEden] Failed to create orders in cache during cleanup | count=${batch.length}`, error);
     }
@@ -947,16 +923,8 @@ async function sendSignedOrderData(
         }
 
         try {
-          // STEP 1: Retrieve ALL old orders BEFORE batch overwrite
-          const oldOrdersMap = new Map<string, string>(); // identifier -> oldOrderHash
-          for (const order of batch) {
-            const oldOrder = await orderCache.get(order.taskId, 'magiceden', order.identifier);
-            if (oldOrder?.orderHash) {
-              oldOrdersMap.set(order.identifier, oldOrder.orderHash);
-            }
-          }
-
-          // STEP 2: Place all new bids immediately (batch)
+          // Place all new bids immediately (batch, appends to arrays, no auto-cancellation)
+          // Multiple orders per identifier are now supported
           const createdAt = Date.now();
           const cachedOrders = batch.map(order => ({
             _id: orderCache.generateOrderId(),
@@ -970,22 +938,6 @@ async function sendSignedOrderData(
             taskId: order.taskId
           }));
           await orderCache.setMany(cachedOrders);
-
-          // STEP 3: Cancel ALL replaced old bids async (fire-and-forget)
-          for (const order of batch) {
-            const oldOrderHash = oldOrdersMap.get(order.identifier);
-            if (oldOrderHash && oldOrderHash !== order.orderHash) {
-              queueReplacedOrderCancellation({
-                taskId: order.taskId,
-                marketplace: 'magiceden',
-                orderHash: oldOrderHash,
-                identifier: order.identifier,
-                reason: 'magiceden_batch_replaced'
-              }).catch(err => {
-                errorLog('MagicEden', `Failed to queue cancellation for replaced batch order | taskId=${order.taskId} | identifier=${order.identifier}`, err);
-              });
-            }
-          }
         } catch (error) {
           errorLog('Database', `[MagicEden] Failed to flush batch queue | count=${batch.length}`, error);
         }
@@ -1010,16 +962,8 @@ async function sendSignedOrderData(
 
           if (batch.length > 0) {
             try {
-              // STEP 1: Retrieve ALL old orders BEFORE batch overwrite
-              const oldOrdersMap = new Map<string, string>(); // identifier -> oldOrderHash
-              for (const order of batch) {
-                const oldOrder = await orderCache.get(order.taskId, 'magiceden', order.identifier);
-                if (oldOrder?.orderHash) {
-                  oldOrdersMap.set(order.identifier, oldOrder.orderHash);
-                }
-              }
-
-              // STEP 2: Place all new bids immediately (batch)
+              // Place all new bids immediately (batch, appends to arrays, no auto-cancellation)
+              // Multiple orders per identifier are now supported
               const createdAt = Date.now();
               const cachedOrders = batch.map(order => ({
                 _id: orderCache.generateOrderId(),
@@ -1033,22 +977,6 @@ async function sendSignedOrderData(
                 taskId: order.taskId
               }));
               await orderCache.setMany(cachedOrders);
-
-              // STEP 3: Cancel ALL replaced old bids async (fire-and-forget)
-              for (const order of batch) {
-                const oldOrderHash = oldOrdersMap.get(order.identifier);
-                if (oldOrderHash && oldOrderHash !== order.orderHash) {
-                  queueReplacedOrderCancellation({
-                    taskId: order.taskId,
-                    marketplace: 'magiceden',
-                    orderHash: oldOrderHash,
-                    identifier: order.identifier,
-                    reason: 'magiceden_batch_replaced'
-                  }).catch(err => {
-                    errorLog('MagicEden', `Failed to queue cancellation for replaced batch order | taskId=${order.taskId} | identifier=${order.identifier}`, err);
-                  });
-                }
-              }
             } catch (error) {
               // Log error but don't fail the bid
               errorLog('Database', `[MagicEden] Failed to batch create orders in cache | count=${batch.length}`, error);
