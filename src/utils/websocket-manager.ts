@@ -740,6 +740,9 @@ class WebSocketManager extends EventEmitter {
       // Normalize message format (minimal transformation)
       const message = this.normalizeMessage(parsed);
 
+      // DEBUG: Log message entry
+      debugLog('MsgFlow', `ENTER_PROCESS | eventType=${message.eventType || message.type || 'unknown'} | marketplace=${message.marketplace || 'unknown'}`);
+
       // FIRE-AND-FORGET: Process immediately without queueing
       // Matches commit 7bb0b96 optimization for <100ms latency
       this.processMessageAsync(message, receiveTime).catch(err => {
@@ -779,10 +782,13 @@ class WebSocketManager extends EventEmitter {
 
   /**
    * Async message processor - handles the actual message processing
-   * Called by p-queue which manages concurrency and timeouts
+   * Now called directly (fire-and-forget) without queueing
    */
   private async processMessageAsync(parsed: any, receiveTime: number): Promise<void> {
     try {
+      // DEBUG: Log async processing entry
+      debugLog('MsgFlow', `ASYNC_PROCESS | eventType=${parsed.eventType || parsed.type || 'unknown'} | hasData=${!!parsed.data}`);
+
       this.metrics.totalMessages++;
       this.recordMessage();
 
@@ -805,6 +811,9 @@ class WebSocketManager extends EventEmitter {
         // Extract actual message from wrapped format
         message = parsed.data;
 
+        // DEBUG: Log wrapped message extraction
+        debugLog('MsgFlow', `UNWRAP_SEQ | seqNum=${parsed.seqNum} | innerType=${message.eventType || message.type || 'unknown'}`);
+
         // Send ACK immediately if buffer is getting large or enough time has passed
         if (this.receivedSeqNums.length >= 50 || (Date.now() - this.lastAckTime) > this.ACK_BATCH_INTERVAL) {
           this.sendAck();
@@ -814,6 +823,8 @@ class WebSocketManager extends EventEmitter {
         // Legacy message without seqNum (backward compatibility)
         message = parsed;
 
+        // DEBUG: Log legacy message
+        debugLog('MsgFlow', `LEGACY_MSG | type=${message.eventType || message.type || 'unknown'}`);
       }
 
       // Latency tracking - check if message has a timestamp from ws-proxy
@@ -901,6 +912,9 @@ class WebSocketManager extends EventEmitter {
           // Normal case - we are subscribed (no log needed - too noisy)
         }
       }
+
+      // DEBUG: Log before emit
+      debugLog('MsgFlow', `EMIT_MESSAGE | eventType=${message.eventType || message.type || 'unknown'} | marketplace=${message.marketplace || 'unknown'} | listenerCount=${this.listenerCount('message')}`);
 
       // FIRE-AND-FORGET: Emit message immediately without queueing
       // (2025-12-31 optimization: Removed handler backpressure queue that was causing MINUTES of latency)
