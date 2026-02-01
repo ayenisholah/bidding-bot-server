@@ -1,6 +1,5 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
-import PQueue from 'p-queue';
 import { LRUCache } from 'lru-cache';
 import { warnLog, errorLog, debugLog, infoLog } from './debug-file-logger';
 import { config } from 'dotenv';
@@ -169,11 +168,6 @@ class WebSocketManager extends EventEmitter {
   // (2025-12-31: Removed backpressure queue - now using fire-and-forget for <100ms latency)
   private subscribedSlugs = new Set<string>();
 
-  // p-queue for bounded concurrent message processing with backpressure
-  // (2026-01-15: Replaces custom worker pool with p-queue for better timeout handling)
-  // (2026-01-21: Made unbounded to align with ws-proxy philosophy - no artificial limits)
-  private messageQueue: PQueue;
-
   constructor(config: WebSocketManagerConfig) {
     super();
     this.config = {
@@ -186,20 +180,9 @@ class WebSocketManager extends EventEmitter {
       ...config
     };
 
-    // Initialize p-queue for message processing with concurrency from RATE_LIMIT
-    // Uses RATE_LIMIT environment variable (default: 10 if not set)
-    // With RATE_LIMIT=64: 64 concurrent handlers = 211 msg/sec capacity @ 300ms avg
-    // Queue is unbounded - relies on concurrency limiting and upstream flow control
-    const concurrency = Number(process.env.RATE_LIMIT) || 10;
-    this.messageQueue = new PQueue({
-      concurrency,          // Use RATE_LIMIT from env (default: 10)
-      timeout: 30000,       // 30s timeout per message
-      throwOnTimeout: false // Graceful failures instead of crashing
-    });
-
-    // Log the configured concurrency
-    infoLog('WebSocketManager', `Message queue initialized | concurrency=${concurrency} | ` +
-      `estimatedCapacity=${Math.floor(concurrency * 3.3)}msg/sec`);
+    // Fire-and-forget architecture - no message queueing
+    // Messages are emitted immediately for <100ms latency (per commit 7bb0b96)
+    infoLog('WebSocketManager', `WebSocket manager initialized | mode=fire-and-forget | targetLatency=<100ms`);
 
     // Load persistent listing subscriptions on initialization
     this.loadPersistentSubscriptions();
@@ -321,7 +304,7 @@ class WebSocketManager extends EventEmitter {
 
     // Log connection established with current state
     infoLog('WebSocket', `[CONNECT] Established | connectionId=${connectionId} | totalConnections=${this.metrics.totalConnections} | activeSubscriptions=${this.activeSubscriptions.size}`);
-    debugLog('WebSocket', `[CONNECT] Details | persistentListings=${this.persistentListingSubscriptions.size} | queueSize=${this.messageQueue.size}`);
+    debugLog('WebSocket', `[CONNECT] Details | persistentListings=${this.persistentListingSubscriptions.size} | persistentBidding=${this.persistentBiddingSubscriptions.size}`);
 
     // Enable TCP keepalive for faster dead connection detection
     try {
@@ -757,15 +740,14 @@ class WebSocketManager extends EventEmitter {
       // Normalize message format (minimal transformation)
       const message = this.normalizeMessage(parsed);
 
-      // Queue the message for processing via p-queue (unbounded)
-      this.messageQueue.add(async () => {
-        await this.processMessageAsync(message, receiveTime);
-      }).catch(err => {
+      // FIRE-AND-FORGET: Process immediately without queueing
+      // Matches commit 7bb0b96 optimization for <100ms latency
+      this.processMessageAsync(message, receiveTime).catch(err => {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        errorLog('QueueError', `Message processing error | error=${errorMsg}`, err);
+        errorLog('MessageProcessing', `Message processing error | error=${errorMsg}`, err);
       });
     } catch (err) {
-      errorLog('QueueError', `processSingleMessage error | error=${(err as Error).message}`, err);
+      errorLog('MessageProcessing', `processSingleMessage error | error=${(err as Error).message}`, err);
     }
   }
 
