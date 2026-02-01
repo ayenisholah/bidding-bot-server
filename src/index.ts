@@ -31,7 +31,7 @@ import { axiosInstance, initialize, limiter, removeTaskFromBlacklist, isTaskBlac
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrderWithoutTracking, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor, resolveContractAddress } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor, getAccessToken, getAuthMetrics, getTimeoutMetrics, transferRestrictedCollections, authMetrics, timeoutMetrics } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
-import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, fetchOpenseaTraits, fetchRarityTokens, getBlurFloor, tokenHasTrait } from "./functions";
+import { CollectionItemsQueryVariables, fetchOpenSeaCollectionItems, fetchOpenseaTraits, fetchRarityTokens, getBlurFloor, getMagicEdenFloor, tokenHasTrait } from "./functions";
 import mongoose from 'mongoose';
 import Task, { ITask, SelectedTraits } from "./models/task.model";
 import { Queue, Worker, Job, JobType, JobsOptions, QueueEvents, QueueOptions } from "bullmq";
@@ -69,7 +69,7 @@ import { IListing } from "./types/listing.types";
 import { LRUCache } from 'lru-cache';
 import { addIfNotExists } from './utils/lru-helpers';
 import { walletCache } from "./utils/wallet-cache";
-import { getCachedCollectionDetails, getCachedFloorPrice, invalidateCollection } from "./utils/collection-cache";
+import { getCachedCollectionDetails, getCachedFloorPrice, getCachedOpenseaBestOffer, getCachedBlurBestOffer, getCachedMagicEdenBestOffer } from "./utils/collection-cache";
 import { convertBidDurationToHours } from "./utils/duration";
 import { taskCircuitBreaker } from "./utils/task-circuit-breaker";
 import { openseaFloorBreakerRegistry } from "./utils/circuit-breaker";
@@ -88,7 +88,7 @@ import { BroadcastManager } from "./utils/broadcast-manager";
 import { memorySnapshotService } from "./services/memory-snapshot.service";
 import { memoryCleanupService } from "./services/memory-cleanup.service";
 import { counterbidTrackingService } from "./services/counterbid-tracking.service";
-import { floorPriceWarmer } from "./services/floor-price-warmer.service";
+import { collectionDataWarmer } from "./services/collection-data-warmer.service";
 
 // Global type declarations
 declare global {
@@ -221,9 +221,9 @@ let removedTokens: { [key: string]: { opensea: string[]; magiceden: string[] } }
 // =============================================================================
 
 // Use LRUCache with TTL for memory-efficient tracking
-// Kept at 100K max per user request (high safety buffer for burst scenarios)
+// Increased to 1M max for production scale (handle extreme burst scenarios)
 const seenOrderHashes = new LRUCache<string, boolean>({
-  max: 100000,                   // Kept at 100K for extra safety during burst traffic
+  max: 1000000,                  // Increased to 1M for extreme burst traffic handling
   ttl: 60 * 1000,                // 60-second TTL (aligned with ws-proxy)
   updateAgeOnGet: false,          // Don't reset TTL on reads
   allowStale: false,              // Never return expired entries
@@ -236,6 +236,25 @@ const errorLogCache = new LRUCache<string, boolean>({
   ttl: 5000 // 5 seconds
 });
 
+// Collection stats endpoint cache - stores complete API response
+// Eliminates Redis roundtrip (50-200ms) → <1ms LRU access
+const collectionStatsLRU = new LRUCache<string, any>({
+  max: 1000,                        // Max 1000 different collections
+  ttl: 24 * 60 * 60 * 1000,        // 24 hours TTL (traits rarely change)
+  updateAgeOnGet: false,
+  allowStale: false
+});
+
+// Collection data endpoint cache - stores complete API response from /api/collection
+// 24 hour TTL - collection metadata rarely changes
+// Memory: ~50KB per collection × 1000 max = ~50MB max (standardized minimum)
+const collectionDataLRU = new LRUCache<string, any>({
+  max: 1000,                 // Max 1000 different collections (standardized minimum)
+  ttl: 24 * 60 * 60 * 1000,  // 24 hours TTL
+  updateAgeOnGet: false,     // Don't update age on cache reads
+  allowStale: false          // Don't serve stale entries
+});
+
 // =============================================================================
 // OUR WALLET ADDRESS TRACKING
 // =============================================================================
@@ -243,9 +262,8 @@ const errorLogCache = new LRUCache<string, boolean>({
 // Used to detect and skip counterbids against our own bids
 // NOTE: Wallet tracking functions (loadOurWalletAddresses, addOurWalletAddress, removeOurWalletAddress, isOurWallet) are now imported from ./utils/wallet-tracking
 
-// NOTE: Pending counterbid tracking (markCounterbidPending, getPendingCounterbid, updatePendingCounterbidPrice, clearCounterbidPending)
-// and marketplace top offer caching (getMarketplaceTopOffer, setMarketplaceTopOffer) are now handled by
-// counterbidTrackingService imported from ./services/counterbid-tracking.service
+// NOTE: Marketplace top offer caching (getMarketplaceTopOffer, setMarketplaceTopOffer) is handled by
+// counterbidTrackingService imported from ./services/counterbid-tracking.service (currently NO-OP)
 
 // Helper functions for seen items management
 function addSeenItem(cache: LRUCache<string, number>, key: string): void {
@@ -2252,6 +2270,8 @@ async function startServer() {
     memorySnapshotService.initialize(redis, queue, blurQueue, {
       memoryCleanupService,
       processedMessages,
+      collectionStatsLRU,
+      collectionDataLRU,
       traitsToRemove,
       removedTokens,
       tasksBeingRestarted,
@@ -2278,9 +2298,9 @@ async function startServer() {
     });
     console.log('[STARTUP] Memory cleanup service initialized');
 
-    // Start background floor price warming (4 min interval, Priority 999)
-    floorPriceWarmer.startBackgroundWarming();
-    console.log('[STARTUP] Background floor price warming started');
+    // Start background collection data warming (4 min interval, Priority 999)
+    collectionDataWarmer.startBackgroundWarming();
+    console.log('[STARTUP] Background collection data warming started');
 
     // Initialize queue event handlers
     initializeQueueEventHandlers();
@@ -3017,6 +3037,15 @@ async function startServer() {
       errorLog('STARTUP', 'Failed to fetch current tasks from database', error as Error);
     }
 
+    // Warm all task collections (deduplicates automatically: 100 tasks → 30 collections)
+    try {
+      const allTasks = Array.from(activeTasks.values());
+      collectionDataWarmer.warmAllTaskCollections(allTasks);
+      debugLog('STARTUP', `Collection warming initialized | tasks=${allTasks.length}`);
+    } catch (error) {
+      errorLog('STARTUP', 'Failed to initialize collection warming', error as Error);
+    }
+
     // Initialize bid counts from database immediately after loading tasks
     // This ensures bidStats is populated before clients connect (fixes Active:0 bug on server restart)
     try {
@@ -3365,8 +3394,8 @@ process.on('SIGINT', async () => {
   // Stop connectivity monitoring
   stopConnectivityMonitoring();
 
-  // Stop background floor price warming
-  floorPriceWarmer.stopBackgroundWarming();
+  // Stop background collection data warming
+  collectionDataWarmer.stopBackgroundWarming();
 
   // Stop memory cleanup service
   memoryCleanupService.stopCleanup();
@@ -3459,8 +3488,8 @@ process.on('SIGTERM', async () => {
   // Stop connectivity monitoring
   stopConnectivityMonitoring();
 
-  // Stop background floor price warming
-  floorPriceWarmer.stopBackgroundWarming();
+  // Stop background collection data warming
+  collectionDataWarmer.stopBackgroundWarming();
 
   // Stop memory cleanup service
   memoryCleanupService.stopCleanup();
@@ -4990,7 +5019,6 @@ async function executeMarketplaceBidLoop(taskId: string, marketplace: string): P
     try {
       // Validate task state before execution
       const currentTask = activeTasks.get(taskId);
-      const isRunning = currentTask?.running === true;
       const isBlacklisted = isTaskBlacklisted(taskId, mpKey);
 
       if (!currentTask?.running) {
@@ -6313,11 +6341,63 @@ async function publishTaskMetrics() {
 
   // DIAGNOSTIC: Check for orphaned tasks (in taskStatus but not in bidStats)
   const orphanedTasks = Object.keys(taskStatus).filter(taskId => !bidStats[taskId]);
-  if (orphanedTasks.length > 0) {
+  const runningOrphanedTasks = orphanedTasks.filter(taskId => {
+    const status = taskStatus[taskId];
+    return Object.values(status.marketplaces).some(
+      mp => ['RUNNING', 'WAITING', 'QUEUED', 'QUEUEING', 'STARTED', 'PROCESSING'].includes(mp.status)
+    );
+  });
+
+  if (runningOrphanedTasks.length > 0) {
     warnLog('TaskMetrics',
-      `ORPHANED_TASKS | count=${orphanedTasks.length} | taskIds=[${orphanedTasks.join(',')}] | ` +
-      `reason=taskStatus exists but bidStats missing - tasks won't show metrics`,
-      { orphanedTasks });
+      `ORPHANED_RUNNING_TASKS | count=${runningOrphanedTasks.length} | taskIds=[${runningOrphanedTasks.join(',')}] | ` +
+      `reason=running tasks missing bidStats - will auto-initialize`,
+      { orphanedTasks: runningOrphanedTasks });
+  }
+
+  // Log stopped orphaned tasks at debug level (this is expected)
+  const stoppedOrphanedTasks = orphanedTasks.filter(taskId => !runningOrphanedTasks.includes(taskId));
+  if (stoppedOrphanedTasks.length > 0) {
+    debugLog('TaskMetrics',
+      `ORPHANED_STOPPED_TASKS | count=${stoppedOrphanedTasks.length} | taskIds=[${stoppedOrphanedTasks.join(',')}] | ` +
+      `reason=stopped tasks still in taskStatus (expected - cleanup on next restart)`,
+      { orphanedTasks: stoppedOrphanedTasks });
+  }
+
+  // AUTO-FIX: Initialize bidStats for running orphaned tasks
+  if (orphanedTasks.length > 0) {
+    for (const taskId of orphanedTasks) {
+      const status = taskStatus[taskId];
+
+      // Check if any marketplace is actually running (not STOPPED/IDLE/COMPLETED)
+      const isRunning = Object.values(status.marketplaces).some(
+        mp => ['RUNNING', 'WAITING', 'QUEUED', 'QUEUEING', 'STARTED', 'PROCESSING'].includes(mp.status)
+      );
+
+      if (isRunning) {
+        // Auto-initialize missing bidStats for running tasks
+        if (!bidStats[taskId]) {
+          bidStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
+          infoLog('TaskMetrics',
+            `AUTO_INIT_BIDSTATS | taskId=${taskId} | reason=running task missing bidStats`);
+        }
+
+        // Also initialize related stats if missing
+        if (!skipStats[taskId]) {
+          skipStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
+        }
+        if (!errorStats[taskId]) {
+          errorStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
+        }
+        if (!loopCounterStats[taskId]) {
+          loopCounterStats[taskId] = {};
+        }
+      } else {
+        // Task is stopped - this is expected, just log at debug level
+        debugLog('TaskMetrics',
+          `ORPHANED_STOPPED_TASK | taskId=${taskId} | reason=taskStatus exists for stopped task (expected)`);
+      }
+    }
   }
 
   for (const taskId of tasks) {
@@ -6899,9 +6979,6 @@ async function processJob(job: Job, signal?: AbortSignal) {
           try {
             const { taskId, orderId, identifier, source } = job.data;
             const jobType = job.name;
-            const isCounterbid = jobType === CANCEL_OPENSEA_COUNTERBID;
-            const isOutbid = jobType === CANCEL_OPENSEA_OUTBID;
-
             // Log worker entry
             debugLog('Cancellation',
               `[CANCEL_WORKER_ENTRY] Processing ${jobType} job | source=${source || 'unknown'} | orderId=${orderId?.substring(0, 16)}... | identifier=${identifier}`,
@@ -9204,11 +9281,9 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
   const contractAddress = task.contract.contractAddress;
   debugLog('StartInternal', `AVAILABILITY_CACHE_CLEAR | taskId=${taskId} | slug=${slug} | contract=${contractAddress}`);
   const cacheClsStart = Date.now();
-  await Promise.all([
-    clearUnavailabilityCache('blur', slug),
-    clearUnavailabilityCache('magiceden', contractAddress),
-    clearUnavailabilityCache('opensea', slug),
-  ]);
+  clearUnavailabilityCache('blur', slug);
+  clearUnavailabilityCache('magiceden', contractAddress);
+  clearUnavailabilityCache('opensea', slug);
   debugLog('PerfAwait', `startTaskInternal | taskId=${taskId} | phase=CACHE_CLEAR | durationMs=${Date.now() - cacheClsStart}`);
 
   if (!taskWallet.encryptedPrivateKey) {
@@ -9336,11 +9411,10 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
     // Silently ignore aggregate errors - individual errors already logged
   });
 
-  // Start floor price warmer for OpenSea counterbid tasks
-  // Proactively warms cache every 4 minutes to prevent 800-2500ms cache misses
+  // Track task start for collection warming (reference counting)
+  // Collections already warmed at startup - this just increments reference count
   if (task.outbidOptions?.counterbid && marketplacesToPrefetch.includes('opensea')) {
-    floorPriceWarmer.startWarming(task.contract.slug, taskId);
-    debugLog('FloorWarmer', `[START] Warmer started for counterbid task | slug=${task.contract.slug} | taskId=${taskId}`);
+    collectionDataWarmer.startWarming(task.contract.slug, taskId);
   }
 
   if (!marketplace) {
@@ -10330,6 +10404,19 @@ async function validateAndTransitionToStopped(taskId: string, marketplace: strin
         delete bidStats[taskId];
         await orderCache.deleteByTask(taskId);
 
+        // Check if all marketplaces are stopped - clean up taskStatus for fully stopped tasks
+        if (taskStatus[taskId]) {
+          const allStopped = Object.values(taskStatus[taskId].marketplaces).every(
+            mp => ['STOPPED', 'COMPLETED', 'IDLE'].includes(mp.status)
+          );
+
+          if (allStopped) {
+            // Clean up taskStatus for fully stopped tasks
+            delete taskStatus[taskId];
+            infoLog('TaskCleanup', `REMOVED_TASKSTATUS | taskId=${taskId} | reason=all marketplaces stopped`);
+          }
+        }
+
         // Clear processedOwnBids cache - prevents memory leak and ensures fresh start on task restart
         processedOwnBids.clear();
         debugLog('StopTask', `Cleared processedOwnBids cache | taskId=${taskId} | size=${processedOwnBids.size}`, { taskId });
@@ -10506,6 +10593,19 @@ export async function updateTaskCancellationPercentage(taskId: string, forcePerc
           await orderCache.deleteByTask(taskId);
           if (bidStats[taskId]) {
             delete bidStats[taskId];
+          }
+
+          // Check if all marketplaces are stopped - clean up taskStatus for fully stopped tasks
+          if (taskStatus[taskId]) {
+            const allStopped = Object.values(taskStatus[taskId].marketplaces).every(
+              mp => ['STOPPED', 'COMPLETED', 'IDLE'].includes(mp.status)
+            );
+
+            if (allStopped) {
+              // Clean up taskStatus for fully stopped tasks
+              delete taskStatus[taskId];
+              infoLog('TaskCleanup', `REMOVED_TASKSTATUS | taskId=${taskId} | reason=all marketplaces stopped`);
+            }
           }
 
           // Clear processedOwnBids cache - prevents memory leak and ensures fresh start on task restart
@@ -10864,9 +10964,9 @@ async function
       // Clear marketplace top offer cache for this task
       counterbidTrackingService.clearTopOffersByTask(taskId);
 
-      // Stop floor price warmer when task fully stops
-      floorPriceWarmer.stopWarming(task.contract.slug, taskId);
-      debugLog('FloorWarmer', `[STOP] Warmer stopped | slug=${task.contract.slug} | taskId=${taskId}`);
+      // Decrement reference count for collection warming
+      // Only stops warming if no other tasks use this collection
+      collectionDataWarmer.stopWarming(task.contract.slug, taskId);
     }
 
     if (!marketplace && !stoppedByWarning) {
@@ -13765,7 +13865,7 @@ async function handleCounterBid(message: any) {
     }
 
     // Fire-and-forget counterbid processing (extreme scale optimization)
-    // pendingCounterbids cache provides dedup; no need to await all tasks which blocks handler
+    // Deterministic job IDs provide deduplication at queue level
     relevantTasks.forEach(task => {
       handleCounterBidForTask(task, message).catch(err => {
         errorLog('CounterbidError', `Task ${task._id}: ${err.message}`);
@@ -14079,33 +14179,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
       const tokenOfferPriceForQueue = Math.ceil(Number(offerPrice));
 
-      // Token-level deduplication with price comparison
-      // Compare incoming offer vs our pending counterbid (not our new counterbid vs pending)
-      // If incoming offer <= our pending counterbid, our pending bid is still winning
-      const pendingEntry = counterbidTrackingService.getPendingCounterbid(task._id, 'magiceden', tokenId.toString());
-      if (pendingEntry) {
-        // Case 1: Incoming offer <= our pending counterbid - our bid is still winning, skip
-        if (incomingBidAmount <= pendingEntry.priceWei) {
-          return;
-        }
-
-        // Case 2: Incoming offer > our pending counterbid - need to update our bid
-        try {
-          const existingJob = await Job.fromId(queue, pendingEntry.jobId);
-          if (existingJob) {
-            await existingJob.updateData({ ...existingJob.data, offerPrice: tokenOfferPriceForQueue });
-            counterbidTrackingService.updatePendingCounterbidPrice(task._id, 'magiceden', tokenId.toString(), tokenOfferPriceForQueue);
-            debugLog('Counterbid', `[ME] ${task.contract.slug} [${tokenId}] | Pending Check: UPDATED - incoming ${incomingBidAmount} > pending ${pendingEntry.priceWei}, new counterbid ${tokenOfferPriceForQueue}`, { taskId: task._id.toString(), marketplace: 'magiceden', slug: task.contract.slug, tokenId: tokenId.toString() });
-          } else {
-            counterbidTrackingService.clearCounterbidPending(task._id, 'magiceden', tokenId.toString());
-          }
-        } catch (updateErr) {
-          errorLog('Queue', `Failed to update pending counterbid job price`, updateErr);
-        }
-        return;
-      }
-
-      // No pending counterbid - create new job
+      // Create counterbid job
       const bidData: IMagicedenTokenBidData = {
         taskId: task._id.toString(),
         address: task.wallet,
@@ -14124,25 +14198,40 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       debugLog('Counterbid', `[ME] ${task.contract.slug} [${tokenId}] | QUEUEING JOB: offerPrice=${offerPriceEth} ${currencySymbol}`, { taskId: task._id.toString(), marketplace: 'magiceden', slug: task.contract.slug, tokenId: tokenId.toString() });
 
       try {
-        const counterbidJobId = `CB-${task._id}-me-token-${tokenId}-${tokenOfferPriceForQueue}`;
-        const job = await queue.add(
-          MAGICEDEN_TOKEN_BID_COUNTERBID,
-          bidData,
-          {
-            jobId: counterbidJobId,
-            removeOnComplete: true,
-            removeOnFail: true
+        const counterbidJobId = `CB-${task._id}-me-token-${tokenId}`;  // No price in jobId
+
+        // Check for existing job and update if new price is higher
+        const existingJob = await queue.getJob(counterbidJobId);
+        if (existingJob) {
+          const existingPrice = existingJob.data.offerPrice;
+          if (tokenOfferPriceForQueue > existingPrice) {
+            await existingJob.updateData({
+              ...existingJob.data,
+              offerPrice: tokenOfferPriceForQueue,
+              maxBidPriceEth: maxBidPriceEth,
+              minBidPriceEth: minBidPriceEth
+            });
+            debugLog('CounterbidUpdate', `[ME-Token] Updated job with higher price | tokenId=${tokenId} | oldPrice=${existingPrice} | newPrice=${tokenOfferPriceForQueue}`);
+          } else if (tokenOfferPriceForQueue === existingPrice) {
+            debugLog('CounterbidUpdate', `[ME-Token] Skipped - equal price | tokenId=${tokenId} | price=${tokenOfferPriceForQueue}`);
+          } else {
+            debugLog('CounterbidUpdate', `[ME-Token] Skipped - lower price | tokenId=${tokenId} | existingPrice=${existingPrice} | newPrice=${tokenOfferPriceForQueue}`);
           }
-        );
-        if (job?.id) {
-          counterbidTrackingService.markCounterbidPending(task._id, 'magiceden', tokenId.toString(), tokenOfferPriceForQueue, job.id);
+        } else {
+          // No existing job - add new one
+          await queue.add(
+            MAGICEDEN_TOKEN_BID_COUNTERBID,
+            bidData,
+            {
+              jobId: counterbidJobId,
+              removeOnComplete: true,
+              removeOnFail: true
+            }
+          );
+          debugLog('CounterbidUpdate', `[ME-Token] New job added | tokenId=${tokenId} | price=${tokenOfferPriceForQueue}`);
         }
       } catch (error: any) {
-        if (!error?.message?.includes('Job with this id already exists')) {
-          // Clear pending status if queueing fails (but not for duplicate job errors)
-          counterbidTrackingService.clearCounterbidPending(task._id, 'magiceden', tokenId.toString());
-          throw error;
-        }
+        errorLog('Queue', `Failed to process MagicEden token counterbid`, error);
       }
 
       // Removed: seenOrderHashes.delete(taskSpecificHash) - let TTL handle expiration to prevent duplicate bids
@@ -14284,16 +14373,34 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           }
 
           try {
-            const counterbidJobId = `CB-${task._id}-me-trait-${identifier}-${offerPrice}`;
-            await queue.add(MAGICEDEN_TRAIT_BID_COUNTERBID, bidData, {
-              jobId: counterbidJobId,
-              removeOnComplete: true,
-              removeOnFail: true
-            });
-          } catch (queueError: any) {
-            if (!queueError?.message?.includes('Job with this id already exists')) {
-              errorLog('Queue', `Failed to queue MagicEden trait counterbid`, queueError);
+            const counterbidJobId = `CB-${task._id}-me-trait-${identifier}`;  // No price in jobId
+
+            // Check for existing job and update if new price is higher
+            const existingJob = await queue.getJob(counterbidJobId);
+            if (existingJob) {
+              const existingPrice = existingJob.data.offerPrice;
+              if (offerPrice > existingPrice) {
+                await existingJob.updateData({
+                  ...existingJob.data,
+                  offerPrice: offerPrice
+                });
+                debugLog('CounterbidUpdate', `[ME-Trait] Updated job with higher price | trait=${identifier} | oldPrice=${existingPrice} | newPrice=${offerPrice}`);
+              } else if (offerPrice === existingPrice) {
+                debugLog('CounterbidUpdate', `[ME-Trait] Skipped - equal price | trait=${identifier} | price=${offerPrice}`);
+              } else {
+                debugLog('CounterbidUpdate', `[ME-Trait] Skipped - lower price | trait=${identifier} | existingPrice=${existingPrice} | newPrice=${offerPrice}`);
+              }
+            } else {
+              // No existing job - add new one
+              await queue.add(MAGICEDEN_TRAIT_BID_COUNTERBID, bidData, {
+                jobId: counterbidJobId,
+                removeOnComplete: true,
+                removeOnFail: true
+              });
+              debugLog('CounterbidUpdate', `[ME-Trait] New job added | trait=${identifier} | price=${offerPrice}`);
             }
+          } catch (queueError: any) {
+            errorLog('Queue', `Failed to process MagicEden trait counterbid`, queueError);
           }
         }
       } // END: if (hasTraits) block
@@ -14372,22 +14479,42 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
             };
 
             try {
-              const counterbidJobId = `CB-${task._id}-me-token-${tokenId}-${tokenOfferPrice}`;
-              await queue.add(
-                MAGICEDEN_TOKEN_BID_COUNTERBID,
-                tokenBidData,
-                {
-                  jobId: counterbidJobId,
-                  removeOnComplete: true,
-                  removeOnFail: true
+              const counterbidJobId = `CB-${task._id}-me-token-${tokenId}`;  // No price in jobId
+
+              // Check for existing job and update if new price is higher
+              const existingJob = await queue.getJob(counterbidJobId);
+              if (existingJob) {
+                const existingPrice = existingJob.data.offerPrice;
+                if (tokenOfferPrice > existingPrice) {
+                  await existingJob.updateData({
+                    ...existingJob.data,
+                    offerPrice: tokenOfferPrice,
+                    maxBidPriceEth: maxBidPriceEth,
+                    minBidPriceEth: minBidPriceEth
+                  });
+                  debugLog('CounterbidUpdate', `[ME-Token] Updated job with higher price | tokenId=${tokenId} | oldPrice=${existingPrice} | newPrice=${tokenOfferPrice}`);
+                  tokenCounterbidsQueued++;
+                } else if (tokenOfferPrice === existingPrice) {
+                  debugLog('CounterbidUpdate', `[ME-Token] Skipped - equal price | tokenId=${tokenId} | price=${tokenOfferPrice}`);
+                } else {
+                  debugLog('CounterbidUpdate', `[ME-Token] Skipped - lower price | tokenId=${tokenId} | existingPrice=${existingPrice} | newPrice=${tokenOfferPrice}`);
                 }
-              );
-              tokenCounterbidsQueued++;
-              debugLog('Counterbid', `[ME] ${task.contract.slug} [${tokenId}] | Token-vs-Trait: QUEUED - defending token against trait offer ${trait.attributeKey}:${trait.attributeValue} at ${tokenOfferPriceEth} ETH`, { taskId: task._id.toString(), marketplace: 'magiceden' });
-            } catch (queueError: any) {
-              if (!queueError?.message?.includes('Job with this id already exists')) {
-                errorLog('Queue', `Failed to queue MagicEden token counterbid`, queueError);
+              } else {
+                // No existing job - add new one
+                await queue.add(
+                  MAGICEDEN_TOKEN_BID_COUNTERBID,
+                  tokenBidData,
+                  {
+                    jobId: counterbidJobId,
+                    removeOnComplete: true,
+                    removeOnFail: true
+                  }
+                );
+                debugLog('CounterbidUpdate', `[ME-Token] New job added | tokenId=${tokenId} | price=${tokenOfferPrice}`);
+                tokenCounterbidsQueued++;
               }
+            } catch (queueError: any) {
+              errorLog('Queue', `Failed to process MagicEden token counterbid`, queueError);
             }
           }
         }
@@ -14619,22 +14746,42 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
             }
 
             try {
-              const counterbidJobId = `CB-${task._id}-me-coll-${task.contract.slug}-${orderOfferPrice}`;
-              await queue.add(
-                MAGICEDEN_COLLECTION_BID_COUNTERBID,
-                bidData,
-                {
-                  jobId: counterbidJobId,
-                  removeOnComplete: true,
-                  removeOnFail: true
+              const counterbidJobId = `CB-${task._id}-me-coll-${task.contract.slug}`;  // No price in jobId
+
+              // Check for existing job and update if new price is higher
+              const existingJob = await queue.getJob(counterbidJobId);
+              if (existingJob) {
+                const existingPrice = existingJob.data.offerPrice;
+                if (orderOfferPrice > existingPrice) {
+                  await existingJob.updateData({
+                    ...existingJob.data,
+                    offerPrice: orderOfferPrice
+                  });
+                  debugLog('CounterbidUpdate', `[ME-Coll] Updated job with higher price | slug=${task.contract.slug} | oldPrice=${existingPrice} | newPrice=${orderOfferPrice}`);
+                  counterbidsQueued++;
+                  ordersToCancel.push(order);
+                } else if (orderOfferPrice === existingPrice) {
+                  debugLog('CounterbidUpdate', `[ME-Coll] Skipped - equal price | slug=${task.contract.slug} | price=${orderOfferPrice}`);
+                } else {
+                  debugLog('CounterbidUpdate', `[ME-Coll] Skipped - lower price | slug=${task.contract.slug} | existingPrice=${existingPrice} | newPrice=${orderOfferPrice}`);
                 }
-              );
-              counterbidsQueued++;
-              ordersToCancel.push(order);
-            } catch (queueError: any) {
-              if (!queueError?.message?.includes('Job with this id already exists')) {
-                errorLog('Queue', `Failed to queue MagicEden collection counterbid`, queueError);
+              } else {
+                // No existing job - add new one
+                await queue.add(
+                  MAGICEDEN_COLLECTION_BID_COUNTERBID,
+                  bidData,
+                  {
+                    jobId: counterbidJobId,
+                    removeOnComplete: true,
+                    removeOnFail: true
+                  }
+                );
+                debugLog('CounterbidUpdate', `[ME-Coll] New job added | slug=${task.contract.slug} | price=${orderOfferPrice}`);
+                counterbidsQueued++;
+                ordersToCancel.push(order);
               }
+            } catch (queueError: any) {
+              errorLog('Queue', `Failed to process MagicEden collection counterbid`, queueError);
             }
 
           } else {
@@ -14658,22 +14805,44 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
 
             try {
-              const counterbidJobId = `CB-${task._id}-me-token-${tokenId}-${orderOfferPrice}`;
-              await queue.add(
-                MAGICEDEN_TOKEN_BID_COUNTERBID,
-                bidData,
-                {
-                  jobId: counterbidJobId,
-                  removeOnComplete: true,
-                  removeOnFail: true
+              const counterbidJobId = `CB-${task._id}-me-token-${tokenId}`;  // No price in jobId
+
+              // Check for existing job and update if new price is higher
+              const existingJob = await queue.getJob(counterbidJobId);
+              if (existingJob) {
+                const existingPrice = existingJob.data.offerPrice;
+                if (orderOfferPrice > existingPrice) {
+                  await existingJob.updateData({
+                    ...existingJob.data,
+                    offerPrice: orderOfferPrice,
+                    maxBidPriceEth: maxBidPriceEth,
+                    minBidPriceEth: minBidPriceEth
+                  });
+                  debugLog('CounterbidUpdate', `[ME-Token] Updated job with higher price | tokenId=${tokenId} | oldPrice=${existingPrice} | newPrice=${orderOfferPrice}`);
+                  counterbidsQueued++;
+                  ordersToCancel.push(order);
+                } else if (orderOfferPrice === existingPrice) {
+                  debugLog('CounterbidUpdate', `[ME-Token] Skipped - equal price | tokenId=${tokenId} | price=${orderOfferPrice}`);
+                } else {
+                  debugLog('CounterbidUpdate', `[ME-Token] Skipped - lower price | tokenId=${tokenId} | existingPrice=${existingPrice} | newPrice=${orderOfferPrice}`);
                 }
-              );
-              counterbidsQueued++;
-              ordersToCancel.push(order);
-            } catch (queueError: any) {
-              if (!queueError?.message?.includes('Job with this id already exists')) {
-                errorLog('Queue', `Failed to queue MagicEden token counterbid`, queueError);
+              } else {
+                // No existing job - add new one
+                await queue.add(
+                  MAGICEDEN_TOKEN_BID_COUNTERBID,
+                  bidData,
+                  {
+                    jobId: counterbidJobId,
+                    removeOnComplete: true,
+                    removeOnFail: true
+                  }
+                );
+                debugLog('CounterbidUpdate', `[ME-Token] New job added | tokenId=${tokenId} | price=${orderOfferPrice}`);
+                counterbidsQueued++;
+                ordersToCancel.push(order);
               }
+            } catch (queueError: any) {
+              errorLog('Queue', `Failed to process MagicEden token counterbid`, queueError);
             }
           }
         } else {
@@ -14770,33 +14939,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
             const tokenOfferPriceForQueue = Math.ceil(Number(tokenOfferPrice));
             const basePriceWei = Math.ceil(basePriceEth * Math.pow(10, decimal));
 
-            // Check if there's already a pending counterbid for this token
-            // Compare base price (incoming offer) vs our pending counterbid
-            // If base price <= our pending counterbid, our bid is still winning
-            const pendingEntry = counterbidTrackingService.getPendingCounterbid(task._id, 'magiceden', targetTokenId.toString());
-            if (pendingEntry) {
-              // Case 1: Base price <= our pending counterbid - our bid is still winning, skip
-              if (basePriceWei <= pendingEntry.priceWei) {
-                continue;
-              }
-
-              // Case 2: Base price > our pending counterbid - need to update our bid
-              try {
-                const existingJob = await Job.fromId(queue, pendingEntry.jobId);
-                if (existingJob) {
-                  await existingJob.updateData({ ...existingJob.data, offerPrice: tokenOfferPriceForQueue });
-                  counterbidTrackingService.updatePendingCounterbidPrice(task._id, 'magiceden', targetTokenId.toString(), tokenOfferPriceForQueue);
-                  debugLog('Counterbid', `[ME] ${task.contract.slug} [${targetTokenId}] | Token-vs-Collection: UPDATED - base ${basePriceWei} > pending ${pendingEntry.priceWei}, new counterbid ${tokenOfferPriceForQueue}`, { taskId: task._id.toString(), marketplace: 'magiceden' });
-                } else {
-                  counterbidTrackingService.clearCounterbidPending(task._id, 'magiceden', targetTokenId.toString());
-                }
-              } catch (updateErr) {
-                errorLog('Queue', `Failed to update pending counterbid job price`, updateErr);
-              }
-              continue;
-            }
-
-            // No pending counterbid - create new job
+            // Create counterbid job
             const tokenBidData: IMagicedenTokenBidData = {
               taskId: task._id.toString(),
               address: task.wallet,
@@ -14814,14 +14957,11 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
             try {
               const counterbidJobId = `CB-${task._id}-me-token-${targetTokenId}-${tokenOfferPriceForQueue}`;
-              const job = await queue.add(MAGICEDEN_TOKEN_BID_COUNTERBID, tokenBidData, {
+              await queue.add(MAGICEDEN_TOKEN_BID_COUNTERBID, tokenBidData, {
                 jobId: counterbidJobId,
                 removeOnComplete: true,
                 removeOnFail: true
               });
-              if (job?.id) {
-                counterbidTrackingService.markCounterbidPending(task._id, 'magiceden', targetTokenId.toString(), tokenOfferPriceForQueue, job.id);
-              }
               tokenCollectionCounterbidsQueued++;
               debugLog('Counterbid', `[ME] ${task.contract.slug} [${targetTokenId}] | Token-vs-Collection: QUEUED - defending token against collection offer at ${tokenOfferPriceEth} ETH`, { taskId: task._id.toString(), marketplace: 'magiceden' });
             } catch (queueError: any) {
@@ -14829,7 +14969,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               if (queueError?.message?.includes('Job with this id already exists')) {
                 debugLog('Counterbid', `[ME] ${task.contract.slug} [${targetTokenId}] | Token-vs-Collection: SKIPPED - duplicate job for same price`, { taskId: task._id.toString(), marketplace: 'magiceden' });
               } else {
-                counterbidTrackingService.clearCounterbidPending(task._id, 'magiceden', targetTokenId.toString());
                 errorLog('Queue', `Failed to queue token counterbid for collection defense`, queueError);
               }
             }
@@ -14842,12 +14981,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     }
   } catch (error) {
     errorLog('Counterbid', `ME counterbid handler failed | task=${task._id}`, error);
-    // Clean up pending marks on error to prevent blocking future counterbids
-    const bidType = data?.data?.criteria?.kind;
-    const tokenId = data?.data?.criteria?.data?.token?.tokenId;
-    if (bidType === 'token' && tokenId) {
-      counterbidTrackingService.clearCounterbidPending(task._id, 'magiceden', tokenId.toString());
-    }
   }
 }
 
@@ -15160,8 +15293,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
     // Route to appropriate handler: token (item_received_bid), trait (trait_offer), or collection (collection_offer)
     // Note: Cross-type defense (TOKEN-vs-TRAIT, TOKEN-vs-COLLECTION) is handled inline in each handler
 
-    // Track counterbid activity for floor price warmer
-    floorPriceWarmer.trackActivity(task.contract.slug);
+    // Track counterbid activity for collection data warmer
+    collectionDataWarmer.trackActivity(task.contract.slug);
 
     const collectionOfferEth = data.event === "collection_offer" ? incomingBidAmount / Math.pow(10, decimal) : 0
 
@@ -15294,9 +15427,9 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
         return
       }
 
-      // Queue counterbid job (deterministic jobId prevents duplicates)
+      // Queue counterbid job (price comparison prevents duplicates)
       const tokenOfferPriceForQueue = Math.ceil(offerPrice);
-      const counterbidJobId = `CB-${task._id}-os-token-${tokenId}-${tokenOfferPriceForQueue}`;
+      const counterbidJobId = `CB-${task._id}-os-token-${tokenId}`;  // No price in jobId
 
       const asset = {
         contractAddress: task.contract.contractAddress,
@@ -15321,22 +15454,38 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       debugLog('Counterbid', `[OS] ${task.contract.slug} [${tokenId}] | QUEUEING counterbid | offer=${offerPriceEth} ${currencySymbol} | oldPrice=${(ourCurrentPriceWei / Math.pow(10, decimal)).toFixed(6)}`);
 
       // Fire-and-forget: non-blocking queue operation (saves 50-75ms)
-      queue.add(
-        OPENSEA_TOKEN_BID_COUNTERBID,
-        bidData,
-        {
-          jobId: counterbidJobId,
-          removeOnComplete: true,
-          removeOnFail: true
-        }
-      ).then(() => {
-        debugLog('Performance', `[OS-Handler] Counterbid queued | floor=${floor_price} | offer=${offerPriceEth} | slug=${task.contract.slug} | tokenId=${tokenId} | jobId=${counterbidJobId}`);
-      }).catch((error: any) => {
-        if (!error?.message?.includes('Job with this id already exists')) {
-          errorLog('Queue', `Failed to queue OpenSea token counterbid`, error);
+      // Check for existing job and update if new price is higher
+      queue.getJob(counterbidJobId).then(async (existingJob) => {
+        if (existingJob) {
+          const existingPrice = existingJob.data.offerPrice;
+          if (tokenOfferPriceForQueue > existingPrice) {
+            await existingJob.updateData({
+              ...existingJob.data,
+              offerPrice: tokenOfferPriceForQueue,
+              floor_price: floor_price,
+              maxBidPriceEth: maxBidPriceEth
+            });
+            debugLog('CounterbidUpdate', `[OS-Token] Updated job with higher price | tokenId=${tokenId} | oldPrice=${existingPrice} | newPrice=${tokenOfferPriceForQueue}`);
+          } else if (tokenOfferPriceForQueue === existingPrice) {
+            debugLog('CounterbidUpdate', `[OS-Token] Skipped - equal price | tokenId=${tokenId} | price=${tokenOfferPriceForQueue}`);
+          } else {
+            debugLog('CounterbidUpdate', `[OS-Token] Skipped - lower price | tokenId=${tokenId} | existingPrice=${existingPrice} | newPrice=${tokenOfferPriceForQueue}`);
+          }
         } else {
-          debugLog('Counterbid', `[OS] ${task.contract.slug} [${tokenId}] | Job already exists (deterministic dedup) | jobId=${counterbidJobId}`);
+          // No existing job - add new one
+          await queue.add(
+            OPENSEA_TOKEN_BID_COUNTERBID,
+            bidData,
+            {
+              jobId: counterbidJobId,
+              removeOnComplete: true,
+              removeOnFail: true
+            }
+          );
+          debugLog('CounterbidUpdate', `[OS-Token] New job added | tokenId=${tokenId} | price=${tokenOfferPriceForQueue}`);
         }
+      }).catch((error: any) => {
+        errorLog('Queue', `Failed to process OpenSea token counterbid`, error);
       });
     }
 
@@ -15543,24 +15692,41 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                 outbidOptions: outbidOptions
               };
 
-              const counterbidJobId = `CB-${task._id}-os-token-${tokenId}-${tokenOfferPriceForQueue}`;
+              const counterbidJobId = `CB-${task._id}-os-token-${tokenId}`;  // No price in jobId
               // Fire-and-forget: non-blocking queue operation (saves 50-75ms)
-              queue.add(
-                OPENSEA_TOKEN_BID_COUNTERBID,
-                tokenBidData,
-                {
-                  jobId: counterbidJobId,
-                  removeOnComplete: true,
-                  removeOnFail: true
-                }
-              ).then(() => {
-                tokenCounterbidsQueued++;
-              }).catch((queueError: any) => {
-                if (!queueError?.message?.includes('Job with this id already exists')) {
-                  errorLog('Queue', `Failed to queue OpenSea token counterbid`, queueError);
+              queue.getJob(counterbidJobId).then(async (existingJob) => {
+                if (existingJob) {
+                  const existingPrice = existingJob.data.offerPrice;
+                  if (tokenOfferPriceForQueue > existingPrice) {
+                    await existingJob.updateData({
+                      ...existingJob.data,
+                      offerPrice: tokenOfferPriceForQueue,
+                      floor_price: floor_price,
+                      maxBidPriceEth: maxBidPriceEth
+                    });
+                    debugLog('CounterbidUpdate', `[OS-Token] Updated job with higher price | tokenId=${tokenId} | oldPrice=${existingPrice} | newPrice=${tokenOfferPriceForQueue}`);
+                    tokenCounterbidsQueued++;
+                  } else if (tokenOfferPriceForQueue === existingPrice) {
+                    debugLog('CounterbidUpdate', `[OS-Token] Skipped - equal price | tokenId=${tokenId} | price=${tokenOfferPriceForQueue}`);
+                  } else {
+                    debugLog('CounterbidUpdate', `[OS-Token] Skipped - lower price | tokenId=${tokenId} | existingPrice=${existingPrice} | newPrice=${tokenOfferPriceForQueue}`);
+                  }
                 } else {
-                  debugLog('Counterbid', `[OS] ${task.contract.slug} [${tokenId}] | Job already exists (deterministic dedup) | jobId=${counterbidJobId}`);
+                  // No existing job - add new one
+                  await queue.add(
+                    OPENSEA_TOKEN_BID_COUNTERBID,
+                    tokenBidData,
+                    {
+                      jobId: counterbidJobId,
+                      removeOnComplete: true,
+                      removeOnFail: true
+                    }
+                  );
+                  debugLog('CounterbidUpdate', `[OS-Token] New job added | tokenId=${tokenId} | price=${tokenOfferPriceForQueue}`);
+                  tokenCounterbidsQueued++;
                 }
+              }).catch((queueError: any) => {
+                errorLog('Queue', `Failed to process OpenSea token counterbid`, queueError);
               });
             }
           }
@@ -15591,23 +15757,39 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
           try {
             const traitKey = `${trait.type}:${trait.value}`;
-            const counterbidJobId = `CB-${task._id}-os-trait-${traitKey}-${traitOfferForQueue}`;
-            await queue.add(
-              OPENSEA_TRAIT_BID_COUNTERBID,
-              counterbidData,
-              {
-                jobId: counterbidJobId,
-                removeOnComplete: true,
-                removeOnFail: true
+            const counterbidJobId = `CB-${task._id}-os-trait-${traitKey}`;  // No price in jobId
+
+            // Check for existing job and update if new price is higher
+            const existingJob = await queue.getJob(counterbidJobId);
+            if (existingJob) {
+              const existingPrice = existingJob.data.offerPrice;
+              if (traitOfferForQueue > existingPrice) {
+                await existingJob.updateData({
+                  ...existingJob.data,
+                  offerPrice: traitOfferForQueue,
+                  floor_price: cachedFloorPrice
+                });
+                debugLog('CounterbidUpdate', `[OS-Trait] Updated job with higher price | trait=${traitKey} | oldPrice=${existingPrice} | newPrice=${traitOfferForQueue}`);
+              } else if (traitOfferForQueue === existingPrice) {
+                debugLog('CounterbidUpdate', `[OS-Trait] Skipped - equal price | trait=${traitKey} | price=${traitOfferForQueue}`);
+              } else {
+                debugLog('CounterbidUpdate', `[OS-Trait] Skipped - lower price | trait=${traitKey} | existingPrice=${existingPrice} | newPrice=${traitOfferForQueue}`);
               }
-            );
-            debugLog('Counterbid', `[OS] ${task.contract.slug} [${traitKey}] | QUEUED trait counterbid | offer=${(traitOfferForQueue / Math.pow(10, decimal)).toFixed(6)} ETH`);
-          } catch (queueError: any) {
-            if (!queueError?.message?.includes('Job with this id already exists')) {
-              errorLog('Queue', `Failed to queue OpenSea trait counterbid`, queueError);
             } else {
-              debugLog('Counterbid', `[OS] ${task.contract.slug} [${trait.type}:${trait.value}] | Job already exists (deterministic dedup)`);
+              // No existing job - add new one
+              await queue.add(
+                OPENSEA_TRAIT_BID_COUNTERBID,
+                counterbidData,
+                {
+                  jobId: counterbidJobId,
+                  removeOnComplete: true,
+                  removeOnFail: true
+                }
+              );
+              debugLog('CounterbidUpdate', `[OS-Trait] New job added | trait=${traitKey} | price=${traitOfferForQueue}`);
             }
+          } catch (queueError: any) {
+            errorLog('Queue', `Failed to process OpenSea trait counterbid`, queueError);
           }
         }
       } // END: if (hasTraits) block
@@ -15977,28 +16159,41 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
             // [15] QUEUE OPERATION
             try {
-              const counterbidJobId = `CB-${task._id}-os-coll-${task.contract.slug}-${collectionOfferForQueue}`;
+              const counterbidJobId = `CB-${task._id}-os-coll-${task.contract.slug}`;  // No price in jobId
 
-              await queue.add(
-                OPENSEA_COLLECTION_BID_COUNTERBID,
-                bidData,
-                {
-                  jobId: counterbidJobId,
-                  removeOnComplete: true,
-                  removeOnFail: true
+              // Check for existing job and update if new price is higher
+              const existingJob = await queue.getJob(counterbidJobId);
+              if (existingJob) {
+                const existingPrice = existingJob.data.offerPrice;
+                if (collectionOfferForQueue > existingPrice) {
+                  await existingJob.updateData({
+                    ...existingJob.data,
+                    offerPrice: collectionOfferForQueue,
+                    floor_price: cachedFloorPrice
+                  });
+                  debugLog('CounterbidUpdate', `[OS-Coll] Updated job with higher price | slug=${task.contract.slug} | oldPrice=${existingPrice} | newPrice=${collectionOfferForQueue}`);
+                  counterbidsQueued++;
+                } else if (collectionOfferForQueue === existingPrice) {
+                  debugLog('CounterbidUpdate', `[OS-Coll] Skipped - equal price | slug=${task.contract.slug} | price=${collectionOfferForQueue}`);
+                } else {
+                  debugLog('CounterbidUpdate', `[OS-Coll] Skipped - lower price | slug=${task.contract.slug} | existingPrice=${existingPrice} | newPrice=${collectionOfferForQueue}`);
                 }
-              );
-
-              counterbidsQueued++;
-            } catch (queueError: any) {
-              if (queueError?.message?.includes('Job with this id already exists')) {
-                debugLog('Counterbid', `[QUEUE_DUPLICATE] Job already exists | slug=${task.contract.slug} | SKIP (expected behavior)`,
-                  { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
               } else {
-                errorLog('Queue', `Failed to queue OpenSea collection counterbid`, queueError);
-                debugLog('Counterbid', `[QUEUE_ERROR] Failed to queue | slug=${task.contract.slug} | error=${queueError?.message}`,
-                  { taskId: task._id.toString(), marketplace: 'opensea', slug: task.contract.slug });
+                // No existing job - add new one
+                await queue.add(
+                  OPENSEA_COLLECTION_BID_COUNTERBID,
+                  bidData,
+                  {
+                    jobId: counterbidJobId,
+                    removeOnComplete: true,
+                    removeOnFail: true
+                  }
+                );
+                debugLog('CounterbidUpdate', `[OS-Coll] New job added | slug=${task.contract.slug} | price=${collectionOfferForQueue}`);
+                counterbidsQueued++;
               }
+            } catch (queueError: any) {
+              errorLog('Queue', `Failed to process OpenSea collection counterbid`, queueError);
             }
           } else {
             // This is a token offer
@@ -16023,21 +16218,42 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
 
             try {
-              const counterbidJobId = `CB-${task._id}-os-token-${tokenId}-${orderOfferPriceForQueue}`;
-              await queue.add(
-                OPENSEA_TOKEN_BID_COUNTERBID,
-                bidData,
-                {
-                  jobId: counterbidJobId,
-                  removeOnComplete: true,
-                  removeOnFail: true
+              const counterbidJobId = `CB-${task._id}-os-token-${tokenId}`;  // No price in jobId
+
+              // Check for existing job and update if new price is higher
+              const existingJob = await queue.getJob(counterbidJobId);
+              if (existingJob) {
+                const existingPrice = existingJob.data.offerPrice;
+                if (orderOfferPriceForQueue > existingPrice) {
+                  await existingJob.updateData({
+                    ...existingJob.data,
+                    offerPrice: orderOfferPriceForQueue,
+                    floor_price: floor_price,
+                    maxBidPriceEth: maxBidPriceEth
+                  });
+                  debugLog('CounterbidUpdate', `[OS-Token] Updated job with higher price | tokenId=${tokenId} | oldPrice=${existingPrice} | newPrice=${orderOfferPriceForQueue}`);
+                  counterbidsQueued++;
+                } else if (orderOfferPriceForQueue === existingPrice) {
+                  debugLog('CounterbidUpdate', `[OS-Token] Skipped - equal price | tokenId=${tokenId} | price=${orderOfferPriceForQueue}`);
+                } else {
+                  debugLog('CounterbidUpdate', `[OS-Token] Skipped - lower price | tokenId=${tokenId} | existingPrice=${existingPrice} | newPrice=${orderOfferPriceForQueue}`);
                 }
-              );
-              counterbidsQueued++;
-            } catch (queueError: any) {
-              if (!queueError?.message?.includes('Job with this id already exists')) {
-                errorLog('Queue', `Failed to queue OpenSea token counterbid`, queueError);
+              } else {
+                // No existing job - add new one
+                await queue.add(
+                  OPENSEA_TOKEN_BID_COUNTERBID,
+                  bidData,
+                  {
+                    jobId: counterbidJobId,
+                    removeOnComplete: true,
+                    removeOnFail: true
+                  }
+                );
+                debugLog('CounterbidUpdate', `[OS-Token] New job added | tokenId=${tokenId} | price=${orderOfferPriceForQueue}`);
+                counterbidsQueued++;
               }
+            } catch (queueError: any) {
+              errorLog('Queue', `Failed to process OpenSea token counterbid`, queueError);
             }
           }
         }
@@ -16403,16 +16619,34 @@ async function handleBlurCounterbid(data: any, task: ITask) {
         debugLog('Counterbid', `[Blur] ${task.contract.slug} [${identifier}] | QUEUE: Trait counterbid at ${offerPriceEth} BETH (outbidding ${incomingPrice} BETH)`);
 
         try {
-          const counterbidJobId = `CB-${task._id}-blur-trait-${identifier}-${offerPrice}`;
-          await blurQueue.add(BLUR_TRAIT_BID_COUNTERBID, bidData, {
-            jobId: counterbidJobId,
-            removeOnComplete: true,
-            removeOnFail: true
-          });
-        } catch (queueError: any) {
-          if (!queueError?.message?.includes('Job with this id already exists')) {
-            errorLog('Queue', `Failed to queue Blur trait counterbid`, queueError);
+          const counterbidJobId = `CB-${task._id}-blur-trait-${identifier}`;  // No price in jobId
+
+          // Check for existing job and update if new price is higher
+          const existingJob = await blurQueue.getJob(counterbidJobId);
+          if (existingJob) {
+            const existingPrice = existingJob.data.offerPrice;
+            if (Number(offerPrice) > existingPrice) {
+              await existingJob.updateData({
+                ...existingJob.data,
+                offerPrice: Number(offerPrice)
+              });
+              debugLog('CounterbidUpdate', `[Blur-Trait] Updated job with higher price | trait=${identifier} | oldPrice=${existingPrice} | newPrice=${offerPrice}`);
+            } else if (Number(offerPrice) === existingPrice) {
+              debugLog('CounterbidUpdate', `[Blur-Trait] Skipped - equal price | trait=${identifier} | price=${offerPrice}`);
+            } else {
+              debugLog('CounterbidUpdate', `[Blur-Trait] Skipped - lower price | trait=${identifier} | existingPrice=${existingPrice} | newPrice=${offerPrice}`);
+            }
+          } else {
+            // No existing job - add new one
+            await blurQueue.add(BLUR_TRAIT_BID_COUNTERBID, bidData, {
+              jobId: counterbidJobId,
+              removeOnComplete: true,
+              removeOnFail: true
+            });
+            debugLog('CounterbidUpdate', `[Blur-Trait] New job added | trait=${identifier} | price=${offerPrice}`);
           }
+        } catch (queueError: any) {
+          errorLog('Queue', `Failed to process Blur trait counterbid`, queueError);
         }
       }
 
@@ -16601,17 +16835,36 @@ async function handleBlurCounterbid(data: any, task: ITask) {
             debugLog('Counterbid', `[Blur] ${task.contract.slug} [${order.identifier}] | QUEUE: Trait counterbid at ${offerPriceEth} BETH`);
 
             try {
-              const counterbidJobId = `CB-${task._id}-blur-trait-${order.identifier}-${orderOfferPrice}`;
-              await blurQueue.add(BLUR_TRAIT_BID_COUNTERBID, counterbidData, {
-                jobId: counterbidJobId,
-                removeOnComplete: true,
-                removeOnFail: true
-              });
-              counterbidsQueued++;
-            } catch (queueError: any) {
-              if (!queueError?.message?.includes('Job with this id already exists')) {
-                errorLog('Queue', `Failed to queue Blur trait counterbid`, queueError);
+              const counterbidJobId = `CB-${task._id}-blur-trait-${order.identifier}`;  // No price in jobId
+
+              // Check for existing job and update if new price is higher
+              const existingJob = await blurQueue.getJob(counterbidJobId);
+              if (existingJob) {
+                const existingPrice = existingJob.data.offerPrice;
+                if (Number(orderOfferPrice) > existingPrice) {
+                  await existingJob.updateData({
+                    ...existingJob.data,
+                    offerPrice: Number(orderOfferPrice)
+                  });
+                  debugLog('CounterbidUpdate', `[Blur-Trait] Updated job with higher price | trait=${order.identifier} | oldPrice=${existingPrice} | newPrice=${orderOfferPrice}`);
+                  counterbidsQueued++;
+                } else if (Number(orderOfferPrice) === existingPrice) {
+                  debugLog('CounterbidUpdate', `[Blur-Trait] Skipped - equal price | trait=${order.identifier} | price=${orderOfferPrice}`);
+                } else {
+                  debugLog('CounterbidUpdate', `[Blur-Trait] Skipped - lower price | trait=${order.identifier} | existingPrice=${existingPrice} | newPrice=${orderOfferPrice}`);
+                }
+              } else {
+                // No existing job - add new one
+                await blurQueue.add(BLUR_TRAIT_BID_COUNTERBID, counterbidData, {
+                  jobId: counterbidJobId,
+                  removeOnComplete: true,
+                  removeOnFail: true
+                });
+                debugLog('CounterbidUpdate', `[Blur-Trait] New job added | trait=${order.identifier} | price=${orderOfferPrice}`);
+                counterbidsQueued++;
               }
+            } catch (queueError: any) {
+              errorLog('Queue', `Failed to process Blur trait counterbid`, queueError);
             }
 
           } else if (order.identifier === 'collection') {
@@ -16631,17 +16884,36 @@ async function handleBlurCounterbid(data: any, task: ITask) {
             debugLog('Counterbid', `[Blur] ${task.contract.slug} [Collection] | QUEUE: Collection counterbid at ${offerPriceEthColl} BETH`);
 
             try {
-              const counterbidJobId = `CB-${task._id}-blur-coll-${task.contract.slug}-${orderOfferPrice}`;
-              await blurQueue.add(BLUR_COLLECTION_BID_COUNTERBID, bidData, {
-                jobId: counterbidJobId,
-                removeOnComplete: true,
-                removeOnFail: true
-              });
-              counterbidsQueued++;
-            } catch (queueError: any) {
-              if (!queueError?.message?.includes('Job with this id already exists')) {
-                errorLog('Queue', `Failed to queue Blur collection counterbid`, queueError);
+              const counterbidJobId = `CB-${task._id}-blur-coll-${task.contract.slug}`;  // No price in jobId
+
+              // Check for existing job and update if new price is higher
+              const existingJob = await blurQueue.getJob(counterbidJobId);
+              if (existingJob) {
+                const existingPrice = existingJob.data.offerPrice;
+                if (Number(orderOfferPrice) > existingPrice) {
+                  await existingJob.updateData({
+                    ...existingJob.data,
+                    offerPrice: Number(orderOfferPrice)
+                  });
+                  debugLog('CounterbidUpdate', `[Blur-Coll] Updated job with higher price | slug=${task.contract.slug} | oldPrice=${existingPrice} | newPrice=${orderOfferPrice}`);
+                  counterbidsQueued++;
+                } else if (Number(orderOfferPrice) === existingPrice) {
+                  debugLog('CounterbidUpdate', `[Blur-Coll] Skipped - equal price | slug=${task.contract.slug} | price=${orderOfferPrice}`);
+                } else {
+                  debugLog('CounterbidUpdate', `[Blur-Coll] Skipped - lower price | slug=${task.contract.slug} | existingPrice=${existingPrice} | newPrice=${orderOfferPrice}`);
+                }
+              } else {
+                // No existing job - add new one
+                await blurQueue.add(BLUR_COLLECTION_BID_COUNTERBID, bidData, {
+                  jobId: counterbidJobId,
+                  removeOnComplete: true,
+                  removeOnFail: true
+                });
+                debugLog('CounterbidUpdate', `[Blur-Coll] New job added | slug=${task.contract.slug} | price=${orderOfferPrice}`);
+                counterbidsQueued++;
               }
+            } catch (queueError: any) {
+              errorLog('Queue', `Failed to process Blur collection counterbid`, queueError);
             }
           }
         }
@@ -20919,9 +21191,6 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
   } catch (error: any) {
     const errorMsg = error?.response?.data?.message || error?.response?.data || error?.message || String(error);
     await logBidError(data.taskId, "MAGICEDEN TOKEN COUNTER BID ERROR", `Error bidding on token ${data.tokenId} in collection ${data.slug}: ${errorMsg}`, "error", "magiceden");
-  } finally {
-    // Always clear pending counterbid status when job completes (success or failure)
-    counterbidTrackingService.clearCounterbidPending(data.taskId, 'magiceden', data.tokenId.toString());
   }
 }
 
@@ -22100,12 +22369,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       return;
     }
 
-    // Check if a counterbid is already pending for this token (prevents race with Token-vs-Collection)
-    if (counterbidTrackingService.getPendingCounterbid(taskId, 'magiceden', tokenId.toString())) {
-      debugLog('BidFlow', `[ME-Token] ${slug} [${tokenId}] | SKIP: Counterbid already pending for this token`, { taskId: taskId, marketplace: 'magiceden', tokenId: tokenId.toString() });
-      return;
-    }
-
     const outbidOptions = currentTask.outbidOptions
 
     // Fetch floor price. Orders from cache.
@@ -22310,10 +22573,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     const secondBidEth = secondTopBidAmount / Math.pow(10, decimal);
     debugLog('BidFlow', `[ME-Token] ${slug}#${tokenId} | PLACING BID: ${finalOfferEth} ${currencySymbol} | TopBid: ${topBidEth} | SecondBid: ${secondBidEth} | Margin: ${outbidMargin} | isOurs: ${isOwnBid}`);
 
-    // Mark this token as pending to prevent Token-vs-Collection from also bidding
-    // Using placeholder jobId since this is a scheduled bid being processed (not a queued counterbid)
-    counterbidTrackingService.markCounterbidPending(taskId, 'magiceden', tokenId.toString(), Number(tokenOffer), 'scheduled-processing');
-
     try {
       // Log bid API start
 
@@ -22358,9 +22617,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
       // Throw the error
       throw bidError;
-    } finally {
-      // Clear the pending flag after bid completes (success or failure)
-      counterbidTrackingService.clearCounterbidPending(taskId, 'magiceden', tokenId.toString());
     }
 
   } catch (error: any) {
@@ -23673,6 +23929,19 @@ app.post('/api/collection', async (req, res) => {
       });
     }
 
+    // STEP 1: Check LRU cache first (<1ms access)
+    const cacheKey = slug.toLowerCase();
+    const cached = collectionDataLRU.get(cacheKey);
+
+    if (cached) {
+      const age = Date.now() - cached.cachedAt;
+      debugLog('CollectionData', `[${slug}] LRU CACHE_HIT | age=${Math.floor(age / 1000)}s | returning cached data`);
+      return res.status(200).json(cached.data);
+    }
+
+    debugLog('CollectionData', `[${slug}] LRU CACHE_MISS | fetching from APIs`);
+
+    // STEP 2: Fetch from APIs (existing logic continues...)
     const { collectionResult, magicEdenResult } = await fetchCollectionData(slug);
 
     // Extract data safely based on success flags
@@ -23711,9 +23980,22 @@ app.post('/api/collection', async (req, res) => {
       contractAddress,
     };
 
+    // STEP 3: Cache result if valid (non-blocking)
     if (slugValid) {
+      try {
+        collectionDataLRU.set(cacheKey, {
+          data,
+          cachedAt: Date.now()
+        });
+        debugLog('CollectionData', `[${slug}] Cached result | slugValid=${slugValid}`);
+      } catch (cacheError: any) {
+        // Fail-open: cache errors don't break endpoint
+        errorLog('CollectionData', `Failed to cache result for ${slug}`, cacheError instanceof Error ? cacheError : new Error(String(cacheError)));
+      }
+
       return res.status(200).json(data);
     } else {
+      // Don't cache invalid slugs (400 errors)
       console.warn(`[API] /api/collection: Collection offers not enabled for: ${slug}`);
       return res.status(400).json({ error: "Collection offers not enabled" });
     }
@@ -23741,75 +24023,91 @@ app.post('/api/collection/stats', async (req, res) => {
     const contractAddress = req.body.address as string;
     const startTime = Date.now();
 
-    // Check cache first (60 second TTL)
-    const STATS_CACHE_TTL = 60;
-    const cacheKey = `collection:stats:${slug}:${contractAddress}`;
+    // 1. Check LRU cache first (24-hour TTL, <1ms access)
+    const cacheKey = `${slug}:${contractAddress}`;
+    const cached = collectionStatsLRU.get(cacheKey);
 
-    try {
-      const cached = redisClient.isReady() ? await redisClient.getClient().get(cacheKey) : null;
-      if (cached) {
-        debugLog('CollectionStats', `[${slug}] Cache HIT | returning cached stats`);
-        return res.status(200).json(JSON.parse(cached));
-      }
-    } catch (cacheError) {
-      warnLog('CollectionStats', `[${slug}] Cache read error: ${cacheError}`);
+    if (cached) {
+      const age = Date.now() - cached.cachedAt;
+      debugLog('CollectionStats', `[${slug}] LRU CACHE_HIT | age=${age}ms | returning cached stats`);
+      return res.status(200).json(cached.data);
     }
 
-    debugLog('CollectionStats', `[${slug}] Cache MISS | fetching from APIs in parallel`);
+    debugLog('CollectionStats', `[${slug}] LRU CACHE_MISS | fetching from marketplace APIs`);
 
-    // Helper to time each fetch with timeout (prevents slow MagicEden APIs from blocking response)
-    const API_TIMEOUT_MS = 15000; // 15 second timeout per API call
-    const timedFetch = async <T>(name: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
-      const fnStart = Date.now();
+    // Helper to time individual function calls with cache hit/miss detection
+    const timeFunction = async <T>(
+      name: string,
+      fn: Promise<T>
+    ): Promise<{ result: T | null; elapsed: number; status: 'fulfilled' | 'rejected' }> => {
+      const start = Date.now();
       try {
-        const result = await Promise.race([
-          fn(),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`${name} timed out after ${API_TIMEOUT_MS}ms`)), API_TIMEOUT_MS)
-          )
-        ]);
-        debugLog('CollectionStats', `[${slug}] ${name} completed | time=${Date.now() - fnStart}ms`);
-        return result;
-      } catch (error) {
-        const elapsed = Date.now() - fnStart;
-        const isTimeout = error instanceof Error && error.message.includes('timed out');
-        if (isTimeout) {
-          warnLog('CollectionStats', `[${slug}] ${name} TIMEOUT | time=${elapsed}ms | using fallback`);
-        } else {
-          errorLog('CollectionStats', `[${slug}] ${name} failed | time=${elapsed}ms`, error);
-        }
-        return fallback;
+        const result = await fn;
+        const elapsed = Date.now() - start;
+
+        // Detect cache hit/miss based on response time (<10ms = cache hit)
+        const cacheStatus = elapsed < 10 ? 'CACHE_HIT' : 'CACHE_MISS';
+        debugLog('CollectionStatsPerf', `[${slug}] ${name} | status=fulfilled | time=${elapsed}ms | cache=${cacheStatus}`);
+        return { result, elapsed, status: 'fulfilled' };
+      } catch (error: any) {
+        const elapsed = Date.now() - start;
+        debugLog('CollectionStatsPerf', `[${slug}] ${name} | status=rejected | time=${elapsed}ms | error=${error?.message}`);
+        return { result: null, elapsed, status: 'rejected' };
       }
     };
 
-    // Run all fetches in parallel using Promise.all (bypass pQueue for faster response)
-    // NOTE: MagicEden + Blur traits API calls temporarily removed due to timeouts - using OpenSea data as fallback
-    const [
-      blurFloorResult,
-      openseaFloorResult,
-      openseaTraitsResult,
-      openseaBestOfferResult,
-      blurBestOfferResult,
-      magicedenBestOfferResult
-    ] = await Promise.all([
-      timedFetch('fetchBlurCollectionStats', () => fetchBlurCollectionStats(slug), 0),
-      timedFetch('getCachedFloorPrice', () => getCachedFloorPrice(slug), 0),
-      timedFetch('fetchOpenseaTraits', () => fetchOpenseaTraits(slug), []),
-      timedFetch('fetchOpenseaOffers', () => fetchOpenseaOffers('COLLECTION', slug, {}).then((r: any) => Number(r[0]?.eth) || 0), 0),
-      timedFetch('fetchBlurBid', () => fetchBlurBid(slug, 'COLLECTION', {}).then((r: any) => r?.priceLevels?.[0]?.price ? Number(r.priceLevels[0].price) : 0), 0),
-      timedFetch('fetchMagicEdenOffer', () => fetchMagicEdenOffer('COLLECTION', contractAddress, '{}').then((r: any) => Number(r[0]?.eth) || 0), 0),
+    // 2. Fetch data using EXISTING cached functions (with timing instrumentation)
+    const timedCalls = await Promise.all([
+      timeFunction('getCachedFloorPrice', getCachedFloorPrice(slug)),
+      timeFunction('getBlurFloor', getBlurFloor(contractAddress)),
+      timeFunction('getMagicEdenFloor', getMagicEdenFloor(contractAddress)),
+      timeFunction('fetchOpenseaTraits', fetchOpenseaTraits(slug)),
+      timeFunction('getCachedOpenseaBestOffer', getCachedOpenseaBestOffer(slug)),
+      timeFunction('getCachedBlurBestOffer', getCachedBlurBestOffer(contractAddress))
+      // TODO: Re-enable after adding timeout to MagicEden API (currently times out at 30s)
+      // TODO: Fix in magiceden/bid.ts:1312 - add timeout: 5000 to axiosInstance.get()
+      // timeFunction('getCachedMagicEdenBestOffer', getCachedMagicEdenBestOffer(contractAddress))
     ]);
 
-    const blurFloorPrice = blurFloorResult;
-    const openseaFloorPrice = openseaFloorResult;
-    const openseaTraits = openseaTraitsResult;
+    // Calculate total API time (sum of all parallel calls)
+    const totalApiTime = timedCalls.reduce((sum, call) => sum + call.elapsed, 0);
+    const longestCall = timedCalls.reduce((max, call) => call.elapsed > max.elapsed ? call : max, timedCalls[0]);
+    const cacheHits = timedCalls.filter(call => call.elapsed < 10).length;
+    const cacheMisses = timedCalls.filter(call => call.elapsed >= 10).length;
+    debugLog('CollectionStatsPerf', `[${slug}] All API calls complete | totalApiTime=${totalApiTime}ms | longestCall=${longestCall.elapsed}ms | parallelTime=${Date.now() - startTime}ms | cacheHits=${cacheHits}/6 | cacheMisses=${cacheMisses}/6`);
+
+    // Extract results (handle both fulfilled and rejected)
+    const [
+      openseaFloorResult,
+      blurFloorResult,
+      magicedenFloorResult,
+      openseaTraitsResult,
+      openseaBestOfferResult,
+      blurBestOfferResult
+      // magicedenBestOfferResult - temporarily removed, using OpenSea value instead (see line 23831)
+    ] = timedCalls.map(call => ({
+      status: call.status,
+      value: call.result
+    }));
+
+    // 3. Extract values with fallbacks (graceful degradation if individual marketplaces fail)
+    const openseaFloorPrice = openseaFloorResult.status === 'fulfilled' ? openseaFloorResult.value : 0;
+    const blurFloorPrice = blurFloorResult.status === 'fulfilled' ? blurFloorResult.value : 0;
+    const magicedenFloorPrice = magicedenFloorResult.status === 'fulfilled' ? magicedenFloorResult.value : 0;
+    const openseaTraits = openseaTraitsResult.status === 'fulfilled' ? openseaTraitsResult.value : [];
+    const openseaBestOffer = openseaBestOfferResult.status === 'fulfilled' ? Number(openseaBestOfferResult.value?.eth) || 0 : 0;
+    const blurBestOffer = blurBestOfferResult.status === 'fulfilled' ? Number(blurBestOfferResult.value?.price) || 0 : 0;
+    const magicedenBestOffer = openseaBestOfferResult.status === 'fulfilled' ? Number(openseaBestOfferResult.value?.eth) || 0 : 0; // Temporarily use OpenSea result to avoid MagicEden timeout
+
+    debugLog('CollectionStats', `[${slug}] API fetches complete | time=${Date.now() - startTime}ms | osFloor=${openseaFloorPrice} blurFloor=${blurFloorPrice} meFloor=${magicedenFloorPrice}`);
+    debugLog('CollectionStatsPerf', `[${slug}] Phase1_ApiFetch complete | time=${Date.now() - startTime}ms`);
 
     // Use fallback data for disabled APIs (MagicEden + Blur traits temporarily disabled due to timeouts)
-    const magicedenFloorPrice = String(openseaFloorPrice);
     const magicEdenTraits = { traits: { categories: {}, counts: {} }, magicedenRaw: { attributes: [] } };
     const blurTraits = { traits: { categories: {}, counts: {} }, blurRaw: { success: false, traits: {} } };
 
-    debugLog('CollectionStats', `[${slug}] All API fetches completed | totalTime=${Date.now() - startTime}ms`);
+    debugLog('CollectionStats', `[${slug}] Processing traits data`);
+    const traitsProcessStart = Date.now();
 
     const combinedTraits: {
       categories: Record<string, string>;
@@ -23958,6 +24256,9 @@ app.post('/api/collection/stats', async (req, res) => {
       });
     });
 
+    debugLog('CollectionStatsPerf', `[${slug}] Phase2_TraitsProcess complete | time=${Date.now() - traitsProcessStart}ms`);
+
+    // 4. Build response data
     const data = {
       traits: combinedTraits,
       magicEdenValid: Number(magicedenFloorPrice) > 0,
@@ -23966,11 +24267,14 @@ app.post('/api/collection/stats', async (req, res) => {
       blurFloorPrice,
       magicedenFloorPrice,
       openseaFloorPrice,
+      openseaBestOffer,
+      blurBestOffer,
+      magicedenBestOffer,
       contractAddress,
       slug
     };
 
-    // Populate collectionFloorCache so /api/floor has valid data immediately
+    // 5. Populate collectionFloorCache so /api/floor has valid data immediately
     // This prevents the dashboard from seeing 0 values when a task is first created
     const floorCacheKey = `${slug}:${contractAddress}`;
     collectionFloorCache.set(floorCacheKey, {
@@ -23980,25 +24284,25 @@ app.post('/api/collection/stats', async (req, res) => {
         magiceden: Number(magicedenFloorPrice) || 0,
       },
       bestOffers: {
-        opensea: openseaBestOfferResult || 0,
-        blur: blurBestOfferResult || 0,
-        magiceden: magicedenBestOfferResult || 0,
+        opensea: openseaBestOffer || 0,
+        blur: blurBestOffer || 0,
+        magiceden: magicedenBestOffer || 0,
       },
       lastFetched: Date.now(),
       isRefreshing: false,
     });
-    debugLog('CollectionStats', `[${slug}] Populated collectionFloorCache | floors: os=${openseaFloorPrice} blur=${blurFloorPrice} me=${magicedenFloorPrice} | offers: os=${openseaBestOfferResult} blur=${blurBestOfferResult} me=${magicedenBestOfferResult}`);
+    debugLog('CollectionStats', `[${slug}] Populated collectionFloorCache | floors: os=${openseaFloorPrice} blur=${blurFloorPrice} me=${magicedenFloorPrice} | offers: os=${openseaBestOffer} blur=${blurBestOffer} me=${magicedenBestOffer}`);
+    debugLog('CollectionStatsPerf', `[${slug}] Phase3_CachePopulate complete | time=${Date.now() - startTime}ms`);
 
-    // Cache the result for 60 seconds
-    try {
-      if (redisClient.isReady()) {
-        await redisClient.getClient().set(cacheKey, JSON.stringify(data), 'EX', STATS_CACHE_TTL);
-        debugLog('CollectionStats', `[${slug}] Cached stats | ttl=${STATS_CACHE_TTL}s`);
-      }
-    } catch (cacheWriteError) {
-      warnLog('CollectionStats', `[${slug}] Cache write error: ${cacheWriteError}`);
-    }
+    // 6. Cache result in LRU (non-blocking, <1ms)
+    collectionStatsLRU.set(cacheKey, {
+      data,
+      cachedAt: Date.now()
+    });
+    debugLog('CollectionStats', `[${slug}] Cached in LRU | ttl=24h`);
 
+    const breakdown = timedCalls.map(call => `${call.elapsed}ms`).join(', ');
+    debugLog('CollectionStatsPerf', `[${slug}] REQUEST_COMPLETE | totalTime=${Date.now() - startTime}ms | breakdown=[${breakdown}] | slowest=${longestCall.elapsed}ms | cacheHits=${cacheHits}/6 | cacheMisses=${cacheMisses}/6`);
     debugLog('CollectionStats', `[${slug}] Request complete | totalTime=${Date.now() - startTime}ms`);
     res.status(200).json(data);
   } catch (error: any) {
@@ -25809,6 +26113,112 @@ function formatBytes(bytes: number): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
+
+// ============================================
+// LRU CACHE SAMPLER ENDPOINTS
+// ============================================
+
+// Sample all LRU caches
+// GET /api/debug/sample-caches
+app.get('/api/debug/sample-caches', async (req, res) => {
+  try {
+    const { sampleAllCaches, getCacheStatistics } = await import('./utils/lru-cache-sampler');
+
+    // Trigger sampling (logs to debug-logs/system-YYYY-MM-DD.log)
+    sampleAllCaches();
+
+    // Get statistics for response
+    const stats = getCacheStatistics();
+
+    res.json({
+      success: true,
+      message: 'Cache sampling complete. Check debug-logs/system-YYYY-MM-DD.log for detailed output.',
+      statistics: {
+        totalCaches: stats.total,
+        totalMaxCapacity: stats.totalMaxCapacity.toLocaleString(),
+        totalCurrentSize: stats.totalCurrentSize.toLocaleString(),
+        fillRate: `${stats.fillRate.toFixed(2)}%`,
+        byCategory: stats.byCategory
+      }
+    });
+  } catch (error) {
+    errorLog('API', 'Failed to sample caches', error);
+    res.status(500).json({ error: 'Failed to sample caches' });
+  }
+});
+
+// Sample caches by category
+// GET /api/debug/sample-caches/category/:category
+app.get('/api/debug/sample-caches/category/:category', async (req, res) => {
+  try {
+    const { category } = req.params;
+    const validCategories = ['dedup', 'marketplace', 'security', 'monitoring', 'error', 'trait', 'other'];
+
+    if (!validCategories.includes(category)) {
+      return res.status(400).json({
+        error: `Invalid category. Must be one of: ${validCategories.join(', ')}`
+      });
+    }
+
+    const { sampleCachesByCategory } = await import('./utils/lru-cache-sampler');
+
+    // Trigger sampling (logs to debug-logs/system-YYYY-MM-DD.log)
+    sampleCachesByCategory(category as any);
+
+    res.json({
+      success: true,
+      message: `Sampled caches in category '${category}'. Check debug-logs/system-YYYY-MM-DD.log for detailed output.`,
+      category
+    });
+  } catch (error) {
+    errorLog('API', 'Failed to sample caches by category', error);
+    res.status(500).json({ error: 'Failed to sample caches by category' });
+  }
+});
+
+// Sample a specific cache
+// GET /api/debug/sample-caches/cache/:cacheName
+app.get('/api/debug/sample-caches/cache/:cacheName', async (req, res) => {
+  try {
+    const { cacheName } = req.params;
+    const { sampleCache } = await import('./utils/lru-cache-sampler');
+
+    // Trigger sampling (logs to debug-logs/system-YYYY-MM-DD.log)
+    sampleCache(cacheName);
+
+    res.json({
+      success: true,
+      message: `Sampled cache '${cacheName}'. Check debug-logs/system-YYYY-MM-DD.log for detailed output.`,
+      cacheName
+    });
+  } catch (error) {
+    errorLog('API', 'Failed to sample cache', error);
+    res.status(500).json({ error: 'Failed to sample cache' });
+  }
+});
+
+// Get cache statistics only (no sampling)
+// GET /api/debug/cache-statistics
+app.get('/api/debug/cache-statistics', async (req, res) => {
+  try {
+    const { getCacheStatistics } = await import('./utils/lru-cache-sampler');
+    const stats = getCacheStatistics();
+
+    res.json({
+      success: true,
+      statistics: {
+        totalCaches: stats.total,
+        totalMaxCapacity: stats.totalMaxCapacity.toLocaleString(),
+        totalCurrentSize: stats.totalCurrentSize.toLocaleString(),
+        fillRate: `${stats.fillRate.toFixed(2)}%`,
+        byCategory: stats.byCategory
+      }
+    });
+  } catch (error) {
+    errorLog('API', 'Failed to get cache statistics', error);
+    res.status(500).json({ error: 'Failed to get cache statistics' });
+  }
+});
 
 // List all debug log files with metadata
 app.get('/api/debug-logs/list', async (_req, res) => {

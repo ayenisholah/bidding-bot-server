@@ -189,8 +189,7 @@ class WebSocketManager extends EventEmitter {
     // Initialize p-queue for message processing with concurrency from RATE_LIMIT
     // Uses RATE_LIMIT environment variable (default: 10 if not set)
     // With RATE_LIMIT=64: 64 concurrent handlers = 211 msg/sec capacity @ 300ms avg
-    // Backpressure: Manual queue size checks prevent unbounded growth and OOM crashes
-    // p-queue v6 doesn't support queueSize option, so we check queue.size before adding messages
+    // Queue is unbounded - relies on concurrency limiting and upstream flow control
     const concurrency = Number(process.env.RATE_LIMIT) || 10;
     this.messageQueue = new PQueue({
       concurrency,          // Use RATE_LIMIT from env (default: 10)
@@ -758,29 +757,12 @@ class WebSocketManager extends EventEmitter {
       // Normalize message format (minimal transformation)
       const message = this.normalizeMessage(parsed);
 
-      // Log queue health warnings at thresholds
-      const queueSize = this.messageQueue.size;
-
-      if (queueSize > 10000 && queueSize % 1000 === 0) {
-        warnLog('QueueHealth', `High queue size | size=${queueSize} | pending=${this.messageQueue.pending}`);
-      }
-
-      // EMERGENCY FIX: Check queue size before adding (backpressure)
-      if (this.messageQueue.size >= 4500) {  // Warn at 90% capacity (5000 max)
-        warnLog('QueueBackpressure', `Queue near capacity | size=${this.messageQueue.size} | dropping message to prevent OOM`);
-        return; // Drop message to prevent OOM
-      }
-
-      // Queue the message for processing via p-queue
+      // Queue the message for processing via p-queue (unbounded)
       this.messageQueue.add(async () => {
         await this.processMessageAsync(message, receiveTime);
       }).catch(err => {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        if (errorMsg.includes('queue limit reached')) {
-          warnLog('QueueFull', `Queue full | size=${this.messageQueue.size} | message dropped`);
-        } else {
-          errorLog('QueueError', `Message processing error | error=${errorMsg}`, err);
-        }
+        errorLog('QueueError', `Message processing error | error=${errorMsg}`, err);
       });
     } catch (err) {
       errorLog('QueueError', `processSingleMessage error | error=${(err as Error).message}`, err);
