@@ -1,3 +1,12 @@
+/**
+ * ERC20 Token Allowance Cache
+ *
+ * Caches numeric allowance amounts for wallet-marketplace-token combinations.
+ * Makes on-chain RPC calls to verify allowances and caches results for 24 hours.
+ *
+ * NOT to be confused with marketplaceApprovalCache which tracks high-level
+ * approval status flags (boolean) rather than actual allowance amounts.
+ */
 import { ethers } from 'ethers';
 import { LRUCache } from 'lru-cache';
 import { ERC20_MIN_ABI } from '../constants';
@@ -22,12 +31,12 @@ interface ApprovalCacheEntry {
 }
 
 class ApprovalCache {
-  private cache: LRUCache<string, ApprovalCacheEntry>;
+  private approvalEntriesLRU: LRUCache<string, ApprovalCacheEntry>;
   private readonly CACHE_TTL = 24 * 60 * 60 * 1000; // 1 day
   private readonly MAX_CACHE_SIZE = 50000; // 50K wallet-token-marketplace combos (~66KB)
 
   constructor() {
-    this.cache = new LRUCache<string, ApprovalCacheEntry>({
+    this.approvalEntriesLRU = new LRUCache<string, ApprovalCacheEntry>({
       max: this.MAX_CACHE_SIZE,
       ttl: this.CACHE_TTL,
       updateAgeOnGet: true,
@@ -54,7 +63,7 @@ class ApprovalCache {
     const key = this.getCacheKey(walletAddress, marketplaceAddress, tokenAddress);
 
     // Check LRU cache
-    const cached = this.cache.get(key);
+    const cached = this.approvalEntriesLRU.get(key);
     if (cached) {
       return BigInt(cached.allowance) >= BigInt(requiredAmount);
     }
@@ -146,7 +155,7 @@ class ApprovalCache {
     entry: ApprovalCacheEntry
   ): Promise<void> {
     const key = this.getCacheKey(walletAddress, marketplaceAddress, tokenAddress);
-    this.cache.set(key, entry);
+    this.approvalEntriesLRU.set(key, entry);
   }
 
   /**
@@ -154,14 +163,14 @@ class ApprovalCache {
    */
   async invalidate(walletAddress: string, marketplaceAddress: string, tokenAddress: string): Promise<void> {
     const key = this.getCacheKey(walletAddress, marketplaceAddress, tokenAddress);
-    this.cache.delete(key);
+    this.approvalEntriesLRU.delete(key);
   }
 
   /**
    * Clear all cached approvals (for testing/maintenance)
    */
   async clearAll(): Promise<void> {
-    this.cache.clear();
+    this.approvalEntriesLRU.clear();
   }
 
   /**
@@ -169,11 +178,19 @@ class ApprovalCache {
    */
   getStats(): { size: number; maxSize: number; ttl: number; estimatedMemoryBytes: number } {
     return {
-      size: this.cache.size,
+      size: this.approvalEntriesLRU.size,
       maxSize: this.MAX_CACHE_SIZE,
       ttl: this.CACHE_TTL,
-      estimatedMemoryBytes: this.cache.size * 66, // ~66 bytes per entry
+      estimatedMemoryBytes: this.approvalEntriesLRU.size * 66, // ~66 bytes per entry
     };
+  }
+
+  /**
+   * Get the internal LRU cache for debugging/monitoring
+   * @internal - For use by lru-cache-sampler.ts only
+   */
+  public getCache(): LRUCache<string, ApprovalCacheEntry> {
+    return this.approvalEntriesLRU;
   }
 }
 

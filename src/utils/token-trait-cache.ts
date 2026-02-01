@@ -2,7 +2,7 @@ import { debugLog, errorLog } from './debug-file-logger';
 import { LRUCache } from 'lru-cache';
 
 // LRU Cache configuration (single-tier, no MongoDB)
-const L1_CACHE_SIZE = 100000; // Max 100K token trait entries
+const L1_CACHE_SIZE = 1000000; // Max 1M token trait entries (increased for production scale)
 const L1_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours TTL
 
 interface TokenTraitType {
@@ -52,10 +52,10 @@ setInterval(() => {
 
 class TokenTraitCache {
   // LRU cache (single-tier, no MongoDB)
-  public hotCache: LRUCache<string, TokenTraitData>;
+  public tokenTraitsLRU: LRUCache<string, TokenTraitData>;
 
   constructor() {
-    this.hotCache = new LRUCache<string, TokenTraitData>({
+    this.tokenTraitsLRU = new LRUCache<string, TokenTraitData>({
       max: L1_CACHE_SIZE,
       ttl: L1_CACHE_TTL,
       updateAgeOnGet: true, // LRU behavior - keep hot tokens fresh
@@ -83,7 +83,7 @@ class TokenTraitCache {
 
     try {
       // Update L1 cache only (MongoDB removed!)
-      this.hotCache.set(key, normalizedData);
+      this.tokenTraitsLRU.set(key, normalizedData);
       cacheStats.sets++;
 
       debugLog('TokenTraitCache',
@@ -104,7 +104,7 @@ class TokenTraitCache {
 
     try {
       // Try L1 cache (only cache tier!)
-      const cached = this.hotCache.get(key);
+      const cached = this.tokenTraitsLRU.get(key);
       if (cached) {
         cacheStats.hits++;
         // CACHE_HIT log removed - was generating 11.3M lines/day (1.2GB)
@@ -156,7 +156,7 @@ class TokenTraitCache {
       : '0%';
 
     return {
-      size: this.hotCache.size,
+      size: this.tokenTraitsLRU.size,
       maxSize: L1_CACHE_SIZE,
       hits: cacheStats.hits,
       misses: cacheStats.misses,
@@ -171,11 +171,19 @@ class TokenTraitCache {
    */
   async shutdown(): Promise<void> {
     try {
-      this.hotCache.clear();
+      this.tokenTraitsLRU.clear();
       console.log('[TOKEN TRAIT CACHE] Cache cleared');
     } catch (error) {
       errorLog('Cache', 'Error shutting down token trait cache', error);
     }
+  }
+
+  /**
+   * Get the internal LRU cache for debugging/monitoring
+   * @internal - For use by lru-cache-sampler.ts only
+   */
+  public getCache(): LRUCache<string, TokenTraitData> {
+    return this.tokenTraitsLRU;
   }
 }
 
@@ -192,7 +200,7 @@ export function getTokenTraitCacheStats(): TokenTraitCacheStats {
     : '0%';
 
   return {
-    size: tokenTraitCache.hotCache?.size || 0,
+    size: tokenTraitCache.tokenTraitsLRU?.size || 0,
     maxSize: L1_CACHE_SIZE,
     hits: cacheStats.hits,
     misses: cacheStats.misses,

@@ -317,3 +317,11 @@ class WebSocketService {
 }
 
 export const websocketService = new WebSocketService();
+
+/**
+ * Get processed messages cache for debugging/monitoring
+ * @internal - For use by lru-cache-sampler.ts only
+ */
+export function getProcessedMessages(): LRUCache<string, number> {
+  return processedMessages;
+}

@@ -313,3 +313,15 @@ export function clearAllCaches(): void {
   floorPriceCache.clear();
   pendingRequests.clear();
 }
+
+/**
+ * Get cache instances for debugging/monitoring
+ * @internal - For use by lru-cache-sampler.ts only
+ */
+export function getFloorPriceCache(): LRUCache<string, number> {
+  return floorPriceCache;
+}
+
+export function getCollectionDetailsCache(): LRUCache<string, any> {
+  return collectionDetailsCache;
+}

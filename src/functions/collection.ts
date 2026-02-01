@@ -2,7 +2,6 @@ import stringify from 'json-stable-stringify';
 import crypto from 'crypto';
 import { AxiosResponse } from 'axios';
 import { axiosInstance, limiter } from "../init";
-import { DistributedLockManager } from "../utils/lock";
 import { openseaFloorBreakerRegistry } from "../utils/circuit-breaker";
 import { API_KEY } from "..";
 import { CollectionItemsListQuery } from "../queries";
@@ -17,7 +16,7 @@ import {
   collectionDetailsLRU,
   trackCollectionDetailsHit,
   trackCollectionDetailsMiss,
-  floorPriceLRU,
+  openseaFloorLRU,
   trackFloorHit,
   trackFloorMiss,
   blurFloorLRU,
@@ -79,11 +78,6 @@ function ensureOpenseaMarketplaceFee(details?: ICollectionDetails) {
   }
 }
 
-const lockManager = new DistributedLockManager({
-  lockPrefix: 'collection:fetch:',
-  defaultTTLSeconds: 300 // Reduced from 10 hours to 5 minutes
-});
-
 // Helper function to add timeout to promises
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -117,112 +111,84 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
   debugLog('Performance', `[OS-CollDetails] CACHE_MISS | slug=${slug} | fetching...`);
   const fetchStart = Date.now();
 
-  const lockKey = `{${slug}}:collection`;
-
   try {
-    const result = await withTimeout(
-      lockManager.withLock(lockKey, async () => {
-        // Double-check LRU after lock
-        const lruCachedAfterLock = collectionDetailsLRU.get(normalizedSlug);
-        if (lruCachedAfterLock) {
-          return lruCachedAfterLock;
-        }
+    // Double-check LRU after potential race condition
+    const lruCachedAfterLock = collectionDetailsLRU.get(normalizedSlug);
+    if (lruCachedAfterLock) {
+      return lruCachedAfterLock;
+    }
 
-        // Double-check old memory cache after lock
-        if (collectionCache[slug]) {
-          return collectionCache[slug];
-        }
+    // Double-check old memory cache after potential race condition
+    if (collectionCache[slug]) {
+      return collectionCache[slug];
+    }
 
-        const { data: collection } = await withTimeout(
-          apiDedup(
-            `opensea-collection-details-${slug.toLowerCase()}`,
-            () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get(
-              `${BASE_URL}/opensea/api/v2/collections/${slug}`,
-              {
-                headers: {
-                  'x-api-key': API_KEY
-                }
-              }
-            )),
-            { category: 'Collection' }
-          ),
-          20000, // 20 second timeout for API call
-          `OpenSea API call for ${slug}`
-        );
-
-        let creator_fees: { [key: string]: number } = {};
-        let enforceCreatorFee = false;
-
-        // FeeDebug logs removed - too noisy in production
-
-        if (collection?.fees && Array.isArray(collection.fees)) {
-          // Process creator fees (exclude OpenSea platform fee and optional fees)
-          for (const fee of collection.fees) {
-            const isOpenSeaFee = fee.recipient.toLowerCase() === OPENSEA_FEE_ADDRESS_LOWER;
-
-            // Skip OpenSea platform fee
-            if (isOpenSeaFee) {
-              continue;
+    const { data: collection } = await withTimeout(
+      apiDedup(
+        `opensea-collection-details-${slug.toLowerCase()}`,
+        () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get(
+          `${BASE_URL}/opensea/api/v2/collections/${slug}`,
+          {
+            headers: {
+              'x-api-key': API_KEY
             }
-
-            // Skip optional creator fees (fulfiller can opt-in at fill time)
-            if (!fee.required) {
-              continue;
-            }
-
-            creator_fees[fee.recipient] = fee.fee * 100;
-            enforceCreatorFee = true;
           }
-        }
-
-        // If no creator fees found, use default
-        if (Object.keys(creator_fees).length === 0) {
-          creator_fees = { null: 0 };
-        }
-
-        if (Object.keys(collectionCache).length >= MAX_CACHE_ITEMS) {
-          delete collectionCache[Object.keys(collectionCache)[0]];
-        }
-
-        const result = {
-          ...collection,
-          creator_fees: creator_fees,
-          enforceCreatorFee: enforceCreatorFee
-        };
-
-        ensureOpenseaMarketplaceFee(result);
-
-        // Store in both LRU and old memory cache
-        collectionDetailsLRU.set(normalizedSlug, result);
-        collectionCache[slug] = result;
-
-        const fetchTime = Date.now() - fetchStart;
-        debugLog('Performance', `[OS-CollDetails] API_FETCH | slug=${slug} | fetchTime=${fetchTime}ms`);
-
-        return result;
-      }),
-      60000, // 60 second timeout for entire operation
-      `Collection details fetch for ${slug}`
+        )),
+        { category: 'Collection' }
+      ),
+      20000, // 20 second timeout for API call
+      `OpenSea API call for ${slug}`
     );
 
-    if (!result) {
-      errorLog('Collection', `[collection.ts] Failed to acquire lock for collection details | slug=${slug} | contractAddress=${contractAddress}`);
-      throw new Error('Failed to acquire lock for collection details');
+    let creator_fees: { [key: string]: number } = {};
+    let enforceCreatorFee = false;
+
+    // FeeDebug logs removed - too noisy in production
+
+    if (collection?.fees && Array.isArray(collection.fees)) {
+      // Process creator fees (exclude OpenSea platform fee and optional fees)
+      for (const fee of collection.fees) {
+        const isOpenSeaFee = fee.recipient.toLowerCase() === OPENSEA_FEE_ADDRESS_LOWER;
+
+        // Skip OpenSea platform fee
+        if (isOpenSeaFee) {
+          continue;
+        }
+
+        // Skip optional creator fees (fulfiller can opt-in at fill time)
+        if (!fee.required) {
+          continue;
+        }
+
+        creator_fees[fee.recipient] = fee.fee * 100;
+        enforceCreatorFee = true;
+      }
     }
-    // {
-    //   getCollectionDetails: [
-    //     {
-    //       fee: 1,
-    //       recipient: '0x0000a26b00c1f0df003000390027140000faa719',
-    //       required: true
-    //     },
-    //     {
-    //       fee: 1,
-    //       recipient: '0xa858ddc0445d8131dac4d1de01f834ffcba52ef1',
-    //       required: false
-    //     }
-    //   ]
-    // }
+
+    // If no creator fees found, use default
+    if (Object.keys(creator_fees).length === 0) {
+      creator_fees = { null: 0 };
+    }
+
+    if (Object.keys(collectionCache).length >= MAX_CACHE_ITEMS) {
+      delete collectionCache[Object.keys(collectionCache)[0]];
+    }
+
+    const result = {
+      ...collection,
+      creator_fees: creator_fees,
+      enforceCreatorFee: enforceCreatorFee
+    };
+
+    ensureOpenseaMarketplaceFee(result);
+
+    // Store in both LRU and old memory cache
+    collectionDetailsLRU.set(normalizedSlug, result);
+    collectionCache[slug] = result;
+
+    const fetchTime = Date.now() - fetchStart;
+    debugLog('Performance', `[OS-CollDetails] API_FETCH | slug=${slug} | fetchTime=${fetchTime}ms`);
+
     return result;
   } catch (error) {
     // Log the error
@@ -311,16 +277,15 @@ interface FloorPriceResponse {
 
 export async function getOpenseaFloor(collectionSlug: string) {
   // Check if collection is known to be unavailable on OpenSea
-  const unavailable = await isCollectionUnavailable('opensea', collectionSlug);
+  const unavailable = isCollectionUnavailable('opensea', collectionSlug);
   if (unavailable) {
     return 0; // Skip API call, already cached as unavailable
   }
 
-  const lockKey = `floor:{opensea}:${collectionSlug}`;
   const normalizedSlug = collectionSlug.toLowerCase();
 
   // STEP 1: Check LRU (< 1ms)
-  const lruCached = floorPriceLRU.get(normalizedSlug);
+  const lruCached = openseaFloorLRU.get(normalizedSlug);
   if (lruCached !== undefined) {
     trackFloorHit();
     debugLog('Performance', `[OS-Floor] LRU_HIT (<1ms) | slug=${collectionSlug} | floor=${lruCached}`);
@@ -332,114 +297,90 @@ export async function getOpenseaFloor(collectionSlug: string) {
   debugLog('Performance', `[OS-Floor] CACHE_MISS | slug=${collectionSlug} | fetching...`);
   const fetchStart = Date.now();
 
-  // If not in cache, try to acquire lock and fetch
-  const result = await lockManager.withLock(lockKey, async () => {
-    // Double-check LRU after lock
-    const lruCachedAfterLock = floorPriceLRU.get(normalizedSlug);
-    if (lruCachedAfterLock !== undefined) {
-      return lruCachedAfterLock;
-    }
-
-    // Retry configuration for floor price fetching
-    const MAX_RETRIES = 3;
-    const BASE_DELAY = 500; // 500ms, 1000ms, 2000ms exponential backoff
-
-    const payload = {
-      operationName: "FloorPriceQuery",
-      query: FloorPriceQuery,
-      variables: {
-        collectionSlug,
-        limit: 1,
-        sort: { by: "PRICE", direction: "ASC" }
-      }
-    };
-
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        // Use per-collection circuit breaker to isolate failures
-        const breaker = openseaFloorBreakerRegistry.getBreaker(collectionSlug);
-        const { data } = await apiDedup(
-          `opensea-floor-${collectionSlug}`,
-          () => breaker.execute(() =>
-            limiter.schedule({ priority: 0 }, () => axiosInstance.post<FloorPriceResponse>(
-              `${BASE_URL}/opensea/graphql`,
-              payload,
-              {
-                headers: { 'x-api-key': API_KEY }
-              }
-            ))
-          ),
-          { category: 'Collection' }
-        );
-
-        // Extract floor price from GraphQL response
-        const floor_price = data?.data?.collectionItems?.items?.[0]?.bestListing?.pricePerItem?.token?.unit || 0;
-
-        // If floor is 0 and we have retries left, retry (likely temporary API issue)
-        if (floor_price === 0 && attempt < MAX_RETRIES) {
-          warnLog('API', `[collection.ts] OpenSea floor price is 0, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug}`);
-          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
-          continue;
-        }
-
-        // Cache in LRU (only positive floor prices)
-        if (floor_price > 0) {
-          floorPriceLRU.set(normalizedSlug, floor_price);
-        }
-
-        const fetchTime = Date.now() - fetchStart;
-        debugLog('Performance', `[OS-Floor] API_FETCH | slug=${collectionSlug} | floor=${floor_price} | attempt=${attempt} | fetchTime=${fetchTime}ms`);
-
-        return floor_price;
-
-      } catch (error: any) {
-        // Handle 404 errors specifically - collection might be delisted or renamed (no retry)
-        if (error?.response?.status === 404) {
-          // Collection doesn't exist on OpenSea - cache this for 1 hour
-          await markCollectionUnavailable('opensea', collectionSlug, 404);
-          return 0; // Return 0 floor price for non-existent collections
-        }
-
-        // Retry on other errors if attempts remaining
-        if (attempt < MAX_RETRIES) {
-          // Better error parsing: show HTTP status or network error code
-          const errorCode = error?.response?.status || error?.code || 'UNKNOWN';
-          warnLog('API', `[collection.ts] OpenSea floor price fetch failed, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug} | error=${errorCode}`);
-          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
-          continue;
-        }
-
-        // Final attempt failed - log and re-throw
-        const errorCode = error?.response?.status || error?.code || 'UNKNOWN';
-        errorLog('API', `[collection.ts] Failed to fetch OpenSea floor price after ${MAX_RETRIES} attempts | slug=${collectionSlug} | error=${errorCode}`, error);
-        throw error;
-      }
-    }
-
-    // Should not reach here, but return 0 as fallback
-    return 0;
-  });
-
-  if (!result) {
-    // If we couldn't acquire the lock, another request is fetching - wait with retries
-    const maxRetries = 5;
-    for (let i = 0; i < maxRetries; i++) {
-      const waitTime = Math.min(100 * Math.pow(2, i), 2000); // Exponential backoff, max 2s
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-
-      // Check LRU cache after wait
-      const lruRetry = floorPriceLRU.get(normalizedSlug);
-      if (lruRetry !== undefined) {
-        return lruRetry;
-      }
-    }
-
-    // After all retries, still no data - log and throw error
-    errorLog('Collection', `[collection.ts] Failed to fetch OpenSea floor price after retries | slug=${collectionSlug}`);
-    throw new Error('Failed to fetch OpenSea floor price');
+  // Double-check LRU after potential race condition
+  const lruCachedAfterLock = openseaFloorLRU.get(normalizedSlug);
+  if (lruCachedAfterLock !== undefined) {
+    return lruCachedAfterLock;
   }
 
-  return result;
+  // Retry configuration for floor price fetching
+  const MAX_RETRIES = 3;
+  const BASE_DELAY = 500; // 500ms, 1000ms, 2000ms exponential backoff
+
+  const payload = {
+    operationName: "FloorPriceQuery",
+    query: FloorPriceQuery,
+    variables: {
+      collectionSlug,
+      limit: 1,
+      sort: { by: "PRICE", direction: "ASC" }
+    }
+  };
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      // Use per-collection circuit breaker to isolate failures
+      const breaker = openseaFloorBreakerRegistry.getBreaker(collectionSlug);
+      const { data } = await apiDedup(
+        `opensea-floor-${collectionSlug}`,
+        () => breaker.execute(() =>
+          limiter.schedule({ priority: 0 }, () => axiosInstance.post<FloorPriceResponse>(
+            `${BASE_URL}/opensea/graphql`,
+            payload,
+            {
+              headers: { 'x-api-key': API_KEY }
+            }
+          ))
+        ),
+        { category: 'Collection' }
+      );
+
+      // Extract floor price from GraphQL response
+      const floor_price = data?.data?.collectionItems?.items?.[0]?.bestListing?.pricePerItem?.token?.unit || 0;
+
+      // If floor is 0 and we have retries left, retry (likely temporary API issue)
+      if (floor_price === 0 && attempt < MAX_RETRIES) {
+        warnLog('API', `[collection.ts] OpenSea floor price is 0, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug}`);
+        await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+        continue;
+      }
+
+      // Cache in LRU (only positive floor prices)
+      if (floor_price > 0) {
+        openseaFloorLRU.set(normalizedSlug, floor_price);
+      }
+
+      const fetchTime = Date.now() - fetchStart;
+      debugLog('Performance', `[OS-Floor] API_FETCH | slug=${collectionSlug} | floor=${floor_price} | attempt=${attempt} | fetchTime=${fetchTime}ms`);
+
+      return floor_price;
+
+    } catch (error: any) {
+      // Handle 404 errors specifically - collection might be delisted or renamed (no retry)
+      if (error?.response?.status === 404) {
+        // Collection doesn't exist on OpenSea - cache this for 1 hour
+        markCollectionUnavailable('opensea', collectionSlug, 404);
+        return 0; // Return 0 floor price for non-existent collections
+      }
+
+      // Retry on other errors if attempts remaining
+      if (attempt < MAX_RETRIES) {
+        // Better error parsing: show HTTP status or network error code
+        const errorCode = error?.response?.status || error?.code || 'UNKNOWN';
+        warnLog('API', `[collection.ts] OpenSea floor price fetch failed, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug} | error=${errorCode}`);
+        await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+        continue;
+      }
+
+      // Final attempt failed - log and re-throw
+      const errorCode = error?.response?.status || error?.code || 'UNKNOWN';
+      errorLog('API', `[collection.ts] Failed to fetch OpenSea floor price after ${MAX_RETRIES} attempts | slug=${collectionSlug} | error=${errorCode}`, error);
+      throw error;
+    }
+  }
+
+  // Should not reach here, but return 0 as fallback
+  return 0;
 }
 
 // Circuit breaker for Blur API calls to prevent repeated failures
@@ -485,7 +426,6 @@ function recordBlurAPIFailure(collectionSlug: string, errorStatus: number) {
 }
 
 export async function getBlurFloor(collectionSlug: string): Promise<number> {
-  const lockKey = `floor:{blur}:${collectionSlug}`;
   const normalizedSlug = collectionSlug.toLowerCase();
 
   // Check LRU cache first
@@ -501,80 +441,74 @@ export async function getBlurFloor(collectionSlug: string): Promise<number> {
     return 0;
   }
 
-  // If not in cache, try to acquire lock and fetch
-  const result = await lockManager.withLock(lockKey, async () => {
-    // Double check LRU cache after acquiring lock
-    const lruCachedAfterLock = blurFloorLRU.get(normalizedSlug);
-    if (lruCachedAfterLock !== undefined) {
-      return lruCachedAfterLock;
-    }
+  // Double check LRU cache after potential race condition
+  const lruCachedAfterLock = blurFloorLRU.get(normalizedSlug);
+  if (lruCachedAfterLock !== undefined) {
+    return lruCachedAfterLock;
+  }
 
-    // Retry configuration for floor price fetching
-    const MAX_RETRIES = 3;
-    const BASE_DELAY = 500; // 500ms, 1000ms, 2000ms exponential backoff
+  // Retry configuration for floor price fetching
+  const MAX_RETRIES = 3;
+  const BASE_DELAY = 500; // 500ms, 1000ms, 2000ms exponential backoff
 
-    // Import Blur functions dynamically to avoid circular dependency
-    const { fetchBlurCollectionStats } = await import('../marketplace/blur/bid');
+  // Import Blur functions dynamically to avoid circular dependency
+  const { fetchBlurCollectionStats } = await import('../marketplace/blur/bid');
 
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        // CRITICAL FIX: fetchBlurCollectionStats returns a NUMBER, not an object!
-        const blurFloor = await fetchBlurCollectionStats(collectionSlug);
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      // CRITICAL FIX: fetchBlurCollectionStats returns a NUMBER, not an object!
+      const blurFloor = await fetchBlurCollectionStats(collectionSlug);
 
-        // blurFloor is already a number (e.g., 0.0497)
-        const floor_price = blurFloor ? Number(blurFloor) : 0;
+      // blurFloor is already a number (e.g., 0.0497)
+      const floor_price = blurFloor ? Number(blurFloor) : 0;
 
-        // If floor is 0 and we have retries left, retry (likely temporary API issue)
-        if (floor_price === 0 && attempt < MAX_RETRIES) {
-          warnLog('Collection', `[getBlurFloor] ${collectionSlug} | Floor is 0, retrying (${attempt}/${MAX_RETRIES})`);
-          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
-          continue;
-        }
-
-        // Only cache positive floor prices - don't cache 0 values
-        if (floor_price > 0) {
-          blurFloorLRU.set(normalizedSlug, floor_price);
-        }
-
-        // Reset circuit breaker on success
-        if (blurCircuitBreaker.has(collectionSlug)) {
-          blurCircuitBreaker.delete(collectionSlug);
-        }
-
-        return floor_price;
-
-      } catch (error: any) {
-        const errorStatus = error?.response?.status;
-
-        // Record failure for circuit breaker (403/408 only)
-        if (errorStatus === 403 || errorStatus === 408) {
-          recordBlurAPIFailure(collectionSlug, errorStatus);
-          const state = blurCircuitBreaker.get(collectionSlug);
-          warnLog('Collection', `[BlurCircuitBreaker] ${collectionSlug} | Failure recorded: ${state?.failureCount}/${BLUR_CIRCUIT_OPEN_THRESHOLD} | status=${errorStatus}`);
-        }
-
-        // Retry on errors if attempts remaining
-        if (attempt < MAX_RETRIES) {
-          warnLog('Collection', `[getBlurFloor] ${collectionSlug} | Fetch failed, retrying (${attempt}/${MAX_RETRIES}) | status=${errorStatus}`);
-          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
-          continue;
-        }
-
-        // Final attempt failed - log and return 0
-        errorLog('Collection', `[getBlurFloor] ${collectionSlug} | Error fetching Blur floor price after ${MAX_RETRIES} attempts | status=${errorStatus}`, error);
-        return 0;
+      // If floor is 0 and we have retries left, retry (likely temporary API issue)
+      if (floor_price === 0 && attempt < MAX_RETRIES) {
+        warnLog('Collection', `[getBlurFloor] ${collectionSlug} | Floor is 0, retrying (${attempt}/${MAX_RETRIES})`);
+        await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+        continue;
       }
+
+      // Only cache positive floor prices - don't cache 0 values
+      if (floor_price > 0) {
+        blurFloorLRU.set(normalizedSlug, floor_price);
+      }
+
+      // Reset circuit breaker on success
+      if (blurCircuitBreaker.has(collectionSlug)) {
+        blurCircuitBreaker.delete(collectionSlug);
+      }
+
+      return floor_price;
+
+    } catch (error: any) {
+      const errorStatus = error?.response?.status;
+
+      // Record failure for circuit breaker (403/408 only)
+      if (errorStatus === 403 || errorStatus === 408) {
+        recordBlurAPIFailure(collectionSlug, errorStatus);
+        const state = blurCircuitBreaker.get(collectionSlug);
+        warnLog('Collection', `[BlurCircuitBreaker] ${collectionSlug} | Failure recorded: ${state?.failureCount}/${BLUR_CIRCUIT_OPEN_THRESHOLD} | status=${errorStatus}`);
+      }
+
+      // Retry on errors if attempts remaining
+      if (attempt < MAX_RETRIES) {
+        warnLog('Collection', `[getBlurFloor] ${collectionSlug} | Fetch failed, retrying (${attempt}/${MAX_RETRIES}) | status=${errorStatus}`);
+        await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+        continue;
+      }
+
+      // Final attempt failed - log and return 0
+      errorLog('Collection', `[getBlurFloor] ${collectionSlug} | Error fetching Blur floor price after ${MAX_RETRIES} attempts | status=${errorStatus}`, error);
+      return 0;
     }
+  }
 
-    // Should not reach here, but return 0 as fallback
-    return 0;
-  });
-
-  return result || 0;
+  // Should not reach here, but return 0 as fallback
+  return 0;
 }
 
 export async function getMagicEdenFloor(collectionSlug: string): Promise<number> {
-  const lockKey = `floor:magiceden}:${collectionSlug}`;
   const normalizedSlug = collectionSlug.toLowerCase();
 
   // Check LRU cache first
@@ -583,63 +517,58 @@ export async function getMagicEdenFloor(collectionSlug: string): Promise<number>
     return lruCached;
   }
 
-  // If not in cache, try to acquire lock and fetch
-  const result = await lockManager.withLock(lockKey, async () => {
-    // Double check LRU cache after acquiring lock
-    const lruCachedAfterLock = magicEdenFloorLRU.get(normalizedSlug);
-    if (lruCachedAfterLock !== undefined) {
-      return lruCachedAfterLock;
-    }
+  // Double check LRU cache after potential race condition
+  const lruCachedAfterLock = magicEdenFloorLRU.get(normalizedSlug);
+  if (lruCachedAfterLock !== undefined) {
+    return lruCachedAfterLock;
+  }
 
-    // Retry configuration for floor price fetching
-    const MAX_RETRIES = 3;
-    const BASE_DELAY = 500; // 500ms, 1000ms, 2000ms exponential backoff
+  // Retry configuration for floor price fetching
+  const MAX_RETRIES = 3;
+  const BASE_DELAY = 500; // 500ms, 1000ms, 2000ms exponential backoff
 
-    // Import Magic Eden functions dynamically to avoid circular dependency
-    const { fetchMagicEdenCollectionStats } = await import('../marketplace/magiceden');
+  // Import Magic Eden functions dynamically to avoid circular dependency
+  const { fetchMagicEdenCollectionStats } = await import('../marketplace/magiceden');
 
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const stats = await fetchMagicEdenCollectionStats(collectionSlug);
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const stats = await fetchMagicEdenCollectionStats(collectionSlug);
 
-        const floor_price = stats ? Number(stats) : 0;
+      const floor_price = stats ? Number(stats) : 0;
 
-        // If floor is 0 and we have retries left, retry (likely temporary API issue)
-        if (floor_price === 0 && attempt < MAX_RETRIES) {
-          warnLog('API', `[collection.ts] MagicEden floor price is 0, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug}`);
-          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
-          continue;
-        }
-
-        // Only cache positive floor prices - don't cache 0 values
-        if (floor_price > 0) {
-          magicEdenFloorLRU.set(normalizedSlug, floor_price);
-        }
-
-        return floor_price;
-
-      } catch (error: any) {
-        // Retry on errors if attempts remaining
-        if (attempt < MAX_RETRIES) {
-          // Better error parsing: show HTTP status or network error code
-          const errorCode = error?.response?.status || error?.code || 'UNKNOWN';
-          warnLog('API', `[collection.ts] MagicEden floor price fetch failed, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug} | error=${errorCode}`);
-          await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
-          continue;
-        }
-
-        // Final attempt failed - log and return 0
-        const errorCode = error?.response?.status || error?.code || 'UNKNOWN';
-        errorLog('API', `[collection.ts] Error fetching Magic Eden floor price after ${MAX_RETRIES} attempts | slug=${collectionSlug} | error=${errorCode}`, error);
-        return 0;
+      // If floor is 0 and we have retries left, retry (likely temporary API issue)
+      if (floor_price === 0 && attempt < MAX_RETRIES) {
+        warnLog('API', `[collection.ts] MagicEden floor price is 0, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug}`);
+        await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+        continue;
       }
+
+      // Only cache positive floor prices - don't cache 0 values
+      if (floor_price > 0) {
+        magicEdenFloorLRU.set(normalizedSlug, floor_price);
+      }
+
+      return floor_price;
+
+    } catch (error: any) {
+      // Retry on errors if attempts remaining
+      if (attempt < MAX_RETRIES) {
+        // Better error parsing: show HTTP status or network error code
+        const errorCode = error?.response?.status || error?.code || 'UNKNOWN';
+        warnLog('API', `[collection.ts] MagicEden floor price fetch failed, retrying (${attempt}/${MAX_RETRIES}) | slug=${collectionSlug} | error=${errorCode}`);
+        await new Promise(resolve => setTimeout(resolve, BASE_DELAY * Math.pow(2, attempt - 1)));
+        continue;
+      }
+
+      // Final attempt failed - log and return 0
+      const errorCode = error?.response?.status || error?.code || 'UNKNOWN';
+      errorLog('API', `[collection.ts] Error fetching Magic Eden floor price after ${MAX_RETRIES} attempts | slug=${collectionSlug} | error=${errorCode}`, error);
+      return 0;
     }
+  }
 
-    // Should not reach here, but return 0 as fallback
-    return 0;
-  });
-
-  return result || 0;
+  // Should not reach here, but return 0 as fallback
+  return 0;
 }
 
 export async function getAllFloorPrices(collectionSlug: string): Promise<{
@@ -692,6 +621,12 @@ export async function getCollectionEvents(
     return cachedData;
   }
 
+  // Double-check LRU after potential race condition
+  const cachedDataAfterCheck = collectionEventsLRU.get(cacheKey);
+  if (cachedDataAfterCheck) {
+    return cachedDataAfterCheck;
+  }
+
   try {
     const params = new URLSearchParams();
     eventTypes.forEach(type => params.append('event_type', type));
@@ -733,7 +668,6 @@ export async function fetchOpenSeaCollectionItems(
   priority?: number
 ): Promise<string[]> {
   const cacheKey = `${variables.collectionSlug}:${hashData(variables)}`;
-  const lockKey = `opensea:lock:collection-items:${variables.collectionSlug}:${hashData(variables)}`;
 
   // Try to get from LRU cache first (only for initial request)
   if (!cursor) {
@@ -745,36 +679,24 @@ export async function fetchOpenSeaCollectionItems(
 
   // For paginated requests or cache miss, fetch data
   try {
-    // Only use lock for initial request
+    // Only use double-check for initial request
     if (!cursor) {
-      const result = await lockManager.withLock(lockKey, async () => {
-        // Double check LRU cache after acquiring lock
-        const cachedData = collectionItemsLRU.get(cacheKey);
-        if (cachedData) {
-          return cachedData;
-        }
-
-        // Fetch data
-        return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount, priority);
-      });
-
-      if (result) {
-        // Cache the final result
-        if (result.length > 0) {
-          collectionItemsLRU.set(cacheKey, result);
-        }
-        return result;
-      }
-
-      // If lock acquisition failed, wait and try cache again
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Double check LRU cache after potential race condition
       const cachedData = collectionItemsLRU.get(cacheKey);
       if (cachedData) {
         return cachedData;
       }
-      throw new Error('Failed to acquire lock for collection items fetch');
+
+      // Fetch data
+      const result = await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount, priority);
+
+      // Cache the final result
+      if (result.length > 0) {
+        collectionItemsLRU.set(cacheKey, result);
+      }
+      return result;
     } else {
-      // For paginated requests, fetch directly without lock
+      // For paginated requests, fetch directly
       return await fetchCollectionItemsRecursive(variables, allTokenIds, cursor, 1, taskId, expectedCount, priority);
     }
   } catch (error) {
@@ -940,7 +862,6 @@ export async function fetchOpenseaTraits(
   cursor?: string
 ): Promise<CollectionAttribute[]> {
   const normalizedSlug = slug.toLowerCase();
-  const lockKey = `opensea:lock:traits:${slug}`;
 
   // Try to get from LRU cache first if no cursor (first page)
   if (!cursor) {
@@ -951,36 +872,24 @@ export async function fetchOpenseaTraits(
   }
 
   try {
-    // Only use lock for initial request
+    // Only use double-check for initial request
     if (!cursor) {
-      const result = await lockManager.withLock(lockKey, async () => {
-        // Double check LRU cache after acquiring lock
-        const cachedTraits = collectionTraitsLRU.get(normalizedSlug);
-        if (cachedTraits) {
-          return cachedTraits;
-        }
-
-        // Fetch traits recursively
-        return await fetchOpenseaTraitsRecursive(slug, limit, cursor);
-      });
-
-      if (result) {
-        // Cache the final result
-        if (result.length > 0) {
-          collectionTraitsLRU.set(normalizedSlug, result);
-        }
-        return result;
-      }
-
-      // If lock acquisition failed, wait and try cache again
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Double check LRU cache after potential race condition
       const cachedTraits = collectionTraitsLRU.get(normalizedSlug);
       if (cachedTraits) {
         return cachedTraits;
       }
-      throw new Error('Failed to acquire lock for traits fetch');
+
+      // Fetch traits recursively
+      const result = await fetchOpenseaTraitsRecursive(slug, limit, cursor);
+
+      // Cache the final result
+      if (result.length > 0) {
+        collectionTraitsLRU.set(normalizedSlug, result);
+      }
+      return result;
     } else {
-      // For paginated requests, fetch directly without lock
+      // For paginated requests, fetch directly
       return await fetchOpenseaTraitsRecursive(slug, limit, cursor);
     }
   } catch (error) {
@@ -1084,7 +993,6 @@ export async function fetchOpenseaTraitFloors(
 ): Promise<TraitWithFloorPrice[]> {
   const traitHash = hashData(traits);
   const cacheKey = `${slug}:${traitHash}`;
-  const lockKey = `opensea:lock:trait-floors:${slug}:${traitHash}`;
 
   // Try to get from LRU cache first
   const cachedData = traitFloorsDetailLRU.get(cacheKey);
@@ -1092,65 +1000,61 @@ export async function fetchOpenseaTraitFloors(
     return cachedData;
   }
 
-  // If not in cache, try to acquire lock and fetch
-  const result = await lockManager.withLock(lockKey, async () => {
-    // Double check LRU cache after acquiring lock
-    const cachedData = traitFloorsDetailLRU.get(cacheKey);
-    if (cachedData) {
-      return cachedData;
-    }
+  // Double check LRU cache after potential race condition
+  const cachedDataAfterCheck = traitFloorsDetailLRU.get(cacheKey);
+  if (cachedDataAfterCheck) {
+    return cachedDataAfterCheck;
+  }
 
-    try {
-      // Build the attributes filter for the query
-      const attributesFilter = traits.map(trait => ({
-        traitType: trait.traitType,
-        values: trait.values
-      }));
+  try {
+    // Build the attributes filter for the query
+    const attributesFilter = traits.map(trait => ({
+      traitType: trait.traitType,
+      values: trait.values
+    }));
 
-      const payload = {
-        operationName: 'CollectionItemsListQuery',
-        query: `query CollectionItemsListQuery($collectionSlug: String!, $filter: CollectionItemsFilter, $limit: Int!) {
-          collectionItems(
-            collectionSlug: $collectionSlug
-            filter: $filter
-            limit: $limit
-            sort: { by: PRICE, direction: ASC }
-          ) {
-            items {
-              id
-              tokenId
-              attributes {
-                traitType
-                value
-                floorPrice {
-                  native {
-                    unit
-                    __typename
-                  }
-                  usd
-                  token {
-                    unit
-                    symbol
-                    contractAddress
-                    __typename
-                  }
+    const payload = {
+      operationName: 'CollectionItemsListQuery',
+      query: `query CollectionItemsListQuery($collectionSlug: String!, $filter: CollectionItemsFilter, $limit: Int!) {
+        collectionItems(
+          collectionSlug: $collectionSlug
+          filter: $filter
+          limit: $limit
+          sort: { by: PRICE, direction: ASC }
+        ) {
+          items {
+            id
+            tokenId
+            attributes {
+              traitType
+              value
+              floorPrice {
+                native {
+                  unit
                   __typename
                 }
-                stats {
-                  itemCount
-                  percent
+                usd
+                token {
+                  unit
+                  symbol
+                  contractAddress
                   __typename
                 }
                 __typename
               }
-              bestListing {
-                pricePerItem {
-                  usd
-                  token {
-                    unit
-                    symbol
-                    __typename
-                  }
+              stats {
+                itemCount
+                percent
+                __typename
+              }
+              __typename
+            }
+            bestListing {
+              pricePerItem {
+                usd
+                token {
+                  unit
+                  symbol
                   __typename
                 }
                 __typename
@@ -1159,74 +1063,63 @@ export async function fetchOpenseaTraitFloors(
             }
             __typename
           }
-        }`,
-        variables: {
-          collectionSlug: slug,
-          filter: {
-            attributes: attributesFilter
-          },
-          limit: 1  // We only need one item per trait combo to get floor prices
+          __typename
         }
-      };
+      }`,
+      variables: {
+        collectionSlug: slug,
+        filter: {
+          attributes: attributesFilter
+        },
+        limit: 1  // We only need one item per trait combo to get floor prices
+      }
+    };
 
-      const { data } = await apiDedup(
-        `opensea-trait-floors-${slug}-${hashData(traits)}`,
-        () => limiter.schedule(priority !== undefined ? { priority } : {}, () =>
-          axiosInstance.post(`${BASE_URL}/opensea/graphql`, payload, {
-            headers: {
-              "x-api-key": API_KEY
-            },
-          })
-        ),
-        { category: 'Collection' }
-      );
+    const { data } = await apiDedup(
+      `opensea-trait-floors-${slug}-${hashData(traits)}`,
+      () => limiter.schedule(priority !== undefined ? { priority } : {}, () =>
+        axiosInstance.post(`${BASE_URL}/opensea/graphql`, payload, {
+          headers: {
+            "x-api-key": API_KEY
+          },
+        })
+      ),
+      { category: 'Collection' }
+    );
 
-      // Extract unique trait floor prices from the response
-      const traitFloorMap = new Map<string, TraitWithFloorPrice>();
+    // Extract unique trait floor prices from the response
+    const traitFloorMap = new Map<string, TraitWithFloorPrice>();
 
-      if (data?.data?.collectionItems?.items) {
-        for (const item of data.data.collectionItems.items) {
-          if (item.attributes) {
-            for (const attr of item.attributes) {
-              const key = `${attr.traitType}:${attr.value}`;
-              if (!traitFloorMap.has(key) && attr.floorPrice) {
-                traitFloorMap.set(key, {
-                  traitType: attr.traitType,
-                  value: attr.value,
-                  count: attr.stats?.itemCount || 0,
-                  floorPrice: attr.floorPrice
-                });
-              }
+    if (data?.data?.collectionItems?.items) {
+      for (const item of data.data.collectionItems.items) {
+        if (item.attributes) {
+          for (const attr of item.attributes) {
+            const key = `${attr.traitType}:${attr.value}`;
+            if (!traitFloorMap.has(key) && attr.floorPrice) {
+              traitFloorMap.set(key, {
+                traitType: attr.traitType,
+                value: attr.value,
+                count: attr.stats?.itemCount || 0,
+                floorPrice: attr.floorPrice
+              });
             }
           }
         }
       }
-
-      const result = Array.from(traitFloorMap.values());
-
-      // Cache the result
-      if (result.length > 0) {
-        traitFloorsDetailLRU.set(cacheKey, result);
-      }
-
-      return result;
-    } catch (error) {
-      errorLog('Collection', `[collection.ts] Error fetching OpenSea trait floors | slug=${slug}`, error);
-      throw error;
     }
-  });
 
-  if (!result) {
-    // If we couldn't acquire the lock, wait briefly and try cache again
-    await new Promise(resolve => setTimeout(resolve, 100));
-    const cachedData = traitFloorsDetailLRU.get(cacheKey);
-    if (cachedData) {
-      return cachedData;
+    const result = Array.from(traitFloorMap.values());
+
+    // Cache the result
+    if (result.length > 0) {
+      traitFloorsDetailLRU.set(cacheKey, result);
     }
-    throw new Error(`Failed to fetch trait floors for collection ${slug}: Could not acquire lock`);
+
+    return result;
+  } catch (error) {
+    errorLog('Collection', `[collection.ts] Error fetching OpenSea trait floors | slug=${slug}`, error);
+    throw error;
   }
-
-  return result;
 }
 
 interface CollectionItemsFilter {

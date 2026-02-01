@@ -15,8 +15,8 @@ interface CachedWallet {
 }
 
 class WalletCache {
-  // LRU cache with no TTL - only size-based eviction (max 100 entries)
-  private cache: LRUCache<string, CachedWallet>;
+  // LRU cache with no TTL - only size-based eviction (max 1000 entries)
+  private walletDataLRU: LRUCache<string, CachedWallet>;
   private readonly QUERY_TIMEOUT = 30000; // 30 seconds
   private password: string | null = null;
 
@@ -28,16 +28,17 @@ class WalletCache {
 
   constructor() {
     // Initialize wallet metadata cache (NO TTL, size-based eviction only)
-    this.cache = new LRUCache<string, CachedWallet>({
-      max: 100,  // Max 100 wallets
-      updateAgeOnGet: false,  // Don't track access time (not needed without TTL)
+    this.walletDataLRU = new LRUCache<string, CachedWallet>({
+      max: 1000,  // Max 1000 wallets (standardized minimum)
+      ttl: 24 * 60 * 60 * 1000, // 24 hours TTL (ensure metadata freshness)
+      updateAgeOnGet: false,  // Don't reset TTL on reads
       allowStale: false,
       dispose: (value, key) => {
-        debugLog('WalletCache', `LRU_EVICT_WALLET | address=${key} | reason=cache full | cacheSize=${this.cache.size}/100`);
+        debugLog('WalletCache', `LRU_EVICT_WALLET | address=${key} | reason=cache full | cacheSize=${this.walletDataLRU.size}/1000`);
       }
     });
 
-    debugLog('WalletCache', 'LRU cache initialized | walletMax=100 | TTL=NONE | eviction=LRU_only');
+    debugLog('WalletCache', 'LRU cache initialized | walletMax=1000 | TTL=NONE | eviction=LRU_only');
   }
 
   /**
@@ -54,7 +55,7 @@ class WalletCache {
     this.password = password;
     debugLog('WalletCache', 'Initializing wallet cache with password');
     await this.loadAllWallets();
-    debugLog('WalletCache', `Wallet cache initialized | wallets=${this.cache.size} | max=100`);
+    debugLog('WalletCache', `Wallet cache initialized | wallets=${this.walletDataLRU.size} | max=1000`);
   }
 
   private async loadAllWallets() {
@@ -64,7 +65,7 @@ class WalletCache {
 
       for (const wallet of wallets) {
         const address = wallet.address.toLowerCase();
-        this.cache.set(address, {
+        this.walletDataLRU.set(address, {
           _id: wallet._id,
           address: wallet.address,
           encryptedPrivateKey: wallet.encryptedPrivateKey,
@@ -74,7 +75,7 @@ class WalletCache {
         });
       }
 
-      debugLog('WalletCache', `Loaded ${this.cache.size} wallets into LRU cache (NO TTL, max=100)`);
+      debugLog('WalletCache', `Loaded ${this.walletDataLRU.size} wallets into LRU cache (NO TTL, max=1000)`);
     } catch (error) {
       errorLog('[Database]', 'Failed to initialize wallet cache', error as Error);
     }
@@ -84,9 +85,9 @@ class WalletCache {
     const normalizedAddress = address.toLowerCase();
 
     // Check cache first
-    const cached = this.cache.get(normalizedAddress);
+    const cached = this.walletDataLRU.get(normalizedAddress);
     if (cached) {
-      debugLog('WalletCache', `CACHE_HIT | wallet=${normalizedAddress} | cacheSize=${this.cache.size}/100`);
+      debugLog('WalletCache', `CACHE_HIT | wallet=${normalizedAddress} | cacheSize=${this.walletDataLRU.size}/1000`);
       return cached as unknown as IWallet;
     }
 
@@ -108,7 +109,7 @@ class WalletCache {
           `getWalletByAddress(${normalizedAddress})`
         );
         if (wallet) {
-          this.cache.set(normalizedAddress, {
+          this.walletDataLRU.set(normalizedAddress, {
             _id: wallet._id,
             address: wallet.address,
             encryptedPrivateKey: wallet.encryptedPrivateKey,
@@ -116,7 +117,7 @@ class WalletCache {
             user: String(wallet.user),
             tasks: (wallet as any).tasks
           });
-          debugLog('WalletCache', `DB_FETCH_SUCCESS | wallet=${normalizedAddress} | cached | cacheSize=${this.cache.size}/100`);
+          debugLog('WalletCache', `DB_FETCH_SUCCESS | wallet=${normalizedAddress} | cached | cacheSize=${this.walletDataLRU.size}/1000`);
           return wallet;
         }
         debugLog('WalletCache', `DB_FETCH_NOT_FOUND | wallet=${normalizedAddress}`);
@@ -147,7 +148,7 @@ class WalletCache {
 
   async findWalletsByTaskId(taskId: string): Promise<IWallet[]> {
     // First check if we have all wallets in cache
-    const allWallets = Array.from(this.cache.values());
+    const allWallets = Array.from(this.walletDataLRU.values());
     if (allWallets.length > 0) {
       return allWallets.filter(w => w.tasks && Array.isArray(w.tasks) && w.tasks.includes(taskId)) as unknown as IWallet[];
     }
@@ -169,7 +170,7 @@ class WalletCache {
         // Update cache
         for (const wallet of wallets) {
           const address = wallet.address.toLowerCase();
-          this.cache.set(address, {
+          this.walletDataLRU.set(address, {
             _id: wallet._id,
             address: wallet.address,
             encryptedPrivateKey: wallet.encryptedPrivateKey,
@@ -194,11 +195,11 @@ class WalletCache {
 
   async getAllWallets(): Promise<IWallet[]> {
     // If cache is empty, load from database
-    if (this.cache.size === 0) {
+    if (this.walletDataLRU.size === 0) {
       await this.loadAllWallets();
     }
     
-    return Array.from(this.cache.values()) as unknown as IWallet[];
+    return Array.from(this.walletDataLRU.values()) as unknown as IWallet[];
   }
 
   async getWalletByAddress(address: string): Promise<IWallet | null> {
@@ -207,9 +208,9 @@ class WalletCache {
 
   async getWalletById(walletId: string): Promise<IWallet | null> {
     // First check if we have it in cache by scanning
-    for (const cached of this.cache.values()) {
+    for (const cached of this.walletDataLRU.values()) {
       if (cached._id.toString() === walletId) {
-        debugLog('WalletCache', `CACHE_HIT_BY_ID | walletId=${walletId} | cacheSize=${this.cache.size}/100`);
+        debugLog('WalletCache', `CACHE_HIT_BY_ID | walletId=${walletId} | cacheSize=${this.walletDataLRU.size}/1000`);
         return cached as unknown as IWallet;
       }
     }
@@ -233,7 +234,7 @@ class WalletCache {
         );
         if (wallet) {
           const address = wallet.address.toLowerCase();
-          this.cache.set(address, {
+          this.walletDataLRU.set(address, {
             _id: wallet._id,
             address: wallet.address,
             encryptedPrivateKey: wallet.encryptedPrivateKey,
@@ -241,7 +242,7 @@ class WalletCache {
             user: String(wallet.user),
             tasks: (wallet as any).tasks
           });
-          debugLog('WalletCache', `DB_FETCH_SUCCESS_BY_ID | walletId=${walletId} | address=${address} | cached | cacheSize=${this.cache.size}/100`);
+          debugLog('WalletCache', `DB_FETCH_SUCCESS_BY_ID | walletId=${walletId} | address=${address} | cached | cacheSize=${this.walletDataLRU.size}/1000`);
           return wallet;
         }
         debugLog('WalletCache', `DB_FETCH_NOT_FOUND_BY_ID | walletId=${walletId}`);
@@ -263,27 +264,35 @@ class WalletCache {
     const normalizedAddress = address.toLowerCase();
 
     // Get cached wallet to access encryptedPrivateKey before deletion
-    const cached = this.cache.get(normalizedAddress);
+    const cached = this.walletDataLRU.get(normalizedAddress);
     if (cached) {
       // Clear decrypted key from crypto.ts cache
       clearDecryptedKey(cached.encryptedPrivateKey);
     }
 
     // Clear wallet metadata from this cache
-    this.cache.delete(normalizedAddress);
-    debugLog('WalletCache', `INVALIDATE_WALLET | address=${normalizedAddress} | cacheSize=${this.cache.size}/100`);
+    this.walletDataLRU.delete(normalizedAddress);
+    debugLog('WalletCache', `INVALIDATE_WALLET | address=${normalizedAddress} | cacheSize=${this.walletDataLRU.size}/1000`);
   }
 
   invalidateAll() {
-    const walletCount = this.cache.size;
-    this.cache.clear();
-    debugLog('WalletCache', `INVALIDATE_ALL | cleared=${walletCount} wallets | cacheSize=0/100`);
+    const walletCount = this.walletDataLRU.size;
+    this.walletDataLRU.clear();
+    debugLog('WalletCache', `INVALIDATE_ALL | cleared=${walletCount} wallets | cacheSize=0/1000`);
   }
 
   destroy() {
-    const walletCount = this.cache.size;
-    this.cache.clear();
+    const walletCount = this.walletDataLRU.size;
+    this.walletDataLRU.clear();
     debugLog('WalletCache', `DESTROY | cleared=${walletCount} wallets | cache destroyed`);
+  }
+
+  /**
+   * Get the internal LRU cache for debugging/monitoring
+   * @internal - For use by lru-cache-sampler.ts only
+   */
+  public getCache(): LRUCache<string, CachedWallet> {
+    return this.walletDataLRU;
   }
 }
 

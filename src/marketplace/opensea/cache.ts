@@ -1,36 +1,37 @@
 import { LRUCache } from 'lru-cache';
 // Collection Details LRU (24 hours TTL - long-lived, rarely changes)
-// Right-sized to 500 max for typical user profiles (<100 collections, 5x safety buffer)
-// Memory impact: ~5MB max (10KB per collection × 500 collections)
+// Standardized to 1000 max (10x typical usage, good safety buffer)
+// Memory impact: ~10MB max (10KB per collection × 1000 collections)
 export const collectionDetailsLRU = new LRUCache<string, any>({
-  max: 500,
+  max: 1000,
   ttl: 24 * 60 * 60 * 1000,  // 24 hours
   allowStale: true,
   updateAgeOnGet: false
 });
 
-// Floor Price LRU (5 min TTL per user requirement)
-// Right-sized to 500 max for typical user profiles (<100 collections, 5x safety buffer)
-export const floorPriceLRU = new LRUCache<string, number>({
-  max: 500,
+// OpenSea Floor Price LRU (5 min TTL per user requirement)
+// Standardized to 1000 max (10x typical usage, good safety buffer)
+// Renamed from floorPriceLRU to openseaFloorLRU for consistency with other marketplace caches
+export const openseaFloorLRU = new LRUCache<string, number>({
+  max: 1000,
   ttl: 5 * 60 * 1000,  // 5 minutes
   allowStale: true,
   updateAgeOnGet: false
 });
 
 // Balance LRU (5 min TTL per user requirement)
-// Right-sized to 100 max for typical usage (10-20 active wallets during bidding)
+// Standardized to 1000 max (sufficient for large-scale operations)
 export const balanceLRU = new LRUCache<string, number>({
-  max: 100,
+  max: 1000,
   ttl: 60 * 1000,  // 60 seconds (balance changes more frequently)
   allowStale: false,
   updateAgeOnGet: false
 });
 
 // Trait Floor LRU (5 min TTL)
-// Right-sized to 20K max (100 collections × 5 trait types × 20 values × 2x safety buffer)
+// Right-sized to 10K max (100 collections × 5 trait types × 20 values)
 export const traitFloorLRU = new LRUCache<string, number>({
-  max: 20000,
+  max: 10000, // Reduced from 20K to 10K
   ttl: 5 * 60 * 1000,
   allowStale: true,
   updateAgeOnGet: false
@@ -61,7 +62,7 @@ export const magicEdenFloorLRU = new LRUCache<string, number>({
 // Collection Items LRU (1 hour TTL - matches Redis)
 // Stores token IDs lists for collections
 export const collectionItemsLRU = new LRUCache<string, string[]>({
-  max: 500,
+  max: 1000,
   ttl: 60 * 60 * 1000, // 1 hour
   allowStale: true,
   updateAgeOnGet: false,
@@ -81,7 +82,7 @@ export const collectionTraitsLRU = new LRUCache<string, any>({
 // Trait Floors Detail LRU (1 min TTL - matches Redis)
 // Stores detailed trait floor prices by trait combinations
 export const traitFloorsDetailLRU = new LRUCache<string, any>({
-  max: 5000,
+  max: 10000, // Increased from 5K to 10K for better high-traffic capacity
   ttl: 60 * 1000, // 1 minute
   allowStale: true,
   updateAgeOnGet: false,
@@ -93,6 +94,39 @@ export const traitFloorsDetailLRU = new LRUCache<string, any>({
 export const collectionEventsLRU = new LRUCache<string, any>({
   max: 1000,
   ttl: 10 * 1000, // 10 seconds
+  allowStale: true,
+  updateAgeOnGet: false,
+  updateAgeOnHas: false
+});
+
+// ============================================
+// Best Offer LRU Caches (for client UI only)
+// ============================================
+// Server bidding logic always fetches fresh offers - these serve client UI only
+// 5 minute TTL matches floor price caches for consistency
+
+// OpenSea Best Offer LRU (5min TTL - for client consumption only)
+export const openseaBestOfferLRU = new LRUCache<string, any>({
+  max: 1000,
+  ttl: 5 * 60 * 1000, // 5 minutes
+  allowStale: true,
+  updateAgeOnGet: false,
+  updateAgeOnHas: false
+});
+
+// Blur Best Offer LRU (5min TTL - for client consumption only)
+export const blurBestOfferLRU = new LRUCache<string, any>({
+  max: 1000,
+  ttl: 5 * 60 * 1000, // 5 minutes
+  allowStale: true,
+  updateAgeOnGet: false,
+  updateAgeOnHas: false
+});
+
+// MagicEden Best Offer LRU (5min TTL - for client consumption only)
+export const magicedenBestOfferLRU = new LRUCache<string, any>({
+  max: 1000,
+  ttl: 5 * 60 * 1000, // 5 minutes
   allowStale: true,
   updateAgeOnGet: false,
   updateAgeOnHas: false
@@ -124,7 +158,7 @@ export function getCacheStats() {
     floor: {
       ...stats.floor,
       hitRate: `${((stats.floor.hits / (stats.floor.hits + stats.floor.misses)) * 100 || 0).toFixed(1)}%`,
-      size: floorPriceLRU.size
+      size: openseaFloorLRU.size
     },
     balance: {
       ...stats.balance,

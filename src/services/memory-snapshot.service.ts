@@ -21,16 +21,20 @@ import { getDecryptedKeyCacheStats } from '../utils/crypto';
 // Import OpenSea caches
 import {
   collectionDetailsLRU,
-  floorPriceLRU,
+  openseaFloorLRU,
   balanceLRU,
   traitFloorLRU,
   blurFloorLRU,
   magicEdenFloorLRU,
   collectionItemsLRU,
   collectionTraitsLRU,
+  openseaBestOfferLRU,
+  blurBestOfferLRU,
+  magicedenBestOfferLRU,
   traitFloorsDetailLRU,
   collectionEventsLRU
 } from '../marketplace/opensea/cache';
+import { marketplaceUnavailableLRU } from '../utils/marketplace-availability';
 
 // Import global state
 import {
@@ -56,6 +60,8 @@ interface CacheStats {
 interface MemorySnapshotDependencies {
   memoryCleanupService: any;
   processedMessages: any; // LRUCache
+  collectionStatsLRU: any; // LRUCache
+  collectionDataLRU: any; // LRUCache
   traitsToRemove: Record<string, string[]>;
   removedTokens: Record<string, any>;
   tasksBeingRestarted: Set<string>;
@@ -590,7 +596,7 @@ class MemorySnapshotService {
       // OpenSea caches
       const openseaCaches = {
         collectionDetailsLRU: { size: collectionDetailsLRU.size, maxSize: 500, ttl: 24 * 60 * 60 * 1000 },
-        floorPriceLRU: { size: floorPriceLRU.size, maxSize: 500, ttl: 5 * 60 * 1000 },
+        openseaFloorLRU: { size: openseaFloorLRU.size, maxSize: 500, ttl: 5 * 60 * 1000 },
         contractResolutionLRU: { size: 0, maxSize: 5000, ttl: 24 * 60 * 60 * 1000 }, // Not exported
         multiContractSlugLRU: { size: 0, maxSize: 500, ttl: 24 * 60 * 60 * 1000 }, // Not exported
         contractMapLRU: { size: 0, maxSize: 500, ttl: 24 * 60 * 60 * 1000 }, // Not exported
@@ -603,10 +609,15 @@ class MemorySnapshotService {
         collectionTraitsLRU: { size: collectionTraitsLRU.size, maxSize: 1_000_000, ttl: 24 * 60 * 60 * 1000 },
         traitFloorsDetailLRU: { size: traitFloorsDetailLRU.size, maxSize: 5000, ttl: 60 * 1000 },
         collectionEventsLRU: { size: collectionEventsLRU.size, maxSize: 1000, ttl: 10 * 1000 },
+        // New best offer caches (for client UI only)
+        openseaBestOfferLRU: { size: openseaBestOfferLRU.size, maxSize: 1000, ttl: 5 * 60 * 1000 },
+        blurBestOfferLRU: { size: blurBestOfferLRU.size, maxSize: 1000, ttl: 5 * 60 * 1000 },
+        magicedenBestOfferLRU: { size: magicedenBestOfferLRU.size, maxSize: 1000, ttl: 5 * 60 * 1000 },
         totalEstimatedMemoryBytes: estimateMemory(
-          collectionDetailsLRU.size + floorPriceLRU.size + balanceLRU.size +
+          collectionDetailsLRU.size + openseaFloorLRU.size + balanceLRU.size +
           blurFloorLRU.size + magicEdenFloorLRU.size + collectionItemsLRU.size +
-          collectionTraitsLRU.size + traitFloorsDetailLRU.size + collectionEventsLRU.size, 500
+          collectionTraitsLRU.size + traitFloorsDetailLRU.size + collectionEventsLRU.size +
+          openseaBestOfferLRU.size + blurBestOfferLRU.size + magicedenBestOfferLRU.size, 500
         )
       };
 
@@ -630,12 +641,17 @@ class MemorySnapshotService {
       // Trading & Listing caches
       const tradingDisabledCacheSize = tradingDisabledCache.getStats().total;
       const listingPriceCacheSize = listingPriceCache.getStats().memoryCacheSize;
+      const collectionStatsLRUSize = this.deps?.collectionStatsLRU?.size || 0;
+      const collectionDataLRUSize = this.deps?.collectionDataLRU?.size || 0;
       const tradingListingCaches = {
         tradingDisabledCache: { size: tradingDisabledCacheSize, maxSize: 5000, ttl: 24 * 60 * 60 * 1000 },
         listingPriceCache: { size: listingPriceCacheSize, maxSize: 10000, ttl: 30 * 60 * 1000 },
         collectionFloorCache: { size: collectionFloorCache.size, maxSize: 1000, ttl: 5 * 60 * 1000 },
+        collectionStatsLRU: { size: collectionStatsLRUSize, maxSize: 1000, ttl: 24 * 60 * 60 * 1000 },
+        collectionDataLRU: { size: collectionDataLRUSize, maxSize: 100, ttl: 24 * 60 * 60 * 1000 },
         totalEstimatedMemoryBytes: estimateMemory(
-          tradingDisabledCacheSize + listingPriceCacheSize + collectionFloorCache.size, 300
+          tradingDisabledCacheSize + listingPriceCacheSize + collectionFloorCache.size +
+          collectionStatsLRUSize + collectionDataLRUSize, 500
         )
       };
 
@@ -647,14 +663,20 @@ class MemorySnapshotService {
       };
 
       // Small utility caches
-      const walletCacheSize = (walletCache as any).cache?.size || 0;
-      const marketplaceApprovalCacheSize = (marketplaceApprovalCache as any).cache?.size || 0;
+      const walletCacheSize = (walletCache as any).walletDataLRU?.size || 0;
+      const marketplaceApprovalCacheSize = (marketplaceApprovalCache as any).marketplaceApprovalLRU?.size || 0;
       const smallUtilityCaches = {
-        walletCache: { size: walletCacheSize, maxSize: 100 },
-        decryptedKeyCache: { size: decryptedKeyCacheStats.size, maxSize: 100 },
-        marketplaceApprovalCache: { size: marketplaceApprovalCacheSize, maxSize: 100 },
+        walletCache: { size: walletCacheSize, maxSize: 1000 },
+        decryptedKeyCache: { size: decryptedKeyCacheStats.size, maxSize: 1000 },
+        marketplaceApprovalCache: { size: marketplaceApprovalCacheSize, maxSize: 1000 },
+        marketplaceUnavailableLRU: {
+          size: marketplaceUnavailableLRU.size,
+          maxSize: 1000,
+          ttl: 3600 * 1000
+        },
         totalEstimatedMemoryBytes: estimateMemory(
-          walletCacheSize + decryptedKeyCacheStats.size + marketplaceApprovalCacheSize, 200
+          walletCacheSize + decryptedKeyCacheStats.size + marketplaceApprovalCacheSize + marketplaceUnavailableLRU.size,
+          100  // ~100 bytes per entry (key + boolean + metadata)
         )
       };
 
@@ -662,10 +684,11 @@ class MemorySnapshotService {
       const totalSizeAllCaches =
         orderLRU.size + rarityCacheObj.size + tokenTraitCacheStats.size + logsCacheObj.size +
         processedMessagesObj.size + processedOwnBidsObj.size + approvalCacheObj.size +
-        traitFloorLRUObj.size + collectionDetailsLRU.size + floorPriceLRU.size + balanceLRU.size +
+        traitFloorLRUObj.size + collectionDetailsLRU.size + openseaFloorLRU.size + balanceLRU.size +
         collectionCacheStats.collectionDetails.size + collectionCacheStats.floorPrice.size +
         tradingDisabledCacheSize + listingPriceCacheSize + collectionFloorCache.size +
-        walletCacheSize + decryptedKeyCacheStats.size + marketplaceApprovalCacheSize;
+        collectionStatsLRUSize + collectionDataLRUSize +
+        walletCacheSize + decryptedKeyCacheStats.size + marketplaceApprovalCacheSize + marketplaceUnavailableLRU.size;
 
       const totalEstimatedMemoryBytes =
         orderLRU.estimatedMemoryBytes + rarityCacheObj.estimatedMemoryBytes +
@@ -784,7 +807,7 @@ class MemorySnapshotService {
       // Grouped caches
       openseaCaches: {
         collectionDetailsLRU: { size: 0, maxSize: 0, ttl: 0 },
-        floorPriceLRU: { size: 0, maxSize: 0, ttl: 0 },
+        openseaFloorLRU: { size: 0, maxSize: 0, ttl: 0 },
         contractResolutionLRU: { size: 0, maxSize: 0, ttl: 0 },
         multiContractSlugLRU: { size: 0, maxSize: 0, ttl: 0 },
         contractMapLRU: { size: 0, maxSize: 0, ttl: 0 },
@@ -800,6 +823,8 @@ class MemorySnapshotService {
         tradingDisabledCache: { size: 0, maxSize: 0, ttl: 0 },
         listingPriceCache: { size: 0, maxSize: 0, ttl: 0 },
         collectionFloorCache: { size: 0, maxSize: 0, ttl: 0 },
+        collectionStatsLRU: { size: 0, maxSize: 0, ttl: 0 },
+        collectionDataLRU: { size: 0, maxSize: 0, ttl: 0 },
         totalEstimatedMemoryBytes: 0
       },
       dedupCaches: {
@@ -811,6 +836,7 @@ class MemorySnapshotService {
         walletCache: { size: 0, maxSize: 0 },
         decryptedKeyCache: { size: 0, maxSize: 0 },
         marketplaceApprovalCache: { size: 0, maxSize: 0 },
+        marketplaceUnavailableLRU: { size: 0, maxSize: 0, ttl: 0 },
         totalEstimatedMemoryBytes: 0
       },
 

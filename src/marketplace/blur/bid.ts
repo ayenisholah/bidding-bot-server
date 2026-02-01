@@ -1089,7 +1089,7 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
 
 export async function fetchBlurCollectionStats(slug: string, priority?: number) {
   // Check if collection is known to be unavailable on Blur
-  const unavailable = await isCollectionUnavailable('blur', slug);
+  const unavailable = isCollectionUnavailable('blur', slug);
   if (unavailable) {
     return 0; // Skip API call, already cached as unavailable
   }
@@ -1147,7 +1147,7 @@ export async function fetchBlurCollectionStats(slug: string, priority?: number) 
       const status = error?.response?.status;
       if (status === 400 || status === 404) {
         // Collection doesn't exist on Blur - cache this for 1 hour
-        await markCollectionUnavailable('blur', slug, status);
+        markCollectionUnavailable('blur', slug, status);
         return 0;
       }
       // Only log unexpected errors
@@ -1289,4 +1289,12 @@ export function getTimeoutMetrics() {
       ? (timeoutMetrics.successAfterRetry / timeoutMetrics.total408Errors) * 100
       : 0,
   };
+}
+
+/**
+ * Get cache instances for debugging/monitoring
+ * @internal - For use by lru-cache-sampler.ts only
+ */
+export function getBlurInsufficientBalanceLogCache(): LRUCache<string, boolean> {
+  return insufficientBalanceLogCache;
 }

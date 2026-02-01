@@ -246,3 +246,11 @@ export function getTokenAddressForCurrency(currency: string): string | null {
       return null;
   }
 }
+
+/**
+ * Get logged balance errors cache for debugging/monitoring
+ * @internal - For use by lru-cache-sampler.ts only
+ */
+export function getLoggedBalanceErrors(): LRUCache<string, boolean> {
+  return loggedBalanceErrors;
+}

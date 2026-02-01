@@ -19,7 +19,7 @@ export interface CachedOrder {
 // IMPORTANT: Each entry now stores an ARRAY of CachedOrder[] to support multiple orders per identifier
 const orderLRU = new LRUCache<string, CachedOrder[]>({
   max: 1000000,           // 1M entries max (handle more concurrent active orders)
-  ttl: 0,                 // No automatic TTL - manual expiration via expiresAt
+  ttl: 24 * 60 * 60 * 1000, // 24 hours TTL (safety net, manual expiration via expiresAt still primary)
   allowStale: false,
   updateAgeOnGet: false,
   updateAgeOnHas: false
@@ -671,6 +671,14 @@ class OrderCache {
     for (const order of orders) {
       this.set(order);
     }
+  }
+
+  /**
+   * Get the internal orderLRU cache for debugging/monitoring
+   * @internal - For use by lru-cache-sampler.ts only
+   */
+  getOrderLRU(): LRUCache<string, CachedOrder[]> {
+    return orderLRU;
   }
 }
 

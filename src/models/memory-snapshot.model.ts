@@ -68,7 +68,7 @@ interface LRUCachesStats {
   // OpenSea caches (6)
   openseaCaches: {
     collectionDetailsLRU: { size: number; maxSize: number; ttl: number };
-    floorPriceLRU: { size: number; maxSize: number; ttl: number };
+    openseaFloorLRU: { size: number; maxSize: number; ttl: number };
     contractResolutionLRU: { size: number; maxSize: number; ttl: number };
     multiContractSlugLRU: { size: number; maxSize: number; ttl: number };
     contractMapLRU: { size: number; maxSize: number; ttl: number };
@@ -83,11 +83,13 @@ interface LRUCachesStats {
     totalEstimatedMemoryBytes: number;
   };
 
-  // Trading & Listing (3)
+  // Trading & Listing (4)
   tradingListingCaches: {
     tradingDisabledCache: { size: number; maxSize: number; ttl: number };
     listingPriceCache: { size: number; maxSize: number; ttl: number };
     collectionFloorCache: { size: number; maxSize: number; ttl: number };
+    collectionStatsLRU: { size: number; maxSize: number; ttl: number };
+    collectionDataLRU: { size: number; maxSize: number; ttl: number };
     totalEstimatedMemoryBytes: number;
   };
 
@@ -242,7 +244,7 @@ const LRUCachesStatsSchema = new Schema({
   // OpenSea caches
   openseaCaches: {
     collectionDetailsLRU: { size: Number, maxSize: Number, ttl: Number },
-    floorPriceLRU: { size: Number, maxSize: Number, ttl: Number },
+    openseaFloorLRU: { size: Number, maxSize: Number, ttl: Number },
     contractResolutionLRU: { size: Number, maxSize: Number, ttl: Number },
     multiContractSlugLRU: { size: Number, maxSize: Number, ttl: Number },
     contractMapLRU: { size: Number, maxSize: Number, ttl: Number },
@@ -262,6 +264,8 @@ const LRUCachesStatsSchema = new Schema({
     tradingDisabledCache: { size: Number, maxSize: Number, ttl: Number },
     listingPriceCache: { size: Number, maxSize: Number, ttl: Number },
     collectionFloorCache: { size: Number, maxSize: Number, ttl: Number },
+    collectionStatsLRU: { size: Number, maxSize: Number, ttl: Number },
+    collectionDataLRU: { size: Number, maxSize: Number, ttl: Number },
     totalEstimatedMemoryBytes: Number
   },
 

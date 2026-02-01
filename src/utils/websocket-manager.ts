@@ -1844,6 +1844,25 @@ class WebSocketManager extends EventEmitter {
     this.persistentBiddingSubscriptions.clear();
     this.subscribedSlugs.clear();
   }
+
+  /**
+   * Get forwarding latency samples cache for debugging/monitoring
+   * @internal - For use by lru-cache-sampler.ts only
+   */
+  public getForwardingLatencySamples(): LRUCache<string, { marketplace: string; latency: number; timestamp: number }> {
+    return this.forwardingLatencySamples;
+  }
 }
 
 export default WebSocketManager;
+
+/**
+ * Get forwarding latency samples cache for debugging/monitoring
+ * Note: This requires accessing the WebSocketManager singleton instance
+ * @internal - For use by lru-cache-sampler.ts only
+ */
+export function getForwardingLatencySamples(): LRUCache<string, { marketplace: string; latency: number; timestamp: number }> | null {
+  // This will be populated by the actual instance when it's created
+  // The lru-cache-sampler will need to handle null case
+  return null;
+}

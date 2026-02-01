@@ -104,7 +104,7 @@ const BASIS_CONSTANTS: Record<number, number> = {
 // Wallet cache to avoid recreating wallet instances
 // Migrated to LRUCache to match OpenSea pattern and prevent unbounded growth
 const walletCache = new LRUCache<string, Wallet>({
-  max: 50,
+  max: 1000,
   ttl: 60 * 1000 // 1 minute (match OpenSea)
 });
 
@@ -1531,7 +1531,7 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
 
 export async function fetchMagicEdenCollectionStats(contractAddress: string, priority?: number): Promise<string> {
   // Check if collection is known to be unavailable on MagicEden
-  const unavailable = await isCollectionUnavailable('magiceden', contractAddress);
+  const unavailable = isCollectionUnavailable('magiceden', contractAddress);
   if (unavailable) {
     return "0"; // Skip API call, already cached as unavailable
   }
@@ -1605,7 +1605,7 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string, pri
       const status = error?.response?.status;
       if (status === 400 || status === 404) {
         // Collection doesn't exist on MagicEden - cache this for 1 hour
-        await markCollectionUnavailable('magiceden', contractAddress, status);
+        markCollectionUnavailable('magiceden', contractAddress, status);
         return "0";
       }
       // Re-throw unexpected errors
@@ -2352,3 +2352,14 @@ interface MarketDetails {
   floorAsk: FloorAsk;
 }
 
+/**
+ * Get cache instances for debugging/monitoring
+ * @internal - For use by lru-cache-sampler.ts only
+ */
+export function getMagicedenWalletCache(): LRUCache<string, Wallet> {
+  return walletCache;
+}
+
+export function getMagicedenInsufficientBalanceLogCache(): LRUCache<string, boolean> {
+  return insufficientBalanceLogCache;
+}

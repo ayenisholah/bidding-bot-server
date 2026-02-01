@@ -24,7 +24,7 @@ interface LogsCacheStats {
 
 class LogsCache {
   // Cache: key = taskId-messageHash-marketplace
-  private cache: LRUCache<string, BidLogEntry>;
+  private bidLogsLRU: LRUCache<string, BidLogEntry>;
 
   // Stats tracking
   private stats = {
@@ -41,8 +41,8 @@ class LogsCache {
   constructor() {
     // Start with default 24-hour TTL
     // Will be updated per-task when task starts
-    this.cache = new LRUCache<string, BidLogEntry>({
-      max: 100000, // Large enough for all tasks
+    this.bidLogsLRU = new LRUCache<string, BidLogEntry>({
+      max: 10000, // Reduced from 100K to 10K - sufficient for 100 concurrent tasks
       ttl: 24 * 60 * 60 * 1000, // Default 24 hours
       ttlAutopurge: true,
       updateAgeOnGet: false // Don't refresh TTL on reads
@@ -79,7 +79,7 @@ class LogsCache {
     this.stats.totalRequests++;
     const key = this.getCacheKey(taskId, messageHash, marketplace);
 
-    const entry = this.cache.get(key);
+    const entry = this.bidLogsLRU.get(key);
     if (entry) {
       this.stats.hits++;
       debugLog('LogsCache', `CACHE_HIT | ${key}`);
@@ -100,7 +100,7 @@ class LogsCache {
     // Get task-specific TTL or use default
     const ttl = this.taskTTLs.get(entry.taskId) || (24 * 60 * 60 * 1000);
 
-    this.cache.set(key, entry, { ttl });
+    this.bidLogsLRU.set(key, entry, { ttl });
     this.stats.sets++;
 
     // CACHE_SET log removed - was logging every error cache operation (75MB/day)
@@ -117,12 +117,12 @@ class LogsCache {
     timestamp: Date
   ): Promise<void> {
     const key = this.getCacheKey(taskId, messageHash, marketplace);
-    const existing = this.cache.get(key);
+    const existing = this.bidLogsLRU.get(key);
 
     if (existing) {
       existing.timestamp = timestamp;
       const ttl = this.taskTTLs.get(taskId) || (24 * 60 * 60 * 1000);
-      this.cache.set(key, existing, { ttl });
+      this.bidLogsLRU.set(key, existing, { ttl });
 
       debugLog('LogsCache', `CACHE_UPDATE | ${key} | timestamp=${timestamp.toISOString()}`);
     }
@@ -135,9 +135,9 @@ class LogsCache {
     let deletedCount = 0;
 
     // Iterate through cache and delete matching taskId entries
-    for (const [key, entry] of this.cache.entries()) {
+    for (const [key, entry] of this.bidLogsLRU.entries()) {
       if (entry.taskId === taskId) {
-        this.cache.delete(key);
+        this.bidLogsLRU.delete(key);
         deletedCount++;
       }
     }
@@ -158,7 +158,7 @@ class LogsCache {
     const logs: BidLogEntry[] = [];
 
     // Iterate through cache and collect matching entries
-    for (const entry of this.cache.values()) {
+    for (const entry of this.bidLogsLRU.values()) {
       if (entry.taskId === taskId) {
         logs.push(entry);
       }
@@ -187,8 +187,8 @@ class LogsCache {
       deletes: this.stats.deletes,
       totalRequests: this.stats.totalRequests,
       hitRate,
-      size: this.cache.size,
-      maxSize: this.cache.max
+      size: this.bidLogsLRU.size,
+      maxSize: this.bidLogsLRU.max
     };
   }
 
@@ -204,6 +204,14 @@ class LogsCache {
         `size=${stats.size}/${stats.maxSize}`
       );
     }
+  }
+
+  /**
+   * Get the internal LRU cache for debugging/monitoring
+   * @internal - For use by lru-cache-sampler.ts only
+   */
+  public getCache(): LRUCache<string, BidLogEntry> {
+    return this.bidLogsLRU;
   }
 }
 

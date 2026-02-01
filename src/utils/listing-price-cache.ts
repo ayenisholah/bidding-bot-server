@@ -210,6 +210,14 @@ class ListingPriceCache {
       memoryCacheStats: getCacheStats(this.priceCache)
     };
   }
+
+  /**
+   * Get the internal LRU cache for debugging/monitoring
+   * @internal - For use by lru-cache-sampler.ts only
+   */
+  public getCache(): LRUCache<string, ListingPriceData> {
+    return this.priceCache;
+  }
 }
 
 // Export singleton instance

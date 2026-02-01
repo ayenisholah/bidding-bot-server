@@ -9,7 +9,7 @@ import { debugLog, infoLog } from './debug-file-logger';
  */
 
 const RARITY_TTL = 1 * 24 * 60 * 60 * 1000; // 1 day in ms
-const MAX_CACHE_SIZE = 100000; // 100K entries (support larger rarity datasets)
+const MAX_CACHE_SIZE = 1000000; // 1M entries (increased for production scale - support very large rarity datasets)
 
 export interface RarityData {
   tokenIds: string[];
@@ -117,6 +117,14 @@ class RarityCache {
 
     // LRU cache doesn't expose getRemainingTTL, so return full TTL if exists
     return RARITY_TTL / 1000; // Return in seconds for backward compatibility
+  }
+
+  /**
+   * Get the internal LRU cache for debugging/monitoring
+   * @internal - For use by lru-cache-sampler.ts only
+   */
+  public getCache(): LRUCache<string, RarityData> {
+    return this.cache;
   }
 }
 

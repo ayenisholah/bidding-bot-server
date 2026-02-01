@@ -25,10 +25,10 @@ const NO_PASSWORD_LOG_INTERVAL = 60000; // Log once per minute max
 // =============================================================================
 
 // Cache decrypted private keys (no TTL, persists until server restart)
-// Max 100 wallets (standardized utility cache size, LRU eviction on capacity)
+// Max 1000 wallets (standardized minimum cache size, LRU eviction on capacity)
 const decryptedKeyCache = new LRUCache<string, string>({
-  max: 100,               // Max 100 unique wallets (standardized)
-  ttl: 0,                 // No TTL (infinite until server restart)
+  max: 1000,              // Max 1000 unique wallets (standardized)
+  ttl: 24 * 60 * 60 * 1000, // 24 hours TTL (security - limit plaintext key exposure)
   allowStale: false,
   updateAgeOnGet: true    // LRU behavior - keep hot keys fresh
 });
@@ -479,3 +479,10 @@ setInterval(() => {
     `sets=${stats.sets}`
   );
 }, 5 * 60 * 1000);
+/**
+ * Get decrypted key cache for debugging/monitoring
+ * @internal - For use by lru-cache-sampler.ts only
+ */
+export function getDecryptedKeyCache(): LRUCache<string, string> {
+  return decryptedKeyCache;
+}

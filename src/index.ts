@@ -29374,4 +29374,29 @@ async function checkCancellationJobStatus(taskId: string): Promise<{
 
 // Export verification function for use in other modules
 export { verifyCancellationComplete };
+
+/**
+ * Get cache instances for debugging/monitoring
+ * @internal - For use by lru-cache-sampler.ts only
+ */
+export function getProcessedMessages(): LRUCache<string, number> {
+  return processedMessages;
+}
+
+export function getSeenOrderHashes(): LRUCache<string, boolean> {
+  return seenOrderHashes;
+}
+
+export function getErrorLogCache(): LRUCache<string, boolean> {
+  return errorLogCache;
+}
+
+export function getCollectionStatsLRU(): LRUCache<string, any> {
+  return collectionStatsLRU;
+}
+
+export function getCollectionDataLRU(): LRUCache<string, any> {
+  return collectionDataLRU;
+}
+
 // force reload

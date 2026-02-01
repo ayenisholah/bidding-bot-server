@@ -5,32 +5,14 @@ import { debugLog } from '../utils/debug-file-logger';
 // Constants
 const DEBUG = process.env.DEBUG === 'true';
 
-// Type definitions
-interface PendingCounterbidEntry {
-  timestamp: number;
-  priceWei: number;  // Current queued price in wei
-  jobId: string;     // BullMQ job ID for updating
-}
-
-
 /**
  * Counterbid Tracking Service
  *
- * Handles all counterbid-related state management:
- * - Pending counterbid job tracking (prevents duplicate bids on same token)
+ * Handles counterbid-related utilities:
  * - Deduplication utilities for seen items
- *
- * This service coordinates bid timing and prevents race conditions across
- * marketplace WebSocket handlers.
+ * - Execution latency tracking
  */
 class CounterbidTrackingService {
-  // Track tokens with pending counterbid jobs
-  // Key format: "counterbid-{taskId}-{marketplace}-{tokenId}" → PendingCounterbidEntry
-  private pendingCounterbids = new LRUCache<string, PendingCounterbidEntry>({
-    max: 10000,
-    ttl: 60 * 1000 // 60 second TTL
-  });
-
   // Execution latency samples for performance monitoring
   // Key: unique sample ID, Value: { marketplace, latency, success, timestamp }
   private executionLatencySamples = new LRUCache<string, {
@@ -45,65 +27,6 @@ class CounterbidTrackingService {
 
   // Sample counter for unique IDs
   private executionSampleCounter = 0;
-
-  // =============================================================================
-  // PENDING COUNTERBID MANAGEMENT
-  // =============================================================================
-
-  /**
-   * Mark a token as having a pending counterbid job.
-   * Returns true if marked successfully, false if another counterbid is already pending.
-   */
-  public markCounterbidPending(
-    taskId: string,
-    marketplace: string,
-    tokenId: string,
-    priceWei: number,
-    jobId: string
-  ): boolean {
-    const key = `counterbid-${taskId}-${marketplace}-${tokenId}`;
-    return addIfNotExists(this.pendingCounterbids, key, {
-      timestamp: Date.now(),
-      priceWei,
-      jobId
-    });
-  }
-
-  /**
-   * Get the pending counterbid entry for a token, if any.
-   */
-  public getPendingCounterbid(
-    taskId: string,
-    marketplace: string,
-    tokenId: string
-  ): PendingCounterbidEntry | undefined {
-    const key = `counterbid-${taskId}-${marketplace}-${tokenId}`;
-    return this.pendingCounterbids.get(key);
-  }
-
-  /**
-   * Update the price in a pending counterbid entry.
-   */
-  public updatePendingCounterbidPrice(
-    taskId: string,
-    marketplace: string,
-    tokenId: string,
-    newPriceWei: number
-  ): void {
-    const key = `counterbid-${taskId}-${marketplace}-${tokenId}`;
-    const existing = this.pendingCounterbids.get(key);
-    if (existing) {
-      this.pendingCounterbids.set(key, { ...existing, priceWei: newPriceWei });
-    }
-  }
-
-  /**
-   * Clear the pending counterbid status for a token after the job completes.
-   */
-  public clearCounterbidPending(taskId: string, marketplace: string, tokenId: string): void {
-    const key = `counterbid-${taskId}-${marketplace}-${tokenId}`;
-    this.pendingCounterbids.delete(key);
-  }
 
   // =============================================================================
   // MARKETPLACE TOP OFFER CACHE - NO-OP METHODS (Cache Removed)
@@ -244,10 +167,10 @@ class CounterbidTrackingService {
    * Get statistics about cache usage
    */
   public getStats(): {
-    pendingCounterbids: number;
+    executionSamples: number;
   } {
     return {
-      pendingCounterbids: this.pendingCounterbids.size
+      executionSamples: this.executionLatencySamples.size
     };
   }
 
@@ -327,6 +250,22 @@ class CounterbidTrackingService {
 
     return { p50, p95, p99, avg, max, sampleCount: samples.length, successRate };
   }
+
+  /**
+   * Get execution latency samples cache for debugging/monitoring
+   * @internal - For use by lru-cache-sampler.ts only
+   */
+  public getExecutionLatencySamples(): LRUCache<string, { marketplace: string; latency: number; success: boolean; timestamp: number }> {
+    return this.executionLatencySamples;
+  }
 }
 
 export const counterbidTrackingService = new CounterbidTrackingService();
+
+/**
+ * Get execution latency samples cache for debugging/monitoring
+ * @internal - For use by lru-cache-sampler.ts only
+ */
+export function getExecutionLatencySamples(): LRUCache<string, { marketplace: string; latency: number; success: boolean; timestamp: number }> {
+  return counterbidTrackingService.getExecutionLatencySamples();
+}

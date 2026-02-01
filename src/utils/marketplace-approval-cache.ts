@@ -1,3 +1,12 @@
+/**
+ * Marketplace Approval Status Cache
+ *
+ * Tracks boolean approval status flags for wallet-currency combinations across
+ * OpenSea and MagicEden. Acts as a "done" flag after approval transactions complete.
+ *
+ * NOT to be confused with approvalCache which tracks actual ERC20 allowance
+ * amounts (numeric) via on-chain RPC calls.
+ */
 import { LRUCache } from 'lru-cache';
 import { debugLog } from './debug-file-logger';
 
@@ -21,7 +30,7 @@ interface MarketplaceApprovalCacheStats {
 
 class MarketplaceApprovalCache {
   // Cache: key = address-currency
-  private cache: LRUCache<string, MarketplaceApprovalEntry>;
+  private marketplaceApprovalLRU: LRUCache<string, MarketplaceApprovalEntry>;
 
   // Stats tracking
   private stats = {
@@ -32,9 +41,9 @@ class MarketplaceApprovalCache {
   };
 
   constructor() {
-    this.cache = new LRUCache<string, MarketplaceApprovalEntry>({
-      max: 100, // Max 100 wallet approvals (standardized)
-      ttl: 0, // No TTL - persist until server restart
+    this.marketplaceApprovalLRU = new LRUCache<string, MarketplaceApprovalEntry>({
+      max: 1000, // Max 1000 wallet approvals (standardized minimum)
+      ttl: 24 * 60 * 60 * 1000, // 24 hours TTL (force daily revalidation of approval status)
       updateAgeOnGet: false
     });
 
@@ -60,7 +69,7 @@ class MarketplaceApprovalCache {
     this.stats.totalRequests++;
     const key = this.getCacheKey(address, currency);
 
-    const entry = this.cache.get(key);
+    const entry = this.marketplaceApprovalLRU.get(key);
     if (entry) {
       this.stats.hits++;
       const hasApproval = marketplace === 'opensea'
@@ -90,7 +99,7 @@ class MarketplaceApprovalCache {
     const key = this.getCacheKey(address, currency);
 
     // Get existing or create new
-    let entry = this.cache.get(key);
+    let entry = this.marketplaceApprovalLRU.get(key);
 
     if (!entry) {
       entry = {
@@ -111,7 +120,7 @@ class MarketplaceApprovalCache {
 
     entry.timestamp = new Date();
 
-    this.cache.set(key, entry);
+    this.marketplaceApprovalLRU.set(key, entry);
     this.stats.sets++;
 
     debugLog('MarketplaceApprovalCache',
@@ -124,7 +133,7 @@ class MarketplaceApprovalCache {
    * Get all approvals (for debugging/admin)
    */
   async findAll(): Promise<MarketplaceApprovalEntry[]> {
-    return Array.from(this.cache.values());
+    return Array.from(this.marketplaceApprovalLRU.values());
   }
 
   /**
@@ -132,7 +141,7 @@ class MarketplaceApprovalCache {
    */
   async clear(address: string, currency: string): Promise<void> {
     const key = this.getCacheKey(address, currency);
-    this.cache.delete(key);
+    this.marketplaceApprovalLRU.delete(key);
     debugLog('MarketplaceApprovalCache', `CACHE_CLEAR | ${key}`);
   }
 
@@ -150,8 +159,8 @@ class MarketplaceApprovalCache {
       sets: this.stats.sets,
       totalRequests: this.stats.totalRequests,
       hitRate,
-      size: this.cache.size,
-      maxSize: this.cache.max
+      size: this.marketplaceApprovalLRU.size,
+      maxSize: this.marketplaceApprovalLRU.max
     };
   }
 
@@ -167,6 +176,14 @@ class MarketplaceApprovalCache {
         `size=${stats.size}/${stats.maxSize}`
       );
     }
+  }
+
+  /**
+   * Get the internal LRU cache for debugging/monitoring
+   * @internal - For use by lru-cache-sampler.ts only
+   */
+  public getCache(): LRUCache<string, MarketplaceApprovalEntry> {
+    return this.marketplaceApprovalLRU;
   }
 }
 

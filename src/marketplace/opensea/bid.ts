@@ -2667,3 +2667,30 @@ export interface Marketplace {
   identifier: string;
   __typename: string;
 }
+/**
+ * Get cache instances for debugging/monitoring
+ * @internal - For use by lru-cache-sampler.ts only
+ */
+export function getContractResolutionLRU(): LRUCache<string, string> {
+  return contractResolutionLRU;
+}
+
+export function getTraitFloorLRU(): LRUCache<string, number> {
+  return traitFloorLRU;
+}
+
+export function getMultiContractSlugLRU(): LRUCache<string, boolean> {
+  return multiContractSlugLRU;
+}
+
+export function getContractMapLRU(): LRUCache<string, Record<string, string>> {
+  return contractMapLRU;
+}
+
+export function getOpenseaWalletCache(): LRUCache<string, Wallet> {
+  return walletCache;
+}
+
+export function getOpenseaInsufficientBalanceLogCache(): LRUCache<string, boolean> {
+  return insufficientBalanceLogCache;
+}

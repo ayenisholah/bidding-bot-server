@@ -293,7 +293,23 @@ class CollectionDataWarmerService {
     this.collectionTaskCounts.clear();
     debugLog('CollectionDataWarmer', '[SHUTDOWN] Cleared all warming tasks');
   }
+
+  /**
+   * Get warming slugs cache for debugging/monitoring
+   * @internal - For use by lru-cache-sampler.ts only
+   */
+  public getWarmingSlugs(): LRUCache<string, boolean> {
+    return this.warmingSlugs;
+  }
 }
 
 // Singleton instance
 export const collectionDataWarmer = new CollectionDataWarmerService();
+
+/**
+ * Get warming slugs cache for debugging/monitoring
+ * @internal - For use by lru-cache-sampler.ts only
+ */
+export function getWarmingSlugs(): LRUCache<string, boolean> {
+  return collectionDataWarmer.getWarmingSlugs();
+}
