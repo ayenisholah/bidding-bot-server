@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
+import PQueue from 'p-queue';
 import { LRUCache } from 'lru-cache';
 import { warnLog, errorLog, debugLog, infoLog } from './debug-file-logger';
 import { config } from 'dotenv';
@@ -168,6 +169,11 @@ class WebSocketManager extends EventEmitter {
   // (2025-12-31: Removed backpressure queue - now using fire-and-forget for <100ms latency)
   private subscribedSlugs = new Set<string>();
 
+  // p-queue for bounded concurrent message processing with backpressure
+  // (2026-01-15: Replaces custom worker pool with p-queue for better timeout handling)
+  // (2026-01-21: Made unbounded to align with ws-proxy philosophy - no artificial limits)
+  private messageQueue: PQueue;
+
   constructor(config: WebSocketManagerConfig) {
     super();
     this.config = {
@@ -180,9 +186,20 @@ class WebSocketManager extends EventEmitter {
       ...config
     };
 
-    // Fire-and-forget architecture - no message queueing
-    // Messages are emitted immediately for <100ms latency (per commit 7bb0b96)
-    infoLog('WebSocketManager', `WebSocket manager initialized | mode=fire-and-forget | targetLatency=<100ms`);
+    // Initialize p-queue for message processing with concurrency from RATE_LIMIT
+    // Uses RATE_LIMIT environment variable (default: 10 if not set)
+    // With RATE_LIMIT=64: 64 concurrent handlers = 211 msg/sec capacity @ 300ms avg
+    // Queue is unbounded - relies on concurrency limiting and upstream flow control
+    const concurrency = Number(process.env.RATE_LIMIT) || 10;
+    this.messageQueue = new PQueue({
+      concurrency,          // Use RATE_LIMIT from env (default: 10)
+      timeout: 30000,       // 30s timeout per message
+      throwOnTimeout: false // Graceful failures instead of crashing
+    });
+
+    // Log the configured concurrency
+    infoLog('WebSocketManager', `Message queue initialized | concurrency=${concurrency} | ` +
+      `estimatedCapacity=${Math.floor(concurrency * 3.3)}msg/sec`);
 
     // Load persistent listing subscriptions on initialization
     this.loadPersistentSubscriptions();
@@ -304,7 +321,7 @@ class WebSocketManager extends EventEmitter {
 
     // Log connection established with current state
     infoLog('WebSocket', `[CONNECT] Established | connectionId=${connectionId} | totalConnections=${this.metrics.totalConnections} | activeSubscriptions=${this.activeSubscriptions.size}`);
-    debugLog('WebSocket', `[CONNECT] Details | persistentListings=${this.persistentListingSubscriptions.size} | persistentBidding=${this.persistentBiddingSubscriptions.size}`);
+    debugLog('WebSocket', `[CONNECT] Details | persistentListings=${this.persistentListingSubscriptions.size} | queueSize=${this.messageQueue.size}`);
 
     // Enable TCP keepalive for faster dead connection detection
     try {
@@ -740,17 +757,15 @@ class WebSocketManager extends EventEmitter {
       // Normalize message format (minimal transformation)
       const message = this.normalizeMessage(parsed);
 
-      // DEBUG: Log message entry
-      debugLog('MsgFlow', `ENTER_PROCESS | eventType=${message.eventType || message.type || 'unknown'} | marketplace=${message.marketplace || 'unknown'}`);
-
-      // FIRE-AND-FORGET: Process immediately without queueing
-      // Matches commit 7bb0b96 optimization for <100ms latency
-      this.processMessageAsync(message, receiveTime).catch(err => {
+      // Queue the message for processing via p-queue (unbounded)
+      this.messageQueue.add(async () => {
+        await this.processMessageAsync(message, receiveTime);
+      }).catch(err => {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        errorLog('MessageProcessing', `Message processing error | error=${errorMsg}`, err);
+        errorLog('QueueError', `Message processing error | error=${errorMsg}`, err);
       });
     } catch (err) {
-      errorLog('MessageProcessing', `processSingleMessage error | error=${(err as Error).message}`, err);
+      errorLog('QueueError', `processSingleMessage error | error=${(err as Error).message}`, err);
     }
   }
 
@@ -782,13 +797,10 @@ class WebSocketManager extends EventEmitter {
 
   /**
    * Async message processor - handles the actual message processing
-   * Now called directly (fire-and-forget) without queueing
+   * Called by p-queue which manages concurrency and timeouts
    */
   private async processMessageAsync(parsed: any, receiveTime: number): Promise<void> {
     try {
-      // DEBUG: Log async processing entry
-      debugLog('MsgFlow', `ASYNC_PROCESS | eventType=${parsed.eventType || parsed.type || 'unknown'} | hasData=${!!parsed.data}`);
-
       this.metrics.totalMessages++;
       this.recordMessage();
 
@@ -811,9 +823,6 @@ class WebSocketManager extends EventEmitter {
         // Extract actual message from wrapped format
         message = parsed.data;
 
-        // DEBUG: Log wrapped message extraction
-        debugLog('MsgFlow', `UNWRAP_SEQ | seqNum=${parsed.seqNum} | innerType=${message.eventType || message.type || 'unknown'}`);
-
         // Send ACK immediately if buffer is getting large or enough time has passed
         if (this.receivedSeqNums.length >= 50 || (Date.now() - this.lastAckTime) > this.ACK_BATCH_INTERVAL) {
           this.sendAck();
@@ -823,8 +832,6 @@ class WebSocketManager extends EventEmitter {
         // Legacy message without seqNum (backward compatibility)
         message = parsed;
 
-        // DEBUG: Log legacy message
-        debugLog('MsgFlow', `LEGACY_MSG | type=${message.eventType || message.type || 'unknown'}`);
       }
 
       // Latency tracking - check if message has a timestamp from ws-proxy
@@ -912,9 +919,6 @@ class WebSocketManager extends EventEmitter {
           // Normal case - we are subscribed (no log needed - too noisy)
         }
       }
-
-      // DEBUG: Log before emit
-      debugLog('MsgFlow', `EMIT_MESSAGE | eventType=${message.eventType || message.type || 'unknown'} | marketplace=${message.marketplace || 'unknown'} | listenerCount=${this.listenerCount('message')}`);
 
       // FIRE-AND-FORGET: Emit message immediately without queueing
       // (2025-12-31 optimization: Removed handler backpressure queue that was causing MINUTES of latency)
