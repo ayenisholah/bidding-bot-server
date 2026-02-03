@@ -87,7 +87,6 @@ import { MarketplaceBidRateTracker } from "./utils/metrics-rate-tracker";
 import { BroadcastManager } from "./utils/broadcast-manager";
 import { memorySnapshotService } from "./services/memory-snapshot.service";
 import { memoryCleanupService } from "./services/memory-cleanup.service";
-import { counterbidTrackingService } from "./services/counterbid-tracking.service";
 import { collectionDataWarmer } from "./services/collection-data-warmer.service";
 
 // Global type declarations
@@ -202,8 +201,6 @@ interface LoopCount {
   };
 }
 
-// Dynamically allocate up to 75% of available CPU cores
-export const WORKER_COUNT = Math.max(1, Math.floor(os.cpus().length * 0.75));
 let traitsToRemove: { [key: string]: string[] } = {}
 let removedTokens: { [key: string]: { opensea: string[]; magiceden: string[] } } = {}
 
@@ -245,6 +242,18 @@ const collectionStatsLRU = new LRUCache<string, any>({
   allowStale: false
 });
 
+// Update rate limiting cache - tracks update endpoint requests per IP
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+}
+const updateRateLimitLRU = new LRUCache<string, RateLimitEntry>({
+  max: 10000,
+  ttl: 60 * 60 * 1000, // 1 hour
+  allowStale: false,
+  updateAgeOnGet: false
+});
+
 // Collection data endpoint cache - stores complete API response from /api/collection
 // 24 hour TTL - collection metadata rarely changes
 // Memory: ~50KB per collection × 1000 max = ~50MB max (standardized minimum)
@@ -261,9 +270,6 @@ const collectionDataLRU = new LRUCache<string, any>({
 // In-memory Set of our wallet addresses (lowercase) for fast O(1) lookup
 // Used to detect and skip counterbids against our own bids
 // NOTE: Wallet tracking functions (loadOurWalletAddresses, addOurWalletAddress, removeOurWalletAddress, isOurWallet) are now imported from ./utils/wallet-tracking
-
-// NOTE: Marketplace top offer caching (getMarketplaceTopOffer, setMarketplaceTopOffer) is handled by
-// counterbidTrackingService imported from ./services/counterbid-tracking.service (currently NO-OP)
 
 // Helper functions for seen items management
 function addSeenItem(cache: LRUCache<string, number>, key: string): void {
@@ -371,7 +377,7 @@ class RateLimiter {
       }
 
       if (this.tokens <= 0) {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise(resolve => setTimeout(resolve, 10)); // 10ms granularity for smoother token refilling (was 100ms)
       }
     }
     this.tokens--;
@@ -380,7 +386,8 @@ class RateLimiter {
 
 
 // Initialize worker later in startServer function
-let workers: Worker[] = [];
+let mainWorker: Worker | null = null;
+let blurWorker: Worker | null = null;
 
 // Track all BullMQ connections for proper cleanup
 let bullMQConnections: any[] = [];
@@ -1664,9 +1671,8 @@ async function pauseQueueAndWorkers() {
     await blurQueue.pause();
 
     // Pause all workers
-    if (workers.length > 0) {
-      await Promise.all(workers.map(worker => worker.pause()));
-    }
+    if (mainWorker) await mainWorker.pause();
+    if (blurWorker) await blurWorker.pause();
 
   } catch (error) {
     errorLog('QueuePause', 'Error pausing queues and workers', error);
@@ -1681,9 +1687,8 @@ async function resumeQueueAndWorkers() {
     await blurQueue.resume();
 
     // Resume all workers
-    if (workers.length > 0) {
-      await Promise.all(workers.map(worker => worker.resume()));
-    }
+    if (mainWorker) await mainWorker.resume();
+    if (blurWorker) await blurWorker.resume();
 
 
     // Retry any failed jobs that were due to missing password
@@ -1726,11 +1731,6 @@ const WORKER_FAILURE_WINDOW = 5 * 60 * 1000; // 5 minutes
 let lastWorkerRestartTime = 0;
 const WORKER_RESTART_COOLDOWN = 5 * 60 * 1000; // 5 minutes between restarts
 
-// Queue drain monitoring
-const DRAIN_CHECK_INTERVAL = 30 * 1000; // Check every 30 seconds
-let queueDrainInterval: NodeJS.Timeout | null = null;
-const queueProcessingHistory = new Map<number, { processed: number; waiting: number }>();
-let lastQueueClearForBacklog = 0;
 
 function startWorkerHealthMonitoring() {
 
@@ -1741,22 +1741,8 @@ function startWorkerHealthMonitoring() {
   workerHealthInterval = setInterval(() => {
     checkWorkerHealth();
   }, WORKER_HEALTH_CHECK_INTERVAL);
-
-  // Start queue drain monitoring
-  startQueueDrainMonitoring();
 }
 
-
-function startQueueDrainMonitoring() {
-
-  // Initial drain check
-  monitorQueueDrain();
-
-  // Set up periodic drain checks
-  queueDrainInterval = setInterval(() => {
-    monitorQueueDrain();
-  }, DRAIN_CHECK_INTERVAL);
-}
 
 async function checkWorkerHealth() {
   try {
@@ -1773,35 +1759,56 @@ async function checkWorkerHealth() {
     }
 
     // Check worker status
-    const workerStatuses = await Promise.all(
-      workers.map(async (worker, index) => {
-        try {
-          // Check if worker is running
-          const isRunning = worker.isRunning();
-          const isPaused = worker.isPaused();
+    const workerStatuses = [];
 
-          return {
-            index,
-            running: isRunning,
-            paused: isPaused,
-            healthy: isRunning && !isPaused
-          };
-        } catch (error) {
-          return {
-            index,
-            running: false,
-            paused: false,
-            healthy: false,
-            error: error instanceof Error ? error.message : 'Unknown error'
-          };
-        }
-      })
-    );
+    // Check main worker
+    if (mainWorker) {
+      try {
+        workerStatuses.push({
+          index: 0,
+          name: 'main-worker',
+          running: mainWorker.isRunning(),
+          paused: mainWorker.isPaused(),
+          healthy: mainWorker.isRunning() && !mainWorker.isPaused()
+        });
+      } catch (error) {
+        workerStatuses.push({
+          index: 0,
+          name: 'main-worker',
+          running: false,
+          paused: false,
+          healthy: false,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    }
+
+    // Check blur worker
+    if (blurWorker) {
+      try {
+        workerStatuses.push({
+          index: 1,
+          name: 'blur-worker',
+          running: blurWorker.isRunning(),
+          paused: blurWorker.isPaused(),
+          healthy: blurWorker.isRunning() && !blurWorker.isPaused()
+        });
+      } catch (error) {
+        workerStatuses.push({
+          index: 1,
+          name: 'blur-worker',
+          running: false,
+          paused: false,
+          healthy: false,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    }
 
     const unhealthyWorkers = workerStatuses.filter(status => !status.healthy);
 
     if (unhealthyWorkers.length > 0) {
-      errorLog('HealthCheck', `Unhealthy workers detected: ${unhealthyWorkers.length}/${workers.length}`);
+      errorLog('HealthCheck', `Unhealthy workers detected: ${unhealthyWorkers.length}/2`);
 
       let shouldRestartAll = false;
 
@@ -1817,7 +1824,11 @@ async function checkWorkerHealth() {
           }
         } else if (workerStatus.paused) {
           try {
-            await workers[workerStatus.index].resume();
+            if (workerStatus.index === 0 && mainWorker) {
+              await mainWorker.resume();
+            } else if (workerStatus.index === 1 && blurWorker) {
+              await blurWorker.resume();
+            }
           } catch (error) {
             errorLog('HealthCheck', `Failed to resume worker ${workerStatus.index}`, error);
 
@@ -1875,8 +1886,8 @@ async function checkWorkerHealth() {
         healthy: Object.keys(connectionHealth).length - unhealthyConnections.length
       },
       workers: {
-        total: workers.length,
-        healthy: workers.length - unhealthyWorkers.length
+        total: 2,
+        healthy: 2 - unhealthyWorkers.length
       },
       queues: {
         main: {
@@ -1988,16 +1999,6 @@ async function checkWorkerHealth() {
   }
 }
 
-function stopWorkerHealthMonitoring() {
-  if (workerHealthInterval) {
-    clearInterval(workerHealthInterval);
-    workerHealthInterval = null;
-  }
-  if (queueDrainInterval) {
-    clearInterval(queueDrainInterval);
-    queueDrainInterval = null;
-  }
-}
 
 // Track worker failures
 function trackWorkerFailure(workerIndex: number, error: string) {
@@ -2027,90 +2028,6 @@ function trackWorkerFailure(workerIndex: number, error: string) {
   return failure.count >= WORKER_FAILURE_THRESHOLD;
 }
 
-// Monitor queue drain and detect backlogs
-async function monitorQueueDrain() {
-  try {
-    if (!queue || !blurQueue) {
-      return;
-    }
-
-    const now = Date.now();
-    const [mainCounts, blurCounts] = await Promise.all([
-      queue.getJobCounts(),
-      blurQueue.getJobCounts()
-    ]);
-
-    const totalWaiting = (mainCounts.waiting || 0) + (blurCounts.waiting || 0);
-    const totalActive = (mainCounts.active || 0) + (blurCounts.active || 0);
-    const totalCompleted = (mainCounts.completed || 0) + (blurCounts.completed || 0);
-
-    // Store current state for history
-    queueProcessingHistory.set(now, { processed: totalCompleted, waiting: totalWaiting });
-
-    // Clean old history (keep 5 minutes)
-    const historyLimit = now - (5 * 60 * 1000);
-    for (const [timestamp] of queueProcessingHistory) {
-      if (timestamp < historyLimit) {
-        queueProcessingHistory.delete(timestamp);
-      }
-    }
-
-    // Check for backlog conditions
-    let shouldClearQueue = false;
-    let clearReason = '';
-
-    // Condition 1: High waiting count with no active workers
-    // if (totalWaiting > QUEUE_BACKLOG_THRESHOLD && totalActive === 0) {
-    //   shouldClearQueue = true;
-    //   clearReason = `High waiting jobs (${totalWaiting}) with no active workers`;
-    // }
-
-    // Condition 2: Check for stagnation (no progress in processing)
-    const historyEntries = Array.from(queueProcessingHistory.entries()).sort((a, b) => a[0] - b[0]);
-    if (historyEntries.length >= 3) {
-      const recentHistory = historyEntries.slice(-3);
-      const noProgress = recentHistory.every((entry, idx) => {
-        if (idx === 0) return true;
-        const prevEntry = recentHistory[idx - 1];
-        return entry[1].processed === prevEntry[1].processed && entry[1].waiting > 0;
-      });
-
-      // if (noProgress && totalWaiting > 0) {
-      //   const stagnationTime = now - recentHistory[0][0];
-      //   if (stagnationTime > QUEUE_STAGNATION_TIME) {
-      //     shouldClearQueue = true;
-      //     clearReason = `Queue stagnation detected - no progress for ${Math.round(stagnationTime / 1000)}s`;
-      //   }
-      // }
-    }
-
-    // Condition 3: Extreme backlog
-    // if (totalWaiting > QUEUE_BACKLOG_THRESHOLD * 3) {
-    //   shouldClearQueue = true;
-    //   clearReason = `Extreme backlog detected: ${totalWaiting} waiting jobs`;
-    // }
-
-    // Check cooldown before clearing
-    if (shouldClearQueue && (now - lastQueueClearForBacklog) > CLEAR_COOLDOWN) {
-
-      lastQueueClearForBacklog = now;
-      await clearQueueAndRestartJobs();
-    } else if (shouldClearQueue) {
-      const cooldownRemaining = Math.ceil((CLEAR_COOLDOWN - (now - lastQueueClearForBacklog)) / 1000);
-    }
-
-    // Log drain status if high waiting count
-    if (totalWaiting > RATE_LIMIT) {
-      const processingRate = historyEntries.length >= 2
-        ? (historyEntries[historyEntries.length - 1][1].processed - historyEntries[0][1].processed) / (historyEntries.length - 1)
-        : 0;
-
-    }
-
-  } catch (error) {
-    errorLog('QueueDrainMonitor', 'Error in queue drain monitoring', error);
-  }
-}
 
 // =============================================================================
 // CRASH DETECTION AND TASK RECOVERY
@@ -2306,241 +2223,223 @@ async function startServer() {
     initializeQueueEventHandlers();
 
 
-    const concurrencyPerWorker = Number(RATE_LIMIT) / WORKER_COUNT;
+    // Single worker gets full RATE_LIMIT concurrency
+    const concurrency = Number(RATE_LIMIT);
 
-    for (let i = 0; i < WORKER_COUNT; i++) {
-      // Create a separate connection for each worker
-      const workerConnection = await createBullMQConnection(`main-worker-${i + 1}`);
-      bullMQConnections.push(workerConnection);
+    // Create single main queue worker with full concurrency
+    const mainWorkerConnection = await createBullMQConnection('main-worker');
+    bullMQConnections.push(mainWorkerConnection);
 
-      const worker = new Worker(
-        QUEUE_NAME,
-        async (job) => {
-          const jobTimeout = 900000; // 15 minutes - increased for event loop recovery
-          const abortController = new AbortController();
+    mainWorker = new Worker(
+      QUEUE_NAME,
+      async (job) => {
+        // TIMEOUT CONFIGURATION (Optimized for aggressive fast failure)
+        // Cascade: Axios (30s) → Lock (45s) → Stall (60s) → Job (60s)
+        // - Lock expires BEFORE stall detection (prevents race conditions)
+        // - Ultra-fast failure (45s lock, 60s job) maximizes retry opportunities
+        // - Allows 1-2 sequential API calls per job (competitive bidding priority)
+        const jobTimeout = 60000; // 1 minute (aggressive timeout for fast retries)
+        const abortController = new AbortController();
 
-          const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => {
-              abortController.abort(); // Signal cancellation to any async operations
-              const customJobId = (job.opts as any)?.jobId || job.id;
-              reject(new Error(`Job ${customJobId} (ID: ${job.id}) timed out after ${jobTimeout}ms - aborted`));
-            }, jobTimeout);
-          });
-          try {
-            const result = await Promise.race([
-              processJob(job, abortController.signal),
-              timeoutPromise
-            ]);
-            return result || { success: true };
-          } catch (error: any) {
-            // If it's a password error, throw it to fail the job properly
-            if (error.code === 'NO_PASSWORD' || error.message?.includes('No password available')) {
-              throw error;
-            }
-            // For other errors, also throw to ensure proper retry
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => {
+            abortController.abort(); // Signal cancellation to any async operations
+            const customJobId = (job.opts as any)?.jobId || job.id;
+            reject(new Error(`Job ${customJobId} (ID: ${job.id}) timed out after ${jobTimeout}ms - aborted`));
+          }, jobTimeout);
+        });
+        try {
+          const result = await Promise.race([
+            processJob(job, abortController.signal),
+            timeoutPromise
+          ]);
+          return result || { success: true };
+        } catch (error: any) {
+          // If it's a password error, throw it to fail the job properly
+          if (error.code === 'NO_PASSWORD' || error.message?.includes('No password available')) {
             throw error;
           }
-        },
-        {
-          connection: workerConnection,
-          concurrency: concurrencyPerWorker,
-          lockDuration: 120000,      // 2 minutes - faster lock release for stuck jobs
-          stalledInterval: 15000,   // Check every 15 seconds for faster stall detection
-          maxStalledCount: 6        // 6 stall checks = 90s safety net before force-fail
+          // For other errors, also throw to ensure proper retry
+          throw error;
         }
-      );
+      },
+      {
+        connection: mainWorkerConnection,
+        concurrency: concurrency, // Full RATE_LIMIT
+        lockDuration: 45000,       // 45 seconds - allows 1-2 sequential 30s API calls
+        stalledInterval: 15000,    // 15 seconds - high-frequency stall detection
+        maxStalledCount: 4         // 4 checks = 60s (triggers AFTER lock expires at 45s)
+      }
+    );
 
-      // Add error handlers for main workers
-      worker.on('error', async (error) => {
-        errorLog('Worker', `Worker ${i + 1} error`, error);
-        trackWorkerFailure(i, `Worker error: ${error.message || String(error)}`);
+    // Add error handlers for main worker
+    mainWorker.on('error', async (error) => {
+      errorLog('Worker', 'Main worker error', error);
+      trackWorkerFailure(0, `Worker error: ${error.message || String(error)}`);
 
-        // Check if this is a Redis error
-        if (isRedisError(error)) {
-          redisFailures++;
+      // Check if this is a Redis error
+      if (isRedisError(error)) {
+        errorLog('Worker', 'Main worker Redis connection error - attempting recovery', error);
+        try {
+          // Force reconnection by recreating connection
+          await mainWorkerConnection.disconnect();
+          const newConnection = await createBullMQConnection('main-worker');
+          bullMQConnections[0] = newConnection;
 
-          if (redisFailures >= REDIS_FAILURE_THRESHOLD) {
-            await handleRedisFailure();
+          // Worker will automatically reconnect using the new connection
+          infoLog('Worker', 'Main worker Redis connection recovered');
+        } catch (reconnectError) {
+          errorLog('Worker', 'Failed to recover main worker Redis connection', reconnectError);
+        }
+      }
+    });
+
+    mainWorker.on('failed', async (job, error) => {
+      const taskId = getTaskIdForLog(job);
+      // Deduplicate worker failure logs to prevent log flooding
+      const workerErrorKey = `worker-failed-${taskId}-${job?.id}`;
+      if (addIfNotExists(errorLogCache, workerErrorKey, true)) {
+        errorLog('Worker', `Main worker - Task ${taskId} - Job ${job?.id} failed`, error);
+      }
+
+      // Track execution latency for failed counterbid jobs
+      if (job && job.timestamp) {
+        const isCounterbid = job.name === OPENSEA_TOKEN_BID_COUNTERBID ||
+          job.name === OPENSEA_TRAIT_BID_COUNTERBID ||
+          job.name === OPENSEA_COLLECTION_BID_COUNTERBID ||
+          job.name === MAGICEDEN_TOKEN_BID_COUNTERBID ||
+          job.name === MAGICEDEN_TRAIT_BID_COUNTERBID ||
+          job.name === MAGICEDEN_COLLECTION_BID_COUNTERBID;
+
+        // Counterbid execution tracking removed - no longer needed
+      }
+
+      // Handle failed bid jobs - immediately mark as processed
+      if (job && job.id && typeof job.id === 'string' && job.id.startsWith('bid-')) {
+
+        // Extract task and marketplace from job ID (format: bid-taskId-marketplace-...)
+        const parts = job.id.split('-');
+        if (parts.length >= 3) {
+          const taskId = parts[1];
+          const marketplace = parts[2].toLowerCase();
+
+          // Extract loopNumber from job data if available for precise parent lookup
+          const jobLoopNumber = job.data?.loopNumber as number | undefined;
+
+          // Mark job as processed to allow loop completion
+          markJobAsProcessed(taskId, marketplace, job.id, false, jobLoopNumber).catch(err => {
+            errorLog('Worker', 'Main worker failed to mark failed bid job as processed', err);
+          });
+        }
+      }
+
+      // Handle failed cancellation jobs - track them as completed
+      if (job && job.name && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID || job.name === CANCEL_MAGICEDEN_BID || job.name === CANCEL_BLUR_BID)) {
+        const { taskId } = job.data;
+        const marketplace = (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID) ? 'opensea' :
+          job.name === CANCEL_MAGICEDEN_BID ? 'magiceden' : 'blur';
+
+
+        // Record the failed cancellation as a completion to ensure we reach 100%
+        cancellationTracker.recordCompletion(taskId, 1, marketplace);
+        updateTaskCancellationPercentage(taskId, undefined, marketplace).catch(err => {
+          const failedTaskId = getTaskIdForLog(job);
+          errorLog('CancellationTracking', `Failed to update cancellation percentage for task ${failedTaskId} after job failure`, err);
+        });
+
+        // Delete the order from Redis cache to clean up
+        if (job.data.orderKey) {
+          await safeDeleteFromCache(job.data.orderKey, taskId, marketplace);
+        } else if (job.data.orderKeys) {
+          for (const orderKey of job.data.orderKeys) {
+            await safeDeleteFromCache(orderKey, taskId, marketplace);
           }
-        }
 
-        errorLog('Worker', `Main worker ${i + 1} error`, error);
-      });
-
-      worker.on('failed', async (job, error) => {
-        const taskId = getTaskIdForLog(job);
-        // Deduplicate worker failure logs to prevent log flooding
-        const workerErrorKey = `worker-failed-${taskId}-${job?.id}`;
-        if (addIfNotExists(errorLogCache, workerErrorKey, true)) {
-          errorLog('Worker', `Worker ${i + 1} - Task ${taskId} - Job ${job?.id} failed`, error);
-        }
-
-        // Track execution latency for failed counterbid jobs
-        if (job && job.timestamp) {
-          const isCounterbid = job.name === OPENSEA_TOKEN_BID_COUNTERBID ||
-            job.name === OPENSEA_TRAIT_BID_COUNTERBID ||
-            job.name === OPENSEA_COLLECTION_BID_COUNTERBID ||
-            job.name === MAGICEDEN_TOKEN_BID_COUNTERBID ||
-            job.name === MAGICEDEN_TRAIT_BID_COUNTERBID ||
-            job.name === MAGICEDEN_COLLECTION_BID_COUNTERBID;
-
-          if (isCounterbid && job.data) {
-            const marketplace = job.name.toLowerCase().includes('opensea') ? 'opensea' : 'magiceden';
-            const jobTaskId = job.data._id || job.data.taskId;
-            const rawTokenId = job.data.asset?.tokenId || job.data.tokenId;
-            const tokenId = rawTokenId ? safeTokenIdToString(rawTokenId) : undefined;
-            const traceId = job.data.os2TraceId;
-
-            counterbidTrackingService.recordExecutionComplete(
-              marketplace,
-              jobTaskId,
-              job.timestamp,
-              Date.now(),
-              false, // failure
-              tokenId,
-              traceId
-            );
-          }
-        }
-
-        // Handle failed bid jobs - immediately mark as processed
-        if (job && job.id && typeof job.id === 'string' && job.id.startsWith('bid-')) {
-
-          // Extract task and marketplace from job ID (format: bid-taskId-marketplace-...)
-          const parts = job.id.split('-');
-          if (parts.length >= 3) {
-            const taskId = parts[1];
-            const marketplace = parts[2].toLowerCase();
-
-            // Extract loopNumber from job data if available for precise parent lookup
-            const jobLoopNumber = job.data?.loopNumber as number | undefined;
-
-            // Mark job as processed to allow loop completion
-            markJobAsProcessed(taskId, marketplace, job.id, false, jobLoopNumber).catch(err => {
-              errorLog('Worker', `Worker ${i + 1} failed to mark failed bid job as processed`, err);
+          // Clean up MagicEden tracking set on failure
+          if (job.name === CANCEL_MAGICEDEN_BID && job.data.orderKeys) {
+            job.data.orderKeys.forEach((orderKey: string) => {
+              magicedenOrdersBeingCancelled.delete(orderKey);
             });
           }
         }
+      }
 
-        // Handle failed cancellation jobs - track them as completed
-        if (job && job.name && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID || job.name === CANCEL_MAGICEDEN_BID || job.name === CANCEL_BLUR_BID)) {
-          const { taskId } = job.data;
-          const marketplace = (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID) ? 'opensea' :
-            job.name === CANCEL_MAGICEDEN_BID ? 'magiceden' : 'blur';
+      // Only track as worker failure if it's a systemic issue
+      if (error.message?.includes('could not renew lock') ||
+        error.message?.includes('Missing lock') ||
+        error.message?.includes('connection lost')) {
+        trackWorkerFailure(0, `Job processing error: ${error.message}`);
+      }
+    });
 
+    // Add completion hook for guaranteed cleanup verification
+    mainWorker.on('completed', async (job) => {
+      // Track execution latency for counterbid jobs
+      if (job && job.timestamp) {
+        const isCounterbid = job.name === OPENSEA_TOKEN_BID_COUNTERBID ||
+          job.name === OPENSEA_TRAIT_BID_COUNTERBID ||
+          job.name === OPENSEA_COLLECTION_BID_COUNTERBID ||
+          job.name === MAGICEDEN_TOKEN_BID_COUNTERBID ||
+          job.name === MAGICEDEN_TRAIT_BID_COUNTERBID ||
+          job.name === MAGICEDEN_COLLECTION_BID_COUNTERBID;
 
-          // Record the failed cancellation as a completion to ensure we reach 100%
-          cancellationTracker.recordCompletion(taskId, 1, marketplace);
-          updateTaskCancellationPercentage(taskId, undefined, marketplace).catch(err => {
-            const failedTaskId = getTaskIdForLog(job);
-            errorLog('CancellationTracking', `Failed to update cancellation percentage for task ${failedTaskId} after job failure`, err);
-          });
+        // Counterbid execution tracking removed - no longer needed
+      }
 
-          // Delete the order from Redis cache to clean up
-          if (job.data.orderKey) {
-            await safeDeleteFromCache(job.data.orderKey, taskId, marketplace);
-          } else if (job.data.orderKeys) {
-            for (const orderKey of job.data.orderKeys) {
-              await safeDeleteFromCache(orderKey, taskId, marketplace);
-            }
+      // Verify cache was cleaned (defensive check)
+      if (job && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID || job.name === CANCEL_MAGICEDEN_BID) && job.data.orderKey) {
+        const taskId = job.data.taskId;
+        const orderKey = job.data.orderKey;
+        const marketplace = (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID) ? 'opensea' : 'magiceden';
 
-            // Clean up MagicEden tracking set on failure
-            if (job.name === CANCEL_MAGICEDEN_BID && job.data.orderKeys) {
-              job.data.orderKeys.forEach((orderKey: string) => {
-                magicedenOrdersBeingCancelled.delete(orderKey);
-              });
-            }
+        // Check if order still exists in cache (shouldn't be there)
+        const identifier = job.data.identifier;
+        if (identifier) {
+          const stillExists = await orderCache.getNewest(taskId, marketplace, identifier);
+          if (stillExists) {
+            warnLog('WorkerCleanup', `ORDER_STILL_IN_CACHE_AFTER_COMPLETION | taskId=${taskId} | orderKey=${orderKey}`, { taskId });
+            await safeDeleteFromCache(orderKey, taskId, marketplace);
           }
         }
+      }
+    });
 
-        // Only track as worker failure if it's a systemic issue
-        if (error.message?.includes('could not renew lock') ||
-          error.message?.includes('Missing lock') ||
-          error.message?.includes('connection lost')) {
-          trackWorkerFailure(i, `Job processing error: ${error.message}`);
-        }
-      });
+    // Add failure hook for guaranteed cleanup (even if error handler failed to delete)
+    mainWorker.on('failed', async (job, error) => {
+      if (job && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID || job.name === CANCEL_MAGICEDEN_BID)) {
+        const taskId = job.data.taskId;
+        const marketplace = (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID) ? 'opensea' : 'magiceden';
 
-      // Add completion hook for guaranteed cleanup verification
-      worker.on('completed', async (job) => {
-        // Track execution latency for counterbid jobs
-        if (job && job.timestamp) {
-          const isCounterbid = job.name === OPENSEA_TOKEN_BID_COUNTERBID ||
-            job.name === OPENSEA_TRAIT_BID_COUNTERBID ||
-            job.name === OPENSEA_COLLECTION_BID_COUNTERBID ||
-            job.name === MAGICEDEN_TOKEN_BID_COUNTERBID ||
-            job.name === MAGICEDEN_TRAIT_BID_COUNTERBID ||
-            job.name === MAGICEDEN_COLLECTION_BID_COUNTERBID;
-
-          if (isCounterbid && job.data) {
-            const marketplace = job.name.toLowerCase().includes('opensea') ? 'opensea' : 'magiceden';
-            const taskId = job.data._id || job.data.taskId;
-            const rawTokenId = job.data.asset?.tokenId || job.data.tokenId;
-            const tokenId = rawTokenId ? safeTokenIdToString(rawTokenId) : undefined;
-            const traceId = job.data.os2TraceId;
-
-            counterbidTrackingService.recordExecutionComplete(
-              marketplace,
-              taskId,
-              job.timestamp,
-              Date.now(),
-              true, // success (we're in completed handler)
-              tokenId,
-              traceId
-            );
-          }
-        }
-
-        // Verify cache was cleaned (defensive check)
-        if (job && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID || job.name === CANCEL_MAGICEDEN_BID) && job.data.orderKey) {
-          const taskId = job.data.taskId;
+        // GUARANTEED CLEANUP: Even if error handler failed to delete
+        if (job.data.orderKey) {
           const orderKey = job.data.orderKey;
-          const marketplace = (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID) ? 'opensea' : 'magiceden';
-
-          // Check if order still exists in cache (shouldn't be there)
-          const identifier = job.data.identifier;
-          if (identifier) {
-            const stillExists = await orderCache.getNewest(taskId, marketplace, identifier);
-            if (stillExists) {
-              warnLog('WorkerCleanup', `ORDER_STILL_IN_CACHE_AFTER_COMPLETION | taskId=${taskId} | orderKey=${orderKey}`, { taskId });
-              await safeDeleteFromCache(orderKey, taskId, marketplace);
-            }
-          }
-        }
-      });
-
-      // Add failure hook for guaranteed cleanup (even if error handler failed to delete)
-      worker.on('failed', async (job, error) => {
-        if (job && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID || job.name === CANCEL_MAGICEDEN_BID)) {
-          const taskId = job.data.taskId;
-          const marketplace = (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID) ? 'opensea' : 'magiceden';
-
-          // GUARANTEED CLEANUP: Even if error handler failed to delete
-          if (job.data.orderKey) {
-            const orderKey = job.data.orderKey;
+          warnLog('WorkerCleanup', `GUARANTEED_CLEANUP_ON_FAILURE | taskId=${taskId} | marketplace=${marketplace} | orderKey=${orderKey} | error=${error.message}`, { taskId });
+          await safeDeleteFromCache(orderKey, taskId, marketplace);
+        } else if (job.data.orderKeys) {
+          for (const orderKey of job.data.orderKeys) {
             warnLog('WorkerCleanup', `GUARANTEED_CLEANUP_ON_FAILURE | taskId=${taskId} | marketplace=${marketplace} | orderKey=${orderKey} | error=${error.message}`, { taskId });
             await safeDeleteFromCache(orderKey, taskId, marketplace);
-          } else if (job.data.orderKeys) {
-            for (const orderKey of job.data.orderKeys) {
-              warnLog('WorkerCleanup', `GUARANTEED_CLEANUP_ON_FAILURE | taskId=${taskId} | marketplace=${marketplace} | orderKey=${orderKey} | error=${error.message}`, { taskId });
-              await safeDeleteFromCache(orderKey, taskId, marketplace);
-            }
           }
         }
-      });
+      }
+    });
 
-      // Add worker to array
-      workers.push(worker);
-    }
+    // Assign main worker instance
+    infoLog('Worker', `Main worker initialized | concurrency=${concurrency} | queue=${QUEUE_NAME}`);
 
     // Create Blur worker with its own connection and rate limiting
     const blurWorkerConnection = await createBullMQConnection('blur-worker');
     bullMQConnections.push(blurWorkerConnection);
 
-    const blurWorker = new Worker(
+    blurWorker = new Worker(
       BLUR_BIDDING_QUEUE,
       async (job) => {
-        const jobTimeout = 900000; // 15 minutes - increased for event loop recovery
+        // TIMEOUT CONFIGURATION (Optimized for aggressive fast failure)
+        // Cascade: Axios (30s) → Lock (45s) → Stall (60s) → Job (60s)
+        // - Lock expires BEFORE stall detection (prevents race conditions)
+        // - Ultra-fast failure (45s lock, 60s job) maximizes retry opportunities
+        // - Allows 1-2 sequential API calls per job (competitive bidding priority)
+        const jobTimeout = 60000; // 1 minute (aggressive timeout for fast retries)
         const abortController = new AbortController();
 
         const timeoutPromise = new Promise((_, reject) => {
@@ -2571,22 +2470,17 @@ async function startServer() {
       },
       {
         connection: blurWorkerConnection,
-        concurrency: concurrencyPerWorker, // Reduce concurrency for Blur to prevent rate limit issues
-        lockDuration: 120000,      // 2 minutes - faster lock release for stuck jobs
-        stalledInterval: 15000,   // Check every 15 seconds for faster stall detection
-        maxStalledCount: 6        // 6 stall checks = 90s safety net before force-fail
+        concurrency: concurrency, // Reduce concurrency for Blur to prevent rate limit issues
+        lockDuration: 45000,       // 45 seconds - allows 1-2 sequential 30s API calls
+        stalledInterval: 15000,    // 15 seconds - high-frequency stall detection
+        maxStalledCount: 4         // 4 checks = 60s (triggers AFTER lock expires at 45s)
       }
     );
-
-
-
-    workers.push(blurWorker);
 
     // Add error handlers for Blur queue components
     blurWorker.on('error', async (error) => {
       errorLog('BlurWorker', 'Worker error', error);
-      const blurWorkerIndex = workers.length - 1; // Blur worker is the last one
-      trackWorkerFailure(blurWorkerIndex, `Blur worker error: ${error.message || String(error)}`);
+      trackWorkerFailure(1, `Blur worker error: ${error.message || String(error)}`);
 
       // Check if this is a Redis error
       if (isRedisError(error)) {
@@ -2651,8 +2545,7 @@ async function startServer() {
       if (error.message?.includes('could not renew lock') ||
         error.message?.includes('Missing lock') ||
         error.message?.includes('connection lost')) {
-        const blurWorkerIndex = workers.length - 1;
-        trackWorkerFailure(blurWorkerIndex, `Blur job processing error: ${error.message}`);
+        trackWorkerFailure(1, `Blur job processing error: ${error.message}`);
       }
     });
 
@@ -2689,7 +2582,7 @@ async function startServer() {
     // Initialize worker health monitoring
     startWorkerHealthMonitoring();
 
-    debugLog('STARTUP', `Workers initialized | count=${workers.length} | concurrency=${concurrencyPerWorker}`);
+    infoLog('STARTUP', `Workers initialized | mainWorker=1 | blurWorker=1 | total=2 | concurrency=${concurrency}`);
 
 
     // Add process-level error handler for uncaught BullMQ errors
@@ -2721,7 +2614,8 @@ async function startServer() {
         await Task.updateMany({ running: true }, { running: false });
 
         // Stop workers
-        await Promise.all(workers.map(worker => worker.close()));
+        if (mainWorker) await mainWorker.close();
+        if (blurWorker) await blurWorker.close();
 
         // Close BullMQ connections
         await closeAllBullMQConnections();
@@ -2917,17 +2811,47 @@ async function startServer() {
       await new Promise(resolve => setTimeout(resolve, 2000));
 
       // Check worker health
-      const workerStatuses = await Promise.all(
-        workers.map(async (worker, index) => {
-          try {
-            const isRunning = worker.isRunning();
-            const isPaused = worker.isPaused();
-            return { index, running: isRunning, paused: isPaused, healthy: isRunning && !isPaused };
-          } catch (error) {
-            return { index, running: false, paused: false, healthy: false, error };
-          }
-        })
-      );
+      const workerStatuses = [];
+
+      // Check main worker
+      if (mainWorker) {
+        try {
+          workerStatuses.push({
+            index: 0,
+            running: mainWorker.isRunning(),
+            paused: mainWorker.isPaused(),
+            healthy: mainWorker.isRunning() && !mainWorker.isPaused()
+          });
+        } catch (error) {
+          workerStatuses.push({
+            index: 0,
+            running: false,
+            paused: false,
+            healthy: false,
+            error
+          });
+        }
+      }
+
+      // Check blur worker
+      if (blurWorker) {
+        try {
+          workerStatuses.push({
+            index: 1,
+            running: blurWorker.isRunning(),
+            paused: blurWorker.isPaused(),
+            healthy: blurWorker.isRunning() && !blurWorker.isPaused()
+          });
+        } catch (error) {
+          workerStatuses.push({
+            index: 1,
+            running: false,
+            paused: false,
+            healthy: false,
+            error
+          });
+        }
+      }
 
       const unhealthyWorkers = workerStatuses.filter(s => !s.healthy);
       if (unhealthyWorkers.length > 0) {
@@ -2940,7 +2864,11 @@ async function startServer() {
         for (const workerStatus of unhealthyWorkers) {
           if (!workerStatus.running || workerStatus.paused) {
             try {
-              await workers[workerStatus.index].resume();
+              if (workerStatus.index === 0 && mainWorker) {
+                await mainWorker.resume();
+              } else if (workerStatus.index === 1 && blurWorker) {
+                await blurWorker.resume();
+              }
             } catch (error) {
               errorLog('WorkerResume', `Failed to resume worker ${workerStatus.index}`, error);
             }
@@ -7871,7 +7799,7 @@ async function updateTaskData(task: ITask) {
         enforceCreatorFee: collectionDetails.enforceCreatorFee,
         trait: JSON.stringify(trait),
         outbidOptions: task.outbidOptions,
-        task: newTask
+        task: newTask,
       },
       opts: { priority: TRAIT_BID_PRIORITY.OPENSEA, attempts: 1 } as JobsOptions
     })) as Job[] : [] as Job[]
@@ -7937,7 +7865,7 @@ async function updateTaskData(task: ITask) {
           enforceCreatorFee: collectionDetails.enforceCreatorFee,
           asset: { contractAddress: task.contract.contractAddress, tokenId: token },
           outbidOptions: task.outbidOptions,
-          task: newTask
+          task: newTask,
         },
         opts: { priority: TOKEN_BID_PRIORITY.OPENSEA, attempts: 1 } as JobsOptions,
       })) as Job[] : [] as Job[]
@@ -8048,6 +7976,31 @@ async function updateTaskData(task: ITask) {
 
 const DRAIN_THRESHOLD = 900000; // 90% of MAX_QUEUE_JOBS - triggers backpressure early
 
+// Cached queue depth for dynamic throttling (avoid expensive getJobCounts calls)
+let cachedQueueDepth = 0;
+let queueDepthCacheTimestamp = 0;
+const QUEUE_DEPTH_CACHE_TTL = 500; // 0.5 seconds cache (fresher throttle decisions, reduces worker starvation from 2s → 500ms max)
+
+async function getCachedQueueDepth(): Promise<number> {
+  const now = Date.now();
+
+  // Return cached value if still valid (within TTL)
+  if (now - queueDepthCacheTimestamp < QUEUE_DEPTH_CACHE_TTL) {
+    return cachedQueueDepth;
+  }
+
+  // Cache expired, fetch fresh counts
+  const [mainCounts, blurCounts] = await Promise.all([
+    queue.getJobCounts(),
+    blurQueue.getJobCounts()
+  ]);
+
+  cachedQueueDepth = (mainCounts.waiting || 0) + (blurCounts.waiting || 0);
+  queueDepthCacheTimestamp = now;
+
+  return cachedQueueDepth;
+}
+
 const BLUR_JOBS = [
   'BLUR_COLLECTION_BID',
   'BLUR_COLLECTION_BID_COUNTERBID',
@@ -8077,20 +8030,6 @@ function getMarketplaceFromJobName(jobName: string): string | null {
   if (name.includes('MAGICEDEN')) return 'magiceden';
   if (name.includes('BLUR')) return 'blur';
   return null;
-}
-
-async function waitForQueueDrain(): Promise<void> {
-  while (true) {
-    const counts = await queue.getJobCounts();
-    const prioritizedCount = counts.prioritized || 0;
-
-    if (prioritizedCount <= DRAIN_THRESHOLD) {
-      break;
-    }
-
-    const delay = prioritizedCount / DRAIN_THRESHOLD;
-    await new Promise(resolve => setTimeout(resolve, delay * 1000)); DRAIN_THRESHOLD
-  }
 }
 
 const MAX_QUEUE_JOBS = 1000000; // Hard limit for queue capacity
@@ -8199,15 +8138,8 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
   const rateLimiter = new RateLimiter(RATE_LIMIT);
 
   try {
-    // Check Redis health before attempting bulk operations
-    const redisCheckStartTime = Date.now();
-    const isRedisHealthy = await checkRedisHealth();
-    const redisCheckMs = Date.now() - redisCheckStartTime;
-    infoLog('BulkJobsPerf', `REDIS_HEALTH_CHECK | taskId=${taskId} | elapsed=${redisCheckMs}ms | healthy=${isRedisHealthy} | marketplace=${mpForLog}`, { taskId, marketplace: mpForLog as 'opensea' | 'magiceden' | 'blur' | undefined });
-    if (!isRedisHealthy) {
-      const error = new Error('Redis cluster is not healthy - cannot queue jobs');
-      throw error;
-    }
+    // Redis health check REMOVED - errors will be caught by actual queue operations (queue.addBulk)
+    // This eliminates 5-50ms blocking delay on every processBulkJobs call
 
     // For cancellation jobs, we should process them even if the task is not running
     const isCancellationJob = firstJob.name.toLowerCase().includes('cancel');
@@ -8518,9 +8450,37 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
               if (cancellationJobCount > 0) {
               }
 
-              for (const jobChunk of rateLimitChunks) {
-                await rateLimiter.acquire();
+              // Get current queue depth for dynamic rate limiting (cached to avoid expensive Redis calls)
+              const currentQueueDepth = await getCachedQueueDepth();
 
+              // Dynamic buffer multiplier to prevent queue threshold violations
+              // Target: Keep queue between 100-10,000 jobs
+              let BUFFER_MULTIPLIER;
+              if (currentQueueDepth > 50000) {
+                BUFFER_MULTIPLIER = 0.5;  // Super slow: wait every chunk (32 jobs/sec)
+                debugLog('QueueThrottle', `HIGH queue depth=${currentQueueDepth} | multiplier=0.5x | queueRate=32/sec`);
+              } else if (currentQueueDepth > 10000) {
+                BUFFER_MULTIPLIER = 1;    // Slow: 64 jobs/sec
+                debugLog('QueueThrottle', `ELEVATED queue depth=${currentQueueDepth} | multiplier=1x | queueRate=64/sec`);
+              } else if (currentQueueDepth > 1000) {
+                BUFFER_MULTIPLIER = 2;    // Medium: 128 jobs/sec
+              } else {
+                BUFFER_MULTIPLIER = 3;    // Full speed: 192 jobs/sec (prevent starvation)
+              }
+
+              for (let i = 0; i < rateLimitChunks.length; i++) {
+                const jobChunk = rateLimitChunks[i];
+
+                // Apply dynamic throttling
+                if (BUFFER_MULTIPLIER === 0.5) {
+                  // Wait every chunk when queue critical
+                  await rateLimiter.acquire();
+                } else if (i % BUFFER_MULTIPLIER === 0 && i > 0) {
+                  // Normal throttling based on multiplier
+                  await rateLimiter.acquire();
+                }
+
+                // Always queue the chunk (maintains oversaturated queue)
                 const addedJobs = await queue.addBulk(jobChunk);
 
                 // Verify addBulk results - ensure all jobs have IDs (successful queueing)
@@ -8615,9 +8575,38 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
               // Add Blur jobs with rate limiting using chunked addBulk
               const blurRateLimitChunks = chunk(uniqueBlurJobs, RATE_LIMIT);
-              for (const jobChunk of blurRateLimitChunks) {
-                await rateLimiter.acquire();
 
+              // Get current queue depth for dynamic rate limiting (Blur) - reuse cached value
+              const currentQueueDepthBlur = await getCachedQueueDepth();
+
+              // Dynamic buffer multiplier to prevent queue threshold violations
+              // Target: Keep queue between 100-10,000 jobs
+              let BLUR_BUFFER_MULTIPLIER;
+              if (currentQueueDepthBlur > 50000) {
+                BLUR_BUFFER_MULTIPLIER = 0.5;  // Super slow: wait every chunk (32 jobs/sec)
+                debugLog('QueueThrottle', `HIGH Blur queue depth=${currentQueueDepthBlur} | multiplier=0.5x | queueRate=32/sec`);
+              } else if (currentQueueDepthBlur > 10000) {
+                BLUR_BUFFER_MULTIPLIER = 1;    // Slow: 64 jobs/sec
+                debugLog('QueueThrottle', `ELEVATED Blur queue depth=${currentQueueDepthBlur} | multiplier=1x | queueRate=64/sec`);
+              } else if (currentQueueDepthBlur > 1000) {
+                BLUR_BUFFER_MULTIPLIER = 2;    // Medium: 128 jobs/sec
+              } else {
+                BLUR_BUFFER_MULTIPLIER = 3;    // Full speed: 192 jobs/sec (prevent starvation)
+              }
+
+              for (let i = 0; i < blurRateLimitChunks.length; i++) {
+                const jobChunk = blurRateLimitChunks[i];
+
+                // Apply dynamic throttling
+                if (BLUR_BUFFER_MULTIPLIER === 0.5) {
+                  // Wait every chunk when queue critical
+                  await rateLimiter.acquire();
+                } else if (i % BLUR_BUFFER_MULTIPLIER === 0 && i > 0) {
+                  // Normal throttling based on multiplier
+                  await rateLimiter.acquire();
+                }
+
+                // Always queue the chunk (maintains oversaturated queue)
                 const addedJobs = await blurQueue.addBulk(jobChunk);
 
                 // Verify addBulk results for Blur - ensure all jobs have IDs
@@ -8679,13 +8668,18 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
           debugLog('ChunkProcess', `COMPLETE | taskId=${taskId} | mp=${marketplace} | chunk=${chunkIndex + 1}/${chunks.length} | input=${currentChunk.length} | valid=${chunkJobsQueued} | rejected=${chunkRejectedJobs} | totalProcessed=${processedCount} | totalQueued=${actuallyQueuedCount} | capacityWaitMs=${capacityWaitMs} | totalMs=${chunkTotalMs}`, { taskId, marketplace: mpForLog as 'opensea' | 'magiceden' | 'blur' | undefined });
           // BulkJobsPerf CHUNK_COMPLETE log removed - was logging every chunk (250MB/day total with ENTRY)
 
-          // Log queue state AFTER addBulk every 5 chunks to avoid spam
+          // Log queue state AFTER addBulk every 5 chunks to avoid spam (async, non-blocking)
           if ((chunkIndex + 1) % 5 === 0 || chunkIndex === chunks.length - 1) {
-            const postAddCounts = await queue.getJobCounts();
-            const postAddBlurCounts = await blurQueue.getJobCounts();
-            const postMainTotal = (postAddCounts.waiting || 0) + (postAddCounts.active || 0) + (postAddCounts.prioritized || 0);
-            const postBlurTotal = (postAddBlurCounts.waiting || 0) + (postAddBlurCounts.active || 0) + (postAddBlurCounts.prioritized || 0);
-            debugLog('JobQueue', `QUEUE_STATE_AFTER | taskId=${taskId} | mp=${marketplace} | chunk=${chunkIndex + 1}/${chunks.length} | mainQueue=[waiting=${postAddCounts.waiting || 0},active=${postAddCounts.active || 0},prioritized=${postAddCounts.prioritized || 0},total=${postMainTotal}] | blurQueue=[waiting=${postAddBlurCounts.waiting || 0},active=${postAddBlurCounts.active || 0},prioritized=${postAddBlurCounts.prioritized || 0},total=${postBlurTotal}] | combined=${postMainTotal + postBlurTotal}`, { taskId, marketplace: mpForLog as 'opensea' | 'magiceden' | 'blur' | undefined });
+            // Fire-and-forget logging - don't block job queueing for metrics
+            Promise.all([queue.getJobCounts(), blurQueue.getJobCounts()])
+              .then(([postAddCounts, postAddBlurCounts]) => {
+                const postMainTotal = (postAddCounts.waiting || 0) + (postAddCounts.active || 0) + (postAddCounts.prioritized || 0);
+                const postBlurTotal = (postAddBlurCounts.waiting || 0) + (postAddBlurCounts.active || 0) + (postAddBlurCounts.prioritized || 0);
+                debugLog('JobQueue', `QUEUE_STATE_AFTER | taskId=${taskId} | mp=${marketplace} | chunk=${chunkIndex + 1}/${chunks.length} | mainQueue=[waiting=${postAddCounts.waiting || 0},active=${postAddCounts.active || 0},prioritized=${postAddCounts.prioritized || 0},total=${postMainTotal}] | blurQueue=[waiting=${postAddBlurCounts.waiting || 0},active=${postAddBlurCounts.active || 0},prioritized=${postAddBlurCounts.prioritized || 0},total=${postBlurTotal}] | combined=${postMainTotal + postBlurTotal}`, { taskId, marketplace: mpForLog as 'opensea' | 'magiceden' | 'blur' | undefined });
+              })
+              .catch(err => {
+                // Silently ignore logging errors - don't spam console
+              });
           }
 
           // Update queueing progress for progress-based watchdog timeout
@@ -10764,8 +10758,7 @@ async function fetchOrdersForCancellation(taskId: string, marketplace?: string):
   }
 }
 
-async function
-  stopTask(task: ITask, start: boolean, marketplace?: string, stoppedByWarning = false) {
+async function stopTask(task: ITask, start: boolean, marketplace?: string, stoppedByWarning = false) {
   const taskId = task._id.toString();
   const stopStartTime = Date.now();
 
@@ -10960,9 +10953,6 @@ async function
 
       // NOTE: Do NOT clear orderCache here - it will be cleared in updateTaskCancellationPercentage when 100% complete
       // This allows proper decrementBidCount tracking during cancellation
-
-      // Clear marketplace top offer cache for this task
-      counterbidTrackingService.clearTopOffersByTask(taskId);
 
       // Decrement reference count for collection warming
       // Only stops warming if no other tasks use this collection
@@ -14127,33 +14117,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       }
 
 
-      // Check marketplace top offer cache first (cache-first approach)
-      // This prevents placing bids that won't become the top offer
-      const counterbidCheck = counterbidTrackingService.checkShouldCounterbid(
-        task._id,
-        'magiceden',
-        tokenId.toString(),
-        incomingBidAmountEth,
-        maker || '',
-        task.wallet
-      );
-
-      if (!counterbidCheck.shouldCounterbid) {
-        return;
-      }
-
-      // Update cache with incoming bid if it's higher than cached
-      if (counterbidCheck.reason === 'outbid' || counterbidCheck.reason === 'cache_miss') {
-        counterbidTrackingService.updateTopOfferFromIncomingBid(
-          task._id,
-          'magiceden',
-          tokenId.toString(),
-          incomingBidAmountEth,
-          incomingBidAmount.toString(),
-          maker || '',
-          task.wallet
-        );
-      }
+      // Always counterbid incoming bids (cache-first check removed)
 
       const roundedEth = roundToValidPrecision(incomingBidAmountEth)
 
@@ -14317,31 +14281,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
         // Check marketplace top offer cache first (cache-first approach)
         // This prevents placing bids that won't become the top offer
-        const counterbidCheck = counterbidTrackingService.checkShouldCounterbid(
-          task._id,
-          'magiceden',
-          identifier,
-          incomingBidAmountEth,
-          maker || '',
-          task.wallet
-        );
-
-        if (!counterbidCheck.shouldCounterbid) {
-          return;
-        }
-
-        // Update cache with incoming bid if it's higher than cached
-        if (counterbidCheck.reason === 'outbid' || counterbidCheck.reason === 'cache_miss') {
-          counterbidTrackingService.updateTopOfferFromIncomingBid(
-            task._id,
-            'magiceden',
-            identifier,
-            incomingBidAmountEth,
-            incomingBidAmount.toString(),
-            maker || '',
-            task.wallet
-          );
-        }
+        // Always counterbid incoming bids (cache-first check removed)
 
         offerPrice = Math.ceil((magicedenOutbidMargin * Math.pow(10, decimal)) + incomingBidAmount)
         const offerPriceEth = offerPrice / Math.pow(10, decimal)
@@ -14439,14 +14379,8 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
           if (cachedTokenOrder) {
             // We have an existing offer on this token - queue instant counterbid
-            const cachedTopOffer = counterbidTrackingService.getMarketplaceTopOffer(task._id, 'magiceden', tokenId);
-
-            // Calculate base price: max(trait offer, cached top token offer)
+            // Use incoming trait offer as base price
             let basePriceWei = incomingBidAmount; // incoming trait offer in wei
-            const incomingBidAmountEthLocal = incomingBidAmount / Math.pow(10, decimal);
-            if (cachedTopOffer && cachedTopOffer.topOfferAmount > incomingBidAmountEthLocal && !cachedTopOffer.isOurBid) {
-              basePriceWei = cachedTopOffer.topOfferAmount * Math.pow(10, decimal);
-            }
 
             // Calculate offer price with crossTypeMarginMultiplier
             const marginMultiplier = currentTask.outbidOptions.crossTypeMarginMultiplier || 1;
@@ -14602,33 +14536,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
       const ordersToCancel = [];
 
       for (const order of allTaskOrders) {
-        // Check marketplace top offer cache first (cache-first approach)
-        // This prevents placing bids that won't become the top offer
-        const counterbidCheck = counterbidTrackingService.checkShouldCounterbid(
-          task._id,
-          'magiceden',
-          order.identifier,
-          incomingBidAmountEth,
-          maker || '',
-          task.wallet
-        );
-
-        if (!counterbidCheck.shouldCounterbid) {
-          continue;
-        }
-
-        // Update cache with incoming bid if it's higher than cached
-        if (counterbidCheck.reason === 'outbid' || counterbidCheck.reason === 'cache_miss') {
-          counterbidTrackingService.updateTopOfferFromIncomingBid(
-            task._id,
-            'magiceden',
-            order.identifier,
-            incomingBidAmountEth,
-            incomingBidAmount.toString(),
-            maker || '',
-            task.wallet
-          );
-        }
+        // Always counterbid incoming bids (cache-first check removed)
 
         // Only counterbid orders that are <= incoming collection offer
         if (Number(order.offerPrice) <= incomingBidAmount) {
@@ -14643,10 +14551,10 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
             // For trait/token orders: use max(collection offer, cached/fetched top offer) + margin
             // This ensures we bid above the actual top offer, not just above the collection offer
             let basePriceEth = roundedEth; // incoming collection offer
-            let cachedOfferForOrder = counterbidCheck.cachedOffer;
+            let cachedOfferForOrder = null;
 
-            // API FALLBACK: If cache miss, fetch from API based on order type
-            if (!cachedOfferForOrder) {
+            // Fetch from API to get current top offer
+            {
               try {
                 let topOffer: OpenseaOfferData | undefined;
                 if (order.identifier.includes(':')) {
@@ -14672,7 +14580,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
                   isOurBid: isOurBid,
                   timestamp: Date.now()
                 };
-                counterbidTrackingService.setMarketplaceTopOffer(task._id.toString(), 'magiceden', order.identifier, cachedOfferForOrder);
               } catch (fetchError) {
                 errorLog('Counterbid', `[ME] ${task.contract.slug} [${order.identifier}] | Trait/Token-vs-Collection: API fetch failed - using collection offer as base`, fetchError);
               }
@@ -14890,36 +14797,8 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
           // Only counterbid if incoming collection offer beats our token offer
           if (incomingBidAmountEth > ourTokenPriceEth) {
-            // Cache-first approach: Check cache for existing top token offer
-            let cachedTopOffer = counterbidTrackingService.getMarketplaceTopOffer(task._id.toString(), 'magiceden', targetTokenId.toString());
-
-            // API FALLBACK: If cache miss, fetch from API
-            if (!cachedTopOffer) {
-              try {
-                const [topOffer] = await fetchMagicEdenOffer("TOKEN", task.contract.contractAddress, targetTokenId.toString()) as unknown as OpenseaOfferData[];
-                const topOfferEth = topOffer?.eth || 0;
-                const walletsArr = await walletCache.getAllWallets();
-                const topBidderOwner = topOffer?.owner?.toLowerCase() || '';
-                const isOurBid = walletsArr.map(w => w.address.toLowerCase()).includes(topBidderOwner);
-
-                cachedTopOffer = {
-                  topOfferAmount: topOfferEth,
-                  topOfferWei: (topOfferEth * Math.pow(10, decimal)).toString(),
-                  topBidderAddress: topBidderOwner,
-                  isOurBid: isOurBid,
-                  timestamp: Date.now()
-                };
-                counterbidTrackingService.setMarketplaceTopOffer(task._id.toString(), 'magiceden', targetTokenId.toString(), cachedTopOffer);
-              } catch (fetchError) {
-                errorLog('Counterbid', `[ME] ${task.contract.slug} [${targetTokenId}] | Token-vs-Collection: API fetch failed - using collection offer as base`, fetchError);
-              }
-            }
-
-            // Calculate base price: max(collection offer, cached/fetched top token offer)
+            // Use incoming collection offer as base price
             let basePriceEth = roundedEth; // incoming collection offer
-            if (cachedTopOffer && cachedTopOffer.topOfferAmount > basePriceEth && !cachedTopOffer.isOurBid) {
-              basePriceEth = cachedTopOffer.topOfferAmount;
-            }
 
             // Calculate token counterbid price with crossTypeMarginMultiplier
             const marginMultiplier = currentTask.outbidOptions.crossTypeMarginMultiplier || 1;
@@ -16575,25 +16454,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
           return
         }
 
-        // Cache-first check: Use marketplace top offer cache to determine if we should counterbid
-        // Blur doesn't provide maker address, so we pass empty string and rely on cache/our wallet for comparison
-        const counterbidCheck = counterbidTrackingService.checkShouldCounterbid(
-          task._id,
-          'blur',
-          identifier,
-          incomingPrice,
-          '', // Blur WebSocket doesn't include maker address in trait updates
-          task.wallet
-        );
-
-        if (!counterbidCheck.shouldCounterbid) {
-          return;
-        }
-
-        // Update cache with the incoming bid (we know it's a competitor since we're counterbidding)
-        // Convert incoming price from ETH to wei for cache storage
-        const incomingPriceWei = (incomingPrice * 1e18).toString();
-        counterbidTrackingService.updateTopOfferFromIncomingBid(task._id, 'blur', identifier, incomingPrice, incomingPriceWei, '', task.wallet);
+        // Always counterbid incoming bids (cache-first check removed)
 
         let offerPrice: any = Number((blurOutbidMargin + Number(incomingPrice))?.toFixed(2))
         offerPrice = parseEther(offerPrice?.toString())
@@ -16781,25 +16642,7 @@ async function handleBlurCounterbid(data: any, task: ITask) {
       let counterbidsQueued = 0;
 
       for (const order of allTaskOrders) {
-        // Cache-first check: Use marketplace top offer cache to determine if we should counterbid
-        // For collection bids affecting individual orders, check each identifier
-        const incomingPriceEth = Number(bestPrice);
-        const counterbidCheck = counterbidTrackingService.checkShouldCounterbid(
-          task._id,
-          'blur',
-          order.identifier,
-          incomingPriceEth,
-          '', // Blur WebSocket doesn't include maker address
-          task.wallet
-        );
-
-        if (!counterbidCheck.shouldCounterbid) {
-          continue;
-        }
-
-        // Update cache with the incoming bid (we know it's a competitor since we're counterbidding)
-        // incomingPriceWei is already calculated earlier in this function
-        counterbidTrackingService.updateTopOfferFromIncomingBid(task._id, 'blur', order.identifier, incomingPriceEth, incomingPriceWei.toString(), '', task.wallet);
+        // Always counterbid incoming bids (cache-first check removed)
 
         // Only counterbid orders that are <= incoming collection offer
         if (Number(order.offerPrice) <= incomingPriceWei) {
@@ -17827,6 +17670,30 @@ async function processOpenseaScheduledBid(task: ITask) {
           throw error;
         }
 
+        // Pre-calculate bid price values ONCE for all processors (counterbid pattern)
+        // This avoids redundant calculateBidPrice calls in each processor (15-150ms savings per bid)
+        let scheduledBidCalc: {
+          maxBidPriceEth: number;
+          offerPriceEth: number;
+          minBidPriceEth: number;
+          currencySymbol: string;
+          currency: string;
+          decimal: number;
+          floor_price: number;
+        } | null = null;
+
+        if (preprocessing.opensea.enabled && floorPrice !== undefined) {
+          scheduledBidCalc = {
+            ...await calculateBidPrice(
+              currentTask,
+              floorPrice,  // Use floor price fetched above
+              "opensea"
+            ),
+            floor_price: floorPrice
+          };
+          debugLog('Performance', `[OS-Sched] Pre-calc | slug=${currentTask.contract.slug} | floor=${floorPrice} | max=${scheduledBidCalc.maxBidPriceEth} | offer=${scheduledBidCalc.offerPriceEth}`);
+        }
+
         // creator_fees: JSON.stringify(collectionDetails.creator_fees),
         // has_null: collectionDetails.creator_fees.null !== undefined,
         // null_value: collectionDetails.creator_fees.null,
@@ -17837,11 +17704,6 @@ async function processOpenseaScheduledBid(task: ITask) {
         const creatorFees: IFee = Object.fromEntries(
           Object.entries(collectionDetails.creator_fees).map(([key, value]) => [key, Number(value)])
         );
-
-
-        // Note: Status will be set to appropriate state after job creation is determined
-        const newTask = { ...currentTask, traits: {} } as ITask
-
 
         // Create jobs based on preprocessing results
         if (preprocessing.opensea.tokens.length > 0) {
@@ -17858,6 +17720,14 @@ async function processOpenseaScheduledBid(task: ITask) {
                 enforceCreatorFee: collectionDetails.enforceCreatorFee,
                 asset: { contractAddress: currentTask.contract.contractAddress, tokenId: token },
                 outbidOptions: currentTask.outbidOptions,
+                // Pass pre-calculated values to avoid redundant calculateBidPrice calls (15-150ms savings)
+                floor_price: scheduledBidCalc?.floor_price,
+                maxBidPriceEth: scheduledBidCalc?.maxBidPriceEth,
+                minBidPriceEth: scheduledBidCalc?.minBidPriceEth,
+                offerPriceEth: scheduledBidCalc?.offerPriceEth,
+                currency: scheduledBidCalc?.currency,
+                decimal: scheduledBidCalc?.decimal,
+                currencySymbol: scheduledBidCalc?.currencySymbol,
               },
               opts: { priority: TOKEN_BID_PRIORITY.OPENSEA, attempts: 1 } as JobsOptions,
             })) as Job[]
@@ -17905,6 +17775,14 @@ async function processOpenseaScheduledBid(task: ITask) {
               enforceCreatorFee: collectionDetails.enforceCreatorFee,
               trait: JSON.stringify(trait),
               outbidOptions: currentTask.outbidOptions,
+              // Pass pre-calculated values to avoid redundant calculateBidPrice calls (15-150ms savings)
+              floor_price: scheduledBidCalc?.floor_price,
+              maxBidPriceEth: scheduledBidCalc?.maxBidPriceEth,
+              minBidPriceEth: scheduledBidCalc?.minBidPriceEth,
+              offerPriceEth: scheduledBidCalc?.offerPriceEth,
+              currency: scheduledBidCalc?.currency,
+              decimal: scheduledBidCalc?.decimal,
+              currencySymbol: scheduledBidCalc?.currencySymbol,
             };
             return {
               name: OPENSEA_TRAIT_BID,
@@ -17965,7 +17843,18 @@ async function processOpenseaScheduledBid(task: ITask) {
 
           await queue.add(
             OPENSEA_COLLECTION_BID,
-            { taskId: taskId, collectionDetails, currency },
+            {
+              taskId: taskId,
+              collectionDetails,
+              currency,
+              // Pass pre-calculated values to avoid redundant calculateBidPrice calls (15-150ms savings)
+              floor_price: scheduledBidCalc?.floor_price,
+              maxBidPriceEth: scheduledBidCalc?.maxBidPriceEth,
+              minBidPriceEth: scheduledBidCalc?.minBidPriceEth,
+              offerPriceEth: scheduledBidCalc?.offerPriceEth,
+              decimal: scheduledBidCalc?.decimal,
+              currencySymbol: scheduledBidCalc?.currencySymbol,
+            },
             { jobId, priority: 2, attempts: 1 }
           );
 
@@ -18121,7 +18010,17 @@ function transformSelectedTraitsToAttributes(selectedTraits: Record<string, stri
   }));
 }
 
-async function processOpenseaCollectionBid(data: { taskId: string, collectionDetails: any }) {
+async function processOpenseaCollectionBid(data: {
+  taskId: string;
+  collectionDetails: any;
+  currency?: string;
+  floor_price?: number;
+  maxBidPriceEth?: number;
+  minBidPriceEth?: number;
+  offerPriceEth?: number;
+  decimal?: number;
+  currencySymbol?: string;
+}) {
   const taskId = data.taskId;
   if (isTaskBlacklisted(taskId, 'opensea')) {
     return;
@@ -18197,42 +18096,30 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       return;
     }
 
-    const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+    // Use pre-calculated values if available (scheduled bids), otherwise calculate (backwards compatibility)
+    let offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal;
 
-    // Fetch fresh balance and check if sufficient for minimum bid
-    const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency);
-    if (balance < minBidPriceEth) {
-      if (DEBUG) {
-        debugLog('BidFlow', `[OS-Coll] ${currentTask.contract.slug} | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} ${currencySymbol}`);
-      }
-      const errorMsg = balance <= 0
-        ? `Insufficient ${currencySymbol} balance: ${balance} (zero or negative) for task ${taskId}`
-        : `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId}`;
-      // Increment skip stats
-      if (!skipStats[currentTask._id]) {
-        skipStats[currentTask._id] = { opensea: 0, magiceden: 0, blur: 0 };
-      }
-      skipStats[currentTask._id].opensea++;
+    if (data.maxBidPriceEth !== undefined && data.offerPriceEth !== undefined) {
+      // Use pre-calculated values from scheduled bid (saves 15-150ms)
+      maxBidPriceEth = data.maxBidPriceEth;
+      offerPriceEth = data.offerPriceEth;
+      minBidPriceEth = data.minBidPriceEth!;
+      currencySymbol = data.currencySymbol!;
+      currency = data.currency!;
+      decimal = data.decimal!;
 
-      // Log the insufficient balance
-      await logBidError(taskId, "INSUFFICIENT_BALANCE", errorMsg, "skipped", "opensea");
+      debugLog('Performance', `[OS-CollBid] Using passed values | slug=${currentTask.contract.slug} | max=${maxBidPriceEth} | offer=${offerPriceEth} (saves 15-150ms)`);
+    } else {
+      // Fallback: Calculate (backwards compatibility)
+      const result = await calculateBidPrice(currentTask, floor_price as number, "opensea");
+      maxBidPriceEth = result.maxBidPriceEth;
+      offerPriceEth = result.offerPriceEth;
+      minBidPriceEth = result.minBidPriceEth;
+      currencySymbol = result.currencySymbol;
+      currency = result.currency;
+      decimal = result.decimal;
 
-      // Create empty parent job and complete the marketplace loop
-      await ensureParentJobExists(taskId, 'opensea');
-      const parentJobId = getParentJobId(taskId, 'opensea');
-      const parentJob = parentJobs.get(parentJobId);
-      if (parentJob) {
-        parentJob.expectedJobs = 0;
-        parentJob.totalJobs = 0;
-        parentJob.allJobsQueued = true;
-        parentJob.completedJobs = 0;
-      }
-
-      // Trigger marketplace completion
-      await checkTaskCompletionAndScheduleNext(taskId, 'opensea');
-
-      return;
+      debugLog('Performance', `[OS-CollBid] Calculated values | slug=${currentTask.contract.slug} | floor=${floor_price} | max=${maxBidPriceEth}`);
     }
 
     const expiry = getExpiry(currentTask.bidDuration)
@@ -18282,19 +18169,10 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
 
       const owner = topOffer.owner.toLowerCase();
       isOwnBid = walletsArr
-        .map(addr => addr.address.toLowerCase())
+        .map((addr: any) => addr.address.toLowerCase())
         .includes(owner);
 
-      // Cache the API result for counterbid handlers
-      const topOfferEthForCache = topOffer?.eth || 0;
-      counterbidTrackingService.setMarketplaceTopOffer(currentTask._id.toString(), 'opensea', 'collection', {
-        topOfferAmount: topOfferEthForCache,
-        topOfferWei: (topOfferEthForCache * Math.pow(10, decimal)).toString(),
-        topBidderAddress: owner,
-        isOurBid: isOwnBid,
-        timestamp: Date.now()
-      });
-
+      // Top offer fetched from API
 
       // 2. Handle own bid case
       if (isOwnBid) {
@@ -18435,17 +18313,6 @@ async function processOpenseaCollectionBid(data: { taskId: string, collectionDet
       )
 
       // Log success
-      // Update marketplace top offer cache - we are now the top bidder
-      const finalOfferEth = Number(collectionOffer) / Math.pow(10, decimal);
-      counterbidTrackingService.updateTopOfferAfterOurBid(
-        currentTask._id,
-        'opensea',
-        'collection',
-        finalOfferEth,
-        collectionOffer.toString(),
-        currentTask.wallet
-      );
-
       // Log job completed
 
     } catch (bidError: any) {
@@ -19044,32 +18911,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "blur")
 
 
-    // Fetch fresh BETH balance and check if sufficient for minimum bid
-
-    const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const { BETH } = await import('./utils/currencies');
-    const balance = await fetchERC20BalanceFresh(currentTask.wallet, BETH);
-
-
-
-    if (balance < minBidPriceEth) {
-      if (DEBUG) {
-        debugLog('BidFlow', `[Blur-Coll] ${collectionSlug} | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} BETH`);
-      }
-      skipStats[currentTask._id]['blur']++;
-
-
-
-      await logBidError(
-        taskId,
-        "INSUFFICIENT_BALANCE",
-        `Insufficient BETH balance: ${balance} < ${minBidPriceEth} for task ${taskId} collection bid`,
-        "skipped",
-        "blur"
-      );
-      return;
-    }
-
     let collectionOffer = BigInt(Math.round(offerPriceEth * 1e18))
 
     // Check if offer exceeds floor price (only for WETH)
@@ -19114,14 +18955,7 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(currentTask.wallet.toLowerCase())
       blurOutbidMargin = currentTask.outbidOptions.blurOutbidMargin || 0.01
 
-      // Cache the API result for counterbid handlers
-      counterbidTrackingService.setMarketplaceTopOffer(currentTask._id.toString(), 'blur', 'collection', {
-        topOfferAmount: topOfferAmount,
-        topOfferWei: (topOfferAmount * Math.pow(10, 18)).toString(),
-        topBidderAddress: bidderAddressesSample[0]?.toLowerCase() || '',
-        isOurBid: isTopBid,
-        timestamp: Date.now()
-      });
+      // Top offer fetched from API
 
       if (isTopBid) {
         const spread = (Number(topOfferAmount) - Number(secondOfferAmount));
@@ -19209,15 +19043,7 @@ async function processBlurCollectionBid(data: { taskId: string }) {
       await bidOnBlur(currentTask._id, bidCount, currentTask.wallet, privateKey, currentTask.contract.contractAddress, collectionOffer, currentTask.contract.slug, expiry);
 
       // Log bid success
-      // Update marketplace top offer cache - we are now the top bidder
-      counterbidTrackingService.updateTopOfferAfterOurBid(
-        currentTask._id,
-        'blur',
-        'collection',
-        finalBidEth,
-        collectionOffer.toString(),
-        currentTask.wallet
-      );
+      // Bid successful
 
     } catch (bidError: any) {
       throw bidError; // Re-throw to be handled by outer catch
@@ -19257,23 +19083,7 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 }
 
 
-async function processOpenseaTraitBid(data: {
-  _id: string
-  address: string;
-  walletId: string;
-  slug: string;
-  contractAddress: string;
-  creatorFees: IFee;
-  enforceCreatorFee: boolean;
-  trait: string;
-  outbidOptions: {
-    outbid: boolean;
-    blurOutbidMargin: number | null;
-    openseaOutbidMargin: number | null;
-    magicedenOutbidMargin: number | null;
-    counterbid: boolean;
-  }
-}) {
+async function processOpenseaTraitBid(data: IProcessOpenseaTraitBidData) {
   // Parse trait early for logging
   let traitKey = 'unknown';
   try {
@@ -19417,28 +19227,31 @@ async function processOpenseaTraitBid(data: {
       return
     }
 
-    const { maxBidPriceEth, offerPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
+    // Use pre-calculated values if available (scheduled bids), otherwise calculate (counterbids/backwards compatibility)
+    let maxBidPriceEth, offerPriceEth, minBidPriceEth, currencySymbol, currency, decimal;
 
+    if (data.maxBidPriceEth !== undefined && data.offerPriceEth !== undefined) {
+      // Use pre-calculated values from scheduled bid (saves 15-150ms)
+      maxBidPriceEth = data.maxBidPriceEth;
+      offerPriceEth = data.offerPriceEth;
+      minBidPriceEth = data.minBidPriceEth!;
+      currencySymbol = data.currencySymbol!;
+      currency = data.currency!;
+      decimal = data.decimal!;
 
-    // Fetch fresh balance and check if sufficient for minimum bid
-    const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const balance = await fetchERC20BalanceFresh(address, currency);
+      debugLog('Performance', `[OS-TraitBid] Using passed values | slug=${slug} | trait=${identifier} | max=${maxBidPriceEth} | offer=${offerPriceEth} (saves 15-150ms)`);
+    } else {
+      // Fallback: Calculate (counterbids or backwards compatibility)
+      const result = await calculateBidPrice(currentTask, floor_price as number, "opensea");
+      maxBidPriceEth = result.maxBidPriceEth;
+      offerPriceEth = result.offerPriceEth;
+      minBidPriceEth = result.minBidPriceEth;
+      currencySymbol = result.currencySymbol;
+      currency = result.currency;
+      decimal = result.decimal;
 
-    if (balance < minBidPriceEth) {
-      skipStats[_id]['opensea']++;
-      await logBidError(
-        _id,
-        "INSUFFICIENT_BALANCE",
-        `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} trait ${trait}`,
-        "skipped",
-        "opensea"
-      );
-      if (DEBUG) {
-        debugLog('BidFlow', `[OS-Trait] ${slug}:${identifier} | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} ${currencySymbol}`);
-      }
-      return;
+      debugLog('Performance', `[OS-TraitBid] Calculated values | slug=${slug} | trait=${identifier} | floor=${floor_price} | max=${maxBidPriceEth}`);
     }
-
 
     const outbidOptions = currentTask.outbidOptions
 
@@ -19489,16 +19302,7 @@ async function processOpenseaTraitBid(data: {
         .map(addr => addr.address.toLowerCase())
         .includes(owner as string);
 
-      // Cache the API result for counterbid handlers
-      const topOfferEthForCache = topOffer?.eth || 0;
-      counterbidTrackingService.setMarketplaceTopOffer(currentTask._id.toString(), 'opensea', identifier, {
-        topOfferAmount: topOfferEthForCache,
-        topOfferWei: (topOfferEthForCache * Math.pow(10, decimal)).toString(),
-        topBidderAddress: owner,
-        isOurBid: isOwnBid,
-        timestamp: Date.now()
-      });
-
+      // Top offer fetched from API
 
       if (isOwnBid) {
         const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
@@ -19630,17 +19434,6 @@ async function processOpenseaTraitBid(data: {
       );
 
       // Log API success
-      // Update marketplace top offer cache - we are now the top bidder
-      const finalOfferEth = Number(traitOffer) / Math.pow(10, decimal);
-      counterbidTrackingService.updateTopOfferAfterOurBid(
-        _id,
-        'opensea',
-        identifier,
-        finalOfferEth,
-        traitOffer.toString(),
-        address
-      );
-
       // Log job completed
 
     } catch (bidError: any) {
@@ -19693,7 +19486,7 @@ async function processOpenseaTraitBid(data: {
 
 async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
   const taskId = data._id;
-  const tokenId = data.asset?.tokenId?.toString() || 'unknown';
+  // const tokenId = data.asset?.tokenId?.toString() || 'unknown';
 
   // Create trace for scheduled bid
   // Log job started
@@ -19705,9 +19498,9 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
   // Early exit if marketplace already stopped due to insufficient balance
   // This prevents thousands of redundant error logs when balance is exhausted
-  if (isMarketplaceStoppedDueToBalance(taskStatus, taskId, 'opensea')) {
-    return;
-  }
+  // if (isMarketplaceStoppedDueToBalance(taskStatus, taskId, 'opensea')) {
+  //   return;
+  // }
 
   let errorMessage = ''
   try {
@@ -19736,23 +19529,23 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     }
 
     // Check if token is cached as trading disabled
-    if (tradingDisabledCache.isDisabled(asset.contractAddress, +asset.tokenId, 'opensea')) {
-      const message = `Token ${asset.tokenId} is cached as trading disabled - skipping`;
+    // if (tradingDisabledCache.isDisabled(asset.contractAddress, +asset.tokenId, 'opensea')) {
+    //   const message = `Token ${asset.tokenId} is cached as trading disabled - skipping`;
 
 
-      // Log the skip and update error stats
-      logBidError(_id, "TRADING DISABLED (CACHED)", message, "skipped", "opensea"); // Non-blocking
+    //   // Log the skip and update error stats
+    //   logBidError(_id, "TRADING DISABLED (CACHED)", message, "skipped", "opensea"); // Non-blocking
 
-      if (!errorStats[_id]) {
-        errorStats[_id] = { opensea: 0, magiceden: 0, blur: 0 };
-      }
-      // Error tracking is now handled in queue event handlers
+    //   if (!errorStats[_id]) {
+    //     errorStats[_id] = { opensea: 0, magiceden: 0, blur: 0 };
+    //   }
+    //   // Error tracking is now handled in queue event handlers
 
-      if (DEBUG) {
-        debugLog('BidFlow', `[OS-Token] ${slug}:${asset.tokenId} | SKIP: Trading disabled (cached)`);
-      }
-      return;
-    }
+    //   if (DEBUG) {
+    //     debugLog('BidFlow', `[OS-Token] ${slug}:${asset.tokenId} | SKIP: Trading disabled (cached)`);
+    //   }
+    //   return;
+    // }
 
     const currentTask = activeTasks.get(_id)
     if (!currentTask || !currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("opensea")) {
@@ -19781,65 +19574,41 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       }
     }
 
-    // Fetch floor price. Orders from cache.
-    const floor_price = await getCachedFloorPrice(slug);
+    // Fetch orders from cache
     const cachedOrder = await orderCache.getNewest(_id, OPENSEA.toLowerCase(), asset.tokenId.toString());
     const orders = cachedOrder ? [cachedOrder] : [];
 
-    if (!floor_price) { throw new Error(`Failed to fetch floor price for ${slug}`); }
+    // Use pre-calculated values if available (scheduled bids), otherwise calculate (counterbids/backwards compatibility)
+    let maxBidPriceEth, offerPriceEth, minBidPriceEth, currencySymbol, currency, decimal;
 
-    // Fix 9: Defensive null check - floorPrices may be deleted by cleanupTaskResources during async operations
-    if (!floorPrices[_id]) {
-      debugLog('BidFlow', `[OS-Token] ${slug}#${asset.tokenId} | SKIP_FLOOR_DELETED | taskId=${_id} | reason=floorPrices_deleted_during_execution`);
-      return;
+    if (data.maxBidPriceEth !== undefined && data.offerPriceEth !== undefined) {
+      // Use pre-calculated values from scheduled bid (saves 15-150ms)
+      maxBidPriceEth = data.maxBidPriceEth;
+      offerPriceEth = data.offerPriceEth;
+      minBidPriceEth = data.minBidPriceEth!;
+      currencySymbol = data.currencySymbol!;
+      currency = data.currency!;
+      decimal = data.decimal!;
+
+      debugLog('Performance', `[OS-TokenBid] Using passed values | slug=${slug} | tokenId=${asset.tokenId} | max=${maxBidPriceEth} | offer=${offerPriceEth} (saves 15-150ms)`);
+    } else {
+      // Fallback: Calculate (counterbids or backwards compatibility)
+      const floor = data.floor_price || 0;
+      const result = await calculateBidPrice(currentTask, floor, "opensea");
+      maxBidPriceEth = result.maxBidPriceEth;
+      offerPriceEth = result.offerPriceEth;
+      minBidPriceEth = result.minBidPriceEth;
+      currencySymbol = result.currencySymbol;
+      currency = result.currency;
+      decimal = result.decimal;
+
+      debugLog('Performance', `[OS-TokenBid] Calculated values | slug=${slug} | tokenId=${asset.tokenId} | floor=${floor} | max=${maxBidPriceEth}`);
     }
-    floorPrices[_id].opensea = floor_price as number;
-
-    // Standalone Floor log removed - combined with PriceCalc log below
-
-    const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), false)
-    if (stopBid) {
-      if (DEBUG) {
-        debugLog('BidFlow', `[OS-Token] ${slug}:${asset.tokenId} | STOP: Floor ${floor_price} outside configured range`);
-      }
-      if (orders.length > 0) {
-        const cancelData = orders.map((order, index) => {
-          return {
-            name: CANCEL_OPENSEA_BID,
-            data: { walletId, orderId: order.orderHash, taskId: _id, orderKey: order._id }
-          }
-        })
-
-        queue.addBulk(cancelData)
-      }
-      return
-    }
-
-    const { maxBidPriceEth, offerPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "opensea")
 
 
     const outbidOptions = currentTask.outbidOptions
     const expiry = getExpiry(currentTask.bidDuration)
     const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
-
-    // Fetch fresh balance and check if sufficient for minimum bid
-    const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const balance = await fetchERC20BalanceFresh(address, currency);
-
-    if (balance < minBidPriceEth) {
-      skipStats[_id]['opensea']++;
-      await logBidError(
-        _id,
-        "INSUFFICIENT_BALANCE",
-        `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} token ${asset.tokenId}`,
-        "skipped",
-        "opensea"
-      );
-      if (DEBUG) {
-        debugLog('BidFlow', `[OS-Token] ${slug}:${asset.tokenId} | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} ${currencySymbol}`);
-      }
-      return;
-    }
 
     let tokenOffer = BigInt(Math.round(roundToValidPrecision(offerPriceEth) * Math.pow(10, decimal)))
 
@@ -19855,12 +19624,6 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       ? Math.round((orderExpiresAt - orderCreatedAt) / 1000)
       : expiry;
 
-    // Initialize spread info variables with defaults (used in PLACING BID log)
-    let highestBidAmount = 0;
-    let secondTopBidAmount = 0;
-    let outbidMargin = 0;
-    let isOwnBid = false;
-
     if (!outbidOptions.outbid) {
       // Skip if bid is still valid: TTL sufficient, same price, similar expiration
       if (hasActiveOrder && ttl >= MIN_BID_DURATION && currentPrice === Number(tokenOffer) && Math.abs(orderExpiration - expiry) < 30) {
@@ -19870,6 +19633,10 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         return;
       }
     } else {
+      // === INTELLIGENT BID ADJUSTMENT FOR SCHEDULED BIDS ===
+      // Note: This function ONLY processes scheduled bids (OPENSEA_TOKEN_BID).
+      // Counterbids use a separate processor (openseaTokenCounterBid).
+
       // Resolve contract address for Max Pain collection override support
       const resolvedContractAddress = await resolveContractAddress(
         slug,
@@ -19877,25 +19644,24 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         asset.contractAddress
       );
 
-      // Parallel fetch: wallets and item offers
+      // BLOCKING fetch: wallets and item offers (needed for intelligent pricing)
       const [walletsArr, highestBid] = await Promise.all([
         walletCache.getAllWallets(),
         fetchItemOffers(resolvedContractAddress, asset.tokenId.toString())
       ]);
-      const [topOffer, secondOffer] = highestBid
+      const [topOffer, secondOffer] = highestBid;
 
-      highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal)
-      secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal)
-      outbidMargin = calculateOutbidMargin(highestBidAmount ? highestBidAmount / Math.pow(10, decimal) : offerPriceEth, currency);
+      const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal);
+      const secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal);
+      const outbidMargin = calculateOutbidMargin(highestBidAmount ? highestBidAmount / Math.pow(10, decimal) : offerPriceEth, currency);
 
       const owner = topOffer && typeof topOffer === 'object' ? topOffer.owner?.toLowerCase() : '';
-      isOwnBid = walletsArr
+      const isOwnBid = walletsArr
         .map(addr => addr.address.toLowerCase())
         .includes(owner);
 
-      // SIMPLIFIED: Removed marketplace top offer caching - orderCache is source of truth
-
       if (isOwnBid) {
+        // We own the top bid - apply spread optimization
         const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
         const spread = roundToValidPrecision(spreadRaw);
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
@@ -19904,38 +19670,30 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
           // Large spread: lower our bid to just above second place
           tokenOffer = BigInt(Math.round(roundToValidPrecision(potentialNewBidEth) * Math.pow(10, decimal)));
-          if (DEBUG) {
-            debugLog('ScheduledBid', `[OS-Token] ${slug}:${asset.tokenId} | OwnBid: Lowering to ${roundToValidPrecision(potentialNewBidEth)} (spread: ${roundToValidPrecision(spread)} > margin: ${outbidMargin})`);
-          }
+          debugLog('ScheduledBid', `[OS-Token] ${slug}:${asset.tokenId} | OwnBid: Lowering to ${roundToValidPrecision(potentialNewBidEth)} (spread: ${roundToValidPrecision(spread)} > margin: ${outbidMargin})`);
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
-          // Large spread but potential bid below min: keep current offer (don't lower below min)
-          if (DEBUG) {
-            debugLog('ScheduledBid', `[OS-Token] ${slug}:${asset.tokenId} | OwnBid: Cannot lower - potentialBid ${potentialNewBidEth} < minBid ${minBidPriceEth}`);
-          }
-          // tokenOffer stays at original offerPriceEth-based value
+          // Large spread but potential bid below min: keep current offer
+          debugLog('ScheduledBid', `[OS-Token] ${slug}:${asset.tokenId} | OwnBid: Cannot lower - potentialBid ${potentialNewBidEth} < minBid ${minBidPriceEth}`);
         }
         else if (ttl > MIN_BID_DURATION) {
           // Our bid is still valid with sufficient TTL
-          if (DEBUG) {
-            debugLog('ScheduledBid', `[OS-Token] ${slug}:${asset.tokenId} | OwnBid: SKIP - bid still valid (TTL: ${ttl.toFixed(0)}s)`);
-          }
+          debugLog('ScheduledBid', `[OS-Token] ${slug}:${asset.tokenId} | OwnBid: SKIP - bid still valid (TTL: ${ttl.toFixed(0)}s)`);
           return;
         } else {
           // Renew at same price
           tokenOffer = BigInt(Math.round(roundToValidPrecision(highestBidAmount / Math.pow(10, decimal)) * Math.pow(10, decimal)));
-          if (DEBUG) {
-            debugLog('ScheduledBid', `[OS-Token] ${slug}:${asset.tokenId} | OwnBid: Renewing at same price ${highestBidAmount / Math.pow(10, decimal)}`);
-          }
+          debugLog('ScheduledBid', `[OS-Token] ${slug}:${asset.tokenId} | OwnBid: Renewing at same price ${highestBidAmount / Math.pow(10, decimal)}`);
         }
       }
       else {
         // Not our bid: outbid the current top bidder
         const newBidEth = (highestBidAmount / Math.pow(10, decimal)) + outbidMargin;
         tokenOffer = BigInt(Math.round(roundToValidPrecision(newBidEth) * Math.pow(10, decimal)));
+        debugLog('ScheduledBid', `[OS-Token] ${slug}:${asset.tokenId} | Outbidding top bidder | newBid=${newBidEth}`);
       }
-
     }
+
     const bidCount = getIncrementedBidCount(OPENSEA, slug, _id)
     const offerEth = Number(tokenOffer) / Math.pow(10, decimal);
 
@@ -19994,16 +19752,9 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     }
 
     const finalOfferEth = Number(tokenOffer) / Math.pow(10, decimal);
-    const topBidEth = highestBidAmount / Math.pow(10, decimal);
-    const secondBidEth = secondTopBidAmount / Math.pow(10, decimal);
-    debugLog('BidFlow', `[OS-Token] ${slug}:${asset.tokenId} | PLACING BID: ${finalOfferEth} ${currencySymbol} | TopBid: ${topBidEth} | SecondBid: ${secondBidEth} | Margin: ${outbidMargin} | isOurs: ${isOwnBid}`);
-
-    // SIMPLIFIED: Removed pending counterbid tracking - BullMQ deterministic job IDs handle deduplication
+    debugLog('BidFlow', `[OS-Token] ${slug}:${asset.tokenId} | PLACING BID: ${finalOfferEth} ${currencySymbol} | outbid=${outbidOptions.outbid} | max=${maxBidPriceEth}`);
 
     try {
-
-      // Log API start
-
       await bidOnOpensea(
         _id,
         bidCount,
@@ -20019,19 +19770,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         asset
       )
 
-      // Log API success
-      // Update marketplace top offer cache - we are now the top bidder
-      const finalOfferEth = Number(tokenOffer) / Math.pow(10, decimal);
-      counterbidTrackingService.updateTopOfferAfterOurBid(
-        _id,
-        'opensea',
-        asset.tokenId.toString(),
-        finalOfferEth,
-        tokenOffer.toString(),
-        address
-      );
-
-      // Log job completed
+      // Bid successful
 
     } catch (bidError: any) {
 
@@ -20207,42 +19946,7 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
     return;
   }
 
-  // Only re-fetch floor price if stale (>90s) or not provided
-  const jobCreatedAt = Date.now(); // Job processing time
-  let floorPrice = floor_price;
-
-  if (!floor_price || (Date.now() - jobCreatedAt > 90000)) {
-    debugLog('Performance', `[OS-Collection-CB] Floor price stale or missing | re-fetching | taskId=${taskId}`);
-    floorPrice = await getCachedFloorPrice(currentTask.contract.slug);
-  } else {
-    debugLog('Performance', `[OS-Collection-CB] Using cached floor price | floor=${floorPrice} | taskId=${taskId}`);
-  }
-
-  if (!floorPrice) {
-    debugLog('Counterbid', `[WORKER_SKIP] Failed to fetch floor price | slug=${slug}`,
-      { taskId: taskId.toString(), marketplace: 'opensea', slug });
-    return;
-  }
-
-  const { currency, decimal, currencySymbol, maxBidPriceEth } = await calculateBidPrice(currentTask, floorPrice as number, "opensea");
-
-  const offerEth = Number(offerPrice) / Math.pow(10, decimal);
-
-  // CRITICAL: Re-validate maxBidPrice before placing bid (silent - no skipStats, no logBidError)
-  if (maxBidPriceEth > 0 && offerEth > maxBidPriceEth) {
-    debugLog('LimitCheck', `[OS-Coll-CB] ${slug} | BLOCKED: offer=${offerEth} ${currencySymbol} > max=${maxBidPriceEth} ${currencySymbol}`);
-    return;
-  }
-  debugLog('LimitCheck', `[OS-Coll-CB] ${slug} | PASS: offer=${offerEth} ${currencySymbol} <= max=${maxBidPriceEth} ${currencySymbol}`);
-
-  if (currencySymbol.toLowerCase() === "weth" && offerEth > Number(floor_price)) {
-    if (DEBUG) {
-      debugLog('BidFlow', `[OS-Coll-CB] ${slug} | SKIP: Bid ${offerEth} exceeds floor ${floor_price} ${currencySymbol}`);
-    }
-    const message = `⚠️ Counter bid offer price ${offerEth} ${currencySymbol} for ${slug} collection exceeds floor price ${floor_price} ${currencySymbol} FOR OPENSEA.`.toUpperCase();
-    await logBidError(taskId, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "opensea");
-    return;
-  }
+  const { currency } = getCurrencyDetailsFromTask(currentTask, "opensea");
 
   try {
     const cachedOrder = await orderCache.getNewest(taskId, "opensea", "collection");
@@ -20334,28 +20038,13 @@ async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) 
     return;
   }
 
-  const floor_price = Number(await fetchMagicEdenCollectionStats(contractAddress));
-  if (!floor_price) {
-    if (DEBUG) {
-      debugLog('BidFlow', `[ME-Coll-CB] ${slug} | SKIP: Floor fetch failed`);
-    }
-    return;
-  }
-
   try {
     // Query and cancel existing collection orders
     const cachedOrder = await orderCache.getNewest(taskId, MAGICEDEN.toLowerCase(), "collection");
     const orders = cachedOrder ? [cachedOrder] : [];
 
-    const { currencyType, currency, decimal, currencySymbol, maxBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "magiceden")
-    const offerEth = Number(offerPrice) / Math.pow(10, decimal);
-
-    // CRITICAL: Re-validate maxBidPrice before placing bid (silent - no skipStats, no logBidError)
-    if (maxBidPriceEth > 0 && offerEth > maxBidPriceEth) {
-      debugLog('LimitCheck', `[ME-Coll-CB] ${slug} | BLOCKED: offer=${offerEth} ${currencySymbol} > max=${maxBidPriceEth} ${currencySymbol}`);
-      return;
-    }
-    debugLog('LimitCheck', `[ME-Coll-CB] ${slug} | PASS: offer=${offerEth} ${currencySymbol} <= max=${maxBidPriceEth} ${currencySymbol}`);
+    const { currency, currencySymbol } = getCurrencyDetailsFromTask(currentTask, "magiceden");
+    const offerEth = Number(offerPrice) / 1e18;
 
     // Fetch wallet and decrypt private key before cancellation (needed for cancelMagicEdenOrdersDirectly)
     const wallet = await walletCache.getWalletById(walletId);
@@ -20372,18 +20061,6 @@ async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) 
         identifier: 'collection',
         reason: 'counterbid_replace_existing'
       });
-    }
-
-    // Check if offer exceeds floor price (only for WETH)
-    if (currencySymbol.toLowerCase() === 'weth' && offerEth > floor_price) {
-      if (DEBUG) {
-        debugLog('BidFlow', `[ME-Coll-CB] ${slug} | SKIP: Bid ${offerEth} exceeds floor ${floor_price} ${currencySymbol}`);
-      }
-      const message = `⚠️ Counter bid offer price ${offerEth} ${currencySymbol} for ${slug} collection exceeds floor price ${floor_price} ${currencySymbol} FOR MAGICEDEN.Stopping bid...`.toUpperCase();
-
-
-      await logBidError(taskId, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "magiceden");
-      return;
     }
 
     if (DEBUG) {
@@ -20456,20 +20133,7 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
     const orders = cachedOrder ? [cachedOrder] : [];
 
     const { currencyType, currency } = getCurrencyDetailsFromTask(currentTask, "magiceden");
-
-    // CRITICAL: Re-validate maxBidPrice before placing bid
-    // FIX: Always check maxBidPrice regardless of floor_price availability
     const offerEth = Number(offerPrice) / 1e18;
-    const floor_price = Number(await fetchMagicEdenCollectionStats(currentTask.contract.contractAddress));
-    const { maxBidPriceEth } = await calculateBidPrice(currentTask, floor_price || 0, "magiceden");
-
-    debugLog('LimitCheck', `[ME-Trait-CB] ${slug} [${traitKey}] | floor=${floor_price || 'unavailable'} | offer=${offerEth} | max=${maxBidPriceEth} WETH`);
-
-    // Silent - no skipStats, no logBidError
-    if (maxBidPriceEth > 0 && offerEth > maxBidPriceEth) {
-      debugLog('LimitCheck', `[ME-Trait-CB] ${slug} [${traitKey}] | BLOCKED: offer=${offerEth} WETH > max=${maxBidPriceEth} WETH (floor=${floor_price || 'unavailable'})`);
-      return;
-    }
 
     // Fetch wallet and decrypt private key just before use
     const wallet = await walletCache.getWalletById(walletId);
@@ -20539,34 +20203,7 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
   }
 
 
-  const floor_price: number = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
-  if (!floor_price) {
-    if (DEBUG) {
-      debugLog('BidFlow', `[Blur-Coll-CB] ${slug} | SKIP: Failed to fetch floor price`);
-    }
-    return
-  }
-
-
   const offerEth = Number(offerPrice) / 1e18;
-
-  // CRITICAL: Re-validate maxBidPrice before placing bid (silent - no skipStats, no logBidError)
-  const { maxBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "blur");
-  if (maxBidPriceEth > 0 && offerEth > maxBidPriceEth) {
-    debugLog('LimitCheck', `[Blur-Coll-CB] ${slug} | BLOCKED: offer=${offerEth} BETH > max=${maxBidPriceEth} BETH`);
-    return;
-  }
-  debugLog('LimitCheck', `[Blur-Coll-CB] ${slug} | PASS: offer=${offerEth} BETH <= max=${maxBidPriceEth} BETH`);
-
-  if (offerEth > floor_price) {
-    if (DEBUG) {
-      debugLog('BidFlow', `[Blur-Coll-CB] ${slug} | SKIP: Bid ${offerEth} exceeds floor ${floor_price} BETH`);
-    }
-    const message = `⚠️ Counter bid offer price ${offerEth} WETH for ${slug} collection exceeds floor price ${floor_price} WETH FOR BLUR.Stopping bid...`.toUpperCase();
-
-    await logBidError(taskId, "COUNTER BID OFFER EXCEEDS FLOOR PRICE", message, "warning", "blur");
-    return;
-  }
 
   try {
     // Query existing collection orders
@@ -20699,19 +20336,6 @@ async function blurTraitCounterBid(data: IBlurBidData) {
 
     const offerEth = Number(offerPrice) / 1e18;
 
-    // CRITICAL: Re-validate maxBidPrice before placing bid
-    // FIX: Always check maxBidPrice regardless of floor_price availability
-    const floor_price = Number(await fetchBlurCollectionStats(currentTask.contract.slug));
-    const { maxBidPriceEth } = await calculateBidPrice(currentTask, floor_price || 0, "blur");
-
-    debugLog('LimitCheck', `[Blur-Trait-CB] ${slug} [${identifier}] | floor=${floor_price || 'unavailable'} | offer=${offerEth} | max=${maxBidPriceEth} BETH`);
-
-    // Silent - no skipStats, no logBidError
-    if (maxBidPriceEth > 0 && offerEth > maxBidPriceEth) {
-      debugLog('LimitCheck', `[Blur-Trait-CB] ${slug} [${identifier}] | BLOCKED: offer=${offerEth} BETH > max=${maxBidPriceEth} BETH (floor=${floor_price || 'unavailable'})`);
-      return;
-    }
-
     if (DEBUG) {
       debugLog('BidFlow', `[Blur-Trait-CB] ${slug} [${identifier}] | PLACING COUNTERBID: ${offerEth} BETH`);
     }
@@ -20839,36 +20463,7 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
     }
 
     const { currency, decimal, currencySymbol } = getCurrencyDetailsFromTask(currentTask, "opensea");
-
-    // Use floor_price and maxBidPriceEth from handler (with staleness validation)
-    // This eliminates redundant API call that adds 800-2500ms
     const offerPriceEth = Number(offerPrice) / Math.pow(10, decimal);
-    let floor_price = data.floor_price;
-    let maxBidPriceEth = data.maxBidPriceEth;
-
-    debugLog('Performance', `[OS-JobProcessor] Using passed data | floor=${floor_price} | maxBid=${maxBidPriceEth} | slug=${slug} | tokenId=${asset.tokenId} (saves 800-2500ms)`);
-
-    // Staleness check: if data is >90s old, re-fetch for safety (optional safeguard)
-    // Note: In practice, counterbids are processed within seconds, so this rarely triggers
-    const taskStartTime = Date.now(); // Could be passed in bidData if needed
-    if (taskStartTime && (Date.now() - taskStartTime > 90000)) {
-      debugLog('Performance', `[OS-JobProcessor] Floor price >90s old, re-fetching for safety | slug=${slug}`);
-      const fresh_floor = await getCachedFloorPrice(slug);
-      if (fresh_floor && Math.abs(fresh_floor - floor_price) / floor_price > 0.1) {
-        warnLog('Performance', `[OS-JobProcessor] Floor price changed significantly | old=${floor_price} | new=${fresh_floor} | slug=${slug}`);
-        floor_price = fresh_floor;
-        const { maxBidPriceEth: newMax } = await calculateBidPrice(currentTask, floor_price, "opensea");
-        maxBidPriceEth = newMax;
-      }
-    }
-
-    debugLog('LimitCheck', `[OS-Token-CB] ${slug}#${asset.tokenId} | floor=${floor_price || 'unavailable'} | offer=${offerPriceEth} | max=${maxBidPriceEth} ${currencySymbol}`);
-
-    // Silent - no skipStats, no logBidError
-    if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
-      debugLog('LimitCheck', `[OS-Token-CB] ${slug}#${asset.tokenId} | BLOCKED: offer=${offerPriceEth} ${currencySymbol} > max=${maxBidPriceEth} ${currencySymbol} (floor=${floor_price || 'unavailable'})`);
-      return;
-    }
 
     const wallet = await walletCache.getWalletById(walletId);
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
@@ -21033,28 +20628,6 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
     const { currency, decimal, currencySymbol } = getCurrencyDetailsFromTask(currentTask, "opensea");
     const offerEth = Number(offerPrice) / Math.pow(10, decimal);
 
-    // CRITICAL: Re-validate maxBidPrice before placing bid
-    // Only re-fetch floor price if stale (>90s) or not provided
-    const jobCreatedAt = Date.now(); // Job processing time
-    let floorPrice = floor_price;
-
-    if (!floor_price || (Date.now() - jobCreatedAt > 90000)) {
-      debugLog('Performance', `[OS-Trait-CB] Floor price stale or missing | re-fetching | taskId=${taskId}`);
-      floorPrice = await getCachedFloorPrice(slug);
-    } else {
-      debugLog('Performance', `[OS-Trait-CB] Using cached floor price | floor=${floorPrice} | taskId=${taskId}`);
-    }
-
-    const { maxBidPriceEth } = await calculateBidPrice(currentTask, floorPrice || 0, "opensea");
-
-    debugLog('LimitCheck', `[OS-Trait-CB] ${slug} [${identifier}] | floor=${floorPrice || 'unavailable'} | offer=${offerEth} | max=${maxBidPriceEth} ${currencySymbol}`);
-
-    // Silent - no skipStats, no logBidError
-    if (maxBidPriceEth > 0 && offerEth > maxBidPriceEth) {
-      debugLog('LimitCheck', `[OS-Trait-CB] ${slug} [${identifier}] | BLOCKED: offer=${offerEth} ${currencySymbol} > max=${maxBidPriceEth} ${currencySymbol} (floor=${floor_price || 'unavailable'})`);
-      return;
-    }
-
     if (DEBUG) {
       debugLog('BidFlow', `[OS-Trait-CB] ${slug} [${identifier}] | PLACING BID: ${offerEth} ${currencySymbol}`);
     }
@@ -21133,21 +20706,7 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
     }
 
     const { currency } = getCurrencyDetailsFromTask(currentTask, "magiceden");
-
-    // CRITICAL: Re-validate maxBidPrice before placing bid
-    // FIX: Always check maxBidPrice regardless of floor_price availability
     const offerEth = Number(offerPrice) / 1e18;
-    const floor_price = Number(await fetchMagicEdenCollectionStats(contractAddress));
-    const { maxBidPriceEth } = await calculateBidPrice(currentTask, floor_price || 0, "magiceden");
-
-    debugLog('LimitCheck', `[ME-Token-CB] ${slug} [${tokenId}] | floor=${floor_price || 'unavailable'} | offer=${offerEth} | max=${maxBidPriceEth} WETH`);
-
-    // Silent - no skipStats, no logBidError
-    if (maxBidPriceEth > 0 && offerEth > maxBidPriceEth) {
-      debugLog('LimitCheck', `[ME-Token-CB] ${slug} [${tokenId}] | BLOCKED: offer=${offerEth} WETH > max=${maxBidPriceEth} WETH (floor=${floor_price || 'unavailable'})`);
-      return;
-    }
-
     const bidCount = getIncrementedBidCount(MAGICEDEN, slug, taskId)
     // Fetch wallet and decrypt private key just before use
     const wallet = await walletCache.getWalletById(walletId);
@@ -21325,27 +20884,6 @@ async function processBlurTraitBid(data: {
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth } = await calculateBidPrice(currentTask, floor_price, "blur")
 
 
-    const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const { BETH } = await import('./utils/currencies');
-    const balance = await fetchERC20BalanceFresh(address, BETH);
-
-
-    if (balance < minBidPriceEth) {
-      if (DEBUG) {
-        debugLog('BidFlow', `[Blur-Trait] ${slug} [${identifier}] | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} BETH`);
-      }
-
-      skipStats[_id]['blur']++;
-      await logBidError(
-        _id,
-        "INSUFFICIENT_BALANCE",
-        `Insufficient BETH balance: ${balance} < ${minBidPriceEth} for task ${_id} trait ${trait}`,
-        "skipped",
-        "blur"
-      );
-      return;
-    }
-
 
     let traitOffer = BigInt(Math.round(Number(offerPriceEth * Math.pow(10, 18)) / 1e16) * 1e16);
 
@@ -21390,14 +20928,7 @@ async function processBlurTraitBid(data: {
 
       isTopBid = numberBidders === 1 && bidderAddressesSample.map((address) => address.toLowerCase()).includes(currentTask.wallet.toLowerCase())
 
-      // Cache the API result for counterbid handlers
-      counterbidTrackingService.setMarketplaceTopOffer(currentTask._id.toString(), 'blur', identifier, {
-        topOfferAmount: topOfferAmount,
-        topOfferWei: (topOfferAmount * Math.pow(10, 18)).toString(),
-        topBidderAddress: bidderAddressesSample[0]?.toLowerCase() || '',
-        isOurBid: isTopBid,
-        timestamp: Date.now()
-      });
+      // Top offer fetched from API
 
       if (isTopBid) {
         const spread = (Number(topOfferAmount) - Number(secondOfferAmount));
@@ -21470,16 +21001,6 @@ async function processBlurTraitBid(data: {
     await bidOnBlur(_id, bidCount, address, privateKey, contractAddress, traitOffer, slug, expiry, trait, data.batchInfo);
 
     // Log success
-    // Update marketplace top offer cache - we are now the top bidder
-    counterbidTrackingService.updateTopOfferAfterOurBid(
-      _id,
-      'blur',
-      identifier,
-      finalOfferEth,
-      traitOffer.toString(),
-      address
-    );
-
     // Log job completed
 
   } catch (error: any) {
@@ -22081,47 +21602,6 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
 
-
-
-    // Fetch fresh balance and check if sufficient for minimum bid
-    const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const balance = await fetchERC20BalanceFresh(currentTask.wallet, currency);
-
-
-    if (balance < minBidPriceEth) {
-      if (DEBUG) {
-        debugLog('BidFlow', `[ME-Coll] ${currentTask.contract.slug} | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} ${currencySymbol}`);
-      }
-      const errorMsg = balance <= 0
-        ? `Insufficient ${currencySymbol} balance: ${balance} (zero or negative) for task ${taskId}`
-        : `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId}`;
-
-
-      // Increment skip stats
-      if (!skipStats[currentTask._id]) {
-        skipStats[currentTask._id] = { opensea: 0, magiceden: 0, blur: 0 };
-      }
-      skipStats[currentTask._id].magiceden++;
-
-      // Log the insufficient balance
-      await logBidError(taskId, "INSUFFICIENT_BALANCE", errorMsg, "skipped", "magiceden");
-
-      // Create empty parent job and complete the marketplace loop
-      await ensureParentJobExists(taskId, 'magiceden');
-      const parentJobId = getParentJobId(taskId, 'magiceden');
-      const parentJob = parentJobs.get(parentJobId);
-      if (parentJob) {
-        parentJob.expectedJobs = 0;
-        parentJob.totalJobs = 0;
-        parentJob.allJobsQueued = true;
-        parentJob.completedJobs = 0;
-      }
-
-      // Trigger marketplace completion
-      await checkTaskCompletionAndScheduleNext(taskId, 'magiceden');
-
-      return;
-    }
     const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
 
     let offerPrice = Math.ceil(offerPriceEth * Math.pow(10, decimal))
@@ -22165,18 +21645,10 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
       const owner = topOffer.owner.toLowerCase();
       isOwnBid = walletsArr
-        .map(addr => addr.address.toLowerCase())
+        .map((addr: any) => addr.address.toLowerCase())
         .includes(owner);
 
-      // Cache the API result for counterbid handlers
-      const topOfferEthForCache = topOffer?.eth || 0;
-      counterbidTrackingService.setMarketplaceTopOffer(currentTask._id.toString(), 'magiceden', 'collection', {
-        topOfferAmount: topOfferEthForCache,
-        topOfferWei: (topOfferEthForCache * Math.pow(10, decimal)).toString(),
-        topBidderAddress: owner,
-        isOurBid: isOwnBid,
-        timestamp: Date.now()
-      });
+      // Top offer fetched from API
 
       if (isOwnBid) {
         const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
@@ -22275,16 +21747,6 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
       await bidOnMagiceden(currentTask._id, bidCount, currentTask.wallet, currentTask.contract.contractAddress, 1, collectionOffer.toString(), privateKey, currentTask.contract.slug, expiration, currency);
 
       // Log success
-      // Update marketplace top offer cache - we are now the top bidder
-      counterbidTrackingService.updateTopOfferAfterOurBid(
-        currentTask._id,
-        'magiceden',
-        'collection',
-        finalOfferEth,
-        collectionOffer.toString(),
-        currentTask.wallet
-      );
-
       // Log job completed
 
     } catch (bidError: any) {
@@ -22371,20 +21833,9 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
     const outbidOptions = currentTask.outbidOptions
 
-    // Fetch floor price. Orders from cache.
-    const floor_price = await fetchMagicEdenCollectionStats(currentTask.contract.contractAddress).then(Number);
+    // Fetch orders from cache
     const cachedOrder = await orderCache.getNewest(taskId, MAGICEDEN.toLowerCase(), tokenId.toString());
     const orders = cachedOrder ? [cachedOrder] : [];
-
-    if (!floor_price) {
-      throw new Error(`Failed to fetch floor price for ${slug}`);
-    }
-
-    // Fix 9: Defensive null check - floorPrices may be deleted by cleanupTaskResources during async operations
-    if (!floorPrices[taskId]) {
-      debugLog('BidFlow', `[ME-Token] ${slug}#${tokenId} | SKIP_FLOOR_DELETED | taskId=${taskId} | reason=floorPrices_deleted_during_execution`);
-      return;
-    }
 
     if (!skipStats[taskId]) {
       skipStats[taskId] = {
@@ -22394,42 +21845,8 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       }
     }
 
-    floorPrices[taskId].magiceden = floor_price;
+    const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, 0, "magiceden")
 
-    const stopBid = await stopOption(currentTask, 'magiceden', Number(floor_price), false)
-    if (stopBid) {
-      if (DEBUG) {
-        debugLog('BidFlow', `[ME-Token] ${slug}#${tokenId} | SKIP: Floor outside configured range`);
-      }
-      if (orders.length > 0) {
-        const orderKeys = orders.map((order: any) => order._id)
-        const extractedOrderIds = await extractMagicedenOrderHash(orders)
-        queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId, orderKeys, taskId: taskId });
-      }
-      return;
-    };
-
-    const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
-
-
-    // Fetch fresh balance and check if sufficient for minimum bid
-    const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const balance = await fetchERC20BalanceFresh(address, currency);
-
-    if (balance < minBidPriceEth) {
-      if (DEBUG) {
-        debugLog('BidFlow', `[ME-Token] ${slug}#${tokenId} | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} ${currencySymbol}`);
-      }
-      skipStats[taskId]['magiceden']++;
-      await logBidError(
-        taskId,
-        "INSUFFICIENT_BALANCE",
-        `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${taskId} token ${tokenId}`,
-        "skipped",
-        "magiceden"
-      );
-      return;
-    }
 
     const expiration = getExpiry(currentTask.bidDuration)
     const usdcBid = currency.toLowerCase() === USDC.toLowerCase()
@@ -22471,15 +21888,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
         .map(addr => addr.address.toLowerCase())
         .includes(owner);
 
-      // Cache the API result for counterbid handlers
-      const topOfferEthForCache = topOffer?.eth || 0;
-      counterbidTrackingService.setMarketplaceTopOffer(currentTask._id.toString(), 'magiceden', tokenId.toString(), {
-        topOfferAmount: topOfferEthForCache,
-        topOfferWei: (topOfferEthForCache * Math.pow(10, decimal)).toString(),
-        topBidderAddress: owner,
-        isOurBid: isOwnBid,
-        timestamp: Date.now()
-      });
+      // Top offer fetched from API
 
       outbidMargin = currentTask.outbidOptions.magicedenOutbidMargin || usdcBid ? 0.01 : 0.0001
 
@@ -22579,15 +21988,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
       await bidOnMagiceden(taskId, bidCount, address, contractAddress, quantity, tokenOffer.toString(), privateKey, slug, expiration, currency, undefined, tokenId);
 
       // Log bid success
-      // Update marketplace top offer cache - we are now the top bidder
-      counterbidTrackingService.updateTopOfferAfterOurBid(
-        taskId,
-        'magiceden',
-        tokenId.toString(),
-        finalOfferEth,
-        tokenOffer.toString(),
-        address
-      );
     } catch (bidError: any) {
       // Check if this is an insufficient balance error
       const handled = await handleInsufficientBalanceError(
@@ -22742,25 +22142,6 @@ async function processMagicedenTraitBid(data: {
 
     const { offerPriceEth, maxBidPriceEth, minBidPriceEth, currencySymbol, currency, decimal } = await calculateBidPrice(currentTask, floor_price as number, "magiceden")
 
-
-    // Fetch fresh balance and check if sufficient for minimum bid
-    const { fetchERC20BalanceFresh } = await import('./utils/balance');
-    const balance = await fetchERC20BalanceFresh(address, currency);
-
-    if (balance < minBidPriceEth) {
-      if (DEBUG) {
-        debugLog('BidFlow', `[ME-Trait] ${slug} [${identifier}] | SKIP: Insufficient balance ${balance} < ${minBidPriceEth} ${currencySymbol}`);
-      }
-      skipStats[_id]['magiceden']++;
-      await logBidError(
-        _id,
-        "INSUFFICIENT_BALANCE",
-        `Insufficient ${currencySymbol} balance: ${balance} < ${minBidPriceEth} for task ${_id} trait ${identifier}`,
-        "skipped",
-        "magiceden"
-      );
-      return;
-    }
     const expiration = getExpiry(currentTask.bidDuration)
     // Fix 9: Defensive null check - floorPrices may be deleted by cleanupTaskResources during async operations
     if (!floorPrices[currentTask._id]) {
@@ -22804,15 +22185,7 @@ async function processMagicedenTraitBid(data: {
       const isTopBid = order ? +order.offerPrice > highestBidAmount : false
       outbidMargin = currentTask.outbidOptions.magicedenOutbidMargin || usdcBid ? 0.01 : 0.0001
 
-      // Cache the API result for counterbid handlers
-      const topOfferEthForCache = topOffer?.eth || 0;
-      counterbidTrackingService.setMarketplaceTopOffer(currentTask._id.toString(), 'magiceden', identifier, {
-        topOfferAmount: topOfferEthForCache,
-        topOfferWei: (topOfferEthForCache * Math.pow(10, decimal)).toString(),
-        topBidderAddress: owner || '',
-        isOurBid: isOwnBid,
-        timestamp: Date.now()
-      });
+      // Top offer fetched from API
 
       if (isOwnBid) {
         const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
@@ -22923,15 +22296,6 @@ async function processMagicedenTraitBid(data: {
       await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, traitOffer.toString(), privateKey, slug, expiration, currency, trait)
 
       // Log bid success
-      // Update marketplace top offer cache - we are now the top bidder
-      counterbidTrackingService.updateTopOfferAfterOurBid(
-        _id,
-        'magiceden',
-        identifier,
-        finalOfferEth,
-        traitOffer.toString(),
-        address
-      );
 
     } catch (bidError: any) {
       // Check if this is an insufficient balance error
@@ -23379,43 +22743,56 @@ app.get("/metrics", async (req, res) => {
     ]);
 
     // Get worker health status
-    const workerStatuses = await Promise.all(
-      workers.map(async (worker, index) => {
-        try {
-          return {
-            index,
-            running: worker.isRunning(),
-            paused: worker.isPaused(),
-            healthy: worker.isRunning() && !worker.isPaused()
-          };
-        } catch (error) {
-          return {
-            index,
-            running: false,
-            paused: false,
-            healthy: false,
-            error: error instanceof Error ? error.message : 'Unknown error'
-          };
-        }
-      })
-    );
+    const workerStatuses = [];
+
+    // Check main worker
+    if (mainWorker) {
+      try {
+        workerStatuses.push({
+          index: 0,
+          running: mainWorker.isRunning(),
+          paused: mainWorker.isPaused(),
+          healthy: mainWorker.isRunning() && !mainWorker.isPaused()
+        });
+      } catch (error) {
+        workerStatuses.push({
+          index: 0,
+          running: false,
+          paused: false,
+          healthy: false,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    }
+
+    // Check blur worker
+    if (blurWorker) {
+      try {
+        workerStatuses.push({
+          index: 1,
+          running: blurWorker.isRunning(),
+          paused: blurWorker.isPaused(),
+          healthy: blurWorker.isRunning() && !blurWorker.isPaused()
+        });
+      } catch (error) {
+        workerStatuses.push({
+          index: 1,
+          running: false,
+          paused: false,
+          healthy: false,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    }
 
     // Get Redis connection pool stats
     const connectionPoolStats = getBullMQConnections();
     const connectionHealth = await checkBullMQConnectionsHealth();
 
-    // Calculate processing rates
-    const currentTime = Date.now();
-    const processingHistory = Array.from(queueProcessingHistory.entries())
-      .sort((a, b) => b[0] - a[0])
-      .slice(0, 10); // Last 10 entries
-
-    let processingRate = 0;
-    if (processingHistory.length >= 2) {
-      const timeDiff = (processingHistory[0][0] - processingHistory[processingHistory.length - 1][0]) / 1000; // seconds
-      const processedDiff = processingHistory[0][1].processed - processingHistory[processingHistory.length - 1][1].processed;
-      processingRate = processedDiff / timeDiff;
-    }
+    // Calculate processing rate: total completed jobs / server uptime
+    const totalCompleted = (mainQueueCounts.completed || 0) + (blurQueueCounts.completed || 0);
+    const uptimeSeconds = process.uptime();
+    const processingRate = uptimeSeconds > 0 ? totalCompleted / uptimeSeconds : 0;
 
     // Get active tasks and their status
     const taskStatuses = Array.from(activeTasks.entries()).map(([taskId, task]) => ({
@@ -23458,10 +22835,31 @@ app.get("/metrics", async (req, res) => {
           completed: (mainQueueCounts.completed || 0) + (blurQueueCounts.completed || 0),
           failed: (mainQueueCounts.failed || 0) + (blurQueueCounts.failed || 0)
         },
+        thresholds: {
+          currentDepth: (mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0),
+          maxThreshold: MAX_QUEUE_JOBS,
+          drainThreshold: DRAIN_THRESHOLD,
+          utilizationPct: parseFloat((((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) / MAX_QUEUE_JOBS * 100).toFixed(2))
+        },
+        dynamicThrottling: {
+          currentDepth: (mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0),
+          bufferMultiplier:
+            ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 50000 ? 0.5 :
+              ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 10000 ? 1 :
+                ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 1000 ? 2 : 3,
+          queueingRatePerSec:
+            ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 50000 ? 32 :
+              ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 10000 ? 64 :
+                ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 1000 ? 128 : 192,
+          status:
+            ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 50000 ? 'CRITICAL' :
+              ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 10000 ? 'ELEVATED' :
+                ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 1000 ? 'MEDIUM' : 'NORMAL'
+        },
         processingRate: processingRate.toFixed(2) + ' jobs/sec'
       },
       workers: {
-        total: workers.length,
+        total: 2,
         healthy: workerStatuses.filter(w => w.healthy).length,
         unhealthy: workerStatuses.filter(w => !w.healthy).length,
         details: workerStatuses
@@ -24770,19 +24168,22 @@ app.post('/api/update-app', async (req, res) => {
     debugLog('Update', `SERVER_IP configured: ${SERVER_IP}`);
 
     // Rate limiting check - prevent abuse
-    const rateLimitKey = `update_app_${req.ip}`;
-    const redis = redisClient.getClient();
-    if (redis) {
-      const attempts = await redis.incr(rateLimitKey);
-      if (attempts === 1) {
-        await redis.expire(rateLimitKey, 3600); // 1 hour expiry
-      }
-      debugLog('Update', `Rate limit check - attempts: ${attempts}/3`);
-      if (attempts > 3) { // Max 3 update attempts per hour
-        warnLog('Update', 'RATE_LIMIT_EXCEEDED');
-        warnLog('Security', 'RATE_LIMIT_EXCEEDED - Update rate limit exceeded');
-        return res.status(429).json({ error: 'Too many requests' });
-      }
+    const rateLimitKey = req.ip || 'unknown';
+    let entry = updateRateLimitLRU.get(rateLimitKey);
+    if (!entry || entry.resetAt < Date.now()) {
+      // Create new entry or reset expired entry
+      entry = { count: 1, resetAt: Date.now() + (60 * 60 * 1000) };
+    } else {
+      // Increment existing entry
+      entry.count++;
+    }
+    updateRateLimitLRU.set(rateLimitKey, entry);
+
+    debugLog('Update', `Rate limit check - attempts: ${entry.count}/3`);
+    if (entry.count > 3) { // Max 3 update attempts per hour
+      warnLog('Update', 'RATE_LIMIT_EXCEEDED');
+      warnLog('Security', 'RATE_LIMIT_EXCEEDED - Update rate limit exceeded');
+      return res.status(429).json({ error: 'Too many requests' });
     }
 
     // Check for updates
@@ -25271,31 +24672,51 @@ app.post('/api/memory-snapshots/trigger', async (req, res) => {
 app.get('/api/health/workers', async (req, res) => {
   try {
     // Check worker status
-    const workerStatuses = await Promise.all(
-      workers.map(async (worker, index) => {
-        try {
-          const isRunning = worker.isRunning();
-          const isPaused = worker.isPaused();
+    const workerStatuses = [];
 
-          return {
-            index,
-            name: index < WORKER_COUNT ? `main-worker-${index + 1}` : 'blur-worker',
-            running: isRunning,
-            paused: isPaused,
-            healthy: isRunning && !isPaused
-          };
-        } catch (error) {
-          return {
-            index,
-            name: index < WORKER_COUNT ? `main-worker-${index + 1}` : 'blur-worker',
-            running: false,
-            paused: false,
-            healthy: false,
-            error: error instanceof Error ? error.message : 'Unknown error'
-          };
-        }
-      })
-    );
+    // Check main worker
+    if (mainWorker) {
+      try {
+        workerStatuses.push({
+          index: 0,
+          name: 'main-worker',
+          running: mainWorker.isRunning(),
+          paused: mainWorker.isPaused(),
+          healthy: mainWorker.isRunning() && !mainWorker.isPaused()
+        });
+      } catch (error) {
+        workerStatuses.push({
+          index: 0,
+          name: 'main-worker',
+          running: false,
+          paused: false,
+          healthy: false,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    }
+
+    // Check blur worker
+    if (blurWorker) {
+      try {
+        workerStatuses.push({
+          index: 1,
+          name: 'blur-worker',
+          running: blurWorker.isRunning(),
+          paused: blurWorker.isPaused(),
+          healthy: blurWorker.isRunning() && !blurWorker.isPaused()
+        });
+      } catch (error) {
+        workerStatuses.push({
+          index: 1,
+          name: 'blur-worker',
+          running: false,
+          paused: false,
+          healthy: false,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    }
 
     // Get queue counts
     const [mainQueueCounts, blurQueueCounts] = await Promise.all([
@@ -25304,13 +24725,13 @@ app.get('/api/health/workers', async (req, res) => {
     ]);
 
     const healthyWorkers = workerStatuses.filter(w => w.healthy).length;
-    const isHealthy = healthyWorkers === workers.length;
+    const isHealthy = healthyWorkers === 2;
 
     res.status(isHealthy ? 200 : 503).json({
       status: isHealthy ? 'healthy' : 'unhealthy',
       timestamp: new Date().toISOString(),
       workers: {
-        total: workers.length,
+        total: 2,
         healthy: healthyWorkers,
         details: workerStatuses
       },
@@ -25319,8 +24740,9 @@ app.get('/api/health/workers', async (req, res) => {
         blur: blurQueueCounts
       },
       configuration: {
-        workerCount: WORKER_COUNT,
-        concurrencyPerWorker: Number(RATE_LIMIT) / WORKER_COUNT
+        mainWorkerConcurrency: Number(RATE_LIMIT),
+        blurWorkerConcurrency: Number(RATE_LIMIT),
+        totalWorkers: 2
       }
     });
   } catch (error) {
@@ -25336,12 +24758,18 @@ app.get('/api/health/workers', async (req, res) => {
 app.get('/api/health/system', async (req, res) => {
   try {
     // Get all health statuses
-    const [redisHealth, workerHealth] = await Promise.all([
-      checkBullMQConnectionsHealth(),
-      Promise.all(workers.map(w => ({ running: w.isRunning(), paused: w.isPaused() })))
-    ]);
+    const redisHealth = await checkBullMQConnectionsHealth();
 
-    const unhealthyRedis = Object.values(redisHealth).filter(s => !s.healthy).length;
+    // Check workers
+    const workerHealth = [];
+    if (mainWorker) {
+      workerHealth.push({ running: mainWorker.isRunning(), paused: mainWorker.isPaused() });
+    }
+    if (blurWorker) {
+      workerHealth.push({ running: blurWorker.isRunning(), paused: blurWorker.isPaused() });
+    }
+
+    const unhealthyRedis = Object.values(redisHealth).filter((s: any) => !s.healthy).length;
     const unhealthyWorkers = workerHealth.filter(w => !w.running || w.paused).length;
 
     const systemHealth = {
@@ -25417,14 +24845,6 @@ app.get('/api/latency-stats', (req, res) => {
         magiceden: wsManager.getForwardingLatencyStats('magiceden'),
         overall: wsManager.getForwardingLatencyStats()
       },
-      executionLatency: {
-        overall: counterbidTrackingService.getExecutionLatencyStats(),
-        byMarketplace: {
-          opensea: counterbidTrackingService.getExecutionLatencyStats('opensea'),
-          blur: counterbidTrackingService.getExecutionLatencyStats('blur'),
-          magiceden: counterbidTrackingService.getExecutionLatencyStats('magiceden')
-        }
-      },
       memory: {
         heapUsedMB,
         heapTotalMB,
@@ -25478,7 +24898,7 @@ app.get('/api/queue-monitor/status', async (req, res) => {
 // Comprehensive queue health endpoint for diagnosing QUEUEING stuck issues
 app.get('/api/queue-health', async (req, res) => {
   try {
-    const concurrencyPerWorker = Number(RATE_LIMIT) / WORKER_COUNT;
+    const concurrency = Number(RATE_LIMIT);
 
     // Get current queue counts
     const [mainCounts, blurCounts] = await Promise.all([
@@ -25487,8 +24907,8 @@ app.get('/api/queue-health', async (req, res) => {
     ]);
 
     // Calculate total capacity
-    const totalMainCapacity = WORKER_COUNT * concurrencyPerWorker;
-    const totalBlurCapacity = concurrencyPerWorker; // Single blur worker
+    const totalMainCapacity = concurrency; // Single main worker
+    const totalBlurCapacity = concurrency; // Single blur worker
 
     // Get active tasks count for context
     const activeTaskCount = activeTasks.size;
@@ -25524,9 +24944,9 @@ app.get('/api/queue-health', async (req, res) => {
         estimatedProcessingTimeSec: blurEstimatedProcessingTimeSec
       },
       workers: {
-        mainWorkerCount: WORKER_COUNT,
+        mainWorkerCount: 1,
         blurWorkerCount: 1,
-        concurrencyPerWorker: concurrencyPerWorker,
+        concurrency: concurrency,
         totalMainCapacity: totalMainCapacity,
         totalBlurCapacity: totalBlurCapacity,
         rateLimit: Number(RATE_LIMIT)
@@ -27738,8 +27158,13 @@ interface IProcessOpenseaTokenBidData {
   creatorFees: IFee;
   offerPrice: number;
   enforceCreatorFee: boolean;
-  floor_price: number;           // Passed from handler to avoid redundant API call
-  maxBidPriceEth: number;        // Passed from handler to avoid redundant calculation
+  floor_price?: number;           // Passed from handler to avoid redundant API call
+  maxBidPriceEth?: number;        // Passed from handler to avoid redundant calculation
+  minBidPriceEth?: number;        // Pre-calculated min bid price
+  offerPriceEth?: number;         // Pre-calculated offer price
+  currency?: string;              // Pre-calculated currency address
+  decimal?: number;               // Pre-calculated decimal places
+  currencySymbol?: string;        // Pre-calculated currency symbol (WETH/USDC)
   asset: {
     contractAddress: string;
     tokenId: number;
@@ -27994,6 +27419,20 @@ interface IProcessOpenseaTraitBidData {
   trait: string;
   oldOrderHash?: string;  // For speed-first cancellation
   floor_price?: number;   // Cached floor price from handler to avoid redundant API call
+  maxBidPriceEth?: number;        // Pre-calculated max bid price
+  minBidPriceEth?: number;        // Pre-calculated min bid price
+  offerPriceEth?: number;         // Pre-calculated offer price
+  currency?: string;              // Pre-calculated currency address
+  decimal?: number;               // Pre-calculated decimal places
+  currencySymbol?: string;        // Pre-calculated currency symbol (WETH/USDC)
+  contractAddress?: string;       // Contract address (added for trait bids)
+  outbidOptions?: {               // Outbid options
+    outbid: boolean;
+    blurOutbidMargin: number | null;
+    openseaOutbidMargin: number | null;
+    magicedenOutbidMargin: number | null;
+    counterbid: boolean;
+  };
 }
 
 interface Currency {

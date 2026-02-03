@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import { config } from "dotenv"
-import { getRedisConnection } from '../utils/redis'
 import { debugLog, errorLog, warnLog } from './debug-file-logger'
 import { LRUCache } from 'lru-cache';
 
@@ -10,11 +9,11 @@ const ALGORITHM = 'aes-256-gcm';
 const DETERMINISTIC_ALGORITHM = "aes-256-ecb";
 
 // Password persistence configuration (development only)
-const PASSWORD_REDIS_KEY = 'nft-bot:server:password'; // Single Redis node key
 const PASSWORD_TTL = 604800; // Default 7 days (7 * 24 * 60 * 60)
 
 // In-memory password storage
 let PASSWORD: string | undefined = undefined
+let PASSWORD_TIMESTAMP = 0; // Track when password was set
 
 // Rate limiter for no password error logging
 let lastNoPasswordLogTime = 0;
@@ -41,67 +40,42 @@ let cacheStats = {
 };
 
 // =============================================================================
-// REDIS-BASED PASSWORD STORAGE (Development)
+// IN-MEMORY PASSWORD STORAGE (Development)
 // =============================================================================
 
-// Try to recover password from Redis on startup (development only)
+// Check if password has expired (development only)
+function isPasswordExpired(): boolean {
+  if (process.env.NODE_ENV === 'production') return false;
+  if (!PASSWORD || PASSWORD_TIMESTAMP === 0) return true;
+
+  const elapsed = Date.now() - PASSWORD_TIMESTAMP;
+  return elapsed > (PASSWORD_TTL * 1000);
+}
+
+// Try to recover password from memory on startup (development only)
 export async function recoverPasswordFromRedis(): Promise<boolean> {
   // Only attempt recovery in development
   if (process.env.NODE_ENV === 'production') {
-    // console.log('🔑 [PRODUCTION] Password recovery from Redis disabled');
     return false;
   }
 
-  try {
-    // console.log(`🔍 [DEVELOPMENT] Attempting to recover password from Redis key: ${PASSWORD_REDIS_KEY}`);
-    const redis = getRedisConnection();
-
-    // Check if key exists
-    const exists = await redis.exists(PASSWORD_REDIS_KEY);
-    // console.log(`🔍 Redis key exists: ${exists === 1 ? 'YES' : 'NO'}`);
-
-    if (!exists) {
-      // console.log('🔍 No password found in Redis');
-      return false;
-    }
-
-    const storedPassword = await redis.get(PASSWORD_REDIS_KEY);
-    if (storedPassword) {
-      PASSWORD = storedPassword;
-      // console.log('✅ Password successfully retrieved from Redis');
-
-      // Get remaining TTL
-      const ttl = await redis.ttl(PASSWORD_REDIS_KEY);
-      if (ttl > 0) {
-        // const days = Math.floor(ttl / 86400);
-        // const hours = Math.floor((ttl % 86400) / 3600);
-        // console.log(`🔑 Password recovered from Redis (expires in ${days} days, ${hours} hours)`);
-      } else if (ttl === -1) {
-        // console.log('🔑 Password recovered from Redis (no expiration set)');
-      } else {
-        // console.log('🔑 Password recovered from Redis storage');
-      }
-
-      // Refresh TTL to full duration on recovery
-      if (PASSWORD_TTL > 0) {
-        await redis.expire(PASSWORD_REDIS_KEY, PASSWORD_TTL);
-        // const days = Math.floor(PASSWORD_TTL / 86400);
-        // const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
-        // console.log(`🔑 Password TTL refreshed to ${days} days, ${hours} hours`);
-      }
-      return true;
-    } else {
-      // console.log('⚠️ Redis key exists but value is empty');
-      return false;
-    }
-  } catch (error) {
-    errorLog('Crypto', 'Failed to recover password from Redis', error);
-    return false;
+  // Check if we have a non-expired password in memory
+  if (PASSWORD && !isPasswordExpired()) {
+    const remainingMs = (PASSWORD_TTL * 1000) - (Date.now() - PASSWORD_TIMESTAMP);
+    const days = Math.floor(remainingMs / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((remainingMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    debugLog('Crypto', `[DEV] Password still valid in memory (expires in ${days} days, ${hours} hours)`);
+    return true;
   }
+
+  // Password expired or not set
+  debugLog('Crypto', '[DEV] No valid password found in memory');
+  return false;
 }
 
 export async function setPassword(password: string): Promise<void> {
   PASSWORD = password;
+  PASSWORD_TIMESTAMP = Date.now();
 
   // Clear decrypted key cache when password changes
   clearAllDecryptedKeys();
@@ -109,18 +83,11 @@ export async function setPassword(password: string): Promise<void> {
   // Clear wallet cache when password changes (handled by wallet-cache.ts)
   // Note: Caller should call walletCache.invalidateAll() after this
 
-  // Development only: persist to Redis for convenience
+  // Development only: password stored in memory with timestamp
   if (process.env.NODE_ENV !== 'production') {
-    try {
-      const redis = getRedisConnection();
-      if (PASSWORD_TTL > 0) {
-        await redis.setex(PASSWORD_REDIS_KEY, PASSWORD_TTL, password);
-      } else {
-        await redis.set(PASSWORD_REDIS_KEY, password);
-      }
-    } catch {
-      warnLog('Crypto', '[DEV] Failed to store password in Redis - using memory only');
-    }
+    const days = Math.floor(PASSWORD_TTL / 86400);
+    const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
+    debugLog('Crypto', `[DEV] Password stored in memory (TTL: ${days} days, ${hours} hours)`);
   }
   // Production: password only stored in memory (no persistence)
 }
@@ -133,23 +100,23 @@ export function getPassword(): string | undefined {
 export async function renewPasswordTTL(): Promise<void> {
   if (!PASSWORD || PASSWORD_TTL <= 0 || process.env.NODE_ENV === 'production') return;
 
-  try {
-    const redis = getRedisConnection();
-    const exists = await redis.exists(PASSWORD_REDIS_KEY);
-    if (exists) {
-      await redis.expire(PASSWORD_REDIS_KEY, PASSWORD_TTL);
-      // const days = Math.floor(PASSWORD_TTL / 86400);
-      // const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
-      // console.log(`🔑 [DEVELOPMENT] Password TTL renewed for ${days} days, ${hours} hours`);
-    }
-  } catch {
-    warnLog('Crypto', '[DEV] Failed to renew password TTL');
+  // Check if password is expired
+  if (isPasswordExpired()) {
+    warnLog('Crypto', '[DEV] Cannot renew TTL - password has expired');
+    return;
   }
+
+  // Refresh timestamp
+  PASSWORD_TIMESTAMP = Date.now();
+  const days = Math.floor(PASSWORD_TTL / 86400);
+  const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
+  debugLog('Crypto', `[DEV] Password TTL renewed for ${days} days, ${hours} hours`);
 }
 
 // Clear password from all storage
 export async function clearPassword(): Promise<void> {
   PASSWORD = undefined;
+  PASSWORD_TIMESTAMP = 0;
 
   // Clear decrypted key cache when password is cleared
   clearAllDecryptedKeys();
@@ -157,14 +124,9 @@ export async function clearPassword(): Promise<void> {
   // Clear wallet cache when password is cleared (handled by wallet-cache.ts)
   // Note: Caller should call walletCache.invalidateAll() after this
 
-  // Development only: clear from Redis
+  // Development only: already cleared from memory
   if (process.env.NODE_ENV !== 'production') {
-    try {
-      const redis = getRedisConnection();
-      await redis.del(PASSWORD_REDIS_KEY);
-    } catch {
-      warnLog('Crypto', '[DEV] Failed to clear password from Redis - cleared from memory only');
-    }
+    debugLog('Crypto', '[DEV] Password cleared from memory');
   }
   // Production: password only in memory, already cleared above
 }
