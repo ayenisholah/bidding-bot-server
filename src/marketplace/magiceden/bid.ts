@@ -6,10 +6,8 @@ import { ethers, Wallet } from "ethers";
 import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
 import { config } from "dotenv";
 import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, trackBidRate, updateTaskCancellationPercentage } from "../..";
-import { DistributedLockManager } from '../../utils/lock';
 import { orderCache, queueReplacedOrderCancellation } from '../../utils/order-cache';
 import { withRetry } from '../../utils/db-retry';
-import redisClient from '../../utils/redis';
 import axios from "axios";
 import { USDC, WETH } from "../../utils/currencies";
 import { BASE_URL } from "../../constants";
@@ -29,6 +27,35 @@ import { safeTokenIdToString } from '../../utils/tokenId';
 const insufficientBalanceLogCache = new LRUCache<string, boolean>({
   max: 1000,
   ttl: 5000 // 5 seconds
+});
+
+// LRU caches for MagicEden marketplace data (Phase 2 Redis → LRU Migration)
+
+// Trait floor cache: magiceden:trait:${contract}:${key}:${value}
+// Memory: ~200 bytes per entry × 10K max = ~2MB
+const magicedenTraitFloorLRU = new LRUCache<string, any>({
+  max: 10000,
+  ttl: 120 * 1000, // 120 seconds
+  allowStale: true,
+  updateAgeOnGet: false
+});
+
+// Stats cache: magiceden:stats:${contract}
+// Memory: ~500 bytes per entry × 1K max = ~500KB
+const magicedenStatsLRU = new LRUCache<string, any>({
+  max: 1000,
+  ttl: 30 * 1000, // 30 seconds
+  allowStale: true,
+  updateAgeOnGet: false
+});
+
+// Tokens cache: magiceden:tokens:${collection}:${limit}
+// Memory: ~2KB per entry × 1K max = ~2MB
+const magicedenTokensLRU = new LRUCache<string, any>({
+  max: 1000,
+  ttl: 60 * 1000, // 60 seconds
+  allowStale: true,
+  updateAgeOnGet: false
 });
 
 const YELLOW = '\x1b[33m';
@@ -86,11 +113,6 @@ const MAGICEDEN_CONFIG = {
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
 // Singleton provider with connection pooling
 const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
-
-const lockManager = new DistributedLockManager({
-  lockPrefix: 'magiceden:fetch:',
-  defaultTTLSeconds: 30
-});
 
 const activeRequests = new Map<string, AbortController[]>();
 
@@ -1467,19 +1489,12 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
 }
 
 export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: { attributeKey: string; attributeValue: string }, priority?: number) {
-  const CACHE_TTL = 120; // 2 minutes cache for trait data
-  const cacheKey = `magiceden:trait:${contractAddress}:${trait.attributeKey}:${trait.attributeValue}`;
+  const cacheKey = `${contractAddress}:${trait.attributeKey}:${trait.attributeValue}`;
 
-  // Try to get from cache first
-  try {
-    const redis = redisClient.getClient();
-    const cachedFloor = await redis.get(cacheKey);
-    if (cachedFloor) {
-      return JSON.parse(cachedFloor);
-    }
-  } catch (error) {
-    // Log cache error but continue to fetch fresh data
-    errorLog('Cache', `[MagicEden] Error reading trait floor from cache | contract=${contractAddress}`, error);
+  // Check LRU cache first
+  const cached = magicedenTraitFloorLRU.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
   }
 
   try {
@@ -1512,13 +1527,8 @@ export async function fetchMagicEdenTraitFloor(contractAddress: string, trait: {
 
     // Cache the result
     if (floor !== undefined) {
-      try {
-        const redis = redisClient.getClient();
-        await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(floor));
-      } catch (error) {
-        // Log cache error but don't fail the request
-        errorLog('Cache', `[MagicEden] Error caching trait floor | contract=${contractAddress}`, error);
-      }
+      // Cache the floor in LRU
+      magicedenTraitFloorLRU.set(cacheKey, floor);
     }
 
     return floor
@@ -1536,33 +1546,19 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string, pri
     return "0"; // Skip API call, already cached as unavailable
   }
 
-  const CACHE_TTL = 30; // 30 seconds cache
-  const cacheKey = `magiceden:stats:${contractAddress}`;
-  const lockKey = `stats:${contractAddress}`;
+  const cacheKey = contractAddress.toLowerCase();
 
-  // Try to get from cache first
-  try {
-    const redis = redisClient.getClient();
-    const cachedStats = await redis.get(cacheKey);
-    if (cachedStats) {
-      return JSON.parse(cachedStats);
-    }
-  } catch (error) {
-    errorLog('Cache', `[MagicEden] Error reading stats from cache | contract=${contractAddress}`, error);
+  // Check LRU cache first
+  const cached = magicedenStatsLRU.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
   }
 
-  // If not in cache, try to acquire lock and fetch
-  const result = await lockManager.withLock(lockKey, async () => {
-    // Double check cache after acquiring lock
-    try {
-      const redis = redisClient.getClient();
-      const cachedStats = await redis.get(cacheKey);
-      if (cachedStats) {
-        return JSON.parse(cachedStats);
-      }
-    } catch (error) {
-      errorLog('Cache', `[MagicEden] Error reading stats from cache after lock | contract=${contractAddress}`, error);
-    }
+  // Double-check pattern (prevents thundering herd without distributed lock)
+  const cachedAfterCheck = magicedenStatsLRU.get(cacheKey);
+  if (cachedAfterCheck !== undefined) {
+    return cachedAfterCheck;
+  }
 
     const queryParams = {
       includeCollectionStats: true,
@@ -1592,16 +1588,12 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string, pri
       const stats = data?.tokens[0]?.market?.floorAsk?.priceV2?.amount?.native || "0";
       // Cache the result
       if (stats !== undefined) {
-        try {
-          const redis = redisClient.getClient();
-          await redis.set(cacheKey, JSON.stringify(stats), 'EX', CACHE_TTL);
-        } catch (error) {
-          errorLog('Cache', `[MagicEden] Error writing stats to cache | contract=${contractAddress}`, error);
-        }
+        // Cache the stats in LRU
+        magicedenStatsLRU.set(cacheKey, stats);
       }
 
       return stats;
-    } catch (error: any) {
+  } catch (error: any) {
       const status = error?.response?.status;
       if (status === 400 || status === 404) {
         // Collection doesn't exist on MagicEden - cache this for 1 hour
@@ -1611,57 +1603,22 @@ export async function fetchMagicEdenCollectionStats(contractAddress: string, pri
       // Re-throw unexpected errors
       throw error;
     }
-
-  });
-  if (!result) {
-    // If we couldn't acquire the lock, wait briefly and try cache again
-    await new Promise(resolve => setTimeout(resolve, 100));
-    try {
-      const redis = redisClient.getClient();
-      const cachedStats = await redis.get(cacheKey);
-      if (cachedStats) {
-        return JSON.parse(cachedStats);
-      }
-    } catch (error) {
-      errorLog('Cache', `[MagicEden] Error reading from cache after lock failure | contract=${contractAddress}`, error);
-    }
-    errorLog('Collection', `[MagicEden] Failed to fetch collection stats | contract=${contractAddress}`);
-    throw new Error('Failed to fetch collection stats');
-  }
-  return result;
 }
 
 export async function fetchMagicEdenTokens(taskId: string, collectionId: string, limit?: number, priority?: number) {
-  const CACHE_TTL = 60; // 1 minute cache for token listings
-  const cacheKey = `magiceden:tokens:${collectionId}:${limit || 'all'}`;
-  const lockKey = `tokens:${collectionId} `;
+  const cacheKey = `${collectionId}:${limit || 'all'}`;
 
-  // Try to get from cache first
-  try {
-    const redis = redisClient.getClient();
-    const cachedTokens = await redis.get(cacheKey);
-    if (cachedTokens) {
-      return JSON.parse(cachedTokens);
-    }
-  } catch (error) {
-    // Log cache error but continue to fetch fresh data
-    errorLog('Cache', `[MagicEden] Error reading tokens from cache | collectionId=${collectionId}`, error);
+  // Check LRU cache first
+  const cached = magicedenTokensLRU.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
   }
 
-  return await lockManager.withLock(
-    lockKey,
-    async () => {
-      // Double-check cache after acquiring lock
-      try {
-        const redis = redisClient.getClient();
-        const cachedTokens = await redis.get(cacheKey);
-        if (cachedTokens) {
-          return JSON.parse(cachedTokens);
-        }
-      } catch (error) {
-        // Continue if cache check fails
-        errorLog('Cache', `[MagicEden] Cache check after lock failed | collectionId=${collectionId}`, error);
-      }
+  // Double-check pattern (prevents thundering herd)
+  const cachedAfterCheck = magicedenTokensLRU.get(cacheKey);
+  if (cachedAfterCheck !== undefined) {
+    return cachedAfterCheck;
+  }
 
       const params: any = {
         excludeSpam: true,
@@ -1701,22 +1658,12 @@ export async function fetchMagicEdenTokens(taskId: string, collectionId: string,
         params.continuation = data?.continuation;
       } while (params.continuation && totalFetched < limit);
 
-      const result = allTokens.slice(0, limit);
+    const result = allTokens.slice(0, limit);
 
-      // Cache the result
-      try {
-        const redis = redisClient.getClient();
-        await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(result));
-      } catch (error) {
-        // Log cache error but don't fail the request
-        errorLog('Cache', `[MagicEden] Error caching tokens | collectionId=${collectionId}`, error);
-      }
+    // Cache the result in LRU
+    magicedenTokensLRU.set(cacheKey, result);
 
-      return result;
-
-    },
-    60 // Lock TTL in seconds - longer for token fetching since it's paginated
-  );
+    return result;
 }
 interface TokenMagiceden {
   chainId: number;
@@ -2362,4 +2309,16 @@ export function getMagicedenWalletCache(): LRUCache<string, Wallet> {
 
 export function getMagicedenInsufficientBalanceLogCache(): LRUCache<string, boolean> {
   return insufficientBalanceLogCache;
+}
+
+export function getMagicedenTraitFloorLRU(): LRUCache<string, any> {
+  return magicedenTraitFloorLRU;
+}
+
+export function getMagicedenStatsLRU(): LRUCache<string, any> {
+  return magicedenStatsLRU;
+}
+
+export function getMagicedenTokensLRU(): LRUCache<string, any> {
+  return magicedenTokensLRU;
 }
