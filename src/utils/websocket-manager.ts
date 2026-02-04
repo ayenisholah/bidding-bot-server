@@ -4,6 +4,7 @@ import PQueue from 'p-queue';
 import { LRUCache } from 'lru-cache';
 import { warnLog, errorLog, debugLog, infoLog } from './debug-file-logger';
 import { config } from 'dotenv';
+import { recordForwarding } from '../services/unified-latency-tracker';
 
 config()
 
@@ -122,17 +123,6 @@ class WebSocketManager extends EventEmitter {
   private lastPingSent = 0;
   private lastPongReceived = 0;
   private missedPongs = 0;
-  // Forwarding latency samples (proxy → server)
-  // Tracks marketplace-specific latency for last 1000 messages
-  private forwardingLatencySamples = new LRUCache<string, {
-    marketplace: string;
-    latency: number;
-    timestamp: number;
-  }>({
-    max: 1000,     // Last 1000 samples
-    ttl: 60000     // 60 seconds (recent samples more relevant)
-  });
-  private forwardingSampleCounter = 0;
   // Circular buffer for message timestamps (5 minute window, max 10000 messages)
   private messageTimestamps = new TimestampCircularBuffer(10000, 300000);
   private lastMessageReceived = 0;
@@ -186,20 +176,18 @@ class WebSocketManager extends EventEmitter {
       ...config
     };
 
-    // Initialize p-queue for message processing with concurrency from RATE_LIMIT
-    // Uses RATE_LIMIT environment variable (default: 10 if not set)
-    // With RATE_LIMIT=64: 64 concurrent handlers = 211 msg/sec capacity @ 300ms avg
+    // Initialize p-queue for message processing with hardcoded concurrency
+    // Concurrency: 512 concurrent handlers = ~3,400 msg/sec capacity @ 300ms avg processing time
     // Queue is unbounded - relies on concurrency limiting and upstream flow control
-    const concurrency = Number(process.env.RATE_LIMIT) || 10;
     this.messageQueue = new PQueue({
-      concurrency,          // Use RATE_LIMIT from env (default: 10)
+      concurrency: 512,     // Hardcoded concurrency for optimal throughput
       timeout: 30000,       // 30s timeout per message
       throwOnTimeout: false // Graceful failures instead of crashing
     });
 
     // Log the configured concurrency
-    infoLog('WebSocketManager', `Message queue initialized | concurrency=${concurrency} | ` +
-      `estimatedCapacity=${Math.floor(concurrency * 3.3)}msg/sec`);
+    infoLog('WebSocketManager', `Message queue initialized | concurrency=512 | ` +
+      `estimatedCapacity=1690msg/sec`);
 
     // Load persistent listing subscriptions on initialization
     this.loadPersistentSubscriptions();
@@ -845,8 +833,8 @@ class WebSocketManager extends EventEmitter {
       if (msgTimestamp) {
         const latency = receiveTime - msgTimestamp;
 
-        // Record latency for metrics
-        this.recordLatency(latency, marketplace);
+        // Record latency for metrics (pass timestamps for unified tracking)
+        this.recordLatency(latency, marketplace, msgTimestamp, receiveTime);
 
         // Tier-based latency logging
         if (latency > 5000) {
@@ -1546,58 +1534,20 @@ class WebSocketManager extends EventEmitter {
   }
 
   // Metrics helpers
-  private recordLatency(latency: number, marketplace: string = 'unknown'): void {
-    const sampleId = `fwd-${this.forwardingSampleCounter++}`;
+  private recordLatency(latency: number, marketplace: string = 'unknown', proxyReceivedAt?: number, serverReceivedAt?: number): void {
+    // Record to unified latency tracker (Stage 1: Forwarding)
+    if (proxyReceivedAt && serverReceivedAt) {
+      const normalizedMarketplace = marketplace.toLowerCase();
+      if (normalizedMarketplace === 'opensea' || normalizedMarketplace === 'blur' || normalizedMarketplace === 'magiceden') {
+        recordForwarding(normalizedMarketplace as 'opensea' | 'blur' | 'magiceden', proxyReceivedAt, serverReceivedAt);
+      }
+    }
 
-    this.forwardingLatencySamples.set(sampleId, {
-      marketplace: marketplace.toLowerCase(),
-      latency,
-      timestamp: Date.now()
-    });
-
-    // Calculate average for connection quality (from all samples)
-    const samples = Array.from(this.forwardingLatencySamples.values());
-    this.metrics.averageLatency = samples.length > 0
-      ? samples.reduce((sum, s) => sum + s.latency, 0) / samples.length
-      : 0;
+    // Legacy: Calculate average for connection quality (backward compat)
+    this.metrics.averageLatency = latency;
 
     // Update connection quality
     this.updateConnectionQuality();
-  }
-
-  /**
-   * Get forwarding latency statistics for a marketplace (or all marketplaces)
-   */
-  public getForwardingLatencyStats(marketplace?: string): {
-    p50: number; p95: number; p99: number; avg: number; max: number; sampleCount: number;
-  } {
-    // Collect samples for the specified marketplace (or all if not specified)
-    const samples: number[] = [];
-
-    for (const sample of this.forwardingLatencySamples.values()) {
-      // Filter by marketplace if specified
-      if (marketplace && sample.marketplace !== marketplace.toLowerCase()) {
-        continue;
-      }
-      samples.push(sample.latency);
-    }
-
-    // Return zeros if no samples
-    if (samples.length === 0) {
-      return { p50: 0, p95: 0, p99: 0, avg: 0, max: 0, sampleCount: 0 };
-    }
-
-    // Sort samples for percentile calculation
-    samples.sort((a, b) => a - b);
-
-    // Calculate statistics
-    const p50 = samples[Math.floor(samples.length * 0.5)] || 0;
-    const p95 = samples[Math.floor(samples.length * 0.95)] || 0;
-    const p99 = samples[Math.floor(samples.length * 0.99)] || 0;
-    const max = samples[samples.length - 1] || 0;
-    const avg = Math.round(samples.reduce((sum, val) => sum + val, 0) / samples.length);
-
-    return { p50, p95, p99, avg, max, sampleCount: samples.length };
   }
 
   private recordMessage(): void {
@@ -1848,9 +1798,10 @@ class WebSocketManager extends EventEmitter {
   /**
    * Get forwarding latency samples cache for debugging/monitoring
    * @internal - For use by lru-cache-sampler.ts only
+   * @deprecated - Forwarding latency tracking has been migrated to unified-latency-tracker.ts
    */
-  public getForwardingLatencySamples(): LRUCache<string, { marketplace: string; latency: number; timestamp: number }> {
-    return this.forwardingLatencySamples;
+  public getForwardingLatencySamples(): null {
+    return null;
   }
 }
 

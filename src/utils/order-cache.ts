@@ -25,6 +25,18 @@ const orderLRU = new LRUCache<string, CachedOrder[]>({
   updateAgeOnHas: false
 });
 
+// Protected tasks - orders for these tasks will NOT be deleted
+const PROTECTED_TASK_IDS = new Set<string>([
+  '6980b274d1b3547aa07f6a9a'  // Preserve for debugging order cleanup issue
+]);
+
+/**
+ * Check if a task is protected from deletion
+ */
+function isProtectedTask(taskId: string): boolean {
+  return PROTECTED_TASK_IDS.has(taskId);
+}
+
 // Cache statistics
 interface CacheStats {
   hits: number;
@@ -285,6 +297,11 @@ class OrderCache {
    * IMPORTANT: Deletes ALL orders for this identifier
    */
   delete(taskId: string, marketplace: string, identifier: string): boolean {
+    if (isProtectedTask(taskId)) {
+      debugLog('OrderCache', `DELETE_SKIPPED (protected) | taskId=${taskId} | ${marketplace}:${identifier}`);
+      return false;
+    }
+
     const lruKey = this.getLruKey(taskId, marketplace, identifier);
     const existing = orderLRU.get(lruKey);
     const deleted = orderLRU.delete(lruKey);
@@ -302,6 +319,11 @@ class OrderCache {
    * Useful for selective cancellation
    */
   deleteOne(taskId: string, marketplace: string, identifier: string, orderHash: string): boolean {
+    if (isProtectedTask(taskId)) {
+      debugLog('OrderCache', `DELETE_ONE_SKIPPED (protected) | taskId=${taskId} | orderHash=${orderHash}`);
+      return false;
+    }
+
     const lruKey = this.getLruKey(taskId, marketplace, identifier);
     const existing = orderLRU.get(lruKey);
 
@@ -420,6 +442,11 @@ class OrderCache {
     for (const [lruKey, orders] of orderLRU.entries()) {
       // Filter expired orders for this key
       const activeOrders = orders.filter(order => {
+        // Skip cleanup for protected tasks
+        if (order.taskId === taskId && isProtectedTask(taskId)) {
+          return true; // Keep all orders (don't expire)
+        }
+
         // Only process orders for this task
         if (order.taskId === taskId) {
           if (!this.isExpired(order)) {
@@ -455,6 +482,11 @@ class OrderCache {
    * IMPORTANT: Counts total orders deleted from all arrays
    */
   deleteByTask(taskId: string): number {
+    if (isProtectedTask(taskId)) {
+      debugLog('OrderCache', `DELETE_BY_TASK_SKIPPED (protected) | taskId=${taskId}`);
+      return 0;
+    }
+
     let deletedCount = 0;
 
     for (const [lruKey, orders] of orderLRU.entries()) {
@@ -559,6 +591,11 @@ class OrderCache {
    * IMPORTANT: Counts total orders deleted from all arrays
    */
   deleteByTaskAndMarketplace(taskId: string, marketplace: string): number {
+    if (isProtectedTask(taskId)) {
+      debugLog('OrderCache', `DELETE_BY_TASK_MARKETPLACE_SKIPPED (protected) | taskId=${taskId} | marketplace=${marketplace}`);
+      return 0;
+    }
+
     let deletedCount = 0;
     const marketplaceLower = marketplace.toLowerCase();
 

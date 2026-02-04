@@ -1,8 +1,7 @@
-import { DistributedLockManager } from "./lock";
 import { API_KEY } from "..";
 import { limiter, axiosInstance } from "../init";
 import { BASE_URL } from "../constants";
-import { warnLog, errorLog, debugLog } from "./debug-file-logger";
+import { warnLog, errorLog, debugLog, startTimer } from "./debug-file-logger";
 import { apiDedup } from "./api-dedup";
 import {
   balanceLRU,
@@ -11,6 +10,9 @@ import {
 } from "../marketplace/opensea/cache";
 
 const WETH_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2".toLowerCase();
+
+// In-flight balance fetch tracking (Phase 4 migration - replaces distributed locks)
+const balanceFetchInFlight = new Map<string, Promise<number>>();
 
 // Debug logging controlled by single environment variable
 const DEBUG = process.env.DEBUG === 'true';
@@ -38,6 +40,8 @@ interface BalanceResponse {
  * This is faster and more reliable than Alchemy RPC calls.
  */
 async function fetchWethBalanceGraphQL(walletAddress: string): Promise<number> {
+  const timer = startTimer('fetchWethBalanceGraphQL', { walletAddress: walletAddress.slice(0, 10) + '...' });
+
   // Note: Removed "GraphQL fetch starting/complete" logs - was noise (35K+ lines/day)
 
   const query = {
@@ -56,6 +60,7 @@ async function fetchWethBalanceGraphQL(walletAddress: string): Promise<number> {
     variables: { address: walletAddress }
   };
 
+  const apiTimer = startTimer('fetchWethBalanceGraphQL_API', { walletAddress: walletAddress.slice(0, 10) + '...' });
   const { data } = await apiDedup(
     `opensea-weth-balance-${walletAddress.toLowerCase()}`,
     () => limiter.schedule({ priority: 0 }, () => axiosInstance.post<BalanceResponse>(
@@ -70,6 +75,7 @@ async function fetchWethBalanceGraphQL(walletAddress: string): Promise<number> {
     )),
     { category: 'Balance' }
   );
+  apiTimer.endAPI('/opensea/graphql', { statusCode: 200 });
 
   const wethBalance = data.data.addressBalances.find(
     (bal) =>
@@ -78,6 +84,7 @@ async function fetchWethBalanceGraphQL(walletAddress: string): Promise<number> {
   );
 
   const balance = wethBalance ? Number(wethBalance.quantity) : 0;
+  timer.end({ balance });
   return balance;
 }
 
@@ -98,6 +105,8 @@ export async function invalidateBalanceCache(walletAddress: string, tokenAddress
 }
 
 export async function fetchERC20Balance(walletAddress: string, _tokenAddress: string): Promise<number> {
+  const timer = startTimer('fetchERC20Balance', { walletAddress: walletAddress.slice(0, 10) + '...', currency: _tokenAddress });
+
   const CACHE_EXPIRY_SECONDS = 300;  // 5 minutes
   const normalizedAddress = walletAddress.toLowerCase();
 
@@ -106,6 +115,7 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
   if (lruCached !== undefined) {
     trackBalanceHit();
     debugLog('Performance', `[OS-Balance] LRU_HIT (<1ms) | wallet=${walletAddress.slice(0,10)}... | balance=${lruCached}`);
+    timer.end({ balance: lruCached, cached: true });
     return lruCached;
   }
 
@@ -114,28 +124,24 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
   debugLog('Performance', `[OS-Balance] CACHE_MISS | wallet=${walletAddress.slice(0,10)}... | fetching...`);
   const fetchStart = Date.now();
 
-  const lockManager = new DistributedLockManager({
-    lockPrefix: 'erc20_balance:lock:',
-    defaultTTLSeconds: CACHE_EXPIRY_SECONDS
-  });
+  // Use in-flight Map to prevent duplicate concurrent fetches (Phase 4 migration)
+  let inFlightPromise = balanceFetchInFlight.get(normalizedAddress);
 
-  const lockKey = `{erc20_${walletAddress}}_weth`;
-
-  try {
-    const result = await lockManager.withLock(
-      lockKey,
-      async () => {
-        // Double-check LRU after acquiring lock
-        const lruCachedAfterLock = balanceLRU.get(normalizedAddress);
-        if (lruCachedAfterLock !== undefined) {
-          return lruCachedAfterLock;
+  if (!inFlightPromise) {
+    // Create new fetch operation
+    inFlightPromise = (async () => {
+      try {
+        // Double-check LRU after starting fetch
+        const lruCachedAfterStart = balanceLRU.get(normalizedAddress);
+        if (lruCachedAfterStart !== undefined) {
+          return lruCachedAfterStart;
         }
 
         try {
           // Use OpenSea GraphQL API with deduplication
           const balance = await fetchWethBalanceGraphQL(walletAddress);
 
-          // Store in LRU cache (5 minute TTL)
+          // Store in LRU cache (60 second TTL)
           balanceLRU.set(normalizedAddress, balance);
 
           const fetchTime = Date.now() - fetchStart;
@@ -146,13 +152,24 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
           errorLog('Balance', `Error fetching WETH balance via GraphQL | wallet=${walletAddress.slice(0, 10)}...`, error);
           throw error;
         }
+      } finally {
+        // Remove from in-flight tracking
+        balanceFetchInFlight.delete(normalizedAddress);
       }
-    );
+    })();
 
+    balanceFetchInFlight.set(normalizedAddress, inFlightPromise);
+  }
+
+  try {
+    // Wait for fetch to complete (either new or in-progress)
+    const result = await inFlightPromise;
+    timer.end({ balance: result || 0, cached: false });
     return result || 0;
   } catch (error) {
-    // If we get a network error or lock error, return 0
+    // If we get a network error, return 0
     errorLog('Balance', `Failed to fetch WETH balance | wallet=${walletAddress.slice(0, 10)}...`, error);
+    timer.end({ balance: 0, cached: false, error: error instanceof Error ? error.message : String(error) });
     return 0;
   }
 }
@@ -178,35 +195,38 @@ export async function fetchERC20BalanceFresh(walletAddress: string, _tokenAddres
   });
 
   const fetchPromise = async (): Promise<number> => {
-    const lockManager = new DistributedLockManager({
-      lockPrefix: 'erc20_balance:lock:',
-      defaultTTLSeconds: CACHE_EXPIRY_SECONDS
-    });
+    // Use in-flight Map to prevent duplicate concurrent fetches (Phase 4 migration)
+    let inFlightPromise = balanceFetchInFlight.get(normalizedAddress);
 
-    const lockKey = `{erc20_${walletAddress}}_weth`;
+    if (!inFlightPromise) {
+      // Create new fetch operation
+      inFlightPromise = (async () => {
+        try {
+          // Use OpenSea GraphQL API with deduplication
+          const balance = await fetchWethBalanceGraphQL(walletAddress);
+
+          // Store in LRU cache (60 second TTL)
+          balanceLRU.set(normalizedAddress, balance);
+
+          return balance;
+        } catch (error) {
+          errorLog('Balance', `Error fetching fresh WETH balance via GraphQL | wallet=${walletAddress.slice(0, 10)}...`, error);
+          throw error;
+        } finally {
+          // Remove from in-flight tracking
+          balanceFetchInFlight.delete(normalizedAddress);
+        }
+      })();
+
+      balanceFetchInFlight.set(normalizedAddress, inFlightPromise);
+    }
 
     try {
-      const result = await lockManager.withLock(
-        lockKey,
-        async () => {
-          try {
-            // Use OpenSea GraphQL API with deduplication
-            const balance = await fetchWethBalanceGraphQL(walletAddress);
-
-            // Store in LRU cache (5 minute TTL)
-            balanceLRU.set(normalizedAddress, balance);
-
-            return balance;
-          } catch (error) {
-            errorLog('Balance', `Error fetching fresh WETH balance via GraphQL | wallet=${walletAddress.slice(0, 10)}...`, error);
-            throw error;
-          }
-        }
-      );
-
+      // Wait for fetch to complete (either new or in-progress)
+      const result = await inFlightPromise;
       return result || 0;
     } catch (error: any) {
-      errorLog('Balance', `Lock/fetch error | wallet=${walletAddress.slice(0, 10)}...`, error);
+      errorLog('Balance', `Fetch error | wallet=${walletAddress.slice(0, 10)}...`, error);
       throw error;
     }
   };

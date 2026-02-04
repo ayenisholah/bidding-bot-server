@@ -12,12 +12,11 @@ import { LRUCache } from 'lru-cache';
 import { ERC20_MIN_ABI } from '../constants';
 import { errorLog, warnLog, debugLog } from './debug-file-logger';
 
-// Create primary provider with increased timeout (30 seconds)
-const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
-const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
+// Import shared providers with fallback capability
+import { mainProvider as provider, fallbackProvider } from './provider';
 
-// Create fallback provider (PublicNode) for when Alchemy times out
-const fallbackProvider = new ethers.JsonRpcProvider('https://ethereum.publicnode.com');
+// Note: provider and fallbackProvider now shared across all blockchain operations
+// RPC timeout and retry logic maintained in isApproved() method below
 
 // Configure RPC timeout and retry settings
 const RPC_TIMEOUT = 60000; // 60 seconds (increased from default ~10s)

@@ -23,10 +23,12 @@ class QueueService {
   // Queue instances
   private mainQueue: Queue | null = null;
   private blurQueue: Queue | null = null;
+  private counterbidQueue: Queue | null = null;
 
   // Queue event listeners
   private queueEvents: QueueEvents | null = null;
   private blurQueueEvents: QueueEvents | null = null;
+  private counterbidQueueEvents: QueueEvents | null = null;
 
   // Workers
   private workers: Worker[] = [];
@@ -59,6 +61,7 @@ class QueueService {
   public async initialize(config: {
     queueName: string;
     blurQueueName: string;
+    counterbidQueueName: string;
     workerCount: number;
     rateLimit: number;
     processJob: (job: Job, signal?: AbortSignal) => Promise<any>;
@@ -85,10 +88,10 @@ class QueueService {
     this.startWorkerHealthMonitoring = config.startWorkerHealthMonitoring;
 
     // Create BullMQ connections
-    await this.createConnections(config.queueName, config.blurQueueName);
+    await this.createConnections(config.queueName, config.blurQueueName, config.counterbidQueueName);
 
     // Initialize queues
-    await this.initializeQueues(config.queueName, config.blurQueueName);
+    await this.initializeQueues(config.queueName, config.blurQueueName, config.counterbidQueueName);
 
     // Create workers
     await this.createWorkers(config.workerCount, config.rateLimit);
@@ -104,7 +107,7 @@ class QueueService {
   /**
    * Create separate BullMQ connections for each component
    */
-  private async createConnections(_queueName: string, _blurQueueName: string): Promise<void> {
+  private async createConnections(_queueName: string, _blurQueueName: string, _counterbidQueueName: string): Promise<void> {
     try {
       // Main queue connection
       const mainQueueConnection = await createBullMQConnection('main-queue');
@@ -121,6 +124,14 @@ class QueueService {
       // Blur queue events connection
       const blurQueueEventsConnection = await createBullMQConnection('blur-queue-events');
       this.bullMQConnections.push(blurQueueEventsConnection);
+
+      // Counterbid queue connection
+      const counterbidQueueConnection = await createBullMQConnection('counterbid-queue');
+      this.bullMQConnections.push(counterbidQueueConnection);
+
+      // Counterbid queue events connection
+      const counterbidQueueEventsConnection = await createBullMQConnection('counterbid-queue-events');
+      this.bullMQConnections.push(counterbidQueueEventsConnection);
 
       // Verify all connections are healthy before proceeding
       const healthCheck = await checkBullMQConnectionsHealth();
@@ -145,11 +156,13 @@ class QueueService {
   /**
    * Initialize queue and queue events with their own connections
    */
-  private async initializeQueues(queueName: string, blurQueueName: string): Promise<void> {
+  private async initializeQueues(queueName: string, blurQueueName: string, counterbidQueueName: string): Promise<void> {
     const mainQueueConnection = this.bullMQConnections[0];
     const mainQueueEventsConnection = this.bullMQConnections[1];
     const blurQueueConnection = this.bullMQConnections[2];
     const blurQueueEventsConnection = this.bullMQConnections[3];
+    const counterbidQueueConnection = this.bullMQConnections[4];
+    const counterbidQueueEventsConnection = this.bullMQConnections[5];
 
     // Initialize queue options with main queue connection
     const QUEUE_OPTIONS: QueueOptions = {
@@ -165,10 +178,21 @@ class QueueService {
     this.mainQueue = new Queue(queueName, QUEUE_OPTIONS);
     this.queueEvents = new QueueEvents(queueName, { connection: mainQueueEventsConnection });
     this.blurQueueEvents = new QueueEvents(blurQueueName, { connection: blurQueueEventsConnection });
+    this.counterbidQueueEvents = new QueueEvents(counterbidQueueName, { connection: counterbidQueueEventsConnection });
 
     // Initialize Blur queue with its own connection
     this.blurQueue = new Queue(blurQueueName, {
       connection: blurQueueConnection,
+      defaultJobOptions: {
+        removeOnComplete: true,
+        removeOnFail: true,
+        attempts: 1,
+      }
+    });
+
+    // Initialize Counterbid queue with its own connection
+    this.counterbidQueue = new Queue(counterbidQueueName, {
+      connection: counterbidQueueConnection,
       defaultJobOptions: {
         removeOnComplete: true,
         removeOnFail: true,
@@ -185,6 +209,17 @@ class QueueService {
     this.blurQueueEvents.on('error', (error) => {
       errorLog('BlurQueueEvents', 'Events error', error);
       errorLog('Queue', 'Blur queue events error', error);
+    });
+
+    // Set up Counterbid queue error handlers
+    this.counterbidQueue.on('error', (error) => {
+      errorLog('CounterbidQueue', 'Queue error', error);
+      errorLog('Queue', 'Counterbid queue error', error);
+    });
+
+    this.counterbidQueueEvents.on('error', (error) => {
+      errorLog('CounterbidQueueEvents', 'Events error', error);
+      errorLog('Queue', 'Counterbid queue events error', error);
     });
 
     console.log('[STARTUP] BullMQ queues initialized');
@@ -226,7 +261,12 @@ class QueueService {
     const worker = new Worker(
       this.mainQueue.name,
       async (job) => {
-        const jobTimeout = 900000; // 15 minutes - increased for event loop recovery
+        // TIMEOUT CONFIGURATION (Optimized for aggressive fast failure)
+        // Cascade: Axios (30s) → Lock (45s) → Stall (60s) → Job (60s)
+        // - Lock expires BEFORE stall detection (prevents race conditions)
+        // - Ultra-fast failure (45s lock, 60s job) maximizes retry opportunities
+        // - Allows 1-2 sequential API calls per job (competitive bidding priority)
+        const jobTimeout = 60000; // 1 minute (aggressive timeout for fast retries)
         const abortController = new AbortController();
 
         const timeoutPromise = new Promise((_, reject) => {
@@ -255,9 +295,9 @@ class QueueService {
       {
         connection: workerConnection,
         concurrency: concurrencyPerWorker,
-        lockDuration: 120000,      // 2 minutes - faster lock release for stuck jobs
-        stalledInterval: 15000,   // Check every 15 seconds for faster stall detection
-        maxStalledCount: 6        // 6 stall checks = 90s safety net before force-fail
+        lockDuration: 45000,       // 45 seconds - allows 1-2 sequential 30s API calls
+        stalledInterval: 15000,    // 15 seconds - high-frequency stall detection
+        maxStalledCount: 4         // 4 checks = 60s (triggers AFTER lock expires at 45s)
       }
     );
 
@@ -436,7 +476,12 @@ class QueueService {
     const blurWorker = new Worker(
       this.blurQueue.name,
       async (job) => {
-        const jobTimeout = 900000; // 15 minutes - increased for event loop recovery
+        // TIMEOUT CONFIGURATION (Optimized for aggressive fast failure)
+        // Cascade: Axios (30s) → Lock (45s) → Stall (60s) → Job (60s)
+        // - Lock expires BEFORE stall detection (prevents race conditions)
+        // - Ultra-fast failure (45s lock, 60s job) maximizes retry opportunities
+        // - Allows 1-2 sequential API calls per job (competitive bidding priority)
+        const jobTimeout = 60000; // 1 minute (aggressive timeout for fast retries)
         const abortController = new AbortController();
 
         const timeoutPromise = new Promise((_, reject) => {
@@ -468,9 +513,9 @@ class QueueService {
       {
         connection: blurWorkerConnection,
         concurrency: concurrencyPerWorker, // Reduce concurrency for Blur to prevent rate limit issues
-        lockDuration: 120000,      // 2 minutes - faster lock release for stuck jobs
-        stalledInterval: 15000,   // Check every 15 seconds for faster stall detection
-        maxStalledCount: 6        // 6 stall checks = 90s safety net before force-fail
+        lockDuration: 45000,       // 45 seconds - allows 1-2 sequential 30s API calls
+        stalledInterval: 15000,    // 15 seconds - high-frequency stall detection
+        maxStalledCount: 4         // 4 checks = 60s (triggers AFTER lock expires at 45s)
       }
     );
 
@@ -611,6 +656,26 @@ class QueueService {
   }
 
   /**
+   * Get the Counterbid queue
+   */
+  public getCounterbidQueue(): Queue {
+    if (!this.counterbidQueue) {
+      throw new Error('Counterbid queue not initialized');
+    }
+    return this.counterbidQueue;
+  }
+
+  /**
+   * Get Counterbid queue events
+   */
+  public getCounterbidQueueEvents(): QueueEvents {
+    if (!this.counterbidQueueEvents) {
+      throw new Error('Counterbid queue events not initialized');
+    }
+    return this.counterbidQueueEvents;
+  }
+
+  /**
    * Get all workers
    */
   public getWorkers(): Worker[] {
@@ -640,6 +705,9 @@ class QueueService {
     if (this.blurQueueEvents) {
       await this.blurQueueEvents.close();
     }
+    if (this.counterbidQueueEvents) {
+      await this.counterbidQueueEvents.close();
+    }
 
     // Close queues
     if (this.mainQueue) {
@@ -647,6 +715,9 @@ class QueueService {
     }
     if (this.blurQueue) {
       await this.blurQueue.close();
+    }
+    if (this.counterbidQueue) {
+      await this.counterbidQueue.close();
     }
 
     // Close all BullMQ connections

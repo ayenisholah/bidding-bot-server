@@ -16,15 +16,24 @@ import { CollectionItemsListQuery } from "../../queries";
 import { CollectionItemsQueryVariables, CollectionItemsResponse } from "../../functions";
 import { fetchERC20Balance } from "../../utils/balance";
 import { InsufficientBalanceError } from "../errors";
-import { getCachedOrFetch, CACHE_TTL, CACHE_KEYS } from "../../utils/opensea-cache";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
-import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
+import { errorLog, warnLog, debugLog, startTimer, sanitizeLogData } from "../../utils/debug-file-logger";
 import { apiDedup } from "../../utils/api-dedup";
 import { MAX_PAIN_OVERRIDE_ADDRESS, MAX_PAIN_SLUG, MAX_PAIN_TOKEN_OVERRIDES } from "../../maxPainOverrides";
 import { LRUCache } from 'lru-cache';
 import { addIfNotExists } from '../../utils/lru-helpers';
 import { safeTokenIdToString } from '../../utils/tokenId';
+import {
+  seaportCounterLRU,
+  trackSeaportCounterHit,
+  trackSeaportCounterMiss,
+  balanceLRU,
+  trackBalanceHit,
+  trackBalanceMiss,
+  openseaListingsLRU
+} from './cache';
+import { mainProvider as provider } from '../../utils/provider';
 
 // Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
 // This prevents log flooding when multiple parallel jobs hit the same balance check
@@ -180,8 +189,6 @@ const ZONE_HASH = "0x00000000000000000000000000000000000000000000000000000000000
 const CONDUIT_KEY = "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000"
 const SEAPORT_1_6 = "0x0000000000000068f116a894984e2db1123eb395"
 const OPENSEA_FEE_ADDRESS = "0x0000a26b00c1f0df003000390027140000faa719"
-const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
-const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
 const SEAPORT_CONTRACT = new ethers.Contract(SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI, provider);
 
 // Pre-calculated values for optimization
@@ -226,15 +233,29 @@ function getWallet(privateKey: string): Wallet {
   return wallet;
 }
 
-// Seaport counter getter - always fetches fresh from blockchain for guaranteed correctness
+// Seaport counter getter - cached for 30s to reduce RPC calls (50-300ms savings)
+// Invalidated immediately after successful bid placement
 async function getSeaportCounter(walletAddress: string): Promise<bigint> {
+  const normalizedAddress = walletAddress.toLowerCase();
   const walletPrefix = walletAddress.slice(0, 10);
-  const fetchStart = Date.now();
 
+  // Check cache first
+  const cached = seaportCounterLRU.get(normalizedAddress);
+  if (cached !== undefined) {
+    trackSeaportCounterHit();
+    debugLog('Performance', `[OS-SeaportCounter] CACHE_HIT | wallet=${walletPrefix}... | counter=${cached}`);
+    return cached;
+  }
+
+  // Cache miss - fetch from blockchain
+  trackSeaportCounterMiss();
+  const fetchStart = Date.now();
   const counter = await SEAPORT_CONTRACT.getCounter(walletAddress);
   const fetchTime = Date.now() - fetchStart;
 
-  debugLog('Performance', `[OS-SeaportCounter] FETCH | wallet=${walletPrefix}... | counter=${counter} | fetchTime=${fetchTime}ms`);
+  // Cache for 30 seconds
+  seaportCounterLRU.set(normalizedAddress, counter);
+  debugLog('Performance', `[OS-SeaportCounter] FETCH | wallet=${walletPrefix}... | counter=${counter} | fetchTime=${fetchTime}ms | cached=30s`);
 
   return counter;
 }
@@ -591,6 +612,8 @@ export async function bidOnOpensea(
   asset?: { contractAddress: string, tokenId: string | number },
   source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
+  const timer = startTimer('bidOnOpensea', { taskId, slug, source });
+
   // OpenSea requires minimum 10 minutes (600 seconds) expiration
   // Enforce minimum to prevent "Expiration time must be at least 10 minutes past submission time" errors
   const OPENSEA_MIN_EXPIRY = 900; // 15 minutes in seconds
@@ -644,35 +667,40 @@ export async function bidOnOpensea(
       // Get wallet from cache
       const wallet = getWallet(private_key);
 
-      // Skip balance check for counterbids (800-1500ms savings)
-      // Only check balance for scheduled bids since they run less frequently
-      if (source === 'scheduled') {
+      // Check balance with LRU cache (60s TTL)
+      // Cache key includes wallet + currency to track different token balances
+      const balanceCacheKey = `${wallet_address.toLowerCase()}-${currency.toLowerCase()}`;
+      let wethBalance = balanceLRU.get(balanceCacheKey);
+
+      if (wethBalance !== undefined) {
+        trackBalanceHit();
+        debugLog('Performance', `[OS-Balance] CACHE_HIT | source=${source} | balance=${wethBalance} ${currencySymbol} | taskId=${taskId}`);
+      } else {
+        trackBalanceMiss();
         const balanceCheckStart = Date.now();
-        const wethBalance = await fetchERC20Balance(wallet_address, currency);
+        wethBalance = await fetchERC20Balance(wallet_address, currency);
         const balanceCheckTime = Date.now() - balanceCheckStart;
 
-        debugLog('Performance', `[OS-Balance] source=scheduled | time=${balanceCheckTime}ms | balance=${wethBalance} ${currencySymbol} | taskId=${taskId}`);
+        // Cache for 60 seconds
+        balanceLRU.set(balanceCacheKey, wethBalance);
+        debugLog('Performance', `[OS-Balance] FETCH | source=${source} | time=${balanceCheckTime}ms | balance=${wethBalance} ${currencySymbol} | cached=60s | taskId=${taskId}`);
+      }
 
-        if (offerPriceEthFinal > wethBalance) {
-          const error = new InsufficientBalanceError(
-            'opensea',
-            currencySymbol,
-            offerPriceEthFinal,
-            wethBalance,
-            wallet_address,
-            slug
-          );
-          // Only log once per wallet/collection combo within 5 seconds to prevent log flooding
-          const dedupeKey = `opensea-${wallet_address}-${slug}`;
-          if (addIfNotExists(insufficientBalanceLogCache, dedupeKey, true)) {
-            errorLog('API', `[OpenSea] Insufficient balance for bid | taskId=${taskId} | wallet=${wallet_address.slice(0, 10)}... | collection=${slug} | bidAmount=${offerPriceEthFinal} ${currencySymbol} | available=${wethBalance}`, error);
-          }
-          throw error;
+      if (offerPriceEthFinal > wethBalance) {
+        const error = new InsufficientBalanceError(
+          'opensea',
+          currencySymbol,
+          offerPriceEthFinal,
+          wethBalance,
+          wallet_address,
+          slug
+        );
+        // Only log once per wallet/collection combo within 5 seconds to prevent log flooding
+        const dedupeKey = `opensea-${wallet_address}-${slug}`;
+        if (addIfNotExists(insufficientBalanceLogCache, dedupeKey, true)) {
+          errorLog('API', `[OpenSea] Insufficient balance for bid | taskId=${taskId} | wallet=${wallet_address.slice(0, 10)}... | collection=${slug} | bidAmount=${offerPriceEthFinal} ${currencySymbol} | available=${wethBalance}`, error);
         }
-      } else {
-        // Counterbids skip balance check - rely on insufficient balance errors from OpenSea API
-        // This saves 800-1500ms per counterbid with minimal risk
-        debugLog('Performance', `[OS-Balance] source=counterbid | SKIPPED (800-1500ms savings) | taskId=${taskId}`);
+        throw error;
       }
 
       if (asset) {
@@ -762,6 +790,11 @@ export async function bidOnOpensea(
           });
           // Track bid rate ONLY for successfully placed bids
           trackBidRate('opensea', taskId);
+
+          // Invalidate caches after successful bid placement
+          seaportCounterLRU.delete(wallet_address.toLowerCase());
+          balanceLRU.delete(`${wallet_address.toLowerCase()}-${currency.toLowerCase()}`);
+          debugLog('Performance', `[OS-Cache] INVALIDATED | seaportCounter + balance | wallet=${wallet_address.slice(0, 10)}... | reason=bid_placed`);
         }
       }
 
@@ -1010,17 +1043,27 @@ export async function bidOnOpensea(
         payload.protocol_address = SEAPORT_1_6;
 
         if (isTaskBlacklisted(taskId, 'opensea') || !task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
+          timer.end({ success: false, reason: 'task_stopped_or_invalid' });
           return
         }
         await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
+        timer.end({
+          success: true,
+          offerPrice: offerPrice.toString(),
+          currency: currencySymbol,
+          decimal: decimal,
+          expiry: expiry
+        });
       }
 
     } catch (error) {
       // Note: Removed duplicate "inner error" log - error is already logged by outer catch
+      timer.end({ success: false, error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   } catch (error) {
     errorLog('OpenSea', `bidOnOpensea failed | taskId=${taskId} | slug=${slug}`, error);
+    timer.end({ success: false, error: error instanceof Error ? error.message : String(error) });
     throw error;
   }
 }
@@ -1031,15 +1074,20 @@ export async function bidOnOpensea(
  */
 async function submitOfferToOpensea(decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900) {
   const [taskId] = bidCount.split(":")
+  const timer = startTimer('submitOfferToOpensea', { taskId, slug: payload.criteria?.collection?.slug });
   const bidStartTime = Date.now();
 
   // Early blacklist check before entering limiter queue
   if (isTaskBlacklisted(taskId, 'opensea')) {
     debugLog('InFlightBid', `BLOCKED_EARLY | taskId=${taskId} | marketplace=opensea | reason=blacklisted`, { taskId, marketplace: 'opensea' });
+    timer.end({ success: false, reason: 'blacklisted' });
     return;
   }
   const task = activeTasks.get(taskId)
-  if (!task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) return
+  if (!task || !task?.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("OPENSEA".toLowerCase())) {
+    timer.end({ success: false, reason: 'task_not_running' });
+    return
+  }
 
   // Create AbortController for HTTP request abort capability
   const controller = new AbortController();
@@ -1047,6 +1095,7 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
 
   let offer: OpenseaOffer;
   try {
+    const apiTimer = startTimer('submitOfferToOpensea_API', { taskId, slug: payload.criteria?.collection?.slug });
     const response = await limiter.schedule(async () => {
       // Re-check blacklist AFTER waiting in limiter queue - this is the critical fix
       if (isTaskBlacklisted(taskId, 'opensea')) {
@@ -1070,6 +1119,7 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
       });
     });
     offer = response.data;
+    apiTimer.endAPI('/opensea/api/v2/offers', { statusCode: response.status });
 
     debugLog('InFlightBid', `BID_PLACED | taskId=${taskId} | marketplace=opensea | collection=${payload.criteria?.collection?.slug} | totalTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'opensea' });
 
@@ -1077,9 +1127,11 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
     // Handle abort gracefully - don't log as error
     if (axios.isCancel(error)) {
       debugLog('HttpAbort', `ABORT_CAUGHT | marketplace=opensea | taskId=${taskId} | function=submitOfferToOpensea`);
+      timer.end({ success: false, reason: 'aborted' });
       return;
     }
     errorLog('API', `[OpenSea] Failed to submit offer | taskId=${taskId} | collection=${payload.criteria.collection.slug} | bidAmount=${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} | status=${(error as any)?.response?.status} | ${extractOpenseaErrorMessage(error)}`, error);
+    timer.end({ success: false, error: error instanceof Error ? error.message : String(error) });
     throw error;
   } finally {
     removeActiveRequest(taskId, controller);
@@ -1113,6 +1165,23 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
     });
     // Track bid rate ONLY for successfully placed bids
     trackBidRate('opensea', taskId);
+
+    // Invalidate caches after successful bid placement
+    const wallet_address = payload.protocol_data.parameters.offerer;
+    const currency = payload.protocol_data.parameters.offer[0]?.token || '';
+    seaportCounterLRU.delete(wallet_address.toLowerCase());
+    balanceLRU.delete(`${wallet_address.toLowerCase()}-${currency.toLowerCase()}`);
+    debugLog('Performance', `[OS-Cache] INVALIDATED | seaportCounter + balance | wallet=${wallet_address.slice(0, 10)}... | reason=bid_placed`);
+
+    timer.end({
+      success: true,
+      payload: {
+        collection: payload.criteria.collection.slug,
+        tokenId: payload.protocol_data?.parameters?.consideration?.[0]?.identifierOrCriteria,
+        offerAmount: payload.protocol_data?.parameters?.offer?.[0]?.startAmount,
+        currency: payload.protocol_data?.parameters?.offer?.[0]?.token
+      }
+    });
   }
 }
 
@@ -1121,9 +1190,12 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
  * @param buildPayload - The payload to build the offer.
  */
 async function buildOffer(taskId: string, buildPayload: any) {
+  const timer = startTimer('buildOffer', { taskId });
+
   // Early blacklist check BEFORE entering limiter queue (Fix 3: Bids after stopTask)
   if (isTaskBlacklisted(taskId, 'opensea')) {
     debugLog('InFlightBid', `BUILD_BLOCKED_EARLY | taskId=${taskId} | marketplace=opensea | reason=blacklisted`, { taskId, marketplace: 'opensea' });
+    timer.end({ success: false, reason: 'blacklisted' });
     return null;
   }
 
@@ -1131,7 +1203,14 @@ async function buildOffer(taskId: string, buildPayload: any) {
   addActiveRequest(taskId, controller);
   const buildStartTime = Date.now();
 
+  // Log request payload for debugging
+  debugLog('Timing', `[REQ] buildOffer request payload`, {
+    taskId,
+    payload: sanitizeLogData(buildPayload, 2000)
+  });
+
   try {
+    const apiTimer = startTimer('buildOffer_API', { taskId });
     const { data } = await limiter.schedule(async () => {
       // Re-check blacklist AFTER waiting in limiter queue
       if (isTaskBlacklisted(taskId, 'opensea')) {
@@ -1150,15 +1229,22 @@ async function buildOffer(taskId: string, buildPayload: any) {
         signal: controller.signal
       });
     });
+    apiTimer.endAPI('/opensea/api/v2/offers/build', { statusCode: 200 });
 
+    timer.end({
+      success: true,
+      response: sanitizeLogData(data)
+    });
     return data;
   } catch (error: any) {
     if (axios.isCancel(error)) {
       debugLog('HttpAbort', `ABORT_CAUGHT | marketplace=opensea | taskId=${taskId} | function=buildOffer`);
+      timer.end({ success: false, reason: 'aborted' });
       return null;
     }
 
     errorLog('API', `[OpenSea] Failed to build offer | taskId=${taskId} | status=${error?.response?.status} | ${extractOpenseaErrorMessage(error)}`, error);
+    timer.end({ success: false, error: error instanceof Error ? error.message : String(error) });
     throw error;
   } finally {
     removeActiveRequest(taskId, controller);
@@ -1368,9 +1454,12 @@ async function fetchMakerOfferForToken(
 }
 
 async function postItemOffer(taskId: string, offer: unknown, signature: string, slug?: string) {
+  const timer = startTimer('postItemOffer', { taskId, slug });
+
   // Early blacklist check BEFORE entering limiter queue (Fix 3: Bids after stopTask)
   if (isTaskBlacklisted(taskId, 'opensea')) {
     debugLog('InFlightBid', `POST_OFFER_BLOCKED_EARLY | taskId=${taskId} | marketplace=opensea | reason=blacklisted`, { taskId, marketplace: 'opensea' });
+    timer.end({ success: false, reason: 'blacklisted' });
     return null;
   }
 
@@ -1409,7 +1498,21 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
     protocol_address: SEAPORT_CONTRACT_ADDRESS,
   }
 
+  // Log request payload for debugging
+  debugLog('Timing', `[REQ] postItemOffer request payload`, {
+    taskId,
+    slug: collectionSlug,
+    payload: {
+      collection: collectionSlug,
+      tokenId: payload.parameters?.consideration?.[0]?.identifierOrCriteria,
+      offerAmount: payload.parameters?.offer?.[0]?.startAmount,
+      currency: payload.parameters?.offer?.[0]?.token,
+      expiry: payload.parameters?.endTime
+    }
+  });
+
   try {
+    const apiTimer = startTimer('postItemOffer_API', { taskId, slug: collectionSlug });
     const { data } = await limiter.schedule(async () => {
       // Re-check blacklist AFTER waiting in limiter queue - critical fix for in-flight token bids
       if (isTaskBlacklisted(taskId, 'opensea')) {
@@ -1429,10 +1532,18 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
         "axios-retry": { retries: 3 },
       });
     })
+    apiTimer.endAPI('/opensea/api/v2/orders/ethereum/seaport/offers', { statusCode: 201 });
+
+    timer.end({
+      success: true,
+      orderHash: data?.order?.order_hash,
+      response: sanitizeLogData(data)
+    });
     return data
   } catch (error: any) {
     if (axios.isCancel(error)) {
       debugLog('HttpAbort', `ABORT_CAUGHT | marketplace=opensea | taskId=${taskId} | function=postItemOffer`);
+      timer.end({ success: false, reason: 'aborted' });
       return null;
     }
 
@@ -1533,6 +1644,7 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
             warnLog('API', `[OpenSea] ORDER_ALREADY_EXISTS SYNC SUCCESS | taskId=${taskId} | orderHash=${existingOffer.orderHash} | token=${existingOffer.tokenId} | price=${offerPriceEth} ETH | slug=${existingOffer.slug} | expiresAt=${expiresAt.toISOString()}`);
 
             // Return the synced order data (similar to successful bid response)
+            timer.end({ success: true, orderAlreadyExists: true });
             return { order: { order_hash: existingOffer.orderHash } };
           } else {
             // NO OFFER FOUND log
@@ -1549,6 +1661,7 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
     }
 
     errorLog('API', `[OpenSea] Failed to post item offer | taskId=${taskId} | status=${error?.response?.status} | ${errorMessage}`, error);
+    timer.end({ success: false, error: error instanceof Error ? error.message : String(error) });
     throw error;
   } finally {
     removeActiveRequest(taskId, controller);
@@ -1589,110 +1702,112 @@ const getItemTokenConsideration = (
 }
 
 export async function fetchItemOffers(contractAddress: string, tokenId: string) {
+  const timer = startTimer('fetchItemOffers', { contractAddress, tokenId });
+
   const query = {
     operationName: "UseItemOffersQuery",
     query: `query UseItemOffersQuery($filter: ItemOffersFilter, $cursor: String, $limit: Int!, $address: Address, $identifier: ItemIdentifierInput!) {
-        itemByIdentifier(identifier: $identifier) {
-          ... on Item {
-            ...ItemOwnedQuantity
-            __typename
-          }
+      itemByIdentifier(identifier: $identifier) {
+        ... on Item {
+          ...ItemOwnedQuantity
           __typename
         }
-        itemOffers(filter: $filter, cursor: $cursor, limit: $limit) {
-          items {
-            id
-            ...ItemOrdersTableRow
-            ...useCancelOrders
-            __typename
-          }
-          nextPageCursor
-          __typename
-        }
-      }
-    
-      fragment ItemOrdersTableRow on Order {
-        id
-        type
-        pricePerItem {
-          token {
-            unit
-            __typename
-          }
-          ...TokenPrice
-          __typename
-        }
-        quantityRemaining
-        maker {
-          ...AccountLockup
-          ...ProfilePreviewTooltip
-          __typename
-        }
-        endTime
-        ...useCancelOrders
         __typename
       }
-    
-      fragment TokenPrice on Price {
-        usd
+      itemOffers(filter: $filter, cursor: $cursor, limit: $limit) {
+        items {
+          id
+          ...ItemOrdersTableRow
+          ...useCancelOrders
+          __typename
+        }
+        nextPageCursor
+        __typename
+      }
+    }
+
+    fragment ItemOrdersTableRow on Order {
+      id
+      type
+      pricePerItem {
         token {
           unit
-          symbol
-          contractAddress
-          chain {
-            identifier
-            __typename
-          }
           __typename
         }
+        ...TokenPrice
         __typename
       }
-    
-      fragment AccountLockup on ProfileIdentifier {
-        address
-        displayName
-        imageUrl
-        ...profileUrl
+      quantityRemaining
+      maker {
+        ...AccountLockup
+        ...ProfilePreviewTooltip
         __typename
       }
-    
-      fragment profileUrl on ProfileIdentifier {
-        address
-        __typename
-      }
-    
-      fragment useCancelOrders on BaseOrder {
-        id
-        marketplace {
+      endTime
+      ...useCancelOrders
+      __typename
+    }
+
+    fragment TokenPrice on Price {
+      usd
+      token {
+        unit
+        symbol
+        contractAddress
+        chain {
           identifier
           __typename
         }
-        maker {
-          address
-          __typename
-        }
         __typename
       }
-    
-      fragment ProfilePreviewTooltip on ProfileIdentifier {
+      __typename
+    }
+
+    fragment AccountLockup on ProfileIdentifier {
+      address
+      displayName
+      imageUrl
+      ...profileUrl
+      __typename
+    }
+
+    fragment profileUrl on ProfileIdentifier {
+      address
+      __typename
+    }
+
+    fragment useCancelOrders on BaseOrder {
+      id
+      marketplace {
+        identifier
+        __typename
+      }
+      maker {
         address
-        ...ProfilePreviewTooltipContent
         __typename
       }
-    
-      fragment ProfilePreviewTooltipContent on ProfileIdentifier {
-        address
+      __typename
+    }
+
+    fragment ProfilePreviewTooltip on ProfileIdentifier {
+      address
+      ...ProfilePreviewTooltipContent
+      __typename
+    }
+
+    fragment ProfilePreviewTooltipContent on ProfileIdentifier {
+      address
+      __typename
+    }
+
+    fragment ItemOwnedQuantity on Item {
+      ownership(address: $address) {
+        id
+        quantity
         __typename
       }
-    
-      fragment ItemOwnedQuantity on Item {
-        ownership(address: $address) {
-          id
-          quantity
-          __typename
-        }
-        __typename
-      }`,
+      __typename
+    }`,
     variables: {
       address: "0x1b8afd0de8a9368ce635be8b9572c65d8f590b21",
       filter: {
@@ -1743,6 +1858,11 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
       decimal: offer?.pricePerItem?.token?.symbol?.toUpperCase() === "WETH" ? 18 : offer?.pricePerItem?.token?.symbol?.toUpperCase() === "ETH" ? 18 : offer?.pricePerItem?.token?.symbol?.toUpperCase() === "BETH" ? 18 : offer?.pricePerItem?.token?.symbol?.toUpperCase() === "USDC" ? 6 : offer?.pricePerItem?.token?.symbol?.toUpperCase() === "USDT" ? 6 : 18,
       eth: offer?.pricePerItem?.token?.unit || 0
     })) || []
+
+  timer.end({
+    offersFound: order.length,
+    offers: sanitizeLogData(order, 3000) // Limit to 3KB
+  });
 
   // Ensure we always return at least 2 offers
   if (order.length === 0) {
@@ -2335,67 +2455,63 @@ export async function openseaTraitFloor(slug: string, trait: {
   traitType: string;
   values: string[];
 }) {
+  const identifier = `${trait.traitType}:${trait.values.join(',')}`;
+  const timer = startTimer('openseaTraitFloor', { slug, traitKey: identifier });
+
   // Use LRU-only cache for fastest access (< 1ms vs 10-20ms Redis)
   const lruKey = `${slug}:${trait.traitType}:${trait.values.join(',')}`;
-  const identifier = `${trait.traitType}:${trait.values.join(',')}`;
 
   // Try LRU cache (< 1ms)
   const cached = traitFloorLRU.get(lruKey);
   if (cached !== undefined) {
     cacheStats.traitFloor.hits++;
     debugLog('Performance', `[OS-TraitFloor] CACHE_HIT (<1ms) | slug=${slug} | trait=${identifier} | floor=${cached}`);
+    timer.end({ cached: true, floor: cached });
     return cached;
   }
 
-  // Fetch from API (500-2000ms) using existing dedup logic
+  // Fetch from API (500-2000ms) - Phase 4: Direct fetch, no Redis layer
   cacheStats.traitFloor.misses++;
   debugLog('Performance', `[OS-TraitFloor] CACHE_MISS | slug=${slug} | trait=${identifier} | fetching...`);
-  const cacheKey = CACHE_KEYS.traitFloor(slug, trait.traitType, trait.values);
   const fetchStart = Date.now();
 
-  const floor = await getCachedOrFetch(
-    cacheKey,
-    CACHE_TTL.TRAIT_FLOOR,
-    async () => {
-      const variables: CollectionItemsQueryVariables = {
-        collectionSlug: slug,
-        filter: {
-          attributes: [trait]
-        },
-        limit: 1,
-        sort: {
-          by: 'PRICE',
-          direction: 'ASC',
-        },
-      }
-      const queryVariables = {
-        ...variables,
-      };
-      const payload = {
-        operationName: 'CollectionItemsListQuery',
-        query: CollectionItemsListQuery,
-        variables: queryVariables
-      };
-
-      const { data } = await limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
-        headers: {
-          "x-api-key": API_KEY
-        },
-      }));
-      const floor = data.data.collectionItems.items[0].bestListing?.pricePerItem.token.unit
-      return floor
+  const variables: CollectionItemsQueryVariables = {
+    collectionSlug: slug,
+    filter: {
+      attributes: [trait]
     },
-    true // parseNumber flag to handle the numeric floor value
-  );
+    limit: 1,
+    sort: {
+      by: 'PRICE',
+      direction: 'ASC',
+    },
+  };
+  const queryVariables = {
+    ...variables,
+  };
+  const payload = {
+    operationName: 'CollectionItemsListQuery',
+    query: CollectionItemsListQuery,
+    variables: queryVariables
+  };
+
+  const { data } = await limiter.schedule(() => axiosInstance.post<CollectionItemsResponse>(`${BASE_URL}/opensea/graphql`, payload, {
+    headers: {
+      "x-api-key": API_KEY
+    },
+  }));
+  const floor = data.data.collectionItems.items[0].bestListing?.pricePerItem.token.unit;
 
   const fetchTime = Date.now() - fetchStart;
 
-  // Store in LRU cache only (no Redis)
+  // Store in LRU cache
   if (floor !== null && floor !== undefined) {
     traitFloorLRU.set(lruKey, floor);
     debugLog('Performance', `[OS-TraitFloor] FETCHED | slug=${slug} | trait=${identifier} | floor=${floor} | time=${fetchTime}ms`);
+    timer.end({ cached: false, floor });
   } else {
     debugLog('Performance', `[OS-TraitFloor] FETCH_FAILED | slug=${slug} | trait=${identifier} | time=${fetchTime}ms`);
+    timer.end({ cached: false, floor: null });
   }
 
   return floor;
@@ -2404,42 +2520,63 @@ export async function openseaTraitFloor(slug: string, trait: {
 export async function fetchOpenseaListings(taskId: string, collectionSlug: string, limit?: number, priority?: number) {
   if (!limit) return;
 
-  const cacheKey = CACHE_KEYS.listings(collectionSlug, limit);
+  const timer = startTimer('fetchOpenseaListings', { taskId, slug: collectionSlug, limit });
 
-  return getCachedOrFetch(
-    cacheKey,
-    CACHE_TTL.LISTINGS,
-    async () => {
-      const baseUrl = `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`;
-      let allListings: OpenseaOrder[] = [];
-      let nextCursor: string | null = null;
-      let uniqueTokenIds: string[] = [];
+  // Check LRU cache first
+  const listingKey = `${collectionSlug}:${limit}`;
+  const cached = openseaListingsLRU.get(listingKey);
+  if (cached) {
+    debugLog('Performance', `[OS-Listings] LRU_HIT | slug=${collectionSlug} | limit=${limit} | count=${cached.length}`);
+    timer.end({
+      cached: true,
+      tokensFound: cached.length,
+      sampleTokens: cached.slice(0, 10)
+    });
+    return cached;
+  }
 
-      while (uniqueTokenIds.length < limit) {
-        const params: any = {
-          next: nextCursor,
-          limit: Math.min(100, limit * 2 - uniqueTokenIds.length) // Fetch more to account for duplicates
-        }
-        const { data } = await limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<OpenseaListingData>(baseUrl, {
-          headers: {
-            'accept': 'application/json',
-            'x-api-key': API_KEY
-          },
-          params: params
-        }))
+  // Cache miss - fetch from API
+  const fetchStart = Date.now();
+  const baseUrl = `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`;
+  let allListings: OpenseaOrder[] = [];
+  let nextCursor: string | null = null;
+  let uniqueTokenIds: string[] = [];
 
-        allListings = [...allListings, ...data.listings];
-        uniqueTokenIds = [...new Set(allListings.map((item) =>
-          item.protocol_data.parameters.offer[0].identifierOrCriteria
-        ))];
-
-        nextCursor = data.next;
-        if (!nextCursor) break;
-      }
-
-      return uniqueTokenIds.slice(0, limit);
+  while (uniqueTokenIds.length < limit) {
+    const params: any = {
+      next: nextCursor,
+      limit: Math.min(100, limit * 2 - uniqueTokenIds.length) // Fetch more to account for duplicates
     }
-  );
+    const { data } = await limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<OpenseaListingData>(baseUrl, {
+      headers: {
+        'accept': 'application/json',
+        'x-api-key': API_KEY
+      },
+      params: params
+    }))
+
+    allListings = [...allListings, ...data.listings];
+    uniqueTokenIds = [...new Set(allListings.map((item) =>
+      item.protocol_data.parameters.offer[0].identifierOrCriteria
+    ))];
+
+    nextCursor = data.next;
+    if (!nextCursor) break;
+  }
+
+  const result = uniqueTokenIds.slice(0, limit);
+  const fetchTime = Date.now() - fetchStart;
+
+  // Store in LRU cache
+  openseaListingsLRU.set(listingKey, result);
+  debugLog('Performance', `[OS-Listings] FETCHED | slug=${collectionSlug} | limit=${limit} | count=${result.length} | time=${fetchTime}ms`);
+
+  timer.end({
+    cached: false,
+    tokensFound: result.length,
+    sampleTokens: result.slice(0, 10)
+  });
+  return result;
 }
 
 interface OpenseaListingData {
@@ -2608,18 +2745,8 @@ export interface OpenseaOfferData {
 
 export interface GraphQLItemOfferResponse {
   data: {
-    itemByIdentifier: ItemByIdentifier | null;
     itemOffers: ItemOffers;
   };
-}
-
-export interface ItemByIdentifier {
-  ownership: Ownership | null;
-  __typename: string;
-}
-
-export interface Ownership {
-  // Define if needed
 }
 
 export interface ItemOffers {
@@ -2627,45 +2754,23 @@ export interface ItemOffers {
 }
 
 export interface OpenSeaOrder {
-  id: string;
-  type: string;
   pricePerItem: IPrice;
-  quantityRemaining: string;
   maker: OrderProfile;
   endTime: string;
-  marketplace: Marketplace;
-  __typename: string;
 }
 
 export interface IPrice {
   token: ITokenPrice;
   usd: number;
-  __typename: string;
 }
 
 export interface ITokenPrice {
   unit: number;
   symbol: string;
-  contractAddress: string;
-  chain: IChain;
-  __typename: string;
-}
-
-export interface IChain {
-  identifier: string;
-  __typename: string;
 }
 
 export interface OrderProfile {
   address: string;
-  displayName: string | null;
-  imageUrl: string;
-  __typename: string;
-}
-
-export interface Marketplace {
-  identifier: string;
-  __typename: string;
 }
 /**
  * Get cache instances for debugging/monitoring

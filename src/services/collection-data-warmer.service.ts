@@ -132,9 +132,9 @@ class CollectionDataWarmerService {
         })
         .catch(() => { /* Best-effort warming */ });
 
-      debugLog('CollectionDataWarmer', `[START] First task for collection | slug=${slug} | taskId=${taskId}`);
+      // First task for collection - warming started (log removed to reduce noise)
     } else {
-      debugLog('CollectionDataWarmer', `[REF++] Additional task for collection | slug=${slug} | taskId=${taskId} | totalTasks=${this.collectionTaskCounts.get(key)!.size}`);
+      // Additional task for same collection - ref count incremented (log removed to reduce noise)
     }
   }
 

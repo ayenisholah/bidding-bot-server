@@ -1,5 +1,5 @@
 import Redis from 'ioredis';
-import { Queue } from 'bullmq';
+import { Queue, Worker } from 'bullmq';
 import mongoose from 'mongoose';
 import { MemorySnapshot, IMemorySnapshot } from '../models/memory-snapshot.model';
 import { debugLog, errorLog, infoLog } from '../utils/debug-file-logger';
@@ -78,12 +78,29 @@ class MemorySnapshotService {
   private redis: Redis | null = null;
   private mainQueue: Queue | null = null;
   private blurQueue: Queue | null = null;
+  private counterbidQueue: Queue | null = null;
+  private mainWorker: Worker | null = null;
+  private counterbidWorker: Worker | null = null;
+  private concurrencyManager: any = null;
   private deps: MemorySnapshotDependencies | null = null;
 
-  public initialize(redis: Redis, mainQueue: Queue, blurQueue: Queue, deps?: MemorySnapshotDependencies): void {
+  public initialize(
+    redis: Redis,
+    mainQueue: Queue,
+    blurQueue: Queue | null,
+    deps?: MemorySnapshotDependencies,
+    counterbidQueue?: Queue,
+    mainWorker?: Worker,
+    counterbidWorker?: Worker,
+    concurrencyManager?: any
+  ): void {
     this.redis = redis;
     this.mainQueue = mainQueue;
     this.blurQueue = blurQueue;
+    this.counterbidQueue = counterbidQueue || null;
+    this.mainWorker = mainWorker || null;
+    this.counterbidWorker = counterbidWorker || null;
+    this.concurrencyManager = concurrencyManager || null;
     if (deps) {
       this.deps = deps;
     }
@@ -158,6 +175,10 @@ class MemorySnapshotService {
 
       const snapshotDurationMs = Date.now() - startTime;
 
+      // Collect worker and concurrency stats
+      const workers = this.collectWorkerStats();
+      const concurrencyAllocation = this.collectConcurrencyAllocation();
+
       const snapshot = new MemorySnapshot({
         timestamp: new Date(),
         processMemory,
@@ -169,6 +190,8 @@ class MemorySnapshotService {
         memoryCleanup,
         lruCaches,
         unboundedDataStructures,
+        workers,
+        concurrencyAllocation,
         metadata: {
           snapshotDurationMs,
           errorCount,
@@ -209,10 +232,10 @@ class MemorySnapshotService {
       throw new Error('Redis client not initialized');
     }
 
+    // Phase 4: Only track BullMQ patterns (all custom caches migrated to LRU)
     const categories = {
       bullMQMain: { pattern: 'bull:BIDDING_BOT:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
       bullMQBlur: { pattern: 'bull:BLUR_BIDDING_QUEUE:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
-      devPassword: { pattern: 'nft-bot:server:password', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
       other: { pattern: 'other', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] }
     };
 
@@ -423,35 +446,141 @@ class MemorySnapshotService {
    * Collect BullMQ queue statistics
    */
   private async collectQueueStats() {
-    if (!this.mainQueue || !this.blurQueue) {
-      throw new Error('BullMQ queues not initialized');
+    if (!this.mainQueue) {
+      throw new Error('Main BullMQ queue not initialized');
     }
 
     try {
-      const [mainCounts, blurCounts] = await Promise.all([
-        this.mainQueue.getJobCounts(),
-        this.blurQueue.getJobCounts()
-      ]);
+      const mainCounts = await this.mainQueue.getJobCounts();
 
-      return {
+      const result: any = {
         main: {
           waiting: mainCounts.waiting || 0,
           active: mainCounts.active || 0,
           completed: mainCounts.completed || 0,
           failed: mainCounts.failed || 0,
           delayed: mainCounts.delayed || 0
-        },
-        blur: {
+        }
+      };
+
+      // If blur queue exists, include its stats (for backwards compatibility)
+      if (this.blurQueue) {
+        const blurCounts = await this.blurQueue.getJobCounts();
+        result.blur = {
           waiting: blurCounts.waiting || 0,
           active: blurCounts.active || 0,
           completed: blurCounts.completed || 0,
           failed: blurCounts.failed || 0,
           delayed: blurCounts.delayed || 0
-        }
-      };
+        };
+      } else {
+        result.blur = {
+          waiting: 0,
+          active: 0,
+          completed: 0,
+          failed: 0,
+          delayed: 0
+        };
+      }
+
+      // Add counterbid queue stats
+      if (this.counterbidQueue) {
+        const counterbidCounts = await this.counterbidQueue.getJobCounts();
+        result.counterbid = {
+          waiting: counterbidCounts.waiting || 0,
+          active: counterbidCounts.active || 0,
+          completed: counterbidCounts.completed || 0,
+          failed: counterbidCounts.failed || 0,
+          delayed: counterbidCounts.delayed || 0
+        };
+      } else {
+        result.counterbid = {
+          waiting: 0,
+          active: 0,
+          completed: 0,
+          failed: 0,
+          delayed: 0
+        };
+      }
+
+      return result;
     } catch (error) {
       errorLog('MemorySnapshot', 'Error collecting queue stats', error);
       return this.getEmptyQueueStats();
+    }
+  }
+
+  /**
+   * Collect worker concurrency statistics
+   */
+  private collectWorkerStats() {
+    try {
+      const mainConcurrency = this.mainWorker?.concurrency || 0;
+      const mainRunning = this.mainWorker?.isRunning() || false;
+      const counterbidConcurrency = this.counterbidWorker?.concurrency || 0;
+      const counterbidRunning = this.counterbidWorker?.isRunning() || false;
+
+      return {
+        main: {
+          concurrency: mainConcurrency,
+          running: mainRunning
+        },
+        counterbid: {
+          concurrency: counterbidConcurrency,
+          running: counterbidRunning
+        },
+        totalConcurrency: mainConcurrency + counterbidConcurrency
+      };
+    } catch (error) {
+      errorLog('MemorySnapshot', 'Error collecting worker stats', error);
+      return {
+        main: { concurrency: 0, running: false },
+        counterbid: { concurrency: 0, running: false },
+        totalConcurrency: 0
+      };
+    }
+  }
+
+  /**
+   * Collect concurrency allocation statistics from concurrency manager
+   */
+  private collectConcurrencyAllocation() {
+    try {
+      if (this.concurrencyManager) {
+        const stats = this.concurrencyManager.getStats();
+        return {
+          activeCounterbidJobs: stats.activeCounterbidJobs || 0,
+          totalConcurrency: stats.totalConcurrency || 150,
+          currentAllocation: {
+            counterbid: stats.currentAllocation?.counterbid || 0,
+            main: stats.currentAllocation?.main || 0
+          }
+        };
+      }
+
+      // Fallback if concurrency manager not available
+      const RATE_LIMIT = Number(process.env.RATE_LIMIT || 8);
+      const maxConcurrency = RATE_LIMIT * 1.5;
+      return {
+        activeCounterbidJobs: 0,
+        totalConcurrency: maxConcurrency,
+        currentAllocation: {
+          counterbid: maxConcurrency,
+          main: maxConcurrency
+        }
+      };
+    } catch (error) {
+      errorLog('MemorySnapshot', 'Error collecting concurrency allocation', error);
+      const RATE_LIMIT = Number(process.env.RATE_LIMIT || 8);
+      const maxConcurrency = RATE_LIMIT * 1.5;
+      return {
+        activeCounterbidJobs: 0,
+        totalConcurrency: maxConcurrency,
+        currentAllocation: {
+          counterbid: maxConcurrency,
+          main: maxConcurrency
+        }
+      };
     }
   }
 
@@ -863,7 +992,8 @@ class MemorySnapshotService {
   private getEmptyQueueStats() {
     return {
       main: { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 },
-      blur: { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 }
+      blur: { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 },
+      counterbid: { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 }
     };
   }
 

@@ -1,4 +1,4 @@
-import { AlchemyProvider, Contract, parseEther, Wallet } from "ethers";
+import { JsonRpcProvider, Contract, parseEther, Wallet } from "ethers";
 import { approveNFT } from "../../functions/approve";
 import { IFee } from "../../types/listing.types";
 import { axiosInstance, limiter } from "../../init";
@@ -13,6 +13,7 @@ import { errorLog } from "../../utils/debug-file-logger";
 import { convertDurationForOpenSea } from "../../utils/duration";
 import { roundToNineDecimals } from "../../utils/decimal-precision";
 import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
+import { mainProvider as provider } from '../../utils/provider';
 
 config()
 
@@ -24,7 +25,6 @@ const openseaFee = Number(getOpenseaMarketplaceFee());
 function ceilDiv(numerator: bigint, denominator: bigint): bigint {
   return (numerator + denominator - 1n) / denominator;
 }
-const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY
 const API_KEY = process.env.API_KEY;
 const types = {
   OrderComponents: [
@@ -122,7 +122,6 @@ const types = {
     }
   ]
 };
-const provider = new AlchemyProvider(NETWORK, ALCHEMY_API_KEY)
 
 /**
  * Lists an NFT on OpenSea marketplace

@@ -4,6 +4,7 @@ services:
     container_name: "redis"
     command: redis-server --port 6379
       --bind 0.0.0.0
+      --maxmemory 300mb
       --maxmemory-policy noeviction
       --appendonly yes
       --save ""

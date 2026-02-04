@@ -1,5 +1,5 @@
 import { IWallet } from '../models/wallet.model';
-import { decryptPrivateKey, getPassword, clearDecryptedKey } from './crypto';
+import { decryptPrivateKey, clearDecryptedKey } from './crypto';
 import { errorLog, debugLog } from './debug-file-logger';
 import Wallet from '../models/wallet.model';
 import { LRUCache } from 'lru-cache';
@@ -198,7 +198,7 @@ class WalletCache {
     if (this.walletDataLRU.size === 0) {
       await this.loadAllWallets();
     }
-    
+
     return Array.from(this.walletDataLRU.values()) as unknown as IWallet[];
   }
 
@@ -210,7 +210,7 @@ class WalletCache {
     // First check if we have it in cache by scanning
     for (const cached of this.walletDataLRU.values()) {
       if (cached._id.toString() === walletId) {
-        debugLog('WalletCache', `CACHE_HIT_BY_ID | walletId=${walletId} | cacheSize=${this.walletDataLRU.size}/1000`);
+        // Cache hit - no need to log on every hit (too verbose)
         return cached as unknown as IWallet;
       }
     }

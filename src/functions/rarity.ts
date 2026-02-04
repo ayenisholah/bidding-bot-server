@@ -3,14 +3,11 @@ import { API_KEY } from "..";
 import { BASE_URL } from "../constants";
 import { CollectionItemsListQuery } from "../queries";
 import { rarityCache } from "../utils/rarity-cache";
-import { DistributedLockManager } from "../utils/lock";
 import { errorLog } from '../utils/debug-file-logger';
 import { apiDedup } from '../utils/api-dedup';
 
-const lockManager = new DistributedLockManager({
-  lockPrefix: 'rarity:fetch:',
-  defaultTTLSeconds: 300 // 5 minutes
-});
+// In-flight rarity fetch tracking (Phase 4 migration - replaces distributed lock)
+const rarityFetchInFlight = new Map<string, Promise<any>>();
 
 interface GraphQLItem {
   id: string;
@@ -151,47 +148,54 @@ export async function fetchRarityTokens(
       };
     }
 
-    // 2. Cache miss - fetch from OpenSea with distributed lock
-    const result = await lockManager.withLock(
-      lockKey,
-      async () => {
-        // Double-check cache after acquiring lock
-        const cachedAfterLock = await rarityCache.getRarityTokens(normalizedSlug, rarityCategory);
-        if (cachedAfterLock && cachedAfterLock.totalCount > 0) {
+    // 2. Cache miss - fetch from OpenSea with in-flight Map deduplication (Phase 4 migration)
+    let inFlightPromise = rarityFetchInFlight.get(lockKey);
+
+    if (!inFlightPromise) {
+      // Create new fetch operation
+      inFlightPromise = (async () => {
+        try {
+          // Double-check cache after starting fetch
+          const cachedAfterStart = await rarityCache.getRarityTokens(normalizedSlug, rarityCategory);
+          if (cachedAfterStart && cachedAfterStart.totalCount > 0) {
+            return {
+              tokenIds: cachedAfterStart.tokenIds.map(id => parseInt(id, 10)),
+              totalCount: cachedAfterStart.totalCount,
+              lastUpdated: new Date(cachedAfterStart.lastUpdated),
+            };
+          }
+
+          // Fetch from OpenSea API
+          const tokenIds = await fetchRarityTokensRecursive(
+            normalizedSlug,
+            rarityCategory
+          );
+
+          const now = new Date();
+
+          // Store in cache (convert numbers to strings for storage)
+          await rarityCache.setRarityTokens(
+            normalizedSlug,
+            rarityCategory,
+            tokenIds.map(id => id.toString())
+          );
+
           return {
-            tokenIds: cachedAfterLock.tokenIds.map(id => parseInt(id, 10)),
-            totalCount: cachedAfterLock.totalCount,
-            lastUpdated: new Date(cachedAfterLock.lastUpdated),
+            tokenIds,
+            totalCount: tokenIds.length,
+            lastUpdated: now,
           };
+        } finally {
+          // Remove from in-flight tracking
+          rarityFetchInFlight.delete(lockKey);
         }
+      })();
 
-        // Fetch from OpenSea API
-        const tokenIds = await fetchRarityTokensRecursive(
-          normalizedSlug,
-          rarityCategory
-        );
-
-        const now = new Date();
-
-        // Store in Redis cache (convert numbers to strings for storage)
-        await rarityCache.setRarityTokens(
-          normalizedSlug,
-          rarityCategory,
-          tokenIds.map(id => id.toString())
-        );
-
-        return {
-          tokenIds,
-          totalCount: tokenIds.length,
-          lastUpdated: now,
-        };
-      },
-      300000 // 5 minute lock timeout
-    );
-
-    if (!result) {
-      throw new Error(`Failed to acquire lock for rarity fetch: ${lockKey}`);
+      rarityFetchInFlight.set(lockKey, inFlightPromise);
     }
+
+    // Wait for fetch to complete (either new or in-progress)
+    const result = await inFlightPromise;
 
     return {
       tokenIds: result.tokenIds,

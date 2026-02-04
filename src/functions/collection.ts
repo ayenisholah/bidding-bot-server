@@ -93,7 +93,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
   const lruCached = collectionDetailsLRU.get(normalizedSlug);
   if (lruCached) {
     trackCollectionDetailsHit();
-    debugLog('Performance', `[OS-CollDetails] LRU_HIT (<1ms) | slug=${slug}`);
+    // Cache hit - no need to log (too verbose)
     ensureOpenseaMarketplaceFee(lruCached);
     return lruCached;
   }
@@ -108,7 +108,7 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
 
   // STEP 3: Fetch from API (100-500ms)
   trackCollectionDetailsMiss();
-  debugLog('Performance', `[OS-CollDetails] CACHE_MISS | slug=${slug} | fetching...`);
+  // Cache miss - logging only API fetch timing, not the miss itself
   const fetchStart = Date.now();
 
   try {
@@ -288,13 +288,13 @@ export async function getOpenseaFloor(collectionSlug: string) {
   const lruCached = openseaFloorLRU.get(normalizedSlug);
   if (lruCached !== undefined) {
     trackFloorHit();
-    debugLog('Performance', `[OS-Floor] LRU_HIT (<1ms) | slug=${collectionSlug} | floor=${lruCached}`);
+    // Cache hit - no need to log (too verbose)
     return lruCached;
   }
 
   // STEP 2: Fetch from API (800-2500ms)
   trackFloorMiss();
-  debugLog('Performance', `[OS-Floor] CACHE_MISS | slug=${collectionSlug} | fetching...`);
+  // Cache miss - logging only API fetch timing, not the miss itself
   const fetchStart = Date.now();
 
   // Double-check LRU after potential race condition

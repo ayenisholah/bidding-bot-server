@@ -12,6 +12,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import v8 from 'v8';
 
 // Log file path - uses same directory as other debug logs
 // In development, use local debug-logs directory; in production, use /app/debug-logs
@@ -49,10 +50,24 @@ let lastMemorySnapshot: {
   timestamp: number;
 } | null = null;
 
-// OOM Prevention thresholds (2026-01-23 - Optimized for 3.5GB container limit)
-// RSS can grow without heap growth (external buffers, native code)
-const MEMORY_WARNING_MB = 2200;  // 2.2GB warning threshold (63% of 3.5GB limit)
-const MEMORY_CRITICAL_MB = 2700; // 2.7GB critical - trigger GC (77% of 3.5GB limit)
+// GC frequency tracking (ENHANCED)
+interface GCEvent {
+  timestamp: number;
+  heapFreedMB: number;
+  type: 'automatic' | 'proactive'; // NEW: Track GC source
+}
+
+const gcEvents: GCEvent[] = [];
+const GC_TRACKING_WINDOW_MS = 60 * 60 * 1000;  // 1 hour
+
+// ENHANCED: Separate tracking for automatic vs proactive GC
+let automaticGCCount = 0;
+let proactiveGCCount = 0;
+
+// OOM Prevention thresholds (2026-02-03 - Proactive GC strategy on 8GB server)
+// With proactive GC at 50%, warning/critical thresholds serve as safety nets for GC failure scenarios
+const MEMORY_WARNING_MB = 3000;  // 3GB (69% of 4.25GB) - GC may be ineffective
+const MEMORY_CRITICAL_MB = 3500; // 3.5GB (80% of 4.25GB) - GC failure, manual intervention needed
 const MEMORY_GUARD_INTERVAL = 30 * 1000; // Check every 30 seconds
 let memoryGuardInterval: NodeJS.Timeout | null = null;
 
@@ -150,6 +165,40 @@ function getDetailedMemoryUsage(): {
 }
 
 /**
+ * Get enhanced GC statistics for API consumption
+ */
+export function getGCStats() {
+  const now = Date.now();
+
+  // Remove stale events and update counters
+  const cutoff = now - GC_TRACKING_WINDOW_MS;
+  while (gcEvents.length > 0 && gcEvents[0].timestamp < cutoff) {
+    const removed = gcEvents.shift();
+    if (removed?.type === 'proactive') {
+      proactiveGCCount = Math.max(0, proactiveGCCount - 1);
+    } else {
+      automaticGCCount = Math.max(0, automaticGCCount - 1);
+    }
+  }
+
+  const recentGCs = gcEvents.filter(gc => (now - gc.timestamp) < GC_TRACKING_WINDOW_MS);
+
+  return {
+    totalLastHour: recentGCs.length,
+    proactiveGCs: proactiveGCCount,
+    automaticGCs: automaticGCCount,
+    avgIntervalMinutes: recentGCs.length > 1
+      ? Math.round((GC_TRACKING_WINDOW_MS / 1000 / 60) / recentGCs.length)
+      : 0,
+    recentEvents: recentGCs.slice(-5).map(gc => ({
+      timestamp: new Date(gc.timestamp).toISOString(),
+      freedMB: gc.heapFreedMB,
+      type: gc.type
+    }))
+  };
+}
+
+/**
  * Get memory stats for API consumption (does NOT update lastMemorySnapshot)
  * Returns current memory usage, delta from last logged sample, and thresholds
  */
@@ -237,6 +286,7 @@ export function getMemoryStats(): {
  */
 export function logProcessStart(): void {
   const memory = getMemoryUsage();
+  const v8Stats = v8.getHeapStatistics();
 
   writeLogSync('INFO', '🚀 PROCESS STARTED', {
     pid: process.pid,
@@ -244,6 +294,15 @@ export function logProcessStart(): void {
     platform: process.platform,
     arch: process.arch,
     memory,
+    v8HeapStats: {
+      heapSizeLimitMB: Math.round(v8Stats.heap_size_limit / 1024 / 1024),
+      totalHeapSizeMB: Math.round(v8Stats.total_heap_size / 1024 / 1024),
+      usedHeapSizeMB: Math.round(v8Stats.used_heap_size / 1024 / 1024),
+      mallocedMemoryMB: Math.round(v8Stats.malloced_memory / 1024 / 1024),
+      peakMallocedMemoryMB: Math.round(v8Stats.peak_malloced_memory / 1024 / 1024),
+      doesZapGarbage: v8Stats.does_zap_garbage
+    },
+    gcAvailable: typeof global.gc === 'function',
     env: process.env.NODE_ENV || 'development',
     uptime: 0,
   });
@@ -277,11 +336,72 @@ export function logProcessExit(code: number, reason: string): void {
 }
 
 /**
+ * Detect and log garbage collection events
+ * ENHANCED: Track automatic vs proactive GC
+ */
+function detectAndLogGC(current: Record<string, number>, delta: Record<string, number> | null): void {
+  if (!delta) return;
+
+  const heapDelta = delta.heapUsed;
+  const rssDelta = delta.rss;
+
+  // GC detected if significant memory freed (>10MB heap reduction)
+  if (heapDelta < -10) {
+    const now = Date.now();
+
+    // Determine GC type based on timing
+    // Proactive GC runs every 30s, so if last GC was ~30s ago, likely proactive
+    const lastGC = gcEvents[gcEvents.length - 1];
+    const timeSinceLastGC = lastGC ? now - lastGC.timestamp : Infinity;
+    const isProactive = timeSinceLastGC >= 29000 && timeSinceLastGC <= 31000; // 30s ± 1s
+    const gcType = isProactive ? 'proactive' : 'automatic';
+
+    if (gcType === 'proactive') {
+      proactiveGCCount++;
+    } else {
+      automaticGCCount++;
+    }
+
+    gcEvents.push({
+      timestamp: now,
+      heapFreedMB: Math.abs(heapDelta),
+      type: gcType
+    });
+
+    // Keep only last hour
+    while (gcEvents.length > 0 && (now - gcEvents[0].timestamp) > GC_TRACKING_WINDOW_MS) {
+      const removed = gcEvents.shift();
+      if (removed?.type === 'proactive') proactiveGCCount = Math.max(0, proactiveGCCount - 1);
+      else automaticGCCount = Math.max(0, automaticGCCount - 1);
+    }
+
+    const gcCountLastHour = gcEvents.length;
+    const avgGcIntervalMin = gcCountLastHour > 1
+      ? Math.round((GC_TRACKING_WINDOW_MS / 1000 / 60) / gcCountLastHour)
+      : 0;
+
+    writeLogSync('INFO', `🧹 GC_DETECTED [${gcType.toUpperCase()}]`, {
+      heapFreedMB: Math.abs(heapDelta),
+      rssFreedMB: Math.round(Math.abs(rssDelta)),
+      currentHeapMB: current.heapUsed,
+      currentRssMB: current.rss,
+      gcCountLastHour,
+      proactiveGCs: proactiveGCCount,
+      automaticGCs: automaticGCCount,
+      avgGcIntervalMin
+    });
+  }
+}
+
+/**
  * Log memory usage (called periodically every 30 seconds)
  * Includes delta from last sample to track memory growth rate
  */
 export function logMemoryUsage(): void {
   const { current, delta, gcAvailable } = getDetailedMemoryUsage();
+
+  // Detect GC before logging snapshot
+  detectAndLogGC(current, delta);
 
   writeLogSync('DEBUG', '📊 MEMORY_SNAPSHOT', {
     ...current,

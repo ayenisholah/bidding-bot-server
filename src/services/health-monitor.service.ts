@@ -178,9 +178,10 @@ class HealthMonitorService {
       // Check if queue is paused
       const isPaused = await this.queue.isPaused();
 
-      // Memory threshold warnings (optimized for 8GB server with 5.5GB heap limit)
-      const MEMORY_WARNING_MB = 4000;
-      const MEMORY_CRITICAL_MB = 5000;
+      // Memory threshold warnings (proactive GC adjusts these downward)
+      // With proactive GC at 50%, these thresholds serve as safety nets for GC failure scenarios
+      const MEMORY_WARNING_MB = 3000;  // 69% of heap - GC may be struggling
+      const MEMORY_CRITICAL_MB = 3500; // 80% of heap - GC failure, manual intervention needed
 
       if (heapUsedMB > MEMORY_CRITICAL_MB) {
         errorLog('Memory', `CRITICAL: Heap at ${Math.round(heapUsedMB)}MB - approaching ${MAX_HEAP_MB}MB limit`);

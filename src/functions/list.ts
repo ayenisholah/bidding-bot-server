@@ -2,7 +2,7 @@ import { config } from "dotenv";
 import { IListing } from "../types/listing.types";
 import { NETWORK, BASE_URL } from "../constants";
 import { decryptPrivateKey } from "../utils/crypto";
-import { AlchemyProvider, Wallet as Web3Wallet } from "ethers";
+import { JsonRpcProvider, Wallet as Web3Wallet } from "ethers";
 import { getCachedFloorPrice } from "../utils/collection-cache";
 import { errorLog, warnLog } from "../utils/debug-file-logger";
 import { updateListingExpiration } from "./relistExpired";
@@ -17,11 +17,9 @@ import { API_KEY } from "..";
 import { getOpenseaTraitFloor } from "../utils/opensea-trait-floor";
 import { getTraitFilteredListings } from "../functions/tokenMetadata";
 import { apiDedup } from "../utils/api-dedup";
+import { mainProvider as provider } from '../utils/provider';
 
 config()
-
-const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY
-const provider = new AlchemyProvider(NETWORK, ALCHEMY_API_KEY)
 
 export async function createListing(data: IListing) {
   // console.log(BLUE + `[LISTING - Create] Token ID: ${data.tokenId}` + RESET);

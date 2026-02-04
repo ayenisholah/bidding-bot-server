@@ -170,6 +170,12 @@ export const errorStats: BidCounts = {};
 export const skipStats: BidCounts = {};
 export const counterbidCounts: BidCounts = {};
 
+// ============================================
+// COUNTERBID EXECUTION LATENCY TRACKING
+// ============================================
+// NOTE: Execution latency tracking has been migrated to unified-latency-tracker.ts
+// This section is kept for reference but is no longer used.
+
 // Message flow tracking counters (for debugging WebSocket message loss)
 export let rawWsMessagesReceived = 0;
 export let rawOurBidsReceived = 0;

@@ -21,6 +21,7 @@ import { addIfNotExists } from '../../utils/lru-helpers';
 import { apiDedup } from "../../utils/api-dedup";
 import { isCollectionUnavailable, markCollectionUnavailable } from "../../utils/marketplace-availability";
 import { safeTokenIdToString } from '../../utils/tokenId';
+import { mainProvider as provider } from '../../utils/provider';
 
 // Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
 // This prevents log flooding when multiple parallel jobs hit the same balance check
@@ -110,10 +111,7 @@ const MAGICEDEN_CONFIG = {
   feeRecipient: '0xca9337244b5f04cb946391bc8b8a980e988f9a6a'
 }
 
-const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
-// Singleton provider with connection pooling
-const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
-
+// Shared provider with connection pooling across all operations
 const activeRequests = new Map<string, AbortController[]>();
 
 // Pre-calculated constants for performance

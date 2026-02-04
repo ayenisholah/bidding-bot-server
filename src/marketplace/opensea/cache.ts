@@ -28,6 +28,16 @@ export const balanceLRU = new LRUCache<string, number>({
   updateAgeOnGet: false
 });
 
+// Seaport Counter LRU (30 second TTL - optimization for bid placement)
+// Counter only increments when bid is placed, safe to cache short-term
+// Invalidated immediately after successful bid placement
+export const seaportCounterLRU = new LRUCache<string, bigint>({
+  max: 100,
+  ttl: 30 * 1000,  // 30 seconds
+  allowStale: false,
+  updateAgeOnGet: false
+});
+
 // Trait Floor LRU (5 min TTL)
 // Right-sized to 10K max (100 collections × 5 trait types × 20 values)
 export const traitFloorLRU = new LRUCache<string, number>({
@@ -100,6 +110,30 @@ export const collectionEventsLRU = new LRUCache<string, any>({
 });
 
 // ============================================
+// Address Balances LRU Cache (Phase 3 Migration)
+// ============================================
+// Migrated from Redis pattern: {address_balances:{addr}}
+// Stores multi-currency balance data from OpenSea API
+// Note: Uses AddressBalancesResponse type from index.ts (exported from there)
+
+/**
+ * Address Balances Cache
+ *
+ * Stores multi-currency balance data for wallet addresses
+ * - Key: lowercase wallet address
+ * - Value: AddressBalancesResponse object (Balance[] with full Currency details)
+ * - TTL: 30 seconds (matches Redis behavior)
+ * - Max: 1000 entries (~2MB memory)
+ * - Usage: UI display only (not critical path)
+ */
+export const addressBalancesLRU = new LRUCache<string, any>({
+  max: 1000,
+  ttl: 30 * 1000, // 30 seconds
+  allowStale: false,
+  updateAgeOnGet: false
+});
+
+// ============================================
 // Best Offer LRU Caches (for client UI only)
 // ============================================
 // Server bidding logic always fetches fresh offers - these serve client UI only
@@ -132,6 +166,29 @@ export const magicedenBestOfferLRU = new LRUCache<string, any>({
   updateAgeOnHas: false
 });
 
+// ============================================
+// OpenSea Listings Cache (Phase 4 Migration)
+// ============================================
+// Replaces opensea-cache.ts getCachedOrFetch for listings
+// Stores array of token IDs (strings) from best listings API
+
+/**
+ * OpenSea Listings Cache
+ *
+ * Stores best listings for collections (token ID arrays)
+ * - Key: `${collectionSlug}:${limit}`
+ * - Value: string[] (array of token IDs)
+ * - TTL: 60 seconds (matches opensea-cache.ts CACHE_TTL.LISTINGS)
+ * - Max: 1000 entries (~1MB memory)
+ * - Usage: fetchOpenseaListings() for finding cheapest NFTs
+ */
+export const openseaListingsLRU = new LRUCache<string, string[]>({
+  max: 1000,
+  ttl: 60 * 1000, // 60 seconds
+  allowStale: false,
+  updateAgeOnGet: false
+});
+
 // Cache statistics
 interface CacheStats {
   hits: number;
@@ -142,6 +199,7 @@ const stats = {
   collectionDetails: { hits: 0, misses: 0 } as CacheStats,
   floor: { hits: 0, misses: 0 } as CacheStats,
   balance: { hits: 0, misses: 0 } as CacheStats,
+  seaportCounter: { hits: 0, misses: 0 } as CacheStats,
   traitFloor: { hits: 0, misses: 0 } as CacheStats
 };
 
@@ -165,6 +223,11 @@ export function getCacheStats() {
       hitRate: `${((stats.balance.hits / (stats.balance.hits + stats.balance.misses)) * 100 || 0).toFixed(1)}%`,
       size: balanceLRU.size
     },
+    seaportCounter: {
+      ...stats.seaportCounter,
+      hitRate: `${((stats.seaportCounter.hits / (stats.seaportCounter.hits + stats.seaportCounter.misses)) * 100 || 0).toFixed(1)}%`,
+      size: seaportCounterLRU.size
+    },
     traitFloor: {
       ...stats.traitFloor,
       hitRate: `${((stats.traitFloor.hits / (stats.traitFloor.hits + stats.traitFloor.misses)) * 100 || 0).toFixed(1)}%`,
@@ -178,6 +241,7 @@ export function resetCacheStats() {
   stats.collectionDetails.hits = stats.collectionDetails.misses = 0;
   stats.floor.hits = stats.floor.misses = 0;
   stats.balance.hits = stats.balance.misses = 0;
+  stats.seaportCounter.hits = stats.seaportCounter.misses = 0;
   stats.traitFloor.hits = stats.traitFloor.misses = 0;
 }
 
@@ -190,6 +254,7 @@ setInterval(() => {
     `collDetails: ${cacheStats.collectionDetails.hits} hits, ${cacheStats.collectionDetails.misses} misses (${cacheStats.collectionDetails.hitRate}, ${cacheStats.collectionDetails.size} cached) | ` +
     `floor: ${cacheStats.floor.hits} hits, ${cacheStats.floor.misses} misses (${cacheStats.floor.hitRate}, ${cacheStats.floor.size} cached) | ` +
     `balance: ${cacheStats.balance.hits} hits, ${cacheStats.balance.misses} misses (${cacheStats.balance.hitRate}, ${cacheStats.balance.size} cached) | ` +
+    `seaportCounter: ${cacheStats.seaportCounter.hits} hits, ${cacheStats.seaportCounter.misses} misses (${cacheStats.seaportCounter.hitRate}, ${cacheStats.seaportCounter.size} cached) | ` +
     `traitFloor: ${cacheStats.traitFloor.hits} hits, ${cacheStats.traitFloor.misses} misses (${cacheStats.traitFloor.hitRate}, ${cacheStats.traitFloor.size} cached) | ` +
     `uptime: ${cacheStats.uptime}`
   );
@@ -202,5 +267,7 @@ export const trackFloorHit = () => stats.floor.hits++;
 export const trackFloorMiss = () => stats.floor.misses++;
 export const trackBalanceHit = () => stats.balance.hits++;
 export const trackBalanceMiss = () => stats.balance.misses++;
+export const trackSeaportCounterHit = () => stats.seaportCounter.hits++;
+export const trackSeaportCounterMiss = () => stats.seaportCounter.misses++;
 export const trackTraitFloorHit = () => stats.traitFloor.hits++;
 export const trackTraitFloorMiss = () => stats.traitFloor.misses++;

@@ -5,21 +5,19 @@ import { debugLog, errorLog, warnLog } from '../utils/debug-file-logger';
 /**
  * Worker Health Monitor Service
  *
- * Monitors BullMQ worker health, connection pools, and queue drain performance.
+ * Monitors BullMQ worker health and connection pools.
  *
  * Responsibilities:
  * - Worker status monitoring (running, paused, healthy)
  * - Worker failure tracking with threshold detection
  * - Redis connection pool monitoring
  * - MongoDB connection pool monitoring
- * - Queue drain/backlog detection
  * - Automatic worker restart coordination
  *
  * Features:
  * - Periodic health checks (configurable interval)
  * - Failure tracking with windowed thresholds
  * - Connection leak detection
- * - Queue stagnation detection
  * - Cooldown mechanisms to prevent restart loops
  */
 
@@ -29,8 +27,6 @@ const WORKER_HEALTH_CHECK_INTERVAL = STANDARD_INTERVAL;
 const WORKER_FAILURE_THRESHOLD = 3; // Failures before restart
 const WORKER_FAILURE_WINDOW = 5 * 60 * 1000; // 5 minutes
 const WORKER_RESTART_COOLDOWN = 5 * 60 * 1000; // 5 minutes between restarts
-const DRAIN_CHECK_INTERVAL = 30 * 1000; // Check every 30 seconds
-const CLEAR_COOLDOWN = 10 * 60 * 1000; // 10 minutes between queue clears
 
 // Color codes for console output
 const RED = '\x1b[31m';
@@ -55,21 +51,14 @@ interface WorkerFailure {
   errorTypes: string[];
 }
 
-interface QueueHistory {
-  processed: number;
-  waiting: number;
-}
 
 class WorkerHealthMonitorService {
   private deps: WorkerHealthMonitorDependencies | null = null;
 
   // State
   private workerHealthInterval: NodeJS.Timeout | null = null;
-  private queueDrainInterval: NodeJS.Timeout | null = null;
   private workerFailures = new Map<number, WorkerFailure>();
   private lastWorkerRestartTime = 0;
-  private queueProcessingHistory = new Map<number, QueueHistory>();
-  private lastQueueClearForBacklog = 0;
 
   /**
    * Initialize the service with dependencies
@@ -81,10 +70,9 @@ class WorkerHealthMonitorService {
 
   /**
    * Start worker health monitoring
-   * Includes both worker status checks and queue drain monitoring
    */
   public startMonitoring(): void {
-    if (this.workerHealthInterval || this.queueDrainInterval) {
+    if (this.workerHealthInterval) {
       warnLog('WorkerHealthMonitor', 'Monitoring already started');
       return;
     }
@@ -97,9 +85,6 @@ class WorkerHealthMonitorService {
       this.checkWorkerHealth();
     }, WORKER_HEALTH_CHECK_INTERVAL);
 
-    // Start queue drain monitoring
-    this.startQueueDrainMonitoring();
-
     debugLog('WorkerHealthMonitor', 'Worker health monitoring started');
   }
 
@@ -110,10 +95,6 @@ class WorkerHealthMonitorService {
     if (this.workerHealthInterval) {
       clearInterval(this.workerHealthInterval);
       this.workerHealthInterval = null;
-    }
-    if (this.queueDrainInterval) {
-      clearInterval(this.queueDrainInterval);
-      this.queueDrainInterval = null;
     }
     debugLog('WorkerHealthMonitor', 'Worker health monitoring stopped');
   }
@@ -151,19 +132,6 @@ class WorkerHealthMonitorService {
   // =============================================================================
   // PRIVATE METHODS
   // =============================================================================
-
-  /**
-   * Start queue drain monitoring
-   */
-  private startQueueDrainMonitoring(): void {
-    // Initial drain check
-    this.monitorQueueDrain();
-
-    // Set up periodic drain checks
-    this.queueDrainInterval = setInterval(() => {
-      this.monitorQueueDrain();
-    }, DRAIN_CHECK_INTERVAL);
-  }
 
   /**
    * Check worker health - monitors workers, connections, and queues
@@ -386,64 +354,6 @@ class WorkerHealthMonitorService {
     }
   }
 
-  /**
-   * Monitor queue drain and detect backlogs
-   */
-  private async monitorQueueDrain(): Promise<void> {
-    if (!this.deps) {
-      return;
-    }
-
-    try {
-      if (!this.deps.queue || !this.deps.blurQueue) {
-        return;
-      }
-
-      const now = Date.now();
-      const [mainCounts, blurCounts] = await Promise.all([
-        this.deps.queue.getJobCounts(),
-        this.deps.blurQueue.getJobCounts()
-      ]);
-
-      const totalWaiting = (mainCounts.waiting || 0) + (blurCounts.waiting || 0);
-      const totalActive = (mainCounts.active || 0) + (blurCounts.active || 0);
-      const totalCompleted = (mainCounts.completed || 0) + (blurCounts.completed || 0);
-
-      // Store current state for history
-      this.queueProcessingHistory.set(now, { processed: totalCompleted, waiting: totalWaiting });
-
-      // Clean old history (keep 5 minutes)
-      const historyLimit = now - (5 * 60 * 1000);
-      for (const [timestamp] of this.queueProcessingHistory) {
-        if (timestamp < historyLimit) {
-          this.queueProcessingHistory.delete(timestamp);
-        }
-      }
-
-      // Check for backlog conditions (currently disabled via comments in original code)
-      let shouldClearQueue = false;
-      const _clearReason = '';
-
-      // Check cooldown before clearing
-      if (shouldClearQueue && (now - this.lastQueueClearForBacklog) > CLEAR_COOLDOWN) {
-        this.lastQueueClearForBacklog = now;
-        await this.deps.clearQueueAndRestartJobs();
-      }
-
-      // Log drain status if high waiting count
-      if (totalWaiting > this.deps.RATE_LIMIT) {
-        const historyEntries = Array.from(this.queueProcessingHistory.entries()).sort((a, b) => a[0] - b[0]);
-        const processingRate = historyEntries.length >= 2
-          ? (historyEntries[historyEntries.length - 1][1].processed - historyEntries[0][1].processed) / (historyEntries.length - 1)
-          : 0;
-
-        debugLog('QueueDrain', `Queue drain status: waiting=${totalWaiting} active=${totalActive} rate=${Math.round(processingRate)} jobs/check`);
-      }
-
-    } catch (error) {
-      errorLog('QueueDrainMonitor', 'Error monitoring queue drain', error);
-    }
-  }
 
   // =============================================================================
   // DIAGNOSTICS & STATS
@@ -455,9 +365,7 @@ class WorkerHealthMonitorService {
   public getStats() {
     return {
       isMonitoring: this.workerHealthInterval !== null,
-      isDrainMonitoring: this.queueDrainInterval !== null,
       workerFailures: this.workerFailures.size,
-      queueHistorySize: this.queueProcessingHistory.size,
       lastWorkerRestartTime: this.lastWorkerRestartTime
     };
   }
