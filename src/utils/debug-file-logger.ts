@@ -296,7 +296,9 @@ export type LogCategory =
   | 'system'
   | 'wsConnection'  // Dedicated log for _doConnect() WebSocket connection errors
   | 'taskperf'  // Performance profiling for task startup operations
-  | 'memory';  // Memory monitoring logs for crash debugging
+  | 'memory'  // Memory monitoring logs for crash debugging
+  | 'timing'  // Performance timing for functions and API calls
+  | 'executiontime';  // Dedicated log for processOpenseaTokenBid and openseaTokenCounterBid execution times
 
 // Prefix → Category mapping (single point of configuration)
 export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
@@ -460,6 +462,14 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   // Memory (1)
   'MemoryMonitor': 'memory',  // Memory monitoring logs for crash debugging
 
+  // Timing (3)
+  'Timing': 'timing',           // Function execution timing
+  'TimingAPI': 'timing',        // API call timing
+  'TimingFunc': 'timing',       // Function-level timing
+
+  // ExecutionTime (1)
+  'ExecutionTime': 'executiontime',  // Dedicated log for processOpenseaTokenBid and openseaTokenCounterBid execution times
+
   // Metadata (2)
   'Metadata': 'metadata',
   'Rarity': 'metadata',
@@ -477,6 +487,9 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'UnhandledRejection': 'system',
   'UncaughtException': 'system',
   'TaskState': 'task',
+  'ConcurrencyAlloc': 'system',      // Dynamic concurrency allocation between workers
+  'ConcurrencyReconcile': 'system',  // Periodic reconciliation for drift detection
+  'ConcurrencyManager': 'system',    // Concurrency manager initialization and setup
 
   // TaskFlow - Consolidated task lifecycle logging (all go to taskflow-YYYY-MM-DD.log)
   // This category captures the ENTIRE task lifecycle for debugging stuck tasks
@@ -699,7 +712,7 @@ export function getAllCategories(): LogCategory[] {
     'startup', 'task', 'scheduler', 'bidflow', 'counterbid', 'queue', 'worker',
     'database', 'redis', 'lock', 'blur', 'opensea', 'magiceden', 'api', 'websocket',
     'listing', 'collection', 'balance', 'cancellation', 'health', 'metadata', 'stoptask',
-    'taskflow', 'system', 'wsConnection', 'taskperf'
+    'taskflow', 'system', 'wsConnection', 'taskperf', 'memory', 'timing'
   ];
 }
 
@@ -816,4 +829,128 @@ export function infoLog(prefix: string, message: string, metadata?: LogMetadata)
 
   // File output (append to category-specific file)
   writeToFile(logLine, prefix);
+}
+
+// ============================================
+// PERFORMANCE TIMING UTILITIES
+// ============================================
+
+/**
+ * Sanitize API response/request data for logging.
+ * Removes sensitive fields and truncates large objects.
+ *
+ * @param data - Data object to sanitize
+ * @param maxSize - Maximum size in characters before truncation (default: 5000)
+ * @returns Sanitized data object
+ */
+export function sanitizeLogData(data: any, maxSize: number = 5000): any {
+  if (!data) return data;
+
+  // Primitives pass through
+  if (typeof data !== 'object') return data;
+
+  // Create shallow copy to avoid mutating original
+  const sanitized = Array.isArray(data) ? [...data] : { ...data };
+
+  // Remove sensitive fields (recursive for nested objects)
+  const sensitiveFields = ['privateKey', 'encryptedPrivateKey', 'signature', 'auth', 'authorization'];
+
+  const removeSensitiveFields = (obj: any): any => {
+    if (!obj || typeof obj !== 'object') return obj;
+
+    if (Array.isArray(obj)) {
+      return obj.map(item => removeSensitiveFields(item));
+    }
+
+    const cleaned: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (sensitiveFields.includes(key)) {
+        cleaned[key] = '[REDACTED]';
+      } else if (typeof value === 'object' && value !== null) {
+        cleaned[key] = removeSensitiveFields(value);
+      } else {
+        cleaned[key] = value;
+      }
+    }
+    return cleaned;
+  };
+
+  const cleaned = removeSensitiveFields(sanitized);
+
+  // Convert to string and check size
+  const str = JSON.stringify(cleaned);
+  if (str.length > maxSize) {
+    return {
+      _truncated: true,
+      _originalSize: str.length,
+      _preview: str.substring(0, maxSize) + '...'
+    };
+  }
+
+  return cleaned;
+}
+
+/**
+ * Performance timer for measuring function execution time.
+ * Logs to timing-YYYY-MM-DD.log file.
+ *
+ * Usage:
+ * const timer = startTimer('fetchItemOffers', { contractAddress, tokenId });
+ * // ... do work ...
+ * timer.end(); // Logs execution time
+ */
+export function startTimer(functionName: string, metadata?: LogMetadata) {
+  const startTime = performance.now();
+
+  return {
+    end: (additionalMeta?: LogMetadata) => {
+      const duration = Math.round(performance.now() - startTime);
+
+      // Calculate response size if data object present
+      let responseSize = 0;
+      if (additionalMeta?.response || additionalMeta?.offers || additionalMeta?.payload) {
+        const dataObj = additionalMeta.response || additionalMeta.offers || additionalMeta.payload;
+        responseSize = JSON.stringify(dataObj).length;
+      }
+
+      const allMeta = {
+        ...metadata,
+        ...additionalMeta,
+        duration,
+        ...(responseSize > 0 && { responseSize })
+      };
+      infoLog('Timing', `[FUNC] ${functionName} | ${duration}ms`, allMeta);
+      return duration;
+    },
+    endAPI: (endpoint: string, additionalMeta?: LogMetadata) => {
+      const duration = Math.round(performance.now() - startTime);
+      const allMeta = { ...metadata, ...additionalMeta, duration, endpoint };
+      infoLog('TimingAPI', `[API] ${functionName} | ${endpoint} | ${duration}ms`, allMeta);
+      return duration;
+    }
+  };
+}
+
+/**
+ * Async wrapper for timing async functions.
+ *
+ * Usage:
+ * const result = await timeAsync('fetchItemOffers', metadata, async () => {
+ *   return await fetchItemOffers(...);
+ * });
+ */
+export async function timeAsync<T>(
+  functionName: string,
+  metadata: LogMetadata,
+  fn: () => Promise<T>
+): Promise<T> {
+  const timer = startTimer(functionName, metadata);
+  try {
+    const result = await fn();
+    timer.end({ success: true });
+    return result;
+  } catch (error) {
+    timer.end({ success: false, error: error instanceof Error ? error.message : String(error) });
+    throw error;
+  }
 }

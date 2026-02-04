@@ -14,6 +14,7 @@ import { config } from "dotenv";
 import fs from 'fs';
 import path from 'path';
 import archiver from 'archiver';
+import v8 from 'v8';
 
 config()
 console.log('[STARTUP] Environment configuration loaded');
@@ -54,7 +55,8 @@ import { decryptPrivateKey, setPassword, getPassword, decryptPassword, recoverPa
 import { getTokenTraitCacheStats } from './utils/token-trait-cache';
 import { getLogsCacheStats } from './utils/logs-cache';
 import { getMarketplaceApprovalCacheStats } from './utils/marketplace-approval-cache';
-import { logProcessStart, logProcessExit, logSignal, logLifecycleEvent, stopMemoryMonitor, getMemoryStats } from "./utils/process-lifecycle-logger";
+import { logProcessStart, logProcessExit, logSignal, logLifecycleEvent, stopMemoryMonitor, getMemoryStats, getGCStats } from "./utils/process-lifecycle-logger";
+import { startProactiveGC, stopProactiveGC, getProactiveGCStats } from "./utils/proactive-gc";
 import { fetchWalletNFTs } from "./utils/nft";
 import WebSocketManager from "./utils/websocket-manager";
 import { initializeListingScheduler, shutdownListingScheduler, scheduleListing, cancelListingJob, processListingJob } from "./functions/listingScheduler";
@@ -78,8 +80,10 @@ import { approvalCache } from "./utils/approval-cache";
 import { blurCompletionTracker } from "./utils/blur-completion-tracker";
 import { cancellationTracker } from "./utils/cancellation-tracker";
 import { cancellationDebugLogger } from "./utils/cancellation-debug-logger";
-import { debugLog, errorLog, warnLog, infoLog, getAllCategories, type LogCategory } from "./utils/debug-file-logger";
+import { debugLog, errorLog, warnLog, infoLog, getAllCategories, type LogCategory, startTimer, sanitizeLogData } from "./utils/debug-file-logger";
 import { clearUnavailabilityCache } from "./utils/marketplace-availability";
+import { blurAuthBlockLRU, blurWalletPauseLRU, blurAccessTokenLRU } from './marketplace/blur/cache';
+import { addressBalancesLRU } from './marketplace/opensea/cache';
 
 import { listingPriceCache } from "./utils/listing-price-cache";
 import Listing from "./models/listing.model";
@@ -88,6 +92,8 @@ import { BroadcastManager } from "./utils/broadcast-manager";
 import { memorySnapshotService } from "./services/memory-snapshot.service";
 import { memoryCleanupService } from "./services/memory-cleanup.service";
 import { collectionDataWarmer } from "./services/collection-data-warmer.service";
+import { recordForwarding, recordExecution as recordCounterbidExecution, getForwardingStats, getAllExecutionStats, startCleanup as startLatencyCleanup, stopCleanup as stopLatencyCleanup } from "./services/unified-latency-tracker";
+import { concurrencyManager } from "./services/concurrency-manager";
 
 // Global type declarations
 declare global {
@@ -98,8 +104,6 @@ declare global {
 import { loadOurWalletAddresses, isOurWallet, addOurWalletAddress, removeOurWalletAddress } from "./utils/wallet-tracking";
 import { getTaskIdForLog, maskSensitiveIdentifier, extractDetailedOpenSeaError } from "./utils/task-helpers";
 import {
-  isMarketplaceStoppedDueToBalance,
-  stopMarketplaceDueToInsufficientBalance,
   handleInsufficientBalanceError,
   shouldLogBalanceError,
   parseOpenseaBalanceError,
@@ -149,6 +153,12 @@ const MARKETPLACE_WS_URL = process.env.MARKETPLACE_WS_URL || "wss://nfttools-ws-
 // Initialize process lifecycle logging immediately on startup
 logProcessStart();
 
+// Start proactive GC monitoring
+startProactiveGC();
+
+// Start unified latency tracker cleanup
+startLatencyCleanup();
+
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
 
@@ -191,8 +201,7 @@ const processedMessages = new LRUCache<string, number>({
 
 // Blur rate limiting is now handled by BlurRateLimiter class
 const QUEUE_NAME = 'BIDDING_BOT';
-const BLUR_BIDDING_QUEUE = 'BLUR_BIDDING_QUEUE';
-const CLEAR_COOLDOWN = 5 * 60 * 1000; // 5 minutes cooldown between queue clears
+const COUNTERBID_QUEUE_NAME = 'COUNTERBID_QUEUE';
 
 // Type definitions (duplicates removed - now imported from global-state.ts)
 interface LoopCount {
@@ -297,7 +306,8 @@ function markSeenIfNew(cache: LRUCache<string, boolean>, key: string): boolean {
  * Check if a marketplace is stopped due to insufficient balance.
  * Used to skip processing queued jobs after balance error is detected.
  */
-// NOTE: Balance helper functions (isMarketplaceStoppedDueToBalance, stopMarketplaceDueToInsufficientBalance, handleInsufficientBalanceError, shouldLogBalanceError) are now imported from ./utils/balance-helpers
+// NOTE: Balance helper functions (handleInsufficientBalanceError, shouldLogBalanceError) are now imported from ./utils/balance-helpers
+// Balance errors are logged but do NOT stop the marketplace - they're treated as normal bid errors
 
 // Set up periodic intervals
 let expirationMonitorInterval: NodeJS.Timeout | null = null;
@@ -387,7 +397,7 @@ class RateLimiter {
 
 // Initialize worker later in startServer function
 let mainWorker: Worker | null = null;
-let blurWorker: Worker | null = null;
+let counterbidWorker: Worker | null = null;
 
 // Track all BullMQ connections for proper cleanup
 let bullMQConnections: any[] = [];
@@ -782,11 +792,9 @@ const statusProgressionManager = new TaskStatusManager();
 // These will be initialized in startServer()
 export let queue: Queue;
 let queueEvents: QueueEvents;
+export let counterbidQueue: Queue;
+let counterbidQueueEvents: QueueEvents;
 let QUEUE_OPTIONS: QueueOptions;
-
-// Blur queue variables
-export let blurQueue: Queue;
-let blurQueueEvents: QueueEvents;
 
 // Redis connection for internal use (not BullMQ)
 let redis = redisClient.getClient();
@@ -1211,9 +1219,9 @@ async function monitorHealth() {
     // Check if queue is paused
     const isPaused = await queue.isPaused();
 
-    // Memory threshold warnings (optimized for 8GB server with 5.5GB heap limit)
-    const MEMORY_WARNING_MB = 4000;
-    const MEMORY_CRITICAL_MB = 5000;
+    // Memory threshold warnings (proactive GC adjusts these downward)
+    const MEMORY_WARNING_MB = 3000;  // 69% of heap - GC may be struggling
+    const MEMORY_CRITICAL_MB = 3500; // 80% of heap - GC failure, manual intervention needed
 
     if (heapUsedMB > MEMORY_CRITICAL_MB) {
       errorLog('Memory', `CRITICAL: Heap at ${Math.round(heapUsedMB)}MB - approaching ${MAX_HEAP_MB}MB limit`);
@@ -1352,16 +1360,14 @@ function getActiveTaskWithIdByIndex(index: number): { id: string, task: ITask } 
 // All other job removal should go through stopTask -> removeAllTaskJobsFromQueue
 async function clearQueueAndRestartJobs() {
   try {
-    // Pause both queues before obliterating
+    // Pause main queue before obliterating
     await queue.pause();
-    await blurQueue.pause();
 
-    // Wait for queues to fully pause and check status
+    // Wait for queue to fully pause and check status
     let retries = 10;
     while (retries > 0) {
       const isPaused = await queue.isPaused();
-      const isBlurPaused = await blurQueue.isPaused();
-      if (isPaused && isBlurPaused) break;
+      if (isPaused) break;
       await new Promise(resolve => setTimeout(resolve, 500));
       retries--;
     }
@@ -1369,16 +1375,14 @@ async function clearQueueAndRestartJobs() {
     // Additional safety wait
     await new Promise(resolve => setTimeout(resolve, 1000));
 
-    // Obliterate both queues with force option
+    // Obliterate main queue with force option
     await queue.obliterate({ force: true });
-    await blurQueue.obliterate({ force: true });
 
-    // Check if password is available before resuming queues
+    // Check if password is available before resuming queue
     const password = getPassword();
     if (password) {
-      // Resume both queues only if password is available
+      // Resume main queue only if password is available
       await queue.resume();
-      await blurQueue.resume();
     }
 
     // Clear any stored job states
@@ -1666,57 +1670,44 @@ const scheduledJobLocks = new Map<string, boolean>();
 async function pauseQueueAndWorkers() {
   try {
 
-    // Pause both queues
+    // Pause main queue
     await queue.pause();
-    await blurQueue.pause();
 
-    // Pause all workers
+    // Pause main worker
     if (mainWorker) await mainWorker.pause();
-    if (blurWorker) await blurWorker.pause();
 
   } catch (error) {
-    errorLog('QueuePause', 'Error pausing queues and workers', error);
+    errorLog('QueuePause', 'Error pausing queue and worker', error);
   }
 }
 
 async function resumeQueueAndWorkers() {
   try {
 
-    // Resume both queues
+    // Resume main queue
     await queue.resume();
-    await blurQueue.resume();
 
-    // Resume all workers
+    // Resume main worker
     if (mainWorker) await mainWorker.resume();
-    if (blurWorker) await blurWorker.resume();
 
 
     // Retry any failed jobs that were due to missing password
     try {
       const failedJobs = await queue.getFailed();
-      const blurFailedJobs = await blurQueue.getFailed();
 
       // Retry jobs that failed due to missing password
-      const passwordFailedJobs = failedJobs.filter(job =>
-        job.failedReason?.includes('No password available')
-      );
-
-      const blurPasswordFailedJobs = blurFailedJobs.filter(job =>
+      const passwordFailedJobs = failedJobs.filter((job: Job) =>
         job.failedReason?.includes('No password available')
       );
 
       if (passwordFailedJobs.length > 0) {
-        await Promise.all(passwordFailedJobs.map(job => job.retry()));
-      }
-
-      if (blurPasswordFailedJobs.length > 0) {
-        await Promise.all(blurPasswordFailedJobs.map(job => job.retry()));
+        await Promise.all(passwordFailedJobs.map((job: Job) => job.retry()));
       }
     } catch (retryError) {
       errorLog('JobRetry', 'Error retrying failed jobs', retryError);
     }
   } catch (error) {
-    errorLog('QueueResume', 'Error resuming queues and workers', error);
+    errorLog('QueueResume', 'Error resuming queue and worker', error);
   }
 }
 
@@ -1783,32 +1774,10 @@ async function checkWorkerHealth() {
       }
     }
 
-    // Check blur worker
-    if (blurWorker) {
-      try {
-        workerStatuses.push({
-          index: 1,
-          name: 'blur-worker',
-          running: blurWorker.isRunning(),
-          paused: blurWorker.isPaused(),
-          healthy: blurWorker.isRunning() && !blurWorker.isPaused()
-        });
-      } catch (error) {
-        workerStatuses.push({
-          index: 1,
-          name: 'blur-worker',
-          running: false,
-          paused: false,
-          healthy: false,
-          error: error instanceof Error ? error.message : 'Unknown error'
-        });
-      }
-    }
-
     const unhealthyWorkers = workerStatuses.filter(status => !status.healthy);
 
     if (unhealthyWorkers.length > 0) {
-      errorLog('HealthCheck', `Unhealthy workers detected: ${unhealthyWorkers.length}/2`);
+      errorLog('HealthCheck', `Unhealthy workers detected: ${unhealthyWorkers.length}/1`);
 
       let shouldRestartAll = false;
 
@@ -1826,8 +1795,6 @@ async function checkWorkerHealth() {
           try {
             if (workerStatus.index === 0 && mainWorker) {
               await mainWorker.resume();
-            } else if (workerStatus.index === 1 && blurWorker) {
-              await blurWorker.resume();
             }
           } catch (error) {
             errorLog('HealthCheck', `Failed to resume worker ${workerStatus.index}`, error);
@@ -1874,10 +1841,7 @@ async function checkWorkerHealth() {
     }
 
     // Check queue status
-    const [mainQueueCounts, blurQueueCounts] = await Promise.all([
-      queue.getJobCounts(),
-      blurQueue.getJobCounts()
-    ]);
+    const mainQueueCounts = await queue.getJobCounts();
 
     // Log health summary
     const healthSummary = {
@@ -1886,19 +1850,14 @@ async function checkWorkerHealth() {
         healthy: Object.keys(connectionHealth).length - unhealthyConnections.length
       },
       workers: {
-        total: 2,
-        healthy: 2 - unhealthyWorkers.length
+        total: 1,
+        healthy: 1 - unhealthyWorkers.length
       },
       queues: {
         main: {
           waiting: mainQueueCounts.waiting || 0,
           active: mainQueueCounts.active || 0,
           failed: mainQueueCounts.failed || 0
-        },
-        blur: {
-          waiting: blurQueueCounts.waiting || 0,
-          active: blurQueueCounts.active || 0,
-          failed: blurQueueCounts.failed || 0
         }
       }
     };
@@ -2112,12 +2071,12 @@ async function startServer() {
     }
 
 
-    // Create separate BullMQ connections for each component
+    // Create BullMQ connections
 
     let mainQueueConnection: any;
     let mainQueueEventsConnection: any;
-    let blurQueueConnection: any;
-    let blurQueueEventsConnection: any;
+    let counterbidQueueConnection: any;
+    let counterbidQueueEventsConnection: any;
 
     try {
       // Main queue connection
@@ -2128,13 +2087,13 @@ async function startServer() {
       mainQueueEventsConnection = await createBullMQConnection('main-queue-events');
       bullMQConnections.push(mainQueueEventsConnection);
 
-      // Blur queue connection
-      blurQueueConnection = await createBullMQConnection('blur-queue');
-      bullMQConnections.push(blurQueueConnection);
+      // Counterbid queue connection
+      counterbidQueueConnection = await createBullMQConnection('counterbid-queue');
+      bullMQConnections.push(counterbidQueueConnection);
 
-      // Blur queue events connection
-      blurQueueEventsConnection = await createBullMQConnection('blur-queue-events');
-      bullMQConnections.push(blurQueueEventsConnection);
+      // Counterbid queue events connection
+      counterbidQueueEventsConnection = await createBullMQConnection('counterbid-queue-events');
+      bullMQConnections.push(counterbidQueueEventsConnection);
 
       // Verify all connections are healthy before proceeding
       const healthCheck = await checkBullMQConnectionsHealth();
@@ -2168,23 +2127,23 @@ async function startServer() {
     // Initialize queue and events with their own connections
     queue = new Queue(QUEUE_NAME, QUEUE_OPTIONS);
     queueEvents = new QueueEvents(QUEUE_NAME, { connection: mainQueueEventsConnection });
-    blurQueueEvents = new QueueEvents(BLUR_BIDDING_QUEUE, { connection: blurQueueEventsConnection });
 
-    // Initialize Blur queue with its own connection
-    blurQueue = new Queue(BLUR_BIDDING_QUEUE, {
-      connection: blurQueueConnection,
+    // Initialize counterbid queue with its own connection
+    counterbidQueue = new Queue(COUNTERBID_QUEUE_NAME, {
+      connection: counterbidQueueConnection,
       defaultJobOptions: {
         removeOnComplete: true,
         removeOnFail: true,
         attempts: 1,
       }
     });
+    counterbidQueueEvents = new QueueEvents(COUNTERBID_QUEUE_NAME, { connection: counterbidQueueEventsConnection });
 
-    console.log('[STARTUP] BullMQ queues initialized');
+    console.log('[STARTUP] BullMQ queues initialized (main + counterbid)');
 
     // Initialize memory snapshot service
     const redis = getRedisConnection();
-    memorySnapshotService.initialize(redis, queue, blurQueue, {
+    memorySnapshotService.initialize(redis, queue, null, {
       memoryCleanupService,
       processedMessages,
       collectionStatsLRU,
@@ -2224,7 +2183,7 @@ async function startServer() {
 
 
     // Single worker gets full RATE_LIMIT concurrency
-    const concurrency = Number(RATE_LIMIT);
+    const concurrency = Number(RATE_LIMIT) * 1.5;
 
     // Create single main queue worker with full concurrency
     const mainWorkerConnection = await createBullMQConnection('main-worker');
@@ -2427,162 +2386,231 @@ async function startServer() {
     // Assign main worker instance
     infoLog('Worker', `Main worker initialized | concurrency=${concurrency} | queue=${QUEUE_NAME}`);
 
-    // Create Blur worker with its own connection and rate limiting
-    const blurWorkerConnection = await createBullMQConnection('blur-worker');
-    bullMQConnections.push(blurWorkerConnection);
+    // Create counterbid worker with dynamic concurrency (starts at 1, adjusted by concurrency manager)
+    const counterbidWorkerConnection = await createBullMQConnection('counterbid-worker');
+    bullMQConnections.push(counterbidWorkerConnection);
 
-    blurWorker = new Worker(
-      BLUR_BIDDING_QUEUE,
+    counterbidWorker = new Worker(
+      COUNTERBID_QUEUE_NAME,
       async (job) => {
-        // TIMEOUT CONFIGURATION (Optimized for aggressive fast failure)
+        // TIMEOUT CONFIGURATION (same as mainWorker)
         // Cascade: Axios (30s) → Lock (45s) → Stall (60s) → Job (60s)
-        // - Lock expires BEFORE stall detection (prevents race conditions)
-        // - Ultra-fast failure (45s lock, 60s job) maximizes retry opportunities
-        // - Allows 1-2 sequential API calls per job (competitive bidding priority)
-        const jobTimeout = 60000; // 1 minute (aggressive timeout for fast retries)
+        const jobTimeout = 60000;
         const abortController = new AbortController();
 
         const timeoutPromise = new Promise((_, reject) => {
           setTimeout(() => {
-            abortController.abort(); // Signal cancellation to any async operations
+            abortController.abort();
             const customJobId = (job.opts as any)?.jobId || job.id;
-            reject(new Error(`Blur job ${customJobId} (ID: ${job.id}) timed out after ${jobTimeout}ms - aborted`));
+            reject(new Error(`Counterbid job ${customJobId} (ID: ${job.id}) timed out after ${jobTimeout}ms - aborted`));
           }, jobTimeout);
         });
 
         try {
           const result = await Promise.race([
-            processBlurJob(job, abortController.signal),
+            processJob(job, abortController.signal),
             timeoutPromise
           ]);
-
           return result || { success: true };
         } catch (error: any) {
-          const blurJobTaskId = getTaskIdForLog(job);
-          errorLog('BlurWorker', `Task ${blurJobTaskId} - Job ${job.id} failed`, error);
-          // If it's a password error, throw it to fail the job properly
           if (error.code === 'NO_PASSWORD' || error.message?.includes('No password available')) {
             throw error;
           }
-          // For other errors, also throw to ensure proper retry
           throw error;
         }
       },
       {
-        connection: blurWorkerConnection,
-        concurrency: concurrency, // Reduce concurrency for Blur to prevent rate limit issues
-        lockDuration: 45000,       // 45 seconds - allows 1-2 sequential 30s API calls
-        stalledInterval: 15000,    // 15 seconds - high-frequency stall detection
-        maxStalledCount: 4         // 4 checks = 60s (triggers AFTER lock expires at 45s)
+        connection: counterbidWorkerConnection,
+        concurrency: concurrency, // Start at minimum, adjusted dynamically by concurrency manager
+        lockDuration: 45000,
+        stalledInterval: 15000,
+        maxStalledCount: 4
       }
     );
 
-    // Add error handlers for Blur queue components
-    blurWorker.on('error', async (error) => {
-      errorLog('BlurWorker', 'Worker error', error);
-      trackWorkerFailure(1, `Blur worker error: ${error.message || String(error)}`);
+    // Add error handlers for counterbid worker
+    counterbidWorker.on('error', async (error) => {
+      errorLog('Worker', 'Counterbid worker error', error);
+      trackWorkerFailure(1, `Counterbid worker error: ${error.message || String(error)}`);
 
-      // Check if this is a Redis error
       if (isRedisError(error)) {
-        // Single node Redis - no cluster failure tracking needed
+        errorLog('Worker', 'Counterbid worker Redis connection error - attempting recovery', error);
+        try {
+          await counterbidWorkerConnection.disconnect();
+          const newConnection = await createBullMQConnection('counterbid-worker');
+          bullMQConnections[bullMQConnections.length - 1] = newConnection;
+          infoLog('Worker', 'Counterbid worker Redis connection recovered');
+        } catch (reconnectError) {
+          errorLog('Worker', 'Failed to recover counterbid worker Redis connection', reconnectError);
+        }
       }
-
-      errorLog('Queue', 'Blur worker error', error instanceof Error ? error : new Error(String(error)));
     });
 
-    blurWorker.on('failed', async (job, error) => {
-      const blurFailedTaskId = getTaskIdForLog(job);
-      // Deduplicate Blur worker failure logs to prevent log flooding
-      const blurErrorKey = `blur-worker-failed-${blurFailedTaskId}-${job?.id}`;
-      if (addIfNotExists(errorLogCache, blurErrorKey, true)) {
-        errorLog('BlurWorker', `Task ${blurFailedTaskId} - Job ${job?.id} failed`, error);
+    counterbidWorker.on('failed', async (job, error) => {
+      const taskId = getTaskIdForLog(job);
+      const workerErrorKey = `counterbid-worker-failed-${taskId}-${job?.id}`;
+      if (addIfNotExists(errorLogCache, workerErrorKey, true)) {
+        errorLog('Worker', `Counterbid worker - Task ${taskId} - Job ${job?.id} failed`, error);
       }
 
-      // Handle failed bid jobs - immediately mark as processed
+      // Handle failed bid jobs
       if (job && job.id && typeof job.id === 'string' && job.id.startsWith('bid-')) {
-
-        // Extract task and marketplace from job ID (format: bid-taskId-marketplace-...)
         const parts = job.id.split('-');
         if (parts.length >= 3) {
           const taskId = parts[1];
           const marketplace = parts[2].toLowerCase();
-
-          // Extract loopNumber from job data if available for precise parent lookup
           const jobLoopNumber = job.data?.loopNumber as number | undefined;
-
-          // Mark job as processed to allow loop completion
           markJobAsProcessed(taskId, marketplace, job.id, false, jobLoopNumber).catch(err => {
-            errorLog('BlurWorker', 'Failed to mark failed bid job as processed', err);
+            errorLog('Worker', 'Counterbid worker failed to mark failed bid job as processed', err);
           });
         }
       }
 
-      // Handle failed Blur cancellation jobs - track them as completed
-      if (job && job.name === CANCEL_BLUR_BID) {
+      // Handle failed cancellation jobs
+      if (job && job.name && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID || job.name === CANCEL_MAGICEDEN_BID || job.name === CANCEL_BLUR_BID)) {
         const { taskId } = job.data;
+        const marketplace = (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID) ? 'opensea' :
+          job.name === CANCEL_MAGICEDEN_BID ? 'magiceden' : 'blur';
 
-
-        // Record the failed cancellation as a completion to ensure we reach 100%
-        infoLog('CancellationWorker', `RECORD_BEFORE | taskId=${taskId} | marketplace=blur | reason=blur_worker_failed`, { taskId });
-        cancellationTracker.recordCompletion(taskId, 1, 'blur');
-        infoLog('CancellationWorker', `RECORD_AFTER | taskId=${taskId} | marketplace=blur`, { taskId });
-        updateTaskCancellationPercentage(taskId, undefined, 'blur').catch((err) => {
-          const blurCancelTaskId = getTaskIdForLog(job);
-          errorLog('CancellationTracking', `Failed to update cancellation percentage for task ${blurCancelTaskId} after Blur job failure`, err);
+        cancellationTracker.recordCompletion(taskId, 1, marketplace);
+        updateTaskCancellationPercentage(taskId, undefined, marketplace).catch(err => {
+          const failedTaskId = getTaskIdForLog(job);
+          errorLog('CancellationTracking', `Failed to update cancellation percentage for task ${failedTaskId} after counterbid job failure`, err);
         });
 
-        // Delete the order from Redis cache to clean up
         if (job.data.orderKey) {
-          await safeDeleteFromCache(job.data.orderKey, taskId, 'blur');
+          await safeDeleteFromCache(job.data.orderKey, taskId, marketplace);
         } else if (job.data.orderKeys) {
           for (const orderKey of job.data.orderKeys) {
-            await safeDeleteFromCache(orderKey, taskId, 'blur');
+            await safeDeleteFromCache(orderKey, taskId, marketplace);
+          }
+
+          if (job.name === CANCEL_MAGICEDEN_BID && job.data.orderKeys) {
+            job.data.orderKeys.forEach((orderKey: string) => {
+              magicedenOrdersBeingCancelled.delete(orderKey);
+            });
           }
         }
       }
 
-      // Track systemic failures
       if (error.message?.includes('could not renew lock') ||
         error.message?.includes('Missing lock') ||
         error.message?.includes('connection lost')) {
-        trackWorkerFailure(1, `Blur job processing error: ${error.message}`);
+        trackWorkerFailure(1, `Counterbid job processing error: ${error.message}`);
       }
     });
 
-    // Add completion hook for Blur worker
-    blurWorker.on('completed', async (job) => {
-      // Verify cache was cleaned (defensive check)
-      if (job && job.name === CANCEL_BLUR_BID && job.data.orderKey) {
+    // Add completion hook for counterbid worker
+    counterbidWorker.on('completed', async (job) => {
+      if (job && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID || job.name === CANCEL_MAGICEDEN_BID) && job.data.orderKey) {
         const taskId = job.data.taskId;
         const orderKey = job.data.orderKey;
+        const marketplace = (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID) ? 'opensea' : 'magiceden';
 
-        // Check if order still exists in cache (shouldn't be there)
         const identifier = job.data.identifier;
         if (identifier) {
-          const stillExists = await orderCache.getNewest(taskId, 'blur', identifier);
+          const stillExists = await orderCache.getNewest(taskId, marketplace, identifier);
           if (stillExists) {
             warnLog('WorkerCleanup', `ORDER_STILL_IN_CACHE_AFTER_COMPLETION | taskId=${taskId} | orderKey=${orderKey}`, { taskId });
-            await safeDeleteFromCache(orderKey, taskId, 'blur');
+            await safeDeleteFromCache(orderKey, taskId, marketplace);
           }
         }
       }
     });
 
-    blurQueue.on('error', (error) => {
-      errorLog('BlurQueue', 'Queue error', error);
-      errorLog('Queue', 'Blur queue error', error);
+    // Add failure hook for counterbid worker cleanup
+    counterbidWorker.on('failed', async (job, error) => {
+      if (job && (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID || job.name === CANCEL_MAGICEDEN_BID)) {
+        const taskId = job.data.taskId;
+        const marketplace = (job.name === CANCEL_OPENSEA_BID || job.name === CANCEL_OPENSEA_COUNTERBID || job.name === CANCEL_OPENSEA_OUTBID) ? 'opensea' : 'magiceden';
+
+        if (job.data.orderKey) {
+          const orderKey = job.data.orderKey;
+          warnLog('WorkerCleanup', `GUARANTEED_CLEANUP_ON_FAILURE | taskId=${taskId} | marketplace=${marketplace} | orderKey=${orderKey} | error=${error.message}`, { taskId });
+          await safeDeleteFromCache(orderKey, taskId, marketplace);
+        } else if (job.data.orderKeys) {
+          for (const orderKey of job.data.orderKeys) {
+            warnLog('WorkerCleanup', `GUARANTEED_CLEANUP_ON_FAILURE | taskId=${taskId} | marketplace=${marketplace} | orderKey=${orderKey} | error=${error.message}`, { taskId });
+            await safeDeleteFromCache(orderKey, taskId, marketplace);
+          }
+        }
+      }
     });
 
-    blurQueueEvents.on('error', (error) => {
-      errorLog('BlurQueueEvents', 'Events error', error);
-      errorLog('Queue', 'Blur queue events error', error);
+    infoLog('Worker', `Counterbid worker initialized | concurrency=1 (dynamic) | queue=${COUNTERBID_QUEUE_NAME}`);
+
+    // Initialize concurrency manager with workers
+    concurrencyManager.setWorkers(mainWorker, counterbidWorker);
+
+    // Hook into counterbid queue events for real-time counter updates
+    // NOTE: increment is called directly at job creation sites (more reliable than 'waiting' event)
+    // Keep 'completed' and 'failed' handlers for decrement (they work more reliably)
+
+    counterbidQueueEvents.on('completed', ({ jobId }) => {
+      concurrencyManager.decrementCounterbid(); // Instant -1, immediate reallocation
     });
 
+    counterbidQueueEvents.on('failed', ({ jobId }) => {
+      concurrencyManager.decrementCounterbid(); // Instant -1, immediate reallocation
+    });
+
+    // Periodic reconciliation (safety net for race conditions, every 60 seconds)
+    setInterval(async () => {
+      try {
+        const counts = await counterbidQueue.getJobCounts();
+        const actual = counts.waiting + counts.active;
+        await concurrencyManager.reconcile(actual);
+      } catch (error) {
+        errorLog('ConcurrencyManager', 'Failed to reconcile counterbid job count', error);
+      }
+    }, 60000);
+
+    infoLog(
+      'ConcurrencyManager',
+      `Dynamic concurrency allocation enabled | RATE_LIMIT=${RATE_LIMIT} | maxConcurrency=${concurrency} | cbFixed=${concurrency} | mainDynamic=1-${concurrency} | totalRange=${concurrency + 1}-${concurrency * 2}`
+    );
+
+    // Additional startup verification log
+    infoLog(
+      'ConcurrencyManager',
+      `Formula: CB = ${concurrency} (constant) | Main = max(1, round(${concurrency} * (1 - min(activeJobs, ${RATE_LIMIT}) / ${RATE_LIMIT})))`
+    );
+
+    // Update memory snapshot service with worker and concurrency manager references
+    memorySnapshotService.initialize(
+      redis,
+      queue,
+      null,
+      {
+        memoryCleanupService,
+        processedMessages,
+        collectionStatsLRU,
+        collectionDataLRU,
+        traitsToRemove,
+        removedTokens,
+        tasksBeingRestarted,
+        tasksBeingCancelled,
+        tasksInCompletionProcess,
+        failedTaskStartQueue,
+        failedTaskStopQueue,
+        queueingProgress,
+        taskLocks,
+        loopSchedulingLocks
+      },
+      counterbidQueue,
+      mainWorker,
+      counterbidWorker,
+      concurrencyManager
+    );
+    infoLog('MemorySnapshot', 'Updated with worker and concurrency manager references');
 
     // Initialize worker health monitoring
     startWorkerHealthMonitoring();
 
-    infoLog('STARTUP', `Workers initialized | mainWorker=1 | blurWorker=1 | total=2 | concurrency=${concurrency}`);
+    infoLog(
+      'STARTUP',
+      `Workers initialized | mainWorker=1 | counterbidWorker=1 | mainConcurrency=${concurrency} (dynamic) | counterbidConcurrency=${concurrency} (fixed)`
+    );
 
 
     // Add process-level error handler for uncaught BullMQ errors
@@ -2615,7 +2643,7 @@ async function startServer() {
 
         // Stop workers
         if (mainWorker) await mainWorker.close();
-        if (blurWorker) await blurWorker.close();
+        if (counterbidWorker) await counterbidWorker.close();
 
         // Close BullMQ connections
         await closeAllBullMQConnections();
@@ -2833,26 +2861,6 @@ async function startServer() {
         }
       }
 
-      // Check blur worker
-      if (blurWorker) {
-        try {
-          workerStatuses.push({
-            index: 1,
-            running: blurWorker.isRunning(),
-            paused: blurWorker.isPaused(),
-            healthy: blurWorker.isRunning() && !blurWorker.isPaused()
-          });
-        } catch (error) {
-          workerStatuses.push({
-            index: 1,
-            running: false,
-            paused: false,
-            healthy: false,
-            error
-          });
-        }
-      }
-
       const unhealthyWorkers = workerStatuses.filter(s => !s.healthy);
       if (unhealthyWorkers.length > 0) {
         errorLog('WorkerHealth', `${unhealthyWorkers.length} workers are not ready`);
@@ -2866,8 +2874,6 @@ async function startServer() {
             try {
               if (workerStatus.index === 0 && mainWorker) {
                 await mainWorker.resume();
-              } else if (workerStatus.index === 1 && blurWorker) {
-                await blurWorker.resume();
               }
             } catch (error) {
               errorLog('WorkerResume', `Failed to resume worker ${workerStatus.index}`, error);
@@ -3275,16 +3281,13 @@ async function startServer() {
         const mainWaiting = await queue.getWaitingCount();
         const mainActive = await queue.getActiveCount();
         const mainDelayed = await queue.getDelayedCount();
-        const blurWaiting = await blurQueue.getWaitingCount();
-        const blurActive = await blurQueue.getActiveCount();
-        const blurDelayed = await blurQueue.getDelayedCount();
 
         // Always log queue stats for monitoring (useful for diagnosing stuck tasks)
-        infoLog('QueueStats', `PERIODIC | mainQueue: waiting=${mainWaiting} active=${mainActive} delayed=${mainDelayed} | blurQueue: waiting=${blurWaiting} active=${blurActive} delayed=${blurDelayed}`);
+        infoLog('QueueStats', `PERIODIC | mainQueue: waiting=${mainWaiting} active=${mainActive} delayed=${mainDelayed}`);
 
         // Warn if queue is backing up
-        if (mainWaiting > 1000 || blurWaiting > 500) {
-          warnLog('QueueStats', `HIGH_BACKLOG | mainQueue: waiting=${mainWaiting} | blurQueue: waiting=${blurWaiting}`);
+        if (mainWaiting > 1000) {
+          warnLog('QueueStats', `HIGH_BACKLOG | mainQueue: waiting=${mainWaiting}`);
         }
       } catch (error) {
         errorLog('QueueStats', 'Failed to fetch queue stats', error);
@@ -3356,6 +3359,12 @@ process.on('SIGINT', async () => {
 
   // Stop memory monitor
   stopMemoryMonitor();
+
+  // Stop proactive GC
+  stopProactiveGC();
+
+  // Stop unified latency tracker cleanup
+  stopLatencyCleanup();
 
   // Disconnect WebSocket and remove all listeners
   if (wsManager) {
@@ -3448,6 +3457,12 @@ process.on('SIGTERM', async () => {
 
   // Stop memory monitor
   stopMemoryMonitor();
+
+  // Stop proactive GC
+  stopProactiveGC();
+
+  // Stop unified latency tracker cleanup
+  stopLatencyCleanup();
 
   // Disconnect WebSocket and remove all listeners
   if (wsManager) {
@@ -6012,179 +6027,8 @@ function initializeQueueEventHandlers() {
     }
   });
 
-  blurQueueEvents.on('completed', async ({ jobId }) => {
-    try {
-      // Decrement counterbid counter if this was a tracked counterbid job
-      decrementCounterbidCount(jobId);
-
-      // Handle Blur schedule job completions for sequential execution
-      if (jobId.includes('-schedule')) {
-        if (jobId.includes('-blur-schedule')) {
-          const taskId = jobId.replace('-blur-schedule', '');
-        }
-        return;
-      }
-
-      // Extract wallet address from jobId (last element after split)
-      const parts = jobId.split('-');
-      const walletAddress = parts[parts.length - 1];
-
-      // Track completion if it's a valid wallet address
-      if (walletAddress && walletAddress.toLowerCase().startsWith('0x')) {
-        blurCompletionTracker.trackCompletion(walletAddress);
-      }
-
-      // Try to extract task and marketplace info from job ID
-      let taskId: string | undefined;
-      let marketplace = 'blur'; // Default to blur for blur queue
-
-      // Handle bid jobs (e.g., bid-taskId-blur-...)
-      if (jobId.startsWith('bid-')) {
-        if (parts.length >= 2) {
-          taskId = parts[1];
-        }
-      }
-      // Handle other job formats
-      else {
-        // Try to find task ID in the job ID
-        if (parts.length >= 1) {
-          // Check if first part is a valid task ID
-          if (activeTasks.has(parts[0])) {
-            taskId = parts[0];
-          } else if (parts.length >= 2 && activeTasks.has(parts[1])) {
-            taskId = parts[1];
-          }
-        }
-      }
-
-      // Process if we found a task ID
-      if (taskId) {
-        const task = activeTasks.get(taskId);
-        if (task && task.running) {
-          await markJobAsProcessed(taskId, marketplace, jobId);
-        }
-      }
-    } catch (error) {
-      errorLog('BlurQueueEvent', `Error handling job completion for job ${jobId}`, error);
-      // Stack trace included in error object above
-      // Error object already logged
-
-      // Log error details for debugging
-      if (error instanceof Error) {
-        // Error details included in error object above
-      }
-
-      // Don't let errors in event handler crash the process
-      // This ensures other jobs can still be processed
-    }
-  });
-
-  blurQueueEvents.on('failed', async ({ jobId, failedReason }) => {
-    // Decrement counterbid counter if this was a tracked counterbid job
-    decrementCounterbidCount(jobId);
-
-    try {
-      // Skip schedule jobs - they are orchestration jobs, not actual bid jobs
-      if (jobId.includes('-schedule')) {
-        return;
-      }
-
-      // Log all job failures for debugging
-
-      // Try to extract task and marketplace info from job ID
-      let taskId: string | undefined;
-      let marketplace = 'blur'; // Default to blur for blur queue
-
-      // Handle bid jobs (e.g., bid-taskId-blur-...)
-      if (jobId.startsWith('bid-')) {
-        const parts = jobId.split('-');
-        if (parts.length >= 2) {
-          taskId = parts[1];
-        }
-      }
-      // Handle other job formats
-      else {
-        // Try to find task ID in the job ID
-        const parts = jobId.split('-');
-        if (parts.length >= 1) {
-          // Check if first part is a valid task ID
-          if (activeTasks.has(parts[0])) {
-            taskId = parts[0];
-          } else if (parts.length >= 2 && activeTasks.has(parts[1])) {
-            taskId = parts[1];
-          }
-        }
-      }
-
-      // Process if we found a task ID
-
-      if (taskId) {
-        // Check if this is an insufficient balance error
-        if (failedReason && (failedReason.includes('InsufficientBalanceError') || failedReason.includes('INSUFFICIENT_BALANCE'))) {
-          // Parse the error message to extract balance details
-          // Message format: "Insufficient {currency} balance: required {X} {currency}, available {Y} {currency} for wallet {address} on collection {slug}"
-          const currencyMatch = failedReason.match(/Insufficient (\w+) balance/);
-          const requiredMatch = failedReason.match(/required ([\d.]+) \w+/);
-          const availableMatch = failedReason.match(/available ([\d.]+) \w+/);
-          const walletMatch = failedReason.match(/for wallet (0x[a-fA-F0-9]{40})/);
-
-          if (currencyMatch && requiredMatch && availableMatch && walletMatch) {
-            const currency = currencyMatch[1];
-            const requiredAmount = parseFloat(requiredMatch[1]);
-            const availableAmount = parseFloat(availableMatch[1]);
-            const wallet = walletMatch[1];
-
-            // Immediately complete the marketplace due to insufficient balance
-            await completeTaskDueToInsufficientBalance(taskId, marketplace, {
-              wallet,
-              requiredAmount,
-              availableAmount,
-              currency
-            });
-
-            // Don't increment error stats for balance errors (it's not really an error in job processing)
-            // Just mark the job as processed and return
-            const task = activeTasks.get(taskId);
-            if (task && task.running) {
-              await safeMarkJobAsProcessed(taskId, marketplace, jobId, false, async (tid, mp, increment) => {
-                await markJobAsProcessed(tid, mp, jobId, false);
-              });
-            }
-            return; // Skip normal error handling
-          }
-        }
-
-        if (!errorStats[taskId]) {
-          errorStats[taskId] = {
-            opensea: 0,
-            blur: 0,
-            magiceden: 0
-          }
-        }
-        // Increment error stats for blur marketplace
-        errorStats[taskId].blur++;
-        const task = activeTasks.get(taskId);
-        if (task && task.running) {
-          await safeMarkJobAsProcessed(taskId, marketplace, jobId, false, async (tid, mp, increment) => {
-            await markJobAsProcessed(tid, mp, jobId, false);
-          });
-        }
-      } else {
-      }
-    } catch (error) {
-      errorLog('BlurQueueEvent', `Error handling job failure for job ${jobId}`, error);
-      // Stack trace included in error object above
-      // Error object already logged
-
-      // Log error details for debugging
-      if (error instanceof Error) {
-        // Error details included in error object above
-      }
-
-      // Don't let errors in event handler crash the process
-      // This ensures other jobs can still be processed
-    }
-  });
+  // Blur queue events removed - Blur jobs now processed by main queue
+  // Events are handled by the main queueEvents handlers above
 }
 
 bidRates = getAllBidRates();
@@ -6601,218 +6445,6 @@ wss.on('connection', async (ws) => {
 // No need for in-memory tracking as we trust Blur's API responses
 
 // Process Blur jobs
-async function processBlurJob(job: Job, signal?: AbortSignal) {
-  // Declare walletAddress outside try block so it's accessible in catch/finally
-  let walletAddress = '';
-  const startTime = Date.now();
-  const taskId = job.data?.taskId || job.data?._id || 'unknown';
-  const marketplace = 'blur';
-
-  try {
-    // Update progress to indicate job started
-    // Progress reporting removed - await job.updateProgress(5);
-
-    // IMMEDIATE blacklist check before ANY processing - prevents stopped task jobs from executing
-    // EXCEPT: CANCEL_* jobs must always execute for cleanup during task stop
-    const { marketplace, type } = job.data || {};
-    const isCancellationJob = job.name === CANCEL_BLUR_BID;
-
-    if (taskId && taskId !== 'unknown' && !isCancellationJob && isTaskBlacklisted(taskId, marketplace || 'blur')) {
-      warnLog('JobSkip', `BLUR_BLACKLIST_SKIP | jobId=${job.id} | taskId=${taskId} | type=${type || job.name} | reason=task_blacklisted_at_blur_worker_entry`);
-      // CRITICAL: Mark job as processed to allow loop completion tracking
-      await markSkippedJobAsProcessed(job);
-      return { skipped: true, reason: 'task_blacklisted' };
-    }
-
-    // Check if abort signal was triggered (job timed out)
-    if (signal?.aborted) {
-      warnLog('JobSkip', `BLUR_ABORT_SKIP | jobId=${job.id} | taskId=${taskId} | type=${type || job.name} | reason=signal_aborted`);
-      // CRITICAL: Mark job as processed to allow loop completion tracking
-      await markSkippedJobAsProcessed(job);
-      return { skipped: true, reason: 'signal_aborted' };
-    }
-
-    // Check if password is available before processing
-    if (!getPassword()) {
-      const error = new Error('No password available. Job will be retried when password is set.');
-      (error as any).code = 'NO_PASSWORD';
-      throw error;
-    }
-
-    // Update progress after password check
-    // Progress reporting removed - await job.updateProgress(10);
-
-    // Extract wallet address from job data first (more reliable than parsing jobId)
-    walletAddress = job.data?.address || job.data?.wallet;
-    if (!walletAddress) {
-      // Fallback to parsing jobId if address not in data
-      const jobId = (job.opts as any)?.jobId || job.id;
-      const jobParts = jobId.toString().split('-');
-      const parsedWallet = jobParts[jobParts.length - 1];
-
-      if (!parsedWallet || !parsedWallet.startsWith('0x')) {
-        errorLog('Blur', `Cannot determine wallet address for job | taskId=${taskId}`);
-        errorLog('BlurJob', `Cannot determine wallet address for job ${job.id}`, undefined);
-        throw new Error('Cannot determine wallet address for rate limiting');
-      }
-      walletAddress = parsedWallet; // Assign the parsed wallet
-    }
-
-    // CRITICAL: Check rate limits BEFORE processing the job
-    if (walletAddress && walletAddress.startsWith('0x')) {
-      // First check if we can make a request using the rate limiter
-      const canProceed = blurRateLimiter.canMakeRequest(walletAddress);
-      if (!canProceed) {
-        const waitTime = blurRateLimiter.getWaitTime(walletAddress);
-
-        try {
-          // Reschedule the job with a delay
-          await job.moveToDelayed(Date.now() + waitTime + 1000); // Add 1s buffer
-
-        } catch (error) {
-          // If we can't move to delayed (e.g., lock already released), job will be retried automatically
-          warnLog('Queue', `Failed to move job to delayed (rate limit) | wallet=${walletAddress} | delay=${waitTime}ms`);
-        }
-        return; // Exit without processing
-      }
-
-      // Check completion-based rate limiting
-      const requiredDelay = blurCompletionTracker.getRequiredDelay(walletAddress);
-      if (requiredDelay > 0) {
-
-
-        try {
-          // Reschedule the job with a delay
-          await job.moveToDelayed(Date.now() + requiredDelay + 1000); // Add 1s buffer
-
-        } catch (error) {
-          // If we can't move to delayed (e.g., lock already released), job will be retried automatically
-          warnLog('Queue', `Failed to move job to delayed (completion) | wallet=${walletAddress} | delay=${requiredDelay}ms`);
-        }
-        return; // Exit without processing
-      }
-
-      // Update progress before Redis checks
-      // Progress reporting removed - await job.updateProgress(15);
-
-      // Check for authentication blocks first
-      try {
-        const redis = redisClient.getClient();
-        if (redis) {
-          // Check authentication block
-          const authBlockKey = `blurAuth:block:${walletAddress}`;
-          const authBlockTime = await redis.get(authBlockKey);
-          if (authBlockTime) {
-            const blockTime = parseInt(authBlockTime);
-            if (blockTime > Date.now()) {
-              const waitTime = blockTime - Date.now();
-              const waitSeconds = Math.round(waitTime / 1000);
-
-
-
-              // Update progress periodically during wait
-              // Progress reporting removed - was: const updateInterval = setInterval(() => job.updateProgress(20), 10000);
-              await new Promise(resolve => setTimeout(resolve, waitTime + 2500));
-              // Progress reporting removed - was: clearInterval(updateInterval);
-
-
-            } else {
-              // Block has expired, clean it up
-              await redis.del(authBlockKey);
-
-            }
-          }
-
-          // Update progress after auth check
-          // Progress reporting removed - await job.updateProgress(25);
-
-          // Then check rate limit pauses
-          const pauseKey = `blurWallet:pause:${walletAddress}`;
-          const redisPauseUntil = await redis.get(pauseKey);
-          if (redisPauseUntil) {
-            const pauseTime = parseInt(redisPauseUntil);
-            if (pauseTime > Date.now()) {
-              const waitTime = pauseTime - Date.now();
-              const waitSeconds = Math.round(waitTime / 1000);
-
-
-              // Enhanced logging with more details
-
-              // Update progress periodically during wait
-              // Progress reporting removed - was: const updateInterval = setInterval(() => job.updateProgress(30), 10000);
-              await new Promise(resolve => setTimeout(resolve, waitTime + 2500));
-              // Progress reporting removed - was: clearInterval(updateInterval);
-
-
-            } else {
-              // Pause has expired, clean it up
-              await redis.del(pauseKey);
-
-            }
-          }
-        }
-      } catch (error) {
-        errorLog('Queue', `Redis auth/pause check failed | wallet=${walletAddress}`, error);
-      }
-    }
-
-    // Update progress before processing job
-    // Progress reporting removed - await job.updateProgress(40);
-
-    // Process job based on type
-
-    switch (job.name) {
-      // BLUR_SCHEDULE case removed - now using direct timer execution via executeMarketplaceBidLoop()
-      case BLUR_COLLECTION_BID:
-        // Progress reporting removed - await job.updateProgress(45);
-        await processBlurCollectionBid(job.data);
-        // Progress reporting removed - await job.updateProgress(95);
-        return { completed: true };
-      case BLUR_TRAIT_BID:
-        // Progress reporting removed - await job.updateProgress(45);
-        await processBlurTraitBid(job.data);
-        // Progress reporting removed - await job.updateProgress(95);
-        return { completed: true };
-      case BLUR_COLLECTION_BID_COUNTERBID:
-        // Progress reporting removed - await job.updateProgress(45);
-        await blurCollectionCounterBid(job.data);
-        // Progress reporting removed - await job.updateProgress(95);
-        return { completed: true };
-      case BLUR_TRAIT_BID_COUNTERBID:
-        // Progress reporting removed - await job.updateProgress(45);
-        await blurTraitCounterBid(job.data);
-        // Progress reporting removed - await job.updateProgress(95);
-        return { completed: true };
-      default:
-        const unknownError = new Error(`Unknown Blur job type: ${job.name}`);
-        debugLog('WorkerJob', `BLUR_PROCESS_JOB_UNKNOWN_TYPE | jobId=${job.id} | jobName=${job.name} | taskId=${taskId}`, taskId && taskId !== 'unknown' ? { taskId, marketplace: 'blur' as const } : undefined);
-        throw unknownError;
-    }
-  } catch (error) {
-    const durationMs = Date.now() - startTime;
-    debugLog('WorkerJob', `BLUR_PROCESS_JOB_ERROR | jobId=${job.id} | jobName=${job.name} | taskId=${taskId} | durationMs=${durationMs} | error=${error instanceof Error ? error.message : String(error)}`, taskId && taskId !== 'unknown' ? { taskId, marketplace: 'blur' as const } : undefined);
-    errorLog('BlurJob', `Job error - ${job.name}`, error);
-
-    errorLog('Blur', `Job processing failed | taskId=${taskId}`, error);
-
-    // Track completion even on error (for rate limiting purposes)
-    if (walletAddress && walletAddress.startsWith('0x')) {
-      blurCompletionTracker.trackCompletion(walletAddress);
-    }
-
-    throw error;
-  } finally {
-    // Track successful completion
-    if (walletAddress && walletAddress.startsWith('0x')) {
-      blurCompletionTracker.trackCompletion(walletAddress);
-
-    }
-
-    // Always update to 100% if we haven't already
-    // Progress reporting removed - await job.updateProgress(100);
-  }
-}
-
 async function processJob(job: Job, signal?: AbortSignal) {
   const startTime = Date.now();
   const { marketplace, type } = job.data || {};
@@ -6827,6 +6459,9 @@ async function processJob(job: Job, signal?: AbortSignal) {
     // Only log if pickup latency > 1 second (indicates queue backlog)
     warnLog('WorkerJob', `JOB_PICKUP_SLOW | jobId=${job.id} | taskId=${taskId} | pickupLatencyMs=${pickupLatencyMs} | queueWaitSec=${(pickupLatencyMs / 1000).toFixed(1)}`);
   }
+
+  // Declare walletAddress outside try block for Blur rate limiting
+  let walletAddress = '';
 
   try {
     // Update progress to indicate job started
@@ -6861,6 +6496,93 @@ async function processJob(job: Job, signal?: AbortSignal) {
       throw new Error('Job aborted before processing');
     }
 
+    // Detect if this is a Blur job for rate limiting
+    const isBlurJob = [
+      BLUR_COLLECTION_BID,
+      BLUR_TRAIT_BID,
+      BLUR_COLLECTION_BID_COUNTERBID,
+      BLUR_TRAIT_BID_COUNTERBID
+    ].includes(job.name);
+
+    // Blur-specific rate limiting (only for Blur jobs)
+    if (isBlurJob) {
+      // Extract wallet address from job data first (more reliable than parsing jobId)
+      walletAddress = job.data?.address || job.data?.wallet;
+      if (!walletAddress) {
+        // Fallback to parsing jobId if address not in data
+        const jobId = (job.opts as any)?.jobId || job.id;
+        const jobParts = jobId.toString().split('-');
+        const parsedWallet = jobParts[jobParts.length - 1];
+
+        if (!parsedWallet || !parsedWallet.startsWith('0x')) {
+          errorLog('Blur', `Cannot determine wallet address for job | taskId=${taskId}`);
+          errorLog('BlurJob', `Cannot determine wallet address for job ${job.id}`, undefined);
+          throw new Error('Cannot determine wallet address for rate limiting');
+        }
+        walletAddress = parsedWallet;
+      }
+
+      // CRITICAL: Check rate limits BEFORE processing the job
+      if (walletAddress && walletAddress.startsWith('0x')) {
+        // First check if we can make a request using the rate limiter
+        const canProceed = blurRateLimiter.canMakeRequest(walletAddress);
+        if (!canProceed) {
+          const waitTime = blurRateLimiter.getWaitTime(walletAddress);
+
+          try {
+            // Reschedule the job with a delay
+            await job.moveToDelayed(Date.now() + waitTime + 1000); // Add 1s buffer
+          } catch (error) {
+            // If we can't move to delayed (e.g., lock already released), job will be retried automatically
+            warnLog('Queue', `Failed to move job to delayed (rate limit) | wallet=${walletAddress} | delay=${waitTime}ms`);
+          }
+          return; // Exit without processing
+        }
+
+        // Check completion-based rate limiting
+        const requiredDelay = blurCompletionTracker.getRequiredDelay(walletAddress);
+        if (requiredDelay > 0) {
+          try {
+            // Reschedule the job with a delay
+            await job.moveToDelayed(Date.now() + requiredDelay + 1000); // Add 1s buffer
+          } catch (error) {
+            // If we can't move to delayed (e.g., lock already released), job will be retried automatically
+            warnLog('Queue', `Failed to move job to delayed (completion) | wallet=${walletAddress} | delay=${requiredDelay}ms`);
+          }
+          return; // Exit without processing
+        }
+
+        // Check for authentication blocks first
+        try {
+          // Check authentication block (LRU cache)
+          const block = blurAuthBlockLRU.get(walletAddress.toLowerCase());
+          if (block && block.blockedUntil > Date.now()) {
+            const waitTime = block.blockedUntil - Date.now();
+            // Wait for auth block to expire
+            await new Promise(resolve => setTimeout(resolve, waitTime + 2500));
+          } else if (block) {
+            // Block has expired, clean it up
+            blurAuthBlockLRU.delete(walletAddress.toLowerCase());
+          }
+
+          // Then check rate limit pauses (LRU cache)
+          const pause = blurWalletPauseLRU.get(walletAddress.toLowerCase());
+          if (pause && pause.pauseUntil > Date.now()) {
+            const waitTime = pause.pauseUntil - Date.now();
+            const waitSeconds = Math.round(waitTime / 1000);
+
+            // Wait for pause to expire
+            await new Promise(resolve => setTimeout(resolve, waitTime + 2500));
+          } else if (pause) {
+            // Pause has expired, clean it up
+            blurWalletPauseLRU.delete(walletAddress.toLowerCase());
+          }
+        } catch (error) {
+          errorLog('Queue', `Redis auth/pause check failed | wallet=${walletAddress}`, error);
+        }
+      }
+    }
+
     const result = await (async () => {
       switch (job.name) {
         case OPENSEA_COLLECTION_BID:
@@ -6870,22 +6592,22 @@ async function processJob(job: Job, signal?: AbortSignal) {
           await processMagicedenCollectionBid(job.data);
           return { completed: true };
         case OPENSEA_COLLECTION_BID_COUNTERBID:
-          await openseaCollectionCounterBid(job.data);
+          await openseaCollectionCounterBid(job);
           return { completed: true };
         case MAGICEDEN_COLLECTION_BID_COUNTERBID:
-          await magicedenCollectionCounterBid(job.data);
+          await magicedenCollectionCounterBid(job);
           return { completed: true };
         case OPENSEA_TOKEN_BID_COUNTERBID:
-          await openseaTokenCounterBid(job.data);
+          await openseaTokenCounterBid(job);
           return { completed: true };
         case OPENSEA_TRAIT_BID_COUNTERBID:
-          await openseaTraitCounterBid(job.data);
+          await openseaTraitCounterBid(job);
           return { completed: true };
         case MAGICEDEN_TOKEN_BID_COUNTERBID:
-          await magicedenTokenCounterBid(job.data);
+          await magicedenTokenCounterBid(job);
           return { completed: true };
         case MAGICEDEN_TRAIT_BID_COUNTERBID:
-          await magicedenTraitCounterBid(job.data);
+          await magicedenTraitCounterBid(job);
           return { completed: true };
         // OPENSEA_SCHEDULE case removed - now using direct timer execution via executeMarketplaceBidLoop()
         case OPENSEA_TRAIT_BID:
@@ -6967,6 +6689,18 @@ async function processJob(job: Job, signal?: AbortSignal) {
             throw error; // Re-throw to let the job fail properly
           }
           return { completed: true };
+        case BLUR_COLLECTION_BID:
+          await processBlurCollectionBid(job.data);
+          return { completed: true };
+        case BLUR_TRAIT_BID:
+          await processBlurTraitBid(job.data);
+          return { completed: true };
+        case BLUR_COLLECTION_BID_COUNTERBID:
+          await blurCollectionCounterBid(job);
+          return { completed: true };
+        case BLUR_TRAIT_BID_COUNTERBID:
+          await blurTraitCounterBid(job);
+          return { completed: true };
         case PROCESS_LISTING:
           return await processListingJob(job);
         case PROCESS_LISTING_UPDATE:
@@ -6981,7 +6715,18 @@ async function processJob(job: Job, signal?: AbortSignal) {
   } catch (error) {
     const durationMs = Date.now() - startTime;
     debugLog('WorkerJob', `PROCESS_JOB_ERROR | jobId=${job.id} | jobName=${job.name} | taskId=${taskId || 'none'} | mp=${marketplace || 'none'} | durationMs=${durationMs} | error=${error instanceof Error ? error.message : String(error)}`, taskId ? { taskId, marketplace: (marketplace?.toLowerCase() || 'opensea') as 'opensea' | 'magiceden' | 'blur' } : undefined);
+
+    // Track completion even on error for Blur jobs (for rate limiting purposes)
+    if (walletAddress && walletAddress.startsWith('0x')) {
+      blurCompletionTracker.trackCompletion(walletAddress);
+    }
+
     throw error;
+  } finally {
+    // Track successful completion for Blur jobs
+    if (walletAddress && walletAddress.startsWith('0x')) {
+      blurCompletionTracker.trackCompletion(walletAddress);
+    }
   }
 }
 
@@ -7990,12 +7735,9 @@ async function getCachedQueueDepth(): Promise<number> {
   }
 
   // Cache expired, fetch fresh counts
-  const [mainCounts, blurCounts] = await Promise.all([
-    queue.getJobCounts(),
-    blurQueue.getJobCounts()
-  ]);
+  const mainCounts = await queue.getJobCounts();
 
-  cachedQueueDepth = (mainCounts.waiting || 0) + (blurCounts.waiting || 0);
+  cachedQueueDepth = mainCounts.waiting || 0;
   queueDepthCacheTimestamp = now;
 
   return cachedQueueDepth;
@@ -8033,15 +7775,10 @@ function getMarketplaceFromJobName(jobName: string): string | null {
 }
 
 const MAX_QUEUE_JOBS = 1000000; // Hard limit for queue capacity
-// Helper function to get total jobs in all queues
+// Helper function to get total jobs in main queue (Blur queue consolidated)
 async function getTotalJobsInQueues(): Promise<number> {
-  const [counts, blurCounts] = await Promise.all([
-    queue.getJobCounts(),
-    blurQueue.getJobCounts()
-  ]);
-
-  return (counts.waiting || 0) + (counts.active || 0) + (counts.prioritized || 0) +
-    (blurCounts.waiting || 0) + (blurCounts.active || 0) + (blurCounts.prioritized || 0);
+  const counts = await queue.getJobCounts();
+  return (counts.waiting || 0) + (counts.active || 0) + (counts.prioritized || 0);
 }
 
 // In-memory tracking for counterbid jobs (fast O(1) lookups instead of expensive Redis queries)
@@ -8190,11 +7927,9 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
     // Check current queue state but don't wait for initial drain
     const queueStateStartTime = Date.now();
     const counts = await queue.getJobCounts();
-    const blurCounts = await blurQueue.getJobCounts();
     const queueStateMs = Date.now() - queueStateStartTime;
     const mainQueueTotal = (counts.waiting || 0) + (counts.active || 0) + (counts.prioritized || 0);
-    const blurQueueTotal = (blurCounts.waiting || 0) + (blurCounts.active || 0) + (blurCounts.prioritized || 0);
-    infoLog('BulkJobsPerf', `QUEUE_STATE | taskId=${taskId} | elapsed=${queueStateMs}ms | mainTotal=${mainQueueTotal} | blurTotal=${blurQueueTotal} | marketplace=${mpForLog}`, { taskId, marketplace: mpForLog as 'opensea' | 'magiceden' | 'blur' | undefined });
+    infoLog('BulkJobsPerf', `QUEUE_STATE | taskId=${taskId} | elapsed=${queueStateMs}ms | mainTotal=${mainQueueTotal} | marketplace=${mpForLog}`, { taskId, marketplace: mpForLog as 'opensea' | 'magiceden' | 'blur' | undefined });
 
     // Log current state but proceed immediately
 
@@ -8259,11 +7994,9 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
           // Check capacity and prioritized count
           const counts = await queue.getJobCounts();
-          const blurCounts = await blurQueue.getJobCounts();
 
-          let totalJobs = (counts.waiting || 0) + (counts.active || 0) + (counts.prioritized || 0) +
-            (blurCounts.waiting || 0) + (blurCounts.active || 0) + (blurCounts.prioritized || 0);
-          let prioritizedJobs = (counts.prioritized || 0) + (blurCounts.prioritized || 0);
+          let totalJobs = (counts.waiting || 0) + (counts.active || 0) + (counts.prioritized || 0);
+          let prioritizedJobs = counts.prioritized || 0;
 
           // Check if we need to wait for capacity BEFORE processing any jobs
           // Use exponential backoff with max wait time cap
@@ -8314,11 +8047,9 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
             // Re-check queue counts
             const newCounts = await queue.getJobCounts();
-            const newBlurCounts = await blurQueue.getJobCounts();
 
-            totalJobs = (newCounts.waiting || 0) + (newCounts.active || 0) + (newCounts.prioritized || 0) +
-              (newBlurCounts.waiting || 0) + (newBlurCounts.active || 0) + (newBlurCounts.prioritized || 0);
-            prioritizedJobs = (newCounts.prioritized || 0) + (newBlurCounts.prioritized || 0);
+            totalJobs = (newCounts.waiting || 0) + (newCounts.active || 0) + (newCounts.prioritized || 0);
+            prioritizedJobs = newCounts.prioritized || 0;
           }
 
           if (waitIterations > 0) {
@@ -8408,16 +8139,13 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
             }
 
-            // Separate Blur and non-Blur jobs
-            const blurJobs = validJobs.filter(job => BLUR_JOBS.includes(job.name));
-            const nonBlurJobs = validJobs.filter(job => !BLUR_JOBS.includes(job.name));
-
-            // Add non-Blur jobs to queue
-            if (nonBlurJobs.length > 0) {
+            // All jobs now go to the main queue (Blur queue consolidated)
+            // Add all jobs to queue
+            if (validJobs.length > 0) {
               // Get current loop number for this task/marketplace to embed in job data
               const currentLoopForJobs = loopCounterStats[taskId]?.[marketplace] || 1;
 
-              const jobsToAdd = nonBlurJobs.map(job => {
+              const jobsToAdd = validJobs.map(job => {
                 const isCancelJob = job.name.toLowerCase().includes('cancel');
                 const jobKey = isCancelJob ? undefined :
                   (createKey ? createJobKey(job) : generateJobKey(job));
@@ -8493,8 +8221,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
                 // Log current prioritized count to track target range
                 if (Math.random() < 0.1) { // Log 10% of the time to avoid spam
                   const qCounts = await queue.getJobCounts();
-                  const bCounts = await blurQueue.getJobCounts();
-                  const currentPri = (qCounts.prioritized || 0) + (bCounts.prioritized || 0);
+                  const currentPri = qCounts.prioritized || 0;
                 }
               }
 
@@ -8539,125 +8266,13 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
                   lastProgressUpdate = Date.now();
                 } catch (error) {
                   // Progress update is non-critical
-                  debugLog('Queue', `Progress update failed (non-Blur) | job=${scheduleJob.id} | progress=${percentComplete}%`);
-                }
-              }
-            }
-
-            // Add Blur jobs using the coordinator
-            if (blurJobs.length > 0) {
-              // Get current loop number for Blur jobs (blur marketplace)
-              const currentLoopForBlurJobs = loopCounterStats[taskId]?.['blur'] || 1;
-
-              const blurJobsToAdd = blurJobs.map(job => {
-                const isCancelJob = job.name.toLowerCase().includes('cancel');
-                const jobKey = isCancelJob ? undefined :
-                  (createKey ? createJobKey(job) : generateJobKey(job));
-                const priority = isCancelJob ? 0 : (loopCounterStats[taskId]?.[marketplace] || 0) + 1
-                return {
-                  name: job.name,
-                  data: {
-                    ...job.data,
-                    loopNumber: currentLoopForBlurJobs  // Store loop number for precise parent job lookup
-                  },
-                  opts: {
-                    ...(jobKey ? { jobId: jobKey } : {}),
-                    ...job.opts,
-                    priority,
-                    removeOnComplete: true,
-                    removeOnFail: isCancelJob ? false : true  // Keep failed cancellation jobs for retry
-                  }
-                };
-              });
-
-              // Skip duplicate check for Blur jobs - use jobId to prevent duplicates
-              const uniqueBlurJobs = blurJobsToAdd;
-
-              // Add Blur jobs with rate limiting using chunked addBulk
-              const blurRateLimitChunks = chunk(uniqueBlurJobs, RATE_LIMIT);
-
-              // Get current queue depth for dynamic rate limiting (Blur) - reuse cached value
-              const currentQueueDepthBlur = await getCachedQueueDepth();
-
-              // Dynamic buffer multiplier to prevent queue threshold violations
-              // Target: Keep queue between 100-10,000 jobs
-              let BLUR_BUFFER_MULTIPLIER;
-              if (currentQueueDepthBlur > 50000) {
-                BLUR_BUFFER_MULTIPLIER = 0.5;  // Super slow: wait every chunk (32 jobs/sec)
-                debugLog('QueueThrottle', `HIGH Blur queue depth=${currentQueueDepthBlur} | multiplier=0.5x | queueRate=32/sec`);
-              } else if (currentQueueDepthBlur > 10000) {
-                BLUR_BUFFER_MULTIPLIER = 1;    // Slow: 64 jobs/sec
-                debugLog('QueueThrottle', `ELEVATED Blur queue depth=${currentQueueDepthBlur} | multiplier=1x | queueRate=64/sec`);
-              } else if (currentQueueDepthBlur > 1000) {
-                BLUR_BUFFER_MULTIPLIER = 2;    // Medium: 128 jobs/sec
-              } else {
-                BLUR_BUFFER_MULTIPLIER = 3;    // Full speed: 192 jobs/sec (prevent starvation)
-              }
-
-              for (let i = 0; i < blurRateLimitChunks.length; i++) {
-                const jobChunk = blurRateLimitChunks[i];
-
-                // Apply dynamic throttling
-                if (BLUR_BUFFER_MULTIPLIER === 0.5) {
-                  // Wait every chunk when queue critical
-                  await rateLimiter.acquire();
-                } else if (i % BLUR_BUFFER_MULTIPLIER === 0 && i > 0) {
-                  // Normal throttling based on multiplier
-                  await rateLimiter.acquire();
-                }
-
-                // Always queue the chunk (maintains oversaturated queue)
-                const addedJobs = await blurQueue.addBulk(jobChunk);
-
-                // Verify addBulk results for Blur - ensure all jobs have IDs
-                const failedBlurJobs = addedJobs.filter(job => !job.id);
-                if (failedBlurJobs.length > 0) {
-                  errorLog('JobQueue', `ADDBULK_PARTIAL_FAILURE_BLUR | taskId=${taskId} | mp=blur | sent=${jobChunk.length} | failed=${failedBlurJobs.length} | success=${addedJobs.length - failedBlurJobs.length}`, { taskId, marketplace: 'blur' });
-                }
-
-              }
-
-              // Track actual Blur jobs added (use unique jobs count)
-              jobsAddedByMarketplace.set('blur', (jobsAddedByMarketplace.get('blur') || 0) + uniqueBlurJobs.length);
-
-              debugLog('StopTaskFlow', `BULK_JOBS_QUEUED | taskId=${taskId} | queued=${uniqueBlurJobs.length} | marketplace=blur`, { taskId });
-
-              // Update progress (use unique jobs count)
-              processedCount += uniqueBlurJobs.length;
-              actuallyQueuedCount += uniqueBlurJobs.length;
-
-              // Update actualJobs incrementally for Blur
-              try {
-                const blurParentJobId = getParentJobId(taskId, 'blur');
-                const blurParentJob = parentJobs.get(blurParentJobId);
-                if (blurParentJob && uniqueBlurJobs.length > 0) {
-                  const previousActualJobs = blurParentJob.actualJobs || 0;
-                  blurParentJob.actualJobs = previousActualJobs + uniqueBlurJobs.length;
-                  debugLog('ParentJobOp', `INCREMENT_ACTUAL_JOBS_BLUR | taskId=${taskId} | mp=blur | parentJobId=${blurParentJobId} | added=${uniqueBlurJobs.length} | previousActual=${previousActualJobs} | newActual=${blurParentJob.actualJobs} | loopNumber=${blurParentJob.loopNumber}`, { taskId, marketplace: 'blur' });
-                  // Clear the count after updating
-                  jobsAddedByMarketplace.set('blur', 0);
-                } else if (uniqueBlurJobs.length > 0) {
-                  debugLog('ParentJobOp', `SKIP_INCREMENT_NO_PARENT_BLUR | taskId=${taskId} | mp=blur | parentJobId=${blurParentJobId} | count=${uniqueBlurJobs.length} | reason=parent_job_not_found`, { taskId, marketplace: 'blur' });
-                }
-              } catch (error) {
-                errorLog('BulkJobs', 'Error updating Blur parent job', error);
-              }
-
-              // Update schedule job progress if needed
-              if (scheduleJob && Date.now() - lastProgressUpdate > progressUpdateInterval) {
-                const percentComplete = Math.round((processedCount / jobs.length) * 100);
-                try {
-                  await scheduleJob.updateProgress(percentComplete);
-                  lastProgressUpdate = Date.now();
-                } catch (error) {
-                  // Progress update is non-critical
-                  debugLog('Queue', `Progress update failed (Blur) | job=${scheduleJob.id} | progress=${percentComplete}%`);
+                  debugLog('Queue', `Progress update failed | job=${scheduleJob.id} | progress=${percentComplete}%`);
                 }
               }
             }
 
             // We always process the full chunk now
-            // Capture addBulk timing (includes both non-Blur and Blur jobs)
+            // Capture addBulk timing
             addBulkMs = Date.now() - addBulkStartTime;
           }
 
@@ -8671,11 +8286,10 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
           // Log queue state AFTER addBulk every 5 chunks to avoid spam (async, non-blocking)
           if ((chunkIndex + 1) % 5 === 0 || chunkIndex === chunks.length - 1) {
             // Fire-and-forget logging - don't block job queueing for metrics
-            Promise.all([queue.getJobCounts(), blurQueue.getJobCounts()])
-              .then(([postAddCounts, postAddBlurCounts]) => {
+            queue.getJobCounts()
+              .then((postAddCounts) => {
                 const postMainTotal = (postAddCounts.waiting || 0) + (postAddCounts.active || 0) + (postAddCounts.prioritized || 0);
-                const postBlurTotal = (postAddBlurCounts.waiting || 0) + (postAddBlurCounts.active || 0) + (postAddBlurCounts.prioritized || 0);
-                debugLog('JobQueue', `QUEUE_STATE_AFTER | taskId=${taskId} | mp=${marketplace} | chunk=${chunkIndex + 1}/${chunks.length} | mainQueue=[waiting=${postAddCounts.waiting || 0},active=${postAddCounts.active || 0},prioritized=${postAddCounts.prioritized || 0},total=${postMainTotal}] | blurQueue=[waiting=${postAddBlurCounts.waiting || 0},active=${postAddBlurCounts.active || 0},prioritized=${postAddBlurCounts.prioritized || 0},total=${postBlurTotal}] | combined=${postMainTotal + postBlurTotal}`, { taskId, marketplace: mpForLog as 'opensea' | 'magiceden' | 'blur' | undefined });
+                debugLog('JobQueue', `QUEUE_STATE_AFTER | taskId=${taskId} | mp=${marketplace} | chunk=${chunkIndex + 1}/${chunks.length} | mainQueue=[waiting=${postAddCounts.waiting || 0},active=${postAddCounts.active || 0},prioritized=${postAddCounts.prioritized || 0},total=${postMainTotal}]`, { taskId, marketplace: mpForLog as 'opensea' | 'magiceden' | 'blur' | undefined });
               })
               .catch(err => {
                 // Silently ignore logging errors - don't spam console
@@ -8699,8 +8313,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
           if (error instanceof Error && error.message?.includes('Command timed out')) {
             // For timeout errors, check queue state before retrying
             const counts = await queue.getJobCounts();
-            const blurCounts = await blurQueue.getJobCounts();
-            const currentPrioritized = (counts.prioritized || 0) + (blurCounts.prioritized || 0);
+            const currentPrioritized = (counts.prioritized || 0);
 
             if (currentPrioritized < DRAIN_THRESHOLD) {
               // Within target range, retry immediately
@@ -8838,9 +8451,7 @@ async function processBulkJobs(jobs: Job[], createKey = false, scheduleJob?: Job
 
       // Get final queue state for exit summary
       const finalCounts = await queue.getJobCounts();
-      const finalBlurCounts = await blurQueue.getJobCounts();
       const finalMainTotal = (finalCounts.waiting || 0) + (finalCounts.active || 0) + (finalCounts.prioritized || 0);
-      const finalBlurTotal = (finalBlurCounts.waiting || 0) + (finalBlurCounts.active || 0) + (finalBlurCounts.prioritized || 0);
 
       // Log comprehensive exit summary
       infoLog('BulkJobsPerf', `EXIT | taskId=${taskId} | totalJobs=${jobs.length} | queued=${actuallyQueuedCount} | rejected=${totalRejectedCount} | totalMs=${totalMs} | rate=${queueRate} jobs/sec | fullyQueued=${fullyQueued} | successRate=${successRate}% | marketplace=${mpForLog}`, { taskId, marketplace: mpForLog as 'opensea' | 'magiceden' | 'blur' | undefined });
@@ -10076,66 +9687,10 @@ async function removeAllTaskJobsFromQueue(taskId: string, marketplace?: string) 
     infoLog('StopJobRemoval', `JOB_REMOVAL_PASS2_COMPLETE | taskId=${taskId} | remainingFound=${remainingJobs} | pass2Removed=${pass2Removed}`, { taskId });
   }
 
-  // Also remove jobs from blurQueue for Blur marketplace
-  if (!marketplace || marketplace.toLowerCase() === 'blur') {
-    debugLog('StopJobRemoval', `BLUR_QUEUE_START | taskId=${taskId}`, { taskId, marketplace: 'blur' });
-    try {
-      // Fix 6: Only scan 'waiting' and 'delayed' states (reduced from 5 to 2)
-      // - active: Can't remove (we don't have the lock token) - blacklist handles these
-      // - completed/failed: Already done, no need to remove - cleanup happens automatically
-      const blurJobStates = ['waiting', 'delayed'] as const;
-
-      for (const state of blurJobStates) {
-        const blurJobs = await blurQueue.getJobs([state], 0, -1);
-        debugLog('StopJobRemoval', `JOB_REMOVAL_SCAN | taskId=${taskId} | queueName=BLUR_BIDDING_QUEUE | state=${state} | totalJobsInState=${blurJobs.length}`, { taskId });
-
-        // Match by taskId in job data (works for all jobs including those without explicit jobId)
-        const blurTaskJobs = blurJobs.filter(job => {
-          if (!job) return false;
-          const jobTaskId = job.data?._id?.toString() || job.data?.taskId?.toString();
-          if (jobTaskId === taskId) return true;
-          // Also match by CB- prefix for counterbid jobs
-          if (job.id && job.id.startsWith(`CB-${taskId}-blur-`)) return true;
-          return false;
-        });
-
-        if (blurTaskJobs.length > 0) {
-          debugLog('StopJobRemoval', `JOB_REMOVAL_MATCH | taskId=${taskId} | queueName=BLUR_BIDDING_QUEUE | state=${state} | matched=${blurTaskJobs.length}`, { taskId });
-        }
-
-        let stateSuccessCount = 0;
-        let stateFailCount = 0;
-        for (const job of blurTaskJobs) {
-          try {
-            // Remove jobs (waiting, delayed only - no active jobs in this optimized version)
-            await job.remove();
-            blurQueueRemoved++;
-            totalRemoved++;
-            stateSuccessCount++;
-          } catch (error: any) {
-            stateFailCount++;
-            const errorMsg = error?.message || String(error);
-            if (errorMsg.includes('Missing lock') || errorMsg.includes('not found')) {
-              debugLog('StopJobRemoval', `JOB_REMOVAL_BLUR_RACE | taskId=${taskId} | jobId=${job.id} | state=${state} | reason=${errorMsg}`, { taskId });
-            } else {
-              errorLog('StopJobRemoval', `JOB_REMOVAL_FAILED | taskId=${taskId} | queueName=BLUR_BIDDING_QUEUE | jobId=${job.id} | state=${state} | error=${errorMsg}`, { taskId });
-            }
-          }
-        }
-
-        if (stateSuccessCount > 0 || stateFailCount > 0) {
-          debugLog('StopJobRemoval', `JOB_REMOVAL_STATE_COMPLETE | taskId=${taskId} | queueName=BLUR_BIDDING_QUEUE | state=${state} | success=${stateSuccessCount} | failed=${stateFailCount}`, { taskId });
-        }
-      }
-
-      infoLog('StopJobRemoval', `BLUR_QUEUE_COMPLETE | taskId=${taskId} | removed=${blurQueueRemoved}`, { taskId, marketplace: 'blur' });
-    } catch (error: any) {
-      errorLog('StopJobRemoval', `BLUR_QUEUE_ERROR | taskId=${taskId} | error=${error?.message || String(error)}`, { taskId });
-    }
-  }
+  // Blur jobs now in main queue - no separate blur queue to scan
 
   const elapsedMs = Date.now() - startTime;
-  infoLog('StopJobRemoval', `JOB_REMOVAL_SUMMARY | taskId=${taskId} | mp=${marketplace || 'all'} | mainQueueRemoved=${mainQueueRemoved} | blurQueueRemoved=${blurQueueRemoved} | totalRemoved=${totalRemoved} | elapsedMs=${elapsedMs}`, { taskId });
+  infoLog('StopJobRemoval', `JOB_REMOVAL_SUMMARY | taskId=${taskId} | mp=${marketplace || 'all'} | mainQueueRemoved=${mainQueueRemoved} | totalRemoved=${totalRemoved} | elapsedMs=${elapsedMs}`, { taskId });
 
   return {
     removed: totalRemoved,
@@ -11944,12 +11499,8 @@ async function removePendingAndWaitingBids(
 
       // Determine which queues to check based on marketplace
       const queuesToCheck: { q: typeof queue, name: string }[] = [];
-      if (!marketplace || marketplace.toLowerCase() !== 'blur') {
-        queuesToCheck.push({ q: queue, name: 'main' });
-      }
-      if (!marketplace || marketplace.toLowerCase() === 'blur') {
-        queuesToCheck.push({ q: blurQueue, name: 'blur' });
-      }
+      // All jobs (including Blur) are in main queue
+      queuesToCheck.push({ q: queue, name: 'main' });
 
       for (const { q, name: queueName } of queuesToCheck) {
         // Get all jobs in waiting, delayed, and active states
@@ -13427,6 +12978,9 @@ async function _doConnect(): Promise<void> {
       try {
         incrementRawWsMessagesReceived();
 
+        // Extract receivedAt timestamp from proxy (or fallback to server time)
+        const receivedAt = message.receivedAt || Date.now();
+
         // Track ALL bid events at earliest point (before any filtering)
         if (message.eventType === 'BID_CREATED' || message.eventType === 'item_received_bid') {
           incrementBidEventsReceived();
@@ -13457,7 +13011,8 @@ async function _doConnect(): Promise<void> {
 
         // Process messages without blocking (fire-and-forget with completion tracking)
         // Use .finally() to signal done() when handler completes without serializing messages
-        handleMarketplaceMessage(message)
+        // Pass receivedAt to measure true end-to-end execution latency
+        handleMarketplaceMessage(message, receivedAt)
           .catch(error => {
             errorLog('WsConnection', 'Error processing marketplace message', error);
           })
@@ -13500,7 +13055,7 @@ async function _doConnect(): Promise<void> {
  * Unified handler for all marketplace messages
  * Handles both counterbid messages and listing price updates
  */
-async function handleMarketplaceMessage(message: any) {
+async function handleMarketplaceMessage(message: any, receivedAt: number) {
 
   const extractedMaker = (message?.payload?.payload?.maker?.address)?.toLowerCase();
   const extractedContract = (message?.payload?.payload?.asset_contract_criteria?.address)?.toLowerCase();
@@ -13522,7 +13077,7 @@ async function handleMarketplaceMessage(message: any) {
 
   try {
     if (message.eventType === 'BID_CREATED') {
-      return handleCounterBid(message)
+      return handleCounterBid(message, receivedAt)
     }
 
     else if (message.eventType === 'LISTING_CREATED') {
@@ -13829,7 +13384,7 @@ async function triggerAutoListingForPurchase(
   }
 }
 
-async function handleCounterBid(message: any) {
+async function handleCounterBid(message: any, receivedAt: number) {
   try {
     // Track bid events reaching handler
     incrementBidEventsReachingHandler();
@@ -13856,8 +13411,9 @@ async function handleCounterBid(message: any) {
 
     // Fire-and-forget counterbid processing (extreme scale optimization)
     // Deterministic job IDs provide deduplication at queue level
+    // Pass receivedAt to measure true end-to-end execution latency
     relevantTasks.forEach(task => {
-      handleCounterBidForTask(task, message).catch(err => {
+      handleCounterBidForTask(task, message, receivedAt).catch(err => {
         errorLog('CounterbidError', `Task ${task._id}: ${err.message}`);
       });
     });
@@ -13887,7 +13443,7 @@ function getMarketplaceDetails(message: any): { contractAddress?: string, slug?:
   }
 }
 
-async function handleCounterBidForTask(task: any, message: any) {
+async function handleCounterBidForTask(task: any, message: any, receivedAt: number) {
   const selectedMarketplaces = task.selectedMarketplaces.map((m: string) => m.toLowerCase());
 
   // Extract correlation info from message for bid tracing
@@ -13920,15 +13476,15 @@ async function handleCounterBidForTask(task: any, message: any) {
       }
 
 
-      await handleBlurCounterbid(message['1'], task)
+      await handleBlurCounterbid(message['1'], task, receivedAt)
     }
     else if (selectedMarketplaces.includes('opensea') && message.marketplace === OPENSEA) {
-      await handleOpenseaCounterbid(message, task)
+      await handleOpenseaCounterbid(message, task, receivedAt)
     }
     else if (selectedMarketplaces.includes('magiceden') && message.marketplace === MAGICEDEN) {
       // Create trace for MagicEden counterbid
 
-      await handleMagicEdenCounterbid(message, task)
+      await handleMagicEdenCounterbid(message, task, receivedAt)
     }
     else {
       // Message didn't match any marketplace routing condition
@@ -13940,7 +13496,7 @@ async function handleCounterBidForTask(task: any, message: any) {
 }
 
 
-async function handleMagicEdenCounterbid(data: any, task: ITask) {
+async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: number) {
   // Structured log: start
   try {
     // Extract bid data early for logging
@@ -13974,12 +13530,6 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
     // NOTE: Must be checked BEFORE balance check so own bids are always counted
     if (maker && isOurWallet(maker)) {
       incrementOwnBidCounter('magiceden', orderHash);
-      return;
-    }
-
-    // Early exit if marketplace already stopped due to insufficient balance
-    if (isMarketplaceStoppedDueToBalance(taskStatus, task._id.toString(), 'magiceden')) {
-      debugLog('Counterbid', `[ME] ${task.contract.slug} | SKIP: Marketplace stopped (insufficient balance)`);
       return;
     }
 
@@ -14156,7 +13706,8 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
         slug: task.contract.slug,
         outbidOptions: task.outbidOptions,
         maxBidPriceEth,
-        minBidPriceEth
+        minBidPriceEth,
+        enqueuedAt: receivedAt  // Proxy timestamp for true end-to-end latency
       }
 
       debugLog('Counterbid', `[ME] ${task.contract.slug} [${tokenId}] | QUEUEING JOB: offerPrice=${offerPriceEth} ${currencySymbol}`, { taskId: task._id.toString(), marketplace: 'magiceden', slug: task.contract.slug, tokenId: tokenId.toString() });
@@ -14174,6 +13725,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               offerPrice: tokenOfferPriceForQueue,
               maxBidPriceEth: maxBidPriceEth,
               minBidPriceEth: minBidPriceEth
+              // Preserve original enqueuedAt timestamp for accurate latency measurement
             });
             debugLog('CounterbidUpdate', `[ME-Token] Updated job with higher price | tokenId=${tokenId} | oldPrice=${existingPrice} | newPrice=${tokenOfferPriceForQueue}`);
           } else if (tokenOfferPriceForQueue === existingPrice) {
@@ -14183,7 +13735,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
           }
         } else {
           // No existing job - add new one
-          await queue.add(
+          await counterbidQueue.add(
             MAGICEDEN_TOKEN_BID_COUNTERBID,
             bidData,
             {
@@ -14192,6 +13744,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               removeOnFail: true
             }
           );
+          concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
           debugLog('CounterbidUpdate', `[ME-Token] New job added | tokenId=${tokenId} | price=${tokenOfferPriceForQueue}`);
         }
       } catch (error: any) {
@@ -14310,6 +13863,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
             walletId: task.walletId,
             slug: task.contract.slug,
             trait: JSON.stringify(trait),
+            enqueuedAt: receivedAt  // Proxy timestamp for true end-to-end latency
           }
 
           try {
@@ -14323,6 +13877,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
                 await existingJob.updateData({
                   ...existingJob.data,
                   offerPrice: offerPrice
+                  // Preserve original enqueuedAt timestamp for accurate latency measurement
                 });
                 debugLog('CounterbidUpdate', `[ME-Trait] Updated job with higher price | trait=${identifier} | oldPrice=${existingPrice} | newPrice=${offerPrice}`);
               } else if (offerPrice === existingPrice) {
@@ -14332,11 +13887,15 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               }
             } else {
               // No existing job - add new one
-              await queue.add(MAGICEDEN_TRAIT_BID_COUNTERBID, bidData, {
+              // Record forwarding latency with jobId for execution tracking
+              recordForwarding('magiceden', receivedAt, Date.now(), counterbidJobId);
+
+              await counterbidQueue.add(MAGICEDEN_TRAIT_BID_COUNTERBID, bidData, {
                 jobId: counterbidJobId,
                 removeOnComplete: true,
                 removeOnFail: true
               });
+              concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
               debugLog('CounterbidUpdate', `[ME-Trait] New job added | trait=${identifier} | price=${offerPrice}`);
             }
           } catch (queueError: any) {
@@ -14425,6 +13984,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
                     offerPrice: tokenOfferPrice,
                     maxBidPriceEth: maxBidPriceEth,
                     minBidPriceEth: minBidPriceEth
+                    // Preserve original enqueuedAt timestamp for accurate latency measurement
                   });
                   debugLog('CounterbidUpdate', `[ME-Token] Updated job with higher price | tokenId=${tokenId} | oldPrice=${existingPrice} | newPrice=${tokenOfferPrice}`);
                   tokenCounterbidsQueued++;
@@ -14435,7 +13995,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
                 }
               } else {
                 // No existing job - add new one
-                await queue.add(
+                await counterbidQueue.add(
                   MAGICEDEN_TOKEN_BID_COUNTERBID,
                   tokenBidData,
                   {
@@ -14444,6 +14004,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
                     removeOnFail: true
                   }
                 );
+                concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
                 debugLog('CounterbidUpdate', `[ME-Token] New job added | tokenId=${tokenId} | price=${tokenOfferPrice}`);
                 tokenCounterbidsQueued++;
               }
@@ -14619,16 +14180,21 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               expiration: expiration,
               walletId: task.walletId,
               slug: task.contract.slug,
-              trait: JSON.stringify(trait)
+              trait: JSON.stringify(trait),
+              enqueuedAt: receivedAt  // Proxy timestamp for true end-to-end latency
             }
 
             try {
               const counterbidJobId = `CB-${task._id}-me-trait-${order.identifier}-${orderOfferPrice}`;
-              await queue.add(MAGICEDEN_TRAIT_BID_COUNTERBID, counterbidData, {
+              // Record forwarding latency with jobId for execution tracking
+              recordForwarding('magiceden', receivedAt, Date.now(), counterbidJobId);
+
+              await counterbidQueue.add(MAGICEDEN_TRAIT_BID_COUNTERBID, counterbidData, {
                 jobId: counterbidJobId,
                 removeOnComplete: true,
                 removeOnFail: true
               });
+              concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
               counterbidsQueued++;
               ordersToCancel.push(order);
             } catch (queueError: any) {
@@ -14649,7 +14215,8 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
               expiration: expiration,
               walletId: task.walletId,
               slug: task.contract.slug,
-              currency
+              currency,
+              enqueuedAt: receivedAt  // Proxy timestamp for true end-to-end latency
             }
 
             try {
@@ -14663,6 +14230,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
                   await existingJob.updateData({
                     ...existingJob.data,
                     offerPrice: orderOfferPrice
+                    // Preserve original enqueuedAt timestamp for accurate latency measurement
                   });
                   debugLog('CounterbidUpdate', `[ME-Coll] Updated job with higher price | slug=${task.contract.slug} | oldPrice=${existingPrice} | newPrice=${orderOfferPrice}`);
                   counterbidsQueued++;
@@ -14674,7 +14242,10 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
                 }
               } else {
                 // No existing job - add new one
-                await queue.add(
+                // Record forwarding latency with jobId for execution tracking
+                recordForwarding('magiceden', receivedAt, Date.now(), counterbidJobId);
+
+                await counterbidQueue.add(
                   MAGICEDEN_COLLECTION_BID_COUNTERBID,
                   bidData,
                   {
@@ -14683,6 +14254,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
                     removeOnFail: true
                   }
                 );
+                concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
                 debugLog('CounterbidUpdate', `[ME-Coll] New job added | slug=${task.contract.slug} | price=${orderOfferPrice}`);
                 counterbidsQueued++;
                 ordersToCancel.push(order);
@@ -14724,6 +14296,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
                     offerPrice: orderOfferPrice,
                     maxBidPriceEth: maxBidPriceEth,
                     minBidPriceEth: minBidPriceEth
+                    // Preserve original enqueuedAt timestamp for accurate latency measurement
                   });
                   debugLog('CounterbidUpdate', `[ME-Token] Updated job with higher price | tokenId=${tokenId} | oldPrice=${existingPrice} | newPrice=${orderOfferPrice}`);
                   counterbidsQueued++;
@@ -14735,7 +14308,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
                 }
               } else {
                 // No existing job - add new one
-                await queue.add(
+                await counterbidQueue.add(
                   MAGICEDEN_TOKEN_BID_COUNTERBID,
                   bidData,
                   {
@@ -14744,6 +14317,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
                     removeOnFail: true
                   }
                 );
+                concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
                 debugLog('CounterbidUpdate', `[ME-Token] New job added | tokenId=${tokenId} | price=${orderOfferPrice}`);
                 counterbidsQueued++;
                 ordersToCancel.push(order);
@@ -14836,11 +14410,15 @@ async function handleMagicEdenCounterbid(data: any, task: ITask) {
 
             try {
               const counterbidJobId = `CB-${task._id}-me-token-${targetTokenId}-${tokenOfferPriceForQueue}`;
-              await queue.add(MAGICEDEN_TOKEN_BID_COUNTERBID, tokenBidData, {
+              // Record forwarding latency with jobId for execution tracking
+              recordForwarding('magiceden', receivedAt, Date.now(), counterbidJobId);
+
+              await counterbidQueue.add(MAGICEDEN_TOKEN_BID_COUNTERBID, tokenBidData, {
                 jobId: counterbidJobId,
                 removeOnComplete: true,
                 removeOnFail: true
               });
+              concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
               tokenCollectionCounterbidsQueued++;
               debugLog('Counterbid', `[ME] ${task.contract.slug} [${targetTokenId}] | Token-vs-Collection: QUEUED - defending token against collection offer at ${tokenOfferPriceEth} ETH`, { taskId: task._id.toString(), marketplace: 'magiceden' });
             } catch (queueError: any) {
@@ -14924,7 +14502,7 @@ async function buildTokenDefenseList(
   return tokenList;
 }
 
-async function handleOpenseaCounterbid(data: any, task: ITask) {
+async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: number) {
   try {
     // ============================================================
     // PHASE 1: MINIMAL EXTRACTION - Extract only what's needed for early checks
@@ -15164,6 +14742,12 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
       currency = bidPriceResult.currency;
       openseaOutbidMargin = calculateOutbidMargin(incomingBidAmountEth, currency);
       marginMultiplier = currentTask.outbidOptions.crossTypeMarginMultiplier || 1;
+
+      // DEBUG: Log cross-type margin calculation (Phase 4 - Priority 2)
+      debugLog('Counterbid',
+        `[OS-CrossType] Margin calculated | slug=${currentTask.contract.slug} | baseMargin=${openseaOutbidMargin} | multiplier=${marginMultiplier} | multipliedMargin=${openseaOutbidMargin * marginMultiplier}`,
+        { taskId: currentTask._id.toString(), marketplace: 'opensea' }
+      );
     }
 
     // ============================================================
@@ -15343,6 +14927,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               offerPrice: tokenOfferPriceForQueue,
               floor_price: floor_price,
               maxBidPriceEth: maxBidPriceEth
+              // Preserve original enqueuedAt timestamp for accurate latency measurement
             });
             debugLog('CounterbidUpdate', `[OS-Token] Updated job with higher price | tokenId=${tokenId} | oldPrice=${existingPrice} | newPrice=${tokenOfferPriceForQueue}`);
           } else if (tokenOfferPriceForQueue === existingPrice) {
@@ -15352,7 +14937,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
           }
         } else {
           // No existing job - add new one
-          await queue.add(
+          await counterbidQueue.add(
             OPENSEA_TOKEN_BID_COUNTERBID,
             bidData,
             {
@@ -15361,6 +14946,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               removeOnFail: true
             }
           );
+          concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
           debugLog('CounterbidUpdate', `[OS-Token] New job added | tokenId=${tokenId} | price=${tokenOfferPriceForQueue}`);
         }
       }).catch((error: any) => {
@@ -15548,6 +15134,13 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
               // Calculate offer price with crossTypeMarginMultiplier (from Phase 6.2.5)
               const multipliedMargin = openseaOutbidMargin * marginMultiplier;
+
+              // DEBUG: Log TOKEN-vs-TRAIT cross-type margin (Phase 4 - Priority 2)
+              debugLog('Counterbid',
+                `[OS] ${task.contract.slug} [${tokenId}] | Cross-Type Margin | scenario=Token-vs-Trait | base=${openseaOutbidMargin} | multiplier=${marginMultiplier} | final=${multipliedMargin}`,
+                { taskId: task._id.toString(), marketplace: 'opensea' }
+              );
+
               const tokenOfferPrice = Math.ceil((multipliedMargin * decimalDivisor) + (basePriceEth * decimalDivisor));
 
               // IMPORTANT: Check if the calculated offer price exceeds max bid price
@@ -15582,6 +15175,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                       offerPrice: tokenOfferPriceForQueue,
                       floor_price: floor_price,
                       maxBidPriceEth: maxBidPriceEth
+                      // Preserve original enqueuedAt timestamp for accurate latency measurement
                     });
                     debugLog('CounterbidUpdate', `[OS-Token] Updated job with higher price | tokenId=${tokenId} | oldPrice=${existingPrice} | newPrice=${tokenOfferPriceForQueue}`);
                     tokenCounterbidsQueued++;
@@ -15592,7 +15186,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                   }
                 } else {
                   // No existing job - add new one
-                  await queue.add(
+                  await counterbidQueue.add(
                     OPENSEA_TOKEN_BID_COUNTERBID,
                     tokenBidData,
                     {
@@ -15601,6 +15195,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                       removeOnFail: true
                     }
                   );
+                  concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
                   debugLog('CounterbidUpdate', `[OS-Token] New job added | tokenId=${tokenId} | price=${tokenOfferPriceForQueue}`);
                   tokenCounterbidsQueued++;
                 }
@@ -15647,6 +15242,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                   ...existingJob.data,
                   offerPrice: traitOfferForQueue,
                   floor_price: cachedFloorPrice
+                  // Preserve original enqueuedAt timestamp for accurate latency measurement
                 });
                 debugLog('CounterbidUpdate', `[OS-Trait] Updated job with higher price | trait=${traitKey} | oldPrice=${existingPrice} | newPrice=${traitOfferForQueue}`);
               } else if (traitOfferForQueue === existingPrice) {
@@ -15656,7 +15252,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               }
             } else {
               // No existing job - add new one
-              await queue.add(
+              // Record forwarding latency with jobId for execution tracking
+              recordForwarding('opensea', receivedAt, Date.now(), counterbidJobId);
+
+              await counterbidQueue.add(
                 OPENSEA_TRAIT_BID_COUNTERBID,
                 counterbidData,
                 {
@@ -15665,6 +15264,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                   removeOnFail: true
                 }
               );
+              concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
               debugLog('CounterbidUpdate', `[OS-Trait] New job added | trait=${traitKey} | price=${traitOfferForQueue}`);
             }
           } catch (queueError: any) {
@@ -15756,6 +15356,13 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
               // Calculate token counterbid price with crossTypeMarginMultiplier (from Phase 6.2.5)
               const multipliedMargin = openseaOutbidMargin * marginMultiplier;
+
+              // DEBUG: Log TOKEN-vs-TRAIT cross-type margin (Phase 4 - Priority 2)
+              debugLog('Counterbid',
+                `[OS] ${task.contract.slug} [${targetTokenId}] | Cross-Type Margin | scenario=Token-vs-Trait | base=${openseaOutbidMargin} | multiplier=${marginMultiplier} | final=${multipliedMargin}`,
+                { taskId: task._id.toString(), marketplace: 'opensea' }
+              );
+
               const tokenOfferPrice = Math.ceil((multipliedMargin * decimalDivisor) + (basePriceEth * decimalDivisor));
               const tokenOfferPriceEth = tokenOfferPrice / decimalDivisor;
 
@@ -15786,8 +15393,11 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               };
 
               const counterbidJobId = `CB-${task._id}-os-token-${targetTokenId}-${tokenOfferPriceForQueue}`;
+              // Record forwarding latency with jobId for execution tracking
+              recordForwarding('opensea', receivedAt, Date.now(), counterbidJobId);
+
               // Fire-and-forget: non-blocking queue operation (saves 50-75ms)
-              queue.add(OPENSEA_TOKEN_BID_COUNTERBID, tokenBidData, {
+              counterbidQueue.add(OPENSEA_TOKEN_BID_COUNTERBID, tokenBidData, {
                 jobId: counterbidJobId,
                 removeOnComplete: true,
                 removeOnFail: true
@@ -15970,6 +15580,13 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
             const basePriceEth = roundedEth; // incoming collection offer
             // marginMultiplier from Phase 6.2.5
             const multipliedMargin = openseaOutbidMargin * marginMultiplier;
+
+            // DEBUG: Log TRAIT-vs-COLLECTION cross-type margin (Phase 4 - Priority 2)
+            debugLog('Counterbid',
+              `[OS] ${task.contract.slug} [${order.identifier}] | Cross-Type Margin | scenario=Trait-vs-Collection | base=${openseaOutbidMargin} | multiplier=${marginMultiplier} | final=${multipliedMargin}`,
+              { taskId: task._id.toString(), marketplace: 'opensea' }
+            );
+
             orderOfferPrice = Math.ceil((multipliedMargin * decimalDivisor) + (basePriceEth * decimalDivisor));
           }
 
@@ -15995,13 +15612,17 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               enforceCreatorFee: collectionDetails.enforceCreatorFee,
               expiry,
               trait: JSON.stringify(trait),
-              floor_price: cachedFloorPrice  // Pass cached floor price to avoid redundant API call
+              floor_price: cachedFloorPrice,  // Pass cached floor price to avoid redundant API call
+              enqueuedAt: receivedAt  // Proxy timestamp for true end-to-end latency
             }
 
             const traitKey = `${traitType}:${traitValue}`;
             try {
               const counterbidJobId = `CB-${task._id}-os-trait-${traitKey}-${orderOfferPriceForQueue}`;
-              await queue.add(
+              // Record forwarding latency with jobId for execution tracking
+              recordForwarding('opensea', receivedAt, Date.now(), counterbidJobId);
+
+              await counterbidQueue.add(
                 OPENSEA_TRAIT_BID_COUNTERBID,
                 counterbidData,
                 {
@@ -16010,6 +15631,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                   removeOnFail: true
                 }
               );
+              concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
               counterbidsQueued++;
             } catch (queueError: any) {
               if (!queueError?.message?.includes('Job with this id already exists')) {
@@ -16033,7 +15655,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               creatorFees,
               enforceCreatorFee: collectionDetails.enforceCreatorFee,
               expiry,
-              floor_price: cachedFloorPrice  // Pass cached floor price to avoid redundant API call
+              floor_price: cachedFloorPrice,  // Pass cached floor price to avoid redundant API call
+              enqueuedAt: receivedAt  // Proxy timestamp for true end-to-end latency
             };
 
             // [15] QUEUE OPERATION
@@ -16049,6 +15672,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                     ...existingJob.data,
                     offerPrice: collectionOfferForQueue,
                     floor_price: cachedFloorPrice
+                    // Preserve original enqueuedAt timestamp for accurate latency measurement
                   });
                   debugLog('CounterbidUpdate', `[OS-Coll] Updated job with higher price | slug=${task.contract.slug} | oldPrice=${existingPrice} | newPrice=${collectionOfferForQueue}`);
                   counterbidsQueued++;
@@ -16059,7 +15683,10 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                 }
               } else {
                 // No existing job - add new one
-                await queue.add(
+                // Record forwarding latency with jobId for execution tracking
+                recordForwarding('opensea', receivedAt, Date.now(), counterbidJobId);
+
+                await counterbidQueue.add(
                   OPENSEA_COLLECTION_BID_COUNTERBID,
                   bidData,
                   {
@@ -16068,6 +15695,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                     removeOnFail: true
                   }
                 );
+                concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
                 debugLog('CounterbidUpdate', `[OS-Coll] New job added | slug=${task.contract.slug} | price=${collectionOfferForQueue}`);
                 counterbidsQueued++;
               }
@@ -16092,7 +15720,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                 contractAddress: task.contract.contractAddress,
                 tokenId: parseInt(tokenId)
               },
-              outbidOptions: outbidOptions
+              outbidOptions: outbidOptions,
+              enqueuedAt: receivedAt  // Proxy timestamp for true end-to-end latency
             }
 
 
@@ -16109,6 +15738,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                     offerPrice: orderOfferPriceForQueue,
                     floor_price: floor_price,
                     maxBidPriceEth: maxBidPriceEth
+                    // Preserve original enqueuedAt timestamp for accurate latency measurement
                   });
                   debugLog('CounterbidUpdate', `[OS-Token] Updated job with higher price | tokenId=${tokenId} | oldPrice=${existingPrice} | newPrice=${orderOfferPriceForQueue}`);
                   counterbidsQueued++;
@@ -16119,7 +15749,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                 }
               } else {
                 // No existing job - add new one
-                await queue.add(
+                await counterbidQueue.add(
                   OPENSEA_TOKEN_BID_COUNTERBID,
                   bidData,
                   {
@@ -16128,6 +15758,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
                     removeOnFail: true
                   }
                 );
+                concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
                 debugLog('CounterbidUpdate', `[OS-Token] New job added | tokenId=${tokenId} | price=${orderOfferPriceForQueue}`);
                 counterbidsQueued++;
               }
@@ -16233,6 +15864,13 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
 
               // Calculate token counterbid price with crossTypeMarginMultiplier (from Phase 6.2.5)
               const multipliedMargin = openseaOutbidMargin * marginMultiplier;
+
+              // DEBUG: Log TOKEN-vs-COLLECTION cross-type margin (Phase 4 - Priority 2)
+              debugLog('Counterbid',
+                `[OS] ${task.contract.slug} [${targetTokenId}] | Cross-Type Margin | scenario=Token-vs-Collection | base=${openseaOutbidMargin} | multiplier=${marginMultiplier} | final=${multipliedMargin}`,
+                { taskId: task._id.toString(), marketplace: 'opensea' }
+              );
+
               const tokenOfferPrice = Math.ceil((multipliedMargin * decimalDivisor) + (basePriceEth * decimalDivisor));
               const tokenOfferPriceEth = tokenOfferPrice / Math.pow(10, decimal);
 
@@ -16263,8 +15901,11 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
               };
 
               const counterbidJobId = `CB-${task._id}-os-token-${targetTokenId}-${tokenOfferPriceForQueue}`;
+              // Record forwarding latency with jobId for execution tracking
+              recordForwarding('opensea', receivedAt, Date.now(), counterbidJobId);
+
               // Fire-and-forget: non-blocking queue operation (saves 50-75ms)
-              queue.add(OPENSEA_TOKEN_BID_COUNTERBID, tokenBidData, {
+              counterbidQueue.add(OPENSEA_TOKEN_BID_COUNTERBID, tokenBidData, {
                 jobId: counterbidJobId,
                 removeOnComplete: true,
                 removeOnFail: true
@@ -16294,7 +15935,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask) {
   }
 }
 
-async function handleBlurCounterbid(data: any, task: ITask) {
+async function handleBlurCounterbid(data: any, task: ITask, receivedAt: number) {
   const incomingBid = data
 
   try {
@@ -16326,12 +15967,6 @@ async function handleBlurCounterbid(data: any, task: ITask) {
     }
 
     if (!currentTask?.outbidOptions?.counterbid) {
-      return;
-    }
-
-    // Early exit if marketplace already stopped due to insufficient balance
-    if (isMarketplaceStoppedDueToBalance(taskStatus, task._id.toString(), 'blur')) {
-      debugLog('Counterbid', `[Blur] ${task.contract.slug} | SKIP: Marketplace stopped (insufficient balance)`);
       return;
     }
 
@@ -16470,7 +16105,8 @@ async function handleBlurCounterbid(data: any, task: ITask) {
           offerPrice: Number(offerPrice),
           slug: task.contract.slug,
           traits,
-          expiry
+          expiry,
+          enqueuedAt: receivedAt  // Proxy timestamp for true end-to-end latency
         }
 
 
@@ -16483,13 +16119,14 @@ async function handleBlurCounterbid(data: any, task: ITask) {
           const counterbidJobId = `CB-${task._id}-blur-trait-${identifier}`;  // No price in jobId
 
           // Check for existing job and update if new price is higher
-          const existingJob = await blurQueue.getJob(counterbidJobId);
+          const existingJob = await queue.getJob(counterbidJobId);
           if (existingJob) {
             const existingPrice = existingJob.data.offerPrice;
             if (Number(offerPrice) > existingPrice) {
               await existingJob.updateData({
                 ...existingJob.data,
                 offerPrice: Number(offerPrice)
+                // Preserve original enqueuedAt timestamp for accurate latency measurement
               });
               debugLog('CounterbidUpdate', `[Blur-Trait] Updated job with higher price | trait=${identifier} | oldPrice=${existingPrice} | newPrice=${offerPrice}`);
             } else if (Number(offerPrice) === existingPrice) {
@@ -16499,11 +16136,15 @@ async function handleBlurCounterbid(data: any, task: ITask) {
             }
           } else {
             // No existing job - add new one
-            await blurQueue.add(BLUR_TRAIT_BID_COUNTERBID, bidData, {
+            // Record forwarding latency with jobId for execution tracking
+            recordForwarding('blur', receivedAt, Date.now(), counterbidJobId);
+
+            await counterbidQueue.add(BLUR_TRAIT_BID_COUNTERBID, bidData, {
               jobId: counterbidJobId,
               removeOnComplete: true,
               removeOnFail: true
             });
+            concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
             debugLog('CounterbidUpdate', `[Blur-Trait] New job added | trait=${identifier} | price=${offerPrice}`);
           }
         } catch (queueError: any) {
@@ -16671,7 +16312,8 @@ async function handleBlurCounterbid(data: any, task: ITask) {
               offerPrice: Number(orderOfferPrice),
               slug: task.contract.slug,
               traits,
-              expiry
+              expiry,
+              enqueuedAt: receivedAt  // Proxy timestamp for true end-to-end latency
             }
 
             const offerPriceEth = Number(orderOfferPrice) / 1e18;
@@ -16681,13 +16323,14 @@ async function handleBlurCounterbid(data: any, task: ITask) {
               const counterbidJobId = `CB-${task._id}-blur-trait-${order.identifier}`;  // No price in jobId
 
               // Check for existing job and update if new price is higher
-              const existingJob = await blurQueue.getJob(counterbidJobId);
+              const existingJob = await queue.getJob(counterbidJobId);
               if (existingJob) {
                 const existingPrice = existingJob.data.offerPrice;
                 if (Number(orderOfferPrice) > existingPrice) {
                   await existingJob.updateData({
                     ...existingJob.data,
                     offerPrice: Number(orderOfferPrice)
+                    // Preserve original enqueuedAt timestamp for accurate latency measurement
                   });
                   debugLog('CounterbidUpdate', `[Blur-Trait] Updated job with higher price | trait=${order.identifier} | oldPrice=${existingPrice} | newPrice=${orderOfferPrice}`);
                   counterbidsQueued++;
@@ -16698,11 +16341,15 @@ async function handleBlurCounterbid(data: any, task: ITask) {
                 }
               } else {
                 // No existing job - add new one
-                await blurQueue.add(BLUR_TRAIT_BID_COUNTERBID, counterbidData, {
+                // Record forwarding latency with jobId for execution tracking
+                recordForwarding('blur', receivedAt, Date.now(), counterbidJobId);
+
+                await counterbidQueue.add(BLUR_TRAIT_BID_COUNTERBID, counterbidData, {
                   jobId: counterbidJobId,
                   removeOnComplete: true,
                   removeOnFail: true
                 });
+                concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
                 debugLog('CounterbidUpdate', `[Blur-Trait] New job added | trait=${order.identifier} | price=${orderOfferPrice}`);
                 counterbidsQueued++;
               }
@@ -16720,7 +16367,8 @@ async function handleBlurCounterbid(data: any, task: ITask) {
               contractAddress: task.contract.contractAddress,
               offerPrice: Number(orderOfferPrice),
               slug: task.contract.slug,
-              expiry
+              expiry,
+              enqueuedAt: receivedAt  // Proxy timestamp for true end-to-end latency
             }
 
             const offerPriceEthColl = Number(orderOfferPrice) / 1e18;
@@ -16730,13 +16378,14 @@ async function handleBlurCounterbid(data: any, task: ITask) {
               const counterbidJobId = `CB-${task._id}-blur-coll-${task.contract.slug}`;  // No price in jobId
 
               // Check for existing job and update if new price is higher
-              const existingJob = await blurQueue.getJob(counterbidJobId);
+              const existingJob = await queue.getJob(counterbidJobId);
               if (existingJob) {
                 const existingPrice = existingJob.data.offerPrice;
                 if (Number(orderOfferPrice) > existingPrice) {
                   await existingJob.updateData({
                     ...existingJob.data,
                     offerPrice: Number(orderOfferPrice)
+                    // Preserve original enqueuedAt timestamp for accurate latency measurement
                   });
                   debugLog('CounterbidUpdate', `[Blur-Coll] Updated job with higher price | slug=${task.contract.slug} | oldPrice=${existingPrice} | newPrice=${orderOfferPrice}`);
                   counterbidsQueued++;
@@ -16747,11 +16396,15 @@ async function handleBlurCounterbid(data: any, task: ITask) {
                 }
               } else {
                 // No existing job - add new one
-                await blurQueue.add(BLUR_COLLECTION_BID_COUNTERBID, bidData, {
+                // Record forwarding latency with jobId for execution tracking
+                recordForwarding('blur', receivedAt, Date.now(), counterbidJobId);
+
+                await counterbidQueue.add(BLUR_COLLECTION_BID_COUNTERBID, bidData, {
                   jobId: counterbidJobId,
                   removeOnComplete: true,
                   removeOnFail: true
                 });
+                concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
                 debugLog('CounterbidUpdate', `[Blur-Coll] New job added | slug=${task.contract.slug} | price=${orderOfferPrice}`);
                 counterbidsQueued++;
               }
@@ -18574,29 +18227,21 @@ async function processBlurScheduledBid(task: ITask) {
     const contractAddress = currentTask.contract.contractAddress
     const newTask = { ...currentTask, traits: {} } as ITask
 
-    // Check authentication block status before pre-authenticating
+    // Check authentication block status before pre-authenticating (LRU cache)
+    const block = blurAuthBlockLRU.get(WALLET_ADDRESS.toLowerCase());
+    if (block && block.blockedUntil > Date.now()) {
+      const waitTime = block.blockedUntil - Date.now();
+      const waitSeconds = Math.round(waitTime / 1000);
 
-    const redis = redisClient.getClient();
-    if (redis) {
-      const authBlockKey = `blur:auth:block:${WALLET_ADDRESS}`;
-      const authBlockTime = await redis.get(authBlockKey);
-
-      if (authBlockTime) {
-        const blockTime = parseInt(authBlockTime);
-        if (blockTime > Date.now()) {
-          const waitTime = blockTime - Date.now();
-          const waitSeconds = Math.round(waitTime / 1000);
-
-
-
-          if (!skipStats[taskId]) {
-            skipStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
-          }
-          skipStats[taskId].blur++;
-
-          throw new Error(`Authentication blocked - retry in ${waitSeconds}s`);
-        }
+      if (!skipStats[taskId]) {
+        skipStats[taskId] = { opensea: 0, magiceden: 0, blur: 0 };
       }
+      skipStats[taskId].blur++;
+
+      throw new Error(`Authentication blocked - retry in ${waitSeconds}s`);
+    } else if (block) {
+      // Block has expired, clean it up
+      blurAuthBlockLRU.delete(WALLET_ADDRESS.toLowerCase());
     }
 
     // Extend lock before pre-authentication
@@ -18625,17 +18270,14 @@ async function processBlurScheduledBid(task: ITask) {
       // Continue anyway - individual jobs will attempt auth if needed
     }
 
-    // Check wallet pause status before creating jobs
-
-    const walletPauseKey = `blur:wallet:pause:${WALLET_ADDRESS}`;
-    const walletPauseUntil = redis ? await redis.get(walletPauseKey) : null;
-
-    if (walletPauseUntil) {
-      const pauseTime = parseInt(walletPauseUntil);
-      if (pauseTime > Date.now()) {
-        const waitTime = pauseTime - Date.now();
-        throw new Error(`Wallet paused for ${Math.round(waitTime / 1000)}s`);
-      }
+    // Check wallet pause status before creating jobs (LRU cache)
+    const walletPause = blurWalletPauseLRU.get(WALLET_ADDRESS.toLowerCase());
+    if (walletPause && walletPause.pauseUntil > Date.now()) {
+      const waitTime = walletPause.pauseUntil - Date.now();
+      throw new Error(`Wallet paused for ${Math.round(waitTime / 1000)}s`);
+    } else if (walletPause) {
+      // Pause has expired, clean it up
+      blurWalletPauseLRU.delete(WALLET_ADDRESS.toLowerCase());
     }
 
     // Define Blur rate limits based on API documentation
@@ -18729,7 +18371,7 @@ async function processBlurScheduledBid(task: ITask) {
         parentJob.totalJobs = 1; // Use expected count initially
       }
 
-      await blurQueue.add(
+      await queue.add(
         BLUR_COLLECTION_BID,
         { taskId: taskId, contractAddress, expiry },
         { jobId, priority: 2, attempts: 1 }
@@ -18824,14 +18466,6 @@ async function processBlurCollectionBid(data: { taskId: string }) {
 
   // Create trace for scheduled bid
   // Log job started
-
-  // Early exit if marketplace already stopped due to insufficient balance
-  if (isMarketplaceStoppedDueToBalance(taskStatus, taskId, 'blur')) {
-    if (DEBUG) {
-      debugLog('BidFlow', `[Blur-Coll] ${collectionSlug} | SKIP: Marketplace stopped (insufficient balance)`);
-    }
-    return;
-  }
 
   // Check if task is blacklisted before processing
   if (isTaskBlacklisted(taskId)) {
@@ -19093,14 +18727,6 @@ async function processOpenseaTraitBid(data: IProcessOpenseaTraitBidData) {
 
   // Check blacklist at the VERY START to prevent any processing if task is being stopped
   if (isTaskBlacklisted(data._id, 'opensea')) {
-    return;
-  }
-
-  // Early exit if marketplace already stopped due to insufficient balance
-  if (isMarketplaceStoppedDueToBalance(taskStatus, data._id, 'opensea')) {
-    if (DEBUG) {
-      debugLog('BidFlow', `[OS-Trait] ${data.slug}:${traitKey} | SKIP: Marketplace stopped (insufficient balance)`);
-    }
     return;
   }
 
@@ -19488,11 +19114,23 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
   const taskId = data._id;
   // const tokenId = data.asset?.tokenId?.toString() || 'unknown';
 
+  // Start timing for end-to-end execution measurement
+  const timer = startTimer('processOpenseaTokenBid', {
+    taskId: taskId,
+    slug: data.slug,
+    tokenId: data.asset?.tokenId?.toString(),
+    source: 'scheduled'
+  });
+
   // Create trace for scheduled bid
   // Log job started
 
   // Check if task is blacklisted
   if (isTaskBlacklisted(taskId, 'opensea')) {
+    const duration = timer.end({ success: false, reason: 'task_blacklisted' });
+    infoLog('ExecutionTime', `processOpenseaTokenBid early_exit | ${duration}ms`, {
+      duration, success: false, reason: 'task_blacklisted', taskId, source: 'scheduled'
+    });
     return;
   }
 
@@ -19506,9 +19144,17 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
   try {
 
     if (!enabledMarketplaces.length) {
+      const duration = timer.end({ success: false, reason: 'no_enabled_marketplaces' });
+      infoLog('ExecutionTime', `processOpenseaTokenBid early_exit | ${duration}ms`, {
+        duration, success: false, reason: 'no_enabled_marketplaces', taskId, source: 'scheduled'
+      });
       return;
     }
     if (!enabledMarketplaces.map((m) => m.toLowerCase()).includes("opensea")) {
+      const duration = timer.end({ success: false, reason: 'opensea_not_enabled' });
+      infoLog('ExecutionTime', `processOpenseaTokenBid early_exit | ${duration}ms`, {
+        duration, success: false, reason: 'opensea_not_enabled', taskId, source: 'scheduled'
+      });
       return;
     }
     const { address, walletId, slug, creatorFees, asset, _id } = data
@@ -19518,6 +19164,10 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     // Early wallet validation - fetch once and reuse later
     const wallet = await walletCache.getWalletById(walletId);
     if (!wallet || !wallet.encryptedPrivateKey) {
+      const duration = timer.end({ success: false, reason: 'wallet_not_found' });
+      infoLog('ExecutionTime', `processOpenseaTokenBid early_exit | ${duration}ms`, {
+        duration, success: false, reason: 'wallet_not_found', taskId, slug, source: 'scheduled'
+      });
       return;
     }
 
@@ -19525,6 +19175,10 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       if (DEBUG) {
         debugLog('BidFlow', `[OS-Token] ${slug}:${asset.tokenId} | SKIP: Token not in active list`);
       }
+      const duration = timer.end({ success: false, reason: 'token_not_in_active_list' });
+      infoLog('ExecutionTime', `processOpenseaTokenBid early_exit | ${duration}ms`, {
+        duration, success: false, reason: 'token_not_in_active_list', taskId, slug, tokenId: asset.tokenId.toString(), source: 'scheduled'
+      });
       return;
     }
 
@@ -19552,6 +19206,10 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       if (DEBUG) {
         debugLog('BidFlow', `[OS-Token] ${slug}:${asset.tokenId} | SKIP: Task not running or marketplace disabled`);
       }
+      const duration = timer.end({ success: false, reason: 'task_not_running_or_marketplace_disabled' });
+      infoLog('ExecutionTime', `processOpenseaTokenBid early_exit | ${duration}ms`, {
+        duration, success: false, reason: 'task_not_running_or_marketplace_disabled', taskId, slug, tokenId: asset.tokenId.toString(), source: 'scheduled'
+      });
       return;
     }
 
@@ -19630,6 +19288,10 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         if (DEBUG) {
           debugLog('ScheduledBid', `[OS-Token] ${slug}:${asset.tokenId} | SKIP: Bid still valid (TTL: ${ttl.toFixed(0)}s >= ${MIN_BID_DURATION}s)`);
         }
+        const duration = timer.end({ success: true, reason: 'bid_still_valid' });
+        infoLog('ExecutionTime', `processOpenseaTokenBid early_exit | ${duration}ms`, {
+          duration, success: true, reason: 'bid_still_valid', taskId, slug, tokenId: asset.tokenId.toString(), source: 'scheduled'
+        });
         return;
       }
     } else {
@@ -19679,6 +19341,10 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         else if (ttl > MIN_BID_DURATION) {
           // Our bid is still valid with sufficient TTL
           debugLog('ScheduledBid', `[OS-Token] ${slug}:${asset.tokenId} | OwnBid: SKIP - bid still valid (TTL: ${ttl.toFixed(0)}s)`);
+          const duration = timer.end({ success: true, reason: 'own_bid_still_valid' });
+          infoLog('ExecutionTime', `processOpenseaTokenBid early_exit | ${duration}ms`, {
+            duration, success: true, reason: 'own_bid_still_valid', taskId, slug, tokenId: asset.tokenId.toString(), source: 'scheduled'
+          });
           return;
         } else {
           // Renew at same price
@@ -19714,6 +19380,10 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       skipStats[_id].opensea++;
       debugLog('LimitCheck', `[OS-Token] ${slug}:${asset.tokenId} | BLOCKED: offer=${offerEth} >= max=${maxBidPriceEth} ${currencySymbol}`);
       logBidError(_id, "MAXIMUM BID PRICE EXCEEDED", message, "skipped", "opensea");
+      const duration = timer.end({ success: false, reason: 'max_bid_price_exceeded' });
+      infoLog('ExecutionTime', `processOpenseaTokenBid early_exit | ${duration}ms`, {
+        duration, success: false, reason: 'max_bid_price_exceeded', taskId, slug, tokenId: asset.tokenId.toString(), bidPrice: offerEth, maxPrice: maxBidPriceEth, source: 'scheduled'
+      });
       return;
     } else if (offerEth < minBidPriceEth) {
       tokenOffer = BigInt(Math.round(roundToValidPrecision(minBidPriceEth) * Math.pow(10, decimal)));
@@ -19771,6 +19441,27 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       )
 
       // Bid successful
+      const duration = timer.end({
+        success: true,
+        tokenId: asset.tokenId.toString(),
+        slug: slug,
+        bidDetails: {
+          address: address,
+          walletId: walletId,
+          bidPrice: finalOfferEth,
+          currency: currencySymbol
+        }
+      });
+      infoLog('ExecutionTime', `processOpenseaTokenBid completed | ${duration}ms`, {
+        duration,
+        success: true,
+        taskId,
+        slug,
+        tokenId: asset.tokenId.toString(),
+        bidPrice: finalOfferEth,
+        currency: currencySymbol,
+        source: 'scheduled'
+      });
 
     } catch (bidError: any) {
 
@@ -19812,6 +19503,10 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
           errorMessage = primaryMessage;
 
+          const duration = timer.end({ success: false, reason: 'trading_disabled' });
+          infoLog('ExecutionTime', `processOpenseaTokenBid early_exit | ${duration}ms`, {
+            duration, success: false, reason: 'trading_disabled', taskId, slug, tokenId: asset.tokenId.toString(), error: primaryMessage, source: 'scheduled'
+          });
           return; // Exit early without re-throwing
         }
 
@@ -19862,6 +19557,10 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
 
       if (handled) {
         // Balance error was handled (marketplace stopped or bid skipped)
+        const duration = timer.end({ success: false, reason: 'insufficient_balance' });
+        infoLog('ExecutionTime', `processOpenseaTokenBid early_exit | ${duration}ms`, {
+          duration, success: false, reason: 'insufficient_balance', taskId, slug, tokenId: asset.tokenId?.toString(), source: 'scheduled'
+        });
         return;
       }
 
@@ -19900,12 +19599,24 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     // Error tracking is now handled in queue event handlers
 
     await logBidError(data._id, "OPENSEA TOKEN BID ERROR", `Error bidding on token ${data.asset.tokenId} in collection ${data.slug}: ${errorMessage}`, "error", "opensea");
+    const duration = timer.end({ success: false, error: errorMessage });
+    infoLog('ExecutionTime', `processOpenseaTokenBid failed | ${duration}ms`, {
+      duration,
+      success: false,
+      taskId: data._id,
+      slug: data.slug,
+      tokenId: data.asset?.tokenId?.toString(),
+      error: errorMessage,
+      source: 'scheduled'
+    });
     throw error;
   }
 }
 
-async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
-  const { taskId, bidCount, walletAddress, walletId, slug, offerPrice, creatorFees, expiry, floor_price } = data;
+async function openseaCollectionCounterBid(job: Job<IOpenseaBidParams>) {
+  const data = job.data;
+  const { taskId, bidCount, walletAddress, walletId, slug, offerPrice, creatorFees, expiry, floor_price, enqueuedAt } = data;
+  let success = false;
 
   // [18] WORKER ENTRY
   debugLog('Counterbid', `[WORKER_ENTRY] Processing collection counterbid job | slug=${slug} | price=${(offerPrice / Math.pow(10, 18)).toFixed(6)} ETH`,
@@ -20015,21 +19726,28 @@ async function openseaCollectionCounterBid(data: IOpenseaBidParams) {
       };
     }
     counterbidCounts[taskId]["opensea"]++;
+    success = true;  // Mark as successful before return
   } catch (error: any) {
+    success = false;
     const errorMessage = extractDetailedOpenSeaError(error);
     errorLog('OpenSea', `Error during OpenSea collection counterbid | taskId=${taskId}`, error);
     await logBidError(data.taskId, "OPENSEA COLLECTION COUNTER BID ERROR", `Error processing OpenSea collection counter bid for task: ${data.slug}: ${errorMessage}`, "error", "opensea");
+  } finally {
+    // Record execution latency (Stage 2: Job completion)
+    recordCounterbidExecution('opensea', job.id!, success);
   }
 }
 
-async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) {
+async function magicedenCollectionCounterBid(job: Job<IMagicedenCollectionBidData>) {
+  const data = job.data;
   if (!enabledMarketplaces.length) {
     if (DEBUG) {
       debugLog('BidFlow', `[ME-Coll-CB] ${data.slug} | SKIP: No marketplaces enabled`);
     }
     return;
   }
-  const { taskId, bidCount, address, contractAddress, quantity, offerPrice, expiration, walletId, slug } = data
+  const { taskId, bidCount, address, contractAddress, quantity, offerPrice, expiration, walletId, slug, enqueuedAt } = data;
+  let success = false;
   const currentTask = activeTasks.get(taskId)
   if (!currentTask?.running || !currentTask.selectedMarketplaces.map((market) => market.toLowerCase()).includes("magiceden") || !enabledMarketplaces.map((m) => m.toLowerCase()).includes("magiceden")) {
     if (DEBUG) {
@@ -20079,10 +19797,15 @@ async function magicedenCollectionCounterBid(data: IMagicedenCollectionBidData) 
     }
     counterbidCounts[taskId]['magiceden']++;
 
+    success = true;  // Mark as successful before return
     // Log job completed
     debugLog('Counterbid', `[ME-Coll-CB] ${slug} | JOB_COMPLETE | price=${offerEth} ${currencySymbol}`, { taskId, marketplace: 'magiceden' });
   } catch (error: any) {
+    success = false;
     await logBidError(taskId, "MAGICEDEN COLLECTION COUNTER BID ERROR", `Error processing MagicEden collection counter bid for task: ${data.slug}: ${error?.response?.data?.message || error?.response?.data || error?.message || String(error)}`, "error", "magiceden");
+  } finally {
+    // Record execution latency (Stage 2: Job completion)
+    recordCounterbidExecution('magiceden', job.id!, success);
   }
 }
 
@@ -20097,11 +19820,14 @@ interface IMagicedenTraitBidData {
   walletId: string
   slug: string
   trait: string
+  enqueuedAt?: number
 }
 
-async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
+async function magicedenTraitCounterBid(job: Job<IMagicedenTraitBidData>) {
+  const data = job.data;
   // Extract or create trace context
-  const { taskId, bidCount, address, contractAddress, quantity, offerPrice, expiration, walletId, slug, trait } = data
+  const { taskId, bidCount, address, contractAddress, quantity, offerPrice, expiration, walletId, slug, trait, enqueuedAt } = data;
+  let success = false;
   const triatData = JSON.parse(trait)
   const bidTrait = {
     attributeKey: triatData?.attributeKey,
@@ -20172,17 +19898,24 @@ async function magicedenTraitCounterBid(data: IMagicedenTraitBidData) {
     }
     counterbidCounts[taskId]['magiceden']++;
 
+    success = true;  // Mark as successful before return
     // Log job completed
     debugLog('Counterbid', `[ME-Trait-CB] ${slug} [${traitKey}] | JOB_COMPLETE | price=${offerEth} WETH`, { taskId, marketplace: 'magiceden' });
   } catch (error: any) {
+    success = false;
     const errorMsg = error?.response?.data?.message || error?.response?.data || error?.message || String(error);
     await logBidError(data.taskId, "MAGICEDEN TRAIT COUNTER BID ERROR", `Error processing MagicEden trait counter bid for task: ${data.slug}: ${errorMsg}`, "error", "magiceden");
+  } finally {
+    // Record execution latency (Stage 2: Job completion)
+    recordCounterbidExecution('magiceden', job.id!, success);
   }
 }
 
-async function blurCollectionCounterBid(data: IBlurBidData) {
+async function blurCollectionCounterBid(job: Job<IBlurBidData>) {
+  const data = job.data;
   // Extract or create trace context
-  const { taskId, bidCount, address, walletId, contractAddress, offerPrice, slug, expiry } = data
+  const { taskId, bidCount, address, walletId, contractAddress, offerPrice, slug, expiry, enqueuedAt } = data;
+  let success = false;
 
   // Log job started
 
@@ -20249,10 +19982,12 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
     }
     counterbidCounts[taskId]['blur']++;
 
+    success = true;  // Mark as successful before return
     // Log job completed
     debugLog('Counterbid', `[Blur-Coll-CB] ${slug} | JOB_COMPLETE | price=${offerEth} BETH`, { taskId, marketplace: 'blur' });
 
   } catch (error: any) {
+    success = false;
     const errorMsg = error?.response?.data?.message || error?.response?.data || error?.message || String(error);
 
     // Handle rate limit errors
@@ -20267,12 +20002,17 @@ async function blurCollectionCounterBid(data: IBlurBidData) {
     }
 
     await logBidError(taskId, "BLUR COLLECTION COUNTER BID ERROR", `Error processing Blur collection counter bid for task: ${slug}: ${errorMsg}`, "error", "blur");
+  } finally {
+    // Record execution latency (Stage 2: Job completion)
+    recordCounterbidExecution('blur', job.id!, success);
   }
 }
 
-async function blurTraitCounterBid(data: IBlurBidData) {
+async function blurTraitCounterBid(job: Job<IBlurBidData>) {
+  const data = job.data;
   // Extract or create trace context
-  const { taskId, bidCount, address, walletId, contractAddress, offerPrice, slug, expiry, traits } = data
+  const { taskId, bidCount, address, walletId, contractAddress, offerPrice, slug, expiry, traits, enqueuedAt } = data;
+  let success = false;
 
   // Parse traits early to get identifier for logging
   let traitKey = 'unknown';
@@ -20356,10 +20096,12 @@ async function blurTraitCounterBid(data: IBlurBidData) {
     }
     counterbidCounts[taskId]['blur']++;
 
+    success = true;  // Mark as successful before return
     // Log job completed
     debugLog('Counterbid', `[Blur-Trait-CB] ${slug} [${identifier}] | JOB_COMPLETE | price=${offerEth} BETH`, { taskId, marketplace: 'blur' });
 
   } catch (error: any) {
+    success = false;
     const errorMsg = error?.response?.data?.message || error?.response?.data || error?.message || String(error);
 
     // Handle rate limit errors
@@ -20374,6 +20116,9 @@ async function blurTraitCounterBid(data: IBlurBidData) {
     }
 
     logBidError(data.taskId, "BLUR TRAIT COUNTER BID ERROR", `Error processing Blur trait counter bid for task: ${data.slug}: ${errorMsg}`, "error", "blur");
+  } finally {
+    // Record execution latency (Stage 2: Job completion)
+    recordCounterbidExecution('blur', job.id!, success);
   }
 }
 
@@ -20389,7 +20134,8 @@ interface BlurTraitCounterBid {
   traits: string;
 }
 
-async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
+async function openseaTokenCounterBid(job: Job<IProcessOpenseaTokenBidData>) {
+  const data = job.data;
   const {
     _id,
     address,
@@ -20397,14 +20143,29 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
     slug,
     offerPrice,
     creatorFees,
-    asset, } = data;
+    asset,
+    enqueuedAt } = data;
   const taskId = _id;
+  let success = false;
+
+  // Start timing for end-to-end execution measurement
+  const timer = startTimer('openseaTokenCounterBid', {
+    taskId: taskId,
+    slug: slug,
+    tokenId: asset.tokenId?.toString(),
+    source: 'counterbid'
+  });
+
   // Log job started
 
   if (!enabledMarketplaces.length) {
     if (DEBUG) {
       debugLog('BidFlow', `[OS-Token-CB] ${slug}#${asset.tokenId} | SKIP: No marketplaces enabled`);
     }
+    const duration = timer.end({ success: false, reason: 'no_enabled_marketplaces' });
+    infoLog('ExecutionTime', `openseaTokenCounterBid early_exit | ${duration}ms`, {
+      duration, success: false, reason: 'no_enabled_marketplaces', taskId, slug, tokenId: asset.tokenId?.toString(), source: 'counterbid'
+    });
     return;
   }
 
@@ -20414,6 +20175,10 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
     if (DEBUG) {
       debugLog('BidFlow', `[OS-Token-CB] ${slug}#${asset.tokenId} | SKIP: Task not found`);
     }
+    const duration = timer.end({ success: false, reason: 'task_not_found' });
+    infoLog('ExecutionTime', `openseaTokenCounterBid early_exit | ${duration}ms`, {
+      duration, success: false, reason: 'task_not_found', taskId, slug, tokenId: asset.tokenId?.toString(), source: 'counterbid'
+    });
     return;
   }
 
@@ -20421,6 +20186,10 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
     if (DEBUG) {
       debugLog('BidFlow', `[OS-Token-CB] ${slug}#${asset.tokenId} | SKIP: Task not running`);
     }
+    const duration = timer.end({ success: false, reason: 'task_not_running' });
+    infoLog('ExecutionTime', `openseaTokenCounterBid early_exit | ${duration}ms`, {
+      duration, success: false, reason: 'task_not_running', taskId, slug, tokenId: asset.tokenId?.toString(), source: 'counterbid'
+    });
     return;
   }
 
@@ -20429,6 +20198,10 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
     if (DEBUG) {
       debugLog('BidFlow', `[OS-Token-CB] ${slug}#${asset.tokenId} | SKIP: OpenSea not selected`);
     }
+    const duration = timer.end({ success: false, reason: 'opensea_not_selected' });
+    infoLog('ExecutionTime', `openseaTokenCounterBid early_exit | ${duration}ms`, {
+      duration, success: false, reason: 'opensea_not_selected', taskId, slug, tokenId: asset.tokenId?.toString(), source: 'counterbid'
+    });
     return;
   }
 
@@ -20437,6 +20210,10 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
     if (DEBUG) {
       debugLog('BidFlow', `[OS-Token-CB] ${slug}#${asset.tokenId} | SKIP: OpenSea not enabled globally`);
     }
+    const duration = timer.end({ success: false, reason: 'opensea_not_enabled_globally' });
+    infoLog('ExecutionTime', `openseaTokenCounterBid early_exit | ${duration}ms`, {
+      duration, success: false, reason: 'opensea_not_enabled_globally', taskId, slug, tokenId: asset.tokenId?.toString(), source: 'counterbid'
+    });
     return;
   }
 
@@ -20458,6 +20235,10 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
         if (DEBUG) {
           debugLog('BidFlow', `[OS-Token-CB] ${slug}#${asset.tokenId} | SKIP: Existing bid ${currentOfferWei} >= incoming ${incomingOfferWei}`);
         }
+        const duration = timer.end({ success: false, reason: 'existing_bid_higher_or_equal' });
+        infoLog('ExecutionTime', `openseaTokenCounterBid early_exit | ${duration}ms`, {
+          duration, success: false, reason: 'existing_bid_higher_or_equal', taskId, slug, tokenId: asset.tokenId?.toString(), currentBid: Number(currentOfferWei), incomingBid: Number(incomingOfferWei), source: 'counterbid'
+        });
         return;
       }
     }
@@ -20529,19 +20310,53 @@ async function openseaTokenCounterBid(data: IProcessOpenseaTokenBidData) {
     }
     counterbidCounts[taskId]['opensea']++;
 
+    success = true;  // Mark as successful before return
     // Log job completed
     debugLog('Counterbid', `[OS-Token-CB] ${slug}#${asset.tokenId} | JOB_COMPLETE | price=${offerEth} ${currencySymbol}`, { taskId, marketplace: 'opensea', tokenId: asset.tokenId.toString() });
+    const duration = timer.end({
+      success: true,
+      slug: slug,
+      tokenId: asset.tokenId.toString(),
+      bidPrice: offerEth,
+      currency: currencySymbol
+    });
+    infoLog('ExecutionTime', `openseaTokenCounterBid completed | ${duration}ms`, {
+      duration,
+      success: true,
+      taskId,
+      slug,
+      tokenId: asset.tokenId.toString(),
+      bidPrice: offerEth,
+      currency: currencySymbol,
+      source: 'counterbid'
+    });
   } catch (error: any) {
+    success = false;
     const errorMessage = extractDetailedOpenSeaError(error);
     errorLog('OpenSea', `Error processing OpenSea token counterbid | taskId=${taskId}`, error);
     await logBidError(data._id, "OPENSEA TOKEN COUNTER BID ERROR", `Error bidding on token ${data.asset.tokenId} in collection ${data.slug}: ${errorMessage}`, "error", "opensea");
+    const duration = timer.end({ success: false, error: errorMessage });
+    infoLog('ExecutionTime', `openseaTokenCounterBid failed | ${duration}ms`, {
+      duration,
+      success: false,
+      taskId,
+      slug,
+      tokenId: asset.tokenId?.toString(),
+      error: errorMessage,
+      source: 'counterbid'
+    });
+  } finally {
+    // Record execution latency (Stage 2: Job completion)
+    recordCounterbidExecution('opensea', job.id!, success);
   }
   // SIMPLIFIED: Removed pending counterbid cleanup - no longer needed
 }
 
-async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
-  const { _id, bidCount, address, walletId, slug, offerPrice, creatorFees, expiry, trait, floor_price } = data;
+async function openseaTraitCounterBid(job: Job<IProcessOpenseaTraitBidData>) {
+  const data = job.data;
+  const { _id, bidCount, address, walletId, slug, offerPrice, creatorFees, expiry, trait, floor_price, enqueuedAt } = data;
   const taskId = _id;
+  let success = false;
 
   if (!enabledMarketplaces.length) {
     if (DEBUG) {
@@ -20657,18 +20472,26 @@ async function openseaTraitCounterBid(data: IProcessOpenseaTraitBidData) {
     }
     counterbidCounts[taskId]['opensea']++;
 
+    success = true;  // Mark as successful before return
     // Log job completed
     debugLog('Counterbid', `[OS-Trait-CB] ${slug} [${identifier}] | JOB_COMPLETE | price=${offerEth} ${currencySymbol}`, { taskId, marketplace: 'opensea' });
   } catch (error: any) {
+    success = false;
     const errorMessage = extractDetailedOpenSeaError(error);
     errorLog('OpenSea', `Error processing OpenSea trait counterbid | taskId=${taskId}`, error);
     await logBidError(data._id, "OPENSEA TRAIT COUNTER BID ERROR", `Error bidding on trait ${data.trait} in collection ${data.slug}: ${errorMessage}`, "error", "opensea");
     throw error;
+  } finally {
+    // Record execution latency (Stage 2: Job completion)
+    recordCounterbidExecution('opensea', job.id!, success);
   }
 }
 
-async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
+async function magicedenTokenCounterBid(job: Job<IMagicedenTokenBidData>) {
+  const data = job.data;
   // Extract or create trace context
+  const { enqueuedAt } = data;
+  let success = false;
   // Log job started
 
   try {
@@ -20745,11 +20568,16 @@ async function magicedenTokenCounterBid(data: IMagicedenTokenBidData) {
     }
     counterbidCounts[taskId]['magiceden']++;
 
+    success = true;  // Mark as successful before return
     // Log job completed
     debugLog('Counterbid', `[ME-Token-CB] ${slug}#${tokenId} | JOB_COMPLETE | price=${offerEth} WETH`, { taskId, marketplace: 'magiceden', tokenId: tokenId.toString() });
   } catch (error: any) {
+    success = false;
     const errorMsg = error?.response?.data?.message || error?.response?.data || error?.message || String(error);
     await logBidError(data.taskId, "MAGICEDEN TOKEN COUNTER BID ERROR", `Error bidding on token ${data.tokenId} in collection ${data.slug}: ${errorMsg}`, "error", "magiceden");
+  } finally {
+    // Record execution latency (Stage 2: Job completion)
+    recordCounterbidExecution('magiceden', job.id!, success);
   }
 }
 
@@ -20790,14 +20618,6 @@ async function processBlurTraitBid(data: {
 
   // Check blacklist at the VERY START to prevent any processing if task is being stopped
   if (isTaskBlacklisted(data._id, 'blur')) {
-    return;
-  }
-
-  // Early exit if marketplace already stopped due to insufficient balance
-  if (isMarketplaceStoppedDueToBalance(taskStatus, data._id, 'blur')) {
-    if (DEBUG) {
-      debugLog('BidFlow', `[Blur-Trait] ${data.slug} [${traitKey}] | SKIP: Marketplace stopped (insufficient balance)`);
-    }
     return;
   }
 
@@ -21799,14 +21619,6 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     return;
   }
 
-  // Early exit if marketplace already stopped due to insufficient balance
-  if (isMarketplaceStoppedDueToBalance(taskStatus, data.taskId, 'magiceden')) {
-    if (DEBUG) {
-      debugLog('BidFlow', `[ME-Token] ${data.slug}#${tokenIdStr} | SKIP: Marketplace stopped (insufficient balance)`);
-    }
-    return;
-  }
-
   try {
     const { contractAddress, address, quantity, walletId, slug, tokenId } = data
     if (!enabledMarketplaces.length) {
@@ -22062,14 +21874,6 @@ async function processMagicedenTraitBid(data: {
 
   // Check blacklist at the VERY START to prevent any processing if task is being stopped
   if (isTaskBlacklisted(data._id, 'magiceden')) {
-    return;
-  }
-
-  // Early exit if marketplace already stopped due to insufficient balance
-  if (isMarketplaceStoppedDueToBalance(taskStatus, data._id, 'magiceden')) {
-    if (DEBUG) {
-      debugLog('BidFlow', `[ME-Trait] ${data.slug} [${traitKey}] | SKIP: Marketplace stopped (insufficient balance)`);
-    }
     return;
   }
 
@@ -22737,9 +22541,9 @@ app.get("/health", async (req, res) => {
 app.get("/metrics", async (req, res) => {
   try {
     // Get queue metrics
-    const [mainQueueCounts, blurQueueCounts] = await Promise.all([
+    const [mainQueueCounts, counterbidQueueCounts] = await Promise.all([
       queue.getJobCounts(),
-      blurQueue.getJobCounts()
+      counterbidQueue.getJobCounts()
     ]);
 
     // Get worker health status
@@ -22750,47 +22554,56 @@ app.get("/metrics", async (req, res) => {
       try {
         workerStatuses.push({
           index: 0,
+          name: 'main',
           running: mainWorker.isRunning(),
           paused: mainWorker.isPaused(),
+          concurrency: mainWorker.concurrency,
           healthy: mainWorker.isRunning() && !mainWorker.isPaused()
         });
       } catch (error) {
         workerStatuses.push({
           index: 0,
+          name: 'main',
           running: false,
           paused: false,
+          concurrency: 0,
           healthy: false,
           error: error instanceof Error ? error.message : 'Unknown error'
         });
       }
     }
 
-    // Check blur worker
-    if (blurWorker) {
+    // Check counterbid worker
+    if (counterbidWorker) {
       try {
         workerStatuses.push({
           index: 1,
-          running: blurWorker.isRunning(),
-          paused: blurWorker.isPaused(),
-          healthy: blurWorker.isRunning() && !blurWorker.isPaused()
+          name: 'counterbid',
+          running: counterbidWorker.isRunning(),
+          paused: counterbidWorker.isPaused(),
+          concurrency: counterbidWorker.concurrency,
+          healthy: counterbidWorker.isRunning() && !counterbidWorker.isPaused()
         });
       } catch (error) {
         workerStatuses.push({
           index: 1,
+          name: 'counterbid',
           running: false,
           paused: false,
+          concurrency: 0,
           healthy: false,
           error: error instanceof Error ? error.message : 'Unknown error'
         });
       }
     }
+
 
     // Get Redis connection pool stats
     const connectionPoolStats = getBullMQConnections();
     const connectionHealth = await checkBullMQConnectionsHealth();
 
     // Calculate processing rate: total completed jobs / server uptime
-    const totalCompleted = (mainQueueCounts.completed || 0) + (blurQueueCounts.completed || 0);
+    const totalCompleted = (mainQueueCounts.completed || 0) + (counterbidQueueCounts.completed || 0);
     const uptimeSeconds = process.uptime();
     const processingRate = uptimeSeconds > 0 ? totalCompleted / uptimeSeconds : 0;
 
@@ -22823,38 +22636,43 @@ app.get("/metrics", async (req, res) => {
       queues: {
         main: {
           ...mainQueueCounts,
-          name: QUEUE_NAME
+          name: QUEUE_NAME,
+          concurrency: mainWorker?.concurrency || 0,
+          description: 'All scheduled bids (OpenSea, MagicEden, Blur)'
         },
-        blur: {
-          ...blurQueueCounts,
-          name: BLUR_BIDDING_QUEUE
+        counterbid: {
+          ...counterbidQueueCounts,
+          name: COUNTERBID_QUEUE_NAME,
+          concurrency: counterbidWorker?.concurrency || 0,
+          description: 'All counterbids (OpenSea, MagicEden, Blur)'
         },
         totals: {
-          waiting: (mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0),
-          active: (mainQueueCounts.active || 0) + (blurQueueCounts.active || 0),
-          completed: (mainQueueCounts.completed || 0) + (blurQueueCounts.completed || 0),
-          failed: (mainQueueCounts.failed || 0) + (blurQueueCounts.failed || 0)
+          waiting: (mainQueueCounts.waiting || 0) + (counterbidQueueCounts.waiting || 0),
+          active: (mainQueueCounts.active || 0) + (counterbidQueueCounts.active || 0),
+          completed: (mainQueueCounts.completed || 0) + (counterbidQueueCounts.completed || 0),
+          failed: (mainQueueCounts.failed || 0) + (counterbidQueueCounts.failed || 0)
         },
+        concurrencyAllocation: concurrencyManager.getStats(),
         thresholds: {
-          currentDepth: (mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0),
+          currentDepth: (mainQueueCounts.waiting || 0),
           maxThreshold: MAX_QUEUE_JOBS,
           drainThreshold: DRAIN_THRESHOLD,
-          utilizationPct: parseFloat((((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) / MAX_QUEUE_JOBS * 100).toFixed(2))
+          utilizationPct: parseFloat(((mainQueueCounts.waiting || 0) / MAX_QUEUE_JOBS * 100).toFixed(2))
         },
         dynamicThrottling: {
-          currentDepth: (mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0),
+          currentDepth: (mainQueueCounts.waiting || 0),
           bufferMultiplier:
-            ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 50000 ? 0.5 :
-              ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 10000 ? 1 :
-                ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 1000 ? 2 : 3,
+            ((mainQueueCounts.waiting || 0)) > 50000 ? 0.5 :
+              ((mainQueueCounts.waiting || 0)) > 10000 ? 1 :
+                ((mainQueueCounts.waiting || 0)) > 1000 ? 2 : 3,
           queueingRatePerSec:
-            ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 50000 ? 32 :
-              ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 10000 ? 64 :
-                ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 1000 ? 128 : 192,
+            ((mainQueueCounts.waiting || 0)) > 50000 ? 32 :
+              ((mainQueueCounts.waiting || 0)) > 10000 ? 64 :
+                ((mainQueueCounts.waiting || 0)) > 1000 ? 128 : 192,
           status:
-            ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 50000 ? 'CRITICAL' :
-              ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 10000 ? 'ELEVATED' :
-                ((mainQueueCounts.waiting || 0) + (blurQueueCounts.waiting || 0)) > 1000 ? 'MEDIUM' : 'NORMAL'
+            ((mainQueueCounts.waiting || 0)) > 50000 ? 'CRITICAL' :
+              ((mainQueueCounts.waiting || 0)) > 10000 ? 'ELEVATED' :
+                ((mainQueueCounts.waiting || 0)) > 1000 ? 'MEDIUM' : 'NORMAL'
         },
         processingRate: processingRate.toFixed(2) + ' jobs/sec'
       },
@@ -22862,6 +22680,7 @@ app.get("/metrics", async (req, res) => {
         total: 2,
         healthy: workerStatuses.filter(w => w.healthy).length,
         unhealthy: workerStatuses.filter(w => !w.healthy).length,
+        totalConcurrency: (mainWorker?.concurrency || 0) + (counterbidWorker?.concurrency || 0),
         details: workerStatuses
       },
       redis: {
@@ -23988,24 +23807,9 @@ app.post('/api/blur-auth/clear', async (req, res) => {
       }
     }
 
-    const redis = redisClient.getClient();
-    if (!redis) {
-      return res.status(500).json({
-        success: false,
-        error: 'Redis not available'
-      });
-    }
-
-    // Find all Blur access token keys
-    const keys = await redis.keys('blurAccessToken:*');
-    let clearedCount = 0;
-
-    if (keys.length > 0) {
-      // Delete all tokens
-      await redis.del(...keys);
-      clearedCount = keys.length;
-    }
-
+    // Clear all Blur access tokens from LRU cache
+    const clearedCount = blurAccessTokenLRU.size;
+    blurAccessTokenLRU.clear();
 
     res.status(200).json({
       success: true,
@@ -24696,33 +24500,8 @@ app.get('/api/health/workers', async (req, res) => {
       }
     }
 
-    // Check blur worker
-    if (blurWorker) {
-      try {
-        workerStatuses.push({
-          index: 1,
-          name: 'blur-worker',
-          running: blurWorker.isRunning(),
-          paused: blurWorker.isPaused(),
-          healthy: blurWorker.isRunning() && !blurWorker.isPaused()
-        });
-      } catch (error) {
-        workerStatuses.push({
-          index: 1,
-          name: 'blur-worker',
-          running: false,
-          paused: false,
-          healthy: false,
-          error: error instanceof Error ? error.message : 'Unknown error'
-        });
-      }
-    }
-
     // Get queue counts
-    const [mainQueueCounts, blurQueueCounts] = await Promise.all([
-      queue.getJobCounts(),
-      blurQueue.getJobCounts()
-    ]);
+    const [mainQueueCounts] = await Promise.all([queue.getJobCounts()]);
 
     const healthyWorkers = workerStatuses.filter(w => w.healthy).length;
     const isHealthy = healthyWorkers === 2;
@@ -24737,12 +24516,10 @@ app.get('/api/health/workers', async (req, res) => {
       },
       queues: {
         main: mainQueueCounts,
-        blur: blurQueueCounts
       },
       configuration: {
         mainWorkerConcurrency: Number(RATE_LIMIT),
-        blurWorkerConcurrency: Number(RATE_LIMIT),
-        totalWorkers: 2
+        totalWorkers: 1
       }
     });
   } catch (error) {
@@ -24764,9 +24541,6 @@ app.get('/api/health/system', async (req, res) => {
     const workerHealth = [];
     if (mainWorker) {
       workerHealth.push({ running: mainWorker.isRunning(), paused: mainWorker.isPaused() });
-    }
-    if (blurWorker) {
-      workerHealth.push({ running: blurWorker.isRunning(), paused: blurWorker.isPaused() });
     }
 
     const unhealthyRedis = Object.values(redisHealth).filter((s: any) => !s.healthy).length;
@@ -24829,28 +24603,39 @@ app.get('/api/memory-stats', (req, res) => {
 // Latency statistics API
 app.get('/api/latency-stats', (req, res) => {
   try {
-    // Get memory stats
+    // Get memory stats with V8 heap limit
     const memUsage = process.memoryUsage();
+    const v8HeapStats = v8.getHeapStatistics();
     const heapUsedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
     const heapTotalMB = Math.round(memUsage.heapTotal / 1024 / 1024);
-    const heapPercent = Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100);
+    const heapLimitMB = Math.round(v8HeapStats.heap_size_limit / 1024 / 1024);
+    const heapPercent = Math.round((memUsage.heapUsed / v8HeapStats.heap_size_limit) * 100);
     const externalMB = Math.round(memUsage.external / 1024 / 1024);
     const rssMB = Math.round(memUsage.rss / 1024 / 1024);
 
     res.json({
       timestamp: Date.now(),
       forwardingLatency: {
-        opensea: wsManager.getForwardingLatencyStats('opensea'),
-        blur: wsManager.getForwardingLatencyStats('blur'),
-        magiceden: wsManager.getForwardingLatencyStats('magiceden'),
-        overall: wsManager.getForwardingLatencyStats()
+        opensea: getForwardingStats('opensea'),
+        blur: getForwardingStats('blur'),
+        magiceden: getForwardingStats('magiceden'),
+        overall: getForwardingStats()
       },
+      executionLatency: getAllExecutionStats(),
+      proactiveGC: getProactiveGCStats(),
+      gcStats: getGCStats(),
       memory: {
         heapUsedMB,
         heapTotalMB,
+        heapLimitMB,
         heapPercent,
         externalMB,
-        rssMB
+        rssMB,
+        gcEfficiency: {
+          proactiveTriggersPerHour: getProactiveGCStats().lastHour,
+          automaticGCsPerHour: getGCStats().automaticGCs,
+          avgMemoryFreedMB: getProactiveGCStats().averageFreedMB
+        }
       }
     });
   } catch (error) {
@@ -24863,11 +24648,7 @@ app.get('/api/latency-stats', (req, res) => {
 app.get('/api/queue-monitor/status', async (req, res) => {
   try {
     // Get current queue counts
-    const [mainCounts, blurCounts] = await Promise.all([
-      queue.getJobCounts(),
-      blurQueue.getJobCounts()
-    ]);
-
+    const mainCounts = await queue.getJobCounts();
 
     const monitorStatus = {
       mainQueue: {
@@ -24877,14 +24658,6 @@ app.get('/api/queue-monitor/status', async (req, res) => {
         failed: mainCounts.failed || 0,
         delayed: mainCounts.delayed || 0,
         prioritized: mainCounts.prioritized || 0
-      },
-      blurQueue: {
-        waiting: blurCounts.waiting || 0,
-        active: blurCounts.active || 0,
-        completed: blurCounts.completed || 0,
-        failed: blurCounts.failed || 0,
-        delayed: blurCounts.delayed || 0,
-        prioritized: blurCounts.prioritized || 0
       }
     };
 
@@ -24901,25 +24674,19 @@ app.get('/api/queue-health', async (req, res) => {
     const concurrency = Number(RATE_LIMIT);
 
     // Get current queue counts
-    const [mainCounts, blurCounts] = await Promise.all([
-      queue.getJobCounts(),
-      blurQueue.getJobCounts()
-    ]);
+    const mainCounts = await queue.getJobCounts();
 
     // Calculate total capacity
     const totalMainCapacity = concurrency; // Single main worker
-    const totalBlurCapacity = concurrency; // Single blur worker
 
     // Get active tasks count for context
     const activeTaskCount = activeTasks.size;
 
     // Calculate queue health indicators
     const mainQueueBacklog = (mainCounts.waiting || 0) + (mainCounts.delayed || 0);
-    const blurQueueBacklog = (blurCounts.waiting || 0) + (blurCounts.delayed || 0);
 
     // Estimate processing time based on backlog and capacity
     const mainEstimatedProcessingTimeSec = totalMainCapacity > 0 ? Math.ceil(mainQueueBacklog / totalMainCapacity) : 0;
-    const blurEstimatedProcessingTimeSec = totalBlurCapacity > 0 ? Math.ceil(blurQueueBacklog / totalBlurCapacity) : 0;
 
     const queueHealth = {
       timestamp: new Date().toISOString(),
@@ -24933,22 +24700,11 @@ app.get('/api/queue-health', async (req, res) => {
         backlog: mainQueueBacklog,
         estimatedProcessingTimeSec: mainEstimatedProcessingTimeSec
       },
-      blurQueue: {
-        waiting: blurCounts.waiting || 0,
-        active: blurCounts.active || 0,
-        delayed: blurCounts.delayed || 0,
-        completed: blurCounts.completed || 0,
-        failed: blurCounts.failed || 0,
-        prioritized: blurCounts.prioritized || 0,
-        backlog: blurQueueBacklog,
-        estimatedProcessingTimeSec: blurEstimatedProcessingTimeSec
-      },
       workers: {
         mainWorkerCount: 1,
-        blurWorkerCount: 1,
+        blurWorkerCount: 0,
         concurrency: concurrency,
         totalMainCapacity: totalMainCapacity,
-        totalBlurCapacity: totalBlurCapacity,
         rateLimit: Number(RATE_LIMIT)
       },
       context: {
@@ -24957,8 +24713,7 @@ app.get('/api/queue-health', async (req, res) => {
       },
       health: {
         mainQueueHealthy: mainQueueBacklog < 5000,
-        blurQueueHealthy: blurQueueBacklog < 1000,
-        workersUtilized: (mainCounts.active || 0) > 0 || (blurCounts.active || 0) > 0,
+        workersUtilized: (mainCounts.active || 0) > 0,
         recommendation: mainQueueBacklog > 10000
           ? 'HIGH_BACKLOG: Consider stopping some tasks or increasing worker count'
           : mainQueueBacklog > 5000
@@ -25910,126 +25665,95 @@ app.get('/api/bid-traces/duplicates', async (req, res) => {
 
 
 export async function fetchAddressBalances(walletAddress: string): Promise<AddressBalancesResponse> {
-  const CACHE_EXPIRY_SECONDS = 30;
-  // Use hash tag for deterministic slot assignment in Redis Cluster
-  const cacheKey = `{address_balances:${walletAddress}}`;
-
-  // Check cache first
-  const cachedData = redis ? await redis.get(cacheKey) : null;
+  // Check LRU cache first
+  const normalizedAddress = walletAddress.toLowerCase();
+  const cachedData = addressBalancesLRU.get(normalizedAddress);
   if (cachedData) {
-    try {
-      return JSON.parse(cachedData);
-    } catch (error) {
-      errorLog('AddressBalances', 'Error parsing cached address balances', error);
-    }
+    return cachedData;
   }
 
-  // Use distributed lock to prevent duplicate requests
-  const lockManager = new DistributedLockManager({
-    lockPrefix: 'address_balances:lock:',
-    defaultTTLSeconds: CACHE_EXPIRY_SECONDS
-  });
-
-  const result = await lockManager.withLock(
-    `{address_balances}_${walletAddress}`,
-    async () => {
-      // Check cache again after acquiring lock
-      const cachedDataAfterLock = redis ? await redis.get(cacheKey) : null;
-      if (cachedDataAfterLock) {
-        try {
-          return JSON.parse(cachedDataAfterLock);
-        } catch (error) {
-          errorLog('AddressBalances', 'Error parsing cached address balances after lock', error);
-        }
-      }
-
-      const query = {
-        operationName: "BalancesQuery",
-        query: `query BalancesQuery($address: Address!) {
-          addressBalances(address: $address) {
-            ...ContextBalance
-            __typename
-          }
-        }
-        fragment ContextBalance on Balance {
-          id
-          currency {
-            id
-            contractAddress
-            chain {
-              identifier
-              minOfferPriceUsd
-              __typename
-            }
-            usdPrice
-            symbol
-            imageUrl
-            name
-            decimals
-            ...ContextCurrency
-            __typename
-          }
-          quantity
-          usdValue
-          __typename
-        }
-        fragment ContextCurrency on Currency {
-          contractAddress
-          usdPrice
-          stats {
-            marketCapUsd
-            oneDay {
-              priceChange
-              __typename
-            }
-            __typename
-          }
-          symbol
-          decimals
-          name
-          imageUrl
-          chain {
-            identifier
-            __typename
-          }
-          isSwapDisabled
-          __typename
-        }`,
-        variables: {
-          address: walletAddress
-        }
-      };
-
-      try {
-        const { data } = await apiDedup(
-          `opensea-balances-${walletAddress.toLowerCase()}`,
-          () => limiter.schedule({ priority: 0 }, () => axiosInstance.post<AddressBalancesResponse>(
-            `${BASE_URL}/opensea/graphql`,
-            query,
-            {
-              headers: {
-                'content-type': 'application/json',
-                'x-api-key': API_KEY
-              }
-            }
-          )),
-          { category: 'AddressBalances' }
-        );
-
-        // Cache the result
-        if (redis) {
-          await redis.set(cacheKey, JSON.stringify(data), 'EX', CACHE_EXPIRY_SECONDS);
-        }
-
-        return data;
-      } catch (error) {
-        errorLog('AddressBalances', 'Error fetching address balances', error);
-        throw error;
+  // No distributed lock needed for in-memory cache - fetch fresh data
+  const query = {
+    operationName: "BalancesQuery",
+    query: `query BalancesQuery($address: Address!) {
+      addressBalances(address: $address) {
+        ...ContextBalance
+        __typename
       }
     }
-  );
+    fragment ContextBalance on Balance {
+      id
+      currency {
+        id
+        contractAddress
+        chain {
+          identifier
+          minOfferPriceUsd
+          __typename
+        }
+        usdPrice
+        symbol
+        imageUrl
+        name
+        decimals
+        ...ContextCurrency
+        __typename
+      }
+      quantity
+      usdValue
+      __typename
+    }
+    fragment ContextCurrency on Currency {
+      contractAddress
+      usdPrice
+      stats {
+        marketCapUsd
+        oneDay {
+          priceChange
+          __typename
+        }
+        __typename
+      }
+      symbol
+      decimals
+      name
+      imageUrl
+      chain {
+        identifier
+        __typename
+      }
+      isSwapDisabled
+      __typename
+    }`,
+    variables: {
+      address: walletAddress
+    }
+  };
 
-  return result;
+  try {
+    const { data } = await apiDedup(
+      `opensea-balances-${normalizedAddress}`,
+      () => limiter.schedule({ priority: 0 }, () => axiosInstance.post<AddressBalancesResponse>(
+        `${BASE_URL}/opensea/graphql`,
+        query,
+        {
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': API_KEY
+          }
+        }
+      )),
+      { category: 'AddressBalances' }
+    );
+
+    // Cache the result in LRU (30 second TTL set in cache definition)
+    addressBalancesLRU.set(normalizedAddress, data);
+
+    return data;
+  } catch (error) {
+    errorLog('AddressBalances', 'Error fetching address balances', error);
+    throw error;
+  }
 }
 
 
@@ -27165,6 +26889,7 @@ interface IProcessOpenseaTokenBidData {
   currency?: string;              // Pre-calculated currency address
   decimal?: number;               // Pre-calculated decimal places
   currencySymbol?: string;        // Pre-calculated currency symbol (WETH/USDC)
+  enqueuedAt?: number;            // Timestamp when job was enqueued
   asset: {
     contractAddress: string;
     tokenId: number;
@@ -27189,6 +26914,7 @@ interface IMagicedenTokenBidData {
   walletId: string;
   slug: string;
   tokenId: number;
+  enqueuedAt?: number;
   outbidOptions: {
     outbid: boolean;
     blurOutbidMargin: number | null;
@@ -27312,35 +27038,8 @@ export function incrementOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'b
 // }
 
 
-/**
- * Gets Redis-based counter for our own bids
- */
-export async function getOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', taskId: string) {
-  try {
-    if (redis) {
-      const key = `own_bid_count:${marketplace}:${taskId}`;
-      const count = await redis.get(key);
-      return parseInt(count || '0');
-    }
-  } catch (error) {
-    errorLog('BidCounter', 'Failed to get own bid counter', error);
-  }
-  return 0;
-}
-
-/**
- * Resets memory-based counter for our own bids
- */
-export function resetOwnBidCounter(marketplace: 'opensea' | 'magiceden' | 'blur', taskId: string) {
-  try {
-    // Reset the marketplace counter to 0
-    ownBidCounts[marketplace] = 0;
-
-  } catch (error) {
-    errorLog('BidCounter', 'Failed to reset own bid counter', error);
-  }
-}
-
+// Dead code removed: getOwnBidCounter() and resetOwnBidCounter()
+// These functions were never called and referenced non-existent Redis patterns
 
 
 // Type definitions already moved to the top of the file
@@ -27380,6 +27079,7 @@ interface IOpenseaBidParams {
   enforceCreatorFee: boolean;
   expiry: number;
   floor_price?: number;  // Cached floor price from handler to avoid redundant API call
+  enqueuedAt?: number;
 }
 
 interface IMagicedenCollectionBidData {
@@ -27393,6 +27093,7 @@ interface IMagicedenCollectionBidData {
   walletId: string;
   slug: string;
   currency?: string;
+  enqueuedAt?: number;
 }
 interface IBlurBidData {
   taskId: string;
@@ -27404,6 +27105,7 @@ interface IBlurBidData {
   slug: string;
   expiry: number;
   traits?: string;
+  enqueuedAt?: number;
 }
 
 interface IProcessOpenseaTraitBidData {
@@ -27426,6 +27128,7 @@ interface IProcessOpenseaTraitBidData {
   decimal?: number;               // Pre-calculated decimal places
   currencySymbol?: string;        // Pre-calculated currency symbol (WETH/USDC)
   contractAddress?: string;       // Contract address (added for trait bids)
+  enqueuedAt?: number;            // Timestamp when job was enqueued
   outbidOptions?: {               // Outbid options
     outbid: boolean;
     blurOutbidMargin: number | null;
@@ -28204,10 +27907,7 @@ async function logJobTrackingStatus() {
 
           // Check for stuck task - low percentage with no queue activity
           const queueCounts = await queue.getJobCounts();
-          const blurCounts = await blurQueue.getJobCounts();
-          const totalQueueJobs = (queueCounts.waiting || 0) + (queueCounts.active || 0) +
-            (blurCounts.waiting || 0) + (blurCounts.active || 0);
-
+          const totalQueueJobs = (queueCounts.waiting || 0) + (queueCounts.active || 0)
           if (overallRunningPercentage < 10 && totalQueueJobs === 0 && totalTracked > 0) {
 
             // Force mark all parent jobs as complete to unstick the task
