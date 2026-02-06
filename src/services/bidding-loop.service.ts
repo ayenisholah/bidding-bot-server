@@ -33,7 +33,6 @@ class BiddingLoopService {
   private processBlurScheduledBid: ((task: ITask) => Promise<void>) | null = null;
   private processMagicedenScheduledBid: ((task: ITask) => Promise<void>) | null = null;
   private getExpiry: ((bidDuration: { value: number; unit: string }) => number) | null = null;
-  private isTaskInActiveQueueing: ((taskId: string) => { isQueueing: boolean; marketplace?: string }) | null = null;
   private acquireLoopSchedulingLock: ((taskId: string) => boolean) | null = null;
   private releaseLoopSchedulingLock: ((taskId: string) => void) | null = null;
   private cleanupOldParentJobs: ((taskId: string, currentLoop: number, keepLoops?: number) => void) | null = null;
@@ -62,7 +61,6 @@ class BiddingLoopService {
     processBlurScheduledBid: (task: ITask) => Promise<void>;
     processMagicedenScheduledBid: (task: ITask) => Promise<void>;
     getExpiry: (bidDuration: { value: number; unit: string }) => number;
-    isTaskInActiveQueueing: (taskId: string) => { isQueueing: boolean; marketplace?: string };
     acquireLoopSchedulingLock: (taskId: string) => boolean;
     releaseLoopSchedulingLock: (taskId: string) => void;
     cleanupOldParentJobs: (taskId: string, currentLoop: number, keepLoops?: number) => void;
@@ -90,7 +88,6 @@ class BiddingLoopService {
     this.processBlurScheduledBid = config.processBlurScheduledBid;
     this.processMagicedenScheduledBid = config.processMagicedenScheduledBid;
     this.getExpiry = config.getExpiry;
-    this.isTaskInActiveQueueing = config.isTaskInActiveQueueing;
     this.acquireLoopSchedulingLock = config.acquireLoopSchedulingLock;
     this.releaseLoopSchedulingLock = config.releaseLoopSchedulingLock;
     this.cleanupOldParentJobs = config.cleanupOldParentJobs;
@@ -213,7 +210,7 @@ class BiddingLoopService {
   public async scheduleNextLoop(taskId: string, marketplace?: string): Promise<void> {
     if (!this.activeTasks || !this.taskStatus || !this.taskTimeouts || !this.taskCountdownTimers ||
       !this.timerExecutionIds || !this.tasksBeingCancelled || !this.lastScheduleTimes ||
-      !this.loopCounterStats || !this.getExpiry || !this.isTaskInActiveQueueing ||
+      !this.loopCounterStats || !this.getExpiry ||
       !this.acquireLoopSchedulingLock || !this.releaseLoopSchedulingLock ||
       !this.cleanupOldParentJobs || !this.setTaskStatus || !this.cleanupTaskResources ||
       !this.clearTaskTimers) {
@@ -420,27 +417,7 @@ class BiddingLoopService {
           return;
         }
 
-        // GUARD 3: Don't start if task is actively queueing jobs from a previous loop
-        // When in QUEUEING state, processBulkJobs() is still adding jobs to the queue.
-        // Starting a new loop now would call startTaskInternal() which clears parent job tracking,
-        // breaking completion tracking for the jobs currently being queued.
-        const queueingCheck = this.isTaskInActiveQueueing!(taskId);
-        if (queueingCheck.isQueueing) {
-          // DEBUG: Log GUARD 3 trigger with timestamp for tracking repeated delays
-          const guard3TriggerTime = Date.now();
-          warnLog('LoopScheduler',
-            `GUARD3_QUEUEING_BLOCKED | taskId=${taskId} | mp=${marketplace || 'all'} | activelyQueueing=${queueingCheck.marketplace} | willRetryIn=30s | triggerTime=${guard3TriggerTime}`,
-            { taskId, marketplace: mpKeyForLog, activelyQueueingMarketplace: queueingCheck.marketplace, retryDelayMs: 30000, triggerTime: guard3TriggerTime }
-          );
-          // Reschedule timer for 30 seconds later to give queueing time to complete
-          // Use setTimeout to delay the scheduleNextLoop call which will create a proper new timer
-          setTimeout(() => {
-            this.scheduleNextLoop(taskId, marketplace);
-          }, 30000);
-          return;
-        }
-
-        // GUARD 4a: Check tasksBeingCancelled Set (synchronous flag set at START of stopTask)
+        // GUARD 3: Check tasksBeingCancelled Set (synchronous flag set at START of stopTask)
         // This is the DEFINITIVE check that catches ALL cancellation scenarios because:
         // - It's set synchronously at the very start of stopTask()
         // - It's set BEFORE any async operations that could allow timers to slip through
@@ -452,7 +429,7 @@ class BiddingLoopService {
           return;
         }
 
-        // GUARD 4b: Check if marketplace is being cancelled or stopped (status-based check)
+        // GUARD 4: Check if marketplace is being cancelled or stopped (status-based check)
         // This prevents the race condition where a timer fires after stopTask has started
         // but before the timer could be cleared (timer was created AFTER cleanupTaskResources ran)
         if (marketplace) {

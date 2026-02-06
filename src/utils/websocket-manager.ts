@@ -177,17 +177,16 @@ class WebSocketManager extends EventEmitter {
     };
 
     // Initialize p-queue for message processing with hardcoded concurrency
-    // Concurrency: 512 concurrent handlers = ~3,400 msg/sec capacity @ 300ms avg processing time
     // Queue is unbounded - relies on concurrency limiting and upstream flow control
     this.messageQueue = new PQueue({
-      concurrency: 512,     // Hardcoded concurrency for optimal throughput
+      concurrency: 1024,     // Hardcoded concurrency for optimal throughput
       timeout: 30000,       // 30s timeout per message
       throwOnTimeout: false // Graceful failures instead of crashing
     });
 
     // Log the configured concurrency
-    infoLog('WebSocketManager', `Message queue initialized | concurrency=512 | ` +
-      `estimatedCapacity=1690msg/sec`);
+    infoLog('WebSocketManager', `Message queue initialized | concurrency=1024 | ` +
+      `estimatedCapacity=3400msg/sec`);
 
     // Load persistent listing subscriptions on initialization
     this.loadPersistentSubscriptions();

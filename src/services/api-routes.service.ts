@@ -1,5 +1,6 @@
 import { Application } from 'express';
 import { errorLog, debugLog, warnLog, infoLog } from '../utils/debug-file-logger';
+import { checkBullMQConnectionsHealth } from '../utils/redis';
 
 /**
  * API Routes Service
@@ -188,13 +189,17 @@ class ApiRoutesService {
           warnLog('Health', `Failed to get blur rate limits in health check: ${error instanceof Error ? error.message : String(error)}`);
         }
 
+        // Check BullMQ connection health
+        const bullmqHealth = await checkBullMQConnectionsHealth();
+        const allBullMQHealthy = Object.values(bullmqHealth).every((h: any) => h.healthy);
+
         const metrics = {
           status: "ok",
           timestamp: new Date().toISOString(),
           uptime: process.uptime(),
           passwordSet: !!this.deps!.getPassword(),
           components: {
-            redis: this.deps!.redis && this.deps!.redis.status === "ready" ? "ok" : "error",
+            bullmq: allBullMQHealthy ? "ok" : "error",
             mongodb: this.deps!.mongoose.connection.readyState === 1 ? "ok" : "error",
           },
           metrics: {

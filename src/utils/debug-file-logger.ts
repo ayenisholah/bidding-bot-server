@@ -338,7 +338,7 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'Counterbid': 'counterbid',
   'BidCounter': 'counterbid',   // Track own bid counting for message loss debugging
 
-  // Queue (15)
+  // Queue (17)
   'Queue': 'queue',
   'BlurQueue': 'queue',
   'BlurQueueEvents': 'queue',
@@ -354,6 +354,8 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'BulkJobsPerf': 'queue',       // Performance timing for processBulkJobs bottleneck detection
   'StuckJobCleanup': 'queue',
   'QueueStats': 'queue',         // Periodic queue stats (waiting, active counts) for monitoring
+  'Limiter': 'queue',            // Bottleneck rate limiter initialization and configuration
+  'LimiterQueue': 'queue',       // Queue depth monitoring, refill triggers, health checks
 
   // Worker (6)
   'Worker': 'worker',
@@ -431,11 +433,10 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'ValidateBidCount': 'cancellation',
   'TopBids': 'cancellation',
 
-  // StopTask Flow (20) - Detailed stopTask debugging
+  // StopTask Flow (19) - Detailed stopTask debugging
   'StopTask': 'stoptask',
   'StopTaskFlow': 'stoptask',
   'InFlightBid': 'stoptask',
-  'LimiterQueue': 'stoptask',
   'BidAbort': 'stoptask',
   'LimiterAbort': 'stoptask',     // Limiter queue abort operations (abortPendingLimiterJobs)
   'LimiterPending': 'stoptask',   // Pending job tracking (scheduleWithAbort)

@@ -1,27 +1,110 @@
 services:
-  redis:
+  # Redis Cluster - 3 master nodes (minimal setup for development)
+  redis-node-1:
     image: "redis:latest"
-    container_name: "redis"
-    command: redis-server --port 6379
-      --bind 0.0.0.0
-      --maxmemory 300mb
-      --maxmemory-policy noeviction
+    container_name: "redis-node-1"
+    command: redis-server --port 7000
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
       --appendonly yes
-      --save ""
-      --tcp-keepalive 60
-      --timeout 0
-      --activedefrag yes
+      --maxmemory 200mb
+      --maxmemory-policy noeviction
+      --bind 0.0.0.0
+      --protected-mode no
     ports:
-      - "6379:6379"
+      - "7000:7000"
+      - "17000:17000"
     volumes:
-      - redis_data:/data
+      - redis_node_1:/data
+    networks:
+      - redis-cluster
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-p", "7000", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 10s
     restart: unless-stopped
+
+  redis-node-2:
+    image: "redis:latest"
+    container_name: "redis-node-2"
+    command: redis-server --port 7001
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --appendonly yes
+      --maxmemory 200mb
+      --maxmemory-policy noeviction
+      --bind 0.0.0.0
+      --protected-mode no
+    ports:
+      - "7001:7001"
+      - "17001:17001"
+    volumes:
+      - redis_node_2:/data
+    networks:
+      - redis-cluster
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "7001", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  redis-node-3:
+    image: "redis:latest"
+    container_name: "redis-node-3"
+    command: redis-server --port 7002
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --appendonly yes
+      --maxmemory 200mb
+      --maxmemory-policy noeviction
+      --bind 0.0.0.0
+      --protected-mode no
+    ports:
+      - "7002:7002"
+      - "17002:17002"
+    volumes:
+      - redis_node_3:/data
+    networks:
+      - redis-cluster
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "7002", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # Cluster initialization service (runs once then exits)
+  redis-cluster-init:
+    image: "redis:latest"
+    container_name: "redis-cluster-init"
+    command: >
+      bash -c "
+        echo 'Waiting for Redis nodes to be ready...'
+        sleep 10
+        redis-cli --cluster create
+          redis-node-1:7000
+          redis-node-2:7001
+          redis-node-3:7002
+          --cluster-yes
+        echo 'Redis Cluster initialized successfully!'
+      "
+    depends_on:
+      redis-node-1:
+        condition: service_healthy
+      redis-node-2:
+        condition: service_healthy
+      redis-node-3:
+        condition: service_healthy
+    networks:
+      - redis-cluster
 
   mongodb:
     image: "mongo:latest"
@@ -32,7 +115,14 @@ services:
       - "27017:27017"
     volumes:
       - mongodb_data:/data/db
+    restart: unless-stopped
 
 volumes:
-  redis_data:
+  redis_node_1:
+  redis_node_2:
+  redis_node_3:
   mongodb_data:
+
+networks:
+  redis-cluster:
+    driver: bridge

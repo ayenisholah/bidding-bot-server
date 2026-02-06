@@ -4,7 +4,6 @@ import { activeTasks, API_KEY, currentTasks, decrementBidCount, pQueue, RESET, t
 import { config } from "dotenv";
 import { orderCache } from '../../utils/order-cache';
 import { withRetry } from '../../utils/db-retry';
-import redisClient from '../../utils/redis';
 import { isCancel } from "axios";
 import { BASE_URL } from "../../constants";
 import { fetchERC20Balance } from "../../utils/balance";

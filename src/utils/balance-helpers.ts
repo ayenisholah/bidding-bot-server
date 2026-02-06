@@ -198,3 +198,40 @@ export function getTokenAddressForCurrency(currency: string): string | null {
 export function getLoggedBalanceErrors(): LRUCache<string, boolean> {
   return loggedBalanceErrors;
 }
+
+/**
+ * Check wallet balance before placing bid to avoid wasted API calls.
+ * Uses cached balance (60s TTL) for fast pre-check.
+ *
+ * @param taskId - Task ID for logging
+ * @param walletAddress - Wallet address to check
+ * @param requiredAmountEth - Required amount in ETH
+ * @param currency - Currency contract address
+ * @param currencySymbol - Currency symbol (WETH, BETH, etc)
+ * @param slug - Collection slug for logging
+ * @param marketplace - Marketplace name for logging
+ * @returns Object with sufficient boolean and actual balance
+ */
+export async function checkBalanceBeforeBid(
+  taskId: string,
+  walletAddress: string,
+  requiredAmountEth: number,
+  currency: string,
+  currencySymbol: string,
+  slug: string,
+  marketplace: 'opensea' | 'magiceden' | 'blur'
+): Promise<{ sufficient: boolean; balance: number }> {
+  const { fetchERC20Balance } = await import('./balance');
+  const balance = await fetchERC20Balance(walletAddress, currency);
+
+  const sufficient = balance >= requiredAmountEth;
+
+  if (!sufficient) {
+    warnLog('BidFlow',
+      `[Balance Pre-Check] Insufficient ${currencySymbol} | taskId=${taskId} | collection=${slug} | required=${requiredAmountEth} | available=${balance}`,
+      { taskId, marketplace, slug, required: requiredAmountEth, available: balance }
+    );
+  }
+
+  return { sufficient, balance };
+}

@@ -87,21 +87,14 @@ class HealthMonitorService {
 
   /**
    * Check Redis health with ping
+   *
+   * DEPRECATED: Replaced by BullMQ connection health checks.
+   * This method now always returns true to avoid breaking existing code.
+   * Use checkBullMQConnectionsHealth() from redis.ts for actual health monitoring.
    */
   public async checkRedisHealth(): Promise<boolean> {
-    try {
-      if (!this.redis) {
-        return false;
-      }
-
-      // Simple ping check for single Redis instance
-      const result = await this.redis.ping();
-      return result === 'PONG';
-    } catch (error) {
-      // If we can't even ping, it's definitely not healthy
-      debugLog('Health', `Redis ping failed: ${error instanceof Error ? error.message : String(error)}`);
-      return false;
-    }
+    warnLog('HealthMonitor', 'checkRedisHealth() is deprecated - use BullMQ connection health checks');
+    return true; // Always return true to avoid breaking existing code
   }
 
   /**

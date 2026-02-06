@@ -2,7 +2,7 @@ import Redis from 'ioredis';
 import { Queue, Worker } from 'bullmq';
 import mongoose from 'mongoose';
 import { MemorySnapshot, IMemorySnapshot } from '../models/memory-snapshot.model';
-import { debugLog, errorLog, infoLog } from '../utils/debug-file-logger';
+import { debugLog, errorLog, infoLog, warnLog } from '../utils/debug-file-logger';
 
 // Import caches
 import { tokenTraitCache } from '../utils/token-trait-cache';
@@ -79,8 +79,8 @@ class MemorySnapshotService {
   private mainQueue: Queue | null = null;
   private blurQueue: Queue | null = null;
   private counterbidQueue: Queue | null = null;
-  private mainWorker: Worker | null = null;
-  private counterbidWorker: Worker | null = null;
+  private mainWorkers: Worker[] = [];
+  private counterbidWorkers: Worker[] = [];
   private concurrencyManager: any = null;
   private deps: MemorySnapshotDependencies | null = null;
 
@@ -90,21 +90,21 @@ class MemorySnapshotService {
     blurQueue: Queue | null,
     deps?: MemorySnapshotDependencies,
     counterbidQueue?: Queue,
-    mainWorker?: Worker,
-    counterbidWorker?: Worker,
+    mainWorkers?: Worker[],
+    counterbidWorkers?: Worker[],
     concurrencyManager?: any
   ): void {
     this.redis = redis;
     this.mainQueue = mainQueue;
     this.blurQueue = blurQueue;
     this.counterbidQueue = counterbidQueue || null;
-    this.mainWorker = mainWorker || null;
-    this.counterbidWorker = counterbidWorker || null;
+    this.mainWorkers = mainWorkers || [];
+    this.counterbidWorkers = counterbidWorkers || [];
     this.concurrencyManager = concurrencyManager || null;
     if (deps) {
       this.deps = deps;
     }
-    infoLog('MemorySnapshotService', 'Initialized with Redis and BullMQ queues');
+    infoLog('MemorySnapshotService', `Initialized with Redis and BullMQ queues | mainWorkers=${this.mainWorkers.length} | counterbidWorkers=${this.counterbidWorkers.length}`);
   }
 
   /**
@@ -226,91 +226,15 @@ class MemorySnapshotService {
 
   /**
    * Collect Redis memory statistics by category
+   *
+   * DEPRECATED: Redis memory stats removed - Redis is BullMQ-only
+   * Use BullMQ metrics (queue.getJobCounts(), etc.) for queue monitoring
+   *
+   * Returns empty stats in schema-compatible format
    */
   private async collectRedisMemory() {
-    if (!this.redis) {
-      throw new Error('Redis client not initialized');
-    }
-
-    // Phase 4: Only track BullMQ patterns (all custom caches migrated to LRU)
-    const categories = {
-      bullMQMain: { pattern: 'bull:BIDDING_BOT:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
-      bullMQBlur: { pattern: 'bull:BLUR_BIDDING_QUEUE:*', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] },
-      other: { pattern: 'other', keyCount: 0, totalMemoryBytes: 0, sampleKeys: [] as string[] }
-    };
-
-    let totalKeys = 0;
-    let totalMemoryBytes = 0;
-    let cursor = '0';
-    const batchSize = 100;
-
-    // Use SCAN to iterate through all keys
-    do {
-      const result = await this.redis.scan(cursor, 'COUNT', batchSize);
-
-      cursor = result[0];
-      const keys = result[1];
-
-      // Process each key
-      for (const key of keys) {
-        totalKeys++;
-
-        // Get memory usage for this key
-        let memoryUsage = 0;
-        try {
-          const mem = await this.redis.call('MEMORY', 'USAGE', key);
-          memoryUsage = typeof mem === 'number' ? mem : 0;
-        } catch {
-          // Key might have been deleted, skip it
-          continue;
-        }
-
-        totalMemoryBytes += memoryUsage;
-
-        // Categorize the key
-        let categorized = false;
-        for (const [categoryName, category] of Object.entries(categories)) {
-          if (categoryName === 'other') continue;
-
-          const pattern = category.pattern.replace('*', '');
-          if (key.startsWith(pattern)) {
-            category.keyCount++;
-            category.totalMemoryBytes += memoryUsage;
-
-            // Store sample keys (up to 5 per category)
-            if (category.sampleKeys && category.sampleKeys.length < 5) {
-              category.sampleKeys.push(key);
-            }
-
-            categorized = true;
-            break;
-          }
-        }
-
-        // If not categorized, add to "other"
-        if (!categorized) {
-          categories.other.keyCount++;
-          categories.other.totalMemoryBytes += memoryUsage;
-          if (categories.other.sampleKeys && categories.other.sampleKeys.length < 5) {
-            categories.other.sampleKeys.push(key);
-          }
-        }
-      }
-
-      // Add small delay to avoid blocking Redis
-      if (cursor !== '0') {
-        await new Promise(resolve => setTimeout(resolve, 10));
-      }
-    } while (cursor !== '0');
-
-    return {
-      categories,
-      totals: {
-        totalKeys,
-        totalMemoryBytes,
-        totalMemoryMB: totalMemoryBytes / (1024 * 1024)
-      }
-    };
+    // Return empty stats in the format expected by the schema
+    return this.getEmptyRedisMemory();
   }
 
   /**
@@ -512,22 +436,42 @@ class MemorySnapshotService {
 
   /**
    * Collect worker concurrency statistics
+   * Returns aggregated stats in schema-compatible format
    */
   private collectWorkerStats() {
     try {
-      const mainConcurrency = this.mainWorker?.concurrency || 0;
-      const mainRunning = this.mainWorker?.isRunning() || false;
-      const counterbidConcurrency = this.counterbidWorker?.concurrency || 0;
-      const counterbidRunning = this.counterbidWorker?.isRunning() || false;
+      // Collect per-worker stats
+      const mainWorkerStats = this.mainWorkers.map((worker, index) => ({
+        index,
+        concurrency: worker.concurrency,
+        running: worker.isRunning(),
+        paused: worker.isPaused()
+      }));
 
+      const counterbidWorkerStats = this.counterbidWorkers.map((worker, index) => ({
+        index,
+        concurrency: worker.concurrency,
+        running: worker.isRunning(),
+        paused: worker.isPaused()
+      }));
+
+      // Aggregate totals
+      const mainConcurrency = mainWorkerStats.reduce((sum, w) => sum + w.concurrency, 0);
+      const counterbidConcurrency = counterbidWorkerStats.reduce((sum, w) => sum + w.concurrency, 0);
+
+      // Check if all workers are running (healthy)
+      const allMainRunning = mainWorkerStats.every(w => w.running);
+      const allCounterbidRunning = counterbidWorkerStats.every(w => w.running);
+
+      // Return in schema-compatible format (aggregated, not arrays)
       return {
         main: {
           concurrency: mainConcurrency,
-          running: mainRunning
+          running: allMainRunning
         },
         counterbid: {
           concurrency: counterbidConcurrency,
-          running: counterbidRunning
+          running: allCounterbidRunning
         },
         totalConcurrency: mainConcurrency + counterbidConcurrency
       };

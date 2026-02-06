@@ -24,8 +24,8 @@ class ConcurrencyManager {
   private totalConcurrency: number;
   private rateLimit: number;
   private minConcurrency = 1;
-  private mainWorker: Worker | null = null;
-  private counterbidWorker: Worker | null = null;
+  private mainWorkers: Worker[] = [];
+  private counterbidWorkers: Worker[] = [];
   private lastAdjustment: string = '';
   private adjustmentHistory: Array<{
     timestamp: string;
@@ -46,12 +46,12 @@ class ConcurrencyManager {
   }
 
   /**
-   * Set worker references for dynamic concurrency adjustment
+   * Set worker array references for dynamic concurrency adjustment
    */
-  setWorkers(main: Worker, counterbid: Worker) {
-    this.mainWorker = main;
-    this.counterbidWorker = counterbid;
-    infoLog('ConcurrencyManager', 'Workers set - ready for dynamic allocation');
+  setWorkers(mainWorkers: Worker[], counterbidWorkers: Worker[]) {
+    this.mainWorkers = mainWorkers;
+    this.counterbidWorkers = counterbidWorkers;
+    infoLog('ConcurrencyManager', `Workers set - ready for dynamic allocation | main=${mainWorkers.length} | counterbid=${counterbidWorkers.length}`);
   }
 
   /**
@@ -100,13 +100,23 @@ class ConcurrencyManager {
     const ratio = clampedActive / this.rateLimit;
     const mainConcurrency = Math.max(MIN, Math.round(MAX_CONCURRENCY * (1 - ratio)));
 
-    // Apply to workers (BullMQ allows dynamic concurrency adjustment)
-    if (this.counterbidWorker) {
-      this.counterbidWorker.concurrency = cbConcurrency;
-    }
-    if (this.mainWorker) {
-      this.mainWorker.concurrency = mainConcurrency;
-    }
+    // Distribute concurrency evenly across workers in each array
+    // Split counterbid concurrency evenly across counterbid workers
+    const cbPerWorker = Math.floor(cbConcurrency / this.counterbidWorkers.length);
+    const cbRemainder = cbConcurrency % this.counterbidWorkers.length;
+
+    this.counterbidWorkers.forEach((worker, index) => {
+      // Distribute remainder to first workers
+      worker.concurrency = cbPerWorker + (index < cbRemainder ? 1 : 0);
+    });
+
+    // Split main concurrency evenly across main workers
+    const mainPerWorker = Math.floor(mainConcurrency / this.mainWorkers.length);
+    const mainRemainder = mainConcurrency % this.mainWorkers.length;
+
+    this.mainWorkers.forEach((worker, index) => {
+      worker.concurrency = mainPerWorker + (index < mainRemainder ? 1 : 0);
+    });
 
     // Record adjustment
     const timestamp = new Date().toISOString();
@@ -123,32 +133,23 @@ class ConcurrencyManager {
       this.adjustmentHistory.shift();
     }
 
-    // Enhanced logging with total concurrency and ratio
-    const total = cbConcurrency + mainConcurrency;
+    // Calculate actual totals after worker distribution
+    const actualCbTotal = this.counterbidWorkers.reduce((sum, w) => sum + w.concurrency, 0);
+    const actualMainTotal = this.mainWorkers.reduce((sum, w) => sum + w.concurrency, 0);
+    const total = actualCbTotal + actualMainTotal;
     const percentLoad = ((ratio * 100).toFixed(1));
 
     // Detailed debug logging for verification
     infoLog(
       'ConcurrencyAlloc',
-      `Active=${active}, CB=${cbConcurrency} (fixed), Main=${mainConcurrency} (dynamic), Total=${total} | Load=${percentLoad}% of RATE_LIMIT`
+      `Active=${active}, CB=${actualCbTotal} (fixed, ${this.counterbidWorkers.length} workers), Main=${actualMainTotal} (dynamic, ${this.mainWorkers.length} workers), Total=${total} | Load=${percentLoad}% of RATE_LIMIT`
     );
 
     // Additional verification logs with formula details
     debugLog(
       'ConcurrencyAlloc',
-      `Formula verification | RATE_LIMIT=${this.rateLimit} | maxConcurrency=${MAX_CONCURRENCY} | clampedActive=${clampedActive} | ratio=${ratio.toFixed(4)} | mainFormula=max(${MIN}, round(${MAX_CONCURRENCY} * (1 - ${ratio.toFixed(4)}))) = ${mainConcurrency}`
+      `Formula verification | RATE_LIMIT=${this.rateLimit} | maxConcurrency=${MAX_CONCURRENCY} | clampedActive=${clampedActive} | ratio=${ratio.toFixed(4)} | mainFormula=max(${MIN}, round(${MAX_CONCURRENCY} * (1 - ${ratio.toFixed(4)}))) = ${mainConcurrency} (distributed across ${this.mainWorkers.length} workers)`
     );
-
-    // Log when concurrency changes (only log actual changes to reduce noise)
-    const prevCbConcurrency = this.counterbidWorker?.concurrency ?? 0;
-    const prevMainConcurrency = this.mainWorker?.concurrency ?? 0;
-
-    if (prevCbConcurrency !== cbConcurrency || prevMainConcurrency !== mainConcurrency) {
-      infoLog(
-        'ConcurrencyAlloc',
-        `CHANGE DETECTED | CB: ${prevCbConcurrency}→${cbConcurrency} | Main: ${prevMainConcurrency}→${mainConcurrency} | Total: ${prevCbConcurrency + prevMainConcurrency}→${total}`
-      );
-    }
   }
 
   /**
@@ -175,14 +176,21 @@ class ConcurrencyManager {
    * Get current allocation statistics
    */
   getStats() {
+    const mainConcurrency = this.mainWorkers.reduce((sum, w) => sum + w.concurrency, 0);
+    const counterbidConcurrency = this.counterbidWorkers.reduce((sum, w) => sum + w.concurrency, 0);
+
     return {
       activeCounterbidJobs: this.activeCounterbidJobs,
       totalConcurrency: this.totalConcurrency,
       rateLimit: this.rateLimit,
       currentAllocation: {
-        counterbid: this.counterbidWorker?.concurrency ?? 0,
-        main: this.mainWorker?.concurrency ?? 0,
-        total: (this.counterbidWorker?.concurrency ?? 0) + (this.mainWorker?.concurrency ?? 0),
+        counterbid: counterbidConcurrency,
+        main: mainConcurrency,
+        total: mainConcurrency + counterbidConcurrency,
+      },
+      workers: {
+        main: this.mainWorkers.map((w, i) => ({ index: i, concurrency: w.concurrency })),
+        counterbid: this.counterbidWorkers.map((w, i) => ({ index: i, concurrency: w.concurrency })),
       },
       lastAdjustment: this.lastAdjustment,
       adjustmentHistory: this.adjustmentHistory,

@@ -110,6 +110,10 @@ async function initialize(rateLimit: number) {
   limiter = new Bottleneck({
     minTime: 1000 / concurrency, // Minimum time between job starts
     trackDoneStatus: true,
+    // Reservoir system to maintain steady job flow and prevent queue drain
+    reservoir: rateLimit * 3, // Initial reservoir: 3x rate limit for buffer
+    reservoirRefreshAmount: rateLimit * 1.5, // Aggressive refill: 1.5x rate limit per second
+    reservoirRefreshInterval: 1000, // Refill every 1 second to maintain constant flow
   });
 
   axiosRetry(axiosInstance, retryConfig);
@@ -118,6 +122,7 @@ async function initialize(rateLimit: number) {
   wrapAxiosInstance(axiosInstance, () => jobContext.getJobId());
 
   // Limiter initialized
+  infoLog('Limiter', `INITIALIZED | concurrency=${concurrency} | queueMin=${QUEUE_MINIMUM} | queueTarget=${QUEUE_TARGET} | reservoir=${rateLimit * 3} | reservoirRefresh=${rateLimit * 1.5}/sec`);
 }
 
 // Add a function to get current counts
@@ -134,6 +139,16 @@ export function getLimiterCounts() {
   return limiter.counts();
 }
 
+/**
+ * Get current queue depth (total jobs in limiter).
+ * Quick helper to check queue size without calling getLimiterCounts().
+ */
+export function getQueueDepth(): number {
+  if (!limiter) return 0;
+  const counts = getLimiterCounts();
+  return (counts.RECEIVED || 0) + (counts.QUEUED || 0) + (counts.RUNNING || 0);
+}
+
 // Get detailed limiter queue state for debugging stopTask flow
 export function getLimiterQueueDetails(rateLimit: number): {
   counts: ReturnType<typeof getLimiterCounts>;
@@ -148,6 +163,138 @@ export function getLimiterQueueDetails(rateLimit: number): {
     counts,
     jobsInQueue,
     estimatedDrainTimeMs
+  };
+}
+
+// Queue depth thresholds for proactive refill
+const QUEUE_MINIMUM = RATE_LIMIT * 2; // HARD MINIMUM: Always maintain at least 2x rate limit jobs in queue
+const QUEUE_LOW_WATER_MARK = RATE_LIMIT * 2.5; // Refill trigger: Add jobs when below 2.5x rate limit
+const QUEUE_TARGET = RATE_LIMIT * 3; // Target queue depth for smooth operation (3x rate limit)
+const QUEUE_HIGH_WATER_MARK = RATE_LIMIT * 5; // Stop adding when queue exceeds 5x rate limit
+
+/**
+ * Check if the limiter queue needs refilling to maintain steady RPS.
+ * Returns true when queue depth drops below low water mark (2.5x rate limit).
+ */
+export function shouldRefillQueue(): boolean {
+  if (!limiter) return false;
+
+  const counts = getLimiterCounts();
+  const queueDepth = (counts.RECEIVED || 0) + (counts.QUEUED || 0) + (counts.RUNNING || 0);
+
+  return queueDepth < QUEUE_LOW_WATER_MARK;
+}
+
+/**
+ * Check if queue is below HARD MINIMUM (2x rate limit).
+ * This is CRITICAL - queue should NEVER drop below this threshold.
+ */
+export function isBelowMinimum(): boolean {
+  if (!limiter) return false;
+
+  const counts = getLimiterCounts();
+  const queueDepth = (counts.RECEIVED || 0) + (counts.QUEUED || 0) + (counts.RUNNING || 0);
+
+  return queueDepth < QUEUE_MINIMUM;
+}
+
+/**
+ * Check if the queue is too full and should pause adding new jobs.
+ * Returns true when queue depth exceeds high water mark.
+ */
+export function shouldPauseQueueing(): boolean {
+  if (!limiter) return false;
+
+  const counts = getLimiterCounts();
+  const queueDepth = (counts.RECEIVED || 0) + (counts.QUEUED || 0) + (counts.RUNNING || 0);
+
+  return queueDepth > QUEUE_HIGH_WATER_MARK;
+}
+
+/**
+ * Get recommended number of jobs to add to reach target queue depth.
+ * Returns 0 if queue is at or above target.
+ *
+ * If below MINIMUM: returns jobs needed to reach TARGET (aggressive refill)
+ * If below LOW_WATER: returns jobs needed to reach TARGET
+ * Otherwise: returns 0
+ */
+export function getRecommendedRefillCount(): number {
+  if (!limiter) return 0;
+
+  const counts = getLimiterCounts();
+  const queueDepth = (counts.RECEIVED || 0) + (counts.QUEUED || 0) + (counts.RUNNING || 0);
+
+  // If at or above target, no refill needed
+  if (queueDepth >= QUEUE_TARGET) return 0;
+
+  // Calculate jobs needed to reach target
+  const jobsNeeded = Math.ceil(QUEUE_TARGET - queueDepth);
+
+  // If below minimum, this is URGENT - return full amount needed
+  if (queueDepth < QUEUE_MINIMUM) {
+    return jobsNeeded;
+  }
+
+  // If below low water mark, refill to target
+  if (queueDepth < QUEUE_LOW_WATER_MARK) {
+    return jobsNeeded;
+  }
+
+  // Between low water and target - no urgent need
+  return 0;
+}
+
+/**
+ * Get current queue health metrics for monitoring.
+ */
+export function getQueueHealth(): {
+  queueDepth: number;
+  minimumDepth: number;
+  targetDepth: number;
+  lowWaterMark: number;
+  highWaterMark: number;
+  isBelowMinimum: boolean;
+  needsRefill: boolean;
+  shouldPause: boolean;
+  recommendedRefillCount: number;
+  utilizationPercent: number;
+  status: 'CRITICAL' | 'LOW' | 'HEALTHY' | 'HIGH' | 'OVERLOADED';
+} {
+  const counts = getLimiterCounts();
+  const queueDepth = (counts.RECEIVED || 0) + (counts.QUEUED || 0) + (counts.RUNNING || 0);
+  const belowMinimum = isBelowMinimum();
+  const needsRefill = shouldRefillQueue();
+  const shouldPause = shouldPauseQueueing();
+  const recommendedRefillCount = getRecommendedRefillCount();
+  const utilizationPercent = Math.round((queueDepth / QUEUE_HIGH_WATER_MARK) * 100);
+
+  // Determine queue status
+  let status: 'CRITICAL' | 'LOW' | 'HEALTHY' | 'HIGH' | 'OVERLOADED';
+  if (queueDepth < QUEUE_MINIMUM) {
+    status = 'CRITICAL';
+  } else if (queueDepth < QUEUE_LOW_WATER_MARK) {
+    status = 'LOW';
+  } else if (queueDepth > QUEUE_HIGH_WATER_MARK) {
+    status = 'OVERLOADED';
+  } else if (queueDepth > QUEUE_TARGET * 1.2) {
+    status = 'HIGH';
+  } else {
+    status = 'HEALTHY';
+  }
+
+  return {
+    queueDepth,
+    minimumDepth: QUEUE_MINIMUM,
+    targetDepth: QUEUE_TARGET,
+    lowWaterMark: QUEUE_LOW_WATER_MARK,
+    highWaterMark: QUEUE_HIGH_WATER_MARK,
+    isBelowMinimum: belowMinimum,
+    needsRefill,
+    shouldPause,
+    recommendedRefillCount,
+    utilizationPercent,
+    status
   };
 }
 
@@ -173,6 +320,12 @@ export function stopCountsLogger() {
     // console.log('Stopped logging limiter counts');
   }
 }
+// Track low queue warnings to avoid log spam
+let lowQueueWarningCount = 0;
+let criticalQueueWarningCount = 0;
+let lastLowQueueWarning = 0;
+let lastCriticalQueueWarning = 0;
+
 setInterval(() => {
   const counts = getLimiterCounts();
   // Calculate instantaneous RPS based on completed requests
@@ -198,6 +351,39 @@ setInterval(() => {
   trueRPS = Math.min(RATE_LIMIT, Math.max(executing, averageRPS));
 
   rps.currentRPS = trueRPS
+
+  // Monitor queue health and warn when refill needed
+  const queueDepth = executing;
+  const health = getQueueHealth();
+  const now = Date.now();
+
+  // CRITICAL: Queue below HARD MINIMUM (2x rate limit)
+  if (health.isBelowMinimum) {
+    // Log immediately - this is critical
+    if (now - lastCriticalQueueWarning > 2000) { // Every 2 seconds for critical issues
+      criticalQueueWarningCount++;
+      lastCriticalQueueWarning = now;
+      errorLog('LimiterQueue', `CRITICAL_QUEUE_BELOW_MINIMUM | depth=${queueDepth} | minimum=${QUEUE_MINIMUM} | target=${QUEUE_TARGET} | recommendedRefill=${health.recommendedRefillCount} | status=${health.status} | criticalCount=${criticalQueueWarningCount}`);
+    }
+  }
+  // LOW: Queue below low water mark (2.5x rate limit)
+  else if (health.needsRefill) {
+    // Only log warning every 5 seconds to avoid spam
+    if (now - lastLowQueueWarning > 5000) {
+      lowQueueWarningCount++;
+      lastLowQueueWarning = now;
+      warnLog('LimiterQueue', `LOW_QUEUE_DEPTH | depth=${queueDepth} | lowWaterMark=${QUEUE_LOW_WATER_MARK} | target=${QUEUE_TARGET} | recommendedRefill=${health.recommendedRefillCount} | status=${health.status} | warningCount=${lowQueueWarningCount}`);
+    }
+  }
+  // HEALTHY or HIGH: Reset warning counters
+  else {
+    // Reset warning count when queue is healthy
+    if ((lowQueueWarningCount > 0 || criticalQueueWarningCount > 0) && queueDepth >= QUEUE_TARGET) {
+      infoLog('LimiterQueue', `QUEUE_RECOVERED | depth=${queueDepth} | target=${QUEUE_TARGET} | status=${health.status} | previousLowWarnings=${lowQueueWarningCount} | previousCriticalWarnings=${criticalQueueWarningCount}`);
+      lowQueueWarningCount = 0;
+      criticalQueueWarningCount = 0;
+    }
+  }
 
 }, 1000);
 
