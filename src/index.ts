@@ -1725,14 +1725,23 @@ const WORKER_RESTART_COOLDOWN = 5 * 60 * 1000; // 5 minutes between restarts
 
 
 function startWorkerHealthMonitoring() {
+  // Don't run immediate health check - workers need time to connect to Redis
+  // BullMQ workers take 5-10 seconds to establish connections and emit 'ready' event
 
-  // Initial health check
-  checkWorkerHealth();
+  infoLog('Startup', 'Worker health monitoring will start in 15 seconds');
 
-  // Set up periodic health checks
-  workerHealthInterval = setInterval(() => {
+  // Wait 15 seconds before starting health checks
+  setTimeout(() => {
+    // Run first health check after startup delay
     checkWorkerHealth();
-  }, WORKER_HEALTH_CHECK_INTERVAL);
+
+    // Set up periodic health checks
+    workerHealthInterval = setInterval(() => {
+      checkWorkerHealth();
+    }, WORKER_HEALTH_CHECK_INTERVAL);
+
+    infoLog('HealthCheck', 'Worker health monitoring started');
+  }, 15000); // 15 second startup delay
 }
 
 
