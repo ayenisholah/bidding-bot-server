@@ -47,6 +47,7 @@ import { safeTokenIdToString } from './utils/tokenId';
 
 import { logsCache, BidLogEntry } from './utils/logs-cache';
 import PQueue from "p-queue";
+import pLimit from "p-limit";
 import { orderCache, CachedOrder } from "./utils/order-cache";
 import { marketplaceApprovalCache } from "./utils/marketplace-approval-cache";
 import { USDC, WETH } from "./utils/currencies";
@@ -1728,9 +1729,9 @@ function startWorkerHealthMonitoring() {
   // Don't run immediate health check - workers need time to connect to Redis
   // BullMQ workers take 5-10 seconds to establish connections and emit 'ready' event
 
-  infoLog('Startup', 'Worker health monitoring will start in 15 seconds');
+  infoLog('Startup', 'Worker health monitoring will start in 5 seconds');
 
-  // Wait 15 seconds before starting health checks
+  // Wait 5 seconds before starting health checks
   setTimeout(() => {
     // Run first health check after startup delay
     checkWorkerHealth();
@@ -1741,7 +1742,7 @@ function startWorkerHealthMonitoring() {
     }, WORKER_HEALTH_CHECK_INTERVAL);
 
     infoLog('HealthCheck', 'Worker health monitoring started');
-  }, 15000); // 15 second startup delay
+  }, 5000); // 5 second startup delay (workers connect in 5-10s, install script adds 10s buffer)
 }
 
 
@@ -2253,6 +2254,11 @@ async function startServer() {
         }
       );
 
+      // Add ready event listener for startup visibility
+      worker.on('ready', () => {
+        infoLog('Worker', `Main worker ${index} connected to Redis and ready | concurrency=${concurrency}`);
+      });
+
       // Add error handlers for main worker
       worker.on('error', async (error) => {
         errorLog('Worker', `Main worker ${index} error`, error);
@@ -2464,6 +2470,11 @@ async function startServer() {
           maxStalledCount: 4
         }
       );
+
+      // Add ready event listener for startup visibility
+      worker.on('ready', () => {
+        infoLog('Worker', `Counterbid worker ${index} connected to Redis and ready | concurrency=${concurrency}`);
+      });
 
       // Add error handlers for counterbid worker
       worker.on('error', async (error) => {
@@ -6839,44 +6850,28 @@ async function processListingUpdateJob(job: Job): Promise<boolean> {
  * @param intervalMs - Delay between batches in milliseconds (default 100)
  */
 async function startTasksInBatches(tasks: ITask[], intervalMs: number = 100): Promise<void> {
-  const PARALLEL_BATCH_SIZE = 10; // Increased from 3 - dispatch more tasks per batch
-  const STAGGER_WITHIN_BATCH_MS = 20; // Small delay within batch to avoid thundering herd
+  const MAX_CONCURRENT = 10; // Max concurrent task starts to prevent MongoDB/queue overload
   const dispatchStartTime = Date.now();
 
-  infoLog('BulkStart', `ENTRY | taskCount=${tasks.length} | batchSize=${PARALLEL_BATCH_SIZE} | batchDelayMs=${intervalMs} | staggerMs=${STAGGER_WITHIN_BATCH_MS} | taskIds=${tasks.map(t => t._id?.toString()).slice(0, 5).join(',')}${tasks.length > 5 ? '...' : ''}`);
+  infoLog('BulkStart', `ENTRY | taskCount=${tasks.length} | maxConcurrent=${MAX_CONCURRENT} | taskIds=${tasks.map(t => t._id?.toString()).slice(0, 5).join(',')}${tasks.length > 5 ? '...' : ''}`);
 
-  // Performance profiling entry
-  debugLog('PerfEntry', `startTasksInBatches | totalTasks=${tasks.length} | batchSize=${PARALLEL_BATCH_SIZE} | intervalMs=${intervalMs} | startTime=${dispatchStartTime}`);
+  // Use p-limit for natural backpressure instead of artificial delays
+  const limit = pLimit(MAX_CONCURRENT);
 
-  // Split tasks into batches
-  const batches: ITask[][] = [];
-  for (let i = 0; i < tasks.length; i += PARALLEL_BATCH_SIZE) {
-    batches.push(tasks.slice(i, i + PARALLEL_BATCH_SIZE));
-  }
+  const results = await Promise.allSettled(
+    tasks.map(task =>
+      limit(async () => {
+        const taskId = task._id?.toString() || 'unknown';
+        const taskSlug = task.contract?.slug || taskId;
 
-  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-    const batch = batches[batchIndex];
-    const batchTaskIds = batch.map(t => t._id?.toString()).join(',');
-    const batchStartTime = Date.now();
-
-    debugLog('PerfPhase', `startTasksInBatches | phase=BATCH_START | batchNum=${batchIndex + 1}/${batches.length} | batchTaskCount=${batch.length}`);
-    infoLog('BulkStart', `BATCH_START | batch=${batchIndex + 1}/${batches.length} | taskCount=${batch.length} | taskIds=${batchTaskIds}`);
-
-    // Fire-and-forget: dispatch all tasks in batch without waiting for completion
-    for (const task of batch) {
-      const taskId = task._id?.toString() || 'unknown';
-      const taskSlug = task.contract?.slug || taskId;
-      const capturedBatchIndex = batchIndex; // Capture for async closure
-
-      // Fire off task start asynchronously - don't await
-      startTask(task, true)
-        .then(() => {
+        try {
+          await startTask(task, true);
           // Success - remove from retry queue if present
           failedTaskStartQueue.delete(taskId);
-          debugLog('BulkStart', `TASK_STARTED | taskId=${taskId} | slug=${taskSlug} | batch=${capturedBatchIndex + 1}`);
-        })
-        .catch((err: any) => {
-          warnLog('BulkStart', `TASK_START_FAILED | taskId=${taskId} | slug=${taskSlug} | batch=${capturedBatchIndex + 1} | error=${err?.message || String(err)}`);
+          debugLog('BulkStart', `TASK_STARTED | taskId=${taskId} | slug=${taskSlug}`);
+          return { taskId, success: true };
+        } catch (err: any) {
+          warnLog('BulkStart', `TASK_START_FAILED | taskId=${taskId} | slug=${taskSlug} | error=${err?.message || String(err)}`);
           // Add to retry queue with exponential backoff
           const existing = failedTaskStartQueue.get(taskId);
           const retryCount = existing ? existing.retryCount + 1 : 1;
@@ -6890,28 +6885,18 @@ async function startTasksInBatches(tasks: ITask[], intervalMs: number = 100): Pr
           });
 
           debugLog('BulkStart', `RETRY_QUEUED | taskId=${taskId} | retryCount=${retryCount} | nextRetryMs=${backoffMs}`);
-        });
+          return { taskId, success: false, error: err };
+        }
+      })
+    )
+  );
 
-      // Small stagger within batch to avoid thundering herd on queue capacity
-      debugLog('PerfBlock', `startTasksInBatches | block=STAGGER_DELAY | staggerMs=${STAGGER_WITHIN_BATCH_MS}`);
-      await new Promise(resolve => setTimeout(resolve, STAGGER_WITHIN_BATCH_MS));
-    }
-
-    const batchDuration = Date.now() - batchStartTime;
-    debugLog('PerfPhase', `startTasksInBatches | phase=BATCH_COMPLETE | batchNum=${batchIndex + 1}/${batches.length} | batchDurationMs=${batchDuration}`);
-    infoLog('BulkStart', `BATCH_DISPATCHED | batch=${batchIndex + 1}/${batches.length} | tasksDispatched=${batch.length}`);
-
-    // Delay between batches (skip delay after last batch)
-    if (batchIndex < batches.length - 1) {
-      debugLog('PerfBlock', `startTasksInBatches | block=INTER_BATCH_DELAY | delayMs=${intervalMs} | nextBatch=${batchIndex + 2}`);
-      debugLog('BulkStart', `BATCH_DELAY | delayMs=${intervalMs} | nextBatch=${batchIndex + 2}`);
-      await new Promise(resolve => setTimeout(resolve, intervalMs));
-    }
-  }
-
+  const succeeded = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+  const failed = results.length - succeeded;
   const dispatchDuration = Date.now() - dispatchStartTime;
-  infoLog('BulkStart', `ALL_DISPATCHED | total=${tasks.length} | batches=${batches.length} | dispatchDurationMs=${dispatchDuration} | note=Tasks completing asynchronously`);
-  debugLog('PerfExit', `startTasksInBatches | totalTasks=${tasks.length} | totalBatches=${batches.length} | totalDurationMs=${dispatchDuration} | success=true`);
+
+  infoLog('BulkStart', `ALL_DISPATCHED | total=${tasks.length} | succeeded=${succeeded} | failed=${failed} | dispatchDurationMs=${dispatchDuration}`);
+  debugLog('PerfExit', `startTasksInBatches | totalTasks=${tasks.length} | succeeded=${succeeded} | failed=${failed} | totalDurationMs=${dispatchDuration}`);
 }
 
 /**
@@ -6923,33 +6908,28 @@ async function startTasksInBatches(tasks: ITask[], intervalMs: number = 100): Pr
  * @param batchSize - Number of tasks per batch (default 10)
  */
 async function stopTasksInBatches(tasks: ITask[], batchSize: number = 10): Promise<void> {
-  const STAGGER_WITHIN_BATCH_MS = 20; // Small delay within batch to avoid thundering herd
-  const BATCH_DELAY_MS = 100; // Linear delay between batches (was 2s → 30s exponential)
+  const MAX_CONCURRENT = 10; // Max concurrent task stops to prevent ws-proxy overload
   const dispatchStartTime = Date.now();
 
-  // Split tasks into batches
-  const batches: ITask[][] = [];
-  for (let i = 0; i < tasks.length; i += batchSize) {
-    batches.push(tasks.slice(i, i + batchSize));
-  }
+  infoLog('StopTaskFlow', `ENTRY | taskCount=${tasks.length} | maxConcurrent=${MAX_CONCURRENT}`);
 
-  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-    const batch = batches[batchIndex];
+  // Use p-limit for natural backpressure instead of artificial delays
+  const limit = pLimit(MAX_CONCURRENT);
 
-    // Fire-and-forget: dispatch all stops without waiting for completion
-    for (const task of batch) {
-      const taskId = task._id?.toString() || 'unknown';
-      const taskSlug = task.contract?.slug || taskId;
-      const capturedBatchIndex = batchIndex; // Capture for async closure
+  const results = await Promise.allSettled(
+    tasks.map(task =>
+      limit(async () => {
+        const taskId = task._id?.toString() || 'unknown';
+        const taskSlug = task.contract?.slug || taskId;
 
-      // Fire off task stop asynchronously - don't await
-      stopTask(task, false)
-        .then(() => {
+        try {
+          await stopTask(task, false);
           // Success - remove from retry queue if present
           failedTaskStopQueue.delete(taskId);
-        })
-        .catch((err: any) => {
-          warnLog('StopTaskFlow', `TASK_STOP_FAILED | taskId=${taskId} | slug=${taskSlug} | batch=${capturedBatchIndex + 1} | error=${err?.message || String(err)}`);
+          debugLog('StopTaskFlow', `TASK_STOPPED | taskId=${taskId} | slug=${taskSlug}`);
+          return { taskId, success: true };
+        } catch (err: any) {
+          warnLog('StopTaskFlow', `TASK_STOP_FAILED | taskId=${taskId} | slug=${taskSlug} | error=${err?.message || String(err)}`);
           // Add to retry queue with exponential backoff
           const existing = failedTaskStopQueue.get(taskId);
           const retryCount = existing ? existing.retryCount + 1 : 1;
@@ -6961,20 +6941,19 @@ async function stopTasksInBatches(tasks: ITask[], batchSize: number = 10): Promi
             nextRetryAt: Date.now() + backoffMs,
             lastError: err?.message || String(err)
           });
-        });
 
-      // Small stagger within batch to avoid thundering herd on ws-proxy unsubscriptions
-      await new Promise(resolve => setTimeout(resolve, STAGGER_WITHIN_BATCH_MS));
-    }
+          debugLog('StopTaskFlow', `RETRY_QUEUED | taskId=${taskId} | retryCount=${retryCount} | nextRetryMs=${backoffMs}`);
+          return { taskId, success: false, error: err };
+        }
+      })
+    )
+  );
 
-    // Linear delay between batches (skip delay after last batch)
-    if (batchIndex < batches.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
-    }
-  }
-
+  const succeeded = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+  const failed = results.length - succeeded;
   const dispatchDuration = Date.now() - dispatchStartTime;
-  infoLog('StopTaskFlow', `STOP_ALL_DISPATCHED | total=${tasks.length} | batches=${batches.length} | dispatchDurationMs=${dispatchDuration} | note=Tasks stopping asynchronously`);
+
+  infoLog('StopTaskFlow', `STOP_ALL_DISPATCHED | total=${tasks.length} | succeeded=${succeeded} | failed=${failed} | dispatchDurationMs=${dispatchDuration}`);
 }
 
 /**
@@ -8773,20 +8752,44 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
         { taskId }
       );
 
-      // Subscribe to WebSocket collection (WebSocket should already be connected at startup)
-      try {
-        if (wsManager?.isConnected()) {
-          const newTask = { ...task, running: true };
-          const wsSubStart = Date.now();
-          await subscribeToCollections([newTask]);
-          debugLog('PerfAwait', `startTaskInternal | taskId=${taskId} | phase=WS_SUBSCRIBE | durationMs=${Date.now() - wsSubStart} | slug=${task.contract.slug}`);
-          infoLog('TaskInit', `WS_SUBSCRIBE | taskId=${taskId} | slug=${task.contract.slug} | wsConnected=true`, { taskId });
-        } else {
-          warnLog('TaskInit', `WS_SUBSCRIBE_SKIP | taskId=${taskId} | slug=${task.contract.slug} | wsConnected=false`, { taskId });
+      // Subscribe to WebSocket collection with retry logic
+      const subscribeWithRetry = async (retryCount = 0, maxRetries = 3): Promise<void> => {
+        try {
+          if (wsManager?.isConnected()) {
+            const newTask = { ...task, running: true };
+            const wsSubStart = Date.now();
+            await subscribeToCollections([newTask]);
+            debugLog('PerfAwait', `startTaskInternal | taskId=${taskId} | phase=WS_SUBSCRIBE | durationMs=${Date.now() - wsSubStart} | slug=${task.contract.slug}`);
+            infoLog('TaskInit', `WS_SUBSCRIBE_SUCCESS | taskId=${taskId} | slug=${task.contract.slug} | retryCount=${retryCount}`, { taskId });
+          } else {
+            warnLog('TaskInit', `WS_SUBSCRIBE_SKIP | taskId=${taskId} | slug=${task.contract.slug} | wsConnected=false | willRetry=${retryCount < maxRetries}`, { taskId });
+
+            // Retry after delay if WebSocket not connected yet
+            if (retryCount < maxRetries) {
+              const retryDelayMs = Math.pow(2, retryCount) * 1000; // Exponential backoff: 1s, 2s, 4s
+              setTimeout(async () => {
+                debugLog('TaskInit', `WS_SUBSCRIBE_RETRY | taskId=${taskId} | slug=${task.contract.slug} | retryCount=${retryCount + 1} | delayMs=${retryDelayMs}`, { taskId });
+                await subscribeWithRetry(retryCount + 1, maxRetries);
+              }, retryDelayMs);
+            }
+          }
+        } catch (error) {
+          errorLog('TaskInit', `WS_SUBSCRIBE_ERROR | taskId=${taskId} | slug=${task.contract.slug} | retryCount=${retryCount} | error=${error instanceof Error ? error.message : String(error)}`, error, { taskId });
+
+          // Retry on error with exponential backoff
+          if (retryCount < maxRetries) {
+            const retryDelayMs = Math.pow(2, retryCount) * 1000; // Exponential backoff: 1s, 2s, 4s
+            setTimeout(async () => {
+              debugLog('TaskInit', `WS_SUBSCRIBE_RETRY | taskId=${taskId} | slug=${task.contract.slug} | retryCount=${retryCount + 1} | delayMs=${retryDelayMs}`, { taskId });
+              await subscribeWithRetry(retryCount + 1, maxRetries);
+            }, retryDelayMs);
+          } else {
+            errorLog('TaskInit', `WS_SUBSCRIBE_FAILED_ALL_RETRIES | taskId=${taskId} | slug=${task.contract.slug} | maxRetries=${maxRetries}`, error, { taskId });
+          }
         }
-      } catch (error) {
-        errorLog('TaskInit', `WS_SUBSCRIBE_ERROR | taskId=${taskId} | slug=${task.contract.slug} | error=${error instanceof Error ? error.message : String(error)}`, error, { taskId });
-      }
+      };
+
+      await subscribeWithRetry();
     } else {
       debugLog('TaskInit', `ACTIVE_TASKS_SKIP | taskId=${taskId} | reason=already_running`, { taskId });
     }
@@ -24275,6 +24278,9 @@ app.get('/api/health/workers', async (req, res) => {
 
     res.status(isHealthy ? 200 : 503).json({
       status: isHealthy ? 'healthy' : 'unhealthy',
+      message: isHealthy
+        ? `All ${totalWorkers} workers are healthy and connected`
+        : `${healthyWorkers} / ${totalWorkers} workers are healthy`,
       timestamp: new Date().toISOString(),
       workers: {
         total: totalWorkers,
