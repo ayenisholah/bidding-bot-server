@@ -28,7 +28,7 @@ import stringify from 'json-stable-stringify';
 import WebSocket, { Server as WebSocketServer } from 'ws';
 import http from 'http';
 import os from 'os';
-import { axiosInstance, initialize, limiter, removeTaskFromBlacklist, isTaskBlacklisted, getLimiterQueueDetails, cancelTaskJobs, abortPendingLimiterJobs } from "./init";
+import { axiosInstance, initialize, limiter, removeTaskFromBlacklist, isTaskBlacklisted, getLimiterQueueDetails, cancelTaskJobs, abortPendingLimiterJobs, getQueueHealth } from "./init";
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrderWithoutTracking, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor, resolveContractAddress } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor, getAccessToken, getAuthMetrics, getTimeoutMetrics, transferRestrictedCollections, authMetrics, timeoutMetrics } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
@@ -165,6 +165,11 @@ initExecutionLatencyTracker();
 
 export const RATE_LIMIT = Number(process.env.RATE_LIMIT)
 export const API_KEY = process.env.API_KEY;
+
+if (!Number.isFinite(RATE_LIMIT) || RATE_LIMIT <= 0) {
+  errorLog('Startup', `RATE_LIMIT is invalid: ${process.env.RATE_LIMIT}. Set RATE_LIMIT to a positive number (e.g., 100).`);
+  throw new Error('RATE_LIMIT is required and must be a positive number');
+}
 
 // Validate API_KEY is loaded from environment
 if (!API_KEY) {
@@ -2593,7 +2598,7 @@ async function startServer() {
       concurrencyManager.decrementCounterbid(); // Instant -1, immediate reallocation
     });
 
-    // Periodic reconciliation (safety net for race conditions, every 60 seconds)
+    // Periodic reconciliation (safety net for race conditions, every 5 seconds)
     setInterval(async () => {
       try {
         const counts = await counterbidQueue.getJobCounts();
@@ -2602,7 +2607,7 @@ async function startServer() {
       } catch (error) {
         errorLog('ConcurrencyManager', 'Failed to reconcile counterbid job count', error);
       }
-    }, 60000);
+    }, 5000);
 
     const minMain = Math.floor(RATE_LIMIT / 4);
 
@@ -3224,6 +3229,15 @@ async function startServer() {
     const TASK_RETRY_INTERVAL = 5000; // 5 seconds
     setInterval(processFailedTaskRetries, TASK_RETRY_INTERVAL);
     setInterval(processFailedTaskStopRetries, TASK_RETRY_INTERVAL);
+
+    // Keep limiter backlog continuously loaded so fixed-step minTime emission stays steady.
+    // This does NOT add limiter concurrency caps.
+    const LIMITER_REFILL_CHECK_INTERVAL = 1000; // 1 second
+    setInterval(() => {
+      refillLimiterQueueIfNeeded().catch((error) => {
+        errorLog('LimiterQueue', 'REFILL_INTERVAL_ERROR', error);
+      });
+    }, LIMITER_REFILL_CHECK_INTERVAL);
 
     // Cleanup stale floor cache entries every 5 minutes
     const FLOOR_CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
@@ -4922,6 +4936,64 @@ async function executeMarketplaceBidLoop(taskId: string, marketplace: string): P
         }
       }
     }
+  }
+}
+
+let limiterRefillCursor = 0;
+let limiterRefillInProgress = false;
+
+function getLimiterRefillCandidates(): Array<{ taskId: string; marketplace: 'opensea' | 'magiceden' | 'blur' }> {
+  const enabledMarketplacesSet = new Set(enabledMarketplaces.map((m) => m.toLowerCase()));
+  const candidates: Array<{ taskId: string; marketplace: 'opensea' | 'magiceden' | 'blur' }> = [];
+
+  for (const [taskId, task] of activeTasks.entries()) {
+    if (!task?.running) continue;
+    if (tasksBeingCancelled.has(taskId)) continue;
+
+    for (const marketplaceRaw of task.selectedMarketplaces || []) {
+      const marketplace = marketplaceRaw.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
+      if (!enabledMarketplacesSet.has(marketplace)) continue;
+      if (isTaskBlacklisted(taskId, marketplace)) continue;
+
+      const mpStatus = taskStatus[taskId]?.marketplaces?.[marketplace]?.status;
+      if (mpStatus === 'CANCELLING' || mpStatus === 'STOPPED') continue;
+
+      candidates.push({ taskId, marketplace });
+    }
+  }
+
+  return candidates;
+}
+
+async function refillLimiterQueueIfNeeded(): Promise<void> {
+  if (limiterRefillInProgress) return;
+
+  const health = getQueueHealth();
+  if (!health.needsRefill && !health.isBelowMinimum) return;
+
+  const candidates = getLimiterRefillCandidates();
+  if (candidates.length === 0) return;
+
+  limiterRefillInProgress = true;
+  try {
+    // Refill based on measured deficit to avoid prolonged underfill windows.
+    const minimumLoops = health.isBelowMinimum ? 2 : 1;
+    const desiredRefill = Math.max(minimumLoops, health.recommendedRefillCount || 0);
+    const maxLoopsPerTick = Math.max(1, Number(process.env.LIMITER_REFILL_MAX_LOOPS_PER_TICK || 64));
+    const loopsToTrigger = Math.min(desiredRefill, maxLoopsPerTick, candidates.length);
+    const selected: Array<{ taskId: string; marketplace: 'opensea' | 'magiceden' | 'blur' }> = [];
+
+    for (let i = 0; i < loopsToTrigger; i++) {
+      const index = (limiterRefillCursor + i) % candidates.length;
+      selected.push(candidates[index]);
+    }
+
+    limiterRefillCursor = (limiterRefillCursor + loopsToTrigger) % candidates.length;
+    await Promise.all(selected.map((candidate) => executeMarketplaceBidLoop(candidate.taskId, candidate.marketplace)));
+  } catch (error) {
+    errorLog('LimiterQueue', 'REFILL_EXECUTION_ERROR', error);
+  } finally {
+    limiterRefillInProgress = false;
   }
 }
 
@@ -8597,14 +8669,17 @@ function getCounterbidMarketplacePrefix(marketplace: string): string {
 // Performance optimization (Fix 6):
 // - Only scan 'waiting' and 'delayed' states (active jobs can't be removed, completed/failed don't need removal)
 // - Scan once per state and filter by taskId (not once per marketplace per state)
-// - This reduces Redis operations from 15 to 2 for the main queue
+// - Scan both main queue and counterbid queue so stopTask can drain both pipelines
 async function removeAllTaskJobsFromQueue(taskId: string, marketplace?: string) {
   const startTime = Date.now();
   const marketplaces = marketplace ? [marketplace.toLowerCase()] : ['opensea', 'blur', 'magiceden'];
   let totalRemoved = 0;
+  let counterbidRemoved = 0;
   const removalResults = [];
-  let mainQueueRemoved = 0;
-  let blurQueueRemoved = 0;
+  const queueTargets = [
+    { name: 'main', queueRef: queue },
+    { name: 'counterbid', queueRef: counterbidQueue }
+  ] as const;
 
 
   for (const mp of marketplaces) {
@@ -8615,73 +8690,48 @@ async function removeAllTaskJobsFromQueue(taskId: string, marketplace?: string) 
 
     const marketplaceResult = {
       marketplace: mp,
-      waiting: 0,
-      delayed: 0,
-      total: 0
+      main: { waiting: 0, delayed: 0, total: 0 },
+      counterbid: { waiting: 0, delayed: 0, total: 0 }
     };
 
     try {
-      // Fix 6: Only scan 'waiting' and 'delayed' states (reduced from 5 to 2)
-      // - active: Can't remove (we don't have the lock token) - blacklist handles these
-      // - completed/failed: Already done, no need to remove - cleanup happens automatically
-      // This reduces Redis operations from 5 to 2 per marketplace (60% fewer calls)
       const jobStates = ['waiting', 'delayed'] as const;
-      let dataIdMatches = 0;
-      let prefixMatches = 0;
+      for (const target of queueTargets) {
+        for (const state of jobStates) {
+          const jobs = await target.queueRef.getJobs([state], 0, -1);
 
-      for (const state of jobStates) {
-        const jobs = await queue.getJobs([state], 0, -1);
+          // Match by taskId in job data (works for all jobs including those without explicit jobId)
+          // Also match by job ID prefix for counterbid jobs with explicit IDs (CB-)
+          const taskJobs = jobs.filter(job => {
+            if (!job) return false;
+            const jobTaskId = job.data?._id?.toString() || job.data?.taskId?.toString();
+            if (jobTaskId === taskId) return true;
+            if (job.id && (job.id.startsWith(bidPrefix) || job.id.startsWith(cbPrefix))) return true;
+            return false;
+          });
 
-        // Match by taskId in job data (works for all jobs including those without explicit jobId)
-        // Also match by job ID prefix for counterbid jobs with explicit IDs (CB-)
-        const taskJobs = jobs.filter(job => {
-          if (!job) return false;
-          // Primary match: Check job.data._id or job.data.taskId (works for all jobs)
-          const jobTaskId = job.data?._id?.toString() || job.data?.taskId?.toString();
-          if (jobTaskId === taskId) {
-            dataIdMatches++;
-            return true;
-          }
-          // Secondary match: job ID prefix for counterbid jobs (CB-) that may not have taskId in data
-          if (job.id && (job.id.startsWith(bidPrefix) || job.id.startsWith(cbPrefix))) {
-            prefixMatches++;
-            return true;
-          }
-          return false;
-        });
-
-        if (taskJobs.length > 0) {
-        }
-
-        let stateSuccessCount = 0;
-        let stateFailCount = 0;
-        for (const job of taskJobs) {
-          try {
-            // Remove jobs (waiting, delayed only - no active jobs in this optimized version)
-            await job.remove();
-            (marketplaceResult as any)[state]++;
-            totalRemoved++;
-            mainQueueRemoved++;
-            stateSuccessCount++;
-          } catch (error: any) {
-            stateFailCount++;
-            // Log the specific error for debugging - common errors:
-            // - "Missing lock for job" - job transitioned to active during removal
-            // - "Job not found" - job already completed/removed
-            const errorMsg = error?.message || String(error);
-            if (errorMsg.includes('Missing lock') || errorMsg.includes('not found')) {
-            } else {
-              errorLog('StopJobRemoval', `JOB_REMOVAL_FAILED | taskId=${taskId} | jobId=${job.id} | state=${state} | error=${errorMsg}`, { taskId });
+          for (const job of taskJobs) {
+            try {
+              await job.remove();
+              (marketplaceResult as any)[target.name][state]++;
+              totalRemoved++;
+              if (target.name === 'counterbid') {
+                counterbidRemoved++;
+              }
+            } catch (error: any) {
+              const errorMsg = error?.message || String(error);
+              if (errorMsg.includes('Missing lock') || errorMsg.includes('not found')) {
+              } else {
+                errorLog('StopJobRemoval', `JOB_REMOVAL_FAILED | taskId=${taskId} | queue=${target.name} | jobId=${job.id} | state=${state} | error=${errorMsg}`, { taskId });
+              }
             }
           }
         }
 
-        if (stateSuccessCount > 0 || stateFailCount > 0) {
-        }
+        (marketplaceResult as any)[target.name].total =
+          (marketplaceResult as any)[target.name].waiting +
+          (marketplaceResult as any)[target.name].delayed;
       }
-
-      marketplaceResult.total = marketplaceResult.waiting + marketplaceResult.delayed;
-
 
     } catch (error: any) {
       errorLog('Queue', `Error removing ${mp} jobs for task ${taskId}`, error);
@@ -8705,39 +8755,36 @@ async function removeAllTaskJobsFromQueue(taskId: string, marketplace?: string) 
       // Same prefixes as first pass - scheduled bids and counterbids
       const bidPrefix = `bid-${taskId}-${mp}-`;
       const cbPrefix = `CB-${taskId}-${getCounterbidMarketplacePrefix(mp)}-`;
-      // Fix 6: Only scan 'waiting' and 'delayed' states (same optimization as pass1)
       const jobStates = ['waiting', 'delayed'] as const;
+      for (const target of queueTargets) {
+        for (const state of jobStates) {
+          const jobs = await target.queueRef.getJobs([state], 0, -1);
+          const taskJobs = jobs.filter(job => {
+            if (!job) return false;
+            const jobTaskId = job.data?._id?.toString() || job.data?.taskId?.toString();
+            if (jobTaskId === taskId) return true;
+            if (job.id && (job.id.startsWith(bidPrefix) || job.id.startsWith(cbPrefix))) return true;
+            return false;
+          });
 
-      for (const state of jobStates) {
-        const jobs = await queue.getJobs([state], 0, -1);
-        // Match by taskId in job data (works for all jobs including those without explicit jobId)
-        // Also match by job ID prefix for counterbid jobs with explicit IDs (CB-)
-        const taskJobs = jobs.filter(job => {
-          if (!job) return false;
-          // Primary match: Check job.data._id or job.data.taskId (works for all jobs)
-          const jobTaskId = job.data?._id?.toString() || job.data?.taskId?.toString();
-          if (jobTaskId === taskId) return true;
-          // Secondary match: job ID prefix for counterbid jobs (CB-) that may not have taskId in data
-          if (job.id && (job.id.startsWith(bidPrefix) || job.id.startsWith(cbPrefix))) return true;
-          return false;
-        });
+          if (taskJobs.length > 0) {
+            remainingJobs += taskJobs.length;
+            warnLog('StopJobRemoval', `JOB_REMOVAL_PASS2_FOUND | taskId=${taskId} | mp=${mp} | queue=${target.name} | state=${state} | remainingCount=${taskJobs.length}`, { taskId });
 
-        if (taskJobs.length > 0) {
-          remainingJobs += taskJobs.length;
-          warnLog('StopJobRemoval', `JOB_REMOVAL_PASS2_FOUND | taskId=${taskId} | mp=${mp} | state=${state} | remainingCount=${taskJobs.length}`, { taskId });
-
-          // Try to remove them again
-          for (const job of taskJobs) {
-            try {
-              await job.remove();
-              totalRemoved++;
-              mainQueueRemoved++;
-              pass2Removed++;
-            } catch (error: any) {
-              const errorMsg = error?.message || String(error);
-              if (errorMsg.includes('Missing lock') || errorMsg.includes('not found')) {
-              } else {
-                errorLog('StopJobRemoval', `JOB_REMOVAL_PASS2_FAILED | taskId=${taskId} | jobId=${job.id} | state=${state} | error=${errorMsg}`, { taskId });
+            for (const job of taskJobs) {
+              try {
+                await job.remove();
+                totalRemoved++;
+                if (target.name === 'counterbid') {
+                  counterbidRemoved++;
+                }
+                pass2Removed++;
+              } catch (error: any) {
+                const errorMsg = error?.message || String(error);
+                if (errorMsg.includes('Missing lock') || errorMsg.includes('not found')) {
+                } else {
+                  errorLog('StopJobRemoval', `JOB_REMOVAL_PASS2_FAILED | taskId=${taskId} | queue=${target.name} | jobId=${job.id} | state=${state} | error=${errorMsg}`, { taskId });
+                }
               }
             }
           }
@@ -8747,12 +8794,13 @@ async function removeAllTaskJobsFromQueue(taskId: string, marketplace?: string) 
 
   }
 
-  // Blur jobs now in main queue - no separate blur queue to scan
+  // Blur jobs are in main queue; counterbids are in counterbid queue and are scanned above.
 
   const elapsedMs = Date.now() - startTime;
 
   return {
     removed: totalRemoved,
+    counterbidRemoved,
     results: removalResults,
     success: true
   };
@@ -9480,6 +9528,9 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string, stopp
 
     // Step 2: Cancel active jobs and remove from queue (most important)
     const queueResult = await removeAllTaskJobsFromQueue(taskId, marketplace);
+    if (queueResult.counterbidRemoved > 0) {
+      concurrencyManager.decrementCounterbidBy(queueResult.counterbidRemoved);
+    }
     cancellationDebugLogger.log('JOB_CANCEL', `Removed ${queueResult.removed} jobs from queue`, {
       jobsRemoved: queueResult.removed
     });
@@ -12674,7 +12725,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
         const counterbidJobId = `CB-${task._id}-me-token-${tokenId}`;  // No price in jobId
 
         // Check for existing job and update if new price is higher
-        const existingJob = await queue.getJob(counterbidJobId);
+        const existingJob = await counterbidQueue.getJob(counterbidJobId);
         if (existingJob) {
           const existingPrice = existingJob.data.offerPrice;
           if (tokenOfferPriceForQueue > existingPrice) {
@@ -12823,7 +12874,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
             const counterbidJobId = `CB-${task._id}-me-trait-${identifier}`;  // No price in jobId
 
             // Check for existing job and update if new price is higher
-            const existingJob = await queue.getJob(counterbidJobId);
+            const existingJob = await counterbidQueue.getJob(counterbidJobId);
             if (existingJob) {
               const existingPrice = existingJob.data.offerPrice;
               if (offerPrice > existingPrice) {
@@ -12921,7 +12972,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
               const counterbidJobId = `CB-${task._id}-me-token-${tokenId}`;  // No price in jobId
 
               // Check for existing job and update if new price is higher
-              const existingJob = await queue.getJob(counterbidJobId);
+              const existingJob = await counterbidQueue.getJob(counterbidJobId);
               if (existingJob) {
                 const existingPrice = existingJob.data.offerPrice;
                 if (tokenOfferPrice > existingPrice) {
@@ -13161,7 +13212,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
               const counterbidJobId = `CB-${task._id}-me-coll-${task.contract.slug}`;  // No price in jobId
 
               // Check for existing job and update if new price is higher
-              const existingJob = await queue.getJob(counterbidJobId);
+              const existingJob = await counterbidQueue.getJob(counterbidJobId);
               if (existingJob) {
                 const existingPrice = existingJob.data.offerPrice;
                 if (orderOfferPrice > existingPrice) {
@@ -13221,7 +13272,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
               const counterbidJobId = `CB-${task._id}-me-token-${tokenId}`;  // No price in jobId
 
               // Check for existing job and update if new price is higher
-              const existingJob = await queue.getJob(counterbidJobId);
+              const existingJob = await counterbidQueue.getJob(counterbidJobId);
               if (existingJob) {
                 const existingPrice = existingJob.data.offerPrice;
                 if (orderOfferPrice > existingPrice) {
@@ -13818,7 +13869,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
 
       // Fire-and-forget: non-blocking queue operation (saves 50-75ms)
       // Check for existing job and update if new price is higher
-      queue.getJob(counterbidJobId).then(async (existingJob) => {
+      counterbidQueue.getJob(counterbidJobId).then(async (existingJob) => {
         if (existingJob) {
           const existingPrice = existingJob.data.offerPrice;
           if (tokenOfferPriceForQueue > existingPrice) {
@@ -14051,7 +14102,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
 
               const counterbidJobId = `CB-${task._id}-os-token-${tokenId}`;  // No price in jobId
               // Fire-and-forget: non-blocking queue operation (saves 50-75ms)
-              queue.getJob(counterbidJobId).then(async (existingJob) => {
+              counterbidQueue.getJob(counterbidJobId).then(async (existingJob) => {
                 if (existingJob) {
                   const existingPrice = existingJob.data.offerPrice;
                   if (tokenOfferPriceForQueue > existingPrice) {
@@ -14115,7 +14166,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
             const counterbidJobId = `CB-${task._id}-os-trait-${traitKey}`;  // No price in jobId
 
             // Check for existing job and update if new price is higher
-            const existingJob = await queue.getJob(counterbidJobId);
+            const existingJob = await counterbidQueue.getJob(counterbidJobId);
             if (existingJob) {
               const existingPrice = existingJob.data.offerPrice;
               if (traitOfferForQueue > existingPrice) {
@@ -14271,6 +14322,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                 removeOnComplete: true,
                 removeOnFail: true
               }).then(() => {
+                concurrencyManager.incrementCounterbid();
                 tokenTraitCounterbidsQueued++;
               }).catch((queueError: any) => {
                 if (queueError?.message?.includes('Job with this id already exists')) {
@@ -14508,7 +14560,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
               const counterbidJobId = `CB-${task._id}-os-coll-${task.contract.slug}`;  // No price in jobId
 
               // Check for existing job and update if new price is higher
-              const existingJob = await queue.getJob(counterbidJobId);
+              const existingJob = await counterbidQueue.getJob(counterbidJobId);
               if (existingJob) {
                 const existingPrice = existingJob.data.offerPrice;
                 if (collectionOfferForQueue > existingPrice) {
@@ -14569,7 +14621,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
               const counterbidJobId = `CB-${task._id}-os-token-${tokenId}`;  // No price in jobId
 
               // Check for existing job and update if new price is higher
-              const existingJob = await queue.getJob(counterbidJobId);
+              const existingJob = await counterbidQueue.getJob(counterbidJobId);
               if (existingJob) {
                 const existingPrice = existingJob.data.offerPrice;
                 if (orderOfferPriceForQueue > existingPrice) {
@@ -14730,6 +14782,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                 removeOnComplete: true,
                 removeOnFail: true
               }).then(() => {
+                concurrencyManager.incrementCounterbid();
                 tokenCollectionCounterbidsQueued++;
               }).catch((queueError: any) => {
                 if (queueError?.message?.includes('Job with this id already exists')) {
@@ -14936,7 +14989,7 @@ async function handleBlurCounterbid(data: any, task: ITask, receivedAt: number) 
           const counterbidJobId = `CB-${task._id}-blur-trait-${identifier}`;  // No price in jobId
 
           // Check for existing job and update if new price is higher
-          const existingJob = await queue.getJob(counterbidJobId);
+          const existingJob = await counterbidQueue.getJob(counterbidJobId);
           if (existingJob) {
             const existingPrice = existingJob.data.offerPrice;
             if (Number(offerPrice) > existingPrice) {
@@ -15135,7 +15188,7 @@ async function handleBlurCounterbid(data: any, task: ITask, receivedAt: number) 
               const counterbidJobId = `CB-${task._id}-blur-trait-${order.identifier}`;  // No price in jobId
 
               // Check for existing job and update if new price is higher
-              const existingJob = await queue.getJob(counterbidJobId);
+              const existingJob = await counterbidQueue.getJob(counterbidJobId);
               if (existingJob) {
                 const existingPrice = existingJob.data.offerPrice;
                 if (Number(orderOfferPrice) > existingPrice) {
@@ -15185,7 +15238,7 @@ async function handleBlurCounterbid(data: any, task: ITask, receivedAt: number) 
               const counterbidJobId = `CB-${task._id}-blur-coll-${task.contract.slug}`;  // No price in jobId
 
               // Check for existing job and update if new price is higher
-              const existingJob = await queue.getJob(counterbidJobId);
+              const existingJob = await counterbidQueue.getJob(counterbidJobId);
               if (existingJob) {
                 const existingPrice = existingJob.data.offerPrice;
                 if (Number(orderOfferPrice) > existingPrice) {

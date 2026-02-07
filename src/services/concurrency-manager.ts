@@ -1,19 +1,15 @@
 /**
- * Dynamic concurrency allocation between main and counterbid queues
+ * Concurrency allocation between main and counterbid queues
  *
  * Strategy:
- * - Counterbid concurrency: FIXED at RATE_LIMIT (maximum priority)
- * - Main concurrency: DYNAMIC with protective floor
- *   - 0 jobs → Main = RATE_LIMIT
- *   - Floor: RATE_LIMIT / 4 (prevents complete starvation)
- *   - Formula: max(RATE_LIMIT / 4, RATE_LIMIT - activeCounterbidJobs)
- * - Total concurrency: VARIABLE (ranges from RATE_LIMIT + RATE_LIMIT/4 to RATE_LIMIT × 2)
- * - Real-time adjustment: Updates immediately on every job add/complete/fail event
+ * - Counterbid concurrency: FIXED at RATE_LIMIT
+ * - Main concurrency: FIXED at RATE_LIMIT (no longer reduced by counterbid activity)
+ * - Total concurrency: FIXED at RATE_LIMIT × 2
  *
- * Example (RATE_LIMIT = 100):
- * - 0 CB jobs: CB=100, Main=100, Total=200
- * - 50 CB jobs: CB=100, Main=50, Total=150
- * - 76+ CB jobs: CB=100, Main=25 (floor), Total=125
+ * BullMQ concurrency only controls parallelism (how many jobs run concurrently).
+ * The Bottleneck rate limiter enforces the actual API rate (RPS).
+ * Reducing BullMQ concurrency below RATE_LIMIT starves the Bottleneck queue,
+ * causing RPS to drop well below the configured rate.
  */
 
 import { Worker } from 'bullmq';
@@ -38,7 +34,7 @@ class ConcurrencyManager {
   constructor(totalConcurrency: number) {
     this.totalConcurrency = totalConcurrency;
     this.rateLimit = Number(process.env.RATE_LIMIT || 8);
-    this.minConcurrency = Math.floor(this.rateLimit / 4);
+    this.minConcurrency = this.rateLimit;
 
     // Log initialization with formula
   }
@@ -70,28 +66,30 @@ class ConcurrencyManager {
   }
 
   /**
+   * Decrement counterbid jobs by a batch count (used when queued jobs are removed directly).
+   */
+  decrementCounterbidBy(count: number) {
+    if (!Number.isFinite(count) || count <= 0) return;
+    this.activeCounterbidJobs = Math.max(0, this.activeCounterbidJobs - Math.floor(count));
+    this.adjustConcurrency();
+  }
+
+  /**
    * Adjust worker concurrency based on current counterbid workload
    *
-   * New allocation formula (fixed counterbid priority with floor protection):
-   * - Counterbid concurrency: FIXED at RATE_LIMIT
-   * - Main concurrency: RATE_LIMIT - activeCounterbidJobs, with floor at RATE_LIMIT/4
-   *   - Formula: max(RATE_LIMIT / 4, RATE_LIMIT - activeCounterbidJobs)
-   *
-   * Example (RATE_LIMIT=100):
-   * - 0 jobs: CB=100, Main=100, Total=200
-   * - 50 jobs: CB=100, Main=50, Total=150
-   * - 76+ jobs: CB=100, Main=25 (floor), Total=125
+   * Main concurrency is FIXED at RATE_LIMIT — it is never reduced by counterbid
+   * activity. The Bottleneck rate limiter enforces the actual API rate; BullMQ
+   * concurrency only controls how many jobs can feed the limiter concurrently.
    */
   private adjustConcurrency() {
     const MAX_CONCURRENCY = this.totalConcurrency; // RATE_LIMIT
-    const MIN_MAIN = Math.floor(this.rateLimit / 4);
+    const MIN_MAIN = this.rateLimit;
     const active = this.activeCounterbidJobs;
 
     // Counterbid: FIXED at maximum concurrency (never changes)
     const cbConcurrency = MAX_CONCURRENCY;
 
-    // Main: DYNAMIC with floor protection
-    // Floor kicks in when active jobs exceed (RATE_LIMIT - RATE_LIMIT/4) = 76+ for RATE_LIMIT=100
+    // Main: FIXED at RATE_LIMIT (MIN_MAIN == rateLimit, so max() always returns rateLimit)
     const mainConcurrency = Math.max(MIN_MAIN, this.rateLimit - active);
 
     // Distribute concurrency evenly across workers in each array
@@ -140,15 +138,14 @@ class ConcurrencyManager {
   }
 
   /**
-   * Reconcile counter with actual queue depth (safety net for race conditions)
-   * Only resets if drift is significant (>5 jobs)
+   * Reconcile counter with actual queue depth (safety net for race conditions).
    */
   async reconcile(actualJobCount: number) {
     const diff = Math.abs(actualJobCount - this.activeCounterbidJobs);
 
     // Log every reconciliation check for visibility
 
-    if (diff > 5) {
+    if (diff > 0) {
       warnLog(
         'ConcurrencyAlloc',
         `Counter drift detected: expected=${this.activeCounterbidJobs}, actual=${actualJobCount}, diff=${diff}, resetting to actual`

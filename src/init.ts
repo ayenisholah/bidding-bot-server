@@ -1,6 +1,5 @@
 import Bottleneck from "bottleneck";
 import axios, { AxiosInstance } from "axios";
-import axiosRetry, { IAxiosRetryConfig } from "axios-retry";
 import { config } from "dotenv";
 import { RATE_LIMIT, rps } from ".";
 import { wrapAxiosInstance, jobContext } from "./utils/axios-wrapper";
@@ -21,107 +20,112 @@ let trueRPS = 0;
 const rpsHistory: number[] = [];
 const RPS_HISTORY_SECONDS = 10; // Keep a 10-second history for averaging
 
-const retryConfig: IAxiosRetryConfig = {
-  retries: 3,
-  retryDelay: (retryCount, error) => {
-    limiter.schedule(() => Promise.resolve());
+// ============================================
+// RETRY HELPERS (used by Bottleneck FAILED handler)
+// ============================================
+const MAX_RETRIES = 3;
 
-    // Special handling for 408 errors
-    if (error.response?.status === 408) {
-      const url = error.config?.url || '';
+function isRetryableError(error: any): boolean {
+  // Don't retry client-side cancellations (AbortController, task stop)
+  if (axios.isCancel(error) || error.code === 'ERR_CANCELED') return false;
+  // Network errors (no response received) - retry
+  if (!error.response) return true;
+  const status = error.response.status;
+  // Retry: rate limits (429/430), timeout (408), Cloudflare (520), gateway errors (502/504)
+  return status === 429 || status === 430 || status === 408 || status === 520 || status === 502 || status === 504;
+}
 
-      // Blur endpoints need extra time due to rate limiting
-      if (url.includes('/blur/')) {
-        const baseDelay = 60000; // 60 seconds for Blur
-        const progressiveDelay = baseDelay + (retryCount - 1) * 10000; // +10s each retry (60s, 70s, 80s)
-        const jitter = 1000 + Math.random() * 2000; // 1-3s jitter
-        // console.log(`[Blur 408] Retrying Blur endpoint after 408 (attempt ${retryCount}), waiting ${progressiveDelay + jitter}ms`);
-        return progressiveDelay + jitter;
-      }
+function calculateRetryDelay(retryCount: number, error: any): number {
+  // Special handling for 408 errors
+  if (error.response?.status === 408) {
+    const url = error.config?.url || '';
 
-      // Authentication endpoints get exponential backoff
-      if (url.includes('/auth/challenge') || url.includes('/auth/login')) {
-        // Exponential backoff starting at 5 seconds for auth endpoints
-        const baseDelay = 5000; // 5 seconds
-        const exponentialDelay = Math.min(baseDelay * Math.pow(2, retryCount - 1), 40000); // Max 40 seconds
-        const jitter = 500 + Math.random() * 1500; // 500-2000ms jitter
-        // console.log(`[Auth Backoff] Retrying auth endpoint after 408 (attempt ${retryCount}), waiting ${exponentialDelay + jitter}ms`);
-        return exponentialDelay + jitter;
-      } else {
-        // Progressive delay for other 408 errors
-        const delays = [40000, 60000, 80000]; // 40s, 60s, 80s
-        const delay = delays[Math.min(retryCount - 1, delays.length - 1)];
-        const jitter = 200 + Math.random() * 800; // 200-1000ms jitter
-        // console.log(`Retrying after 408 error (attempt ${retryCount}), waiting ${delay + jitter}ms`);
-        return delay + jitter;
-      }
+    // Blur endpoints need extra time due to rate limiting
+    if (url.includes('/blur/')) {
+      const baseDelay = 60000; // 60 seconds for Blur
+      const progressiveDelay = baseDelay + (retryCount - 1) * 10000; // +10s each retry (60s, 70s, 80s)
+      const jitter = 1000 + Math.random() * 2000; // 1-3s jitter
+      return progressiveDelay + jitter;
     }
 
-    // Rate limit errors - respect retry-after header or use exponential backoff
-    if (error.response?.status === 429 || error.response?.status === 430) {
-      const retryAfter = error.response.headers['retry-after'];
-      if (retryAfter) {
-        return parseInt(retryAfter) * 1000;
-      }
-      // Exponential backoff: 2s, 4s, 8s (max 10s) + jitter
-      const baseDelay = Math.min(Math.pow(2, retryCount) * 1000, 10000);
-      const jitter = 100 + Math.random() * 400; // 100-500ms jitter
-      return baseDelay + jitter;
+    // Authentication endpoints get exponential backoff
+    if (url.includes('/auth/challenge') || url.includes('/auth/login')) {
+      const baseDelay = 5000; // 5 seconds
+      const exponentialDelay = Math.min(baseDelay * Math.pow(2, retryCount - 1), 40000); // Max 40 seconds
+      const jitter = 500 + Math.random() * 1500; // 500-2000ms jitter
+      return exponentialDelay + jitter;
     }
 
-    // Cloudflare origin errors - need longer delays
-    if (error.response?.status === 520) {
-      // Exponential backoff: 5s, 15s, 30s + jitter
-      const baseDelay = Math.min(5000 * Math.pow(2, retryCount - 1), 30000);
-      const jitter = 500 + Math.random() * 1000; // 500-1500ms jitter
-      return baseDelay + jitter;
-    }
-
-    // Gateway errors (502 Bad Gateway, 504 Gateway Timeout) - exponential backoff
-    if (error.response?.status === 502 || error.response?.status === 504) {
-      // Exponential backoff: 3s, 6s, 12s (max 15s) + jitter
-      const baseDelay = Math.min(3000 * Math.pow(2, retryCount - 1), 15000);
-      const jitter = 200 + Math.random() * 600; // 200-800ms jitter
-      return baseDelay + jitter;
-    }
-
-    return axiosRetry.exponentialDelay(retryCount);
-  },
-  retryCondition: async (error: any) => {
-    if (!error.response) {
-      return true; // Network errors
-    }
-    const status = error.response.status;
-    // Retry: rate limits (429/430), timeout (408), Cloudflare (520), gateway errors (502/504)
-    return status === 429 || status === 430 || status === 408 || status === 520 || status === 502 || status === 504;
-  },
-  onRetry: (_retryCount, _error, _requestConfig) => {
-    // Only log retries in development mode or for specific debugging
-    if (DEBUG) {
-      // console.log(`[Axios Retry] Attempt ${_retryCount} for ${_requestConfig.url} - Status: ${_error.response?.status || 'Network Error'}`);
-    }
+    // Progressive delay for other 408 errors
+    const delays = [40000, 60000, 80000]; // 40s, 60s, 80s
+    const delay = delays[Math.min(retryCount - 1, delays.length - 1)];
+    const jitter = 200 + Math.random() * 800; // 200-1000ms jitter
+    return delay + jitter;
   }
-};
+
+  // Rate limit errors - respect retry-after header or use exponential backoff
+  if (error.response?.status === 429 || error.response?.status === 430) {
+    const retryAfter = error.response.headers['retry-after'];
+    if (retryAfter) {
+      return parseInt(retryAfter) * 1000;
+    }
+    // Exponential backoff: 2s, 4s, 8s (max 10s) + jitter
+    const baseDelay = Math.min(Math.pow(2, retryCount) * 1000, 10000);
+    const jitter = 100 + Math.random() * 400; // 100-500ms jitter
+    return baseDelay + jitter;
+  }
+
+  // Cloudflare origin errors - need longer delays
+  if (error.response?.status === 520) {
+    // Exponential backoff: 5s, 15s, 30s + jitter
+    const baseDelay = Math.min(5000 * Math.pow(2, retryCount - 1), 30000);
+    const jitter = 500 + Math.random() * 1000; // 500-1500ms jitter
+    return baseDelay + jitter;
+  }
+
+  // Gateway errors (502 Bad Gateway, 504 Gateway Timeout) - exponential backoff
+  if (error.response?.status === 502 || error.response?.status === 504) {
+    // Exponential backoff: 3s, 6s, 12s (max 15s) + jitter
+    const baseDelay = Math.min(3000 * Math.pow(2, retryCount - 1), 15000);
+    const jitter = 200 + Math.random() * 600; // 200-800ms jitter
+    return baseDelay + jitter;
+  }
+
+  // Default exponential backoff
+  return Math.pow(2, retryCount) * 1000;
+}
 
 async function initialize(rateLimit: number) {
-  axiosInstance = axios.create({ timeout: 30000 });
-  const concurrency = rateLimit * 1.5;
+  if (!Number.isFinite(rateLimit) || rateLimit <= 0) {
+    throw new Error(`Invalid RATE_LIMIT: ${rateLimit}. RATE_LIMIT must be a positive finite number.`);
+  }
 
+  axiosInstance = axios.create({ timeout: 30000 });
+
+  // Constant-rate limiter: exactly 1 request per (1000/rateLimit) ms
+  // e.g. RATE_LIMIT=100 → minTime=10ms → 100 RPS, no bursts
   limiter = new Bottleneck({
-    minTime: 1000 / concurrency, // Minimum time between job starts
+    minTime: 1000 / rateLimit,
     trackDoneStatus: true,
-    // Reservoir system to maintain steady job flow and prevent queue drain
-    // reservoir: rateLimit * 3, // Initial reservoir: 3x rate limit for buffer
-    // reservoirRefreshAmount: rateLimit * 1.5, // Aggressive refill: 1.5x rate limit per second
-    // reservoirRefreshInterval: 1000, // Refill every 1 second to maintain constant flow
   });
 
-  axiosRetry(axiosInstance, retryConfig);
+  // Retry via Bottleneck's native FAILED handler - retries re-enter the queue
+  // and properly consume a rate-limit slot (wait for the next minTime interval)
+  limiter.on("failed", async (error, jobInfo) => {
+    if (jobInfo.retryCount >= MAX_RETRIES) return;
+    if (!isRetryableError(error)) return;
+
+    const delay = calculateRetryDelay(jobInfo.retryCount + 1, error);
+
+    if (DEBUG) {
+      warnLog('LimiterRetry', `Retry ${jobInfo.retryCount + 1}/${MAX_RETRIES} for ${error.config?.url || 'unknown'} - Status: ${error.response?.status || 'Network'} - Delay: ${delay}ms`);
+    }
+
+    return delay;
+  });
 
   // Wrap axios instance to track API calls for timeout analysis
   wrapAxiosInstance(axiosInstance, () => jobContext.getJobId());
-
-  // Limiter initialized
 }
 
 // Add a function to get current counts
@@ -166,14 +170,19 @@ export function getLimiterQueueDetails(rateLimit: number): {
 }
 
 // Queue depth thresholds for proactive refill
-const QUEUE_MINIMUM = RATE_LIMIT * 2; // HARD MINIMUM: Always maintain at least 2x rate limit jobs in queue
-const QUEUE_LOW_WATER_MARK = RATE_LIMIT * 2.5; // Refill trigger: Add jobs when below 2.5x rate limit
-const QUEUE_TARGET = RATE_LIMIT * 3; // Target queue depth for smooth operation (3x rate limit)
-const QUEUE_HIGH_WATER_MARK = RATE_LIMIT * 5; // Stop adding when queue exceeds 5x rate limit
+// NOTE: These thresholds measure QUEUED + RECEIVED + RUNNING in Bottleneck.
+// With ~2×RATE_LIMIT BullMQ slots (steady-state) and in-flight HTTP requests
+// consuming slots, realistic queue depth ≈ totalSlots - (RATE_LIMIT × avgLatency).
+// Previous values (2-5× RATE_LIMIT) were unreachable under normal API latency,
+// causing constant false CRITICAL alerts.
+const QUEUE_MINIMUM = RATE_LIMIT * 0.5; // HARD MINIMUM: 500ms buffer at full rate
+const QUEUE_LOW_WATER_MARK = RATE_LIMIT * 1; // Refill trigger: 1 second of buffer
+const QUEUE_TARGET = RATE_LIMIT * 1.5; // Target queue depth for smooth operation
+const QUEUE_HIGH_WATER_MARK = RATE_LIMIT * 3; // Stop adding when queue exceeds 3x rate limit
 
 /**
  * Check if the limiter queue needs refilling to maintain steady RPS.
- * Returns true when queue depth drops below low water mark (2.5x rate limit).
+ * Returns true when queue depth drops below low water mark (1x rate limit).
  */
 export function shouldRefillQueue(): boolean {
   if (!limiter) return false;
@@ -185,7 +194,7 @@ export function shouldRefillQueue(): boolean {
 }
 
 /**
- * Check if queue is below HARD MINIMUM (2x rate limit).
+ * Check if queue is below HARD MINIMUM (0.5x rate limit).
  * This is CRITICAL - queue should NEVER drop below this threshold.
  */
 export function isBelowMinimum(): boolean {
